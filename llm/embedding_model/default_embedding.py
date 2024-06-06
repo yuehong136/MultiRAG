@@ -1,0 +1,40 @@
+# embedding_model/default_embedding.py
+import re
+import os
+import torch
+import numpy as np
+from huggingface_hub import snapshot_download
+from FlagEmbedding import FlagModel
+from api.utils.file_utils import get_home_cache_dir
+from rag.utils import num_tokens_from_string, truncate
+from llm.embedding_model.base import Base
+
+class DefaultEmbedding(Base):
+    _model = None
+
+    def __init__(self, key, model_name, **kwargs):
+        super().__init__(key, model_name)
+        if not DefaultEmbedding._model:
+            try:
+                self._model = FlagModel(os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z]+/", "", model_name)),
+                                        query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：",
+                                        use_fp16=torch.cuda.is_available())
+            except Exception as e:
+                model_dir = snapshot_download(repo_id="BAAI/bge-large-zh-v1.5",
+                                              local_dir=os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z]+/", "", model_name)),
+                                              local_dir_use_symlinks=False)
+                self._model = FlagModel(model_dir,
+                                        query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：",
+                                        use_fp16=torch.cuda.is_available())
+
+    def encode(self, texts: list, batch_size=32):
+        texts = [truncate(t, 2048) for t in texts]
+        token_count = sum(num_tokens_from_string(t) for t in texts)
+        res = []
+        for i in range(0, len(texts), batch_size):
+            res.extend(self._model.encode(texts[i:i + batch_size]).tolist())
+        return np.array(res), token_count
+
+    def encode_queries(self, text: str):
+        token_count = num_tokens_from_string(text)
+        return self._model.encode_queries([text]).tolist()[0], token_count
