@@ -1,92 +1,76 @@
-# MultRAG
+# 项目名称：大模型LLM的RAG应用项目
 
+## 项目简介
 
+本次项目是大模型LLM的RAG（Retrieval-Augmented Generation）应用项目，结合了当前许多开源项目的优势，具体功能包括：
 
-## Getting started
+- 支持自定义LLM的系统提示词。
+- 支持多模态交互：用户可以上传文档，直接与大模型交流文档内容。
+- 大模型回答用户的输出可以转换为语音（此功能暂未实现，需要排期）。
+- 内置了一些轻AI应用，后期可以根据需求自行定制和拓展（此功能暂未实现，需要排期）。
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## 项目功能
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+1. **对话**：与大模型进行文本对话。
+2. **知识库管理**：上传文档，创建和管理知识库，进行文档内容问答。
+3. **SQL翻译**：将SQL查询从一种方言转换为另一种方言。
 
-## Add your files
+## 使用教程
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+### 环境依赖
 
+在使用本项目之前，请确保已安装以下依赖：
+
+- Python > 3.9
+- Streamlit等
+- 其他依赖项请参考 `requirements.txt` 文件
+
+### 步骤
+
+1. 克隆本项目到本地：
+    
+    ```bash
+    git clone <项目地址>
+    ```
+    
+2. 进入项目目录：
+    
+    ```bash
+    cd <项目目录>
+    ```
+    
+3. 安装环境依赖：
+    
+    ```bash
+    pip install -r requirements.txt
+    ```
+    
+4. 运行项目：
+    
+    ```bash
+    streamlit run app.py
+    ```
+    
+
+## 项目截图
+![主页问答](./assets/source/qa.png)
+![知识库管理](./assets/source/kb_serve.png)
+![SQL翻译](./assets/source/sql_translator.png)
+## 功能展示
+
+- **对话界面**：与大模型进行交互，对话内容将显示在右侧区域。
+- **知识库管理**：上传文档文件，创建和管理知识库，并与知识库中的内容进行交互。
+- **SQL翻译**：输入SQL查询语句，选择源方言和目标方言，进行SQL方言转换。
+
+## 未来计划
+
+- 实现语音输出功能：将大模型的回答转换为语音。
+- 增加更多轻AI应用：根据用户需求自定义和扩展更多AI功能。
+
+## 贡献
+
+欢迎大家提交issue或pull request来共同完善本项目。
+
+## 许可证
+本项目遵循MIT许可证开源。
 ```
-cd existing_repo
-git remote add origin http://122.112.170.159:8888/scdf/ai/multrag.git
-git branch -M main
-git push -uf origin main
-```
-
-## Integrate with your tools
-
-- [ ] [Set up project integrations](http://122.112.170.159:8888/scdf/ai/multrag/-/settings/integrations)
-
-## Collaborate with your team
-
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
