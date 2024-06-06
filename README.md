@@ -53,7 +53,7 @@
     
 
 ## 项目截图
-![主页问答](./assets/source/qa.png)
+![主页问答](./assets/source/qa.jpg)
 ![知识库管理](./assets/source/kb_serve.png)
 ![SQL翻译](./assets/source/sql_translator.png)
 ## 功能展示
