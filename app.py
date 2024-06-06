@@ -1,5 +1,7 @@
 # app.py
 import datetime
+from enum import Enum
+
 import streamlit as st
 from utils.api import query_chroma, upload_file, get_ai_response, process_user_input
 from configs import VERSION
@@ -7,7 +9,7 @@ from web_ui.dialogue.dialogue import reset_history, export2md
 
 # Set Streamlit page configuration
 st.set_page_config(
-    page_title="演示demo",
+    page_title="MultiRAG",
     page_icon="🧊",
     layout="centered",
     initial_sidebar_state="auto",
@@ -17,22 +19,29 @@ st.set_page_config(
         'About': "# This is a header. This is an *extremely* cool app!"
     })
 
+
+class Mode(str, Enum):
+    ALL_TOOLS = "🛠️ All Tools"
+    LONG_CTX = "📝 文档解读"
+    VLM = "🖼️ 多模态"
+
+
 pages = {
-        "对话": {
-            "icon": "chat",
-            # "func": dialogue_page,
-        },
-        "知识库管理": {
-            "icon": "hdd-stack",
-            # "func": knowledge_base_page,
-        },
+    "对话": {
+        "icon": "chat",
+        # "func": dialogue_page,
+    },
+    "知识库管理": {
+        "icon": "hdd-stack",
+        # "func": knowledge_base_page,
+    },
 }
 # name = st.text_input('Name')
 # if not name or name!= "杜晓龙":
 #   st.warning('Please input a real name.')
 #   st.stop()
 # st.success('Thank you for inputting a name.')
-default_model = 'GLM-4'
+default_model = 'GLM-4-520'
 st.toast(
     f"欢迎使用 [`Datav-RAG`](https://dcs.dataonv.com/#/home) ! \n\n"
     f"当前运行的模型`{default_model}`, 您可以开始提问了."
@@ -41,7 +50,18 @@ st.toast(
 # st.page_link("pages/3-购物助手.py", label="Page 2(敬请期待，暂未开发完成)", icon="2️⃣", disabled=True)
 
 # Main code goes here
-st.title("文档对话")
+# st.title("文档对话")
+
+HELP = """
+### 🎉 欢迎使用 MultiRAG!【文档对话版】
+
+请在下方选取一个功能。每次切换功能时，将会重新加载模型并清空对话历史。
+
+""".strip()
+
+st.markdown(HELP)
+# exit()
+
 
 api_key = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"
 fastapi_url = "http://127.0.0.1:8000"  # FastAPI 服务的URL
@@ -50,13 +70,14 @@ if 'api_token' not in st.session_state:
     st.session_state.api_token = api_key
 
 if 'model' not in st.session_state:
-    st.session_state.model = "glm-4"
+    st.session_state.model = "glm-4-0520"
 
 if 'chat_name' not in st.session_state:
     st.session_state.chat_name = 'default'
 
 if 'messages' not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": "你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。"}]
+    st.session_state.messages = [{"role": "assistant",
+                                  "content": "你好 ！我是 迪小维，有什么可以帮助你的嘛 ?"}]
 
 if 'max_tokens' not in st.session_state:
     st.session_state.max_tokens = 512
@@ -64,21 +85,33 @@ if 'max_tokens' not in st.session_state:
 if 'temperature' not in st.session_state:
     st.session_state.temperature = 0.8
 
+if 'sys_prompt' not in st.session_state:
+    st.session_state.sys_prompt = '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。'
+
 # # 显示聊天记录
 # for message in st.session_state.messages:
 #     with st.chat_message(message["role"]):
 #         st.markdown(message["content"])
 
-# 显示聊天记录（增量更新）
-if 'chat_displayed' not in st.session_state:
-    st.session_state.chat_displayed = 0
+# # 显示聊天记录（增量更新）
+# if 'chat_displayed' not in st.session_state:
+#     st.session_state.chat_displayed = 0
+#
+# new_messages = st.session_state.messages[st.session_state.chat_displayed:]
+# for message in new_messages:
+#     # if message["role"] != "system":
+#     with st.chat_message(message["role"]):
+#         st.markdown(message["content"])
+# # 更新已显示的消息数量
+# st.session_state.chat_displayed = len(st.session_state.messages)
 
-new_messages = st.session_state.messages[st.session_state.chat_displayed:]
-for message in new_messages:
-    # if message["role"] != "system":
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-st.session_state.chat_displayed = len(st.session_state.messages)
+# 移除增量更新逻辑，直接显示所有对话
+for message in st.session_state.messages:
+    if message["role"] != "system":
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+
 # 侧边栏选项
 with st.sidebar:
     st.image(
@@ -93,6 +126,7 @@ with st.sidebar:
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🐉", use_container_width=True)
 
+
     def on_mode_change():
         mode = st.session_state.dialogue_mode
         text = f"已切换到 {mode} 模式。"
@@ -102,27 +136,6 @@ with st.sidebar:
                 text = f"{text} 当前知识库： `{cur_kb}`。"
         st.toast(text)
 
-
-    # running_models = list(api.list_running_models())
-    # available_models = []
-    # config_models = api.list_config_models()
-    # if not is_lite:
-    #     for k, v in config_models.get("local", {}).items():
-    #         if (v.get("model_path_exists")
-    #                 and k not in running_models):
-    #             available_models.append(k)
-    # for k, v in config_models.get("online", {}).items():
-    #     if not v.get("provider") and k not in running_models and k in LLM_MODELS:
-    #         available_models.append(k)
-    # llm_models = running_models + available_models
-    # llm_model = st.selectbox(
-    #     "选择LLM模型：",
-    #     llm_models,
-    #     index,
-    #     format_func=llm_model_format_func,
-    #     on_change=on_llm_change,
-    #     key="llm_model",
-    # )
     dialogue_modes = [
         "LLM 对话",
         "知识库问答【暂不支持】",
@@ -137,64 +150,74 @@ with st.sidebar:
         on_change=on_mode_change,
         key="dialogue_mode",
     )
+    sys_prompt = st.session_state.get('sys_prompt','你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。')
+    # 在侧边栏添加一个按钮来触发弹出框
+    # 初始化 show_expander 状态
+    if 'show_expander' not in st.session_state:
+        st.session_state.show_expander = False
+    # 在侧边栏添加一个按钮来触发弹出框
+    if st.sidebar.button("定义模型",use_container_width=True):
+        st.session_state.show_expander = not st.session_state.get("show_expander", False)
+    # 在主页面显示扩展器（模态对话框）
+    if st.session_state.get("show_expander", False):
+        with st.expander("请定义你的LLM", expanded=True):
+            sys_prompt = st.text_area("默认模板如下", value='''# Role: 文档问答助手
+## Profile
+- Author: 杜晓龙
+- Version: 0.1
+- Language:  Chinese
+- Description: Describe your role. Give an overview of the character's characteristics and skills
+### Skill
+## Rules
+1. Don't break character under any circumstance.
+2. Don't talk nonsense and make up facts.
+3. Think step by step and reason yourself to the right decisions to make sure we get it right.
+## Workflow
+1. First, xxx
+2. Then, xxx
+3. Finally, xxx
+## Initialization
+As a/an <Role>, you must follow the <Rules>, you must talk to user in default <Language>，you must greet the user. Then introduce yourself and introduce the <Workflow>.
+            ''')
+            st.session_state.sys_prompt = sys_prompt
+
 
     max_tokens = st.slider("max_tokens", min_value=0, max_value=4096, value=512)
     st.session_state.max_tokens = max_tokens
 
     temperature = st.slider("temperature", min_value=0.0, max_value=1.0, value=0.8)
     st.session_state.temperature = temperature
-    sys_prompt = st.text_area("请定义你的LLM：", value='''
-        # Role: 文档问答助手
 
-        ## Profile
-        
-        - Author: 杜晓龙
-        - Version: 0.1
-        - Language:  Chinese
-        - Description: Describe your role. Give an overview of the character's characteristics and skills
-        
-        ### Skill
-        
-        ## Rules
-        
-        1. Don't break character under any circumstance.
-        2. Don't talk nonsense and make up facts.
-        3. Think step by step and reason yourself to the right decisions to make sure we get it right.
-        
-        ## Workflow
-        
-        1. First, xxx
-        2. Then, xxx
-        3. Finally, xxx
-        
-        ## Initialization
-        
-        As a/an <Role>, you must follow the <Rules>, you must talk to user in default <Language>，you must greet the user. Then introduce yourself and introduce the <Workflow>.
-    ''')
-    st.session_state.sys_prompt = sys_prompt
-    # 上传文件部分
-    uploaded_file = st.file_uploader("上传您的 JSON 文件", type=["json"])
-    if st.button("上传并处理"):
-        upload_file(uploaded_file)
+    # # 上传文件部分
+    # uploaded_file = st.file_uploader("上传您的 JSON 文件", type=["json"])
+    # if st.button("上传并处理"):
+    #     upload_file(uploaded_file)
     now = datetime.datetime.now()
-    with st.sidebar:
+    cols = st.columns(2)
+    export_btn = cols[0]
+    clear_history = cols[1].button("清空对话", use_container_width=True)
+    if clear_history:
+        st.session_state.clear()
+        st.session_state.files_uploaded = False
+        st.session_state.uploaded_texts = ""
+        st.session_state.uploaded_file_nums = 0
+        st.session_state.history = []
+        st.session_state.chat_displayed = 0
+        st.session_state.messages = [{"role": "assistant",
+                                      "content": "你好 ！我是 迪小维，有什么可以帮助你的嘛 ?"}]
+        st.rerun()
 
-        cols = st.columns(2)
-        export_btn = cols[0]
-        if cols[1].button(
-                "清空对话",
-                use_container_width=True,
-        ):
-            reset_history()
-            st.rerun()
-
-    export_btn.download_button(
-        "导出记录",
-        "".join(export2md()),
-        file_name=f"{now:%Y-%m-%d %H.%M}_对话记录.md",
-        mime="text/markdown",
-        use_container_width=True,
-    )
+    if export_btn.button("导出对话", use_container_width=True):
+        st.write(st.session_state.messages)
+        def export_callback():
+            return "".join(export2md())
+        st.download_button(
+            label="下载对话记录",
+            data=export_callback(),
+            file_name=f"{now:%Y-%m-%d %H.%M}_对话记录.md",
+            mime="text/markdown",
+            use_container_width=True
+        )
 
 # 用户输入框
 if prompt := st.chat_input("请输入您的问题："):
@@ -227,15 +250,17 @@ if prompt := st.chat_input("请输入您的问题："):
     
             请根据上述信息回答用户的问题。
             """
+        response_content = get_ai_response(
+            st.session_state.api_token,
+            st.session_state.model,
+            st.session_state.messages,
+            st.session_state.temperature,
+            st.session_state.max_tokens,
+            routing_instructions
+        )
+        st.session_state.messages.append({"role": "assistant", "content": response_content})
+
+        # 显示助手回复的对话
         with st.chat_message("assistant"):
-            response_content = get_ai_response(
-                st.session_state.api_token,
-                st.session_state.model,
-                st.session_state.messages,
-                st.session_state.temperature,
-                st.session_state.max_tokens,
-                routing_instructions
-            )
             response_container = st.empty()
             # response_container.markdown(response_content)
-            st.session_state.messages.append({"role": "assistant", "content": response_content})

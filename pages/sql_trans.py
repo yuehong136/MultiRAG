@@ -37,7 +37,7 @@ st.markdown("""
 st.title("SQL Dialect Translator")
 st.markdown("""
     使用此工具，您可以将SQL查询从一种方言转换为另一种方言。
-    选择源方言和目标方言，输入要转换的SQL查询，然后点击 ***Translate*** 按钮即可获取转换后的SQL查询。
+    选择源方言和目标方言，输入要转换的SQL查询，然后点击**"Translate"**按钮即可获取转换后的SQL查询。
 """)
 
 # 侧边栏
@@ -73,7 +73,7 @@ with col2:
 
 # 定义API参数
 api_token = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"
-model = "glm-4"
+model = "glm-4-0520"
 temperature = 0.8
 max_tokens = 512
 
@@ -88,8 +88,8 @@ def translate_sql(input_sql, from_dialect, to_dialect):
     messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": input_sql}]
     response = get_ai_response(api_token, model, messages, temperature, max_tokens, system_prompt)
 
-    # 使用正则表达式提取SQL语句
-    sql_match = re.search(r"SELECT.*FROM.*;", response, re.IGNORECASE)
+    # 改进正则表达式提取SQL语句
+    sql_match = re.search(r"SELECT.*?(?:FROM|INTO|UPDATE|DELETE).*?;", response, re.IGNORECASE | re.DOTALL)
     if sql_match:
         return sql_match.group(0)
     else:
@@ -104,4 +104,4 @@ if st.button("Translate"):
         translated_sql_placeholder.text_area("翻译后的 SQL", value=translated_sql_value, height=200, help="转换后的SQL查询将显示在这里", key="translated_sql_output")
 
 # 错误消息
-st.error("不支持的表达式类型SwapTable") if "SwapTable" in sql_input else ''
+st.error("不支持的表达式类型SwapTable") if "SwapTable" in sql_input else None

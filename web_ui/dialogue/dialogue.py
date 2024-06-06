@@ -31,7 +31,8 @@ def export2md(
         text = text.replace("\n", "<br>")
         return f"<div style=\"background-color:{bg_color}\">{text}</div>"
 
-    history = st.session_state.messages
+    # 确保导出记录时不会修改历史记录
+    history = st.session_state.messages.copy()
     for msg in history:
         if callable(callback):
             line = callback(msg)
