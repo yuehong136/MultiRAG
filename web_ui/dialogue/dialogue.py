@@ -60,6 +60,6 @@ def reset_history(name=None):
     if name is None:
         name = 'default'
 
-    st.session_state.messages = [{"role": "assistant", "content": "你好，我是你的文档问答小助手，有什么可以帮助你的？"}]
+    st.session_state.messages = [{"role": "assistant", "content": "你好 ！我是 迪小维，有什么可以帮助你的嘛 ?"}]
     st.session_state.chat_displayed = 0  # 重置显示的聊天记录索引
 

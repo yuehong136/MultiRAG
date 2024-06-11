@@ -37,7 +37,7 @@ st.markdown("""
 st.title("SQL方言翻译器")
 st.markdown("""
     使用此工具，您可以将SQL查询从一种方言转换为另一种方言。
-    选择源方言和目标方言，输入要转换的SQL查询，然后点击**"Translate"**按钮即可获取转换后的SQL查询。
+    选择源方言和目标方言，输入要转换的SQL查询，然后点击***Translate***按钮即可获取转换后的SQL查询。
 """)
 
 # 侧边栏
@@ -96,7 +96,7 @@ def translate_sql(input_sql, from_dialect, to_dialect):
         return "转换错误：在响应中找不到SQL查询。"
 
 # 翻译按钮
-if st.button("Translate"):
+if st.button("翻译"):
     if not sql_input.strip():
         st.error("请输入要翻译的SQL。")
     else:

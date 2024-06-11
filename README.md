@@ -21,7 +21,7 @@
 
 在使用本项目之前，请确保已安装以下依赖：
 
-- Python > 3.9
+- Python = 3.12
 - Streamlit等
 - 其他依赖项请参考 `requirements.txt` 文件
 
@@ -53,7 +53,7 @@
     
 
 ## 项目截图
-![主页问答](./assets/source/qa.jpg)
+![主页问答](./assets/source/qa.png)
 ![知识库管理](./assets/source/kb_serve.png)
 ![SQL翻译](./assets/source/sql_translator.png)
 ## 功能展示
@@ -83,4 +83,3 @@
 
 ## 许可证
 本项目遵循MIT许可证开源。
-```

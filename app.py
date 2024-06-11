@@ -1,8 +1,11 @@
 # app.py
 import datetime
+import os
 from enum import Enum
 from uuid import uuid4
 import streamlit as st
+
+from core.file.utils import extract_pdf, extract_docx, extract_pptx, extract_text
 from utils.api import query_chroma, upload_file, get_ai_response, process_user_input
 from configs import VERSION
 from web_ui.dialogue.dialogue import reset_history, export2md
@@ -51,7 +54,7 @@ HELP = """
 st.markdown(HELP)
 
 page = st.radio(
-    "🐖🔢每次切换功能时，将会重新加载模型并清空对话历史",
+    "🐖🔢每次切换功能时，请先手动清空对话历史。【后续将会优化：自动重新加载LLM并清空对话历史】",
     [mode.value for mode in Mode],
     key="page",
     horizontal=True,
@@ -91,7 +94,44 @@ if "files_uploaded" not in st.session_state:
 if 'sys_prompt' not in st.session_state:
     st.session_state.sys_prompt = '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。'
 
-
+first_round = len(st.session_state.messages) == 1
+FILE_TEMPLATE = "[File Name]\n{file_name}\n[File Content]\n{file_content}"
+# 确保 /tmp 目录存在
+tmp_dir = "/tmp"
+if not os.path.exists(tmp_dir):
+    os.makedirs(tmp_dir)
+if first_round and page == Mode.LONG_CTX.value:
+    uploaded_files = st.file_uploader(
+        "上传文件",
+        type=["pdf", "txt", "py", "docx", "pptx", "json", "cpp", "md"],
+        accept_multiple_files=True,
+    )
+    if uploaded_files and not st.session_state.files_uploaded:
+        uploaded_texts = []
+        for uploaded_file in uploaded_files:
+            file_name: str = uploaded_file.name
+            random_file_name = str(uuid4())
+            file_extension = os.path.splitext(file_name)[1]
+            file_path = os.path.join("/tmp", random_file_name + file_extension)
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            if file_name.endswith(".pdf"):
+                content = extract_pdf(file_path)
+            elif file_name.endswith(".docx"):
+                content = extract_docx(file_path)
+            elif file_name.endswith(".pptx"):
+                content = extract_pptx(file_path)
+            else:
+                content = extract_text(file_path)
+            uploaded_texts.append(
+                FILE_TEMPLATE.format(file_name=file_name, file_content=content)
+            )
+            os.remove(file_path)
+        st.session_state.uploaded_texts = "\n\n".join(uploaded_texts)
+        st.session_state.uploaded_file_nums = len(uploaded_files)
+    else:
+        st.session_state.uploaded_texts = ""
+        st.session_state.uploaded_file_nums = 0
 
 # 移除增量更新逻辑，直接显示所有对话
 for message in st.session_state.messages:
@@ -114,7 +154,7 @@ with st.sidebar:
     st.page_link("app.py", label="对话", icon="📝")
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
-    api_token = st.text_input("输入Token:", type="password")
+    api_token = st.text_input("输入API-KEY:", type="password")
     if api_token:
         st.session_state.api_token = api_token
         st.success("API Token 已经配置")
@@ -198,6 +238,9 @@ As a/an <Role>, you must follow the <Rules>, you must talk to user in default <L
         st.session_state.uploaded_file_nums = 0
         st.session_state.history = []
         st.session_state.chat_displayed = 0
+        st.session_state.files_uploaded = False
+        st.session_state.uploaded_texts = ""
+        st.session_state.uploaded_file_nums = 0
         st.session_state.messages = [{"role": "assistant",
                                       "content": "你好 ！我是 迪小维，有什么可以帮助你的嘛 ?"}]
         st.rerun()
@@ -214,48 +257,36 @@ As a/an <Role>, you must follow the <Rules>, you must talk to user in default <L
             use_container_width=True
         )
 
+uploaded_texts = st.session_state.get("uploaded_texts", "")
 # 用户输入框
 if prompt := st.chat_input("请输入您的问题："):
-    processed_prompt = process_user_input(prompt)
+    # 在第一次轮询时，如果存在已上传的文本，将这些文本附加到用户输入的文本前面
+    if first_round and uploaded_texts:
+        processed_prompt = f"{uploaded_texts}\n\n{prompt}"
+        # 清空上传的文本以防止重复使用
+        st.session_state.uploaded_texts = ""
+    # processed_prompt = process_user_input(processed_prompt)
     st.session_state.messages.append({"role": "user", "content": processed_prompt})
     with st.chat_message("user"):
         st.markdown(processed_prompt)
 
-    query_results = query_chroma(processed_prompt)
-    if query_results:
-        if sys_prompt:
-            routing_instructions = sys_prompt
-        else:
-            routing_instructions = f"""
-            你是一个知识渊博的学术助手，负责回答用户提出的各种学术问题。用户的问题可能涉及论文分析、研究方法、理论应用等方面。为了帮助你更好地回答问题，我们将提供一些相关的论文信息。每篇论文的信息包括以下几个部分：
-            1. 摘要 (tgt1): 这是论文的摘要，提供了对论文内容的简要概述。
-            2. 关键字 (tgt2): 这些是与论文内容相关的关键术语，帮助你理解论文的主要研究主题。
-            3. 学科分类 (tgt3): 这是论文所属的学科领域。
-            4. 期刊来源 (tgt4): 这是论文发表的期刊或来源。
-    
-            当用户提出一个问题时，请根据提供的论文信息进行回答。你的回答应基于论文的摘要 (tgt1)，并参考关键字 (tgt2)、学科分类 (tgt3) 和期刊来源 (tgt4) 以确保回答的准确性和专业性。
-    
-            用户问题: {processed_prompt}
-    
-            相关论文信息:
-            - 摘要 (tgt1): {query_results[0]['metadata']['tgt1']}
-            - 关键字 (tgt2): {query_results[0]['metadata']['tgt2']}
-            - 学科分类 (tgt3): {query_results[0]['metadata']['tgt3']}
-            - 期刊来源 (tgt4): {query_results[0]['metadata']['tgt4']}
-    
-            请根据上述信息回答用户的问题。
-            """
-        response_content = get_ai_response(
-            st.session_state.api_token,
-            st.session_state.model,
-            st.session_state.messages,
-            st.session_state.temperature,
-            st.session_state.max_tokens,
-            routing_instructions
-        )
-        st.session_state.messages.append({"role": "assistant", "content": response_content})
+    # query_results = query_chroma(processed_prompt)
+    # if query_results:
+    if sys_prompt:
+        routing_instructions = sys_prompt
+    else:
+        routing_instructions = ''
+    response_content = get_ai_response(
+        st.session_state.api_token,
+        st.session_state.model,
+        st.session_state.messages,
+        st.session_state.temperature,
+        st.session_state.max_tokens,
+        routing_instructions
+    )
+    st.session_state.messages.append({"role": "assistant", "content": response_content})
 
-        # 显示助手回复的对话
-        with st.chat_message("assistant"):
-            response_container = st.empty()
-            # response_container.markdown(response_content)
+    # # 显示助手回复的对话
+    # with st.chat_message("assistant"):
+    #     response_container = st.empty()
+    #     response_container.markdown(response_content)
