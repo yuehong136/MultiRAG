@@ -13,7 +13,7 @@ from web_ui.dialogue.dialogue import reset_history, export2md
 # Set Streamlit page configuration
 st.set_page_config(
     page_title="MultiRAG",
-    page_icon="🧸",#🧊
+    page_icon="🧸",  # 🧊
     layout="centered",
     initial_sidebar_state="auto",
     menu_items={
@@ -24,10 +24,10 @@ st.set_page_config(
 
 
 class Mode(str, Enum):
-    ALL_TOOLS = "🛠️ All Tools"
+    ALL_TOOLS = "🛠️ All Tools[未实现]"
     LONG_CTX = "📝 文档解读"
     # GLM4 = "🖼️ 多模态"
-    VLM = "🖼️ 多模态"
+    VLM = "🖼️ 多模态[未实现]"
 
 
 # name = st.text_input('Name')
@@ -65,7 +65,7 @@ page = st.radio(
 # exit()
 
 
-api_key = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv" # 7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv
+api_key = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"  # 7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv
 # api_key = "" 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
 fastapi_url = "http://127.0.0.1:8000"  # FastAPI 服务的URL
 
@@ -90,6 +90,9 @@ if 'temperature' not in st.session_state:
 
 if "files_uploaded" not in st.session_state:
     st.session_state.files_uploaded = False
+
+if "uploaded_texts" not in st.session_state:
+    st.session_state.uploaded_texts = ''
 
 if 'sys_prompt' not in st.session_state:
     st.session_state.sys_prompt = '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。'
@@ -139,7 +142,6 @@ for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-
 # 侧边栏选项
 
 with st.sidebar:
@@ -171,6 +173,7 @@ with st.sidebar:
                 text = f"{text} 当前知识库： `{cur_kb}`。"
         st.toast(text)
 
+
     dialogue_modes = [
         "LLM 对话",
         "知识库问答【暂不支持】",
@@ -185,13 +188,16 @@ with st.sidebar:
         on_change=on_mode_change,
         key="dialogue_mode",
     )
-    sys_prompt = st.session_state.get('sys_prompt','你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。')
+    sys_prompt = st.session_state.get('sys_prompt',
+                                      '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。')
+    DATE_PROMPT = "当前日期: %Y-%m-%d"
+    sys_prompt += "\n\n" + datetime.datetime.now().strftime(DATE_PROMPT)
     # 在侧边栏添加一个按钮来触发弹出框
     # 初始化 show_expander 状态
     if 'show_expander' not in st.session_state:
         st.session_state.show_expander = False
     # 在侧边栏添加一个按钮来触发弹出框
-    if st.sidebar.button("定义模型",use_container_width=True):
+    if st.sidebar.button("定义模型", use_container_width=True):
         st.session_state.show_expander = not st.session_state.get("show_expander", False)
     # 在主页面显示扩展器（模态对话框）
     if st.session_state.get("show_expander", False):
@@ -215,7 +221,6 @@ with st.sidebar:
 As a/an <Role>, you must follow the <Rules>, you must talk to user in default <Language>，you must greet the user. Then introduce yourself and introduce the <Workflow>.
             ''')
             st.session_state.sys_prompt = sys_prompt
-
 
     max_tokens = st.slider("max_tokens", min_value=0, max_value=4096, value=512)
     st.session_state.max_tokens = max_tokens
@@ -247,8 +252,12 @@ As a/an <Role>, you must follow the <Rules>, you must talk to user in default <L
 
     if export_btn.button("导出对话", use_container_width=True):
         st.write(st.session_state.messages)
+
+
         def export_callback():
             return "".join(export2md())
+
+
         st.download_button(
             label="下载对话记录",
             data=export_callback(),
@@ -294,3 +303,11 @@ if prompt := st.chat_input("请输入您的问题："):
     # with st.chat_message("assistant"):
     #     response_container = st.empty()
     #     response_container.markdown(response_content)
+code = """
+<style>
+    p[align="right"] {
+        color:#BE0291;
+    }
+</style>
+"""
+st.html(code)
