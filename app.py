@@ -260,11 +260,15 @@ As a/an <Role>, you must follow the <Rules>, you must talk to user in default <L
 uploaded_texts = st.session_state.get("uploaded_texts", "")
 # 用户输入框
 if prompt := st.chat_input("请输入您的问题："):
-    # 在第一次轮询时，如果存在已上传的文本，将这些文本附加到用户输入的文本前面
-    if first_round and uploaded_texts:
-        processed_prompt = f"{uploaded_texts}\n\n{prompt}"
-        # 清空上传的文本以防止重复使用
-        st.session_state.uploaded_texts = ""
+    processed_prompt = None
+    if prompt:
+        processed_prompt = process_user_input(prompt)
+    if processed_prompt is not None:
+        # 在第一次轮询时，如果存在已上传的文本，将这些文本附加到用户输入的文本前面
+        if first_round and st.session_state.uploaded_texts:
+            processed_prompt = f"{st.session_state.uploaded_texts}\n\n{processed_prompt}"
+            # 清空上传的文本以防止重复使用
+            st.session_state.uploaded_texts = ""
     # processed_prompt = process_user_input(processed_prompt)
     st.session_state.messages.append({"role": "user", "content": processed_prompt})
     with st.chat_message("user"):
