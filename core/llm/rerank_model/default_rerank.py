@@ -5,7 +5,7 @@ import torch
 import numpy as np
 from FlagEmbedding import FlagReranker
 from huggingface_hub import snapshot_download
-from llm.rerank_model.base import Base
+from core.llm.rerank_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
 from rag.utils import num_tokens_from_string, truncate
 

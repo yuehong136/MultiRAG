@@ -6,8 +6,8 @@ from configs import VERSION
 
 # 设置页面配置
 st.set_page_config(
-    page_title="SQL Dialect Translator",
-    page_icon="🧊",
+    page_title="SQL方言翻译器",
+    page_icon="🛠️",
     layout="wide",
     initial_sidebar_state="auto",
     menu_items={
@@ -34,7 +34,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # 页面标题和说明
-st.title("SQL Dialect Translator")
+st.title("SQL方言翻译器")
 st.markdown("""
     使用此工具，您可以将SQL查询从一种方言转换为另一种方言。
     选择源方言和目标方言，输入要转换的SQL查询，然后点击**"Translate"**按钮即可获取转换后的SQL查询。
@@ -50,9 +50,9 @@ with st.sidebar:
         f"""<p align="right">当前版本：{VERSION}</p>""",
         unsafe_allow_html=True,
     )
-    st.page_link("app.py", label="对话", icon="🧸")
+    st.page_link("app.py", label="对话", icon="📝")
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
-    st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🐉", use_container_width=True)
+    st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
     st.sidebar.title("Datav")
     st.sidebar.markdown("当前版本: v0.0.1-preview")
 
@@ -104,4 +104,4 @@ if st.button("Translate"):
         translated_sql_placeholder.text_area("翻译后的 SQL", value=translated_sql_value, height=200, help="转换后的SQL查询将显示在这里", key="translated_sql_output")
 
 # 错误消息
-st.error("不支持的表达式类型SwapTable") if "SwapTable" in sql_input else None
+st.error("不支持的表达式类型SwapTable") if "SwapTable" in sql_input else ''

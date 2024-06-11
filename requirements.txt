@@ -1,2 +1,7 @@
 streamlit
 requests
+zhipuai
+langchain_community
+python-pptx
+python-docx
+openai

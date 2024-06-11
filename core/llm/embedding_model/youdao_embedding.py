@@ -4,7 +4,7 @@ import os
 import numpy as np
 # import tiktoken
 from BCEmbedding import EmbeddingModel as qanthing
-from llm.embedding_model.base import Base
+from core.llm.embedding_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
 # from rag.dialogue import num_tokens_from_string
 # encoder = tiktoken.encoding_for_model("gpt-3.5-turbo")

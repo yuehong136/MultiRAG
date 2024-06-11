@@ -3,7 +3,17 @@ import streamlit as st
 from configs import VERSION
 
 # 页面配置
-st.set_page_config(page_title="Datav", layout="wide")
+st.set_page_config(
+    page_title="知识库管理",
+    page_icon="🧷",
+    layout="centered",
+    initial_sidebar_state="auto",
+    menu_items={
+        'Get Help': 'https://www.extremelycoolapp.com/help',
+        'Report a bug': "https://www.extremelycoolapp.com/bug",
+        'About': "# This is an SQL Dialect Translator app!"
+    }
+)
 
 # 侧边栏
 with st.sidebar:
@@ -15,9 +25,9 @@ with st.sidebar:
         f"""<p align="right">当前版本：{VERSION}</p>""",
         unsafe_allow_html=True,
     )
-    st.page_link("app.py", label="对话", icon="🧸")
+    st.page_link("app.py", label="对话", icon="📝")
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
-    st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🐉", use_container_width=True)
+    st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
 
     st.sidebar.title("Datav")
     st.sidebar.markdown("当前版本: v0.0.1-preview")

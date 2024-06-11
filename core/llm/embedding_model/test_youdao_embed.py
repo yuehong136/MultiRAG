@@ -1,6 +1,5 @@
 # test_youdao_embed.py
-import os
-from llm.embedding_model.youdao_embedding import YoudaoEmbed
+from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 
 
 def main():

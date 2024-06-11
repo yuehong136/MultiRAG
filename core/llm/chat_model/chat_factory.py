@@ -1,5 +1,7 @@
 # chat_factory.py
-from llm.chat_model.models.zhipu_chat import ZhipuChat
+from core.llm.chat_model.models.zhipu_chat import ZhipuChat
+from core.llm.chat_model.models.gptturbo import GptTurbo
+
 
 class ChatFactory:
     """
@@ -37,8 +39,9 @@ class ChatFactory:
         if self.model_name.startswith("glm"):
             # 根据模型名称创建并返回ZhipuChat实例
             return ZhipuChat(self.key, self.model_name, self.base_url)
+        elif self.model_name.startswith("gpt"):
+            return GptTurbo(self.key, self.model_name, self.base_url)
         # 可以添加更多模型的实例化条件
         else:
             # 如果模型名称不被支持，则抛出异常
             raise ValueError("Unsupported model name")
-
