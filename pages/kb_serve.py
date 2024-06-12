@@ -25,7 +25,7 @@ with st.sidebar:
         f"""<p align="right">当前版本：{VERSION}</p>""",
         unsafe_allow_html=True,
     )
-    st.page_link("app.py", label="对话", icon="📝")
+    st.page_link("test.py", label="对话", icon="📝")
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
 

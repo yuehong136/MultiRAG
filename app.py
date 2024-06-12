@@ -1,11 +1,14 @@
-# app.py
+# test.py
+import base64
 import datetime
 import os
 from enum import Enum
 from uuid import uuid4
 import streamlit as st
+from PIL import Image
 
 from core.file.utils import extract_pdf, extract_docx, extract_pptx, extract_text
+from core.llm.ocr_model.ocr_factory import ModelFactory
 from utils.api import query_chroma, upload_file, get_ai_response, process_user_input
 from configs import VERSION
 from web_ui.dialogue.dialogue import reset_history, export2md
@@ -65,6 +68,7 @@ page = st.radio(
 # exit()
 
 
+
 api_key = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"  # 7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv
 # api_key = "" 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
 fastapi_url = "http://127.0.0.1:8000"  # FastAPI 服务的URL
@@ -106,7 +110,7 @@ if not os.path.exists(tmp_dir):
 if first_round and page == Mode.LONG_CTX.value:
     uploaded_files = st.file_uploader(
         "上传文件",
-        type=["pdf", "txt", "py", "docx", "pptx", "json", "cpp", "md"],
+        type=["pdf", "txt", "py", "docx", "pptx", "json", "cpp", "md", "jpg", "jpeg", "png"],
         accept_multiple_files=True,
     )
     if uploaded_files and not st.session_state.files_uploaded:
@@ -124,6 +128,13 @@ if first_round and page == Mode.LONG_CTX.value:
                 content = extract_docx(file_path)
             elif file_name.endswith(".pptx"):
                 content = extract_pptx(file_path)
+            elif file_name.endswith(".jpg") or file_name.endswith(".jpeg") or file_name.endswith(".png"):
+                # 使用图像描述模型
+                image = Image.open(file_path)
+                model_choice = st.selectbox("选择图像描述模型:",
+                                            ["gpt_v4", "qwen_cv", "zhipu_4v", "ollama_cv", "xinference_cv", "local_cv"])
+                model = ModelFactory.get_model(model_choice, api_key, model_name="glm-4v")
+                content, _ = model.describe(image)
             else:
                 content = extract_text(file_path)
             uploaded_texts.append(
@@ -267,6 +278,7 @@ As a/an <Role>, you must follow the <Rules>, you must talk to user in default <L
         )
 
 uploaded_texts = st.session_state.get("uploaded_texts", "")
+
 # 用户输入框
 if prompt := st.chat_input("请输入您的问题："):
     processed_prompt = None
@@ -303,6 +315,7 @@ if prompt := st.chat_input("请输入您的问题："):
     # with st.chat_message("assistant"):
     #     response_container = st.empty()
     #     response_container.markdown(response_content)
+
 code = """
 <style>
     p[align="right"] {
