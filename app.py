@@ -1,7 +1,8 @@
-# test.py
 import base64
 import datetime
+import json
 import os
+import re
 from enum import Enum
 from uuid import uuid4
 import streamlit as st
@@ -9,9 +10,10 @@ from PIL import Image
 
 from core.file.utils import extract_pdf, extract_docx, extract_pptx, extract_text
 from core.llm.ocr_model.ocr_factory import ModelFactory
-from utils.api import query_chroma, upload_file, get_ai_response, process_user_input
+from core.tools.tools_registry import get_tools, ALL_TOOLS
+from utils.api import get_ai_response, process_user_input
 from configs import VERSION
-from web_ui.dialogue.dialogue import reset_history, export2md
+from web_ui.dialogue.dialogue import export2md, build_system_prompt
 
 # Set Streamlit page configuration
 st.set_page_config(
@@ -27,8 +29,8 @@ st.set_page_config(
 
 
 class Mode(str, Enum):
-    ALL_TOOLS = "🛠️ All Tools[未实现]"
-    LONG_CTX = "📝 文档解读"
+    ALL_TOOLS = "🛠️ All Tools[有BUG]"
+    LONG_CTX = "📝 文件解读"
     # GLM4 = "🖼️ 多模态"
     VLM = "🖼️ 多模态[未实现]"
 
@@ -43,11 +45,6 @@ st.toast(
     f"欢迎使用 [`Datav-RAG`](https://dcs.dataonv.com/#/home) ! \n\n"
     f"当前运行的模型`{default_model}`, 您可以开始提问了."
 )
-
-# st.page_link("pages/3-购物助手.py", label="Page 2(敬请期待，暂未开发完成)", icon="2️⃣", disabled=True)
-
-# Main code goes here
-# st.title("文档对话")
 
 HELP = """
 ### 🎉 欢迎使用 MultiRAG!【文档对话版】
@@ -66,7 +63,6 @@ page = st.radio(
     # on_change=page_changed,
 )
 # exit()
-
 
 
 api_key = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"  # 7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv
@@ -101,6 +97,8 @@ if "uploaded_texts" not in st.session_state:
 if 'sys_prompt' not in st.session_state:
     st.session_state.sys_prompt = '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。'
 
+
+tools = get_tools() if page == Mode.ALL_TOOLS else []
 first_round = len(st.session_state.messages) == 1
 FILE_TEMPLATE = "[File Name]\n{file_name}\n[File Content]\n{file_content}"
 # 确保 /tmp 目录存在
@@ -115,7 +113,7 @@ if first_round and page == Mode.LONG_CTX.value:
     )
     if uploaded_files and not st.session_state.files_uploaded:
         uploaded_texts = []
-        for uploaded_file in uploaded_files:
+        for idx, uploaded_file in enumerate(uploaded_files):
             file_name: str = uploaded_file.name
             random_file_name = str(uuid4())
             file_extension = os.path.splitext(file_name)[1]
@@ -130,11 +128,21 @@ if first_round and page == Mode.LONG_CTX.value:
                 content = extract_pptx(file_path)
             elif file_name.endswith(".jpg") or file_name.endswith(".jpeg") or file_name.endswith(".png"):
                 # 使用图像描述模型
-                image = Image.open(file_path)
-                model_choice = st.selectbox("选择图像描述模型:",
-                                            ["gpt_v4", "qwen_cv", "zhipu_4v", "ollama_cv", "xinference_cv", "local_cv"])
-                model = ModelFactory.get_model(model_choice, api_key, model_name="glm-4v")
-                content, _ = model.describe(image)
+                with Image.open(file_path) as image:
+                    index_keys = f"model_choice_{idx}"
+                    model_choice = st.selectbox("选择图像描述模型:",
+                                                ["zhipu_4v", "qwen_cv", "gpt_v4", "ollama_cv", "xinference_cv",
+                                                 "local_cv"], key=index_keys)
+                    # # API key input
+                    model_key = st.session_state.api_token if st.session_state.api_token and model_choice == "zhipu_4v" else st.text_input(
+                        "输入 API key:", type="password")
+                    model_name = ''
+                    # # Optional parameters
+                    # model_name = st.text_input("输入模型名字(可选,默认为glm-4v):", value="glm-4v")
+                    if model_choice == "zhipu_4v":
+                        model_name = "glm-4v"
+                    model = ModelFactory.get_model(model_choice, key=model_key, model_name=model_name)
+                    content, _ = model.describe(image)
             else:
                 content = extract_text(file_path)
             uploaded_texts.append(
@@ -167,6 +175,7 @@ with st.sidebar:
     st.page_link("app.py", label="对话", icon="📝")
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
+    st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
     api_token = st.text_input("输入API-KEY:", type="password")
     if api_token:
         st.session_state.api_token = api_token
@@ -201,8 +210,27 @@ with st.sidebar:
     )
     sys_prompt = st.session_state.get('sys_prompt',
                                       '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。')
-    DATE_PROMPT = "当前日期: %Y-%m-%d"
-    sys_prompt += "\n\n" + datetime.datetime.now().strftime(DATE_PROMPT)
+    # DATE_PROMPT = "当前日期: %Y-%m-%d"
+    # TOOL_SYSTEM_PROMPTS = {
+    #     "simple_browser": "你可以使用 `simple_browser` 工具。该工具支持以下函数：\n`search(query: str, recency_days: int)`：使用搜索引擎进行查询并显示结果，可以使用 `recency_days` 参数控制搜索内容的时效性。\n`mclick(ids: list[int])`：获取一系列指定 id 的页面内容。每次调用时，须选择3-10个页面。选择多个角度的页面，同时尽可能选择可信任的信息来源。考虑到部分页面是无法加载的，你也可以多打开一些可能有用的页面而不用担心内容过多。\n`open_url(url: str)`：打开指定的 URL。\n\n使用 `【{引用 id}†{引用文本}】` 来引用内容。\n\n操作步骤：1. 使用 `search` 来获得信息列表; 2. 使用 `mclick` 来获取指定 ID 页面的内容; 3. 根据获得的内容进行回复。在回复中应当引用信息来源。\n 如果用户提供了 URL，也可以用 `open_url` 直接打开页面。\n如果初次搜索结果没有找到合适的信息，也可以再次使用 `search` 进行搜索。",
+    # }
+    #
+    # def build_system_prompt(
+    #         enabled_tools: list[str],
+    #         functions: list[dict],
+    # ):
+    #     value = sys_prompt
+    #     value += "\n\n" + datetime.now().strftime(DATE_PROMPT)
+    #     value += "\n\n# 可用工具"
+    #     contents = []
+    #     for tool in enabled_tools:
+    #         contents.append(f"\n\n## {tool}\n\n{TOOL_SYSTEM_PROMPTS[tool]}")
+    #     for function in functions:
+    #         content = f"\n\n## {function['name']}\n\n{json.dumps(function, ensure_ascii=False, indent=4)}"
+    #         content += "\n在调用上述函数时，请使用 Json 格式表示调用的参数。"
+    #         contents.append(content)
+    #     value += "".join(contents)
+    #     return value
     # 在侧边栏添加一个按钮来触发弹出框
     # 初始化 show_expander 状态
     if 'show_expander' not in st.session_state:
@@ -297,17 +325,34 @@ if prompt := st.chat_input("请输入您的问题："):
 
     # query_results = query_chroma(processed_prompt)
     # if query_results:
-    if sys_prompt:
-        routing_instructions = sys_prompt
+        # 检查是否包含工具调用指令
+    tool_call_match = re.search(r"调用工具：(\w+)", processed_prompt)
+    if tool_call_match:
+        tool_name = tool_call_match.group(1).strip()
+        st.session_state.messages.append(
+            # {"role": "assistant", "content": "正在调用工具...",
+            #  "tool_calls": [{"name": tool_name, "arguments": processed_prompt}]}
+            {"role": "tool", "content": "正在调用工具...",
+             "tool_calls": [{"name": tool_name, "arguments": processed_prompt}]}
+        )
+        st.write(f"工具调用匹配成功: {tool_name}")
+
+    else:
+        st.write("没有匹配到工具调用指令")
+    if st.session_state.sys_prompt:
+        routing_instructions = st.session_state.sys_prompt
     else:
         routing_instructions = ''
+    if page == Mode.ALL_TOOLS.value:
+        routing_instructions += "\n\n" + build_system_prompt(list(ALL_TOOLS), tools)
     response_content = get_ai_response(
         st.session_state.api_token,
         st.session_state.model,
         st.session_state.messages,
         st.session_state.temperature,
         st.session_state.max_tokens,
-        routing_instructions
+        routing_instructions,
+        tools
     )
     st.session_state.messages.append({"role": "assistant", "content": response_content})
 
