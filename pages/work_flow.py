@@ -5,7 +5,8 @@ import streamlit as st
 import pandas as pd
 import json
 import subprocess
-from core.components.file_operations import upload_file
+
+from core.components import get_action_handlers
 from core.components.data_processing import process_data
 from core.components.nl2sql import input_nl_query, semantic_parsing, db_schema_understanding, generate_sql
 from core.components.sql_operations import execute_sql
@@ -111,18 +112,12 @@ def main():
 
     # 在侧边栏中显示每个步骤
     steps_to_remove = []
+    action_handlers = get_action_handlers()
+    action_names = list(action_handlers.keys()) + ['显示结果']
+
     for i, step in enumerate(st.session_state.steps):
         cols = st.sidebar.columns([4, 1])
-        selected_step = cols[0].selectbox(f"{step}：", [
-            "上传文件",
-            "数据处理",
-            "显示结果",
-            "输入自然语言查询",
-            "语义解析",
-            "数据库模式理解",
-            "生成 SQL",
-            "执行 SQL"
-        ], key=f"workflow_step_{i}")
+        selected_step = cols[0].selectbox(f"{step}：", action_names, key=f"workflow_step_{i}")
 
         if selected_step == "数据处理":
             st.session_state[f"workflow_params_{i}"] = {
@@ -134,7 +129,6 @@ def main():
 
         if cols[1].button("删除", key=f"delete_step_{i}"):
             steps_to_remove.append(i)
-
     # 删除选中的步骤并重新编号
     if steps_to_remove:
         for i in sorted(steps_to_remove, reverse=True):
