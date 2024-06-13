@@ -13,7 +13,7 @@ st.set_page_config(
     menu_items={
         'Get Help': 'https://www.extremelycoolapp.com/help',
         'Report a bug': "https://www.extremelycoolapp.com/bug",
-        'About': "# This is an SQL Dialect Translator app!"
+        'About': "- 在此随便进行SQL翻译转换!"
     }
 )
 

@@ -1,6 +1,9 @@
 import pandas as pd
 
 def process_data(data, method):
+    """
+    数据处理
+    """
     if method == "数值列求和":
         data['Sum'] = data.select_dtypes(include='number').sum(axis=1)
     elif method == "数值列求平均":

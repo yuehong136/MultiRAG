@@ -2,6 +2,9 @@ import sqlite3
 import pandas as pd
 
 def execute_sql(sql_query):
+    """
+    执行 SQL
+    """
     conn = sqlite3.connect(':memory:')
     c = conn.cursor()
     c.execute('''CREATE TABLE employees (id int, name text, age int, department_id int)''')

@@ -5,10 +5,10 @@ import pandas as pd
 import numpy as np
 import io
 from pathlib import Path
-from core.components.file_operations import upload_file
-from core.components.data_processing import process_data
-from core.components.sql_operations import execute_sql
-from core.components.nl2sql import input_nl_query, semantic_parsing, db_schema_understanding, generate_sql
+import core.components.file_operations as file_ops
+import core.components.data_processing as data_ops
+import core.components.sql_operations as sql_ops
+import core.components.nl2sql as nl2sql
 
 # 设置日志记录
 logging.basicConfig(level=logging.INFO)
@@ -64,39 +64,21 @@ async def execute_workflow(file: UploadFile = File(None), use_uploaded: bool = D
         workflow = read_workflow(use_uploaded=use_uploaded)
         result = None
 
+        action_handlers = get_action_handlers()
+
         for step in workflow:
             action = step["action"]
+            params = step.get("params", {})
             logger.info(f"执行步骤: {step}")
 
-            match action:
-                case "上传文件":
-                    if file is not None:
-                        result = await handle_upload_file(file)
-                    else:
-                        raise HTTPException(status_code=400, detail="未提供文件进行上传")
-                case "数据处理":
-                    if result is not None:
-                        result = process_data(result, step["params"]["method"])
-                    else:
-                        raise HTTPException(status_code=400, detail="没有数据可处理")
-                case "显示结果":
-                    if result is not None:
-                        result = display_results(result)
-                    else:
-                        raise HTTPException(status_code=400, detail="没有数据可显示")
-                case "输入自然语言查询":
-                    result = input_nl_query(step["params"]["query"])
-                case "语义解析":
-                    result = semantic_parsing(result)
-                case "数据库模式理解":
-                    result = db_schema_understanding()
-                case "生成 SQL":
-                    result = generate_sql(result, db_schema_understanding())
-                case "执行 SQL":
-                    if result is not None:
-                        result = execute_sql(result)
-                    else:
-                        raise HTTPException(status_code=400, detail="没有要执行的SQL查询")
+            if action in action_handlers:
+                handler = action_handlers[action]
+                if handler.__name__ == 'handle_upload_file':
+                    result = await handler(file)
+                else:
+                    result = handler(result, **params)
+            else:
+                raise HTTPException(status_code=400, detail=f"未知的操作: {action}")
 
         serializable_result = convert_to_serializable(result)
         logger.info(f"工作流执行结果: {serializable_result}")
@@ -120,3 +102,25 @@ async def handle_upload_file(file: UploadFile):
 def display_results(data):
     logger.info("显示结果")
     return convert_to_serializable(data)
+
+def get_action_handlers():
+    """
+    获取所有action的映射关系
+    """
+    import core.components.file_operations as file_ops
+    import core.components.data_processing as data_ops
+    import core.components.sql_operations as sql_ops
+    import core.components.nl2sql as nl2sql
+
+    handlers = {}
+
+    for module in [file_ops, data_ops, sql_ops, nl2sql]:
+        for name in dir(module):
+            obj = getattr(module, name)
+            if callable(obj) and obj.__doc__:
+                handlers[obj.__doc__.strip()] = obj
+
+    # 单独处理文件上传操作
+    handlers["上传文件"] = handle_upload_file
+
+    return handlers
