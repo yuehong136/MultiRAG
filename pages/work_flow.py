@@ -1,15 +1,13 @@
 import io
 import atexit
-
 import streamlit as st
 import pandas as pd
-import json
-import subprocess
-
 from core.components import get_action_handlers
 from core.components.data_processing import process_data
+from core.components.llm import zhipuai
 from core.components.nl2sql import input_nl_query, semantic_parsing, db_schema_understanding, generate_sql
 from core.components.sql_operations import execute_sql
+from utils.workflow_utils import save_workflow, import_workflow, stop_fastapi_server, generate_api
 from configs import VERSION
 
 st.set_page_config(
@@ -24,65 +22,9 @@ st.set_page_config(
     }
 )
 
-FASTAPI_PROCESS = None
-
-# 保存编排为 JSON 文件
-def save_workflow():
-    if 'steps' in st.session_state:
-        steps = [{"step": step, "action": st.session_state[f"workflow_step_{i}"],
-                  "params": st.session_state.get(f"workflow_params_{i}", {})} for i, step in
-                 enumerate(st.session_state.steps)]
-        workflow_json = json.dumps(steps, ensure_ascii=False, indent=4)
-        st.download_button("下载当前编排", workflow_json, "workflow.json", "application/json")
-    else:
-        st.error("没有步骤可以保存！")
-
-
-# 导入 JSON 文件生成编排
-def import_workflow():
-    uploaded_file = st.file_uploader("上传编排的 JSON 文件", type="json")
-    if uploaded_file is not None:
-        workflow_json = json.load(uploaded_file)
-        st.session_state.steps = [f"步骤 {i + 1}" for i in range(len(workflow_json))]
-        for i, step in enumerate(workflow_json):
-            st.session_state[f"workflow_step_{i}"] = step["action"]
-            st.session_state[f"workflow_params_{i}"] = step["params"]
-        st.success("编排导入成功！")
-
-
-# 生成 API
-def generate_api():
-    global FASTAPI_PROCESS
-    if 'steps' in st.session_state:
-        steps = [{"step": step, "action": st.session_state[f"workflow_step_{i}"],
-                  "params": st.session_state.get(f"workflow_params_{i}", {})} for i, step in
-                 enumerate(st.session_state.steps)]
-        workflow_json = json.dumps(steps, ensure_ascii=False, indent=4)
-
-        # 保存 JSON 文件
-        with open("workflow.json", "w", encoding="utf-8") as f:
-            f.write(workflow_json)
-
-        # 启动 FastAPI 服务器
-        command = ["uvicorn", "utils.work_flow_api:app", "--reload"]
-        FASTAPI_PROCESS = subprocess.Popen(command)
-        st.success("API 生成成功！访问 http://127.0.0.1:8000/docs 查看 API 文档。")
-    else:
-        st.error("没有步骤可以生成 API！")
-
-# 停止 FastAPI 服务器
-def stop_fastapi_server():
-    global FASTAPI_PROCESS
-    if FASTAPI_PROCESS is not None:
-        FASTAPI_PROCESS.terminate()
-        FASTAPI_PROCESS.wait()
-        FASTAPI_PROCESS = None
-        st.success("FastAPI 服务器已停止")
-
-# 确保在 Python 解释器关闭时终止 FastAPI 服务器
 atexit.register(stop_fastapi_server)
 
-# 主函数构建工作流界面
+
 def main():
     with st.sidebar:
         st.image(
@@ -97,10 +39,10 @@ def main():
         st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
         st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
         st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
+        st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
 
-    st.title("自定义工作流构建器")
+    st.markdown("# " + "***" + "自定义工作流构建器" + "***")
 
-    # 侧边栏用于构建工作流
     st.sidebar.title("构建你的工作流")
 
     if 'steps' not in st.session_state:
@@ -110,7 +52,6 @@ def main():
     if add_step:
         st.session_state.steps.append(f"步骤 {len(st.session_state.steps) + 1}")
 
-    # 在侧边栏中显示每个步骤
     steps_to_remove = []
     action_handlers = get_action_handlers()
     action_names = list(action_handlers.keys()) + ['显示结果']
@@ -127,31 +68,63 @@ def main():
         if selected_step == "输入自然语言查询":
             st.session_state[f"workflow_params_{i}"] = {"query": cols[0].text_input("输入查询", key=f"nl_query_{i}")}
 
+        if selected_step == "智谱GLM4对话":
+            st.session_state[f"workflow_params_{i}"] = {
+                "sys_prompt": cols[0].text_area("定义系统提示词", key=f"glm4_chat_{i}_sys_prompt"),
+                "query": cols[0].text_input("输入查询", key=f"glm4_chat_{i}_query"),
+                "temperature": cols[0].slider("选择模型温度", 0.0, 1.0, 0.8, key=f"glm4_chat_{i}_temperature"),
+                "max_tokens": cols[0].slider("选择最大返回字数", 0, 4096, 512, key=f"glm4_chat_{i}_max_tokens")}
+
+            if cols[0].button("执行智谱GLM4对话", key=f"execute_glm4_chat_{i}"):
+                sys_prompt = st.session_state.get(f"workflow_params_{i}", {}).get("sys_prompt", "")
+                query = st.session_state.get(f"workflow_params_{i}", {}).get("query", "")
+                temperature = st.session_state.get(f"workflow_params_{i}", {}).get("temperature", 0.8)
+                max_tokens = st.session_state.get(f"workflow_params_{i}", {}).get("max_tokens", 512)
+                message = [{"role": "user", "content": query}]
+                nl_query = zhipuai(message, temperature, max_tokens, sys_prompt)
+                st.session_state[f'nl_query_{i}'] = nl_query
+
         if cols[1].button("删除", key=f"delete_step_{i}"):
             steps_to_remove.append(i)
-    # 删除选中的步骤并重新编号
+
     if steps_to_remove:
-        for i in sorted(steps_to_remove, reverse=True):
-            st.session_state.steps.pop(i)
-            del st.session_state[f"workflow_step_{i}"]
-            if f"workflow_params_{i}" in st.session_state:
-                del st.session_state[f"workflow_params_{i}"]
-        # 重新编号
-        st.session_state.steps = [f"步骤 {i + 1}" for i in range(len(st.session_state.steps))]
+        new_steps = []
+        new_workflow_steps = {}
+        new_workflow_params = {}
+        new_nl_query = {}
+        for i, step in enumerate(st.session_state.steps):
+            if i not in steps_to_remove:
+                new_steps.append(f"步骤 {len(new_steps) + 1}")
+                new_workflow_steps[f"workflow_step_{len(new_steps) - 1}"] = st.session_state[f"workflow_step_{i}"]
+                if f"workflow_params_{i}" in st.session_state:
+                    new_workflow_params[f"workflow_params_{len(new_steps) - 1}"] = st.session_state[
+                        f"workflow_params_{i}"]
+                if f"nl_query_{i}" in st.session_state:
+                    new_nl_query[f"nl_query_{len(new_steps) - 1}"] = st.session_state[f"nl_query_{i}"]
+
+        keys_to_clear = list(st.session_state.keys())
+        for key in keys_to_clear:
+            if key.startswith("workflow_step_") or key.startswith("workflow_params_") or key.startswith("nl_query_"):
+                del st.session_state[key]
+
+        st.session_state.steps = new_steps
+        st.session_state.update(new_workflow_steps)
+        st.session_state.update(new_workflow_params)
+        st.session_state.update(new_nl_query)
+
         st.experimental_rerun()
 
-    # 保存编排和导入编排
     with st.sidebar:
         st.subheader("保存和导入编排")
         save_workflow()
         import_workflow()
-        st.subheader("生成 API")
+        st.subheader("API 服务管理")
         if st.button("生成 API"):
             generate_api()
+            st.success("API 生成成功！访问 http://127.0.0.1:8000/docs 查看 API 文档。")
         if st.button("停止 API"):
             stop_fastapi_server()
 
-    # 主界面执行工作流
     for i, step in enumerate(st.session_state.steps):
         selected_step = st.session_state[f"workflow_step_{i}"]
 
@@ -175,6 +148,11 @@ def main():
                 st.session_state['processed_data'] = processed_data
                 st.write("处理后的数据：")
                 st.dataframe(processed_data)
+
+        elif selected_step == "智谱GLM4对话":
+            st.header(f"{step}：智谱GLM4对话")
+            if f'nl_query_{i}' in st.session_state:
+                st.write("自然语言查询：", st.session_state[f'nl_query_{i}'])
 
         elif selected_step == "显示结果":
             st.header(f"{step}：显示结果")
@@ -230,6 +208,7 @@ def main():
                 st.write("SQL 执行结果：", sql_result)
             else:
                 st.error("请先生成 SQL 查询！")
+
 
 if __name__ == "__main__":
     main()

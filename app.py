@@ -176,11 +176,12 @@ with st.sidebar:
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
     st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
+    st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
     api_token = st.text_input("输入API-KEY:", type="password")
     if api_token:
         st.session_state.api_token = api_token
         st.success("API Token 已经配置")
-    model = st.selectbox("选择模型", ["glm-4-0520", "glm-3-turbo", "gpt-3.5-turbo"])
+    model = st.selectbox("选择模型", ["glm-4-0520","glm-4-airx","glm-4-air","glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo"])
     st.session_state.model = model
 
 

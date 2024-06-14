@@ -34,7 +34,8 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # 页面标题和说明
-st.title("SQL方言翻译器")
+# st.title("SQL方言翻译器")
+st.markdown("# " + "***" + "SQL方言翻译器" + "***")
 st.markdown("""
     使用此工具，您可以将SQL查询从一种方言转换为另一种方言。
     选择源方言和目标方言，输入要转换的SQL查询，然后点击***Translate***按钮即可获取转换后的SQL查询。
@@ -54,6 +55,7 @@ with st.sidebar:
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
     st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
+    st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
 
 # 创建两列布局
 col1, col2 = st.columns(2)

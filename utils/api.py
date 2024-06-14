@@ -2,10 +2,7 @@
 import openai
 import streamlit as st
 from core.llm.chat_model.chat_factory import ChatFactory
-import requests
-
 from core.tools.tools_registry import dispatch_tool
-
 
 # fastapi_url = "http://127.0.0.1:8000"  # FastAPI 服务的URL
 #

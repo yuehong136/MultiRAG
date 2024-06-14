@@ -10,4 +10,3 @@ def process_data(result, method, **kwargs):
     elif method == "数值列求平均":
         result['Mean'] = result.select_dtypes(include='number').mean(axis=1)
     return result
-
