@@ -18,3 +18,13 @@ langchain_openai >= 0.1.8
 psycopg2 >= 2.9.9
 # psutil（Process and System utilities）是一个跨平台的Python库，用于检索系统运行的进程和系统利用率（如CPU、内存、磁盘、网络等）的信息。它主要用于系统监控、分析和限制进程资源等任务。
 psutil >= 5.9.8
+# 提供了一种增强型的枚举（Enumeration）类实现，使得枚举值具有更多的功能和安全性
+strenum >= 0.4.15
+# milvus向量数据库
+pymilvus >= 2.4.1
+# chroma向量数据库
+langchain_chroma >= 0.1.1
+# bs4 网页爬虫
+bs4 >= 0.0.2
+# LangChain Hub是一个用于存储和管理LangChain对象（例如提示模板）的中心。这个模块提供了两个主要功能：push和pull，分别用于将对象推送到LangChain Hub和从LangChain Hub拉取对象。
+langchainhub >= 0.1.20

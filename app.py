@@ -41,10 +41,6 @@ class Mode(str, Enum):
 #   st.stop()
 # st.success('Thank you for inputting a name.')
 default_model = 'GLM-4-520'
-st.toast(
-    f"欢迎使用 [`Datav-RAG`](https://dcs.dataonv.com/#/home) ! \n\n"
-    f"当前运行的模型`{default_model}`, 您可以开始提问了."
-)
 
 HELP = """
 ### 🎉 欢迎使用 MultiRAG!【文档对话版】
@@ -63,6 +59,43 @@ page = st.radio(
     # on_change=page_changed,
 )
 # exit()
+
+# Function to save chat history
+# Function to save chat history
+def save_chat_history(history, custom_name=None, user_id='admin', file_path=None, rename=False):
+    first_user_message = history[1]["content"] if len(history) > 1 and history[1]["role"] == "user" else "session"
+    sanitized_message = "".join([c if c.isalnum() else " " for c in first_user_message])
+    truncated_message = sanitized_message[:10].strip()
+    if custom_name:
+        sanitized_custom_name = "".join([c if c.isalnum() else " " for c in custom_name])
+        truncated_message = sanitized_custom_name[:10].strip()
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    if file_path and rename:
+        new_file_name = f"{os.path.dirname(file_path)}/{timestamp}-{truncated_message}.json"
+        os.rename(file_path, new_file_name)
+    else:
+        new_file_name = f"./workspace/{user_id}/{timestamp}-{truncated_message}.json"
+    os.makedirs(os.path.dirname(new_file_name), exist_ok=True)
+    with open(new_file_name, 'w', encoding='utf-8') as f:
+        json.dump(history, f, ensure_ascii=False, indent=4)
+
+# Function to load chat history
+def load_chat_history(user_id='admin'):
+    history_dir = f"./workspace/{user_id}"
+    if not os.path.exists(history_dir):
+        os.makedirs(history_dir)
+    history_files = [f for f in os.listdir(history_dir) if f.endswith('.json')]
+    history_files.sort(key=lambda x: x.split('-')[0], reverse=True)  # Sort by timestamp in descending order
+    return history_files
+
+# Function to display chat history
+def display_chat_history(file_name):
+    with open(file_name, 'r', encoding='utf-8') as f:
+        history = json.load(f)
+    for message in history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    return history
 
 
 api_key = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"  # 7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv
@@ -177,12 +210,62 @@ with st.sidebar:
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
     st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
     st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
+
+    st.header("历史记录")
+    history_files = load_chat_history()
+    display_files = [os.path.splitext(f)[0].split('-', 1)[1] for f in
+                     history_files]  # Remove timestamp and .json extension
+    selected_file = st.selectbox("选择一个历史会话", display_files)
+    selected_file_full_path = f"./workspace/admin/{history_files[display_files.index(selected_file)]}"
+
+    cols = st.columns(2)
+    save_btn = cols[0]
+    load_btn = cols[1]
+    # 保存会话按钮
+    if save_btn.button("保存会话", use_container_width=True):
+        st.session_state.show_save_input = True
+
+    if st.session_state.get("show_save_input", False):
+        custom_name = st.text_input("请输入会话名称（可选）:", key="custom_name")
+        if st.button("确认保存", key="confirm_save"):
+            if "from_history" in st.session_state and st.session_state.from_history:
+                # 从历史会话加载
+                save_chat_history(st.session_state.messages, custom_name, file_path=selected_file_full_path,
+                                  rename=bool(custom_name))
+            else:
+                # 新建会话
+                save_chat_history(st.session_state.messages, custom_name)
+            st.session_state.show_save_input = False
+            st.success('当前会话已成功保存！刷新网页后可查看记录')
+
+    if load_btn.button("加载会话", use_container_width=True):
+        st.success('当前会话已成功加载！')
+        st.session_state.messages = display_chat_history(selected_file_full_path)
+        st.session_state.from_history = True  # 标记为从历史会话加载
+
     api_token = st.text_input("输入API-KEY:", type="password")
     if api_token:
         st.session_state.api_token = api_token
         st.success("API Token 已经配置")
     model = st.selectbox("选择模型", ["glm-4-0520","glm-4-airx","glm-4-air","glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo"])
     st.session_state.model = model
+
+       # 在应用的初始化部分或者适当的位置初始化上一次的model_name
+    if 'previous_model_name' not in st.session_state:
+        st.session_state.previous_model_name = None
+
+    # 获取当前model_name
+    model_name = st.session_state.model
+
+    # 检查model_name是否发生变化
+    if model_name != st.session_state.previous_model_name:
+        # 当model_name变化时，显示toast消息，并更新previous_model_name
+        st.toast(
+            f"欢迎使用 [`Datav-RAG`](https://dcs.dataonv.com/#/home) ! \n\n"
+            f"当前运行的模型`{model_name}`."
+        )
+        st.session_state.previous_model_name = model_name
+
 
 
     def on_mode_change():
@@ -324,8 +407,6 @@ if prompt := st.chat_input("请输入您的问题："):
     with st.chat_message("user"):
         st.markdown(processed_prompt)
 
-    # query_results = query_chroma(processed_prompt)
-    # if query_results:
         # 检查是否包含工具调用指令
     tool_call_match = re.search(r"调用工具：(\w+)", processed_prompt)
     if tool_call_match:
@@ -361,6 +442,16 @@ if prompt := st.chat_input("请输入您的问题："):
     # with st.chat_message("assistant"):
     #     response_container = st.empty()
     #     response_container.markdown(response_content)
+
+    # Save chat history only on session end or refresh
+#     st.session_state.save_history = True
+#
+#
+# def save_session_history():
+#     if 'save_history' in st.session_state and st.session_state.save_history:
+#         save_chat_history(st.session_state.messages)
+#         st.session_state.save_history = False
+
 
 code = """
 <style>

@@ -51,7 +51,7 @@
 4. 运行项目：
     
     ```bash
-    streamlit run app.py
+    streamlit run main.py
     ```
     
 
