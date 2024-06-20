@@ -1,6 +1,7 @@
 # chat_factory.py
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
+from core.llm.chat_model.models.ollama_chat import OllamaChat
 
 
 class ChatFactory:
@@ -30,7 +31,7 @@ class ChatFactory:
         """
         根据模型名称创建并返回相应的聊天机器人实例。
 
-        如果模型名称以"glm"开头，返回ZhipuChat实例。
+        如果模型名称以"glm"开头，返回ZhipuChat实例，以此类推。
         如果模型名称不被支持，则抛出ValueError异常。
 
         返回:
@@ -41,6 +42,10 @@ class ChatFactory:
             return ZhipuChat(self.key, self.model_name, self.base_url)
         elif self.model_name.startswith("gpt"):
             return GptTurbo(self.key, self.model_name, self.base_url)
+        elif self.model_name.startswith("qwen"):
+            self.base_url = "http://localhost:6006"
+
+            return OllamaChat(self.key, self.model_name, self.base_url)
         # 可以添加更多模型的实例化条件
         else:
             # 如果模型名称不被支持，则抛出异常

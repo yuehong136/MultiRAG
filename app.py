@@ -247,7 +247,7 @@ with st.sidebar:
     if api_token:
         st.session_state.api_token = api_token
         st.success("API Token 已经配置")
-    model = st.selectbox("选择模型", ["glm-4-0520","glm-4-airx","glm-4-air","glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo"])
+    model = st.selectbox("选择模型", ["glm-4-0520","glm-4-airx","glm-4-air","glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo", "qwen2:7b-instruct-fp16"])
     st.session_state.model = model
 
        # 在应用的初始化部分或者适当的位置初始化上一次的model_name
