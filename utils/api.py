@@ -97,9 +97,6 @@ def get_ai_recommend(api_token, model, messages, temperature, max_tokens, system
 @st.cache_data(show_spinner="Fetching data from LLM...", ttl=60)
 def get_ai_response(api_token, model, messages, temperature, max_tokens, system_prompt, tools=None):
 
-    factory = ChatFactory(api_token, model)
-    chat_instance = factory.get_chat_instance()
-
     # 定义工具配置
     def format_tool_params(params):
         properties = {}
@@ -130,17 +127,30 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
         }
         tool_definitions.append(tool_definition)
 
-    gen_conf = {
+    gen_conf_default = {
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    gen_conf_has_tool = {
         "temperature": temperature,
         "max_tokens": max_tokens,
         "tools": tool_definitions,
         "tool_choice": "auto"
     }
+    if model.startswith("Doubao"):
+        model = 'ep-20240623093120-66vmh'
+        # print(model)
+        gen_conf = gen_conf_default
+    else:
+        gen_conf = gen_conf_has_tool
+
+    factory = ChatFactory(api_token, model)
+    chat_instance = factory.get_chat_instance()
 
     response_container = st.empty()
     response_content = ""
 
-    # # # 添加调试信息
+    # 添加调试信息
     # st.write(f"Gen Config: {gen_conf}")
     # st.write(f"Routing Instructions: {system_prompt}")
     # st.write(f"Tools: {tools}")

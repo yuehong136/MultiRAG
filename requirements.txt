@@ -30,3 +30,5 @@ bs4 >= 0.0.2
 langchainhub >= 0.1.20
 # ollama python sdk
 ollama >= 0.2.1
+# 豆包模型，抖音旗下火山引擎的sdk
+volcengine-python-sdk[ark] >= 1.0.87

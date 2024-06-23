@@ -17,8 +17,6 @@ from utils.api import get_ai_response, get_ai_recommend, process_user_input
 from configs import VERSION, MODEL_PLATFORMS
 from web_ui.dialogue.dialogue import export2md, build_system_prompt
 
-# from streamlit_extras.bottom_container import bottom
-
 # Set Streamlit page configuration
 st.set_page_config(
     page_title="MultiRAG",
@@ -168,6 +166,7 @@ if "uploaded_texts" not in st.session_state:
 
 if 'sys_prompt' not in st.session_state:
     st.session_state.sys_prompt = '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。你习惯性为用户推荐三个聊天话题'
+    # st.session_state.sys_prompt = ''
 
 if 'current_time' not in st.session_state:
     st.session_state.current_time = datetime.datetime.now()
@@ -583,7 +582,7 @@ with st.sidebar:
             st.success("API Token 已经配置")
         model = st.selectbox("选择模型",
                              ["glm-4-0520", "glm-4-airx", "glm-4-air", "glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo",
-                              "qwen2:7b-instruct-fp16", "qwen2:72b-instruct-q4_0", "qwen2:72b-instruct-q8_0"])
+                              "qwen2:7b-instruct-fp16", "qwen2:72b-instruct-q4_0", "qwen2:72b-instruct-q8_0", "Doubao-pro-32k"])
         st.session_state.model = model
 
         max_tokens = st.slider("max_tokens", min_value=0, max_value=4096, value=512)
