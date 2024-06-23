@@ -57,11 +57,45 @@ from core.tools.tools_registry import dispatch_tool
 #             st.error("Received empty chunk")
 #     st.success("Fetched data from GLM-4!")
 #     return response_content
-@st.cache_data(show_spinner="Fetching data from LLM...", ttl=60, experimental_allow_widgets=True)
-def get_ai_response(api_token, model, messages, temperature, max_tokens, system_prompt, tools):
-    now_temperature = float(st.text_input(label="当前的temperature为: ", value=temperature,
-                                          help="temperature是范围0-1的浮点数"))
 
+# @st.cache_data(show_spinner="Fetching data from LLM...", ttl=60)
+def get_ai_recommend(api_token, model, messages, temperature, max_tokens, system_prompt):
+    factory = ChatFactory(api_token, model)
+    chat_instance = factory.get_chat_instance()
+
+    gen_conf = {
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }
+
+    response_container = st.empty()
+    response_content = ""
+
+    history_with_system_prompt = [{"role": "system", "content": system_prompt}] + messages
+    st.write(history_with_system_prompt)
+    try:
+        response_content, _ = chat_instance.chat(system_prompt, history_with_system_prompt, gen_conf)
+        response_container.markdown(response_content)
+        # st.success("Fetched data successfully!")
+    except openai.APIError as e:
+        st.error(f"API error: {e}")
+        return f"**ERROR**: {e}"
+    except openai.RateLimitError as e:
+        st.error(f"Rate limit exceeded: {e}")
+        return f"**ERROR**: {e}"
+    except openai.AuthenticationError as e:
+        st.error(f"Authentication error: {e}")
+        return f"**ERROR**: {e}"
+    except openai.OpenAIError as e:
+        st.error(f"OpenAI error: {e}")
+        return f"**ERROR**: {e}"
+    except Exception as e:
+        st.error(f"Unexpected error: {e},***看看API-KEY是否配置正确了呢？***")
+        return f"**ERROR**: {e}*"
+    return response_content
+
+@st.cache_data(show_spinner="Fetching data from LLM...", ttl=60)
+def get_ai_response(api_token, model, messages, temperature, max_tokens, system_prompt, tools=None):
 
     factory = ChatFactory(api_token, model)
     chat_instance = factory.get_chat_instance()
@@ -97,7 +131,7 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
         tool_definitions.append(tool_definition)
 
     gen_conf = {
-        "temperature": now_temperature if now_temperature else temperature,
+        "temperature": temperature,
         "max_tokens": max_tokens,
         "tools": tool_definitions,
         "tool_choice": "auto"

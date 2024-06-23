@@ -12,7 +12,7 @@ logger = logging.getLogger("workflow_api")
 app = FastAPI()
 
 DEFAULT_WORKFLOW_PATH = Path(r"/workflow.json")
-UPLOADED_WORKFLOW_PATH = Path(r"/workflow.json")
+UPLOADED_WORKFLOW_PATH = Path(r"./workflow.json")
 
 def read_workflow(use_uploaded: bool = False):
     path = UPLOADED_WORKFLOW_PATH if use_uploaded and UPLOADED_WORKFLOW_PATH.exists() else DEFAULT_WORKFLOW_PATH

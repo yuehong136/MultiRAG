@@ -1,19 +1,23 @@
-import base64
 import datetime
 import json
 import os
 import re
 from enum import Enum
+from typing import Literal, Dict
 from uuid import uuid4
+
+import requests
 import streamlit as st
 from PIL import Image
 
 from core.file.utils import extract_pdf, extract_docx, extract_pptx, extract_text
 from core.llm.ocr_model.ocr_factory import ModelFactory
 from core.tools.tools_registry import get_tools, ALL_TOOLS
-from utils.api import get_ai_response, process_user_input
-from configs import VERSION
+from utils.api import get_ai_response, get_ai_recommend, process_user_input
+from configs import VERSION, MODEL_PLATFORMS
 from web_ui.dialogue.dialogue import export2md, build_system_prompt
+
+# from streamlit_extras.bottom_container import bottom
 
 # Set Streamlit page configuration
 st.set_page_config(
@@ -58,9 +62,8 @@ page = st.radio(
     label_visibility="visible",
     # on_change=page_changed,
 )
-# exit()
 
-# Function to save chat history
+
 # Function to save chat history
 def save_chat_history(history, custom_name=None, user_id='admin', file_path=None, rename=False):
     first_user_message = history[1]["content"] if len(history) > 1 and history[1]["role"] == "user" else "session"
@@ -79,6 +82,7 @@ def save_chat_history(history, custom_name=None, user_id='admin', file_path=None
     with open(new_file_name, 'w', encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False, indent=4)
 
+
 # Function to load chat history
 def load_chat_history(user_id='admin'):
     history_dir = f"./workspace/{user_id}"
@@ -88,6 +92,7 @@ def load_chat_history(user_id='admin'):
     history_files.sort(key=lambda x: x.split('-')[0], reverse=True)  # Sort by timestamp in descending order
     return history_files
 
+
 # Function to display chat history
 def display_chat_history(file_name):
     with open(file_name, 'r', encoding='utf-8') as f:
@@ -96,6 +101,40 @@ def display_chat_history(file_name):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     return history
+
+
+# 删除会话记录函数
+def delete_chat_history(custom_name=None, user_id='admin', file_path=None):
+    history_dir = f"./workspace/{user_id}"
+    if not os.path.exists(history_dir):
+        # os.makedirs(history_dir)
+        st.error('请检查：当前用户的会话历史目录是否存在')
+    # 获取所有历史会话文件
+    history_files = [f for f in os.listdir(history_dir) if f.endswith('.json')]
+    history_files.sort(key=lambda x: x.split('-')[0], reverse=True)  # 按时间戳降序排列
+
+    if file_path:
+        # 如果提供了文件路径，直接删除该文件
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            return True
+        else:
+            return False
+    elif custom_name:
+        # 如果提供了自定义名称，通过自定义名称删除对应的文件
+        for history_file in history_files:
+            display_name = os.path.splitext(history_file)[0].split('-', 1)[1]
+            if custom_name.strip() == display_name.strip():
+                os.remove(os.path.join(history_dir, history_file))
+                return True
+    else:
+        # 如果没有提供自定义名称或文件路径，删除最早的会话记录
+        if history_files:
+            oldest_file = history_files[-1]
+            os.remove(os.path.join(history_dir, oldest_file))
+            return True
+
+    return False
 
 
 api_key = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"  # 7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv
@@ -128,8 +167,16 @@ if "uploaded_texts" not in st.session_state:
     st.session_state.uploaded_texts = ''
 
 if 'sys_prompt' not in st.session_state:
-    st.session_state.sys_prompt = '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。'
+    st.session_state.sys_prompt = '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。你习惯性为用户推荐三个聊天话题'
 
+if 'current_time' not in st.session_state:
+    st.session_state.current_time = datetime.datetime.now()
+
+if 'weather' not in st.session_state:
+    st.session_state.weather = "Loading..."
+
+if 'selected_option' not in st.session_state:
+    st.session_state.selected_option = None
 
 tools = get_tools() if page == Mode.ALL_TOOLS else []
 first_round = len(st.session_state.messages) == 1
@@ -211,183 +258,339 @@ with st.sidebar:
     st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
     st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
 
-    st.header("历史记录")
-    history_files = load_chat_history()
-    display_files = [os.path.splitext(f)[0].split('-', 1)[1] for f in
-                     history_files]  # Remove timestamp and .json extension
-    selected_file = st.selectbox("选择一个历史会话", display_files)
-    selected_file_full_path = f"./workspace/admin/{history_files[display_files.index(selected_file)]}"
+    import datetime
+    import time
 
-    cols = st.columns(2)
-    save_btn = cols[0]
-    load_btn = cols[1]
-    # 保存会话按钮
-    if save_btn.button("保存会话", use_container_width=True):
-        st.session_state.show_save_input = True
+    # 初始化session_state变量
+    if 'current_time' not in st.session_state:
+        st.session_state.current_time = datetime.datetime.now()
 
-    if st.session_state.get("show_save_input", False):
-        custom_name = st.text_input("请输入会话名称（可选）:", key="custom_name")
-        if st.button("确认保存", key="confirm_save"):
-            if "from_history" in st.session_state and st.session_state.from_history:
-                # 从历史会话加载
-                save_chat_history(st.session_state.messages, custom_name, file_path=selected_file_full_path,
-                                  rename=bool(custom_name))
-            else:
-                # 新建会话
-                save_chat_history(st.session_state.messages, custom_name)
-            st.session_state.show_save_input = False
-            st.success('当前会话已成功保存！刷新网页后可查看记录')
 
-    if load_btn.button("加载会话", use_container_width=True):
-        st.success('当前会话已成功加载！')
-        st.session_state.messages = display_chat_history(selected_file_full_path)
-        st.session_state.from_history = True  # 标记为从历史会话加载
+    # 片段函数，实时更新当前时间
+    @st.experimental_fragment(run_every=60)
+    def update_time():
+        st.session_state.current_time = datetime.datetime.now()
+        # st.markdown("# 当前时间: \n" + st.session_state.current_time.strftime("%Y-%m-%d %H:%M:%S"))
+        st.markdown("# 当前时间 \n" + st.session_state.current_time.strftime("%Y-%m-%d %H:%M"))
 
-    api_token = st.text_input("输入API-KEY:", type="password")
-    if api_token:
-        st.session_state.api_token = api_token
-        st.success("API Token 已经配置")
-    model = st.selectbox("选择模型", ["glm-4-0520","glm-4-airx","glm-4-air","glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo", "qwen2:7b-instruct-fp16"])
-    st.session_state.model = model
 
-       # 在应用的初始化部分或者适当的位置初始化上一次的model_name
-    if 'previous_model_name' not in st.session_state:
-        st.session_state.previous_model_name = None
+    # 片段函数，实时更新天气信息
+    @st.experimental_fragment(run_every=3600)  # 每小时更新一次
+    def update_weather():
+        weather = get_weather("南京")
+        st.session_state.weather = weather
+        st.write(st.session_state.weather)
 
-    # 获取当前model_name
-    model_name = st.session_state.model
 
-    # 检查model_name是否发生变化
-    if model_name != st.session_state.previous_model_name:
-        # 当model_name变化时，显示toast消息，并更新previous_model_name
-        st.toast(
-            f"欢迎使用 [`Datav-RAG`](https://dcs.dataonv.com/#/home) ! \n\n"
-            f"当前运行的模型`{model_name}`."
+    @st.cache_data(show_spinner='获取天气信息...')
+    def get_weather(city_name: str) -> str:
+        """
+        获取指定城市的当前天气
+        """
+
+        if not isinstance(city_name, str):
+            raise TypeError("城市名称必须是字符串")
+
+        key_selection = {
+            "current_condition": [
+                "temp_C",
+                "FeelsLikeC",
+                "humidity",
+                "weatherDesc",
+                "observation_time",
+            ],
+        }
+
+        try:
+            resp = requests.get(f"https://wttr.in/{city_name}?format=j1")
+            resp.raise_for_status()
+            resp = resp.json()
+            current_condition = resp["current_condition"][0]
+            ret = {key: current_condition[key] for key in key_selection["current_condition"]}
+            weather_text = (
+                f"温度: {ret['temp_C']}°C\n"
+                f"体感温度: {ret['FeelsLikeC']}°C\n"
+                f"湿度: {ret['humidity']}%\n"
+                f"天气状况: {ret['weatherDesc'][0]['value']}\n"
+                f"观测时间: {ret['observation_time']}\n"
+            )
+        except Exception as e:
+            weather_text = f"获取天气数据时出错: {e}"
+
+        return weather_text
+
+
+    # # 实时显示当前时间
+    # update_time()
+    # st.header("南京天气")
+    # # update_weather()
+
+    tab1, tab2, tab3 = st.tabs(["会话管理", "模型配置", "智能模式"])
+    with tab1:
+
+        def on_mode_change():
+            mode = st.session_state.dialogue_mode
+            text = f"已切换到 {mode} 模式。"
+            if mode == "知识库问答":
+                cur_kb = st.session_state.get("selected_kb")
+                if cur_kb:
+                    text = f"{text} 当前知识库： `{cur_kb}`。"
+            st.toast(text)
+
+
+        dialogue_modes = [
+            "LLM 对话",
+            "知识库问答【暂不支持】",
+            "文件对话【暂不支持】",
+            "搜索引擎问答【暂不支持】",
+            "自定义Agent问答【暂不支持】",
+        ]
+        dialogue_mode = st.selectbox(
+            "请选择对话模式",
+            dialogue_modes,
+            index=0,
+            on_change=on_mode_change,
+            key="dialogue_mode",
         )
-        st.session_state.previous_model_name = model_name
+        sys_prompt = st.session_state.get('sys_prompt',
+                                          '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。')
+
+        history_files = load_chat_history()
+        display_files = [os.path.splitext(f)[0].split('-', 1)[1] for f in
+                         history_files]  # Remove timestamp and .json extension
+        selected_file = st.selectbox("历史会话", display_files)
+        selected_file_full_path = f"./workspace/admin/{history_files[display_files.index(selected_file)]}"
+        cols = st.columns(3)
+        load_btn = cols[0]
+        save_btn = cols[1]
+        del_btn = cols[2]
 
 
+        @st.experimental_dialog("重命名会话")
+        def handle_session_saving(selected_file_full_path=None):
+            """
+            管理会话保存的交互逻辑。
 
-    def on_mode_change():
-        mode = st.session_state.dialogue_mode
-        text = f"已切换到 {mode} 模式。"
-        if mode == "知识库问答":
-            cur_kb = st.session_state.get("selected_kb")
-            if cur_kb:
-                text = f"{text} 当前知识库： `{cur_kb}`。"
-        st.toast(text)
+            参数:
+            - selected_file_full_path: 可选参数，指定保存文件的完整路径，当从历史会话加载时使用。
+            """
+
+            # 如果显示输入框，则处理用户输入
+            custom_name = st.text_input("请输入会话名称（可选）:", key="custom_name")
+            # if st.session_state.get("show_save_input", False):
+            if st.button("确认保存", key="confirm_save"):
+                # 判断是从历史加载还是新建会话，并调用相应的保存逻辑
+                if "from_history" in st.session_state and st.session_state.from_history:
+                    # 从历史会话加载并保存
+                    save_chat_history(st.session_state.messages, custom_name, file_path=selected_file_full_path,
+                                      rename=bool(custom_name))
+                else:
+                    # 新建会话并保存
+                    save_chat_history(st.session_state.messages, custom_name)
+
+                # 保存后重置状态
+                st.session_state.show_save_input = False
+                st.success('当前会话已成功保存！刷新网页后可查看记录')
+                st.rerun()
 
 
-    dialogue_modes = [
-        "LLM 对话",
-        "知识库问答【暂不支持】",
-        "文件对话【暂不支持】",
-        "搜索引擎问答【暂不支持】",
-        "自定义Agent问答【暂不支持】",
-    ]
-    dialogue_mode = st.selectbox(
-        "请选择对话模式：",
-        dialogue_modes,
-        index=0,
-        on_change=on_mode_change,
-        key="dialogue_mode",
-    )
-    sys_prompt = st.session_state.get('sys_prompt',
-                                      '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。')
-    # DATE_PROMPT = "当前日期: %Y-%m-%d"
-    # TOOL_SYSTEM_PROMPTS = {
-    #     "simple_browser": "你可以使用 `simple_browser` 工具。该工具支持以下函数：\n`search(query: str, recency_days: int)`：使用搜索引擎进行查询并显示结果，可以使用 `recency_days` 参数控制搜索内容的时效性。\n`mclick(ids: list[int])`：获取一系列指定 id 的页面内容。每次调用时，须选择3-10个页面。选择多个角度的页面，同时尽可能选择可信任的信息来源。考虑到部分页面是无法加载的，你也可以多打开一些可能有用的页面而不用担心内容过多。\n`open_url(url: str)`：打开指定的 URL。\n\n使用 `【{引用 id}†{引用文本}】` 来引用内容。\n\n操作步骤：1. 使用 `search` 来获得信息列表; 2. 使用 `mclick` 来获取指定 ID 页面的内容; 3. 根据获得的内容进行回复。在回复中应当引用信息来源。\n 如果用户提供了 URL，也可以用 `open_url` 直接打开页面。\n如果初次搜索结果没有找到合适的信息，也可以再次使用 `search` 进行搜索。",
-    # }
-    #
-    # def build_system_prompt(
-    #         enabled_tools: list[str],
-    #         functions: list[dict],
-    # ):
-    #     value = sys_prompt
-    #     value += "\n\n" + datetime.now().strftime(DATE_PROMPT)
-    #     value += "\n\n# 可用工具"
-    #     contents = []
-    #     for tool in enabled_tools:
-    #         contents.append(f"\n\n## {tool}\n\n{TOOL_SYSTEM_PROMPTS[tool]}")
-    #     for function in functions:
-    #         content = f"\n\n## {function['name']}\n\n{json.dumps(function, ensure_ascii=False, indent=4)}"
-    #         content += "\n在调用上述函数时，请使用 Json 格式表示调用的参数。"
-    #         contents.append(content)
-    #     value += "".join(contents)
-    #     return value
-    # 在侧边栏添加一个按钮来触发弹出框
-    # 初始化 show_expander 状态
-    if 'show_expander' not in st.session_state:
-        st.session_state.show_expander = False
-    # 在侧边栏添加一个按钮来触发弹出框
-    if st.sidebar.button("定义模型", use_container_width=True):
-        st.session_state.show_expander = not st.session_state.get("show_expander", False)
-    # 在主页面显示扩展器（模态对话框）
-    if st.session_state.get("show_expander", False):
-        with st.expander("请定义你的LLM", expanded=True):
-            sys_prompt = st.text_area("默认模板如下", value='''# Role: 文档问答助手
-## Profile
-- Author: 杜晓龙
-- Version: 0.1
-- Language:  Chinese
-- Description: Describe your role. Give an overview of the character's characteristics and skills
-### Skill
-## Rules
-1. Don't break character under any circumstance.
-2. Don't talk nonsense and make up facts.
-3. Think step by step and reason yourself to the right decisions to make sure we get it right.
-## Workflow
-1. First, xxx
-2. Then, xxx
-3. Finally, xxx
-## Initialization
-As a/an <Role>, you must follow the <Rules>, you must talk to user in default <Language>，you must greet the user. Then introduce yourself and introduce the <Workflow>.
-            ''')
+        @st.experimental_dialog("删除会话")
+        def handle_session_deleting():
+            history_files = load_chat_history()  # 加载历史会话文件
+            display_files = [os.path.splitext(f)[0].split('-', 1)[1] for f in history_files]  # 获取显示友好的文件名
+
+            selected_file = st.selectbox("请选择要删除的会话:", display_files)  # 下拉选择框
+            selected_file_full_path = f"./workspace/admin/{history_files[display_files.index(selected_file)]}"
+
+            if st.button("确认删除"):
+                if delete_chat_history(file_path=selected_file_full_path):
+                    st.success(f"会话 '{selected_file}' 已成功删除！")
+                    st.session_state.clear()  # 清除会话状态
+                    st.rerun()  # 刷新界面
+                else:
+                    st.error("删除会话失败，请重试。")
+
+
+        # 检查是否点击了保存按钮
+        if save_btn.button("保存", use_container_width=True):
+            st.session_state.show_save_input = True
+            handle_session_saving(selected_file_full_path)
+        if load_btn.button("加载", use_container_width=True):
+            st.success('当前会话已成功加载！')
+            st.session_state.messages = display_chat_history(selected_file_full_path)
+            st.session_state.from_history = True  # 标记为从历史会话加载
+        if del_btn.button("删除", use_container_width=True):
+            st.success('当前会话已成功删除！')
+            handle_session_deleting()
+
+        now = datetime.datetime.now()
+        cols = st.columns(2)
+        export_btn = cols[0]
+        clear_history = cols[1].button("清空对话", use_container_width=True)
+        if clear_history:
+            st.session_state.clear()
+            st.session_state.files_uploaded = False
+            st.session_state.uploaded_texts = ""
+            st.session_state.uploaded_file_nums = 0
+            st.session_state.history = []
+            st.session_state.chat_displayed = 0
+            st.session_state.files_uploaded = False
+            st.session_state.uploaded_texts = ""
+            st.session_state.uploaded_file_nums = 0
+            st.session_state.messages = [{"role": "assistant",
+                                          "content": "你好 ！我是 迪小维，有什么可以帮助你的嘛 ?"}]
+            st.rerun()
+
+        if export_btn.button("导出对话", use_container_width=True):
+            st.write(st.session_state.messages)
+
+
+            def export_callback():
+                return "".join(export2md())
+
+
+            st.download_button(
+                label="下载对话记录",
+                data=export_callback(),
+                file_name=f"{now:%Y-%m-%d %H.%M}_对话记录.md",
+                mime="text/markdown",
+                use_container_width=True
+            )
+
+        # 在应用的初始化部分或者适当的位置初始化上一次的model_name
+        if 'previous_model_name' not in st.session_state:
+            st.session_state.previous_model_name = None
+
+        # 获取当前model_name
+        model_name = st.session_state.model
+
+        # 检查model_name是否发生变化
+        if model_name != st.session_state.previous_model_name:
+            # 当model_name变化时，显示toast消息，并更新previous_model_name
+            st.toast(
+                f"欢迎使用 [`Datav-RAG`](https://dcs.dataonv.com/#/home) ! \n\n"
+                f"当前运行的模型`{model_name}`."
+            )
+            st.session_state.previous_model_name = model_name
+
+    with tab2:
+
+        def get_config_models(
+                model_name: str = None,
+                model_type: Literal[
+                    "llm", "embed", "image", "reranking", "speech2text", "tts"
+                ] = None,
+                platform_name: str = None,
+        ) -> Dict[str, Dict]:
+            """
+            获取配置的模型列表，返回值为:
+            {model_name: {
+                "platform_name": xx,
+                "platform_type": xx,
+                "model_type": xx,
+                "model_name": xx,
+                "api_base_url": xx,
+                "api_key": xx,
+                "api_proxy": xx,
+            }}
+            """
+            # import importlib
+            # 不能支持重载
+            # from chatchat.configs import model_config
+            # importlib.reload(model_config)
+
+            result = {}
+            for m in MODEL_PLATFORMS:
+                if platform_name is not None and platform_name != m.get("platform_name"):
+                    continue
+                if model_type is not None and f"{model_type}_models" not in m:
+                    continue
+
+                if model_type is None:
+                    model_types = [
+                        "llm_models",
+                        "embed_models",
+                        "image_models",
+                        "reranking_models",
+                        "speech2text_models",
+                        "tts_models",
+                    ]
+                else:
+                    model_types = [f"{model_type}_models"]
+
+                for m_type in model_types:
+                    for m_name in m.get(m_type, []):
+                        if model_name is None or model_name == m_name:
+                            result[m_name] = {
+                                "platform_name": m.get("platform_name"),
+                                "platform_type": m.get("platform_type"),
+                                "model_type": m_type.split("_")[0],
+                                "model_name": m_name,
+                                "api_base_url": m.get("api_base_url"),
+                                "api_key": m.get("api_key"),
+                                "api_proxy": m.get("api_proxy"),
+                            }
+            return result
+
+
+        @st.experimental_dialog("System Prompt", width="large")
+        def llm_model_setting():
+            # cols = st.columns(3)
+            # platforms = ["所有"] + [x["platform_name"] for x in MODEL_PLATFORMS]
+            # platform = cols[0].selectbox("选择模型平台", platforms, key="platform")
+            # llm_models = list(
+            #     get_config_models(
+            #         model_type="llm", platform_name=None if platform == "所有" else platform
+            #     )
+            # )
+            # llm_model = cols[1].selectbox("选择LLM模型", llm_models, key="llm_model")
+            # temperature = cols[2].slider("Temperature", 0.0, 1.0, key="temperature")
+            # system_message = st.text_area("System Message:", key="system_message")
+            sys_prompt = st.text_area("系统提示词默认模板如下:", value='''# Role: 文档问答助手
+                    #    ## Profile
+                    #    - Author: 杜晓龙
+                    #    - Version: 0.1
+                    #    - Language:  Chinese
+                    #    - Description: Describe your role. Give an overview of the character's characteristics and skills
+                    #    ### Skill
+                    #    ## Rules
+                    #    1. Don't break character under any circumstance.
+                    #    2. Don't talk nonsense and make up facts.
+                    #    3. Think step by step and reason yourself to the right decisions to make sure we get it right.
+                    #    ## Workflow
+                    #    1. First, xxx
+                    #    2. Then, xxx
+                    #    3. Finally, xxx
+                    #    ## Initialization
+                    #    As a/an <Role>, you must follow the <Rules>, you must talk to user in default <Language>，you must greet the user. Then introduce yourself and introduce the <Workflow>.
+                    #                ''')
             st.session_state.sys_prompt = sys_prompt
-
-    max_tokens = st.slider("max_tokens", min_value=0, max_value=4096, value=512)
-    st.session_state.max_tokens = max_tokens
-
-    temperature = st.slider("temperature", min_value=0.0, max_value=1.0, value=0.8)
-    st.session_state.temperature = temperature
-
-    # # 上传文件部分
-    # uploaded_file = st.file_uploader("上传您的 JSON 文件", type=["json"])
-    # if st.button("上传并处理"):
-    #     upload_file(uploaded_file)
-    now = datetime.datetime.now()
-    cols = st.columns(2)
-    export_btn = cols[0]
-    clear_history = cols[1].button("清空对话", use_container_width=True)
-    if clear_history:
-        st.session_state.clear()
-        st.session_state.files_uploaded = False
-        st.session_state.uploaded_texts = ""
-        st.session_state.uploaded_file_nums = 0
-        st.session_state.history = []
-        st.session_state.chat_displayed = 0
-        st.session_state.files_uploaded = False
-        st.session_state.uploaded_texts = ""
-        st.session_state.uploaded_file_nums = 0
-        st.session_state.messages = [{"role": "assistant",
-                                      "content": "你好 ！我是 迪小维，有什么可以帮助你的嘛 ?"}]
-        st.rerun()
-
-    if export_btn.button("导出对话", use_container_width=True):
-        st.write(st.session_state.messages)
+            if st.button("保存配置"):
+                st.rerun()
 
 
-        def export_callback():
-            return "".join(export2md())
+        # 初始化 show_expander 状态
+        if 'show_expander' not in st.session_state:
+            st.session_state.show_expander = False
+        # 在侧边栏添加一个按钮来触发弹出框
+        if st.button("定义模型", use_container_width=True):
+            st.session_state.show_expander = not st.session_state.get("show_expander", False)
+            llm_model_setting()
 
+        api_token = st.text_input("输入API-KEY", type="password")
+        if api_token:
+            st.session_state.api_token = api_token
+            st.success("API Token 已经配置")
+        model = st.selectbox("选择模型",
+                             ["glm-4-0520", "glm-4-airx", "glm-4-air", "glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo",
+                              "qwen2:7b-instruct-fp16", "qwen2:72b-instruct-q4_0", "qwen2:72b-instruct-q8_0"])
+        st.session_state.model = model
 
-        st.download_button(
-            label="下载对话记录",
-            data=export_callback(),
-            file_name=f"{now:%Y-%m-%d %H.%M}_对话记录.md",
-            mime="text/markdown",
-            use_container_width=True
-        )
+        max_tokens = st.slider("max_tokens", min_value=0, max_value=4096, value=512)
+        st.session_state.max_tokens = max_tokens
+
+        temperature = st.slider("temperature", min_value=0.0, max_value=1.0, value=0.8)
+        st.session_state.temperature = temperature
 
 uploaded_texts = st.session_state.get("uploaded_texts", "")
 
@@ -420,19 +623,31 @@ if prompt := st.chat_input("请输入您的问题："):
         st.write(f"工具调用匹配成功: {tool_name}")
 
     else:
-        st.write("没有匹配到工具调用指令")
+        st.caption(
+            "没有匹配到工具调用指令",
+            unsafe_allow_html=True,
+        )
     if st.session_state.sys_prompt:
         routing_instructions = st.session_state.sys_prompt
     else:
         routing_instructions = ''
     if page == Mode.ALL_TOOLS.value:
         routing_instructions += "\n\n" + build_system_prompt(list(ALL_TOOLS), tools)
+
+    # 获取AI响应
+    api_token = st.session_state.api_token
+    model = st.session_state.model
+    messages = st.session_state.messages
+    temperature = st.session_state.temperature
+    max_tokens = st.session_state.max_tokens
+    routing_instructions = st.session_state.sys_prompt
+
     response_content = get_ai_response(
-        st.session_state.api_token,
-        st.session_state.model,
-        st.session_state.messages,
-        st.session_state.temperature,
-        st.session_state.max_tokens,
+        api_token,
+        model,
+        messages,
+        temperature,
+        max_tokens,
         routing_instructions,
         tools
     )
@@ -442,6 +657,64 @@ if prompt := st.chat_input("请输入您的问题："):
     # with st.chat_message("assistant"):
     #     response_container = st.empty()
     #     response_container.markdown(response_content)
+    # with st.chat_message("assistant"):
+    # st.markdown(response_content)
+    # 添加下钻选项
+    # 确保 st.session_state 中存在 selected_option
+
+
+def extract_list_from_response(response_content):
+    # 使用正则表达式提取方括号中的内容
+    match = re.search(r'\[.*\]', response_content)
+    if match:
+        list_str = match.group(0)
+        try:
+            options = json.loads(list_str)
+            return options
+        except json.JSONDecodeError:
+            st.error("解析推荐话题时出错，请检查AI返回的格式。")
+            return []
+    else:
+        st.error("未找到推荐话题列表。")
+        return []
+
+
+# 如果存在下拉框选择
+if "select" in st.session_state.messages[-1]["content"].lower():
+    st.write(st.session_state.messages)
+    response_content = get_ai_recommend(
+        st.session_state.api_token,
+        st.session_state.model,
+        st.session_state.messages,
+        st.session_state.temperature,
+        st.session_state.max_tokens,
+        '根据用户提问和聊天的内容，请你自行结合场景生成3个推荐可以继续聊天的话题，话题请按照如下格式为返回：["xxx","xxx","xxx"]，请不要返回["xxx","xxx","xxx"]以外的内容',
+    )
+    st.write(response_content)
+    try:
+        options = extract_list_from_response(response_content)
+        st.write(options)
+        selected_option = st.radio("话题拓展：", options, index=None, key=f"option_{len(st.session_state.messages)}")
+        st.session_state.selected_option = selected_option
+    except json.JSONDecodeError:
+        st.error("解析推荐话题时出错，请检查AI返回的格式。")
+# 处理选择的选项
+if st.session_state.selected_option:
+    st.write(st.session_state.messages)
+    st.session_state.messages.append({"role": "user", "content": st.session_state.selected_option})
+    st.write(st.session_state.messages)
+    response_content = get_ai_recommend(
+        st.session_state.api_token,
+        st.session_state.model,
+        st.session_state.messages,
+        st.session_state.temperature,
+        st.session_state.max_tokens,
+        st.session_state.sys_prompt
+    )
+    st.session_state.messages.append({"role": "assistant", "content": response_content})
+
+    # # 重置 selected_option 以便于下一次选择
+    # st.session_state.selected_option = None
 
     # Save chat history only on session end or refresh
 #     st.session_state.save_history = True

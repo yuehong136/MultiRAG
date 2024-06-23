@@ -41,7 +41,7 @@ def main():
         st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
         st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
 
-    st.markdown("# " + "***" + "自定义工作流构建器" + "***")
+    st.markdown("# " + "***" + "自定义编排工作流" + "***")
 
     st.sidebar.title("构建你的工作流")
 
@@ -54,7 +54,7 @@ def main():
 
     steps_to_remove = []
     action_handlers = get_action_handlers()
-    action_names = list(action_handlers.keys()) + ['显示结果']
+    action_names = list(action_handlers.keys())
 
     for i, step in enumerate(st.session_state.steps):
         cols = st.sidebar.columns([4, 1])
@@ -112,7 +112,8 @@ def main():
         st.session_state.update(new_workflow_params)
         st.session_state.update(new_nl_query)
 
-        st.experimental_rerun()
+        st.rerun()
+        # st.experimental_rerun()
 
     with st.sidebar:
         st.subheader("保存和导入编排")

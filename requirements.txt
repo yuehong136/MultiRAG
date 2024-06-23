@@ -1,4 +1,4 @@
-streamlit >= 1.35.0
+streamlit >= 1.36.0
 requests >= 2.31.0
 zhipuai >= 2.1.0.20240521
 langchain_community >= 0.2.4
