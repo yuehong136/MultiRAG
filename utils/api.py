@@ -72,10 +72,10 @@ def get_ai_recommend(api_token, model, messages, temperature, max_tokens, system
     response_content = ""
 
     history_with_system_prompt = [{"role": "system", "content": system_prompt}] + messages
-    st.write(history_with_system_prompt)
+    # st.write(history_with_system_prompt)
     try:
         response_content, _ = chat_instance.chat(system_prompt, history_with_system_prompt, gen_conf)
-        response_container.markdown(response_content)
+        # response_container.markdown(response_content)
         # st.success("Fetched data successfully!")
     except openai.APIError as e:
         st.error(f"API error: {e}")

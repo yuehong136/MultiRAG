@@ -2,6 +2,7 @@ import datetime
 import json
 import os
 import re
+import time
 from enum import Enum
 from typing import Literal, Dict
 from uuid import uuid4
@@ -165,7 +166,7 @@ if "uploaded_texts" not in st.session_state:
     st.session_state.uploaded_texts = ''
 
 if 'sys_prompt' not in st.session_state:
-    st.session_state.sys_prompt = '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。你习惯性为用户推荐三个聊天话题'
+    st.session_state.sys_prompt = '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持'
     # st.session_state.sys_prompt = ''
 
 if 'current_time' not in st.session_state:
@@ -174,8 +175,11 @@ if 'current_time' not in st.session_state:
 if 'weather' not in st.session_state:
     st.session_state.weather = "Loading..."
 
-if 'selected_option' not in st.session_state:
-    st.session_state.selected_option = None
+if 'option_recmd' not in st.session_state:
+    st.session_state.option_recmd = None
+
+if 'is_recmd' not in st.session_state:
+    st.session_state.is_recmd = False
 
 tools = get_tools() if page == Mode.ALL_TOOLS else []
 first_round = len(st.session_state.messages) == 1
@@ -258,7 +262,6 @@ with st.sidebar:
     st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
 
     import datetime
-    import time
 
     # 初始化session_state变量
     if 'current_time' not in st.session_state:
@@ -270,7 +273,8 @@ with st.sidebar:
     def update_time():
         st.session_state.current_time = datetime.datetime.now()
         # st.markdown("# 当前时间: \n" + st.session_state.current_time.strftime("%Y-%m-%d %H:%M:%S"))
-        st.markdown("# 当前时间 \n" + st.session_state.current_time.strftime("%Y-%m-%d %H:%M"))
+        st.markdown(st.session_state.current_time.strftime("%Y-%m-%d %H:%M"))
+        # st.markdown("# 当前时间 \n" + st.session_state.current_time.strftime("%Y-%m-%d %H:%M"))
 
 
     # 片段函数，实时更新天气信息
@@ -320,9 +324,10 @@ with st.sidebar:
 
 
     # # 实时显示当前时间
-    # update_time()
-    # st.header("南京天气")
-    # # update_weather()
+    st.subheader("当前时间")
+    update_time()
+    st.subheader("南京天气")
+    update_weather()
 
     tab1, tab2, tab3 = st.tabs(["会话管理", "模型配置", "智能模式"])
     with tab1:
@@ -442,7 +447,6 @@ with st.sidebar:
 
         if export_btn.button("导出对话", use_container_width=True):
             st.write(st.session_state.messages)
-
 
             def export_callback():
                 return "".join(export2md())
@@ -591,6 +595,47 @@ with st.sidebar:
         temperature = st.slider("temperature", min_value=0.0, max_value=1.0, value=0.8)
         st.session_state.temperature = temperature
 
+    with tab3:
+        on = st.toggle("智能话题推荐", help='开启后，每回合LLM回复后会自动推荐3个话题')
+
+        if on:
+            # 创建一个占位符
+            placeholder = st.empty()
+            # 在占位符中显示成功消息
+            with placeholder:
+                st.success(":rainbow[智能话题推荐已开启！]", icon="✔️")
+            st.session_state['is_recmd'] = True
+            # 等待几秒钟
+            time.sleep(1)
+            # 清空占位符，移除成功消息
+            placeholder.empty()
+        if not on:
+            # 创建一个占位符
+            placeholder = st.empty()
+            # 在占位符中显示成功消息
+            with placeholder:
+                st.success(":智能话题推荐已关闭！", icon="✖️")
+            st.session_state['is_recmd'] = False
+            # 等待几秒钟
+            time.sleep(1)
+            # 清空占位符，移除成功消息
+            placeholder.empty()
+
+    def extract_list_from_response(response_content):
+        # 使用正则表达式提取方括号中的内容
+        match = re.search(r'\[.*\]', response_content)
+        if match:
+            list_str = match.group(0)
+            try:
+                options = json.loads(list_str)
+                return options
+            except json.JSONDecodeError:
+                st.error("解析推荐话题时出错，请检查AI返回的格式。")
+                return []
+        else:
+            st.error("未找到推荐话题列表。")
+            return []
+
 uploaded_texts = st.session_state.get("uploaded_texts", "")
 
 # 用户输入框
@@ -651,79 +696,44 @@ if prompt := st.chat_input("请输入您的问题："):
         tools
     )
     st.session_state.messages.append({"role": "assistant", "content": response_content})
-
-    # # 显示助手回复的对话
-    # with st.chat_message("assistant"):
-    #     response_container = st.empty()
-    #     response_container.markdown(response_content)
-    # with st.chat_message("assistant"):
-    # st.markdown(response_content)
-    # 添加下钻选项
-    # 确保 st.session_state 中存在 selected_option
-
-
-def extract_list_from_response(response_content):
-    # 使用正则表达式提取方括号中的内容
-    match = re.search(r'\[.*\]', response_content)
-    if match:
-        list_str = match.group(0)
+    # Generate recommendations based on the user's query
+    if st.session_state.is_recmd:
+        response_recommendations = get_ai_recommend(
+            st.session_state.api_token,
+            st.session_state.model,
+            st.session_state.messages,
+            st.session_state.temperature,
+            st.session_state.max_tokens,
+            '根据用户提问和聊天的内容，请你自行结合场景生成3个推荐可以继续聊天的话题，话题请按照如下格式为返回：["xxx","xxx","xxx"]，仅返回要求返回的内容',
+        )
         try:
-            options = json.loads(list_str)
-            return options
+            options = extract_list_from_response(response_recommendations)
+            if options:
+                st.session_state['recommendations'] = options
         except json.JSONDecodeError:
             st.error("解析推荐话题时出错，请检查AI返回的格式。")
-            return []
-    else:
-        st.error("未找到推荐话题列表。")
-        return []
+# 显示推荐问题并处理选择
+if 'recommendations' in st.session_state and st.session_state['recommendations'] != []:
+    recmd_option = st.radio("话题拓展：", st.session_state['recommendations'], index=None)
 
-
-# 如果存在下拉框选择
-if "select" in st.session_state.messages[-1]["content"].lower():
-    st.write(st.session_state.messages)
-    response_content = get_ai_recommend(
-        st.session_state.api_token,
-        st.session_state.model,
-        st.session_state.messages,
-        st.session_state.temperature,
-        st.session_state.max_tokens,
-        '根据用户提问和聊天的内容，请你自行结合场景生成3个推荐可以继续聊天的话题，话题请按照如下格式为返回：["xxx","xxx","xxx"]，请不要返回["xxx","xxx","xxx"]以外的内容',
-    )
-    st.write(response_content)
-    try:
-        options = extract_list_from_response(response_content)
-        st.write(options)
-        selected_option = st.radio("话题拓展：", options, index=None, key=f"option_{len(st.session_state.messages)}")
-        st.session_state.selected_option = selected_option
-    except json.JSONDecodeError:
-        st.error("解析推荐话题时出错，请检查AI返回的格式。")
-# 处理选择的选项
-if st.session_state.selected_option:
-    st.write(st.session_state.messages)
-    st.session_state.messages.append({"role": "user", "content": st.session_state.selected_option})
-    st.write(st.session_state.messages)
-    response_content = get_ai_recommend(
-        st.session_state.api_token,
-        st.session_state.model,
-        st.session_state.messages,
-        st.session_state.temperature,
-        st.session_state.max_tokens,
-        st.session_state.sys_prompt
-    )
-    st.session_state.messages.append({"role": "assistant", "content": response_content})
-
-    # # 重置 selected_option 以便于下一次选择
-    # st.session_state.selected_option = None
-
-    # Save chat history only on session end or refresh
-#     st.session_state.save_history = True
-#
-#
-# def save_session_history():
-#     if 'save_history' in st.session_state and st.session_state.save_history:
-#         save_chat_history(st.session_state.messages)
-#         st.session_state.save_history = False
-
+    if recmd_option and st.session_state.option_recmd != recmd_option:  # 确保在选择单选框后更新内容
+        st.session_state['option_recmd'] = recmd_option
+        # st.write(f"选中的推荐话题：{st.session_state['option_recmd']}")
+        # Append the selected recommendation as a new user message
+        st.session_state.messages.append({"role": "user", "content": st.session_state['option_recmd']})
+        # st.write(st.session_state)
+        # Get AI response for the selected recommendation
+        response_content = get_ai_response(
+            st.session_state.api_token,
+            st.session_state.model,
+            st.session_state.messages,
+            st.session_state.temperature,
+            st.session_state.max_tokens,
+            st.session_state.sys_prompt,
+            tools
+        )
+        st.session_state.messages.append({"role": "assistant", "content": response_content})
+        st.session_state['recommendations'] = []
 
 code = """
 <style>
