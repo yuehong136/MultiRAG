@@ -181,6 +181,10 @@ if 'option_recmd' not in st.session_state:
 if 'is_recmd' not in st.session_state:
     st.session_state.is_recmd = False
 
+if 'is_mode_bi' not in st.session_state:
+    st.session_state.is_mode_bi = False
+
+
 tools = get_tools() if page == Mode.ALL_TOOLS else []
 first_round = len(st.session_state.messages) == 1
 FILE_TEMPLATE = "[File Name]\n{file_name}\n[File Content]\n{file_content}"
@@ -215,7 +219,7 @@ if first_round and page == Mode.LONG_CTX.value:
                     index_keys = f"model_choice_{idx}"
                     model_choice = st.selectbox("选择图像描述模型:",
                                                 ["zhipu_4v", "qwen_cv", "gpt_v4", "ollama_cv", "xinference_cv",
-                                                 "local_cv"], key=index_keys)
+                                                 "local_cv"], key=index_keys, help="选择VLLM模型,目前只做了zhipu_4v的适配")
                     # # API key input
                     model_key = st.session_state.api_token if st.session_state.api_token and model_choice == "zhipu_4v" else st.text_input(
                         "输入 API key:", type="password")
@@ -596,30 +600,40 @@ with st.sidebar:
         st.session_state.temperature = temperature
 
     with tab3:
-        on = st.toggle("智能话题推荐", help='开启后，每回合LLM回复后会自动推荐3个话题')
+        def toggle_feature(toggle_name, feature_name, on_message, off_message, help=None):
+            on = st.toggle(toggle_name, help=help)
 
-        if on:
-            # 创建一个占位符
-            placeholder = st.empty()
-            # 在占位符中显示成功消息
-            with placeholder:
-                st.success(":rainbow[智能话题推荐已开启！]", icon="✔️")
-            st.session_state['is_recmd'] = True
-            # 等待几秒钟
-            time.sleep(1)
-            # 清空占位符，移除成功消息
-            placeholder.empty()
-        if not on:
-            # 创建一个占位符
-            placeholder = st.empty()
-            # 在占位符中显示成功消息
-            with placeholder:
-                st.success(":智能话题推荐已关闭！", icon="✖️")
-            st.session_state['is_recmd'] = False
-            # 等待几秒钟
-            time.sleep(1)
-            # 清空占位符，移除成功消息
-            placeholder.empty()
+            if on:
+                placeholder = st.empty()
+                with placeholder:
+                    st.success(f":rainbow[{on_message}]", icon="✔️")
+                st.session_state[f'{feature_name}'] = True
+                time.sleep(1)
+                placeholder.empty()
+            else:
+                # placeholder = st.empty()
+                # with placeholder:
+                #     st.success(f"{off_message}", icon="✖️")
+                st.session_state[f'{feature_name}'] = False
+                # time.sleep(1)
+                # placeholder.empty()
+
+
+        toggle_feature(
+            toggle_name="智能话题推荐",
+            feature_name="is_recmd",
+            on_message="智能话题推荐已开启！",
+            off_message="智能话题推荐已关闭！",
+            help='开启后，每回合LLM回复后会自动推荐3个话题'
+        )
+
+        toggle_feature(
+            toggle_name="BI模式",
+            feature_name="is_mode_bi",
+            on_message="BI模式已开启！",
+            off_message="BI模式已关闭！",
+            help='开启后，每回合LLM回复后默认返回BI问题按钮'
+        )
 
     def extract_list_from_response(response_content):
         # 使用正则表达式提取方括号中的内容
@@ -635,6 +649,22 @@ with st.sidebar:
         else:
             st.error("未找到推荐话题列表。")
             return []
+
+
+    def extract_first_sql(statement):
+        # 定义一个用于匹配 SQL 语句的正则表达式模式
+        sql_pattern = re.compile(
+            r'\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|REPLACE|GRANT|REVOKE|COMMIT|ROLLBACK|SAVEPOINT|SET|SHOW|DESCRIBE|EXPLAIN)\b[\s\S]*?;',
+            re.IGNORECASE
+        )
+
+        # 搜索匹配的 SQL 语句
+        match = sql_pattern.search(statement)
+
+        if match:
+            return match.group(0)
+        else:
+            return None
 
 uploaded_texts = st.session_state.get("uploaded_texts", "")
 
@@ -697,7 +727,7 @@ if prompt := st.chat_input("请输入您的问题："):
     )
     st.session_state.messages.append({"role": "assistant", "content": response_content})
     # Generate recommendations based on the user's query
-    if st.session_state.is_recmd:
+    if st.session_state.is_recmd or st.session_state.is_mode_bi:
         response_recommendations = get_ai_recommend(
             st.session_state.api_token,
             st.session_state.model,
@@ -707,7 +737,10 @@ if prompt := st.chat_input("请输入您的问题："):
             '根据用户提问和聊天的内容，请你自行结合场景生成3个推荐可以继续聊天的话题，话题请按照如下格式为返回：["xxx","xxx","xxx"]，仅返回要求返回的内容',
         )
         try:
-            options = extract_list_from_response(response_recommendations)
+            if not st.session_state['is_mode_bi']:
+                options = extract_list_from_response(response_recommendations)
+            else:
+                options = ['数据检索', '图表展示', '数据对话']
             if options:
                 st.session_state['recommendations'] = options
         except json.JSONDecodeError:
@@ -717,23 +750,59 @@ if 'recommendations' in st.session_state and st.session_state['recommendations']
     recmd_option = st.radio("话题拓展：", st.session_state['recommendations'], index=None)
 
     if recmd_option and st.session_state.option_recmd != recmd_option:  # 确保在选择单选框后更新内容
-        st.session_state['option_recmd'] = recmd_option
-        # st.write(f"选中的推荐话题：{st.session_state['option_recmd']}")
-        # Append the selected recommendation as a new user message
-        st.session_state.messages.append({"role": "user", "content": st.session_state['option_recmd']})
-        # st.write(st.session_state)
-        # Get AI response for the selected recommendation
-        response_content = get_ai_response(
-            st.session_state.api_token,
-            st.session_state.model,
-            st.session_state.messages,
-            st.session_state.temperature,
-            st.session_state.max_tokens,
-            st.session_state.sys_prompt,
-            tools
-        )
-        st.session_state.messages.append({"role": "assistant", "content": response_content})
-        st.session_state['recommendations'] = []
+        if recmd_option == '数据对话':
+            conn = st.connection('local_pg', type='sql')
+            sql = extract_first_sql(st.session_state.messages[-1]['content'])
+            st.warning(sql)
+            df = conn.query(sql)
+            recmd_option = f'''
+                数据库查询到的数据如下：
+                {df}
+                请根据查询的结果和历史对话相关内容进行总结回复
+            '''
+            st.session_state.messages.append({"role": "user", "content": recmd_option})
+            # st.write(st.session_state)
+            # Get AI response for the selected recommendation
+            response_content = get_ai_response(
+                st.session_state.api_token,
+                st.session_state.model,
+                st.session_state.messages,
+                st.session_state.temperature,
+                st.session_state.max_tokens,
+                st.session_state.sys_prompt,
+                tools
+            )
+            st.session_state.messages.append({"role": "assistant", "content": response_content})
+            st.session_state['recommendations'] = []
+        elif recmd_option == '图表展示':
+            conn = st.connection('local_pg', type='sql')
+            sql = extract_first_sql(st.session_state.messages[-1]['content'])
+            st.warning(sql)
+            df = conn.query(sql)
+            st.bar_chart(df)
+            st.session_state['recommendations'] = []
+        elif recmd_option == '数据检索':
+            conn = st.connection('local_pg', type='sql')
+            sql = extract_first_sql(st.session_state.messages[-1]['content'])
+            st.warning(sql)
+            df = conn.query(sql)
+            st.table(df.head())
+            st.session_state['recommendations'] = []
+        else:
+            st.session_state.messages.append({"role": "user", "content": recmd_option})
+            # st.write(st.session_state)
+            # Get AI response for the selected recommendation
+            response_content = get_ai_response(
+                st.session_state.api_token,
+                st.session_state.model,
+                st.session_state.messages,
+                st.session_state.temperature,
+                st.session_state.max_tokens,
+                st.session_state.sys_prompt,
+                tools
+            )
+            st.session_state.messages.append({"role": "assistant", "content": response_content})
+            st.session_state['recommendations'] = []
 
 code = """
 <style>
