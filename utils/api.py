@@ -147,8 +147,8 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
     factory = ChatFactory(api_token, model)
     chat_instance = factory.get_chat_instance()
 
-    response_container = st.empty()
-    response_content = ""
+    # response_container = st.empty()
+    # response_content = ""
 
     # 添加调试信息
     # st.write(f"Gen Config: {gen_conf}")
@@ -188,12 +188,16 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
 
     # 直接传递 history_with_system_prompt 给 chat_streamly 方法
     try:
-        for chunk in chat_instance.chat_streamly(safe_system_prompt, history_with_system_prompt, gen_conf):
-            if chunk:
-                response_content = chunk  # 更新response_content
-                response_container.markdown(response_content)  # 实时更新 Streamlit UI
-            else:
-                st.error("Received empty chunk")
+        with st.status("LLM疯狂输出ing...") as s:
+            response_container = st.empty()
+            response_content = ""
+            for chunk in chat_instance.chat_streamly(safe_system_prompt, history_with_system_prompt, gen_conf):
+                if chunk:
+                    response_content = chunk  # 更新response_content
+                    response_container.markdown(response_content)  # 实时更新 Streamlit UI
+                    s.update(label="💫Over", expanded=True)
+                else:
+                    st.error("Received empty chunk")
         st.success("Fetched data successfully!")
     except openai.APIError as e:
         st.error(f"API error: {e}")

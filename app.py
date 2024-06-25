@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Literal, Dict
 from uuid import uuid4
 
+import pandas as pd
 import requests
 import streamlit as st
 from PIL import Image
@@ -14,6 +15,7 @@ from PIL import Image
 from core.file.utils import extract_pdf, extract_docx, extract_pptx, extract_text
 from core.llm.ocr_model.ocr_factory import ModelFactory
 from core.tools.tools_registry import get_tools, ALL_TOOLS
+from server.kb import kb_list, process_schema_response, request_milvus
 from utils.api import get_ai_response, get_ai_recommend, process_user_input
 from configs import VERSION, MODEL_PLATFORMS
 from web_ui.dialogue.dialogue import export2md, build_system_prompt
@@ -32,10 +34,10 @@ st.set_page_config(
 
 
 class Mode(str, Enum):
-    ALL_TOOLS = "🛠️ All Tools[有BUG]"
+    ALL_TOOLS = "🛠️ All Tools"
     LONG_CTX = "📝 文件解读"
     # GLM4 = "🖼️ 多模态"
-    VLM = "🖼️ 多模态[未实现]"
+    VLM = "🖼️ 多模态"
 
 
 # name = st.text_input('Name')
@@ -46,14 +48,14 @@ class Mode(str, Enum):
 default_model = 'GLM-4-520'
 
 HELP = """
-### 🎉 欢迎使用 MultiRAG!【文档对话版】
+### 🎉 欢迎使用 Datav-MultiRAG!
 请在下方选取一个功能。
 """.strip()
 
 st.markdown(HELP)
 
 page = st.radio(
-    "🐖🔢每次切换功能时，请先手动清空对话历史。【后续将会优化：自动重新加载LLM并清空对话历史】",
+    "🐖🔢每次切换功能时，请先手动清空对话历史。", # todo 【后续优化：自动重新加载LLM并清空页面对话】
     [mode.value for mode in Mode],
     key="page",
     horizontal=True,
@@ -169,6 +171,10 @@ if 'sys_prompt' not in st.session_state:
     st.session_state.sys_prompt = '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持'
     # st.session_state.sys_prompt = ''
 
+# 在应用的初始化部分或者适当的位置初始化上一次的model_name
+if 'previous_model_name' not in st.session_state:
+    st.session_state.previous_model_name = None
+
 if 'current_time' not in st.session_state:
     st.session_state.current_time = datetime.datetime.now()
 
@@ -184,6 +190,14 @@ if 'is_recmd' not in st.session_state:
 if 'is_mode_bi' not in st.session_state:
     st.session_state.is_mode_bi = False
 
+if 'dialogue_mode' not in st.session_state:
+    st.session_state.dialogue_mode = 'LLM 对话'
+
+if 'selected_kb' not in st.session_state:
+    st.session_state.selected_kb = None
+
+if "city_name" not in st.session_state:
+    st.session_state.city_name = '南京'
 
 tools = get_tools() if page == Mode.ALL_TOOLS else []
 first_round = len(st.session_state.messages) == 1
@@ -219,7 +233,8 @@ if first_round and page == Mode.LONG_CTX.value:
                     index_keys = f"model_choice_{idx}"
                     model_choice = st.selectbox("选择图像描述模型:",
                                                 ["zhipu_4v", "qwen_cv", "gpt_v4", "ollama_cv", "xinference_cv",
-                                                 "local_cv"], key=index_keys, help="选择VLLM模型,目前只做了zhipu_4v的适配")
+                                                 "local_cv"], key=index_keys,
+                                                help="选择VLLM模型,目前只做了zhipu_4v的适配")
                     # # API key input
                     model_key = st.session_state.api_token if st.session_state.api_token and model_choice == "zhipu_4v" else st.text_input(
                         "输入 API key:", type="password")
@@ -242,7 +257,7 @@ if first_round and page == Mode.LONG_CTX.value:
         st.session_state.uploaded_texts = ""
         st.session_state.uploaded_file_nums = 0
 
-# 移除增量更新逻辑，直接显示所有对话
+# 显示所有对话
 for message in st.session_state.messages:
     if message["role"] != "system":
         with st.chat_message(message["role"]):
@@ -283,8 +298,8 @@ with st.sidebar:
 
     # 片段函数，实时更新天气信息
     @st.experimental_fragment(run_every=3600)  # 每小时更新一次
-    def update_weather():
-        weather = get_weather("南京")
+    def update_weather(city_name):
+        weather = get_weather(city_name)
         st.session_state.weather = weather
         st.write(st.session_state.weather)
 
@@ -330,27 +345,29 @@ with st.sidebar:
     # # 实时显示当前时间
     st.subheader("当前时间")
     update_time()
-    st.subheader("南京天气")
-    update_weather()
+    if st.session_state.city_name:
+        city = st.text_input('请输入要查询天气的城市:', placeholder="要查询天气的城市", label_visibility="collapsed")
+    else:
+        city = st.session_state.city_name
+    st.subheader(f"{city}天气")
+    update_weather(city)
 
     tab1, tab2, tab3 = st.tabs(["会话管理", "模型配置", "智能模式"])
     with tab1:
-
         def on_mode_change():
-            mode = st.session_state.dialogue_mode
+            mode = 'LLM 对话' if 'dialogue_mode' not in st.session_state else st.session_state.dialogue_mode
             text = f"已切换到 {mode} 模式。"
             if mode == "知识库问答":
                 cur_kb = st.session_state.get("selected_kb")
                 if cur_kb:
-                    text = f"{text} 当前知识库： `{cur_kb}`。"
-            st.toast(text)
+                    text = f"当前知识库：`{cur_kb}`。"
+            st.toast(text, icon="🔥")
 
 
         dialogue_modes = [
             "LLM 对话",
-            "知识库问答【暂不支持】",
-            "文件对话【暂不支持】",
-            "搜索引擎问答【暂不支持】",
+            "知识库问答",
+            "搜索引擎问答【即将支持】",
             "自定义Agent问答【暂不支持】",
         ]
         dialogue_mode = st.selectbox(
@@ -360,6 +377,14 @@ with st.sidebar:
             on_change=on_mode_change,
             key="dialogue_mode",
         )
+
+        if dialogue_mode == "知识库问答":
+            with st.expander("知识库参数", expanded=True):
+                st.selectbox("Database", kb_list, on_change=on_mode_change, key="selected_kb",
+                             placeholder='选择一个知识库')
+                st.number_input("TopN", value=5, min_value=1, key="kb_topn", help="从知识库检索的知识数量")
+                st.text_input("Query", placeholder='输入检索的问题', key="kb_query")
+
         sys_prompt = st.session_state.get('sys_prompt',
                                           '你是一个名为 迪小维 的人工智能助手。你是基于迪塔维[Datav]训练的语言模型模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。')
 
@@ -452,6 +477,7 @@ with st.sidebar:
         if export_btn.button("导出对话", use_container_width=True):
             st.write(st.session_state.messages)
 
+
             def export_callback():
                 return "".join(export2md())
 
@@ -464,14 +490,11 @@ with st.sidebar:
                 use_container_width=True
             )
 
-        # 在应用的初始化部分或者适当的位置初始化上一次的model_name
-        if 'previous_model_name' not in st.session_state:
-            st.session_state.previous_model_name = None
-
         # 获取当前model_name
         model_name = st.session_state.model
 
         # 检查model_name是否发生变化
+
         if model_name != st.session_state.previous_model_name:
             # 当model_name变化时，显示toast消息，并更新previous_model_name
             st.toast(
@@ -553,7 +576,7 @@ with st.sidebar:
             # llm_model = cols[1].selectbox("选择LLM模型", llm_models, key="llm_model")
             # temperature = cols[2].slider("Temperature", 0.0, 1.0, key="temperature")
             # system_message = st.text_area("System Message:", key="system_message")
-            sys_prompt = st.text_area("系统提示词默认模板如下:", value='''# Role: 文档问答助手
+            sys_prompt = st.text_area("系统提示词默认模板如下:", height=500, value='''# Role: 文档问答助手
                     #    ## Profile
                     #    - Author: 杜晓龙
                     #    - Version: 0.1
@@ -590,7 +613,8 @@ with st.sidebar:
             st.success("API Token 已经配置")
         model = st.selectbox("选择模型",
                              ["glm-4-0520", "glm-4-airx", "glm-4-air", "glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo",
-                              "qwen2:7b-instruct-fp16", "qwen2:72b-instruct-q4_0", "qwen2:72b-instruct-q8_0", "Doubao-pro-32k"])
+                              "qwen2:7b-instruct-fp16", "qwen2:72b-instruct-q4_0", "qwen2:72b-instruct-q8_0",
+                              "Doubao-pro-32k"])
         st.session_state.model = model
 
         max_tokens = st.slider("max_tokens", min_value=0, max_value=4096, value=512)
@@ -635,6 +659,7 @@ with st.sidebar:
             help='开启后，每回合LLM回复后默认返回BI问题按钮'
         )
 
+
     def extract_list_from_response(response_content):
         # 使用正则表达式提取方括号中的内容
         match = re.search(r'\[.*\]', response_content)
@@ -647,25 +672,14 @@ with st.sidebar:
                 st.error("解析推荐话题时出错，请检查AI返回的格式。")
                 return []
         else:
-            st.error("未找到推荐话题列表。")
+            st.error("无可推荐话题")
             return []
 
 
-    def extract_first_sql(statement):
-        # 定义一个用于匹配 SQL 语句的正则表达式模式
-        sql_pattern = re.compile(
-            r'\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|REPLACE|GRANT|REVOKE|COMMIT|ROLLBACK|SAVEPOINT|SET|SHOW|DESCRIBE|EXPLAIN)\b[\s\S]*?;',
-            re.IGNORECASE
-        )
-
-        # 搜索匹配的 SQL 语句
-        match = sql_pattern.search(statement)
-
-        if match:
-            return match.group(0)
-        else:
-            return None
-
+    def extract_first_sql(text: str) -> str:
+        # 正则表达式匹配以 ```sql 开头并延续到结束的三反引号之前的所有内容
+        sql_blocks = re.findall(r"```sql\s*([\s\S]+?)\s*```", text)
+        return sql_blocks[0] if sql_blocks else ""
 uploaded_texts = st.session_state.get("uploaded_texts", "")
 
 # 用户输入框
@@ -679,6 +693,27 @@ if prompt := st.chat_input("请输入您的问题："):
             processed_prompt = f"{st.session_state.uploaded_texts}\n\n{processed_prompt}"
             # 清空上传的文本以防止重复使用
             st.session_state.uploaded_texts = ""
+        if dialogue_mode == "知识库问答" and st.session_state['selected_kb']:
+            response = request_milvus()
+            result = process_schema_response(response)
+            df = pd.DataFrame(result, columns=['表物理名', '表中文名', '字段物理名', '字段中文名', '字段类型', '字段约束'])
+            st.markdown('- 参考数据如下')
+            st.write(df)
+            schema_markdown = df.to_markdown(index=False)
+            st.session_state.sys_prompt = f"""
+                        你是一个SQL专家，请基于以下数据库表结构描述（markdown表格格式）：
+                        {schema_markdown}
+
+                        注意:表物理名|表中文名|字段物理名|字段中文名|字段类型|字段约束|，每一行数据都是这个结构，请严格参考每一行的数据写sql，不能互相乱用，比如某一表的字段乱用成另一张表
+
+                        将用户提问转为SQL语句时，请遵循以下要求：
+                        1. 使用`AS`将SQL结果列名转换为对应字段的中文名，除非用户问题中另有要求。
+                        2. 对于代码值，用对应名称值替代（使用`LEFT JOIN`），除非用户问题中另有要求。
+                        3. 如果SQL过滤条件中涉及代码字段条件，使用该字段备注中的代码值常量。
+                        4. SQL语法必须符合指定的数据库类型。
+                        5. 输出仅包含纯SQL文本，不要使用markdown语法包裹。
+                        6. 禁止在输出中包含任何解释、假设以及注意事项等非SQL内容。
+                    """
     # processed_prompt = process_user_input(processed_prompt)
     st.session_state.messages.append({"role": "user", "content": processed_prompt})
     with st.chat_message("user"):
@@ -740,7 +775,7 @@ if prompt := st.chat_input("请输入您的问题："):
             if not st.session_state['is_mode_bi']:
                 options = extract_list_from_response(response_recommendations)
             else:
-                options = ['数据检索', '图表展示', '数据对话']
+                options = ['表格输出', '图表展示', '数据对话']
             if options:
                 st.session_state['recommendations'] = options
         except json.JSONDecodeError:
@@ -752,6 +787,7 @@ if 'recommendations' in st.session_state and st.session_state['recommendations']
     if recmd_option and st.session_state.option_recmd != recmd_option:  # 确保在选择单选框后更新内容
         if recmd_option == '数据对话':
             conn = st.connection('local_pg', type='sql')
+            st.write(st.session_state.messages[-1]['content'])
             sql = extract_first_sql(st.session_state.messages[-1]['content'])
             st.warning(sql)
             df = conn.query(sql)
@@ -781,7 +817,7 @@ if 'recommendations' in st.session_state and st.session_state['recommendations']
             df = conn.query(sql)
             st.bar_chart(df)
             st.session_state['recommendations'] = []
-        elif recmd_option == '数据检索':
+        elif recmd_option == '表格输出':
             conn = st.connection('local_pg', type='sql')
             sql = extract_first_sql(st.session_state.messages[-1]['content'])
             st.warning(sql)
@@ -807,7 +843,7 @@ if 'recommendations' in st.session_state and st.session_state['recommendations']
 code = """
 <style>
     p[align="right"] {
-        color:#BE0291;
+        color:#1E90FF;
     }
 </style>
 """
