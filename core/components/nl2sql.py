@@ -1,9 +1,8 @@
+# step1 用户输入问题
 def input_nl_query(query):
-    """
-    输入自然语言查询
-    """
     return query
 
+# step2 向量化处理
 def semantic_parsing(nl_query):
     """
     语义解析

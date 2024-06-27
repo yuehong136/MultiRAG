@@ -30,7 +30,7 @@ def save_workflow():
                   "params": st.session_state.get(f"workflow_params_{i}", {})} for i, step in
                  enumerate(st.session_state.steps)]
         workflow_json = json.dumps(steps, ensure_ascii=False, indent=4)
-        st.download_button("下载当前编排", workflow_json, "workflow.json", "application/json")
+        st.download_button("导出当前编排", workflow_json, "workflow.json", "application/json")
     else:
         st.error("没有步骤可以保存！")
 

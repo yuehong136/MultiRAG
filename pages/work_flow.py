@@ -12,8 +12,8 @@ from configs import VERSION
 
 st.set_page_config(
     page_title="工作流管理",
-    page_icon="🐇",
-    layout="centered",
+    page_icon="⚡",
+    layout="wide",
     initial_sidebar_state="auto",
     menu_items={
         'Get Help': 'https://cake-doom-0c6.notion.site/4b6c4b3a5338497494620b3dd82e4acc?pvs=4',
@@ -28,7 +28,7 @@ atexit.register(stop_fastapi_server)
 def main():
     with st.sidebar:
         st.image(
-            "E:/Project/python/study/RAG/assets/imgs/logo.png",
+            r"E:\Project\python\study\RAG\assets\imgs\logo2.png",
             use_column_width=True
         )
         st.caption(
@@ -38,15 +38,18 @@ def main():
         st.page_link("app.py", label="对话", icon="📝")
         st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
         st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
-        st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
+        st.page_link("pages/work_flow.py", label="工作流管理", icon="⚡", use_container_width=True)
         st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
 
-    st.markdown("# " + "***" + "自定义编排工作流" + "***")
+    st.header("自定义编排工作流")
+    # st.markdown("*" + "可在侧边栏添加编排功能组件构建流程应用，可选择开放API供三方调用。" + "*")
+    st.markdown("可在侧边栏添加编排功能组件构建流程应用，可选择开放API供三方调用。")
 
     st.sidebar.title("构建你的工作流")
 
     if 'steps' not in st.session_state:
         st.session_state.steps = []
+    st.sidebar.subheader('创建工作流')
     add_step = st.sidebar.button("添加工作流步骤")
 
     if add_step:
@@ -57,7 +60,7 @@ def main():
     action_names = list(action_handlers.keys())
 
     for i, step in enumerate(st.session_state.steps):
-        cols = st.sidebar.columns([4, 1])
+        cols = st.sidebar.columns([2, 1], vertical_alignment="bottom")
         selected_step = cols[0].selectbox(f"{step}：", action_names, key=f"workflow_step_{i}")
 
         if selected_step == "数据处理":
@@ -84,7 +87,7 @@ def main():
                 nl_query = zhipuai(message, temperature, max_tokens, sys_prompt)
                 st.session_state[f'nl_query_{i}'] = nl_query
 
-        if cols[1].button("删除", key=f"delete_step_{i}"):
+        if cols[1].button("删除", use_container_width=True, key=f"delete_step_{i}"):
             steps_to_remove.append(i)
 
     if steps_to_remove:
@@ -116,14 +119,19 @@ def main():
         # st.experimental_rerun()
 
     with st.sidebar:
-        st.subheader("保存和导入编排")
-        save_workflow()
+        st.subheader("导入工作流")
         import_workflow()
+        st.subheader("导出工作流")
+        save_workflow()
+
         st.subheader("API 服务管理")
-        if st.button("生成 API"):
+        cols = st.columns(2)
+        start_btn = cols[0]
+        stop_btn = cols[1]
+        if start_btn.button("启用 API", use_container_width=True):
             generate_api()
             st.success("API 生成成功！访问 http://127.0.0.1:8000/docs 查看 API 文档。")
-        if st.button("停止 API"):
+        if stop_btn.button("停用 API", use_container_width=True):
             stop_fastapi_server()
 
     for i, step in enumerate(st.session_state.steps):

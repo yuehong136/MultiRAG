@@ -36,15 +36,12 @@ st.markdown("""
 # 页面标题和说明
 # st.title("SQL方言翻译器")
 st.markdown("# " + "***" + "SQL方言翻译器" + "***")
-st.markdown("""
-    使用此工具，您可以将SQL查询从一种方言转换为另一种方言。
-    选择源方言和目标方言，输入要转换的SQL查询，然后点击***Translate***按钮即可获取转换后的SQL查询。
-""")
+st.markdown("*" + "使用此工具，您可以将SQL查询从一种方言转换为另一种方言。选择源方言和目标方言，输入要转换的SQL查询，然后点击***Translate***按钮即可获取转换后的SQL查询。" + "*")
 
 # 侧边栏
 with st.sidebar:
     st.image(
-        r"E:\Project\python\study\RAG\assets\imgs\logo.png",
+        r"E:\Project\python\study\RAG\assets\imgs\logo2.png",
         use_column_width=True
     )
     st.caption(
@@ -54,7 +51,7 @@ with st.sidebar:
     st.page_link("app.py", label="对话", icon="📝")
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
-    st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
+    st.page_link("pages/work_flow.py", label="工作流管理", icon="⚡", use_container_width=True)
     st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
 
 # 创建两列布局
@@ -87,10 +84,10 @@ def translate_sql(input_sql, from_dialect, to_dialect):
     SQL 查询: {input_sql}
     """
     messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": input_sql}]
-    response = get_ai_response(api_token, model, messages, temperature, max_tokens, system_prompt)
+    response = get_ai_response(api_token, model, messages, temperature, max_tokens, system_prompt,tools=[])
 
     # 改进正则表达式提取SQL语句
-    sql_match = re.search(r"SELECT.*?(?:FROM|INTO|UPDATE|DELETE).*?;", response, re.IGNORECASE | re.DOTALL)
+    sql_match = re.search(r"sql\s*([\s\S]+?)\s*", response, re.IGNORECASE | re.DOTALL)
     if sql_match:
         return sql_match.group(0)
     else:

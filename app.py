@@ -23,7 +23,7 @@ from web_ui.dialogue.dialogue import export2md, build_system_prompt
 # Set Streamlit page configuration
 st.set_page_config(
     page_title="MultiRAG",
-    page_icon="🧸",  # 🧊
+    page_icon="☀️",  # 🧊
     layout="centered",
     initial_sidebar_state="auto",
     menu_items={
@@ -47,15 +47,15 @@ class Mode(str, Enum):
 # st.success('Thank you for inputting a name.')
 default_model = 'GLM-4-520'
 
-HELP = """
-### 🎉 欢迎使用 Datav-MultiRAG!
-请在下方选取一个功能。
-""".strip()
+# HELP = """
+# 请在下方选取一个功能。
+# """.strip()
+st.title("🎉 欢迎使用 MultiRAG ")
+# st.markdown(HELP)
 
-st.markdown(HELP)
 
 page = st.radio(
-    "🐖🔢每次切换功能时，请先手动清空对话历史。", # todo 【后续优化：自动重新加载LLM并清空页面对话】
+    "❗❗❗每次切换功能时，请先手动清空对话历史", # todo 【后续优化：自动重新加载LLM并清空页面对话】
     [mode.value for mode in Mode],
     key="page",
     horizontal=True,
@@ -257,17 +257,26 @@ if first_round and page == Mode.LONG_CTX.value:
         st.session_state.uploaded_texts = ""
         st.session_state.uploaded_file_nums = 0
 
-# 显示所有对话
-for message in st.session_state.messages:
-    if message["role"] != "system":
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+def display_conversations():
+    """
+    A function to display all conversations excluding system messages in a Streamlit application.
+
+    This function iterates over the messages stored in `st.session_state.messages`.
+    For each message whose role is not "system", it uses Streamlit's chat_message and markdown functions
+    to format and display the conversation.
+    """
+    for message in st.session_state.messages:
+        # Check if the message role is not 'system' before displaying
+        if message["role"] != "system":
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+display_conversations()
 
 # 侧边栏选项
 
 with st.sidebar:
     st.image(
-        r"E:\Project\python\study\RAG\assets\imgs\logo.png",
+        r"E:\Project\python\study\RAG\assets\imgs\logo2.png",
         use_column_width=True
     )
     st.caption(
@@ -277,7 +286,7 @@ with st.sidebar:
     st.page_link("app.py", label="对话", icon="📝")
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
-    st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
+    st.page_link("pages/work_flow.py", label="工作流管理", icon="⚡", use_container_width=True)
     st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
 
     import datetime
@@ -352,7 +361,7 @@ with st.sidebar:
     st.subheader(f"{city}天气")
     update_weather(city)
 
-    tab1, tab2, tab3 = st.tabs(["会话管理", "模型配置", "智能模式"])
+    tab1, tab2, tab3 = st.tabs(["1️⃣会话管理", "2️⃣模型配置", "3️⃣智能模式"])
     with tab1:
         def on_mode_change():
             mode = 'LLM 对话' if 'dialogue_mode' not in st.session_state else st.session_state.dialogue_mode
@@ -448,10 +457,11 @@ with st.sidebar:
         if save_btn.button("保存", use_container_width=True):
             st.session_state.show_save_input = True
             handle_session_saving(selected_file_full_path)
-        if load_btn.button("加载", use_container_width=True):
-            st.success('当前会话已成功加载！')
-            st.session_state.messages = display_chat_history(selected_file_full_path)
-            st.session_state.from_history = True  # 标记为从历史会话加载
+        # if load_btn.button("加载", use_container_width=True):
+        #     st.success('当前会话已成功加载！')
+        #     st.session_state.messages = display_chat_history(selected_file_full_path)
+        #     display_conversations()
+        #     st.session_state.from_history = True  # 标记为从历史会话加载
         if del_btn.button("删除", use_container_width=True):
             st.success('当前会话已成功删除！')
             handle_session_deleting()
@@ -607,7 +617,11 @@ with st.sidebar:
             st.session_state.show_expander = not st.session_state.get("show_expander", False)
             llm_model_setting()
 
-        api_token = st.text_input("输入API-KEY", type="password")
+        with st.popover("API-KEY", use_container_width=True):
+            st.markdown("Hello 👋, 请在此配置API-KEY")
+            # name = st.text_input("What's your name?")
+            api_token = st.text_input("输入API-KEY", type="password")
+            # api_token = st.text_input("输入API-KEY", type="password")
         if api_token:
             st.session_state.api_token = api_token
             st.success("API Token 已经配置")
@@ -677,13 +691,25 @@ with st.sidebar:
 
 
     def extract_first_sql(text: str) -> str:
-        # 正则表达式匹配以 ```sql 开头并延续到结束的三反引号之前的所有内容
-        sql_blocks = re.findall(r"```sql\s*([\s\S]+?)\s*```", text)
+        sql_blocks = re.findall(r"(?i)(```sql\s*([\s\S]+?)```|select\s+[\s\S]+?)(?=(```|SELECT|select|\Z))", text)
+        # 提取匹配的 SQL 代码块，去掉不必要的空捕获组
+        sql_blocks = [block[1] if block[0].startswith('```sql') else block[0] for block in sql_blocks]
         return sql_blocks[0] if sql_blocks else ""
+
+if load_btn.button("加载", use_container_width=True):
+    st.success('当前会话已成功加载！')
+    st.session_state.messages = display_chat_history(selected_file_full_path)
+    display_conversations()
+    st.session_state.from_history = True  # 标记为从历史会话加载
+
 uploaded_texts = st.session_state.get("uploaded_texts", "")
 
 # 用户输入框
 if prompt := st.chat_input("请输入您的问题："):
+    if st.session_state.model.startswith("Doubao"):
+        st.session_state.api_token = '02ca5035-c85d-47c6-b7d6-52e565a29919'
+    elif st.session_state.model.startswith("glm"):
+        st.session_state.api_token = '7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv'
     processed_prompt = None
     if prompt:
         processed_prompt = process_user_input(prompt)
@@ -697,8 +723,11 @@ if prompt := st.chat_input("请输入您的问题："):
             response = request_milvus()
             result = process_schema_response(response)
             df = pd.DataFrame(result, columns=['表物理名', '表中文名', '字段物理名', '字段中文名', '字段类型', '字段约束'])
-            st.markdown('- 参考数据如下')
+            # st.markdown('- 参考数据如下')
             st.write(df)
+            with st.status("正在读取知识库知识ing...") as s:
+                st.data_editor(df)
+                s.update(label="💫参考数据", expanded=False)
             schema_markdown = df.to_markdown(index=False)
             st.session_state.sys_prompt = f"""
                         你是一个SQL专家，请基于以下数据库表结构描述（markdown表格格式）：
@@ -713,6 +742,7 @@ if prompt := st.chat_input("请输入您的问题："):
                         4. SQL语法必须符合指定的数据库类型。
                         5. 输出仅包含纯SQL文本，不要使用markdown语法包裹。
                         6. 禁止在输出中包含任何解释、假设以及注意事项等非SQL内容。
+                        参考示例数据如下
                     """
     # processed_prompt = process_user_input(processed_prompt)
     st.session_state.messages.append({"role": "user", "content": processed_prompt})
@@ -780,6 +810,37 @@ if prompt := st.chat_input("请输入您的问题："):
                 st.session_state['recommendations'] = options
         except json.JSONDecodeError:
             st.error("解析推荐话题时出错，请检查AI返回的格式。")
+
+
+def select_chart_type(data, user_query):
+    """
+    根据数据内容和用户提问内容选择合适的图表类型。
+
+    参数：
+    - data: pandas DataFrame，包含要展示的数据
+    - user_query: str，用户的提问内容
+
+    返回：
+    - str，选择的图表类型（"area_chart", "bar_chart", "line_chart"）
+    - str，选择理由
+    """
+    data_structure = data.dtypes.to_dict()
+    data_columns = list(data.columns)
+    data_size = data.shape[0]
+
+    # 分析数据类型和用户提问内容
+    if 'time' in data_columns or any(col.lower().find('date') != -1 for col in data_columns):
+        if 'trend' in user_query.lower() or '变化' in user_query:
+            return "line_chart", "数据包含时间序列，用户希望分析趋势变化，选择折线图。"
+    elif any(dtype == 'object' for dtype in data_structure.values()):
+        if 'compare' in user_query.lower() or '比较' in user_query:
+            return "bar_chart", "数据包含分类，用户希望进行数据比较，选择条形图。"
+    elif data_size > 10:
+        return "area_chart", "数据点较多，适合展示趋势和变化，选择面积图。"
+    else:
+        return "line_chart", "默认选择折线图，适合展示连续数据的趋势。"
+
+
 # 显示推荐问题并处理选择
 if 'recommendations' in st.session_state and st.session_state['recommendations'] != []:
     recmd_option = st.radio("话题拓展：", st.session_state['recommendations'], index=None)
@@ -815,7 +876,31 @@ if 'recommendations' in st.session_state and st.session_state['recommendations']
             sql = extract_first_sql(st.session_state.messages[-1]['content'])
             st.warning(sql)
             df = conn.query(sql)
-            st.bar_chart(df)
+            # 检查数据框的结构
+            st.write("数据框结构：", df)
+
+            if df.empty:
+                st.error("查询结果为空，无法生成图表。")
+
+            # 提供图表类型选择
+            chart_types = ["area_chart", "bar_chart", "line_chart"]
+            tab1, tab2, tab3 = st.tabs(chart_types)
+
+            with tab1:
+                st.area_chart(df)
+
+            with tab2:
+                # 将数据框转换为适合 bar_chart 的格式
+                df_transposed = df.T.reset_index()
+                df_transposed.columns = ["类型", "人数"]
+                st.bar_chart(df_transposed.set_index("类型"),horizontal=True)
+
+            with tab3:
+                # 将数据框转换为适合 line_chart 的格式
+                df_melted = df.melt(var_name='类型', value_name='人数')
+                st.line_chart(df_melted)
+
+            # st.bar_chart(df)
             st.session_state['recommendations'] = []
         elif recmd_option == '表格输出':
             conn = st.connection('local_pg', type='sql')

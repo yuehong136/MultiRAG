@@ -60,6 +60,8 @@ from core.tools.tools_registry import dispatch_tool
 
 # @st.cache_data(show_spinner="Fetching data from LLM...", ttl=60)
 def get_ai_recommend(api_token, model, messages, temperature, max_tokens, system_prompt):
+    if model.startswith("Doubao"):
+        model = 'ep-20240623093120-66vmh'
     factory = ChatFactory(api_token, model)
     chat_instance = factory.get_chat_instance()
 

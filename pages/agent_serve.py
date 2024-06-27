@@ -18,7 +18,7 @@ st.set_page_config(
 
 with st.sidebar:
     st.image(
-        r"E:\Project\python\study\RAG\assets\imgs\logo.png",
+        r"E:\Project\python\study\RAG\assets\imgs\logo2.png",
         use_column_width=True
     )
     st.caption(
@@ -28,7 +28,7 @@ with st.sidebar:
     st.page_link("app.py", label="对话", icon="📝")
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
-    st.page_link("pages/work_flow.py", label="工作流管理", icon="🐇", use_container_width=True)
+    st.page_link("pages/work_flow.py", label="工作流管理", icon="⚡", use_container_width=True)
     st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
 st.title("智能助手")
 

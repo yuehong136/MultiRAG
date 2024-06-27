@@ -15,7 +15,7 @@ level = "info"
 messageFormat = "%(asctime)s %(message)s"
 
 [theme]
-primaryColor = "purple"
+primaryColor = "deep orange"
 
 [browser]
 
