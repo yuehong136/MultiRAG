@@ -1,11 +1,14 @@
 # rerank_model/base.py
+from dataclasses import dataclass
 from abc import ABC, abstractmethod
+from typing import List
 
+@dataclass
 class Base(ABC):
-    def __init__(self, key, model_name):
-        self.key = key
-        self.model_name = model_name
+    key: str
+    model_name: str
 
     @abstractmethod
-    def similarity(self, query: str, texts: list):
+    def similarity(self, query: str, texts: List[str]) -> List[float]:
         raise NotImplementedError("Please implement similarity method!")
+

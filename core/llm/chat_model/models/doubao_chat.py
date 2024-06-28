@@ -1,15 +1,22 @@
 # doubao.py
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any, Tuple
 from volcenginesdkarkruntime import Ark
 from core.llm.chat_model.base import Base
 
-
+@dataclass
 class DoubaoChat(Base):
-    def __init__(self, key, model_name, base_url):
-        super().__init__(key, model_name, base_url)
-        self.client = Ark(api_key=key, base_url=base_url)
-        print(f"Doubao client initialized with key: {key}")
+    key: str
+    model_name: str
+    base_url: Optional[str] = None
+    client: Ark = field(init=False)
 
-    def chat(self, system, history, gen_conf):
+    def __post_init__(self):
+        self.client = Ark(api_key=self.key, base_url=self.base_url)
+        super().__post_init__()
+        print(f"Doubao client initialized with key: {self.key}")
+
+    def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]) -> Tuple[str, int]:
         if system:
             history.insert(0, {"role": "system", "content": system})
         # try:
@@ -23,24 +30,23 @@ class DoubaoChat(Base):
         # except Exception as e:
         #     return f"**ERROR**: {str(e)}", 0
 
-    def chat_streamly(self, system, history, gen_conf):
+    def chat_streamly(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
         ans = ""
         total_tokens = 0
-        # try:
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=history,
-            stream=True,
-            **gen_conf
-        )
-        for chunk in response:
-            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                ans += chunk.choices[0].delta.content
-                total_tokens += 1
-                yield ans
-        # except Exception as e:
-        #     yield f"**ERROR**: {str(e)}"
-
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=history,
+                stream=True,
+                **gen_conf
+            )
+            for chunk in response:
+                if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                    ans += chunk.choices[0].delta.content
+                    total_tokens += 1
+                    yield ans
+        except Exception as e:
+            yield ans + f"\n**ERROR**: {str(e)}"
         # yield total_tokens

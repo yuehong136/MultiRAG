@@ -15,7 +15,7 @@ from PIL import Image
 from core.file.utils import extract_pdf, extract_docx, extract_pptx, extract_text
 from core.llm.ocr_model.ocr_factory import ModelFactory
 from core.tools.tools_registry import get_tools, ALL_TOOLS
-from server.kb import kb_list, process_schema_response, request_milvus
+# from server.kb import kb_list, process_schema_response, request_milvus
 from utils.api import get_ai_response, get_ai_recommend, process_user_input
 from configs import VERSION, MODEL_PLATFORMS
 from web_ui.dialogue.dialogue import export2md, build_system_prompt
@@ -388,6 +388,7 @@ with st.sidebar:
         )
 
         if dialogue_mode == "知识库问答":
+            from server.kb import kb_list, process_schema_response, request_milvus
             with st.expander("知识库参数", expanded=True):
                 st.selectbox("Database", kb_list, on_change=on_mode_change, key="selected_kb",
                              placeholder='选择一个知识库')

@@ -1,15 +1,16 @@
-# embedding_model/base.py
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import List
 
+@dataclass
 class Base(ABC):
-    def __init__(self, key, model_name):
-        self.key = key
-        self.model_name = model_name
+    key: str
+    model_name: str
 
     @abstractmethod
-    def encode(self, texts: list, batch_size=32):
+    def encode(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
         raise NotImplementedError("Please implement encode method!")
 
     @abstractmethod
-    def encode_queries(self, text: str):
+    def encode_queries(self, text: str) -> List[float]:
         raise NotImplementedError("Please implement encode method!")
