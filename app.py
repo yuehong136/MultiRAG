@@ -152,8 +152,8 @@ if 'chat_name' not in st.session_state:
     st.session_state.chat_name = 'default'
 
 if 'messages' not in st.session_state:
-    st.session_state.messages = [{"role": "assistant",
-                                  "content": "你好 ！我是 迪小维，有什么可以帮助你的嘛 ?"}]
+    # st.session_state.messages = [{"role": "assistant", "content": "你好 ！我是 迪小维，有什么可以帮助你的嘛 ?"}]
+    st.session_state.messages = []
 
 if 'max_tokens' not in st.session_state:
     st.session_state.max_tokens = 512
@@ -481,8 +481,8 @@ with st.sidebar:
             st.session_state.files_uploaded = False
             st.session_state.uploaded_texts = ""
             st.session_state.uploaded_file_nums = 0
-            st.session_state.messages = [{"role": "assistant",
-                                          "content": "你好 ！我是 迪小维，有什么可以帮助你的嘛 ?"}]
+            st.session_state.messages = []
+            # st.session_state.messages = [{"role": "assistant", "content": "你好 ！我是 迪小维，有什么可以帮助你的嘛 ?"}]
             st.rerun()
 
         if export_btn.button("导出对话", use_container_width=True):
@@ -627,7 +627,7 @@ with st.sidebar:
             st.session_state.api_token = api_token
             st.success("API Token 已经配置")
         model = st.selectbox("选择模型",
-                             ["glm-4-0520", "glm-4-airx", "glm-4-air", "glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo",
+                             ["glm-4-0520", "glm-4-airx", "glm-4-air", "glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo", "ERNIE-4.0-8K", "ERNIE-Tiny-8K", "ERNIE-Speed-128K",
                               "qwen2:7b-instruct-fp16", "qwen2:72b-instruct-q4_0", "qwen2:72b-instruct-q8_0",
                               "Doubao-pro-32k"])
         st.session_state.model = model
@@ -711,6 +711,8 @@ if prompt := st.chat_input("请输入您的问题："):
         st.session_state.api_token = '02ca5035-c85d-47c6-b7d6-52e565a29919'
     elif st.session_state.model.startswith("glm"):
         st.session_state.api_token = '7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv'
+    elif st.session_state.model.startswith("ERNIE"):
+        st.session_state.api_token = 'DEDtZBJENAe1FocADSw0Nk41'
     processed_prompt = None
     if prompt:
         processed_prompt = process_user_input(prompt)
@@ -793,6 +795,7 @@ if prompt := st.chat_input("请输入您的问题："):
     )
     st.session_state.messages.append({"role": "assistant", "content": response_content})
     # Generate recommendations based on the user's query
+    # todo ERNIE系模型暂时没法配合输出推荐话题后的多轮对话，原因是：百度API参数要求限制会话个数的奇偶
     if st.session_state.is_recmd or st.session_state.is_mode_bi:
         response_recommendations = get_ai_recommend(
             st.session_state.api_token,
