@@ -60,20 +60,30 @@ from core.tools.tools_registry import dispatch_tool
 
 # @st.cache_data(show_spinner="Fetching data from LLM...", ttl=60)
 def get_ai_recommend(api_token, model, messages, temperature, max_tokens, system_prompt):
-    if model.startswith("Doubao"):
-        model = 'ep-20240623093120-66vmh'
-    factory = ChatFactory(api_token, model)
-    chat_instance = factory.get_chat_instance()
-
     gen_conf = {
         "temperature": temperature,
         "max_tokens": max_tokens
     }
+    gen_conf_ernie = {
+        "temperature": temperature,
+        "max_output_tokens": max_tokens,
+        "system": system_prompt
+    }
+    if model.startswith("Doubao"):
+        model = 'ep-20240623093120-66vmh'
+        gen_conf = gen_conf
+    elif model.startswith("ERNIE"):
+        gen_conf = gen_conf_ernie
+    factory = ChatFactory(api_token, model)
+    chat_instance = factory.get_chat_instance()
+
 
     response_container = st.empty()
     response_content = ""
-
-    history_with_system_prompt = [{"role": "system", "content": system_prompt}] + messages
+    if model.startswith("ERNIE"):
+        history_with_system_prompt = messages
+    else:
+        history_with_system_prompt = [{"role": "system", "content": system_prompt}] + messages
     # st.write(history_with_system_prompt)
     try:
         response_content, _ = chat_instance.chat(system_prompt, history_with_system_prompt, gen_conf)
@@ -139,10 +149,16 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
         "tools": tool_definitions,
         "tool_choice": "auto"
     }
+    gen_conf_ernie = {
+        "temperature": temperature,
+        "max_output_tokens": max_tokens,
+        "system": system_prompt
+    }
     if model.startswith("Doubao"):
         model = 'ep-20240623093120-66vmh'
-        # print(model)
         gen_conf = gen_conf_default
+    elif model.startswith("ERNIE"):
+        gen_conf = gen_conf_ernie
     else:
         gen_conf = gen_conf_has_tool
 
@@ -183,7 +199,10 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
     safe_messages = [{"role": msg["role"], "content": msg.get("content", "")} for msg in messages]
 
     # 创建消息历史记录的副本，并在副本中插入系统提示
-    history_with_system_prompt = [{"role": "system", "content": safe_system_prompt}] + safe_messages
+    if model.startswith("ERNIE"):
+        history_with_system_prompt = safe_messages
+    else:
+        history_with_system_prompt = [{"role": "system", "content": safe_system_prompt}] + safe_messages
 
 
 
@@ -194,8 +213,13 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
             response_container = st.empty()
             response_content = ""
             for chunk in chat_instance.chat_streamly(safe_system_prompt, history_with_system_prompt, gen_conf):
+                # print(chunk)
+                # if chunk:
+                #     response_content = chunk  # 更新response_content
+                #     response_container.markdown(response_content)  # 实时更新 Streamlit UI
+                #     s.update(label="💫Over", expanded=True)
                 if chunk:
-                    response_content = chunk  # 更新response_content
+                    response_content = chunk  # 累积 response_content
                     response_container.markdown(response_content)  # 实时更新 Streamlit UI
                     s.update(label="💫Over", expanded=True)
                 else:

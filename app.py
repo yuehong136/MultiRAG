@@ -55,7 +55,7 @@ st.title("🎉 欢迎使用 MultiRAG ")
 
 
 page = st.radio(
-    "❗❗❗每次切换功能时，请先手动清空对话历史", # todo 【后续优化：自动重新加载LLM并清空页面对话】
+    "❗❗❗每次切换功能时，请先手动清空对话历史",  # todo 【后续优化：自动重新加载LLM并清空页面对话】
     [mode.value for mode in Mode],
     key="page",
     horizontal=True,
@@ -200,7 +200,7 @@ if "city_name" not in st.session_state:
     st.session_state.city_name = '南京'
 
 tools = get_tools() if page == Mode.ALL_TOOLS else []
-first_round = len(st.session_state.messages) == 1
+first_round = len(st.session_state.messages) == 0
 FILE_TEMPLATE = "[File Name]\n{file_name}\n[File Content]\n{file_content}"
 # 确保 /tmp 目录存在
 tmp_dir = "/tmp"
@@ -257,6 +257,7 @@ if first_round and page == Mode.LONG_CTX.value:
         st.session_state.uploaded_texts = ""
         st.session_state.uploaded_file_nums = 0
 
+
 def display_conversations():
     """
     A function to display all conversations excluding system messages in a Streamlit application.
@@ -270,6 +271,8 @@ def display_conversations():
         if message["role"] != "system":
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
+
+
 display_conversations()
 
 # 侧边栏选项
@@ -389,6 +392,7 @@ with st.sidebar:
 
         if dialogue_mode == "知识库问答":
             from server.kb import kb_list, process_schema_response, request_milvus
+
             with st.expander("知识库参数", expanded=True):
                 st.selectbox("Database", kb_list, on_change=on_mode_change, key="selected_kb",
                              placeholder='选择一个知识库')
@@ -627,7 +631,9 @@ with st.sidebar:
             st.session_state.api_token = api_token
             st.success("API Token 已经配置")
         model = st.selectbox("选择模型",
-                             ["glm-4-0520", "glm-4-airx", "glm-4-air", "glm-4-flash", "glm-3-turbo", "gpt-3.5-turbo", "ERNIE-4.0-8K", "ERNIE-Tiny-8K", "ERNIE-Speed-128K",
+                             ["glm-4-0520", "glm-4-airx", "glm-4-air", "glm-4-flash", "glm-3-turbo", "qwen-turbo-0624",
+                              "qwen-plus-0624", "qwen-max-0428", "gpt-3.5-turbo", "ERNIE-4.0-8K", "ERNIE-Tiny-8K",
+                              "ERNIE-Speed-128K",
                               "qwen2:7b-instruct-fp16", "qwen2:72b-instruct-q4_0", "qwen2:72b-instruct-q8_0",
                               "Doubao-pro-32k"])
         st.session_state.model = model
@@ -713,6 +719,8 @@ if prompt := st.chat_input("请输入您的问题："):
         st.session_state.api_token = '7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv'
     elif st.session_state.model.startswith("ERNIE"):
         st.session_state.api_token = 'DEDtZBJENAe1FocADSw0Nk41'
+    elif st.session_state.model.startswith('qwen'):
+        st.session_state.api_token = 'sk-855ec5ff02584d059b833a95eae1b64e'
     processed_prompt = None
     if prompt:
         processed_prompt = process_user_input(prompt)
@@ -725,7 +733,8 @@ if prompt := st.chat_input("请输入您的问题："):
         if dialogue_mode == "知识库问答" and st.session_state['selected_kb']:
             response = request_milvus()
             result = process_schema_response(response)
-            df = pd.DataFrame(result, columns=['表物理名', '表中文名', '字段物理名', '字段中文名', '字段类型', '字段约束'])
+            df = pd.DataFrame(result,
+                              columns=['表物理名', '表中文名', '字段物理名', '字段中文名', '字段类型', '字段约束'])
             # st.markdown('- 参考数据如下')
             st.write(df)
             with st.status("正在读取知识库知识ing...") as s:
@@ -897,7 +906,7 @@ if 'recommendations' in st.session_state and st.session_state['recommendations']
                 # 将数据框转换为适合 bar_chart 的格式
                 df_transposed = df.T.reset_index()
                 df_transposed.columns = ["类型", "人数"]
-                st.bar_chart(df_transposed.set_index("类型"),horizontal=True)
+                st.bar_chart(df_transposed.set_index("类型"), horizontal=True)
 
             with tab3:
                 # 将数据框转换为适合 line_chart 的格式
