@@ -1,5 +1,10 @@
 # 项目名称：大模型LLM的RAG应用项目
 
+<p align="center">
+<a href="README_CN.md"><img src="https://img.shields.io/badge/文档-中文版-blue.svg" alt="CN doc"></a>
+<a href="README.md"><img src="https://img.shields.io/badge/document-English-blue.svg" alt="EN doc"></a>
+</p>
+
 ## 项目简介
 
 本次项目是大模型LLM的RAG（Retrieval-Augmented Generation）应用项目，结合了当前许多开源项目的优势，具体功能包括：
