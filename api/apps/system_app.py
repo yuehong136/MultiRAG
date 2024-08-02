@@ -1,0 +1,62 @@
+# coding=utf-8
+"""
+@project: multirag
+@Author：龙
+@file： xxx.py
+@date：2024/7/9 9:00
+@desc:
+"""
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from fastapi_login import LoginManager
+
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.utils.api_utils import get_json_result
+from api.versions import get_rag_version
+from core.settings import SVR_QUEUE_NAME
+# from core.utils.es_conn import ELASTICSEARCH
+from core.utils.minio_conn import MINIO
+from timeit import default_timer as timer
+from core.utils.redis_conn import REDIS_CONN
+from api.db.database import get_db
+from api.apps import manager
+
+router = APIRouter()
+
+@router.get("/version", summary="获取版本", response_description="成功获取版本")
+async def version():
+    return get_json_result(data=get_rag_version())
+
+@router.get("/status", summary="获取系统状态", response_description="成功获取系统状态")
+async def status(db: Session = Depends(get_db)):
+    res = {}
+    st = timer()
+    try:
+        res["es"] = ELASTICSEARCH.health()
+        res["es"]["elapsed"] = "{:.1f}".format((timer() - st) * 1000.)
+    except Exception as e:
+        res["es"] = {"status": "red", "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+
+    st = timer()
+    try:
+        MINIO.health()
+        res["minio"] = {"status": "green", "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
+    except Exception as e:
+        res["minio"] = {"status": "red", "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+
+    st = timer()
+    try:
+        KnowledgebaseService.get_by_id(db, "x")
+        res["mysql"] = {"status": "green", "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
+    except Exception as e:
+        res["mysql"] = {"status": "red", "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+
+    st = timer()
+    try:
+        if not REDIS_CONN.health():
+            raise Exception("Lost connection!")
+        res["redis"] = {"status": "green", "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
+    except Exception as e:
+        res["redis"] = {"status": "red", "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+
+    return get_json_result(data=res)

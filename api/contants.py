@@ -1,0 +1,1 @@
+NAME_LENGTH_LIMIT = 2 ** 10

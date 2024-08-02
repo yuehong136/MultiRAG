@@ -8,8 +8,8 @@ from PIL import Image
 @dataclass
 class Zhipu4V(Base):
     key: str
-    model_name: str = "glm-4v"
     lang: str = "Chinese"
+    model_name: str = "glm-4v"
     client: ZhipuAI = field(init=False)
 
     def __post_init__(self):
@@ -23,6 +23,7 @@ class Zhipu4V(Base):
             messages=self.prompt(b64, self.lang),
             max_tokens=max_tokens,
         )
+        print(self.prompt(b64, self.lang))
         return res.choices[0].message.content.strip(), res.usage.total_tokens
         # except Exception as e:
         #     return f"**ERROR**: {str(e)}", 0

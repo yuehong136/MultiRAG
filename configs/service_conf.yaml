@@ -1,0 +1,138 @@
+# 配置文件用于定义各种服务的连接和认证信息，以确保应用程序能正确地与这些服务通信。
+
+multirag:
+  # multirag服务的监听地址
+  host: 192.168.188.132
+  # multirag服务的HTTP端口
+  http_port: 8123
+  # multirag服务的SECRET_KEY
+  secret_key: 'multirag'
+
+#postgresql:
+#  # 数据库的类型
+#  name: 'postgresql'
+#  # 数据库的名称
+#  dbname: 'postgres'
+#  # postgresql数据库的用户名
+#  user: 'postgres'
+#  # postgresql数据库的密码
+#  password: '123456'
+#  # postgresql数据库的主机名
+#  host: '127.0.0.1'
+#  # postgresql数据库的端口
+#  port: 5432
+#  # postgresql的最大连接数
+#  max_connections: 100
+#  # postgresql的过期超时时间
+#  stale_timeout: 30
+
+postgresql:
+  # 数据库的类型
+  name: 'postgresql'
+  # 数据库的名称
+  dbname: 'datav'
+  # postgresql数据库的用户名
+  user: 'test_dve'
+  # postgresql数据库的密码
+  password: 'DATAV123'
+  # postgresql数据库的主机名
+  host: '122.112.196.205'
+  # postgresql数据库的端口
+  port: 5431
+  # postgresql的最大连接数
+  max_connections: 100
+  # postgresql的过期超时时间
+  stale_timeout: 30
+
+
+minio:
+  # MinIO服务的用户名
+  user: 'drm'
+  # MinIO服务的密码
+  password: 'datav123'
+  # MinIO服务的主机名和端口
+  host: '122.112.183.1:9199'
+
+#milvus:
+#  # Milvus服务的主机地址
+#  hosts: 'http://172.30.129.150:19530'
+#  # Milvus服务的用户名
+#  username: 'root'
+#  # Milvus服务的密码
+#  password: 'Milvus'
+
+milvus:
+  # Milvus服务的主机地址
+  hosts: 'http://122.112.183.1:19530'
+  # Milvus服务的用户名
+  username: 'root'
+  # Milvus服务的密码
+  password: 'Milvus'
+
+es:
+  # Elasticsearch服务的主机地址
+  hosts: 'http://es01:9200'
+  # Elasticsearch服务的用户名
+  username: 'elastic'
+  # Elasticsearch服务的密码
+  password: 'infini_rag_flow'
+
+redis:
+  # Redis数据库的编号
+  db: 1
+  # Redis数据库的密码
+#  password: 'datav123'
+  password: ''
+  # Redis数据库的主机名和端口
+#  host: '122.112.183.1:6379'
+  host: '127.0.0.1:6379'
+
+user_default_llm:
+  # 默认的LLM（Large Language Model）工厂
+#  factory: 'Tongyi-Qianwen'
+  factory: 'ZHIPU-AI'
+  # LLM的API密钥
+#  api_key: 'sk-855ec5ff02584d059b833a95eae1b64e'
+  api_key: '7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv'
+  # LLM的基础URL
+  base_url: ''
+
+oauth:
+  github:
+    # GitHub OAuth的客户端ID
+    client_id: xxxxxxxxxxxxxxxxxxxxxxxxx
+    # GitHub OAuth的密钥
+    secret_key: xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    # GitHub OAuth的访问令牌URL
+    url: https://github.com/login/oauth/access_token
+  feishu:
+    # 飞书OAuth的应用ID
+    app_id: cli_xxxxxxxxxxxxxxxxxxx
+    # 飞书OAuth的应用密钥
+    app_secret: xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    # 飞书OAuth的应用访问令牌URL
+    app_access_token_url: https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal
+    # 飞书OAuth的用户访问令牌URL
+    user_access_token_url: https://open.feishu.cn/open-apis/authen/v1/oidc/access_token
+    # 飞书OAuth的授权类型
+    grant_type: 'authorization_code'
+
+authentication:
+  client:
+    # 客户端认证开关
+    switch: false
+    # HTTP应用的密钥
+    http_app_key:
+    # HTTP应用的密钥
+    http_secret_key:
+  site:
+    # 站点认证开关
+    switch: false
+
+permission:
+  # 权限检查开关
+  switch: false
+  # 是否启用组件权限检查
+  component: false
+  # 是否启用数据集权限检查
+  dataset: false

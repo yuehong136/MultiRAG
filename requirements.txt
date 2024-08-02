@@ -57,3 +57,54 @@ ruamel.yaml >= 0.18.6
 #transformers==4.36.2
 # 阿里系模型调用
 dashscope >= 1.20.1
+# api/utils/file_utils使用
+pdfplumber >= 0.11.2
+# 用于处理不安全的环境下的数据序列化和签名。其中URLSafeTimedSerializer 类是 itsdangerous 库中的一个组件，它被设计用来创建和验证有时限的、URL安全的令牌。
+itsdangerous >= 2.2.0
+# redis
+redis >= 5.0.7
+## ---------nlp&文件解析---------
+# 使用 datrie 库构建和加载字典树（trie）
+datrie >= 0.8.2
+# 使用 nltk 进行英文词干提取和词形还原
+nltk >= 3.8.1
+# HanziConv 用于中英文转换
+hanziconv >= 0.3.2
+# 用于将罗马数字转换为阿拉伯数字
+roman_numbers >= 1.0.2
+# 用于将英文数字单词转换为阿拉伯数字
+word2number >= 1.1
+# 用于将中文数字转换为阿拉伯数字
+cn2an >= 0.5.22
+# 用于从各种文件格式中提取文本和元数据
+tika >= 2.6.0
+# 用于将 Markdown 文本转换为 HTML
+markdown >= 3.6
+# 用于处理 PDF 文件
+PyPDF2 >= 3.0.1
+# 用于处理 PDF 文件
+pypdf >= 4.3.1
+# openpyxl
+openpyxl >= 3.1.5
+# 用于将中文汉字转换为拼音
+xpinyin >= 0.7.6
+# xgboost 是一个优化的分布式梯度提升库，旨在高效、灵活和便捷地处理大规模数据集和多种机器学习任务
+xgboost >= 2.1.0
+# 视觉处理库
+opencv-python >= 4.10.0.84
+# 用于操作和分析平面几何对象
+shapely >= 2.0.5
+# 用来进行直线图形（比如多边形和矩形）的剪裁（clipping）操作的库
+pyclipper >= 1.3.0.post5
+# 主要用于从网页中提取主要内容。这个库的目标是从HTML文档中去除所有的样式、脚本和布局信息，留下纯净的文章内容
+readability >= 0.3.1
+# 用于从HTML文档中提取文本内容
+html_text >= 0.6.2
+# 是 demjson 的一个分支，用于处理JSON数据
+demjson3 >= 3.0.6
+# Selenium 是一个自动化测试工具，主要用于Web应用程序的自动化测试。它提供了一系列工具，允许用户模拟用户在浏览器中的行为，如点击、拖放、键盘输入等，从而实现自动化测试。
+selenium >= 4.23.0
+# 它提供了一个方便的方式来自动管理Web驱动程序（如ChromeDriver、GeckoDriver、IEDriver和EdgeDriver）的下载和更新。这对于使用Selenium进行自动化测试的开发者来说非常有用，因为它简化了驱动程序的管理过程。
+webdriver_manager >= 4.0.1
+# 核心类 umap.UMAP 是用于数据降维的非线性技术
+umap >= 0.1.1

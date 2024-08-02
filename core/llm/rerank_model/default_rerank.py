@@ -9,7 +9,7 @@ from FlagEmbedding import FlagReranker
 from huggingface_hub import snapshot_download
 from core.llm.rerank_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
-from rag.utils import num_tokens_from_string, truncate
+from core.utils import num_tokens_from_string, truncate
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))

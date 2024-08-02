@@ -50,17 +50,17 @@ class ZhipuChat(Base):
     #     # except Exception as e:
     #     #     yield f"**ERROR**: {str(e)}"
 
-    # async def chat_streamly(self, system, history, gen_conf):
-    #     if system:
-    #         history.insert(0, {"role": "system", "content": system})
-    #     ans = ""
-    #     response = self.client.chat.completions.create(
-    #         model=self.model_name,
-    #         messages=history,
-    #         stream=True,
-    #         **gen_conf
-    #     )
-    #     for chunk in response:
-    #         if hasattr(chunk.choices[0].delta, 'content'):
-    #             ans += chunk.choices[0].delta.content
-    #             yield ans
+    async def achat_streamly(self, system, history, gen_conf):
+        if system:
+            history.insert(0, {"role": "system", "content": system})
+        ans = ""
+        response = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=history,
+            stream=True,
+            **gen_conf
+        )
+        for chunk in response:
+            if hasattr(chunk.choices[0].delta, 'content'):
+                ans += chunk.choices[0].delta.content
+                yield ans

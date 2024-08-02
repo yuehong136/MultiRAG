@@ -2,6 +2,7 @@
 import openai
 import streamlit as st
 from core.llm.chat_model.chat_factory import ChatFactory
+from core.llm.cv_model.cv_factory import CVModelFactory
 from core.tools.tools_registry import dispatch_tool
 
 # fastapi_url = "http://127.0.0.1:8000"  # FastAPI 服务的URL
@@ -161,9 +162,12 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
         gen_conf = gen_conf_ernie
     else:
         gen_conf = gen_conf_has_tool
-
-    factory = ChatFactory(api_token, model)
-    chat_instance = factory.get_chat_instance()
+    if model == 'glm-4v':
+        factory = CVModelFactory(api_token, model)
+        chat_instance = factory.get_model_instance()
+    else:
+        factory = ChatFactory(api_token, model)
+        chat_instance = factory.get_chat_instance()
 
     # response_container = st.empty()
     # response_content = ""
@@ -220,6 +224,7 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
                 #     s.update(label="💫Over", expanded=True)
                 if chunk:
                     response_content = chunk  # 累积 response_content
+                    # print(response_content)
                     response_container.markdown(response_content)  # 实时更新 Streamlit UI
                     s.update(label="💫Over", expanded=True)
                 else:

@@ -1,0 +1,114 @@
+{
+  "mappings": {
+    "dynamic_templates": [
+      {
+        "vector_template": {
+          "match": "vector",
+          "mapping": {
+            "type": "FLOAT_VECTOR",
+            "dims": 768,
+            "similarity": "COSINE"
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "doc_id",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 128
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "kb_id",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 128
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "docnm_kwd",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "title_tks",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "title_sm_tks",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "content_with_weight",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 8192
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "content_ltks",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 8192
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "content_sm_ltks",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 8192
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "create_time",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 64
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "create_timestamp_flt",
+          "mapping": {
+            "type": "FLOAT"
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "pk",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 512
+          }
+        }
+      }
+    ]
+  }
+}

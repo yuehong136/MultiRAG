@@ -1,0 +1,146 @@
+# coding=utf-8
+"""
+@project: multirag
+@Author：龙
+@file： kb_app.py
+@date：2024/7/30 16:34
+@desc:
+"""
+
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from api.db.db_models import File
+from api.db.services import duplicate_name
+from api.db.services.document_service import DocumentService
+from api.db.services.file2document_service import File2DocumentService
+from api.db.services.file_service import FileService
+from api.db.services.user_service import TenantService
+from api.settings import RetCode
+from api.utils.api_utils import server_error_response, get_data_error_result
+from api.utils import get_uuid
+from api.db import StatusEnum, FileSource
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.utils.api_utils import get_json_result
+from api.db.database import get_db
+from api.apps import manager
+
+router = APIRouter()
+
+class CreateKnowledgebaseRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    permission: Optional[str] = None
+    parser_id: Optional[str] = None
+
+class UpdateKnowledgebaseRequest(BaseModel):
+    kb_id: str
+    name: str
+    description: Optional[str] = None
+    permission: Optional[str] = None
+    parser_id: Optional[str] = None
+
+class RemoveKnowledgebaseRequest(BaseModel):
+    kb_id: str
+
+@router.post('/create', summary="创建知识库", response_description="成功创建知识库")
+async def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    req_data = request.dict()
+    req_data["name"] = req_data["name"].strip()
+    req_data["name"] = duplicate_name(
+        KnowledgebaseService.query,
+        name=req_data["name"],
+        tenant_id=user.id,
+        status=StatusEnum.VALID.value
+    )
+    try:
+        req_data["id"] = get_uuid()
+        req_data["tenant_id"] = user.id
+        req_data["created_by"] = user.id
+        e, t = TenantService.get_by_id(user.id)
+        if not e:
+            return get_data_error_result(retmsg="Tenant not found.")
+        req_data["embd_id"] = t.embd_id
+        if not KnowledgebaseService.save(db, **req_data):
+            return get_data_error_result()
+        return get_json_result(data={"kb_id": req_data["id"]})
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post('/update', summary="更新知识库", response_description="成功更新知识库")
+async def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    req_data = request.dict()
+    req_data["name"] = req_data["name"].strip()
+    try:
+        if not KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"]):
+            return get_json_result(
+                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.', retcode=RetCode.OPERATING_ERROR)
+
+        e, kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
+        if not e:
+            return get_data_error_result(retmsg="Can't find this knowledgebase!")
+
+        if req_data["name"].lower() != kb.name.lower() \
+                and len(KnowledgebaseService.query(db, name=req_data["name"], tenant_id=user.id, status=StatusEnum.VALID.value)) > 1:
+            return get_data_error_result(retmsg="Duplicated knowledgebase name.")
+
+        del req_data["kb_id"]
+        if not KnowledgebaseService.update_by_id(db, kb.id, req_data):
+            return get_data_error_result()
+
+        e, kb = KnowledgebaseService.get_by_id(db, kb.id)
+        if not e:
+            return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
+
+        return get_json_result(data=kb.to_dict())
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.get('/detail', summary="获取知识库详情", response_description="成功获取知识库详情")
+async def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+    try:
+        kb = KnowledgebaseService.get_detail(db, kb_id)
+        if not kb:
+            return get_data_error_result(retmsg="Can't find this knowledgebase!")
+        return get_json_result(data=kb)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.get('/list', summary="列出知识库", response_description="成功列出知识库")
+async def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_time", desc: bool = True, db: Session = Depends(get_db), user=Depends(manager)):
+    try:
+        tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
+        kbs = KnowledgebaseService.get_by_tenant_ids(
+            db, [m["tenant_id"] for m in tenants], user.id, page, page_size, orderby, desc)
+        return get_json_result(data=kbs)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post('/rm', summary="删除知识库", response_description="成功删除知识库")
+async def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    req_data = request.dict()
+    try:
+        kbs = KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"])
+        if not kbs:
+            return get_json_result(
+                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.', retcode=RetCode.OPERATING_ERROR)
+
+        for doc in DocumentService.query(db, kb_id=req_data["kb_id"]):
+            if not DocumentService.remove_document(db, doc, kbs[0].tenant_id):
+                return get_data_error_result(retmsg="Database error (Document removal)!")
+            f2d = File2DocumentService.get_by_document_id(db, doc.id)
+            FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
+            File2DocumentService.delete_by_document_id(db, doc.id)
+
+        if not KnowledgebaseService.delete_by_id(db, req_data["kb_id"]):
+            return get_data_error_result(retmsg="Database error (Knowledgebase removal)!")
+        return get_json_result(data=True)
+    except Exception as e:
+        return server_error_response(e)

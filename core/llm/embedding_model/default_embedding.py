@@ -6,7 +6,7 @@ import numpy as np
 from huggingface_hub import snapshot_download
 from FlagEmbedding import FlagModel
 from api.utils.file_utils import get_home_cache_dir
-from rag.utils import num_tokens_from_string, truncate
+from core.utils import num_tokens_from_string, truncate
 from core.llm.embedding_model.base import Base
 
 class DefaultEmbedding(Base):

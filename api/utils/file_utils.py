@@ -1,18 +1,3 @@
-#
-#  Copyright 2024 The InfiniFlow Authors. All Rights Reserved.
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-#
 import base64
 import json
 import os
@@ -22,7 +7,7 @@ from io import BytesIO
 import pdfplumber
 from PIL import Image
 from cachetools import LRUCache, cached
-# from ruamel.yaml import YAML
+from ruamel.yaml import YAML
 
 # from api.db import FileType
 from strenum import StrEnum
@@ -140,30 +125,30 @@ def load_json_conf_real_time(conf_path):
         )
 
 
-# def load_yaml_conf(conf_path):
-#     if not os.path.isabs(conf_path):
-#         conf_path = os.path.join(get_project_base_directory(), conf_path)
-#     try:
-#         with open(conf_path) as f:
-#             yaml = YAML(typ='safe', pure=True)
-#             return yaml.load(f)
-#     except Exception as e:
-#         raise EnvironmentError(
-#             "loading yaml file config from {} failed:".format(conf_path), e
-#         )
+def load_yaml_conf(conf_path):
+    if not os.path.isabs(conf_path):
+        conf_path = os.path.join(get_project_base_directory(), conf_path)
+    try:
+        with open(conf_path,encoding='utf-8') as f:
+            yaml = YAML(typ='safe', pure=True)
+            return yaml.load(f)
+    except Exception as e:
+        raise EnvironmentError(
+            "loading yaml file config from {} failed:".format(conf_path), e
+        )
 
 
-# def rewrite_yaml_conf(conf_path, config):
-#     if not os.path.isabs(conf_path):
-#         conf_path = os.path.join(get_project_base_directory(), conf_path)
-#     try:
-#         with open(conf_path, "w") as f:
-#             yaml = YAML(typ="safe")
-#             yaml.dump(config, f)
-#     except Exception as e:
-#         raise EnvironmentError(
-#             "rewrite yaml file config {} failed:".format(conf_path), e
-#         )
+def rewrite_yaml_conf(conf_path, config):
+    if not os.path.isabs(conf_path):
+        conf_path = os.path.join(get_project_base_directory(), conf_path)
+    try:
+        with open(conf_path, "w") as f:
+            yaml = YAML(typ="safe")
+            yaml.dump(config, f)
+    except Exception as e:
+        raise EnvironmentError(
+            "rewrite yaml file config {} failed:".format(conf_path), e
+        )
 
 
 def rewrite_json_file(filepath, json_data):

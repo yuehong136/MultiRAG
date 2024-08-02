@@ -6,6 +6,9 @@ from openai import OpenAI
 from core.nlp import is_english
 from typing import Optional, List, Dict, Any, Tuple
 
+from core.utils import num_tokens_from_string
+
+
 @dataclass
 class Base(ABC):
     key: str
@@ -45,12 +48,21 @@ class Base(ABC):
             **gen_conf
         )
         for resp in response:
-            if not resp.choices or not resp.choices[0].delta.content:
-                continue
+            if not resp.choices: continue
+            if not resp.choices[0].delta.content:
+                resp.choices[0].delta.content = ""
             ans += resp.choices[0].delta.content
-            total_tokens += 1
+            total_tokens = (
+                (
+                    total_tokens
+                    + num_tokens_from_string(resp.choices[0].delta.content)
+                )
+                if not hasattr(resp, "usage")
+                else resp.usage["total_tokens"]
+            )
             if resp.choices[0].finish_reason == "length":
-                ans += "...\nFor the content length reason, it stopped, continue?" if is_english([ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
+                ans += "...\nFor the content length reason, it stopped, continue?" if is_english(
+                    [ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
             yield ans
         # except openai.APIError as e:
         #     yield ans + "\n**ERROR**: " + str(e)

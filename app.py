@@ -13,6 +13,7 @@ import streamlit as st
 from PIL import Image
 
 from core.file.utils import extract_pdf, extract_docx, extract_pptx, extract_text
+from core.llm.cv_model.cv_factory import CVModelFactory
 from core.llm.ocr_model.ocr_factory import ModelFactory
 from core.tools.tools_registry import get_tools, ALL_TOOLS
 # from server.kb import kb_list, process_schema_response, request_milvus
@@ -241,9 +242,14 @@ if first_round and page == Mode.LONG_CTX.value:
                     model_name = ''
                     # # Optional parameters
                     # model_name = st.text_input("输入模型名字(可选,默认为glm-4v):", value="glm-4v")
+
+                    # if model_choice == "zhipu_4v":
+                    #     model_name = "glm-4v"
+                    # model = ModelFactory.get_model(model_choice, key=model_key, model_name=model_name)
+                    # content, _ = model.describe(image)
                     if model_choice == "zhipu_4v":
                         model_name = "glm-4v"
-                    model = ModelFactory.get_model(model_choice, key=model_key, model_name=model_name)
+                    model = CVModelFactory.get_model_instance(key=model_key, model_name=model_name)
                     content, _ = model.describe(image)
             else:
                 content = extract_text(file_path)
@@ -631,7 +637,7 @@ with st.sidebar:
             st.session_state.api_token = api_token
             st.success("API Token 已经配置")
         model = st.selectbox("选择模型",
-                             ["glm-4-0520", "glm-4-airx", "glm-4-air", "glm-4-flash", "glm-3-turbo", "qwen-turbo-0624",
+                             ["glm-4-0520", "glm-4v", "glm-4-airx", "glm-4-air", "glm-4-flash", "glm-3-turbo", "qwen-turbo-0624",
                               "qwen-plus-0624", "qwen-max-0428", "gpt-3.5-turbo", "ERNIE-4.0-8K", "ERNIE-Tiny-8K",
                               "ERNIE-Speed-128K",
                               "qwen2:7b-instruct-fp16", "qwen2:72b-instruct-q4_0", "qwen2:72b-instruct-q8_0",
