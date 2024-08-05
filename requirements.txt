@@ -108,3 +108,7 @@ selenium >= 4.23.0
 webdriver_manager >= 4.0.1
 # 核心类 umap.UMAP 是用于数据降维的非线性技术
 umap >= 0.1.1
+onnxruntime >= 1.18.1
+chardet >= 5.2.0
+minio >= 7.2.7
+python-multipart >= 0.0.9

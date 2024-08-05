@@ -320,6 +320,7 @@ class Dealer:
         return ranks
 
     def sql_retrieval(self, sql, fetch_size=128, format="json"):
+
         from api.settings import chat_logger
         sql = re.sub(r"[ `]+", " ", sql)
         sql = sql.replace("%", "")

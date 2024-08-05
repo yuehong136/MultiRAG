@@ -3,7 +3,7 @@
 @project: multirag
 @Author：龙
 @file： kb_app.py
-@date：2024/7/30 16:34
+@date：2024/8/5 9:22
 @desc:
 """
 
@@ -48,10 +48,11 @@ class RemoveKnowledgebaseRequest(BaseModel):
 
 @router.post('/create', summary="创建知识库", response_description="成功创建知识库")
 async def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    req_data = request.dict()
+    req_data = request.model_dump()
     req_data["name"] = req_data["name"].strip()
     req_data["name"] = duplicate_name(
         KnowledgebaseService.query,
+        db=db,
         name=req_data["name"],
         tenant_id=user.id,
         status=StatusEnum.VALID.value
@@ -60,8 +61,8 @@ async def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_
         req_data["id"] = get_uuid()
         req_data["tenant_id"] = user.id
         req_data["created_by"] = user.id
-        e, t = TenantService.get_by_id(user.id)
-        if not e:
+        t = TenantService.get_by_id(db, user.id)
+        if not t:
             return get_data_error_result(retmsg="Tenant not found.")
         req_data["embd_id"] = t.embd_id
         if not KnowledgebaseService.save(db, **req_data):
@@ -73,15 +74,15 @@ async def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_
 
 @router.post('/update', summary="更新知识库", response_description="成功更新知识库")
 async def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    req_data = request.dict()
+    req_data = request.model_dump()
     req_data["name"] = req_data["name"].strip()
     try:
         if not KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"]):
             return get_json_result(
                 data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.', retcode=RetCode.OPERATING_ERROR)
 
-        e, kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
-        if not e:
+        kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
+        if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
 
         if req_data["name"].lower() != kb.name.lower() \
@@ -92,8 +93,8 @@ async def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_
         if not KnowledgebaseService.update_by_id(db, kb.id, req_data):
             return get_data_error_result()
 
-        e, kb = KnowledgebaseService.get_by_id(db, kb.id)
-        if not e:
+        kb = KnowledgebaseService.get_by_id(db, kb.id)
+        if not kb:
             return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
 
         return get_json_result(data=kb.to_dict())
@@ -125,7 +126,7 @@ async def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_t
 
 @router.post('/rm', summary="删除知识库", response_description="成功删除知识库")
 async def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    req_data = request.dict()
+    req_data = request.model_dump()
     try:
         kbs = KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"])
         if not kbs:
