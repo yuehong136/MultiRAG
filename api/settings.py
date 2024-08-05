@@ -3,6 +3,7 @@ from enum import IntEnum, Enum
 from api.utils.file_utils import get_project_base_directory
 from api.utils.log_utils import LoggerFactory, getLogger
 from core.nlp import search
+# from graphrag import search as kg_search
 from core.utils.milvus_conn import MILVUS_CONNECTION
 
 # Logger
@@ -191,6 +192,7 @@ PRIVILEGE_COMMAND_WHITELIST = []
 CHECK_NODES_IDENTITY = False
 
 retrievaler = search.Dealer(MILVUS_CONNECTION)
+kg_retrievaler = kg_search.KGSearch(ELASTICSEARCH)
 
 
 class CustomEnum(Enum):

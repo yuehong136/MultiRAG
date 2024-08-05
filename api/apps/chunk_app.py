@@ -7,6 +7,9 @@
 @desc:
 """
 import datetime
+import json
+import traceback
+
 import hashlib
 import re
 from typing import List, Optional
@@ -26,7 +29,7 @@ from api.db.services.llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.db.services.document_service import DocumentService
-from api.settings import RetCode, retrievaler
+from api.settings import RetCode, retrievaler, kg_retrievaler
 from api.utils.api_utils import get_json_result
 from api.db.database import get_db
 from api.apps import manager
