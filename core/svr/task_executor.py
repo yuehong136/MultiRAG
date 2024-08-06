@@ -182,10 +182,16 @@ def build(row, db: Session):
         d["page_num_int"] = json.dumps(d.get("page_num_int", []))
         d["position_int"] = json.dumps(d.get("position_int", []))
         d["top_int"] = json.dumps(d.get("top_int", []))
-        if not d.get("image"):
+        # if not d.get("image"):
+        #     docs.append(d)
+        #     continue
+        if "image" not in d:
+            docs.append(d)  # 如果 image 字段不存在，则直接添加到 docs
+            continue
+        elif d["image"] is None:
+            del d["image"]  # 如果 image 字段为空，则删除该条记录的image
             docs.append(d)
             continue
-
         output_buffer = BytesIO()
         if isinstance(d["image"], bytes):
             output_buffer = BytesIO(d["image"])
