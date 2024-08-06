@@ -112,3 +112,4 @@ onnxruntime >= 1.18.1
 chardet >= 5.2.0
 minio >= 7.2.7
 python-multipart >= 0.0.9
+uvicorn >= 0.30.1
