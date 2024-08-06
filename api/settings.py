@@ -192,7 +192,7 @@ PRIVILEGE_COMMAND_WHITELIST = []
 CHECK_NODES_IDENTITY = False
 
 retrievaler = search.Dealer(MILVUS_CONNECTION)
-kg_retrievaler = kg_search.KGSearch(ELASTICSEARCH)
+# kg_retrievaler = kg_search.KGSearch(ELASTICSEARCH)
 
 
 class CustomEnum(Enum):

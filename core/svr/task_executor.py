@@ -35,7 +35,7 @@ from core.nlp import search, rag_tokenizer
 from io import BytesIO
 import pandas as pd
 
-from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, knowledge_graph
+from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio#, knowledge_graph
 
 from api.db import LLMType, ParserType
 from api.db.services.document_service import DocumentService
@@ -59,8 +59,7 @@ FACTORY = {
     ParserType.PICTURE.value: picture,
     ParserType.ONE.value: one,
     ParserType.AUDIO.value: audio,
-    ParserType.KG.value: knowledge_graph
-
+    # ParserType.KG.value: knowledge_graph
 }
 
 
@@ -178,6 +177,11 @@ def build(row, db: Session):
         d["pk"] = md5.hexdigest()
         d["create_time"] = str(datetime.datetime.now()).replace("T", " ")[:19]
         d["create_timestamp_flt"] = datetime.datetime.now().timestamp()
+
+        # 将数组字段转换为 JSON 字符串
+        d["page_num_int"] = json.dumps(d.get("page_num_int", []))
+        d["position_int"] = json.dumps(d.get("position_int", []))
+        d["top_int"] = json.dumps(d.get("top_int", []))
         if not d.get("image"):
             docs.append(d)
             continue
@@ -189,9 +193,9 @@ def build(row, db: Session):
             d["image"].save(output_buffer, format='JPEG')
 
         st = timer()
-        MINIO.put(row["kb_id"], d["_id"], output_buffer.getvalue())
+        MINIO.put(row["kb_id"], d["pk"], output_buffer.getvalue())
         el += timer() - st
-        d["img_id"] = "{}-{}".format(row["kb_id"], d["_id"])
+        d["img_id"] = "{}-{}".format(row["kb_id"], d["pk"])
         del d["image"]
         docs.append(d)
     cron_logger.info("MINIO PUT({}):{}".format(row["name"], el))
@@ -239,6 +243,11 @@ def convert_data_types(data, schema):
                 data[field_name] = float(data[field_name])
             elif field_type == DataType.INT64:
                 data[field_name] = int(data[field_name])
+            elif field_type == DataType.JSON:
+                if isinstance(data[field_name], list):
+                    data[field_name] = json.dumps(data[field_name])
+                else:
+                    data[field_name] = str(data[field_name])
     return data
     # for record in data:
     #     for field in schema['fields']:

@@ -108,6 +108,39 @@
             "max_length": 512
           }
         }
+      },
+            {
+        "text_template": {
+          "match": "page_num_int",
+          "mapping": {
+            "type": "JSON"
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "position_int",
+          "mapping": {
+            "type": "JSON"
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "top_int",
+          "mapping": {
+            "type": "JSON"
+          }
+        }
+      },
+      {
+        "text_template": {
+          "match": "img_id",
+          "mapping": {
+            "type": "VarChar",
+            "max_length": 256
+          }
+        }
       }
     ]
   }

@@ -616,6 +616,8 @@ class MilvusConnection:
                                               is_primary=True))
                 elif mapping_type == "FLOAT":
                     fields.append(FieldSchema(name=match_pattern, dtype=DataType.FLOAT))
+                elif mapping_type == "JSON":
+                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.JSON))
 
         schema = CollectionSchema(fields=fields, description="Created from mapping file")
 

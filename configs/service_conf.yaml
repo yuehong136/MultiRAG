@@ -2,7 +2,7 @@
 
 multirag:
   # multirag服务的监听地址
-  host: 192.168.188.132
+  host: 127.0.0.1
   # multirag服务的HTTP端口
   http_port: 8123
   # multirag服务的SECRET_KEY

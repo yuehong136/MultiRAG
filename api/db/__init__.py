@@ -70,7 +70,7 @@ class ParserType(StrEnum):
     PICTURE = "picture"
     ONE = "one"
     AUDIO = "audio"
-
+    KG = "knowledge_graph"
 
 class FileSource(StrEnum):
     LOCAL = ""
