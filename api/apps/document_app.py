@@ -568,8 +568,20 @@ async def get_image(
         user=Depends(manager)
 ):
     try:
+        # 分离 bucket 和 name
         bkt, nm = image_id.split("-")
-        file_stream = MINIO.get(bkt, nm)
+
+        # 获取文件内容
+        file_content = MINIO.get(bkt, nm)
+
+        # 确认 file_content 是字节流对象
+        if not isinstance(file_content, (bytes, bytearray)):
+            raise HTTPException(status_code=500, detail="Failed to retrieve image content")
+
+        # 将文件内容包装成 BytesIO 对象
+        file_stream = BytesIO(file_content)
+
+        # 返回图片流响应
         response = StreamingResponse(file_stream, media_type="image/jpeg")
         return response
     except Exception as e:
