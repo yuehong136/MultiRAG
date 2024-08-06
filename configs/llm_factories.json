@@ -87,12 +87,6 @@
                     "mdl_type": "chat"
                 },
                 {
-                    "llm_name": "qwen-plus",
-                    "tags": "LLM,CHAT,32K",
-                    "max_tokens": 32768,
-                    "mdl_type": "chat"
-                },
-                {
                     "llm_name": "qwen-max-1201",
                     "tags": "LLM,CHAT,6K",
                     "max_tokens": 5899,

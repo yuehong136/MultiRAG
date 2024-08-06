@@ -171,7 +171,7 @@ async def set_dialog(request: DialogRequest, db: Session = Depends(get_db), req:
             dia = dia.to_dict()
             return get_json_result(data=dia)
         else:
-            update_data = request.dict(exclude_unset=True)
+            update_data = request.model_dump(exclude_unset=True)
             del update_data["dialog_id"]
             if "kb_names" in update_data:
                 del update_data["kb_names"]

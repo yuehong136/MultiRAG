@@ -7,11 +7,11 @@ import uuid
 from copy import deepcopy
 from sqlalchemy.orm import Session
 from api.db import LLMType, UserTenantRole
-from api.db.db_models import init_database_tables as init_web_db, LLM
+from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM
 from api.db.services import UserService
 # from api.db.services.canvas_service import CanvasTemplateService
-# from api.db.services.document_service import DocumentService
-# from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.document_service import DocumentService
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMFactoriesService, LLMService, TenantLLMService, LLMBundle
 from api.db.services.user_service import TenantService, UserTenantService
 from api.settings import CHAT_MDL, EMBEDDING_MDL, ASR_MDL, IMAGE2TEXT_MDL, PARSERS, LLM_FACTORY, API_KEY, LLM_BASE_URL
@@ -146,7 +146,7 @@ def init_llm_factory(db: Session):
     # LLMService.filter_delete(db, [LLM.fid == "QAnything"])
     # TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "QAnything"], {"llm_factory": "Youdao"})
     # TenantService.filter_update(db, [1 == 1], {
-    #     "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio"})
+    #     "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email"})
     # insert openai two embedding models to the current openai user.
     print("Start to insert 2 OpenAI embedding models...")
     tenant_ids = set([row["tenant_id"] for row in TenantLLMService.get_openai_models(db)])

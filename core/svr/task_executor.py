@@ -35,7 +35,7 @@ from core.nlp import search, rag_tokenizer
 from io import BytesIO
 import pandas as pd
 
-from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio#, knowledge_graph
+from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, email#, knowledge_graph
 
 from api.db import LLMType, ParserType
 from api.db.services.document_service import DocumentService
@@ -59,6 +59,7 @@ FACTORY = {
     ParserType.PICTURE.value: picture,
     ParserType.ONE.value: one,
     ParserType.AUDIO.value: audio,
+    ParserType.EMAIL.value: email,
     # ParserType.KG.value: knowledge_graph
 }
 

@@ -1,4 +1,5 @@
 # models.py
+import os
 import sys
 import inspect
 from sqlalchemy.exc import OperationalError
@@ -357,27 +358,27 @@ class API4Conversation(BaseModel):
     thumb_up = Column(Integer, default=0)
 
 
-# class UserCanvas(BaseModel):
-#     __tablename__ = "user_canvases"
-#
-#     id = Column(String, primary_key=True, index=True)
-#     avatar = Column(Text)
-#     user_id = Column(String)
-#     title = Column(String)
-#     description = Column(Text)
-#     canvas_type = Column(String)
-#     dsl = Column(JSONB, default={})
-#
-#
-# class CanvasTemplate(BaseModel):
-#     __tablename__ = "canvas_templates"
-#
-#     id = Column(String, primary_key=True, index=True)
-#     avatar = Column(Text)
-#     title = Column(String)
-#     description = Column(Text)
-#     canvas_type = Column(String)
-#     dsl = Column(JSONB, default={})
+class UserCanvas(BaseModel):
+    __tablename__ = "user_canvases"
+
+    id = Column(String, primary_key=True, index=True)
+    avatar = Column(Text)
+    user_id = Column(String)
+    title = Column(String)
+    description = Column(Text)
+    canvas_type = Column(String)
+    dsl = Column(JSONB, default={})
+
+
+class CanvasTemplate(BaseModel):
+    __tablename__ = "canvas_templates"
+
+    id = Column(String, primary_key=True, index=True)
+    avatar = Column(Text)
+    title = Column(String)
+    description = Column(Text)
+    canvas_type = Column(String)
+    dsl = Column(JSONB, default={})
 
 
 def init_database_tables():

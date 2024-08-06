@@ -42,7 +42,7 @@ from api.utils import get_uuid
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str
 from api.utils.api_utils import construct_result, validate_request
 from api.utils.file_utils import filename_type, thumbnail
-from core.app import book, laws, manual, naive, one, paper, presentation, qa, resume, table, picture
+from core.app import book, laws, manual, naive, one, paper, presentation, qa, resume, table, picture, email
 from core.nlp import search
 from core.utils.milvus_conn import MILVUS_CONNECTION
 # from core.nlp import search

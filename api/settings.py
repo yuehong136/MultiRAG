@@ -98,6 +98,13 @@ default_llm = {
         "image2text_model": "",
         "asr_model": "",
         "rerank_model": "BAAI/bge-reranker-v2-m3",
+    },
+    "Youdao": {
+        "chat_model": "",
+        "embedding_model": "maidalun1020/bce-embedding-base_v1",
+        "image2text_model": "",
+        "asr_model": "",
+        "rerank_model": "maidalun1020/bce-reranker-base_v1",
     }
 }
 LLM = get_base_config("user_default_llm", {})
@@ -111,15 +118,17 @@ if LLM_FACTORY not in default_llm:
         # f"LLM factory {LLM_FACTORY} has not supported yet, switch to 'Tongyi-Qianwen/QWen' automatically, and please check the API_KEY in service_conf.yaml.")
     LLM_FACTORY = "ZHIPU-AI"
 CHAT_MDL = default_llm[LLM_FACTORY]["chat_model"]
-EMBEDDING_MDL = default_llm["BAAI"]["embedding_model"]
-RERANK_MDL = default_llm["BAAI"]["rerank_model"]
+# EMBEDDING_MDL = default_llm["BAAI"]["embedding_model"]
+EMBEDDING_MDL = default_llm["Youdao"]["embedding_model"]
+# RERANK_MDL = default_llm["BAAI"]["rerank_model"]
+RERANK_MDL = default_llm["Youdao"]["rerank_model"]
 ASR_MDL = default_llm[LLM_FACTORY]["asr_model"]
 IMAGE2TEXT_MDL = default_llm[LLM_FACTORY]["image2text_model"]
 
 API_KEY = LLM.get("api_key", "")
 PARSERS = LLM.get(
     "parsers",
-    "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio")
+    "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email")
 
 # distribution
 DEPENDENT_DISTRIBUTION = get_base_config("dependent_distribution", False)
