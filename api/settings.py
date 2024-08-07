@@ -63,7 +63,7 @@ default_llm = {
         "asr_model": "azure-whisper-1",
     },
     "ZHIPU-AI": {
-        "chat_model": "glm-4",
+        "chat_model": "glm-4-0520",
         "embedding_model": "embedding-2",
         "image2text_model": "glm-4v",
         "asr_model": "",

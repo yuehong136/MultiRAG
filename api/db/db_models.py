@@ -1,11 +1,16 @@
-# models.py
-import os
+# coding=utf-8
+"""
+@project: multirag
+@Author：龙
+@file： db_models.py
+@date：2024/8/7 17:00
+@desc:
+"""
 import sys
 import inspect
-from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.inspection import inspect as sa_inspect
-from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, ForeignKey, BigInteger
+from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, ForeignKey, BigInteger, text
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from api.db.database import Base, BaseModel, engine
@@ -385,31 +390,29 @@ class CanvasTemplate(BaseModel):
 
 
 def init_database_tables():
+    # 需要创建的 schema 名称
+    schema_name = 'test_dve'
+
+    # 检查并创建 schema
+    with engine.connect() as connection:
+        connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+        connection.execute(text("COMMIT"))  # 提交创建schema的事务
+
     # 获取现有表列表
-    existing_tables = sa_inspect(engine).get_table_names()
+    inspector = sa_inspect(engine)
+    existing_tables = inspector.get_table_names(schema=schema_name)
     members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
     table_objs = []
     create_failed_list = []
 
-    # 添加 schema 的检查和创建逻辑
-    schemas_to_create = set()
-    for name, obj in members:
-        if obj != BaseModel and issubclass(obj, BaseModel):
-            schema_name = obj.__table_args__.get('schema')
-            if schema_name:
-                schemas_to_create.add(schema_name)
-
-    with engine.connect() as connection:
-        for schema in schemas_to_create:
-            connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
-
     for name, obj in members:
         if obj != BaseModel and issubclass(obj, BaseModel):
             table_objs.append(obj)
-            LOGGER.info(f"Start creating table {obj.__name__}")
+            LOGGER.info(f"Start creating table {obj.__name__} in schema {schema_name}")
             try:
+                # 检查表是否存在并创建表
                 if obj.__tablename__ not in existing_tables:
-                    obj.__table__.create(bind=engine)
+                    obj.__table__.create(bind=engine, checkfirst=True)
                     LOGGER.info(f"Successfully created table: {obj.__name__}")
             except OperationalError as e:
                 LOGGER.exception(f"Error creating table {obj.__name__}: {e}")

@@ -93,7 +93,7 @@ def message_fit_in(msg, max_length=4000):
 
 def llm_id2llm_type(llm_id):
     fnm = os.path.join(get_project_base_directory(), "configs")
-    llm_factories = json.load(open(os.path.join(fnm, "llm_factories.json"), "r"))
+    llm_factories = json.load(open(os.path.join(fnm, "llm_factories.json"), "r", encoding="utf-8"))
     for llm_factory in llm_factories["factory_llm_infos"]:
         for llm in llm_factory["llm"]:
             if llm_id == llm["llm_name"]:

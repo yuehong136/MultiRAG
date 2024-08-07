@@ -93,7 +93,7 @@ def init_superuser(db: Session):
 
 def init_llm_factory(db: Session):
     try:
-        LLMService.filter_delete([(LLM.fid == "MiniMax" or LLM.fid == "Minimax")])
+        LLMService.filter_delete(db, [(LLM.fid == "MiniMax" or LLM.fid == "Minimax")])
     except Exception as e:
         pass
 
@@ -167,14 +167,24 @@ def add_graph_templates(db: Session):
     dir = os.path.join(get_project_base_directory(), "agent", "templates")
     for fnm in os.listdir(dir):
         try:
-            cnvs = json.load(open(os.path.join(dir, fnm), "r"))
+            with open(os.path.join(dir, fnm), "r", encoding="utf-8") as f:
+                cnvs = json.load(f)
             try:
+                cnvs["id"] = str(cnvs["id"])
                 CanvasTemplateService.save(db, **cnvs)
-            except:
-                CanvasTemplateService.update_by_id(db, cnvs["id"], cnvs)
+            except Exception as e:
+                print(f"Error saving template {cnvs['id']}: {e}")
+                # 使用类型转换确保ID是字符串
+                # cnvs["id"] = str(cnvs["id"])
+                try:
+                    CanvasTemplateService.update_by_id(db, cnvs["id"], cnvs)
+                except Exception as e:
+                    print(f"Error updating template {cnvs['id']}: {e}")
+                    db.rollback()  # 回滚事务
         except Exception as e:
             print("Add graph templates error: ", e)
             print("------------", flush=True)
+            db.rollback()  # 回滚事务
 
 
 
