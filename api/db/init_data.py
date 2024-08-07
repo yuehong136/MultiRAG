@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from api.db import LLMType, UserTenantRole
 from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM
 from api.db.services import UserService
-# from api.db.services.canvas_service import CanvasTemplateService
+from api.db.services.canvas_service import CanvasTemplateService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMFactoriesService, LLMService, TenantLLMService, LLMBundle
@@ -115,7 +115,7 @@ def init_llm_factory(db: Session):
             # print(f"Saved LLM factory: {factory_llm_info['name']}")
         except Exception as e:
             # print(f"Error saving LLM factory {factory_llm_info['name']}: {e}")
-            continue
+            pass
 
         for llm_info in llm_infos:
             llm_info["fid"] = factory_llm_info["name"]
@@ -125,28 +125,15 @@ def init_llm_factory(db: Session):
             except Exception as e:
                 pass
 
-    # for info in factory_infos:
-    #     try:
-    #         LLMFactoriesService.save(db, **info)
-    #     except Exception as e:
-    #         # pass
-    #         print(e)
-    # for info in llm_infos:
-    #     try:
-    #         LLMService.save(db, **info)
-    #     except Exception as e:
-    #         # pass
-    #         print(e)
-
-    # LLMFactoriesService.filter_delete(db, [LLMFactories.name == "Local"])
-    # LLMService.filter_delete(db, [LLM.fid == "Local"])
-    # LLMService.filter_delete(db, [LLM.fid == "Moonshot", LLM.llm_name == "flag-embedding"])
-    # TenantLLMService.filter_delete(db, [TenantLLM.llm_factory == "Moonshot", TenantLLM.llm_name == "flag-embedding"])
-    # LLMFactoriesService.filter_delete(db, [LLMFactories.name == "QAnything"])
-    # LLMService.filter_delete(db, [LLM.fid == "QAnything"])
-    # TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "QAnything"], {"llm_factory": "Youdao"})
-    # TenantService.filter_update(db, [1 == 1], {
-    #     "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email"})
+    LLMFactoriesService.filter_delete(db, [LLMFactories.name == "Local"])
+    LLMService.filter_delete(db, [LLM.fid == "Local"])
+    LLMService.filter_delete(db, [LLM.fid == "Moonshot", LLM.llm_name == "flag-embedding"])
+    TenantLLMService.filter_delete(db, [TenantLLM.llm_factory == "Moonshot", TenantLLM.llm_name == "flag-embedding"])
+    LLMFactoriesService.filter_delete(db, [LLMFactories.name == "QAnything"])
+    LLMService.filter_delete(db, [LLM.fid == "QAnything"])
+    TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "QAnything"], {"llm_factory": "Youdao"})
+    TenantService.filter_update(db, [1 == 1], {
+        "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email"})
     # insert openai two embedding models to the current openai user.
     print("Start to insert 2 OpenAI embedding models...")
     tenant_ids = set([row["tenant_id"] for row in TenantLLMService.get_openai_models(db)])
@@ -164,8 +151,8 @@ def init_llm_factory(db: Session):
             except Exception as e:
                 pass
             break
-    # for kb_id in KnowledgebaseService().get_all_ids(db):
-    #     KnowledgebaseService().update_by_id(db, kb_id, {"doc_num": DocumentService().get_kb_doc_count(db, kb_id)})
+    for kb_id in KnowledgebaseService.get_all_ids(db):
+        KnowledgebaseService.update_by_id(db, kb_id, {"doc_num": DocumentService.get_kb_doc_count(db, kb_id)})
     """
     drop table llm;
     drop table llm_factories;
@@ -176,18 +163,19 @@ def init_llm_factory(db: Session):
     """
 
 
-# def add_graph_templates(db: Session):
-#     dir = os.path.join(get_project_base_directory(), "graph", "templates")
-#     for fnm in os.listdir(dir):
-#         try:
-#             cnvs = json.load(open(os.path.join(dir, fnm), "r"))
-#             try:
-#                 CanvasTemplateService().save(db, **cnvs)
-#             except:
-#                 CanvasTemplateService().update_by_id(db, cnvs["id"], cnvs)
-#         except Exception as e:
-#             print("Add graph templates error: ", e)
-#             print("------------", flush=True)
+def add_graph_templates(db: Session):
+    dir = os.path.join(get_project_base_directory(), "agent", "templates")
+    for fnm in os.listdir(dir):
+        try:
+            cnvs = json.load(open(os.path.join(dir, fnm), "r"))
+            try:
+                CanvasTemplateService.save(db, **cnvs)
+            except:
+                CanvasTemplateService.update_by_id(db, cnvs["id"], cnvs)
+        except Exception as e:
+            print("Add graph templates error: ", e)
+            print("------------", flush=True)
+
 
 
 def init_web_data(db: Session = SessionLocal()):
@@ -198,7 +186,7 @@ def init_web_data(db: Session = SessionLocal()):
     if len(UserService.get_all(db)) == 0:
         init_superuser(db)
 
-    # add_graph_templates(db)
+    add_graph_templates(db)
     print("init web data success:{}".format(time.time() - start_time))
 
 

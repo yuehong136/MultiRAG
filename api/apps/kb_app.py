@@ -126,22 +126,45 @@ async def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_t
 
 @router.post('/rm', summary="删除知识库", response_description="成功删除知识库")
 async def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    删除知识库
+
+    参数:
+    - request: 请求体，包含要删除的知识库ID。
+    - db: 数据库会话，通过依赖注入获取。
+    - user: 当前用户，通过依赖注入的身份验证器获取。
+
+    返回:
+    - 成功删除知识库时，返回包含成功标志的JSON结果。
+    - 如有错误发生，返回相应的错误信息。
+    """
+    # 将请求体转换为字典
     req_data = request.model_dump()
     try:
+        # 查询知识库，确保只有知识库的创建者有权限删除
         kbs = KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"])
         if not kbs:
+            # 如果知识库不存在或用户无权限删除，返回错误信息
             return get_json_result(
                 data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.', retcode=RetCode.OPERATING_ERROR)
 
+        # 遍历知识库中的所有文档，进行删除
         for doc in DocumentService.query(db, kb_id=req_data["kb_id"]):
+            # 删除文档，如果失败则返回错误信息
             if not DocumentService.remove_document(db, doc, kbs[0].tenant_id):
                 return get_data_error_result(retmsg="Database error (Document removal)!")
+            # 查询与文档关联的文件，并删除这些文件
             f2d = File2DocumentService.get_by_document_id(db, doc.id)
             FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
+            # 删除文档与文件的关联
             File2DocumentService.delete_by_document_id(db, doc.id)
 
+        # 删除知识库本身，如果失败则返回错误信息
         if not KnowledgebaseService.delete_by_id(db, req_data["kb_id"]):
             return get_data_error_result(retmsg="Database error (Knowledgebase removal)!")
+        # 知识库删除成功，返回成功标志
         return get_json_result(data=True)
     except Exception as e:
+        # 捕获异常，返回服务器错误响应
         return server_error_response(e)
+
