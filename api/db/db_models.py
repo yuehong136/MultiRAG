@@ -365,7 +365,7 @@ class API4Conversation(BaseModel):
 
 
 class UserCanvas(BaseModel):
-    __tablename__ = "user_canvases"
+    __tablename__ = "t_ai_user_canvases"
     __table_args__ = {"schema": "test_dve"}
 
     id = Column(String, primary_key=True, index=True)
@@ -378,7 +378,7 @@ class UserCanvas(BaseModel):
 
 
 class CanvasTemplate(BaseModel):
-    __tablename__ = "canvas_templates"
+    __tablename__ = "t_ai_canvas_templates"
     __table_args__ = {"schema": "test_dve"}
 
     id = Column(String, primary_key=True, index=True)
