@@ -2,6 +2,7 @@
 import os
 import sys
 import inspect
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, ForeignKey, BigInteger
@@ -387,6 +388,18 @@ def init_database_tables():
     members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
     table_objs = []
     create_failed_list = []
+
+    # 添加 schema 的检查和创建逻辑
+    schemas_to_create = set()
+    for name, obj in members:
+        if obj != BaseModel and issubclass(obj, BaseModel):
+            schema_name = obj.__table_args__.get('schema')
+            if schema_name:
+                schemas_to_create.add(schema_name)
+
+    with engine.connect() as connection:
+        for schema in schemas_to_create:
+            connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
 
     for name, obj in members:
         if obj != BaseModel and issubclass(obj, BaseModel):
