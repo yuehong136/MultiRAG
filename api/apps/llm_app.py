@@ -139,7 +139,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
         #     mdl = EmbeddingModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
         #     try:
         #         arr, tc = mdl.encode(["Test if the api key is available"])
-        #         if len(arr[0]) == 0 or tc == 0:
+        #         if len(arr[0]) == 0:
         #             raise Exception("Fail")
         #         embd_passed = True
         #     except Exception as e:
@@ -147,9 +147,9 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
         if not chat_passed and llm.mdl_type == LLMType.CHAT.value:
             mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
             try:
-                m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}], {"temperature": 0.9})
+                m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}], {"temperature": 0.9,'max_tokens':50})
                 print(m)
-                if not tc:
+                if m.find("**ERROR**") >=0:
                     raise Exception(m)
             except Exception as e:
                 msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
@@ -270,12 +270,12 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     msg = ""
     if llm["mdl_type"] == LLMType.EMBEDDING.value:
         mdl = EmbeddingModel[factory](
-            key=llm['api_key'] if factory in ["VolcEngine", "Bedrock","OpenAI-API-Compatible"] else None,
+            key=llm['api_key'] if factory in ["VolcEngine", "Bedrock","OpenAI-API-Compatible","ZHIPU-AI"] else None,
             model_name=llm["llm_name"],
             base_url=llm["api_base"])
         try:
             arr, tc = mdl.encode(["Test if the api key is available"])
-            if len(arr[0]) == 0 or tc == 0:
+            if len(arr[0]) == 0:
                 raise Exception("Fail")
         except Exception as e:
             msg += f"\nFail to access embedding model({llm['llm_name']})." + str(e)
@@ -287,9 +287,8 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
             base_url=llm["api_base"]
         )
         try:
-            m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}], {
-                "temperature": 0.9})
-            if not tc:
+            m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}], {"temperature": 0.9,'max_tokens':50})
+            if m.find("**ERROR**") >=0:
                 raise Exception(m)
         except Exception as e:
             msg += f"\nFail to access model({llm['llm_name']})." + str(e)

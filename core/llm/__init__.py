@@ -6,6 +6,7 @@ from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
+from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
 from core.llm.sequence2txt_model.azureseq2txt import AzureSeq2txt
 from core.llm.sequence2txt_model.gptseq2txt import GPTSeq2txt
 from core.llm.sequence2txt_model.ollamaseq2txt import OllamaSeq2txt
@@ -20,7 +21,7 @@ EmbeddingModel = {
     # "OpenAI": OpenAIEmbed,
     # "Xinference": XinferenceEmbed,
     # "Tongyi-Qianwen": QWenEmbed,
-    # "ZHIPU-AI": ZhipuEmbed,
+    "ZHIPU-AI": ZhipuEmbed,
     # "FastEmbed": FastEmbed,
     "Youdao": YoudaoEmbed,
     # "BaiChuan": BaiChuanEmbed,

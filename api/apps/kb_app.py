@@ -35,6 +35,7 @@ class CreateKnowledgebaseRequest(BaseModel):
     description: Optional[str] = None
     permission: Optional[str] = None
     parser_id: Optional[str] = None
+    embd_id: Optional[str] = None
 
 class UpdateKnowledgebaseRequest(BaseModel):
     kb_id: str
@@ -64,7 +65,7 @@ async def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_
         t = TenantService.get_by_id(db, user.id)
         if not t:
             return get_data_error_result(retmsg="Tenant not found.")
-        req_data["embd_id"] = t.embd_id
+        req_data["embd_id"] = t.embd_id if req_data["embd_id"] is None else req_data["embd_id"]
         if not KnowledgebaseService.save(db, **req_data):
             return get_data_error_result()
         return get_json_result(data={"kb_id": req_data["id"]})

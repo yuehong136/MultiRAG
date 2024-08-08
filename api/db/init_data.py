@@ -65,7 +65,7 @@ def init_superuser(db: Session):
     UserTenantService.insert(db, **usr_tenant)
     TenantLLMService.insert_many(db, tenant_llm)
     print(
-        "【INFO】Super user initialized. \033[93memail: admin@ragflow.io, password: admin\033[0m. Changing the password after logging in is strongly recommended.")
+        "【INFO】Super user initialized. \033[93memail: admin@datav.com, password: admin\033[0m. Changing the password after logging in is strongly recommended.")
 
     try:
         chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])
