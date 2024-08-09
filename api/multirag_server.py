@@ -70,7 +70,6 @@ if __name__ == '__main__':
     )
 
     # 初始化数据库
-    # todo 表已存在相关冲突没解决，所以暂时注释掉
     # init_web_db()
     # init_web_data()
 

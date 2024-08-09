@@ -3,7 +3,7 @@
 @project: multirag
 @Author：龙
 @file： canvas_app.py
-@date：2024/8/6 16:34
+@date：2024/8/9 14:04
 @desc:
 """
 
@@ -67,7 +67,7 @@ async def rm(request: RemoveCanvasRequest, db: Session = Depends(get_db), user=D
 
 @router.post('/set', summary="保存画布", response_description="成功保存画布")
 async def save(request: SaveCanvasRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    req_data = request.dict()
+    req_data = request.model_dump()
     req_data["user_id"] = user.id
     if not isinstance(req_data["dsl"], str):
         req_data["dsl"] = json.dumps(req_data["dsl"], ensure_ascii=False)
@@ -88,18 +88,18 @@ async def save(request: SaveCanvasRequest, db: Session = Depends(get_db), user=D
 
 @router.get('/get/{canvas_id}', summary="获取画布详情", response_description="成功获取画布详情")
 async def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    e, c = UserCanvasService.get_by_id(db, canvas_id)
-    if not e:
+    c = UserCanvasService.get_by_id(db, canvas_id)
+    if not c:
         return server_error_response("canvas not found.")
     return get_json_result(data=c.to_dict())
 
 
 @router.post('/completion', summary="运行画布", response_description="成功运行画布")
 async def run(request: RunCanvasRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    req_data = request.dict()
+    req_data = request.model_dump()
     stream = req_data.get("stream", True)
-    e, cvs = UserCanvasService.get_by_id(db, req_data["id"])
-    if not e:
+    cvs = UserCanvasService.get_by_id(db, req_data["id"])
+    if not cvs:
         return server_error_response("canvas not found.")
 
     if not isinstance(cvs.dsl, str):
@@ -153,10 +153,10 @@ async def run(request: RunCanvasRequest, db: Session = Depends(get_db), user=Dep
 
 @router.post('/reset', summary="重置画布", response_description="成功重置画布")
 async def reset(request: ResetCanvasRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    req_data = request.dict()
+    req_data = request.model_dump()
     try:
-        e, user_canvas = UserCanvasService.get_by_id(db, req_data["id"])
-        if not e:
+        user_canvas = UserCanvasService.get_by_id(db, req_data["id"])
+        if not user_canvas:
             return server_error_response("canvas not found.")
 
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id)

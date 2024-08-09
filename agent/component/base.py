@@ -2,7 +2,7 @@
 """
 @project: multirag
 @Author：龙
-@file： base.py
+@file： agent.component.base.py
 @date：2024/8/7 10:35
 @desc:
 """
