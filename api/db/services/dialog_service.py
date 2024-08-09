@@ -237,9 +237,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     msg = [{"role": "system", "content": prompt_config["system"].format(**kwargs)}]
 
     # 将非系统消息添加到消息列表中
-    msg.extend([{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"])
-
-
+    msg.extend([{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])}
+                for m in messages if m["role"] != "system"])
     # 确保消息内容不超过LLM的最大token数
     # 调用message_fit_in函数，检查消息是否能在给定的最大令牌数限制内适配
     # 使用最大令牌数的97%作为参考，以确保消息尽可能接近限制而不超过
