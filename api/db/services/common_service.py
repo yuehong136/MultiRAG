@@ -194,7 +194,15 @@ class CommonService:
 
     @classmethod
     def delete_by_id(cls, db: Session, pid: Any) -> int:
-        return db.query(cls.model).filter(cls.model.id == pid).delete(synchronize_session=False)
+        try:
+            deleted_count = db.query(cls.model).filter(cls.model.id == pid).delete(synchronize_session=False)
+            db.commit()  # 确保提交事务
+            return deleted_count
+        except Exception as e:
+            db.rollback()  # 回滚事务
+            print(f"Error occurred: {e}")
+            return 0
+        # return db.query(cls.model).filter(cls.model.id == pid).delete(synchronize_session=False)
 
     @classmethod
     def filter_update(cls, db: Session, filters: List[Any], update_data: Dict[str, Any]):
