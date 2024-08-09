@@ -22,6 +22,7 @@ from core.llm import EmbeddingModel, ChatModel, CvModel  # , RerankModel
 from pydantic import BaseModel
 from typing import Optional
 import requests
+import ast
 
 
 class SetAPIKeyRequest(BaseModel):
@@ -237,7 +238,8 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     factory = req["llm_factory"]
 
     if factory == "VolcEngine":
-        temp = list(eval(req["llm_name"]).items())[0]
+        temp = list(ast.literal_eval(req["llm_name"]).items())[0]
+
         llm_name = temp[0]
         endpoint_id = temp[1]
         api_key = '{' + f'"volc_ak": "{req.get("volc_ak", "")}", ' \
