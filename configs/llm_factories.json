@@ -1,6 +1,6 @@
 {
     "factory_llm_infos": [
-        {
+         {
             "name": "OpenAI",
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,SPEECH2TEXT,MODERATION",
@@ -10,13 +10,13 @@
                     "llm_name": "gpt-4o-mini",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
-                    "mdl_type": "image2text"
+                    "mdl_type": "chat"
                 },
                 {
                     "llm_name": "gpt-4o",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
-                    "mdl_type": "chat,image2text"
+                    "mdl_type": "chat"
                 },
                 {
                     "llm_name": "gpt-3.5-turbo",
