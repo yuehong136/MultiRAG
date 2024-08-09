@@ -154,14 +154,14 @@ async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), 
         return server_error_response(e)
 
 @router.get('/list', summary="列出会话", response_description="成功列出会话")
-async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+async def list_conversation(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     列出会话
 
     该接口用于列出指定对话的所有会话。
 
     参数:
-    - dialog_id: str 对话的唯一标识符
+    - conversation_id: str 对话的唯一标识符
     - db: Session 数据库会话对象
     - user: 当前用户对象
 
@@ -172,7 +172,7 @@ async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=
     try:
         convs = ConversationService.query(
             db,
-            dialog_id=dialog_id,
+            id=conversation_id,
             # order_by=ConversationService.model.create_time,
             order_by="create_time",
             reverse=True)
