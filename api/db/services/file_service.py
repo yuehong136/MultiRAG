@@ -51,6 +51,14 @@ class FileService(CommonService):
             if file["type"] == FileType.FOLDER.value:
                 file["size"] = cls.get_folder_size(db, file["id"])
                 file['kbs_info'] = []
+                # 检查该文件夹是否有子文件夹
+                children = db.query(cls.model).filter(
+                    cls.model.tenant_id == tenant_id,
+                    cls.model.parent_id == file["id"],
+                    cls.model.id != file["id"]
+                ).all()
+
+                file["has_child_folder"] = any(child.to_dict()["type"] == FileType.FOLDER.value for child in children)
             else:
                 file['kbs_info'] = cls.get_kb_id_by_file_id(db, file['id'])
 
