@@ -16,6 +16,7 @@ fastapi >= 0.111.0
 langchain_openai >= 0.1.8
 # psycopg2 是一个用于与PostgreSQL数据库交互的库
 psycopg2 >= 2.9.9
+psycopg2-binary >= 2.9.9
 # psutil（Process and System utilities）是一个跨平台的Python库，用于检索系统运行的进程和系统利用率（如CPU、内存、磁盘、网络等）的信息。它主要用于系统监控、分析和限制进程资源等任务。
 psutil >= 5.9.8
 # 提供了一种增强型的枚举（Enumeration）类实现，使得枚举值具有更多的功能和安全性
@@ -113,3 +114,6 @@ chardet >= 5.2.0
 minio >= 7.2.7
 python-multipart >= 0.0.9
 uvicorn >= 0.30.1
+socksio >= 1.0.0
+# json反序列化
+dacite >= 1.8.1
