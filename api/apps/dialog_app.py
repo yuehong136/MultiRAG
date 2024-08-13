@@ -3,7 +3,7 @@
 @project: multirag
 @Author：龙
 @file： dialog_app.py
-@date：2024/7/17 16:00
+@date：2024/8/12 16:00
 @desc: 对话管理接口
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -258,9 +258,16 @@ async def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=D
     - 成功时返回成功删除的JSON结果
     - 失败时返回错误信息
     """
+    # try:
+    #     DialogService.update_many_by_id(
+    #         db, [{"id": id, "status": StatusEnum.INVALID.value} for id in request.dialog_ids])
+    #     return get_json_result(data=True)
+    # except Exception as e:
+    #     return server_error_response(e)
+
     try:
-        DialogService.update_many_by_id(
-            db, [{"id": id, "status": StatusEnum.INVALID.value} for id in request.dialog_ids])
+        for cid in request.dialog_ids:
+            DialogService.delete_by_id(db, cid)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
