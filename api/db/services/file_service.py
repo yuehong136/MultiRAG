@@ -6,17 +6,21 @@
 @date：2024/7/15 15:00
 @desc:
 """
-
-from sqlalchemy.orm import Session
+import re
+import os
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 from typing import List, Optional, Dict
 
-from api.db import FileType, KNOWLEDGEBASE_FOLDER_NAME, FileSource
+from api.db import FileType, KNOWLEDGEBASE_FOLDER_NAME, FileSource, ParserType
 from api.db.db_models import File, Document, Knowledgebase, File2Document
+from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.utils import get_uuid
+from api.utils.file_utils import filename_type, thumbnail
+from core.utils.minio_conn import MINIO
 
 
 class FileService(CommonService):
@@ -66,11 +70,16 @@ class FileService(CommonService):
 
     @classmethod
     def get_kb_id_by_file_id(cls, db: Session, file_id: str) -> List[Dict]:
-        kbs = db.query(Knowledgebase.id, Knowledgebase.name).join(File2Document, File2Document.file_id == file_id) \
-            .join(Document, File2Document.document_id == Document.id) \
-            .join(Knowledgebase, Knowledgebase.id == Document.kb_id) \
-            .filter(File.id == file_id).all()
-
+        # 使用 aliased 创建表别名
+        KnowledgebaseAlias = aliased(Knowledgebase)
+        DocumentAlias = aliased(Document)
+        FileAlias = aliased(cls.model)
+        kbs = db.query(Knowledgebase.id, Knowledgebase.name) \
+            .select_from(FileAlias) \
+            .join(File2Document, File2Document.file_id == FileAlias.id) \
+            .join(DocumentAlias, File2Document.document_id == DocumentAlias.id) \
+            .join(KnowledgebaseAlias, KnowledgebaseAlias.id == DocumentAlias.kb_id) \
+            .filter(FileAlias.id == file_id).all()
         return [{"kb_id": kb.id, "kb_name": kb.name} for kb in kbs]
 
     @classmethod
@@ -151,13 +160,15 @@ class FileService(CommonService):
     def get_kb_folder(cls, db: Session, tenant_id: str) -> Dict:
         root = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=cls.model.id).first()
         if root:
-            folder = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=root.id, name=KNOWLEDGEBASE_FOLDER_NAME).first()
+            folder = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=root.id,
+                                                   name=KNOWLEDGEBASE_FOLDER_NAME).first()
             if folder:
                 return folder.to_dict()
         raise RuntimeError("Can't find the KB folder. Database init error.")
 
     @classmethod
-    def new_a_file_from_kb(cls, db: Session, tenant_id: str, name: str, parent_id: str, ty=FileType.FOLDER.value, size=0, location="") -> Dict:
+    def new_a_file_from_kb(cls, db: Session, tenant_id: str, name: str, parent_id: str, ty=FileType.FOLDER.value,
+                           size=0, location="") -> Dict:
         existing_files = cls.query(db, tenant_id=tenant_id, parent_id=parent_id, name=name)
         if existing_files:
             # 处理查询返回的列表
