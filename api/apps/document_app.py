@@ -29,7 +29,7 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, queue_tasks
-from api.settings import RetCode
+from api.settings import RetCode, stat_logger
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type, thumbnail
@@ -88,7 +88,6 @@ async def upload(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
     if not files:
@@ -105,6 +104,7 @@ async def upload(
     kb_folder = FileService.new_a_file_from_kb(db, kb.tenant_id, kb.name, kb_root_folder["id"])
 
     err = []
+    uploaded_docs_json = []
     for file in files:
         try:
             MAX_FILE_NUM_PER_USER = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
@@ -140,11 +140,13 @@ async def upload(
             DocumentService.insert(db, doc)
 
             FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
+            uploaded_docs_json.append(doc)
+
         except Exception as e:
             err.append(file.filename + ": " + str(e))
     if err:
         return construct_json_result(data=False, message="\n".join(err), code=RetCode.SERVER_ERROR)
-    return construct_json_result(data=True)
+    return construct_json_result(data=uploaded_docs_json, code=RetCode.SUCCESS)
 
 
 @router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页")
