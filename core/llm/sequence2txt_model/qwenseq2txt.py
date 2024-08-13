@@ -2,8 +2,8 @@
 """
 @project: multirag
 @Author：龙
-@file： xxx.py
-@date：2024/7/9 9:00
+@file： qwenseq2txt.py
+@date：2024/8/12 11:05
 @desc:
 """
 from core.llm.sequence2txt_model.base import Base

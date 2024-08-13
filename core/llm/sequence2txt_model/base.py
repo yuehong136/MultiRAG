@@ -2,8 +2,8 @@
 """
 @project: multirag
 @Author：龙
-@file： xxx.py
-@date：2024/7/9 9:00
+@file： sequence2txt_model.base.py
+@date：2024/8/12 9:00
 @desc:
 """
 from abc import ABC
