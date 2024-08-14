@@ -498,11 +498,16 @@ def main():
             callback(-1, "Index failure!")
             # ELASTICSEARCH.deleteByQuery(
             #     Q("match", doc_id=r["doc_id"]), idxnm=search.index_name(r["tenant_id"], kb.name))
+            # 构建 Milvus 集合名称
+            collection_name = search.index_name_one(r["tenant_id"], kb.name)
+            # 检查集合是否存在并删除 Milvus 中的数据
             try:
-                MILVUS_CONNECTION.delete(
-                    collection_name=search.index_name_one(r["tenant_id"], kb.name),
-                    filter=f"doc_id == {id}"
-                )
+                if MILVUS_CONNECTION.has_collection(collection_name):
+                    MILVUS_CONNECTION.delete(
+                        collection_name=collection_name,
+                        filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
+                        # filter=f"doc_id == '{doc.id}'"
+                    )
             except MilvusException as e:
                 return e
             cron_logger.error(str(milvus_r))
@@ -510,11 +515,16 @@ def main():
             if TaskService.do_cancel(db, r["id"]):
                 # ELASTICSEARCH.deleteByQuery(
                 #     Q("match", doc_id=r["doc_id"]), idxnm=search.index_name(r["tenant_id"], kb.name))
+                # 构建 Milvus 集合名称
+                collection_name = search.index_name_one(r["tenant_id"], kb.name)
+                # 检查集合是否存在并删除 Milvus 中的数据
                 try:
-                    MILVUS_CONNECTION.delete(
-                        collection_name=search.index_name_one(r["tenant_id"], kb.name),
-                        filter=f"doc_id == {id}"
-                    )
+                    if MILVUS_CONNECTION.has_collection(collection_name):
+                        MILVUS_CONNECTION.delete(
+                            collection_name=collection_name,
+                            filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
+                            # filter=f"doc_id == '{doc.id}'"
+                        )
                 except MilvusException as e:
                     return e
                 continue

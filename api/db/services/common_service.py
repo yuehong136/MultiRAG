@@ -169,13 +169,21 @@ class CommonService:
 
     @classmethod
     def update_by_id(cls, db: Session, pid: str, data: Dict[str, Any]) -> int:
-        now = cls.current_timestamp()
-        now_datetime = cls.current_datetime()
-        data["update_time"] = now
-        data["update_date"] = now_datetime
-        num = db.query(cls.model).filter_by(id=pid).update(data)
-        db.commit()
-        return num
+        try:
+            now = cls.current_timestamp()
+            now_datetime = cls.current_datetime()
+            data["update_time"] = now
+            data["update_date"] = now_datetime
+            num = db.query(cls.model).filter(cls.model.id == pid).update(data)
+            db.commit()
+            return num
+        except Exception as e:
+            db.rollback()
+            raise
+        finally:
+            # 可选：确保会话关闭以释放资源
+            db.close()
+
 
     @classmethod
     def get_by_id(cls, db: Session, pid: Any) -> Type[db_models.BaseModel]:

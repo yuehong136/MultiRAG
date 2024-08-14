@@ -38,11 +38,27 @@ class File2DocumentService(CommonService):
 
     @classmethod
     def delete_by_file_id(cls, db: Session, file_id: str):
-        return db.query(cls.model).filter_by(file_id=file_id).delete(synchronize_session=False)
+        # return db.query(cls.model).filter_by(file_id=file_id).delete(synchronize_session=False)
+        try:
+            deleted_count = db.query(cls.model).filter(cls.model.file_id == file_id).delete(synchronize_session=False)
+            db.commit()  # 确保提交事务
+            return deleted_count
+        except Exception as e:
+            db.rollback()  # 回滚事务
+            print(f"Error occurred: {e}")
+            return 0
 
     @classmethod
     def delete_by_document_id(cls, db: Session, doc_id: str):
-        return db.query(cls.model).filter_by(document_id=doc_id).delete(synchronize_session=False)
+        # return db.query(cls.model).filter_by(document_id=doc_id).delete(synchronize_session=False)
+        try:
+            deleted_count = db.query(cls.model).filter(cls.model.document_id == doc_id).delete(synchronize_session=False)
+            db.commit()  # 确保提交事务
+            return deleted_count
+        except Exception as e:
+            db.rollback()  # 回滚事务
+            print(f"Error occurred: {e}")
+            return 0
 
     @classmethod
     def update_by_file_id(cls, db: Session, file_id: str, obj: dict):

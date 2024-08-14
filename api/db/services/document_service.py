@@ -3,7 +3,7 @@
 @project: multirag
 @Author：龙
 @file： document_service.py
-@date：2024/7/9 9:00
+@date：2024/8/14 11:00
 @desc:
 """
 import random
@@ -11,10 +11,10 @@ from datetime import datetime
 from typing import Optional, List, Dict
 
 from pymilvus import MilvusException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 
-from api.db import FileType, TaskStatus, StatusEnum
+from api.db import FileType, TaskStatus, StatusEnum, ParserType
 from api.db.db_models import Document, Knowledgebase, Tenant, Task
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -101,14 +101,17 @@ class DocumentService(CommonService):
     def remove_document(cls, db: Session, doc: Document, tenant_id: str):
         # ELASTICSEARCH.delete_by_query(
         #     Q("match", doc_id=doc.id), index=search.index_name(tenant_id))
-        # 删除Milvus中的数据
+        document = DocumentService.get_by_doc_id(db, doc.id)
+        kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
+        # 构建 Milvus 集合名称
+        collection_name = search.index_name_one(tenant_id, kb.name)
+        # 检查集合是否存在并删除 Milvus 中的数据
         try:
-            kb_id = DocumentService.get_by_doc_id(db, doc.id)
-            kb = KnowledgebaseService.get_by_id(db, kb_id)
-            MILVUS_CONNECTION.delete(
-                collection_name=search.index_name(tenant_id, kb.name),
-                filter=f"doc_id == {id}"
-            )
+            if MILVUS_CONNECTION.has_collection(collection_name):
+                MILVUS_CONNECTION.delete(
+                    collection_name=collection_name,
+                    filter=f"doc_id == '{doc.id}'"
+                )
         except MilvusException as e:
             return e
         cls.clear_chunk_num(db, doc.id)
@@ -232,11 +235,19 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_tenant_id(cls, db: Session, doc_id: str):
-        query = db.query(Knowledgebase.tenant_id).join(Knowledgebase, cls.model.kb_id == Knowledgebase.id
-                                                       ).filter(
-            cls.model.id == doc_id,
-            Knowledgebase.status == StatusEnum.VALID.value
-        ).first()
+        # 使用 aliased 创建表别名
+        KnowledgebaseAlias = aliased(Knowledgebase)
+        DocumentAlias = aliased(Document)
+        query = db.query(KnowledgebaseAlias.tenant_id) \
+            .select_from(DocumentAlias) \
+            .join(KnowledgebaseAlias, DocumentAlias.kb_id == KnowledgebaseAlias.id) \
+            .filter(DocumentAlias.id == doc_id, KnowledgebaseAlias.status == StatusEnum.VALID.value) \
+            .first()
+        # query = db.query(Knowledgebase.tenant_id).join(Knowledgebase, cls.model.kb_id == Knowledgebase.id
+        #                                                ).filter(
+        #     cls.model.id == doc_id,
+        #     Knowledgebase.status == StatusEnum.VALID.value
+        # ).first()
         return query.tenant_id if query else None
 
     @classmethod

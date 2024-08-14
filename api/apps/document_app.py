@@ -20,7 +20,7 @@ from typing import List
 # from elasticsearch_dsl import Q
 # from core.nlp import search
 # from core.utils.es_conn import ELASTICSEARCH
-from api.db import FileType, TaskStatus, ParserType, FileSource
+from api.db import FileType, TaskStatus, ParserType, FileSource, db_models
 from api.db.database import get_db
 from api.db.db_models import Task
 from api.db.services import duplicate_name
@@ -351,7 +351,7 @@ async def remove_document(
     if isinstance(doc_ids, str):
         doc_ids = [doc_ids]
     root_folder = FileService.get_root_folder(db, user.id)
-    pf_id = root_folder.id
+    pf_id = root_folder["id"]
     FileService.init_knowledgebase_docs(db, pf_id, user.id)
     errors = ""
     for doc_id in doc_ids:
@@ -370,7 +370,7 @@ async def remove_document(
                                              code=RetCode.ARGUMENT_ERROR)
 
             f2d = File2DocumentService.get_by_document_id(db, doc_id)
-            FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
+            FileService.filter_delete(db, [db_models.File.source_type == FileSource.KNOWLEDGEBASE, db_models.File.id == f2d[0].file_id])
             File2DocumentService.delete_by_document_id(db, doc_id)
 
             MINIO.rm(b, n)
@@ -405,16 +405,21 @@ async def run(
             if not tenant_id:
                 return construct_json_result(data=False, message="Tenant not found!", code=RetCode.ARGUMENT_ERROR)
 
-            # # 删除Milvus中的数据
-            # try:
-            #     delete_result = MILVUS_CONNECTION.delete(
-            #         collection_name=search.index_name_one(tenant_id, kb.name),
-            #         filter=f"doc_id == {id}"
-            #     )
-            #     if not delete_result:
-            #         return construct_json_result(data=False, message="Milvus delete failed!", code=RetCode.ARGUMENT_ERROR)
-            # except MilvusException as e:
-            #     return construct_json_result(data=False, message=str(e), code=RetCode.ARGUMENT_ERROR)
+            # 构建 Milvus 集合名称
+            collection_name = search.index_name_one(tenant_id, kb.name)
+            # 检查集合是否存在并删除 Milvus 中的数据
+            try:
+                if MILVUS_CONNECTION.has_collection(collection_name):
+                    delete_result = MILVUS_CONNECTION.delete(
+                        collection_name=collection_name,
+                        filter=f"doc_id == '{{doc_id}}'".format(doc_id=d["id"])
+                        # filter=f"doc_id == '{d["id"]}'"
+                    )
+                    if not delete_result:
+                        return construct_json_result(data=False, message="Milvus delete failed!",
+                                                     code=RetCode.ARGUMENT_ERROR)
+            except MilvusException as e:
+                return construct_json_result(data=False, message=str(e), code=RetCode.ARGUMENT_ERROR)
 
             if str(req["run"]) == TaskStatus.RUNNING.value:
                 TaskService.filter_delete(db, [Task.doc_id == id])
@@ -422,10 +427,10 @@ async def run(
                 doc["tenant_id"] = tenant_id
                 bucket, name = File2DocumentService.get_minio_address(db, doc_id=doc["id"])
                 queue_tasks(db, doc, bucket, name)
-
         return construct_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)
+
     #         ELASTICSEARCH.deleteByQuery(Q("match", doc_id=id), idxnm=search.index_name(tenant_id))
     #
     #         if str(req["run"]) == TaskStatus.RUNNING.value:
@@ -518,40 +523,70 @@ async def change_parser(
 ):
     req = request_body.model_dump()
     try:
+        # 根据文档ID获取文档信息
         doc = DocumentService.get_by_id(db, req["doc_id"])
+        # 如果找不到文档，返回错误信息
         if not doc:
             return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
+        # 检查是否需要更新解析器ID
         if doc.parser_id.lower() == req["parser_id"].lower():
+            # 如果parser_id未变更，则根据是否包含parser_config进行处理
             if "parser_config" in req and req["parser_config"] == doc.parser_config:
                 return construct_json_result(data=True)
             else:
                 return construct_json_result(data=True)
+            # # 如果parser_id未变更，则根据是否包含parser_config进行处理
+            # # if "parser_config" in req and req["parser_config"] == doc.parser_config:
+            # #     return construct_json_result(data=True)
+            # def convert_to_dict(obj):
+            #     """
+            #     将一个对象转换为字典。
+            #     如果是自定义对象，使用对象的 __dict__ 属性来获取属性值。
+            #     """
+            #     if isinstance(obj, dict):
+            #         return obj
+            #     elif hasattr(obj, "__dict__"):
+            #         return {key: convert_to_dict(value) for key, value in obj.__dict__.items()}
+            #     else:
+            #         return obj
+            #
+            # # 转换后进行比较
+            # if "parser_config" in req and convert_to_dict(doc.parser_config) == req["parser_config"]:
+            #     return construct_json_result(data=True)
+            # else:
+            #     # return construct_json_result(data=True)
+            #     pass  # 继续往下执行后续代码
 
+        # 检查文档类型是否支持
         if doc.type == FileType.VISUAL or re.search(r"\.(ppt|pptx|pages)$", doc.name):
             return construct_json_result(data=False, message="Not supported yet!", code=RetCode.ARGUMENT_ERROR)
 
+        # 更新文档的parser_id和其他信息
         e = DocumentService.update_by_id(db, doc.id, {"parser_id": req["parser_id"], "progress": 0, "progress_msg": "",
                                                       "run": TaskStatus.UNSTART.value})
+        # 如果更新失败，返回错误信息
         if not e:
             return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
+        # 如果请求中包含parser_config，更新parser_config
         if "parser_config" in req:
             DocumentService.update_parser_config(db, doc.id, req["parser_config"])
+        # 如果文档有token_num大于0，进行相关数值的递减操作
         if doc.token_num > 0:
             e = DocumentService.increment_chunk_num(db, doc.id, doc.kb_id, doc.token_num * -1, doc.chunk_num * -1,
                                                     doc.process_duration * -1)
             if not e:
                 return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
+            # 获取文档所属的租户ID
             tenant_id = DocumentService.get_tenant_id(db, req["doc_id"])
             if not tenant_id:
                 return construct_json_result(data=False, message="Tenant not found!", code=RetCode.ARGUMENT_ERROR)
-            # ELASTICSEARCH.deleteByQuery(Q("match", doc_id=doc.id), idxnm=search.index_name(tenant_id))
+            document = DocumentService.get_by_doc_id(db, doc.id)
+            kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
             # 删除Milvus中的数据
             try:
-                kb_id = DocumentService.get_by_doc_id(db, doc.id)
-                kb = KnowledgebaseService.get_by_id(db, kb_id)
                 delete_result = MILVUS_CONNECTION.delete(
-                    collection_name=search.index_name(tenant_id, [kb.name]),
-                    filter=f"doc_id == {id}"
+                    collection_name=search.index_name_one(tenant_id, kb.name),
+                    filter=f"doc_id == '{doc.id}'"
                 )
                 if not delete_result:
                     return construct_json_result(data=False, message="Milvus delete failed!",
@@ -561,6 +596,7 @@ async def change_parser(
         return construct_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)
+
 
 
 @router.get("/image/{image_id}", summary="获取图片", response_description="成功获取图片")
