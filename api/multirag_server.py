@@ -108,7 +108,7 @@ if __name__ == '__main__':
         for h in access_logger.handlers:
             uvicorn_logger.addHandler(h)  # 将access_logger的处理程序添加到uvicorn的访问日志记录器中
         uvicorn_logger.setLevel(access_logger.level)  # 设置日志级别
-        uvicorn.run(app, host=HOST, port=HTTP_PORT, log_level="info", reload=RuntimeConfig.DEBUG)  # 启动 uvicorn 服务器
+        uvicorn.run("api.multirag_server:app", host=HOST, port=HTTP_PORT, log_level="info", reload=RuntimeConfig.DEBUG)  # 启动 uvicorn 服务器
     except Exception:
         traceback.print_exc()
         os.kill(os.getpid(), signal.SIGKILL)  # 在异常情况下终止进程
