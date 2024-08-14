@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
 
+from fastapi import UploadFile
+
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Node import Node, ValueTypeOfIODefinition, RefContentOfInputDefinition
 from workflow.basic.StartNode import StartNode, StartNodeParam, StartNodeInputDefinition
@@ -30,14 +32,16 @@ class WorkflowEngine:
     def add_edge(self, source_id: str, target_id: str):
         self.edges.append((source_id, target_id))
 
-    def execute(self) -> Dict[str, Any]:
+    async def execute(self, input_data: Optional[dict] = None) -> Dict[str, Any]:
         self.context.clear()  # 清除之前可能存在的上下文数据
         for i in range(len(self.node_list)):
             node = self.node_list[i]
 
-            output_data = node.process(context=self.context)
+            output_data = await node.process(input_data=input_data, context=self.context)
             if output_data is not None:
                 self.context.set(node.node_id, NodeIOData(output_data=output_data))
+
+        return {"node_list": self.node_list, "context": self.context}
 
 
 if __name__ == "__main__":
@@ -55,9 +59,7 @@ if __name__ == "__main__":
 
     fileReaderComponentInputDefinition = FileReaderComponentInputDefinition(parameter_name="FILE_PATH",
                                                                             value_type=ValueTypeOfIODefinition.REF,
-                                                                            content=RefContentOfInputDefinition(
-                                                                                node_id="100002",
-                                                                                name="FILE_PATH"))
+                                                                            content=["100002", "FILE_PATH"])
     fileReaderComponentOutputDefinition = FileReaderComponentOutputDefinition("FILE_CONTENT")
     fileReaderComponentParam = FileReaderComponentParam(output_definition=fileReaderComponentOutputDefinition,
                                                         input_definition=fileReaderComponentInputDefinition)
@@ -66,8 +68,7 @@ if __name__ == "__main__":
 
     llmComponentInputDefinition = LLMComponentInputDefinition(parameter_name="FILE_CONTENT",
                                                               value_type=ValueTypeOfIODefinition.LITERAL,
-                                                              content=RefContentOfInputDefinition(node_id="100004",
-                                                                                                  name="FILE_CONTENT"))
+                                                              content=["100004", "FILE_CONTENT"])
     llmComponentOutputDefinition = LLMComponentOutputDefinition(variable_name="LLM_OUTPUT", variable_type="string",
                                                                 description="llm output")
     prompt = """

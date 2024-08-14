@@ -51,7 +51,7 @@ class Node(ABC, Generic[T]):
         self.node_parameter: T = node_parameter
 
     @abstractmethod
-    def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None) -> Optional[dict]:
+    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None) -> Optional[dict]:
         pass
 
     @abstractmethod

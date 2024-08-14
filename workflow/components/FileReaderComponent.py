@@ -1,15 +1,19 @@
+import asyncio
 from dataclasses import dataclass
 from typing import Optional, Union
 import json
+
+from starlette.datastructures import UploadFile
+
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Component import Component, ComponentParameter
-from workflow.basic.Node import ValueTypeOfIODefinition, RefContentOfInputDefinition, VariableType
+from workflow.basic.Node import ValueTypeOfIODefinition, VariableType
 
 
 @dataclass
 class FileReaderComponentInputDefinition:
     value_type: ValueTypeOfIODefinition
-    content: Union[RefContentOfInputDefinition, str]
+    content: Union[list[str], str]
     parameter_name: str = "INPUT"
 
 
@@ -34,26 +38,22 @@ class FileReaderComponent(Component[FileReaderComponentParam]):
         self.component_parameter: FileReaderComponentParam = component_parameter
         super().__init__(component_parameter, node_id, self.name)
 
-    def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None) -> dict:
+    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None) -> dict:
         file_path = ""
         if context is not None:
-            if self.component_parameter.input_definition.value_type == ValueTypeOfIODefinition.REF:
-                file_path = context.get(
-                    self.component_parameter.input_definition.content.node_id).output_data.get(
-                    self.component_parameter.input_definition.content.name)
+            if self.component_parameter.input_definition.value_type == ValueTypeOfIODefinition.REF.value:
+                ref_node_id = self.component_parameter.input_definition.content[0]
+                ref_name = self.component_parameter.input_definition.content[1]
+                file = context.get(ref_node_id).output_data.get(ref_name)
 
-            file_content = ""
-            try:
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    file_content = file.read()
+                # 判断是否为UploadFile
+                if str(type(file)) == "<class 'starlette.datastructures.UploadFile'>":
+                    print("file is UploadFile")
+                    file_name, file_content = await read_file(file)
+
                     context.set(self.node_id, NodeIOData(
-                        output_data={self.component_parameter.output_definition.variable_name: file_content}))
-            except FileNotFoundError:
-                print(f"错误: 文件 '{file_path}' 未找到。")
-                return None
-            except IOError:
-                print(f"错误: 无法读取文件 '{file_path}'。")
-                return None
+                        output_data={self.component_parameter.output_definition.variable_name: {"fileName": file_name,
+                                                                                                "fileContent": file_content}}))
 
     def validate_inputs(self):
         pass
@@ -86,3 +86,29 @@ class FileReaderComponent(Component[FileReaderComponentParam]):
                                                 description=description, schema=schema),
             FileReaderComponentInputDefinition(value_type=value_type, content=content, parameter_name=parameter_name)),
             node_id)
+
+
+class FileReadError(Exception):
+    """自定义异常类，用于文件读取错误"""
+    pass
+
+
+async def read_file(file: UploadFile):
+    contents = await file.read()
+    decoded_contents = contents.decode('utf-8')
+    return file.filename, decoded_contents
+
+
+async def read_file_object(file: UploadFile):
+    async with file.file as f:
+        # 使用 f 作为文件对象
+        contents = await f.read()
+    return contents
+
+
+def get_file_info(file: UploadFile):
+    return {
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "size": file.size
+    }
