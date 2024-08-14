@@ -14,16 +14,28 @@ class ValueTypeOfIODefinition(Enum):
 
 @dataclass
 class RefContentOfInputDefinition:
-    source: str
     node_id: str
     name: str
 
 
 @dataclass
 class RefContentOfOutputDefinition:
-    source: str
     node_id: str
     name: str
+
+
+@dataclass
+class VariableType(Enum):
+    STRING = "String"
+    INTEGER = "Integer"
+    BOOLEAN = "Boolean"
+    NUMBER = "Number"
+    OBJECT = "Object"
+    ARRSTRING = "Array<String>"
+    ARRINTEGER = "Array<Integer>"
+    ARRBOOLEAN = "Array<Boolean>"
+    ARRNUMBER = "Array<Number>"
+    ARROBJECT = "Array<Object>"
 
 
 class NodeParameter(ABC):

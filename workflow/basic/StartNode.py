@@ -35,6 +35,9 @@ class StartNode(Node[StartNodeParam]):
     def get_output_schema(self):
         pass
 
+    def decode(self, json: str) -> 'StartNode':
+        return self
+
 
 if __name__ == "__main__":
     inputde1 = StartNodeInputDefinition(variable_name="BOT_USER_INPUT", variable_type="string",

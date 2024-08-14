@@ -13,7 +13,8 @@ class ComponentParameter(NodeParameter):
 
 
 class Component(Node[C]):
-    def __init__(self, component_parameter: C, node_id: str):
+    def __init__(self, component_parameter: C, node_id: str, name: str = None):
+        self.name = name
         self.node_id = node_id
         self.component_parameter: C = component_parameter
         super().__init__(component_parameter, node_id)

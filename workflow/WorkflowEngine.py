@@ -14,14 +14,11 @@ from workflow.components.LLMComponent import LLMComponent, LLMComponentParam, LL
 from typing import Dict, Any
 
 
-
-
-
 class WorkflowEngine:
-    def __init__(self):
+    def __init__(self, node_list: Optional[list[Node]] = None):
         self.nodes = {}
         self.edges = []
-        self.node_list = []
+        self.node_list = node_list if node_list is not None else []
         self.context = WorkflowContext()
 
     def add_node(self, node: Node):
@@ -59,7 +56,7 @@ if __name__ == "__main__":
     fileReaderComponentInputDefinition = FileReaderComponentInputDefinition(parameter_name="FILE_PATH",
                                                                             value_type=ValueTypeOfIODefinition.REF,
                                                                             content=RefContentOfInputDefinition(
-                                                                                source="100002", node_id="100002",
+                                                                                node_id="100002",
                                                                                 name="FILE_PATH"))
     fileReaderComponentOutputDefinition = FileReaderComponentOutputDefinition("FILE_CONTENT")
     fileReaderComponentParam = FileReaderComponentParam(output_definition=fileReaderComponentOutputDefinition,
@@ -69,8 +66,7 @@ if __name__ == "__main__":
 
     llmComponentInputDefinition = LLMComponentInputDefinition(parameter_name="FILE_CONTENT",
                                                               value_type=ValueTypeOfIODefinition.LITERAL,
-                                                              content=RefContentOfInputDefinition(source="100004",
-                                                                                                  node_id="100004",
+                                                              content=RefContentOfInputDefinition(node_id="100004",
                                                                                                   name="FILE_CONTENT"))
     llmComponentOutputDefinition = LLMComponentOutputDefinition(variable_name="LLM_OUTPUT", variable_type="string",
                                                                 description="llm output")

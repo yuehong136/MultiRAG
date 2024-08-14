@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from typing import Union, Optional
-
+import json
 from workflow.WorkflowContext import WorkflowContext
 from workflow.basic.Component import Component, ComponentParameter
 from workflow.basic.Node import ValueTypeOfIODefinition, RefContentOfInputDefinition
@@ -32,6 +32,7 @@ class LLMComponentParam(ComponentParameter):
 
 class LLMComponent(Component[LLMComponentParam]):
     def __init__(self, component_parameter: LLMComponentParam, node_id: str):
+        self.name = "LLMComponent"
         self.node_id = node_id
         self.component_parameter = component_parameter
         super().__init__(component_parameter, node_id)
@@ -62,3 +63,18 @@ class LLMComponent(Component[LLMComponentParam]):
 
     def get_output_schema(self):
         pass
+
+    @staticmethod
+    def decode(json: json) -> 'LLMComponent':
+        node_json = json['node']
+        node_id = node_json['id']
+        component_param = node_json['data']['componentParam']
+
+        input_definition = component_param['input_definition']
+        output_definition = component_param['output_definition']
+        model = component_param['model']
+        prompt = component_param['prompt']
+
+        llm_component_param = LLMComponentParam(model=model, prompt=prompt, output_definition=output_definition,
+                                                input_definition_list=input_definition)
+        return LLMComponent(llm_component_param, node_id)
