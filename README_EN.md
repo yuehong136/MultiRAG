@@ -20,7 +20,8 @@ This project is an application of LLM RAG (Retrieval-Augmented Generation), comb
 2. **Knowledge Base Management**: Upload documents, create and manage knowledge bases, and perform Q&A on document content.
 3. **SQL Translation**: Convert SQL queries from one dialect to another.
 4. **Workflow Management**: Orchestrate built-in functional components into workflows, supporting page execution display and API calls.
-5. **Agent Service**: Call existing tools, combine role cognition and memory management for intelligent reasoning, and optionally provide open APIs for third-party calls.
+5. **Process visualization**: Convert the content described by the user into a flowchart.
+6. **Agent Service**: Call existing tools, combine role cognition and memory management for intelligent reasoning, and optionally provide open APIs for third-party calls.
 
 
 ## User Guide
@@ -65,6 +66,7 @@ Before using this project, please ensure the following dependencies are installe
 ![Knowledge Base Management](./assets/source/kb_serve.png)
 ![SQL Translation](./assets/source/sql_translator.png)
 ![Workflow](./assets/source/workflow.png)
+![Process visualization](./assets/source/flowchat.png)
 ![Agent service](./assets/source/agent.png)
 ## Feature Demonstrations
 
@@ -72,6 +74,7 @@ Before using this project, please ensure the following dependencies are installe
 - **Knowledge Base Management**: Upload document files, create and manage knowledge bases, and interact with the content within.
 - **SQL Translation**: Input SQL queries, select source and target dialects, and perform SQL dialect conversion.
 - **Workflow**: Orchestrate functional components into workflow applications, with optional open APIs for third-party calls.
+- **Process visualization**: Convert the content described by the user into a flowchart.
 - **Agent service**: Call existing tools, combine role cognition and memory management for intelligent reasoning, with optional open APIs for third-party calls.
 
 ## Future Plans

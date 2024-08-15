@@ -296,6 +296,7 @@ with st.sidebar:
     st.page_link("pages/kb_serve.py", label="知识库管理", icon="🧷", use_container_width=True)
     st.page_link("pages/sql_trans.py", label="SQL翻译机", icon="🛠️", use_container_width=True)
     st.page_link("pages/work_flow.py", label="工作流管理", icon="⚡", use_container_width=True)
+    st.page_link("pages/flowchat.py", label="流程可视化", icon="🎨", use_container_width=True)
     st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
 
     import datetime

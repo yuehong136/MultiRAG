@@ -43,6 +43,8 @@ tabulate >= 0.9.0
 #chardet >= 5.2.0
 # 百度系模型调用
 qianfan >= 0.3.18
+# 流程图、关系图等
+graphviz >= 0.20.3
 ## ---------接口开发---------
 # 生成和校验 JWT 令牌
 PyJWT >= 2.8.0
@@ -115,5 +117,9 @@ minio >= 7.2.7
 python-multipart >= 0.0.9
 uvicorn >= 0.30.1
 socksio >= 1.0.0
-# json反序列化
+# json反序列化【工作流】
 dacite >= 1.8.1
+# 用于解析 JSON 数据。jsonpath-ng 提供了一个灵活且强大的方法来从 JSON 对象中抽取数据【工作流】
+jsonpath-ng >= 1.6.1
+# 数据库迁移工具，主要用于处理SQLAlchemy ORM（对象关系映射）所使用的数据库模式变更
+alembic >= 1.13.2
