@@ -43,12 +43,12 @@ def get_db():
 class BaseModel(Base):
     __abstract__ = True
 
-    id = Column(String, primary_key=False, index=True, default=lambda: str(uuid.uuid4()))
-    create_time = Column(BigInteger, index=True, default=lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
-    create_date = Column(DateTime, index=True, default=datetime.now(timezone.utc))
-    update_time = Column(BigInteger, index=True, default=lambda: int(datetime.now(timezone.utc).timestamp() * 1000),
+    id = Column(String, primary_key=False, nullable=False, index=True, default=lambda: str(uuid.uuid4()))
+    create_time = Column(BigInteger, nullable=True, index=True, default=lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
+    create_date = Column(DateTime, nullable=True, index=True, default=datetime.now(timezone.utc))
+    update_time = Column(BigInteger, nullable=True, index=True, default=lambda: int(datetime.now(timezone.utc).timestamp() * 1000),
                          onupdate=lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
-    update_date = Column(DateTime, index=True, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
+    update_date = Column(DateTime, nullable=True, index=True, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
 
     def to_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
