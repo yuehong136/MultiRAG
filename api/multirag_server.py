@@ -70,8 +70,8 @@ if __name__ == '__main__':
     )
 
     # 初始化数据库
-    # init_web_db()
-    # init_web_data()
+    init_web_db()
+    init_web_data()
 
     # 初始化运行时配置
     import argparse
