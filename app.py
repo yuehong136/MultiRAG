@@ -307,7 +307,7 @@ with st.sidebar:
 
 
     # 片段函数，实时更新当前时间
-    @st.experimental_fragment(run_every=60)
+    @st.fragment(run_every=60)
     def update_time():
         st.session_state.current_time = datetime.datetime.now()
         # st.markdown("# 当前时间: \n" + st.session_state.current_time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -316,7 +316,7 @@ with st.sidebar:
 
 
     # 片段函数，实时更新天气信息
-    @st.experimental_fragment(run_every=3600)  # 每小时更新一次
+    @st.fragment(run_every=3600)  # 每小时更新一次
     def update_weather(city_name):
         weather = get_weather(city_name)
         st.session_state.weather = weather
@@ -420,7 +420,7 @@ with st.sidebar:
         del_btn = cols[2]
 
 
-        @st.experimental_dialog("重命名会话")
+        @st.dialog("重命名会话")
         def handle_session_saving(selected_file_full_path=None):
             """
             管理会话保存的交互逻辑。
@@ -448,7 +448,7 @@ with st.sidebar:
                 st.rerun()
 
 
-        @st.experimental_dialog("删除会话")
+        @st.dialog("删除会话")
         def handle_session_deleting():
             history_files = load_chat_history()  # 加载历史会话文件
             display_files = [os.path.splitext(f)[0].split('-', 1)[1] for f in history_files]  # 获取显示友好的文件名
@@ -585,7 +585,7 @@ with st.sidebar:
             return result
 
 
-        @st.experimental_dialog("System Prompt", width="large")
+        @st.dialog("System Prompt", width="large")
         def llm_model_setting():
             # cols = st.columns(3)
             # platforms = ["所有"] + [x["platform_name"] for x in MODEL_PLATFORMS]
