@@ -10,7 +10,7 @@ from workflow.utils import safe_format, safe_format_double_braces
 
 
 @dataclass
-class EndNodeInputDefinition:
+class EndNodeOutputDefinition:
     parameter_name: str
     value_type: ValueTypeOfIODefinition
     content: Union[list[str], str]
@@ -18,7 +18,7 @@ class EndNodeInputDefinition:
 
 @dataclass
 class EndNodeParam(NodeParameter):
-    input_definition_list: list[EndNodeInputDefinition]
+    output_definition_list: list[EndNodeOutputDefinition]
     content: str
 
 
@@ -30,17 +30,17 @@ class EndNode(Node[EndNodeParam]):
     async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None) -> dict:
         content = self.node_parameter.content
         parameter_dict = {}
-        for input_definition in self.node_parameter.input_definition_list:
-            parameter_name = input_definition['parameter_name']
-            if input_definition['value_type'] == ValueTypeOfIODefinition.REF.value:
-                ref_node_id = input_definition['content'][0]
-                ref_name = input_definition['content'][1]
+        for output_definition in self.node_parameter.output_definition_list:
+            parameter_name = output_definition['parameter_name']
+            if output_definition['value_type'] == ValueTypeOfIODefinition.REF.value:
+                ref_node_id = output_definition['content'][0]
+                ref_name = output_definition['content'][1]
                 ref_node_data = context.get(ref_node_id).output_data
                 ref_node_data_json_str = json.dumps(ref_node_data, ensure_ascii=False)
                 ref_value = parse('$.' + ref_name).find(json.loads(ref_node_data_json_str))
                 parameter_dict[parameter_name] = ref_value[0].value
-            elif input_definition.value_type == ValueTypeOfIODefinition.LITERAL:
-                parameter_dict[parameter_name] = input_definition.content
+            elif output_definition.value_type == ValueTypeOfIODefinition.LITERAL:
+                parameter_dict[parameter_name] = output_definition.content
         return {"output": safe_format_double_braces(content, **parameter_dict)}
 
     def validate_inputs(self):
@@ -55,9 +55,9 @@ class EndNode(Node[EndNodeParam]):
         node_id = node_json['id']
         component_param = node_json['data']['componentParam']
 
-        input_definition = component_param['input_definition']
+        output_definition = component_param['output_definition']
         content = component_param['content']
-        end_node_param = EndNodeParam(input_definition_list=input_definition, content=content)
+        end_node_param = EndNodeParam(output_definition_list=output_definition, content=content)
         return EndNode(end_node_param)
 
 
