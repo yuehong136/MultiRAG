@@ -180,9 +180,6 @@ class CommonService:
         except Exception as e:
             db.rollback()
             raise
-        finally:
-            # 可选：确保会话关闭以释放资源
-            db.close()
 
 
     @classmethod
