@@ -295,7 +295,7 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
                 raise Exception(m)
         except Exception as e:
             msg += f"\nFail to access model({llm['llm_name']})." + str(e)
-    elif llm["model_type"] == LLMType.IMAGE2TEXT.value:
+    elif llm["mdl_type"] == LLMType.IMAGE2TEXT.value:
         mdl = CvModel[factory](
             # key=None, model_name=llm["llm_name"], base_url=llm["api_base"]
             key=llm["api_key"] if factory in ["OpenAI-API-Compatible"] else None, model_name=llm["llm_name"], base_url=llm["api_base"]

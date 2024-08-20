@@ -169,23 +169,32 @@ def add_graph_templates(db: Session):
         try:
             with open(os.path.join(dir, fnm), "r", encoding="utf-8") as f:
                 cnvs = json.load(f)
-            try:
-                cnvs["id"] = str(cnvs["id"])
-                CanvasTemplateService.save(db, **cnvs)
-            except Exception as e:
-                print(f"Error saving template {cnvs['id']}: {e}")
-                # 使用类型转换确保ID是字符串
-                # cnvs["id"] = str(cnvs["id"])
+
+            # 将 ID 转换为字符串以确保一致性
+            cnvs["id"] = str(cnvs["id"])
+
+            # 在插入前检查记录是否已存在
+            existing_template = CanvasTemplateService.get_by_id(db, cnvs["id"])
+
+            if existing_template:
+                # 如果记录存在，则更新
                 try:
                     CanvasTemplateService.update_by_id(db, cnvs["id"], cnvs)
                 except Exception as e:
                     print(f"Error updating template {cnvs['id']}: {e}")
                     db.rollback()  # 回滚事务
+            else:
+                # 如果记录不存在，则插入
+                try:
+                    CanvasTemplateService.save(db, **cnvs)
+                except Exception as e:
+                    print(f"Error saving template {cnvs['id']}: {e}")
+                    db.rollback()  # 回滚事务
+
         except Exception as e:
             print("Add graph templates error: ", e)
             print("------------", flush=True)
             db.rollback()  # 回滚事务
-
 
 
 def init_web_data(db: Session = SessionLocal()):

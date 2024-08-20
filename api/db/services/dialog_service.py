@@ -97,7 +97,7 @@ def llm_id2llm_type(llm_id):
     for llm_factory in llm_factories["factory_llm_infos"]:
         for llm in llm_factory["llm"]:
             if llm_id == llm["llm_name"]:
-                return llm["model_type"].strip(",")[-1]
+                return llm["mdl_type"].strip(",")[-1]
 
 def chat(dialog, messages, db: Session, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
@@ -136,6 +136,9 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
 
     # 提取用户提出的问题
     questions = [m["content"] for m in messages if m["role"] == "user"]
+    attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None
+    if "doc_ids" in messages[-1]:
+        attachments = messages[-1]["doc_ids"]
     # 初始化嵌入模型，用于将文本转换为向量表示
     if len(embd_nms) != 0:
         embd_mdl = LLMBundle(db, dialog.tenant_id, LLMType.EMBEDDING, embd_nms[0])
@@ -202,7 +205,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         kbinfos = retrievaler.retrieval(" ".join(questions), embd_mdl, dialog.tenant_id, kb_names, 1, dialog.top_n,
                                         dialog.similarity_threshold,
                                         dialog.vector_similarity_weight,
-                                        doc_ids=kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None,
+                                        # doc_ids=kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None,
+                                        doc_ids=attachments,
                                         top=1024, aggs=False, rerank_mdl=rerank_mdl)
 
     # 从kbinfos中提取出知识内容及其权重，存储在一个列表中
@@ -211,14 +215,15 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
 
     # 如果需要自我检索并且内容不相关，尝试重写问题
     if dialog.prompt_config.get("self_rag") and not relevant(dialog.tenant_id, dialog.llm_id, questions[-1],
-                                                             knowledges):
-        questions[-1] = rewrite(dialog.tenant_id, dialog.llm_id, questions[-1])
-        kbinfos = retrievaler.retrieval(" ".join(questions), embd_mdl, dialog.tenant_id, dialog.kb_ids, 1, dialog.top_n,
+                                                             knowledges, db):
+        questions[-1] = rewrite(dialog.tenant_id, dialog.llm_id, questions[-1], db)
+        kbinfos = retrievaler.retrieval(" ".join(questions), embd_mdl, dialog.tenant_id, kb_names, 1, dialog.top_n,
                                         dialog.similarity_threshold,
                                         dialog.vector_similarity_weight,
-                                        doc_ids=kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None,
+                                        # doc_ids=kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None,
+                                        doc_ids=attachments,
                                         top=1024, aggs=False, rerank_mdl=rerank_mdl)
-        knowledges = [ck["content_with_weight"] for ck in kbinfos["chunks"]]
+        knowledges = [ck["text"] for ck in kbinfos["chunks"]]
 
     chat_logger.info(
         "{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
@@ -306,18 +311,18 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
 def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
     sys_prompt = "你是一个DBA。你需要这对以下表的字段结构，根据用户的问题列表，写出最后一个问题对应的SQL。"
     user_promt = """
-表名：{}；
-数据库表字段说明如下：
-{}
-
-问题如下：
-{}
-请写出SQL, 且只要SQL，不要有其他说明及文字。
-""".format(
-        index_name(tenant_id),
-        "\n".join([f"{k}: {v}" for k, v in field_map.items()]),
-        question
-    )
+        表名：{}；
+        数据库表字段说明如下：
+        {}
+        
+        问题如下：
+        {}
+        请写出SQL, 且只要SQL，不要有其他说明及文字。
+    """.format(
+            index_name(tenant_id),
+            "\n".join([f"{k}: {v}" for k, v in field_map.items()]),
+            question
+        )
     tried_times = 0
 
     def get_table():

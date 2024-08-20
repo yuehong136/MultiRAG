@@ -57,6 +57,9 @@ class Dealer:
         if bqry is None:
             raise ValueError("Failed to generate query for the given question.")
 
+        src = req.get("fields", ["docnm_kwd", "content_ltks", "kb_id", "img_id", "title_tks",
+                                 "img_id", "doc_id", "vector", "position_int", "content_with_weight"])
+
         # Vector search parameters
         vector_search_params = self._vector(qst, embd_mdl, req.get("similarity", 0.1), req.get("topk", 1024))
         query_vector = vector_search_params["query_vector"]
@@ -66,17 +69,28 @@ class Dealer:
         fields = {}
 
         for idxnm in idxnms:
-            milvus_logger.info(f"Searching in collection: {idxnm}")
+            milvus_logger.info(f"正在搜索的集合: {idxnm}")
+            # todo 后续考虑不同维度字段检索情况，目前统一叫vector，eg.用户512维的输入无法比对718存储的vector，动态名字就可以了
             try:
-                # Perform the search in Milvus
+                # 在Milvus中执行搜索
+                # 参数:
+                # collection_name: 指定要搜索的集合名称
+                # data: 查询向量
+                # anns_field: 指定用于向量搜索的字段
+                # limit: 要返回的结果数量，默认为10，如果未指定的话
+                # search_params: 搜索参数，包括度量类型和nprobe值
+                # output_fields: 指定要在搜索结果中返回的字段
                 search_results = self.milvus_conn.search(
                     collection_name=idxnm,
                     data=[query_vector],
                     anns_field=vector_search_params["field"],
                     limit=req.get("size", 10),
                     search_params={"metric_type": "COSINE", "params": {"nprobe": 10}},
-                    output_fields=["content_with_weight"]  # Specify the field(s) to return
+                    # output_fields=["content_with_weight"]  # 指定要返回的字段
+                    output_fields=src  # 指定要返回的字段
+                    #expression="" # todo 如何用起来过滤，后续处理
                 )
+
                 milvus_logger.info(f"Search results for {idxnm}: {search_results}")
 
                 # Process search results
@@ -84,7 +98,12 @@ class Dealer:
                     total += len(search_results[0])
                     ids.extend([str(hit['id']) for hit in search_results[0]])
                     for hit in search_results[0]:
-                        fields[str(hit['id'])] = hit['entity'].get("content_with_weight", "")  # Extract the 'text' field
+                        hit_fields = {}
+                        for field in src:
+                            hit_fields[field] = hit['entity'].get(field, "")  # Extract each field's data
+                        # 将字典存储在以id为键的字段字典中
+                        fields[str(hit['id'])] = hit_fields
+                        # fields[str(hit['id'])] = hit['entity'].get("content_with_weight", "")  # Extract the 'text' field
             except Exception as e:
                 milvus_logger.error(f"Error searching in collection {idxnm}: {str(e)}")
 
@@ -216,8 +235,14 @@ class Dealer:
             return [], [], []
 
         ins_tw = []
+        # for i in sres.ids:
+        #     tks = sres.field[i].split(" ")
+        #     ins_tw.append(tks)
         for i in sres.ids:
-            tks = sres.field[i].split(" ")
+            content_ltks = sres.field[i][cfield].split(" ")
+            title_tks = [t for t in sres.field[i].get("title_tks", "").split(" ") if t]
+            important_kwd = sres.field[i].get("important_kwd", [])
+            tks = content_ltks + title_tks + important_kwd
             ins_tw.append(tks)
 
         sim, tksim, vtsim = self.qryr.hybrid_similarity(sres.query_vector,
@@ -290,33 +315,58 @@ class Dealer:
                     continue
                 break
             id = sres.ids[i]
-            text = sres.field[id]
+            text = sres.field[id]["content_with_weight"]
+            dnm = sres.field[id]["docnm_kwd"]
+            did = sres.field[id]["doc_id"]
+            # d = {
+            #     "chunk_id": id,
+            #     "text": text,
+            #     "similarity": sim[i],
+            #     "vector_similarity": vsim[i],
+            #     "term_similarity": tsim[i],
+            #     "vector": self.trans2floats("\t".join(map(str, sres.query_vector))),
+            #     # Ensure this is the correct format
+            # }
             d = {
                 "chunk_id": id,
+                "content_ltks": sres.field[id]["content_ltks"],
                 "text": text,
+                "doc_id": sres.field[id]["doc_id"],
+                "docnm_kwd": dnm,
+                "kb_id": sres.field[id]["kb_id"],
+                "important_kwd": sres.field[id].get("important_kwd", []),
+                "img_id": sres.field[id].get("img_id", ""),
                 "similarity": sim[i],
                 "vector_similarity": vsim[i],
                 "term_similarity": tsim[i],
                 "vector": self.trans2floats("\t".join(map(str, sres.query_vector))),
-                # Ensure this is the correct format
+                "positions": sres.field[id].get("position_int", "").split("\t")
             }
+            if len(d["positions"]) % 5 == 0:
+                poss = []
+                for i in range(0, len(d["positions"]), 5):
+                    poss.append([float(d["positions"][i]), float(d["positions"][i + 1]), float(d["positions"][i + 2]),
+                                 float(d["positions"][i + 3]), float(d["positions"][i + 4])])
+                d["positions"] = poss
             ranks["chunks"].append(d)
-            # 对文档聚合结果进行排序，依据是文档出现的次数，次数多的排在前面
-            # ranks["doc_aggs"] = [{"doc_name": k,
-            #                       "doc_id": v["doc_id"],
-            #                       "count": v["count"]} for k,
-            #                      v in sorted(ranks["doc_aggs"].items(),
-            #                                  key=lambda x: x[1]["count"] * -1)]
-        # Ensure doc_aggs is a dictionary
-        if not isinstance(ranks["doc_aggs"], dict):
-            ranks["doc_aggs"] = {}
-
-        # 对文档聚合结果进行排序，依据是文档出现的次数，次数多的排在前面
+            if dnm not in ranks["doc_aggs"]:
+                ranks["doc_aggs"][dnm] = {"doc_id": did, "count": 0}
+            ranks["doc_aggs"][dnm]["count"] += 1
         ranks["doc_aggs"] = [{"doc_name": k,
                               "doc_id": v["doc_id"],
                               "count": v["count"]} for k,
                              v in sorted(ranks["doc_aggs"].items(),
                                          key=lambda x: x[1]["count"] * -1)]
+        # # Ensure doc_aggs is a dictionary
+        # if not isinstance(ranks["doc_aggs"], dict):
+        #     ranks["doc_aggs"] = {}
+        #
+        # # 对文档聚合结果进行排序，依据是文档出现的次数，次数多的排在前面
+        # ranks["doc_aggs"] = [{"doc_name": k,
+        #                       "doc_id": v["doc_id"],
+        #                       "count": v["count"]} for k,
+        #                      v in sorted(ranks["doc_aggs"].items(),
+        #                                  key=lambda x: x[1]["count"] * -1)]
         return ranks
 
     def sql_retrieval(self, sql, fetch_size=128, format="json"):
@@ -371,3 +421,4 @@ class Dealer:
         for index, chunk in enumerate(milvus_res[0]):
             res.append({fld: chunk.entity.get(fld) for fld in fields})
         return res
+
