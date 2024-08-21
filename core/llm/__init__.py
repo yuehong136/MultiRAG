@@ -7,6 +7,8 @@ from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
+from core.llm.rerank_model.default_rerank import DefaultRerank
+from core.llm.rerank_model.youdao_rerank import YoudaoRerank
 from core.llm.sequence2txt_model.azureseq2txt import AzureSeq2txt
 from core.llm.sequence2txt_model.gptseq2txt import GPTSeq2txt
 from core.llm.sequence2txt_model.ollamaseq2txt import OllamaSeq2txt
@@ -57,12 +59,12 @@ ChatModel = {
     # "MiniMax": MiniMaxChat,
     # "Mistral": MistralChat
 }
-#
-# RerankModel = {
-#     "BAAI": DefaultRerank,
-#     "Jina": JinaRerank,
-#     "Youdao": YoudaoRerank,
-# }
+
+RerankModel = {
+    "BAAI": DefaultRerank,
+    # "Jina": JinaRerank,
+    "Youdao": YoudaoRerank,
+}
 
 
 Seq2txtModel = {

@@ -18,7 +18,7 @@ from api.settings import RetCode
 from api.utils.api_utils import get_json_result, server_error_response, validate_request, get_data_error_result
 from api.db import StatusEnum, LLMType
 from api.db.db_models import TenantLLM
-from core.llm import EmbeddingModel, ChatModel, CvModel  # , RerankModel
+from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel
 from pydantic import BaseModel
 from typing import Optional
 import requests
@@ -165,6 +165,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
         #     except Exception as e:
         #         msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
         #     rerank_passed = True
+
 
     if msg:
         return get_data_error_result(retmsg=msg)

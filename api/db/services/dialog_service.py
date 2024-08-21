@@ -196,16 +196,9 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         if prompt_config.get("keyword", False):
             questions[-1] += keyword_extraction(chat_mdl, questions[-1])
 
-        # 调用检索器，对问题列表进行知识检索，根据检索结果填充kbinfos字典
-        # kbinfos = retrievaler.retrieval(" ".join(questions), embd_mdl, dialog.tenant_id, dialog.kb_ids, 1, dialog.top_n,
-        #                                 dialog.similarity_threshold,
-        #                                 dialog.vector_similarity_weight,
-        #                                 doc_ids=kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None,
-        #                                 top=1024, aggs=False, rerank_mdl=rerank_mdl)
         kbinfos = retrievaler.retrieval(" ".join(questions), embd_mdl, dialog.tenant_id, kb_names, 1, dialog.top_n,
                                         dialog.similarity_threshold,
                                         dialog.vector_similarity_weight,
-                                        # doc_ids=kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None,
                                         doc_ids=attachments,
                                         top=1024, aggs=False, rerank_mdl=rerank_mdl)
 
@@ -220,7 +213,6 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         kbinfos = retrievaler.retrieval(" ".join(questions), embd_mdl, dialog.tenant_id, kb_names, 1, dialog.top_n,
                                         dialog.similarity_threshold,
                                         dialog.vector_similarity_weight,
-                                        # doc_ids=kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None,
                                         doc_ids=attachments,
                                         top=1024, aggs=False, rerank_mdl=rerank_mdl)
         knowledges = [ck["text"] for ck in kbinfos["chunks"]]

@@ -123,3 +123,9 @@ dacite >= 1.8.1
 jsonpath-ng >= 1.6.1
 # 数据库迁移工具，主要用于处理SQLAlchemy ORM（对象关系映射）所使用的数据库模式变更
 alembic >= 1.13.2
+# FlagEmbedding 是一个专注于检索增强大型语言模型(LLM) 的 Python 库
+FlagEmbedding >= 1.2.11
+# pyfiglet生成艺术字
+#pyfiglet >= 1.0.2
+# peft 是一个用于模型训练和优化的库
+peft >= 0.12.0

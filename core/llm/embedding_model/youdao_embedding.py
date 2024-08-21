@@ -1,7 +1,5 @@
-# embedding_model/youdao_embedding.py
 import os
 import numpy as np
-from dataclasses import dataclass, field
 from typing import List, Optional
 from BCEmbedding import EmbeddingModel as qanthing
 from core.llm.embedding_model.base import Base
@@ -9,15 +7,13 @@ from api.utils.file_utils import get_home_cache_dir
 from core.utils import num_tokens_from_string
 
 
-@dataclass
 class YoudaoEmbed(Base):
-    key: str = None
-    model_name: str = "maidalun1020/bce-embedding-base_v1"
-    base_url: Optional[str] = None
-    _client: qanthing = field(init=False, default=None)
-    kwargs: dict = field(default_factory=dict)
+    _client = None
 
-    def __post_init__(self):
+    def __init__(self, key: str = None, model_name: str = "maidalun1020/bce-embedding-base_v1", base_url: Optional[str] = None, **kwargs):
+        super().__init__(key, model_name)
+        self.base_url = base_url
+        self.kwargs = kwargs
         model_path = self.get_model_path(self.model_name.split("/")[-1] if "/" in self.model_name else self.model_name)
         if not YoudaoEmbed._client:
             try:
