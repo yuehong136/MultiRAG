@@ -639,7 +639,7 @@ with st.sidebar:
             st.success("API Token 已经配置")
         model = st.selectbox("选择模型",
                              ["glm-4-0520", "glm-4v", "glm-4-airx", "glm-4-air", "glm-4-flash", "glm-3-turbo", "qwen-turbo-0624",
-                              "qwen-plus-0624", "qwen-max-0428", "gpt-3.5-turbo", "ERNIE-4.0-8K", "ERNIE-Tiny-8K",
+                              "qwen-plus-0624", "qwen-max-0428", "gpt-4o", "ERNIE-4.0-8K", "ERNIE-Tiny-8K",
                               "ERNIE-Speed-128K",
                               "qwen2:7b-instruct-fp16", "qwen2:72b-instruct-q4_0", "qwen2:72b-instruct-q8_0",
                               "Doubao-pro-32k"])
