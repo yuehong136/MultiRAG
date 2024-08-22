@@ -10,7 +10,7 @@ import re
 import os
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple, Any
 
 from api.db import FileType, KNOWLEDGEBASE_FOLDER_NAME, FileSource, ParserType
 from api.db.db_models import File, Document, Knowledgebase, File2Document
@@ -292,3 +292,64 @@ class FileService(CommonService):
         except Exception as e:
             print(e)
             raise RuntimeError("Database error (File move)!")
+
+    @classmethod
+    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: List, current_user) -> (List[str], List[Dict]):
+        # 初始化根文件夹和知识库文件夹
+        root_folder = cls.get_root_folder(db, current_user.id)
+        pf_id = root_folder["id"]
+        cls.init_knowledgebase_docs(db, pf_id, current_user.id)
+        kb_root_folder = cls.get_kb_folder(db, current_user.id)
+        kb_folder = cls.new_a_file_from_kb(db, kb.tenant_id, kb.name, kb_root_folder["id"])
+
+        err, files_info = [], []
+        for file_blob, filename in file_objs:  # 解包元组
+            try:
+                max_file_num_per_user = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
+                if max_file_num_per_user > 0 and DocumentService.get_doc_count(db,
+                                                                               kb.tenant_id) >= max_file_num_per_user:
+                    raise RuntimeError("超出了用户的最大文件数量限制！")
+
+                filename = duplicate_name(
+                    lambda *args, **kwargs: DocumentService.query(db, *args, **kwargs),
+                    name=filename,
+                    kb_id=kb.id)
+
+                filetype = filename_type(filename)
+                if filetype == FileType.OTHER.value:
+                    raise RuntimeError("暂不支持此文件类型！")
+
+                location = filename
+                while MINIO.obj_exist(kb.id, location):
+                    location += "_"
+                MINIO.put(kb.id, location, file_blob)
+
+                doc = {
+                    "id": get_uuid(),
+                    "kb_id": kb.id,
+                    "parser_id": kb.parser_id,
+                    "parser_config": kb.parser_config,
+                    "created_by": current_user.id,
+                    "type": filetype,
+                    "name": filename,
+                    "location": location,
+                    "size": len(file_blob),
+                    "thumbnail": thumbnail(filename, file_blob)
+                }
+
+                if doc["type"] == FileType.VISUAL:
+                    doc["parser_id"] = ParserType.PICTURE.value
+                if doc["type"] == FileType.AURAL:
+                    doc["parser_id"] = ParserType.AUDIO.value
+                if re.search(r"\.(ppt|pptx|pages)$", filename):
+                    doc["parser_id"] = ParserType.PRESENTATION.value
+                if re.search(r"\.(eml)$", filename):
+                    doc["parser_id"] = ParserType.EMAIL.value
+                DocumentService.insert(db, doc)
+
+                cls.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
+                files_info.append(doc)  # 仅返回文档信息，不包含二进制数据
+            except Exception as e:
+                err.append(f"{filename}: {str(e)}")
+
+        return err, files_info

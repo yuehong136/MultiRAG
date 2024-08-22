@@ -96,57 +96,60 @@ async def upload(
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
-
-    root_folder = FileService.get_root_folder(db, user.id)
-    pf_id = root_folder['id']
-    FileService.init_knowledgebase_docs(db, pf_id, user.id)
-    kb_root_folder = FileService.get_kb_folder(db, user.id)
-    kb_folder = FileService.new_a_file_from_kb(db, kb.tenant_id, kb.name, kb_root_folder["id"])
-
-    err = []
-    uploaded_docs_json = []
+    file_contents = []
     for file in files:
-        try:
-            MAX_FILE_NUM_PER_USER = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
-            if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, kb.tenant_id):
-                raise RuntimeError("Exceed the maximum file number of a free user!")
-
-            filename = duplicate_name(DocumentService.query, db=db, name=file.filename, kb_id=kb.id)
-            filetype = filename_type(filename)
-            if filetype == FileType.OTHER.value:
-                raise RuntimeError("This type of file has not been supported yet!")
-
-            location = filename
-            while MINIO.obj_exist(kb_id, location):
-                location += "_"
-            blob = await file.read()
-            MINIO.put(kb_id, location, blob)
-            doc = {
-                "id": get_uuid(),
-                "kb_id": kb.id,
-                "parser_id": kb.parser_id,
-                "parser_config": kb.parser_config,
-                "created_by": user.id,
-                "type": filetype,
-                "name": filename,
-                "location": location,
-                "size": len(blob),
-                "thumbnail": thumbnail(filename, blob)
-            }
-            if doc["type"] == FileType.VISUAL:
-                doc["parser_id"] = ParserType.PICTURE.value
-            if re.search(r"\.(ppt|pptx|pages)$", filename):
-                doc["parser_id"] = ParserType.PRESENTATION.value
-            DocumentService.insert(db, doc)
-
-            FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
-            uploaded_docs_json.append(doc)
-
-        except Exception as e:
-            err.append(file.filename + ": " + str(e))
+        file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
+    err, files = FileService.upload_document(db, kb, file_contents, user)
+    # root_folder = FileService.get_root_folder(db, user.id)
+    # pf_id = root_folder['id']
+    # FileService.init_knowledgebase_docs(db, pf_id, user.id)
+    # kb_root_folder = FileService.get_kb_folder(db, user.id)
+    # kb_folder = FileService.new_a_file_from_kb(db, kb.tenant_id, kb.name, kb_root_folder["id"])
+    #
+    # err = []
+    # uploaded_docs_json = []
+    # for file in files:
+    #     try:
+    #         MAX_FILE_NUM_PER_USER = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
+    #         if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, kb.tenant_id):
+    #             raise RuntimeError("Exceed the maximum file number of a free user!")
+    #
+    #         filename = duplicate_name(DocumentService.query, db=db, name=file.filename, kb_id=kb.id)
+    #         filetype = filename_type(filename)
+    #         if filetype == FileType.OTHER.value:
+    #             raise RuntimeError("This type of file has not been supported yet!")
+    #
+    #         location = filename
+    #         while MINIO.obj_exist(kb_id, location):
+    #             location += "_"
+    #         blob = await file.read()
+    #         MINIO.put(kb_id, location, blob)
+    #         doc = {
+    #             "id": get_uuid(),
+    #             "kb_id": kb.id,
+    #             "parser_id": kb.parser_id,
+    #             "parser_config": kb.parser_config,
+    #             "created_by": user.id,
+    #             "type": filetype,
+    #             "name": filename,
+    #             "location": location,
+    #             "size": len(blob),
+    #             "thumbnail": thumbnail(filename, blob)
+    #         }
+    #         if doc["type"] == FileType.VISUAL:
+    #             doc["parser_id"] = ParserType.PICTURE.value
+    #         if re.search(r"\.(ppt|pptx|pages)$", filename):
+    #             doc["parser_id"] = ParserType.PRESENTATION.value
+    #         DocumentService.insert(db, doc)
+    #
+    #         FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
+    #         uploaded_docs_json.append(doc)
+    #
+    #     except Exception as e:
+    #         err.append(file.filename + ": " + str(e))
     if err:
         return construct_json_result(data=False, message="\n".join(err), code=RetCode.SERVER_ERROR)
-    return construct_json_result(data=uploaded_docs_json, code=RetCode.SUCCESS)
+    return construct_json_result(data=files, code=RetCode.SUCCESS)
 
 
 @router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页")
@@ -370,7 +373,8 @@ async def remove_document(
                                              code=RetCode.ARGUMENT_ERROR)
 
             f2d = File2DocumentService.get_by_document_id(db, doc_id)
-            FileService.filter_delete(db, [db_models.File.source_type == FileSource.KNOWLEDGEBASE, db_models.File.id == f2d[0].file_id])
+            FileService.filter_delete(db, [db_models.File.source_type == FileSource.KNOWLEDGEBASE,
+                                           db_models.File.id == f2d[0].file_id])
             File2DocumentService.delete_by_document_id(db, doc_id)
 
             MINIO.rm(b, n)
@@ -598,7 +602,6 @@ async def change_parser(
         return construct_error_response(e)
 
 
-
 @router.get("/image/{image_id}", summary="获取图片", response_description="成功获取图片")
 async def get_image(
         image_id: str,
@@ -624,3 +627,6 @@ async def get_image(
         return response
     except Exception as e:
         return construct_error_response(e)
+
+
+# todo ragflow的def upload_and_parse待补充
