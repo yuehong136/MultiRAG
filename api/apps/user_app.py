@@ -96,8 +96,9 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     email = request.username
     users = UserService.query(db, email=email)
     if not users:
-        return get_json_result(
-            data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg=f'This Email is not registered!')
+        return get_json_result(data=False,
+                               retcode=RetCode.AUTHENTICATION_ERROR,
+                               retmsg=f'Email: {email} is not registered!')
 
     password = request.password
     user = UserService.query_user(db, email, password)
@@ -116,8 +117,9 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Login error: {str(e)}")
     else:
-        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR,
-                               retmsg='Email and Password do not match!')
+        return get_json_result(data=False,
+                               retcode=RetCode.AUTHENTICATION_ERROR,
+                               retmsg='Email and password do not match!')
 
 @router.get("/github_callback", summary="GitHub 回调")
 async def github_callback(code: str, db: Session = Depends(get_db)):
@@ -135,11 +137,12 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
     - 失败时返回错误信息
     """
     import requests
-    res = requests.post(GITHUB_OAUTH["url"], data={
-        "client_id": GITHUB_OAUTH["client_id"],
-        "client_secret": GITHUB_OAUTH["secret_key"],
-        "code": code
-    }, headers={"Accept": "application/json"})
+    res = requests.post(GITHUB_OAUTH["url"],
+                        data={
+                            "client_id": GITHUB_OAUTH["client_id"],
+                            "client_secret": GITHUB_OAUTH["secret_key"],
+                            "code": code},
+                        headers={"Accept": "application/json"})
     res = res.json()
     if "error" in res:
         return HTTPException(status_code=400, detail=res["error_description"])
@@ -289,10 +292,10 @@ async def setting_user(request: Request, db: Session = Depends(get_db), user=Dep
         return get_json_result(data=True)
     except Exception as e:
         stat_logger.exception(e)
-        return HTTPException(status_code=500, detail='Update failure!')
+        return get_json_result(data=False, retmsg='Update failure!', retcode=RetCode.EXCEPTION_ERROR)
 
 @router.get("/info", summary="获取用户信息")
-async def user_info(user=Depends(manager)):
+async def user_profile(user=Depends(manager)):
     """
     获取用户信息
 
@@ -416,7 +419,7 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
     # Validate the email address
     if not re.match(r"^[\w\._-]+@([\w_-]+\.)+[\w-]{2,4}$", email_address):
         return get_json_result(data=False,
-                               retmsg=f'Invalid Email address: {email_address}!',
+                               retmsg=f'Invalid email address: {email_address}!',
                                retcode=RetCode.OPERATING_ERROR)
 
     # Check if the email address is already used
@@ -443,7 +446,7 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
         if not users:
             raise Exception(f'Fail to register {email_address}.')
         if len(users) > 1:
-            raise Exception(f'Same E-mail: {email_address} exists!')
+            raise Exception(f'Same email: {email_address} exists!')
         user = users[0]
         access_token = manager.create_access_token(data={"sub": user.email})
         return construct_response(data=user.to_dict(), auth=access_token, retmsg=f"{nickname}, welcome aboard!")
