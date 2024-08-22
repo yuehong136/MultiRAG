@@ -1,4 +1,4 @@
-# database.py
+# -*- coding: utf-8 -*-
 import os
 import sys
 import uuid
@@ -19,14 +19,15 @@ DATABASE_URL = (
     f"{database_config.get('dbname', 'postgres')}"
 )
 
-# 配置连接池大小和溢出
+
 engine = create_engine(
     DATABASE_URL,
-    pool_size=database_config.get('pool_size', 10),        # 连接池的大小，默认为10
-    max_overflow=database_config.get('max_overflow', 20),  # 超出连接池大小后允许的最大溢出连接数，默认为20
-    pool_timeout=database_config.get('pool_timeout', 30),  # 获取连接的超时时间，默认为30秒
-    pool_recycle=database_config.get('pool_recycle', 1800), # 连接的重置时间（以秒为单位），默认为1800秒（30分钟）
-    echo=False  # SQL语句的日志记录，便于调试
+    client_encoding='utf8',
+    pool_size=database_config.get('pool_size', 10),
+    max_overflow=database_config.get('max_overflow', 20),
+    pool_timeout=database_config.get('pool_timeout', 30),
+    pool_recycle=database_config.get('pool_recycle', 1800),
+    echo=False
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

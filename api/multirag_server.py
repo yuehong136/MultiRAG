@@ -14,6 +14,10 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
+# import pyfiglet
+# from rich.text import Text
+# from rich import print as rprint
+# from rich.panel import Panel
 from api.apps import app
 from api.db.database import SessionLocal
 from api.db.runtime_config import RuntimeConfig
@@ -45,26 +49,26 @@ def update_progress():
             if db:
                 db.close()
 
-if __name__ == '__main__':
-    # 打印启动信息
-#     print(r"""
-#     __  ___      ____  _    ____
-#    /  |/  /_  __/ / /_(_)  / __ \____ _____ _
-#   / /|_/ / / / / / __/ /  / /_/ / __ `/ __ `/
-#  / /  / / /_/ / / /_/ /  / _, _/ /_/ / /_/ /
-# /_/  /_/\__,_/_/\__/_/  /_/ |_|\__,_/\__, /
-#                                     /____/
-#
-#     """, flush=True)
-    print(r"""
-    __  ___            __   __     _             ____                   
-   /  |/  /  __  __   / /  / /_   (_)           / __ \   ____ _   ____ _
-  / /|_/ /  / / / /  / /  / __/  / /  ______   / /_/ /  / __ `/  / __ `/
- / /  / /  / /_/ /  / /  / /_   / /  /_____/  / _, _/  / /_/ /  / /_/ / 
-/_/  /_/   \__,_/  /_/   \__/  /_/           /_/ |_|   \__,_/   \__, /  
-                                                               /____/   
 
-        """, flush=True)
+if __name__ == '__main__':
+    print(r"""
+        __  ___            __   __     _             ____
+       /  |/  /  __  __   / /  / /_   (_)           / __ \   ____ _   ____ _
+      / /|_/ /  / / / /  / /  / __/  / /  ______   / /_/ /  / __ `/  / __ `/
+     / /  / /  / /_/ /  / /  / /_   / /  /_____/  / _, _/  / /_/ /  / /_/ /
+    /_/  /_/   \__,_/  /_/   \__/  /_/           /_/ |_|   \__,_/   \__, /
+                                                                   /____/
+
+            """, flush=True)
+
+    # ascii_art = pyfiglet.figlet_format("M u l t i - R a g", font="slant")
+    #
+    # project_name = Text(
+    #     ascii_art,
+    #     style="bold blue"
+    # )
+    # rprint(Panel(project_name, title="[bold cyan]Start[/bold cyan]",
+    #              subtitle="[italic yellow]Over[/italic yellow]", border_style="red", expand=False))
     stat_logger.info(
         f'project base: {utils.file_utils.get_project_base_directory()}'
     )
@@ -108,7 +112,8 @@ if __name__ == '__main__':
         for h in access_logger.handlers:
             uvicorn_logger.addHandler(h)  # 将access_logger的处理程序添加到uvicorn的访问日志记录器中
         uvicorn_logger.setLevel(access_logger.level)  # 设置日志级别
-        uvicorn.run("api.multirag_server:app", host=HOST, port=HTTP_PORT, log_level="info", reload=RuntimeConfig.DEBUG)  # 启动 uvicorn 服务器
+        uvicorn.run("api.multirag_server:app", host=HOST, port=HTTP_PORT, log_level="info",
+                    reload=RuntimeConfig.DEBUG)  # 启动 uvicorn 服务器
     except Exception:
         traceback.print_exc()
         os.kill(os.getpid(), signal.SIGKILL)  # 在异常情况下终止进程

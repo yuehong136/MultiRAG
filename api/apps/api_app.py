@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
 
-from api.db import FileType, ParserType, FileSource
+from api.db import FileType, LLMType, ParserType, FileSource
 from api.db.db_models import APIToken, API4Conversation, Task, File
 from api.db.services import duplicate_name
 from api.db.services.api_service import APITokenService, API4ConversationService
@@ -27,12 +27,15 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import queue_tasks, TaskService
 from api.db.services.user_service import UserTenantService
-from api.settings import RetCode, retrievaler  # , retrievaler
+from api.db.services.llm_service import TenantLLMService
+
+from api.settings import RetCode, retrievaler
 from api.utils import get_uuid, current_timestamp, datetime_format
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
 from itsdangerous import URLSafeTimedSerializer
 
 from api.utils.file_utils import filename_type, thumbnail
+from core.nlp import keyword_extraction
 from core.utils.minio_conn import MINIO
 from api.db.services.canvas_service import CanvasTemplateService, UserCanvasService
 from agent.canvas import Canvas
@@ -722,6 +725,17 @@ async def list_kb_docs(request: ListKbDocsRequest, db: Session = Depends(get_db)
         return server_error_response(e)
 
 
+@router.post('/infos', summary="获取文档信息", response_description="成功获取文档信息")
+def docinfos(doc_ids: list[str],db: Session = Depends(get_db), user=Depends(manager)):
+    docs = DocumentService.get_by_ids(db, doc_ids)
+    # 将每个文档对象转换为字典
+    docs_dicts = [doc.__dict__ for doc in docs]
+    # 移除 '_sa_instance_state'，这个是 SQLAlchemy 内部使用的属性
+    for doc_dict in docs_dicts:
+        doc_dict.pop('_sa_instance_state', None)
+    return get_json_result(data=docs_dicts)
+
+
 @router.delete('/document', summary="删除文档", response_description="成功删除文档")
 async def document_rm(request: DocumentRemoveRequest, db: Session = Depends(get_db)):
     token = request.headers.get('Authorization').split()[1]
@@ -868,7 +882,7 @@ async def completion_faq(request: CompletionFAQRequest, db: Session = Depends(ge
 
 
 @router.post('/retrieval', summary="完成FAQ对话", response_description="成功完成FAQ对话")
-def retrieval(kb_id, question, db: Session = Depends(get_db),):
+def retrieval(request, question, db: Session = Depends(get_db),):
     token = request.headers.get('Authorization').split()[1]
     objs = APIToken.query(token=token)
     if not objs:
@@ -876,7 +890,7 @@ def retrieval(kb_id, question, db: Session = Depends(get_db),):
             data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
 
     req = request.json
-    kb_id = req.get("kb_id")
+    kb_ids = req.get("kb_id",[])
     doc_ids = req.get("doc_ids", [])
     question = req.get("question")
     page = int(req.get("page", 1))
@@ -886,33 +900,31 @@ def retrieval(kb_id, question, db: Session = Depends(get_db),):
     top = int(req.get("top_k", 1024))
 
     try:
-        kb = KnowledgebaseService.get_by_id(kb_id)
-        if not kb:
-            return get_data_error_result(retmsg="Knowledgebase not found!")
+        kbs = KnowledgebaseService.get_by_ids(kb_ids)
+        embd_nms = list(set([kb.embd_id for kb in kbs]))
+        if len(embd_nms) != 1:
+            return get_json_result(
+                data=False, retmsg='Knowledge bases use different embedding models or does not exist."',
+                retcode=RetCode.AUTHENTICATION_ERROR)
 
         embd_mdl = TenantLLMService.model_instance(
-            kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
-
+            kbs[0].tenant_id, LLMType.EMBEDDING.value, llm_name=kbs[0].embd_id)
         rerank_mdl = None
         if req.get("rerank_id"):
             rerank_mdl = TenantLLMService.model_instance(
-                kb.tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
-
+                kbs[0].tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
         if req.get("keyword", False):
-            chat_mdl = TenantLLMService.model_instance(kb.tenant_id, LLMType.CHAT)
+            chat_mdl = TenantLLMService.model_instance(kbs[0].tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
-
-        ranks = retrievaler.retrieval(question, embd_mdl, kb.tenant_id, [kb_name], page, size,
+        ranks = retrievaler.retrieval(question, embd_mdl, kbs[0].tenant_id, kb_ids, page, size,
                                       similarity_threshold, vector_similarity_weight, top,
                                       doc_ids, rerank_mdl=rerank_mdl)
         for c in ranks["chunks"]:
             if "vector" in c:
                 del c["vector"]
-
         return get_json_result(data=ranks)
     except Exception as e:
         if str(e).find("not_found") > 0:
             return get_json_result(data=False, retmsg=f'No chunk found! Check the chunk status please!',
                                    retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
-

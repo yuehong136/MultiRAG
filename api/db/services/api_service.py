@@ -46,7 +46,7 @@ class API4ConversationService(CommonService):
             raise e
 
     @classmethod
-    def stats(cls, db: Session, tenant_id: str, from_date: datetime, to_date: datetime):
+    def stats(cls, db: Session, tenant_id: str, from_date: datetime, to_date: datetime, source=None):
         """
         统计指定时间段内特定租户的对话数据。
 
@@ -56,6 +56,7 @@ class API4ConversationService(CommonService):
         :param to_date: 结束日期
         :return: 包含每日统计信息的列表，每个元素是一个字典
         """
+        if len(to_date) == 10: to_date += " 23:59:59"
         try:
             # 构建查询语句，统计每天的对话数量（pv）、独立用户数量（uv）、代币总数（tokens）、总时长（duration）、平均轮次（round）、总点赞数（thumb_up）
             result = db.query(
@@ -68,7 +69,8 @@ class API4ConversationService(CommonService):
                 func.sum(cls.model.thumb_up).label('thumb_up')
             ).join(Dialog, (cls.model.dialog_id == Dialog.id) & (Dialog.tenant_id == tenant_id)).filter(
                 cls.model.create_date >= from_date,
-                cls.model.create_date <= to_date
+                cls.model.create_date <= to_date,
+                cls.model.source == source
             ).group_by(func.date_trunc('day', cls.model.create_date)).all()
 
             # 将查询结果转换为字典列表格式，方便后续处理和使用

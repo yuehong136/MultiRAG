@@ -139,6 +139,9 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None
     if "doc_ids" in messages[-1]:
         attachments = messages[-1]["doc_ids"]
+        for m in messages[:-1]:
+            if "doc_ids" in m:
+                attachments.extend(m["doc_ids"])
     # 初始化嵌入模型，用于将文本转换为向量表示
     if len(embd_nms) != 0:
         embd_mdl = LLMBundle(db, dialog.tenant_id, LLMType.EMBEDDING, embd_nms[0])

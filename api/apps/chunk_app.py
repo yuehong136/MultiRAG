@@ -109,11 +109,12 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
         doc = DocumentService.get_by_id(db, request.doc_id)
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
+        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         query = {
             "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords,
             "sort": True
         }
-        sres = retrievaler.search(query, search.index_name(tenant_id))
+        sres = retrievaler.search(query, search.index_name(tenant_id, kb.name))
         res = {"total": sres.total, "chunks": [], "doc": doc.to_dict()}
         for id in sres.ids:
             d = {

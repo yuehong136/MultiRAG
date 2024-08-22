@@ -6,6 +6,7 @@
 @date：2024/8/7 17:00
 @desc:
 """
+import os
 import sys
 import inspect
 from sqlalchemy.exc import OperationalError
@@ -15,7 +16,8 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from api.db.database import Base, BaseModel, engine
 from api.utils.log_utils import getLogger
-# from alembic import op
+from alembic import command
+from alembic.config import Config
 
 LOGGER = getLogger()
 
@@ -350,7 +352,30 @@ def init_database_tables():
     # 检查并创建 schema
     with engine.connect() as connection:
         connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+
         connection.execute(text("COMMIT"))  # 提交创建schema的事务
+
+    # # 构建相对路径到 alembic.ini 和迁移脚本目录
+    # current_dir = os.path.dirname(__file__)
+    # alembic_ini_path = os.path.join(current_dir, '..', '..', 'configs', 'alembic.ini')
+    # migrations_path = os.path.join(current_dir, '..', '..', 'configs', 'alembic')
+    #
+    # # 执行 Alembic 迁移
+    # alembic_cfg = Config(r"E:\Project\python\study\RAG\configs\alembic.ini")
+    # print("Generated SQLAlchemy URL:", str(engine.url))
+    # alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+    # alembic_cfg.set_main_option("script_location", r"E:\Project\python\study\RAG\configs\alembic")
+    #
+    # try:
+    #     LOGGER.info("Starting Alembic migration...")
+    #     command.upgrade(alembic_cfg, "head")
+    #     LOGGER.info("Alembic migration completed successfully.")
+    # except UnicodeDecodeError as e:
+    #     LOGGER.error(f"UnicodeDecodeError: {e}")
+    #     raise
+    # except Exception as e:
+    #     LOGGER.exception(f"Alembic migration failed: {e}")
+    #     raise
 
     # 获取现有表列表
     inspector = sa_inspect(engine)
@@ -375,52 +400,3 @@ def init_database_tables():
     if create_failed_list:
         LOGGER.error(f"Failed to create tables: {create_failed_list}")
         raise Exception(f"Failed to create tables: {create_failed_list}")
-
-
-# 添加新列、修改现有列的类型
-
-# def upgrade():
-#     # 向 'file' 表中添加 'source_type' 列
-#     op.add_column('file', Column('source_type', String(length=128), nullable=False, server_default="", doc="where dose this document come from"))
-#     op.create_index(op.f('ix_file_source_type'), 'file', ['source_type'], unique=False)
-#
-#     # 向 'tenant' 表中添加 'rerank_id' 列
-#     op.add_column('tenant', Column('rerank_id', String(length=128), nullable=False, server_default="BAAI/bge-reranker-v2-m3", doc="default rerank model ID"))
-#
-#     # 向 'dialog' 表中添加 'rerank_id' 列
-#     op.add_column('dialog', Column('rerank_id', String(length=128), nullable=False, server_default="", doc="default rerank model ID"))
-#
-#     # 向 'dialog' 表中添加 'top_k' 列
-#     op.add_column('dialog', Column('top_k', Integer(), nullable=False, server_default="1024"))
-#
-#     # 修改 'tenant_llm' 表中 'api_key' 列的类型
-#     op.alter_column('tenant_llm', 'api_key', type_=String(length=1024), nullable=True)
-#     op.create_index(op.f('ix_tenant_llm_api_key'), 'tenant_llm', ['api_key'], unique=False)
-#
-#     # 向 'api_token' 表中添加 'source' 列
-#     op.add_column('api_token', Column('source', String(length=16), nullable=True, doc="none|agent|dialog"))
-#     op.create_index(op.f('ix_api_token_source'), 'api_token', ['source'], unique=False)
-#
-#     # 向 'api_4_conversation' 表中添加 'source' 列
-#     op.add_column('api_4_conversation', Column('source', String(length=16), nullable=True, doc="none|agent|dialog"))
-#     op.create_index(op.f('ix_api_4_conversation_source'), 'api_4_conversation', ['source'], unique=False)
-#
-#
-# def downgrade():
-#     # 撤销添加和修改的列
-#     op.drop_index(op.f('ix_api_4_conversation_source'), table_name='api_4_conversation')
-#     op.drop_column('api_4_conversation', 'source')
-#
-#     op.drop_index(op.f('ix_api_token_source'), table_name='api_token')
-#     op.drop_column('api_token', 'source')
-#
-#     op.drop_index(op.f('ix_tenant_llm_api_key'), table_name='tenant_llm')
-#     op.alter_column('tenant_llm', 'api_key', type_=String(length=255), nullable=False)  # 恢复原始类型和限制
-#
-#     op.drop_column('dialog', 'top_k')
-#     op.drop_column('dialog', 'rerank_id')
-#
-#     op.drop_column('tenant', 'rerank_id')
-#
-#     op.drop_index(op.f('ix_file_source_type'), table_name='file')
-#     op.drop_column('file', 'source_type')

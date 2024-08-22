@@ -116,7 +116,7 @@ def init_llm_factory(db: Session):
         except Exception as e:
             # print(f"Error saving LLM factory {factory_llm_info['name']}: {e}")
             pass
-
+        LLMService.filter_delete(db, [LLM.fid == factory_llm_info["name"]])
         for llm_info in llm_infos:
             llm_info["fid"] = factory_llm_info["name"]
             # print(llm_info)
@@ -127,6 +127,7 @@ def init_llm_factory(db: Session):
 
     LLMFactoriesService.filter_delete(db, [LLMFactories.name == "Local"])
     LLMService.filter_delete(db, [LLM.fid == "Local"])
+    LLMService.filter_delete(db, [LLM.llm_name == "qwen-vl-max"])
     LLMService.filter_delete(db, [LLM.fid == "Moonshot", LLM.llm_name == "flag-embedding"])
     TenantLLMService.filter_delete(db, [TenantLLM.llm_factory == "Moonshot", TenantLLM.llm_name == "flag-embedding"])
     LLMFactoriesService.filter_delete(db, [LLMFactories.name == "QAnything"])

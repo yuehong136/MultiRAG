@@ -9,6 +9,8 @@
 import os
 import pathlib
 import re
+from io import BytesIO
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request
 from sqlalchemy.orm import Session
@@ -56,7 +58,6 @@ class RenameRequest(BaseModel):
 class MoveRequest(BaseModel):
     src_file_ids: List[str] = Field(..., description="源文件ID列表")
     dest_file_id: str = Field(..., description="目标文件夹ID")
-
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
@@ -181,7 +182,8 @@ async def create(
 
     try:
         if not FileService.is_parent_folder_exist(db, pf_id):
-            return construct_json_result(data=False, retmsg="Parent Folder Doesn't Exist!", retcode=RetCode.OPERATING_ERROR)
+            return construct_json_result(data=False, retmsg="Parent Folder Doesn't Exist!",
+                                         retcode=RetCode.OPERATING_ERROR)
         if FileService.query(db, name=req["name"], parent_id=pf_id):
             return get_data_error_result(retmsg="Duplicated folder name in the same folder.")
 
@@ -360,7 +362,7 @@ async def rm(
     返回:
     - JSON: 删除结果的JSON响应。
     """
-    req = request_body.dict()
+    req = request_body.model_dump()
     file_ids = req["file_ids"]
     try:
         for file_id in file_ids:
@@ -420,13 +422,14 @@ async def rename(
     返回:
     - JSON: 重命名结果的JSON响应。
     """
-    req = request_body.dict()
+    req = request_body.model_dump()
     try:
         file = FileService.get_by_id(db, req["file_id"])
         if not file:
             return get_data_error_result(retmsg="File not found!")
         if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
-            return construct_json_result(data=False, retmsg="The extension of file can't be changed", retcode=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, retmsg="The extension of file can't be changed",
+                                         retcode=RetCode.ARGUMENT_ERROR)
         for f in FileService.query(db, name=req["name"], pf_id=file.parent_id):
             if f.name == req["name"]:
                 return get_data_error_result(retmsg="Duplicated file name in the same folder.")
@@ -466,7 +469,12 @@ async def get_file(
         if not file:
             return get_data_error_result(retmsg="Document not found!")
         b, n = File2DocumentService.get_minio_address(db, file_id=file_id)
-        file_stream = MINIO.get(b, n)
+        file_content = MINIO.get(b, n)
+        if not file_content:
+            raise HTTPException(status_code=404, detail="File not found in storage")
+
+        # 将文件内容包装成 BytesIO 对象
+        file_stream = BytesIO(file_content)
         ext = re.search(r"\.([^.]+)$", file.name)
         media_type = "application/octet-stream"
         if ext:
@@ -474,12 +482,13 @@ async def get_file(
                 media_type = f'image/{ext.group(1)}'
             else:
                 media_type = f'application/{ext.group(1)}'
+        encoded_filename = quote(file.name)
+
         response = StreamingResponse(file_stream, media_type=media_type)
-        response.headers["Content-Disposition"] = f"attachment; filename={file.name}"
+        response.headers["Content-Disposition"] = f"attachment; filename={encoded_filename}"
         return response
     except Exception as e:
         return construct_error_response(e)
-
 
 
 @router.post("/mv", summary="移动文件或文件夹", response_description="成功移动文件或文件夹")

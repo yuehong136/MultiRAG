@@ -213,6 +213,8 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
         if m["role"] == "assistant" and not msg:
             continue
         msg.append({"role": m["role"], "content": m["content"]})
+        if "doc_ids" in m:
+            msg[-1]["doc_ids"] = m["doc_ids"]
 
     if not msg:
         return get_data_error_result(retmsg="No valid messages found!")
