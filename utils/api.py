@@ -158,6 +158,8 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
     if model.startswith("Doubao"):
         model = 'ep-20240623093120-66vmh'
         gen_conf = gen_conf_default
+    elif model.startswith("gpt"):
+        gen_conf = gen_conf_default
     elif model.startswith("ERNIE"):
         gen_conf = gen_conf_ernie
     else:
