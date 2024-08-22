@@ -167,7 +167,7 @@ def send_file_in_mem(data, filename):
     })
 
 
-def cors_response(retcode=RetCode.SUCCESS, retmsg='success', data=None, auth=None):
+def construct_response(retcode=RetCode.SUCCESS, retmsg='success', data=None, auth=None):
     result_dict = {"retcode": retcode, "retmsg": retmsg, "data": data}
     response_dict = {key: value for key, value in result_dict.items() if value is not None or key == "retcode"}
     response = JSONResponse(content=jsonable_encoder(response_dict))
