@@ -30,7 +30,7 @@ from api.db import UserTenantRole, LLMType, FileType, StatusEnum, TaskStatus
 from api.utils import get_uuid, get_format_time, download_img, current_timestamp, datetime_format
 from api.settings import RetCode, GITHUB_OAUTH, FEISHU_OAUTH, CHAT_MDL, EMBEDDING_MDL, ASR_MDL, IMAGE2TEXT_MDL, PARSERS, \
     API_KEY, LLM_FACTORY, LLM_BASE_URL, RERANK_MDL, stat_logger
-from api.utils.api_utils import get_json_result, server_error_response, validate_request, cors_response
+from api.utils.api_utils import get_json_result, server_error_response, validate_request, construct_response
 
 router = APIRouter()
 
@@ -111,7 +111,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             db.commit()
             msg = "Welcome back!"
             access_token = manager.create_access_token(data={"sub": email})
-            return cors_response(data=response_data, auth=access_token, retmsg=msg)
+            return construct_response(data=response_data, auth=access_token, retmsg=msg)
         except Exception as e:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Login error: {str(e)}")
@@ -234,7 +234,7 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
     return {"auth": access_token}
 
 @router.get("/logout", summary="退出登录")
-async def log_out(user=Depends(manager)):
+async def log_out(db: Session = Depends(get_db), user=Depends(manager)):
     """
     退出登录
 
@@ -246,9 +246,14 @@ async def log_out(user=Depends(manager)):
     返回:
     - 成功时返回成功退出的JSON结果
     """
-    user.access_token = ""
-    user.save()
-    return get_json_result(data=True)
+    try:
+        user.access_token = ""
+        db.add(user)
+        db.commit()
+        return get_json_result(data=True)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 @router.post("/setting", summary="设置用户信息")
 async def setting_user(request: Request, db: Session = Depends(get_db), user=Depends(manager)):
@@ -421,10 +426,12 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
             retmsg=f'Email: {email_address} has already registered!',
             retcode=RetCode.OPERATING_ERROR)
 
+    # Construct user info data
+    nickname = req["nickname"]
     user_dict = {
         "access_token": get_uuid(),
         "email": email_address,
-        "nickname": req["nickname"],
+        "nickname": nickname,
         "password": req["password"],
         "last_login_time": get_format_time(),
         "is_superuser": False,
@@ -434,14 +441,19 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
     try:
         users = user_register(db, user_id, user_dict)
         if not users:
-            raise HTTPException(status_code=500, detail="Register user failure.")
+            raise Exception(f'Fail to register {email_address}.')
+        if len(users) > 1:
+            raise Exception(f'Same E-mail: {email_address} exists!')
         user = users[0]
         access_token = manager.create_access_token(data={"sub": user.email})
-        return cors_response(data=user.to_dict(), auth=access_token, retmsg="Welcome aboard!")
+        return construct_response(data=user.to_dict(), auth=access_token, retmsg=f"{nickname}, welcome aboard!")
     except Exception as e:
         rollback_user_registration(db, user_id)
         stat_logger.exception(e)
-        raise HTTPException(status_code=500, detail=f'User registration failure: {str(e)}')
+        return get_json_result(data=False,
+                               retmsg=f'User registration failure, error: {str(e)}',
+                               retcode=RetCode.EXCEPTION_ERROR)
+
 
 @router.get("/tenant_info", summary="获取租户信息")
 async def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
