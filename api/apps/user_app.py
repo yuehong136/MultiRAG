@@ -407,15 +407,23 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
     - 失败时返回错误信息
     """
     req = request.model_dump()
-    if UserService.query(db, email=req["email"]):
+    email_address = req["email"]
+    # Validate the email address
+    if not re.match(r"^[\w\._-]+@([\w_-]+\.)+[\w-]{2,4}$", email_address):
+        return get_json_result(data=False,
+                               retmsg=f'Invalid Email address: {email_address}!',
+                               retcode=RetCode.OPERATING_ERROR)
+
+    # Check if the email address is already used
+    if UserService.query(email=email_address):
         return get_json_result(
-            data=False, retmsg=f'Email: {req["email"]} has already registered!', retcode=RetCode.OPERATING_ERROR)
-    if not re.match(r"^[\w\._-]+@([\w_-]+\.)+[\w-]{2,4}$", req["email"]):
-        return get_json_result(data=False, retmsg=f'Invalid e-mail: {req["email"]}!', retcode=RetCode.OPERATING_ERROR)
+            data=False,
+            retmsg=f'Email: {email_address} has already registered!',
+            retcode=RetCode.OPERATING_ERROR)
 
     user_dict = {
         "access_token": get_uuid(),
-        "email": req["email"],
+        "email": email_address,
         "nickname": req["nickname"],
         "password": req["password"],
         "last_login_time": get_format_time(),
