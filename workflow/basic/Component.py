@@ -20,7 +20,8 @@ class Component(Node[C]):
         super().__init__(component_parameter, node_id)
 
     @abstractmethod
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None) -> Optional[dict]:
+    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None, **kwargs) -> Optional[
+        dict]:
         pass
 
     @abstractmethod

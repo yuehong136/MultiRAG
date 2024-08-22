@@ -1,12 +1,3 @@
-class DefaultDict(dict):
-    def __missing__(self, key):
-        return '{' + key + '}'
-
-
-def safe_format(template, **kwargs):
-    return template.format_map(DefaultDict(kwargs))
-
-
 import re
 
 

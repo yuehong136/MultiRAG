@@ -5,8 +5,10 @@ from workflow.WorkflowEngine import WorkflowEngine
 from workflow.basic.Edge import Edge
 from workflow.basic.EndNode import EndNode
 from workflow.basic.Node import Node
+from workflow.components.ExcelGeneratorComponent import ExcelGeneratorComponent
 from workflow.components.FileReaderComponent import FileReaderComponent
 from workflow.components.LLMComponent import LLMComponent
+from workflow.components.MinIOSelectionComponent import MinIOSelectionComponent
 from workflow.components.UserFileSelectionComponent import UserFileSelectionComponent, UserFileSelectionComponentParam
 
 class_map = {
@@ -50,6 +52,12 @@ class WorkflowParser:
             elif name == "EndNode":
                 endNode = EndNode.decode(node_json)
                 node_list.append(endNode)
+            elif name == "MinIOSelectionComponent":
+                minIOSelectionComponent = MinIOSelectionComponent.decode(node_json)
+                node_list.append(minIOSelectionComponent)
+            elif name == "ExcelGeneratorComponent":
+                excelGeneratorComponent = ExcelGeneratorComponent.decode(node_json)
+                node_list.append(excelGeneratorComponent)
             else:
                 raise ValueError(f"Unknown component name: {name}")
 

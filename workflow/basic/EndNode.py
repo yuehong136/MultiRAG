@@ -2,11 +2,9 @@ from dataclasses import dataclass
 from typing import Union, Optional
 import json
 
-from jsonpath_ng.ext import parse
-
 from workflow.WorkflowEngine import WorkflowContext
 from workflow.basic.Node import Node, NodeParameter, ValueTypeOfIODefinition
-from workflow.utils import safe_format, safe_format_double_braces
+from workflow.utils.utils import safe_format_double_braces
 
 
 @dataclass
@@ -27,7 +25,7 @@ class EndNode(Node[EndNodeParam]):
         self.name = "EndNode"
         super().__init__(node_parameter, "900001")
 
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None) -> dict:
+    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None, **kwargs) -> dict:
         content = self.node_parameter.content
         parameter_dict = {}
         for output_definition in self.node_parameter.output_definition_list:
@@ -35,10 +33,11 @@ class EndNode(Node[EndNodeParam]):
             if output_definition['value_type'] == ValueTypeOfIODefinition.REF.value:
                 ref_node_id = output_definition['content'][0]
                 ref_name = output_definition['content'][1]
-                ref_node_data = context.get(ref_node_id).output_data
-                ref_node_data_json_str = json.dumps(ref_node_data, ensure_ascii=False)
-                ref_value = parse('$.' + ref_name).find(json.loads(ref_node_data_json_str))
-                parameter_dict[parameter_name] = ref_value[0].value
+                ref_node_data = context.get(str(ref_node_id)).output_data[ref_name]
+                if type(ref_node_data) == str:
+                    parameter_dict[parameter_name] = ref_node_data
+                else:
+                    parameter_dict[parameter_name] = ref_node_data[output_definition['content'][2]]
             elif output_definition.value_type == ValueTypeOfIODefinition.LITERAL:
                 parameter_dict[parameter_name] = output_definition.content
         return {"output": safe_format_double_braces(content, **parameter_dict)}

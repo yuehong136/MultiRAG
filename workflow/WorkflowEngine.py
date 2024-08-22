@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
 
-from fastapi import UploadFile
+from fastapi import UploadFile, Depends
+from requests import Session
 
+from api.apps import manager
+from api.db.database import get_db
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Node import Node, ValueTypeOfIODefinition, RefContentOfInputDefinition
 from workflow.basic.StartNode import StartNode, StartNodeParam, StartNodeInputDefinition
@@ -32,14 +35,16 @@ class WorkflowEngine:
     def add_edge(self, source_id: str, target_id: str):
         self.edges.append((source_id, target_id))
 
-    async def execute(self, input_data: Optional[dict] = None) -> Dict[str, Any]:
+    async def execute(self, input_data: Optional[dict] = None, db: Session = Depends(get_db), user=Depends(manager)) -> \
+            Dict[str, Any]:
         self.context.clear()  # 清除之前可能存在的上下文数据
         for i in range(len(self.node_list)):
             node = self.node_list[i]
 
-            output_data = await node.process(input_data=input_data, context=self.context)
+            output_data = await node.process(input_data=input_data, context=self.context, db=db,
+                                             user=user)
             if output_data is not None:
-                self.context.set(node.node_id, NodeIOData(output_data=output_data))
+                self.context.set(str(node.node_id), NodeIOData(output_data=output_data))
 
         return {"node_list": self.node_list, "context": self.context}
 

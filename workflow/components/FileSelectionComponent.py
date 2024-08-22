@@ -21,10 +21,10 @@ class FileSelectionComponent(Component[FileSelectionComponentParam]):
         self.component_parameter: FileSelectionComponentParam = component_parameter
         super().__init__(component_parameter, node_id)
 
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None) -> dict:
+    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None, **kwargs) -> dict:
         output_variable_name = self.component_parameter.output_definition.variable_name
         file = input_data.get(output_variable_name)
-        context.set(self.node_id, NodeIOData(output_data={
+        context.set(str(self.node_id), NodeIOData(output_data={
             output_variable_name: file}))
 
     def validate_inputs(self):

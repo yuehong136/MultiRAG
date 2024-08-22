@@ -26,7 +26,7 @@ class StartNode(Node[StartNodeParam]):
         self.output_definition_list = node_parameter.input_definition_list
         super().__init__(node_parameter, "100001")
 
-    def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None) -> dict:
+    def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None, **kwargs) -> dict:
         return input_data
 
     def validate_inputs(self):
