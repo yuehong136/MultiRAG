@@ -415,7 +415,7 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
                                retcode=RetCode.OPERATING_ERROR)
 
     # Check if the email address is already used
-    if UserService.query(email=email_address):
+    if UserService.query(db, email=email_address):
         return get_json_result(
             data=False,
             retmsg=f'Email: {email_address} has already registered!',
