@@ -30,7 +30,8 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, queue_tasks
 from api.settings import RetCode, stat_logger
-from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str
+from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
+    get_json_result
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import html2pdf, is_valid_url
@@ -266,6 +267,17 @@ async def list_docs(
         return construct_json_result(data={"total": tol, "docs": docs})
     except Exception as e:
         return construct_error_response(e)
+
+
+@router.post('/infos', summary="获取文档信息", response_description="成功获取文档信息")
+def docinfos(doc_ids: list[str],db: Session = Depends(get_db), user=Depends(manager)):
+    docs = DocumentService.get_by_ids(db, doc_ids)
+    # 将每个文档对象转换为字典
+    docs_dicts = [doc.__dict__ for doc in docs]
+    # 移除 '_sa_instance_state'，这个是 SQLAlchemy 内部使用的属性
+    for doc_dict in docs_dicts:
+        doc_dict.pop('_sa_instance_state', None)
+    return get_json_result(data=docs_dicts)
 
 
 @router.get("/thumbnails", summary="获取文档缩略图", response_description="成功获取文档缩略图")
@@ -627,6 +639,5 @@ async def get_image(
         return response
     except Exception as e:
         return construct_error_response(e)
-
 
 # todo ragflow的def upload_and_parse待补充
