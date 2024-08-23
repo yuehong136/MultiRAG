@@ -8,6 +8,7 @@ import re
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 from pymilvus import MilvusException, DataType
@@ -546,11 +547,28 @@ def main():
                     r["id"], tk_count, len(cks), timer() - st))
 
 
+def report_status():
+    id = "0" if len(sys.argv) < 2 else sys.argv[1]
+    while True:
+        try:
+            obj = REDIS_CONN.get("TASKEXE")
+            obj = json.load(obj)
+            if id not in obj: obj[id] = []
+            obj[id].append(timer()*1000)
+            obj[id] = obj[id][:-60]
+            REDIS_CONN.set_obj("TASKEXE", obj)
+        except Exception as e:
+            print("[Exception]:", str(e))
+        time.sleep(60)
+
 if __name__ == "__main__":
     sqlalchemy_logger = logging.getLogger('sqlalchemy')
     sqlalchemy_logger.propagate = False
     sqlalchemy_logger.addHandler(database_logger.handlers[0])
     sqlalchemy_logger.setLevel(database_logger.level)
+
+    exe = ThreadPoolExecutor(max_workers=1)
+    exe.submit(report_status)
 
     while True:
         main()
