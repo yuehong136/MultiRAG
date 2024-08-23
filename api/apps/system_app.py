@@ -6,6 +6,8 @@
 @date：2024/7/9 9:00
 @desc:
 """
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from fastapi_login import LoginManager
@@ -58,5 +60,21 @@ async def status(db: Session = Depends(get_db)):
         res["redis"] = {"status": "green", "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
     except Exception as e:
         res["redis"] = {"status": "red", "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+
+    try:
+        obj = json.loads(REDIS_CONN.get("TASKEXE"))
+        color = "green"
+        for id in obj.keys():
+            arr = obj[id]
+            if len(arr) == 1:
+                obj[id] = [0]
+            else:
+                obj[id] = [arr[i+1]-arr[i] for i in range(len(arr)-1)]
+            elapsed = max(obj[id])
+            if elapsed > 50: color = "yellow"
+            if elapsed > 120: color = "red"
+        res["task_executor"] = {"status": color, "elapsed": obj}
+    except Exception as e:
+        res["task_executor"] = {"status": "red", "error": str(e)}
 
     return get_json_result(data=res)
