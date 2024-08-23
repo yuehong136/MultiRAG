@@ -57,7 +57,8 @@ ChatModel = {
     "VolcEngine": DoubaoChat,
     # "BaiChuan": BaiChuanChat,
     # "MiniMax": MiniMaxChat,
-    # "Mistral": MistralChat
+    # "Mistral": MistralChat,
+    "Doubao": DoubaoChat
 }
 
 RerankModel = {

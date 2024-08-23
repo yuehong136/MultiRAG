@@ -1,6 +1,20 @@
 {
     "factory_llm_infos": [
         {
+            "name": "Doubao",
+            "logo": "",
+            "tags": "LLM",
+            "status": "1",
+            "llm": [
+                {
+                    "llm_name": "Doubao-pro-32k",
+                    "tags": "LLM,CHAT,32K",
+                    "max_tokens": 32768,
+                    "mdl_type": "chat"
+                }
+            ]
+        },
+        {
             "name": "OpenAI",
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,SPEECH2TEXT,MODERATION",

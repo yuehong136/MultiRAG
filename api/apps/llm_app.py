@@ -281,7 +281,7 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     if llm["mdl_type"] == LLMType.EMBEDDING.value:
         # todo api_key过滤特定厂商问题未根本解决，后续优化
         mdl = EmbeddingModel[factory](
-            key=llm['api_key'] if factory in ["VolcEngine", "Bedrock", "OpenAI-API-Compatible", "ZHIPU-AI", "Replicate"] else None,
+            key=llm['api_key'] if factory in ["VolcEngine", "Bedrock", "OpenAI-API-Compatible", "ZHIPU-AI", "Replicate", "Doubao"] else None,
             model_name=llm["llm_name"],
             base_url=llm["api_base"])
         try:
@@ -293,7 +293,7 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     elif llm["mdl_type"] == LLMType.CHAT.value:
         mdl = ChatModel[factory](
             # key=llm['api_key'],
-            key=llm['api_key'] if factory in ["VolcEngine", "Bedrock", "OpenAI-API-Compatible", "ZHIPU-AI", "Replicate"] else None,
+            key=llm['api_key'] if factory in ["VolcEngine", "Bedrock", "OpenAI-API-Compatible", "ZHIPU-AI", "Replicate", "Doubao"] else None,
             model_name=llm["llm_name"],
             base_url=llm["api_base"]
         )
