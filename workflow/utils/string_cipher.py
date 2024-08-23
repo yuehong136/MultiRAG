@@ -21,11 +21,11 @@ def decrypt(encrypted_text, key):
     return result.decode('utf-8')
 
 # 测试代码
-original_text = "Hello, World"
-key = "DATAV-SK-666"
-
-encrypted_text = encrypt(original_text, key)
-print(f"Encrypted: {encrypted_text}")
-
-decrypted_text = decrypt(encrypted_text, key)
-print(f"Decrypted: {decrypted_text}")
+# original_text = "Hello, World"
+# key = "DATAV-SK-666"
+#
+# encrypted_text = encrypt(original_text, key)
+# print(f"Encrypted: {encrypted_text}")
+#
+# decrypted_text = decrypt(encrypted_text, key)
+# print(f"Decrypted: {decrypted_text}")

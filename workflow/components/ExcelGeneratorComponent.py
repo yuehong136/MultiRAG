@@ -74,6 +74,7 @@ class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
         random_file_name = str(uuid.uuid4())
         complete_file_name = random_file_name + ".xlsx"
         excel_file = create_excel_in_memory(headers, data, filename=complete_file_name)
+        # ExcelGeneratorComponent.create_excel(headers, data, "/Users/naimehao/PycharmProjects/multrag/workflow/temp/"+complete_file_name)
         # 上传到MinIO
         minio_operator = MinioOperator()
         minio_operator.create_bucket(bucket_name=settings.MINIO["workflow_bucket"])
