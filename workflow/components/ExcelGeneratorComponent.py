@@ -78,9 +78,12 @@ class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
         # 上传到MinIO
         minio_operator = MinioOperator()
         minio_operator.create_bucket(bucket_name=settings.MINIO["workflow_bucket"])
-        minio_operator.upload_file_from_memory(bucket_name=settings.MINIO["workflow_bucket"],
-                                               object_name=complete_file_name,
-                                               file_data=excel_file[1])
+        if excel_file[1] is not None:
+            minio_operator.upload_file_from_memory(bucket_name=settings.MINIO["workflow_bucket"],
+                                                   object_name=complete_file_name,
+                                                   file_data=excel_file[1])
+        else:
+            raise Exception("无法生成Excel文件，请检查输入数据是否正确")
         file_info = {
             "bucket_name": settings.MINIO["workflow_bucket"],
             "object_name": complete_file_name

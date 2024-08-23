@@ -58,7 +58,7 @@ class MinioOperator:
             return bucket_name, object_name
         except Exception as e:
             print(f"上传文件时发生错误: {e}")
-            raise type(e)(f"无法生成报告，请检查选择的文件是否符合规范") from e
+            raise type(e)(f"上传文件到MinIO时发生错误") from e
 
     def download_file(self, bucket_name, object_name, file_path):
         try:
