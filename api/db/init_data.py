@@ -5,6 +5,8 @@ import os
 import time
 import uuid
 from copy import deepcopy
+
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from api.db import LLMType, UserTenantRole
 from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM
@@ -175,8 +177,15 @@ def add_graph_templates(db: Session):
             cnvs["id"] = str(cnvs["id"])
 
             # 在插入前检查记录是否已存在
-            existing_template = CanvasTemplateService.get_by_id(db, cnvs["id"])
-
+            existing_template = None
+            try:
+                existing_template = CanvasTemplateService.get_by_id(db, cnvs["id"])
+            except HTTPException as e:
+                if e.status_code == 404:
+                    # 记录不存在，继续执行插入逻辑
+                    print(f"Template {cnvs['id']} not found, will insert.")
+                else:
+                    raise  # 其他异常重新抛出
             if existing_template:
                 # 如果记录存在，则更新
                 try:
