@@ -40,8 +40,10 @@ class MinIOSelectionComponent(Component[MinIOSelectionComponentParam]):
             file_obj = {}
             file_name = file_info['name']
             file_obj['file_name'] = file_name
-            if file_name.endswith(".txt") or file_name.endswith(".docx") or file_name.endswith(
-                    ".pdf") or file_name.endswith(".doc"):
+            if (file_name.endswith(".txt") or
+                    file_name.endswith(".docx") or
+                    file_name.endswith(".pdf")):
+                    # file_name.endswith(".doc")):
                 file = minio_operator.download_to_memory(bucket_name=bucket_name, object_name=file_name)
                 file_obj['file_content'] = file
                 file_list.append(file_obj)
