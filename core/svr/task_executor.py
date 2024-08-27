@@ -552,11 +552,12 @@ def report_status():
     while True:
         try:
             obj = REDIS_CONN.get("TASKEXE")
-            obj = json.load(obj)
+            if not obj: obj = {}
+            else: obj = json.load(obj)
             if id not in obj: obj[id] = []
             obj[id].append(timer()*1000)
-            obj[id] = obj[id][:-60]
-            REDIS_CONN.set_obj("TASKEXE", obj)
+            obj[id] = obj[id][-60:]
+            REDIS_CONN.set_obj("TASKEXE", obj, 60*2)
         except Exception as e:
             print("[Exception]:", str(e))
         time.sleep(60)
@@ -567,8 +568,8 @@ if __name__ == "__main__":
     sqlalchemy_logger.addHandler(database_logger.handlers[0])
     sqlalchemy_logger.setLevel(database_logger.level)
 
-    exe = ThreadPoolExecutor(max_workers=1)
-    exe.submit(report_status)
+    # exe = ThreadPoolExecutor(max_workers=1)
+    # exe.submit(report_status)
 
     while True:
         main()
