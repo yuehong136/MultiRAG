@@ -73,8 +73,8 @@ class SetTenantInfoRequest(BaseModel):
     rerank_id: Optional[str] = None
     """重新排序模型的ID。"""
 
-    parser_ids: Optional[str] = None
-    """解析器的ID。"""
+    tts_id: Optional[str] = None
+    """文本转语音模型的ID。"""
 
 @router.post("/login", summary="登录")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
@@ -494,7 +494,7 @@ async def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), 
         - asr_id: Optional[str] 语音识别模型的ID
         - img2txt_id: Optional[str] 图像转文本模型的ID
         - rerank_id: Optional[str] 重新排序模型的ID
-        - parser_ids: Optional[str] 解析器的ID
+        - tts_id: Optional[str] 文本转语音模型的ID
     - user: 当前用户对象
     - db: Session 数据库会话对象
 
