@@ -375,15 +375,17 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db)):
             continue
         if m["role"] == "assistant" and not msg:
             continue
-        msg.append({"role": m["role"], "content": m["content"]})
+        msg.append(m)
+    if not msg[-1].get("id"): msg[-1]["id"] = get_uuid()
+    message_id = msg[-1]["id"]
 
     def fillin_conv(ans):
-        nonlocal conv
+        nonlocal conv, message_id
         if not conv.reference:
             conv.reference.append(ans["reference"])
         else:
             conv.reference[-1] = ans["reference"]
-        conv.message[-1] = {"role": "assistant", "content": ans["answer"]}
+        conv.message[-1] = {"role": "assistant", "content": ans["answer"], "id": message_id}
 
     def rename_field(ans):
         reference = ans['reference']
@@ -398,8 +400,8 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db)):
         if conv.source == "agent":
             stream = req.get("stream", True)
             conv.message.append(msg[-1])
-            e, cvs = UserCanvasService.get_by_id(conv.dialog_id)
-            if not e:
+            cvs = UserCanvasService.get_by_id(db, conv.dialog_id)
+            if not cvs:
                 return server_error_response("canvas not found.")
             del req["conversation_id"]
             del req["messages"]
@@ -409,7 +411,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db)):
 
             if not conv.reference:
                 conv.reference = []
-            conv.message.append({"role": "assistant", "content": ""})
+            conv.message.append({"role": "assistant", "content": "", "id": message_id})
             conv.reference.append({"chunks": [], "doc_aggs": []})
 
             final_ans = {"reference": [], "content": ""}
@@ -436,7 +438,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db)):
                             yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans},
                                                        ensure_ascii=False) + "\n\n"
 
-                        canvas.messages.append({"role": "assistant", "content": final_ans["content"]})
+                        canvas.messages.append({"role": "assistant", "content": final_ans["content"], "id": message_id})
                         if final_ans.get("reference"):
                             canvas.reference.append(final_ans["reference"])
                         cvs.dsl = json.loads(str(canvas))
@@ -455,7 +457,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db)):
                 return resp
 
             final_ans["content"] = "\n".join(answer["content"]) if "content" in answer else ""
-            canvas.messages.append({"role": "assistant", "content": final_ans["content"]})
+            canvas.messages.append({"role": "assistant", "content": final_ans["content"], "id": message_id})
             if final_ans.get("reference"):
                 canvas.reference.append(final_ans["reference"])
             cvs.dsl = json.loads(str(canvas))
@@ -476,7 +478,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db)):
 
         if not conv.reference:
             conv.reference = []
-        conv.message.append({"role": "assistant", "content": ""})
+        conv.message.append({"role": "assistant", "content": "", "id": message_id})
         conv.reference.append({"chunks": [], "doc_aggs": []})
 
         def stream():

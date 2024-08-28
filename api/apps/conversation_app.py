@@ -20,6 +20,7 @@ from api.utils.api_utils import get_json_result
 from api.db.database import get_db
 from api.apps import manager
 
+
 class SetConversationRequest(BaseModel):
     conversation_id: Optional[str] = None
     """会话的唯一标识符，如果为空则表示创建新会话。"""
@@ -31,6 +32,7 @@ class SetConversationRequest(BaseModel):
     """会话的名称。"""
 
     # 其他可能的字段
+
 
 class CompletionRequest(BaseModel):
     conversation_id: str
@@ -45,11 +47,22 @@ class CompletionRequest(BaseModel):
     stream: Optional[bool] = True
     """是否使用流式响应，默认值为 True。"""
 
+
 class RemoveConversationRequest(BaseModel):
     conversation_ids: List[str]
     """要删除的会话ID列表。"""
 
+
+class DeleteMsgRequest(BaseModel):
+    conversation_id: str
+    """会话的唯一标识符。"""
+
+    message_id: str
+    """消息ID"""
+
+
 router = APIRouter()
+
 
 @router.post('/set', summary="设置会话", response_description="成功设置会话")
 async def set_conversation(request: SetConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
@@ -104,6 +117,7 @@ async def set_conversation(request: SetConversationRequest, db: Session = Depend
     except Exception as e:
         return server_error_response(e)
 
+
 @router.get('/get', summary="获取会话", response_description="成功获取会话")
 async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
@@ -129,6 +143,7 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
     except Exception as e:
         return server_error_response(e)
 
+
 @router.post('/rm', summary="删除会话", response_description="成功删除会话")
 async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
@@ -152,6 +167,7 @@ async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), 
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
+
 
 @router.get('/list', summary="列出会话", response_description="成功列出会话")
 async def list_conversation(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
@@ -180,6 +196,7 @@ async def list_conversation(conversation_id: str, db: Session = Depends(get_db),
         return get_json_result(data=convs)
     except Exception as e:
         return server_error_response(e)
+
 
 @router.post('/completion', summary="完成会话", response_description="成功完成会话")
 async def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
@@ -212,9 +229,12 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
             continue
         if m["role"] == "assistant" and not msg:
             continue
-        msg.append({"role": m["role"], "content": m["content"]})
-        if "doc_ids" in m:
-            msg[-1]["doc_ids"] = m["doc_ids"]
+        # msg.append({"role": m["role"], "content": m["content"]})
+        # if "doc_ids" in m:
+        #     msg[-1]["doc_ids"] = m["doc_ids"]
+        msg.append(m)
+    if not msg[-1].get("id"): msg[-1]["id"] = get_uuid()
+    message_id = msg[-1].get("id")
 
     if not msg:
         return get_data_error_result(retmsg="No valid messages found!")
@@ -232,16 +252,18 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
 
         if not conv.reference:
             conv.reference = []
-        conv.message.append({"role": "assistant", "content": ""})
+        # conv.message.append({"role": "assistant", "content": ""})
+        conv.message.append({"role": "assistant", "content": "", "id": message_id})
         conv.reference.append({"chunks": [], "doc_aggs": []})
 
         def fillin_conv(ans):
-            nonlocal conv
+            nonlocal conv, message_id
             if not conv.reference:
                 conv.reference.append(ans["reference"])
             else:
                 conv.reference[-1] = ans["reference"]
-            conv.message[-1] = {"role": "assistant", "content": ans["answer"]}
+            # conv.message[-1] = {"role": "assistant", "content": ans["answer"]}
+            conv.message[-1] = {"role": "assistant", "content": ans["answer"], "id": message_id}
 
         def stream_response():
             nonlocal dia, msg, db, req, conv
@@ -268,3 +290,56 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
             return get_json_result(data=answer)
     except Exception as e:
         return server_error_response(e)
+
+
+@router.post('/delete_msg', summary="删除信息", response_description="成功删除信息")
+async def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    删除消息
+
+    该接口用于删除指定会话中的某条消息及其关联的参考信息。
+
+    参数:
+    - request: DeleteMsgRequest对象，包含会话ID和消息ID
+        - conversation_id: str 会话的唯一标识符
+        - message_id: List[dict] 消息ID列表
+    - db: Session 数据库会话对象
+    - user: 当前用户对象
+
+    返回:
+    - 成功时返回更新后的会话信息的JSON结果
+    - 失败时返回错误信息
+
+    逻辑说明:
+    - 首先，根据会话ID查找会话。如果会话不存在，返回错误信息。
+    - 如果找到会话，遍历会话中的消息列表，找到与给定消息ID匹配的消息。
+    - 删除匹配的消息及其后续消息和对应的参考信息。
+    - 更新会话信息，并将结果返回。
+    """
+    req = request.model_dump()
+    conv = ConversationService.get_by_id(db, req["conversation_id"])
+    if not conv:
+        return get_data_error_result(retmsg="Conversation not found!")
+
+    conv = conv.to_dict()
+    for i, msg in enumerate(conv["message"]):
+        # 如果当前消息ID与请求的消息ID不匹配，则继续检查下一个消息
+        if req["message_id"] != msg.get("id", ""):
+            continue
+        # 确保不会超出范围
+        if i + 1 < len(conv["message"]):
+            assert conv["message"][i + 1]["id"] == req["message_id"]
+        conv["message"].pop(i)
+        if i < len(conv["message"]):
+            conv["message"].pop(i)  # 因为前面 pop 了一次，后面的索引需要调整
+        # todo 待解决：目前无法完全符合预期删除reference
+        if i < len(conv["reference"]):
+            conv["reference"].pop(i)  # 同样对 reference 做相应的 pop 操作
+        break
+        # assert conv["message"][i + 1]["id"] == req["message_id"]
+        # conv["message"].pop(i)
+        # conv["message"].pop(i)
+        # conv["reference"].pop(i)
+        # break
+    ConversationService.update_by_id(db, conv["id"], conv)
+    return get_json_result(data=conv)
