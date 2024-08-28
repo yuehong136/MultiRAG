@@ -12,8 +12,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Generator
 from api.db.services.dialog_service import DialogService, ConversationService, chat
+from api.db.services.llm_service import LLMBundle, TenantService
+from api.db import LLMType
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
@@ -72,6 +74,10 @@ class ThumbupRequest(BaseModel):
 
     feedback: str
     """反馈"""
+
+class TTSRequest(BaseModel):
+    text: str
+    """文本内容"""
 
 router = APIRouter()
 
@@ -303,6 +309,41 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
             return get_json_result(data=answer)
     except Exception as e:
         return server_error_response(e)
+
+
+@router.post('/tts', summary="文本转语音", response_description="成功文本转语音")
+async def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    req = request.model_dump()
+    text = req.get("text")
+
+    tenants = TenantService.get_by_user_id(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+
+    tts_id = tenants[0].get("tts_id")
+    if not tts_id:
+        raise HTTPException(status_code=400, detail="No default TTS model is set")
+
+    tts_mdl = LLMBundle(db, tenants[0]["tenant_id"], "TTS", tts_id)
+
+    def stream_audio() -> Generator[bytes, None, None]:
+        try:
+            for chunk in tts_mdl(text):
+                yield chunk
+        except Exception as e:
+            error_message = json.dumps({
+                "retcode": 500,
+                "retmsg": str(e),
+                "data": {"answer": "**ERROR**: " + str(e)}
+            }, ensure_ascii=False).encode('utf-8')
+            yield error_message
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no"
+    }
+    return StreamingResponse(stream_audio(), media_type="audio/mpeg", headers=headers)
 
 
 @router.post('/delete_msg', summary="删除信息", response_description="成功删除信息")
