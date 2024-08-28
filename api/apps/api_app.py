@@ -532,12 +532,22 @@ async def get(conversation_id: str, db: Session = Depends(get_db)):
    - 成功时返回包含对话详情的JSON结果
    - 失败时返回错误信息
    """
+    token = request.headers.get('Authorization').split()[1]
+    objs = APITokenService.query(db, token=token)
+    if not objs:
+        return get_json_result(
+            data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
+
     try:
-        e, conv = API4ConversationService.get_by_id(db, conversation_id)
-        if not e:
+        conv = API4ConversationService.get_by_id(db, conversation_id)
+        if not conv:
             return get_data_error_result(retmsg="Conversation not found!")
 
         conv = conv.to_dict()
+        if token != APITokenService.query(db, dialog_id=conv['dialog_id'])[0].token:
+            return get_json_result(data=False, retmsg='Token is not valid for this conversation_id!"',
+                                   retcode=RetCode.AUTHENTICATION_ERROR)
+
         for referenct_i in conv['reference']:
             if referenct_i is None or len(referenct_i) == 0:
                 continue
