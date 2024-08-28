@@ -291,7 +291,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
             # 更新答案变量为最新的解答
             answer = ans
             # 生成并yield一个包含当前答案和空引用的字典
-            yield {"answer": answer, "reference": {}, "prompt": prompt}
+            yield {"answer": answer, "reference": {}}
         # 处理完成后，对最终答案进行装饰并yield
         yield decorate_answer(answer)
     else:
