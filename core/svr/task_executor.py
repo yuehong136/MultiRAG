@@ -506,7 +506,7 @@ def main():
                 print("Data being inserted:", converted_record)
         cron_logger.info("Indexing elapsed({}): {:.2f}".format(r["name"], timer() - st))
         if milvus_r:
-            callback(-1, "Index failure!")
+            callback(-1, f"Insert chunk error, detail info please check logs/api/cron_logger.log. Please also check Milvus status!")
             # ELASTICSEARCH.deleteByQuery(
             #     Q("match", doc_id=r["doc_id"]), idxnm=search.index_name(r["tenant_id"], kb.name))
             # 构建 Milvus 集合名称
