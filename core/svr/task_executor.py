@@ -109,7 +109,10 @@ def collect(db: Session):
         return pd.DataFrame()
     tasks = TaskService.get_tasks(db, msg["id"])
 
-    assert tasks, "{} empty task!".format(msg["id"])
+    # assert tasks, "{} empty task!".format(msg["id"])
+    if not tasks:
+        cron_logger.warn("{} empty task!".format(msg["id"]))
+        return []
 
     tasks = pd.DataFrame(tasks)
 
