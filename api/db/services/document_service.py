@@ -9,6 +9,7 @@
 import hashlib
 import json
 import random
+import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
@@ -28,7 +29,7 @@ from api.settings import stat_logger, RetCode
 from api.utils import current_timestamp, get_format_time, get_uuid
 from api.utils.api_utils import construct_json_result
 from api.utils.db_utils import bulk_insert_into_db
-from core.nlp import search
+from core.nlp import search, rag_tokenizer
 from core.settings import SVR_QUEUE_NAME
 from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils.minio_conn import MINIO
@@ -333,8 +334,7 @@ class DocumentService(CommonService):
                 finished = True
                 bad = 0
 
-                # doc = DocumentService.get_by_id(d["id"])
-                doc = DocumentService.get_by_id(d.id)
+                doc = DocumentService.get_by_id(db, d.id)
                 status = doc.run  # TaskStatus.RUNNING.value
 
                 # status = TaskStatus.RUNNING.value
@@ -357,7 +357,7 @@ class DocumentService(CommonService):
                     # if d["parser_config"].get("raptor", {}).get("use_raptor") and d["progress_msg"].lower().find(
                     if d.parser_config.get("raptor", {}).get("use_raptor") and d.progress_msg.lower().find(
                             " raptor") < 0:
-                        queue_raptor_tasks(d)
+                        queue_raptor_tasks(db, d)
                         prg *= 0.98
                         msg.append("------ RAPTOR -------")
                     else:
@@ -393,7 +393,7 @@ class DocumentService(CommonService):
         return False
 
 
-def queue_raptor_tasks(doc):
+def queue_raptor_tasks(db: Session, doc):
     def new_task():
         return {
             "id": get_uuid(),
@@ -404,7 +404,7 @@ def queue_raptor_tasks(doc):
         }
 
     task = new_task()
-    bulk_insert_into_db(Task, [task], True)
+    bulk_insert_into_db(db, Task, [task], True)
     task["type"] = "raptor"
     assert REDIS_CONN.queue_product(SVR_QUEUE_NAME, message=task), "Can't access Redis. Please check the Redis' status."
 
