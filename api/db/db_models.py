@@ -66,6 +66,7 @@ class Tenant(BaseModel):
     asr_id = Column(String(128), index=True, nullable=False, doc="default ASR model ID")
     img2txt_id = Column(String(128), index=True, nullable=False, doc="default image to text model ID")
     rerank_id = Column(String(128), index=True, nullable=True, doc="default rerank model ID")
+    tts_id = Column(String(256), index=True, nullable=True, doc="default tts model ID")
     parser_ids = Column(String(256), index=True, nullable=False, doc="document processors")
     credit = Column(Integer, index=True, nullable=False, default=512)
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")

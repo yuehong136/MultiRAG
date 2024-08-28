@@ -1,6 +1,6 @@
 streamlit >= 1.37.1
 requests >= 2.31.0
-zhipuai >= 2.1.0.20240521
+zhipuai >= 2.1.4.20230814
 langchain_community >= 0.2.4
 # Python-pptx 是一个用于操作PowerPoint文件的Python库
 python-pptx >= 0.6.23
@@ -132,3 +132,7 @@ peft >= 0.12.0
 # 处理表格数据的Python库，它们可以用来读取、操作和写入不同格式的电子表格数据。【工作流】
 pyexcel >= 0.7.0
 pyexcel-xlsx >= 0.6.0
+# Aspose.Slides for Python via .NET 是一个演示文件格式处理库，用于在不使用 Microsoft PowerPoint 的情况下处理 Microsoft PowerPoint 文件。
+Aspose.Slides >= 24.8.0
+# ormsgpack 是一个适用于 Python 的快速 msgpack 库。它是orjson的分支/重启版本， 序列化速度比msgpack-python更快，反序列化速度稍慢（目前）。它原生支持序列化： dataclass、 datetime、 numpy、 pydantic和 UUID实例。
+ormsgpack >= 1.5.0

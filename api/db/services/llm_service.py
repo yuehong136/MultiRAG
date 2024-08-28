@@ -1,6 +1,6 @@
 # llm_services.py
 from sqlalchemy.orm import Session
-from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel
+from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
 
 from api.db.services.user_service import TenantService
 from api.settings import database_logger
@@ -67,12 +67,15 @@ class TenantLLMService(CommonService):
             mdlnm = tenant.llm_id if not llm_name else llm_name
         elif llm_type == LLMType.RERANK:
             mdlnm = tenant.rerank_id if not llm_name else llm_name
+        elif llm_type == LLMType.TTS:
+            mdlnm = tenant.tts_id if not llm_name else llm_name
         else:
             raise ValueError("LLM type error")
 
         print(f"Debug: Fetching model instance for tenant_id={tenant_id}, mdlnm={mdlnm}")
 
         model_config = cls.get_api_key(db, tenant_id, mdlnm)
+        print("model_config:", model_config)
         if model_config:
             model_config = model_config.to_dict()
         else:
@@ -102,6 +105,12 @@ class TenantLLMService(CommonService):
                 model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"]
             )
 
+        if llm_type == LLMType.RERANK:
+            if model_config["llm_factory"] not in RerankModel:
+                return
+            return RerankModel[model_config["llm_factory"]](
+                model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
+
         if llm_type == LLMType.IMAGE2TEXT.value:
             if model_config["llm_factory"] not in CvModel:
                 print(f"Debug: Image2Text model factory not supported: {model_config['llm_factory']}")
@@ -125,6 +134,15 @@ class TenantLLMService(CommonService):
                 model_config["api_key"], model_config["llm_name"], lang,
                 base_url=model_config["api_base"]
             )
+
+        if llm_type == LLMType.TTS:
+            if model_config["llm_factory"] not in TTSModel:
+                return
+            return TTSModel[model_config["llm_factory"]](
+                model_config["api_key"],
+                model_config["llm_name"],
+                base_url=model_config["api_base"],
+            )
     @classmethod
     def increase_usage(cls, db: Session, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str = None):
         tenant = TenantService.get_by_id(db, tenant_id)
@@ -140,7 +158,9 @@ class TenantLLMService(CommonService):
         elif llm_type == LLMType.CHAT.value:
             mdlnm = tenant.llm_id if not llm_name else llm_name
         elif llm_type == LLMType.RERANK:
-            mdlnm = tenant.llm_id if not llm_name else llm_name
+            mdlnm = tenant.rerank_id if not llm_name else llm_name
+        elif llm_type == LLMType.TTS:
+            mdlnm = tenant.tts_id if not llm_name else llm_name
         else:
             raise ValueError("LLM type error")
 
