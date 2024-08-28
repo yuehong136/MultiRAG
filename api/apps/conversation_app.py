@@ -283,6 +283,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
             # conv.message[-1] = {"role": "assistant", "content": ans["answer"]}
             conv.message[-1] = {"role": "assistant", "content": ans["answer"],
                                 "id": message_id, "prompt": ans.get("prompt", "")}
+            ans["id"] = message_id
 
         def stream_response():
             nonlocal dia, msg, db, req, conv

@@ -386,6 +386,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db)):
         else:
             conv.reference[-1] = ans["reference"]
         conv.message[-1] = {"role": "assistant", "content": ans["answer"], "id": message_id}
+        ans["id"] = message_id
 
     def rename_field(ans):
         reference = ans['reference']
