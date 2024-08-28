@@ -244,6 +244,15 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
         llm_name = req["llm_name"]
         api_key = '{' + f'"ark_api_key": "{req.get("ark_api_key", "")}", ' \
                         f'"ep_id": "{req.get("endpoint_id", "")}", ' + '}'
+    elif factory == "Tencent Hunyuan":
+        api_key = '{' + f'"hunyuan_sid": "{req.get("hunyuan_sid", "")}", ' \
+                        f'"hunyuan_sk": "{req.get("hunyuan_sk", "")}"' + '}'
+        req["api_key"] = api_key
+        return set_api_key()
+    elif factory == "Tencent Cloud":
+        api_key = '{' + f'"tencent_cloud_sid": "{req.get("tencent_cloud_sid", "")}", ' \
+                f'"tencent_cloud_sk": "{req.get("tencent_cloud_sk", "")}"' + '}'
+        req["api_key"] = api_key
     elif factory == "Bedrock":
         llm_name = req["llm_name"]
         api_key = '{' + f'"bedrock_ak": "{req.get("bedrock_ak", "")}", ' \
@@ -262,6 +271,10 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
         llm_name = req["llm_name"]
         api_key = '{' + f'"yiyan_ak": "{req.get("yiyan_ak", "")}", ' \
                 f'"yiyan_sk": "{req.get("yiyan_sk", "")}"' + '}'
+    elif factory == "Fish Audio":
+        llm_name = req["llm_name"]
+        api_key = '{' + f'"fish_audio_ak": "{req.get("fish_audio_ak", "")}", ' \
+                f'"fish_audio_refid": "{req.get("fish_audio_refid", "59cb5986671546eaa6ca8ae6f29f6d22")}"' + '}'
     else:
         llm_name = req["llm_name"]
         api_key = req.get("api_key", "xxxxxxxxxxxxxxx")
