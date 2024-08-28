@@ -14,7 +14,6 @@ from PIL import Image
 
 from core.file.utils import extract_pdf, extract_docx, extract_pptx, extract_text
 from core.llm.cv_model.cv_factory import CVModelFactory
-from core.llm.ocr_model.ocr_factory import ModelFactory
 from core.tools.tools_registry import get_tools, ALL_TOOLS
 # from server.kb import kb_list, process_schema_response, request_milvus
 from utils.api import get_ai_response, get_ai_recommend, process_user_input

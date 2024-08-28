@@ -188,6 +188,7 @@ class CommonService:
             return db.query(cls.model).filter(cls.model.id == pid).one()
         except NoResultFound:
             raise HTTPException(status_code=404, detail="Item not found")
+            # return None  # 返回 None 而不是抛出异常
 
     @classmethod
     def get_by_ids(cls, db: Session, pids: List[Any], cols: List[str] = None) -> list[

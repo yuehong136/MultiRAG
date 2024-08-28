@@ -618,7 +618,7 @@ class MilvusConnection:
                     fields.append(FieldSchema(name=match_pattern, dtype=DataType.FLOAT))
                 elif mapping_type == "JSON":
                     fields.append(FieldSchema(name=match_pattern, dtype=DataType.JSON))
-
+        # todo 测试一下能否在下面使用动态字段
         schema = CollectionSchema(fields=fields, description="Created from mapping file")
 
         self.create_collection(collection_name, schema=schema)

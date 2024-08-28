@@ -58,7 +58,7 @@ class Dealer:
             raise ValueError("Failed to generate query for the given question.")
 
         src = req.get("fields", ["docnm_kwd", "content_ltks", "kb_id", "img_id", "title_tks",
-                                 "img_id", "doc_id", "vector", "position_int", "content_with_weight"])
+                                 "doc_id", "vector", "position_int", "content_with_weight"])
 
         # Vector search parameters
         vector_search_params = self._vector(qst, embd_mdl, req.get("similarity", 0.1), req.get("topk", 1024))
@@ -316,7 +316,8 @@ class Dealer:
                 break
             id = sres.ids[i]
             text = sres.field[id]["content_with_weight"]
-            dnm = sres.field[id]["docnm_kwd"]
+            # dnm = sres.field[id]["docnm_kwd"]
+            dnm = sres.field[id].get("docnm_kwd","")
             did = sres.field[id]["doc_id"]
             # d = {
             #     "chunk_id": id,
@@ -329,7 +330,8 @@ class Dealer:
             # }
             d = {
                 "chunk_id": id,
-                "content_ltks": sres.field[id]["content_ltks"],
+                # "content_ltks": sres.field[id]["content_ltks"],
+                "content_ltks": sres.field[id].get("content_ltks", ""),
                 "text": text,
                 "doc_id": sres.field[id]["doc_id"],
                 "docnm_kwd": dnm,
