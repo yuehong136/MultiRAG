@@ -36,12 +36,12 @@ class AddLLMRequest(BaseModel):
     llm_name: str
     mdl_type: str
     api_key: str = None
-    volc_ak: Optional[str] = None
-    volc_sk: Optional[str] = None
+    api_base: Optional[str] = None
+    ark_api_key: Optional[str] = None
+    endpoint_id: Optional[str] = None
     bedrock_ak: Optional[str] = None
     bedrock_sk: Optional[str] = None
     bedrock_region: Optional[str] = None
-    api_base: Optional[str] = None
 
 
 class DeleteLLMRequest(BaseModel):
@@ -239,13 +239,11 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     factory = req["llm_factory"]
 
     if factory == "VolcEngine":
-        temp = list(ast.literal_eval(req["llm_name"]).items())[0]
-
-        llm_name = temp[0]
-        endpoint_id = temp[1]
-        api_key = '{' + f'"volc_ak": "{req.get("volc_ak", "")}", ' \
-                        f'"volc_sk": "{req.get("volc_sk", "")}", ' \
-                        f'"ep_id": "{endpoint_id}", ' + '}'
+        # For VolcEngine, due to its special authentication method
+        # Assemble ark_api_key endpoint_id into api_key
+        llm_name = req["llm_name"]
+        api_key = '{' + f'"ark_api_key": "{req.get("ark_api_key", "")}", ' \
+                        f'"ep_id": "{req.get("endpoint_id", "")}", ' + '}'
     elif factory == "Bedrock":
         llm_name = req["llm_name"]
         api_key = '{' + f'"bedrock_ak": "{req.get("bedrock_ak", "")}", ' \

@@ -8,7 +8,7 @@ from core.llm.chat_model.base import Base
 class DoubaoChat(Base):
     key: str
     model_name: str
-    base_url: Optional[str] = None
+    base_url: Optional[str] = 'https://ark.cn-beijing.volces.com/api/v3'
     client: Ark = field(init=False)
 
     def __post_init__(self):
