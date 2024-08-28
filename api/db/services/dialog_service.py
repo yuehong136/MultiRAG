@@ -247,7 +247,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     # 断言消息长度至少为2，以验证message_fit_in函数的正确性
     # 如果消息长度小于2，说明函数可能存在bug，需要进行调试
     assert len(msg) >= 2, f"message_fit_in has bug: {msg}"
-
+    prompt = msg[0]["content"]
 
     # 调整生成配置中的最大token数
     if "max_tokens" in gen_conf:
@@ -256,7 +256,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
             max_tokens - used_token_count)
 
     def decorate_answer(answer):
-        nonlocal prompt_config, knowledges, kwargs, kbinfos
+        nonlocal prompt_config, knowledges, kwargs, kbinfos, prompt
         refs = []
         # 如果需要插入引用文献，处理回答内容
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
@@ -280,7 +280,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         # 如果回答中包含无效API key的提示，添加设置API key的提示
         if answer.lower().find("invalid key") >= 0 or answer.lower().find("invalid api") >= 0:
             answer += " Please set LLM API-Key in 'User Setting -> Model Providers -> API-Key'"
-        return {"answer": answer, "reference": refs}
+        return {"answer": answer, "reference": refs, "prompt": prompt}
 
     # 根据是否启用流式输出生成回答
     if stream:
@@ -291,12 +291,13 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
             # 更新答案变量为最新的解答
             answer = ans
             # 生成并yield一个包含当前答案和空引用的字典
-            yield {"answer": answer, "reference": {}}
+            yield {"answer": answer, "reference": {}, "prompt": prompt}
         # 处理完成后，对最终答案进行装饰并yield
         yield decorate_answer(answer)
     else:
         # 使用chat方法直接获取答案
-        answer = chat_mdl.chat(msg[0]["content"], msg[1:], gen_conf)
+        # answer = chat_mdl.chat(msg[0]["content"], msg[1:], gen_conf)
+        answer = chat_mdl.chat(prompt, msg[1:], gen_conf)
         # 记录对话日志，包含用户消息和助手的回答
         chat_logger.info("User: {}|Assistant: {}".format(
             msg[-1]["content"], answer))
@@ -411,7 +412,8 @@ def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
         chat_logger.warning("SQL missing field: " + sql)
         return {
             "answer": "\n".join([clmns, line, rows]),
-            "reference": {"chunks": [], "doc_aggs": []}
+            "reference": {"chunks": [], "doc_aggs": []},
+            "prompt": sys_prompt
         }
 
     docid_idx = list(docid_idx)[0]
@@ -425,7 +427,8 @@ def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
         "answer": "\n".join([clmns, line, rows]),
         "reference": {"chunks": [{"doc_id": r[docid_idx], "docnm_kwd": r[docnm_idx]} for r in tbl["rows"]],
                       "doc_aggs": [{"doc_id": did, "doc_name": d["doc_name"], "count": d["count"]} for did, d in
-                                   doc_aggs.items()]}
+                                   doc_aggs.items()]},
+        "prompt": sys_prompt
     }
 
 

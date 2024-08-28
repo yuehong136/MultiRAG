@@ -60,6 +60,18 @@ class DeleteMsgRequest(BaseModel):
     message_id: str
     """消息ID"""
 
+class ThumbupRequest(BaseModel):
+    conversation_id: str
+    """会话的唯一标识符。"""
+
+    message_id: str
+    """消息ID"""
+
+    set: Optional[bool] = None
+    """点赞状态"""
+
+    feedback: str
+    """反馈"""
 
 router = APIRouter()
 
@@ -263,7 +275,8 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
             else:
                 conv.reference[-1] = ans["reference"]
             # conv.message[-1] = {"role": "assistant", "content": ans["answer"]}
-            conv.message[-1] = {"role": "assistant", "content": ans["answer"], "id": message_id}
+            conv.message[-1] = {"role": "assistant", "content": ans["answer"],
+                                "id": message_id, "prompt": ans.get("prompt", "")}
 
         def stream_response():
             nonlocal dia, msg, db, req, conv
@@ -341,5 +354,29 @@ async def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), u
         # conv["message"].pop(i)
         # conv["reference"].pop(i)
         # break
+    ConversationService.update_by_id(db, conv["id"], conv)
+    return get_json_result(data=conv)
+
+
+
+@router.post('/thumbup', summary="点赞", response_description="成功点赞")
+async def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    req = request.model_dump()
+    conv = ConversationService.get_by_id(db, req["conversation_id"])
+    if not conv:
+        return get_data_error_result(retmsg="Conversation not found!")
+    up_down = req.get("set")
+    feedback = req.get("feedback", "")
+    conv = conv.to_dict()
+    for i, msg in enumerate(conv["message"]):
+        if req["message_id"] == msg.get("id", "") and msg.get("role", "") == "assistant":
+            if up_down:
+                msg["thumbup"] = True
+                if "feedback" in msg: del msg["feedback"]
+            else:
+                msg["thumbup"] = False
+                if feedback: msg["feedback"] = feedback
+            break
+
     ConversationService.update_by_id(db, conv["id"], conv)
     return get_json_result(data=conv)
