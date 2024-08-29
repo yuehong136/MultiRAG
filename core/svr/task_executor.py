@@ -153,11 +153,6 @@ def build(row, db: Session):
         binary = get_minio_binary(bucket, name)
         cron_logger.info(
             "From minio({}) {}/{}".format(timer() - st, row["location"], row["name"]))
-        # cks = chunker.chunk(row["name"], binary=binary, from_page=row["from_page"],
-        #                     to_page=row["to_page"], lang=row["language"], callback=callback,
-        #                     kb_id=row["kb_id"], parser_config=row["parser_config"], tenant_id=row["tenant_id"])
-        # cron_logger.info(
-        #     "Chunkking({}) {}/{}".format(timer() - st, row["location"], row["name"]))
     except TimeoutError as e:
         callback(-1, f"Internal server error: Fetch file from minio timeout. Could you try it again.")
         cron_logger.error(
@@ -191,6 +186,9 @@ def build(row, db: Session):
         "doc_id": row["doc_id"],
         "kb_id": [str(row["kb_id"])]
     }
+    # 如果 row["auth"] 有值，则将其添加到 doc 字典中
+    if "auth" in row and row["auth"]:
+        doc["auth"] = row["auth"]
     el = 0
     for ck in cks:
         d = copy.deepcopy(doc)
@@ -257,6 +255,8 @@ def convert_data_types(data, schema):
                 data[field_name] = 0.0
             elif field_type == DataType.INT64:
                 data[field_name] = 0
+            elif field_type == DataType.ARRAY:
+                data[field_name] = []
             else:
                 data[field_name] = None
         else:
@@ -279,58 +279,10 @@ def convert_data_types(data, schema):
                 else:
                     data[field_name] = str(data[field_name])
     return data
-    # for record in data:
-    #     for field in schema['fields']:
-    #         field_name = field['name']
-    #         field_type = field['type']
-    #         if field_name in record:
-    #             if field_type == DataType.FLOAT_VECTOR and not isinstance(record[field_name], list):
-    #                 record[field_name] = list(record[field_name])
-    #             elif field_type == DataType.VARCHAR:
-    #                 # 如果是 VARCHAR 类型，并且字段名称是 kb_id，则将其转换为字符串
-    #                 if field_name == "kb_id":
-    #                     record[field_name] = ','.join(record[field_name]) if isinstance(record[field_name],
-    #                                                                                     list) else str(
-    #                         record[field_name])
-    #                 else:
-    #                     record[field_name] = str(record[field_name])
-    #             # 添加更多类型转换逻辑
-    # return data
-# def convert_data_types(data, schema):
-#     converted_data = []
-#     for record in data:
-#         new_record = {}
-#         for field in schema['fields']:
-#             field_name = field['name']
-#             field_type = field['type']
-#             if field_name in record:
-#                 if field_type == DataType.FLOAT_VECTOR:
-#                     new_record[field_name] = record[field_name]
-#                 elif field_type == DataType.VARCHAR:
-#                     if field_name == "kb_id" and isinstance(record[field_name], list):
-#                         new_record[field_name] = ','.join(record[field_name])
-#                     else:
-#                         new_record[field_name] = str(record[field_name])
-#                 elif field_type == DataType.FLOAT:
-#                     new_record[field_name] = float(record[field_name])
-#                 else:
-#                     new_record[field_name] = str(record[field_name])
-#             else:
-#                 # 对于缺失字段，填充默认值
-#                 if field_type == DataType.FLOAT_VECTOR:
-#                     new_record[field_name] = [0.0] * field['params']['dim']  # 使用实际维度
-#                 elif field_type == DataType.VARCHAR:
-#                     new_record[field_name] = ""
-#                 elif field_type == DataType.FLOAT:
-#                     new_record[field_name] = 0.0
-#                 else:
-#                     new_record[field_name] = None
-#         converted_data.append(new_record)
-#     return converted_data
 
 def get_schema(collection_name):
     schema = MILVUS_CONNECTION.describe_collection(collection_name)
-    print("Schema of the collection:", schema)
+    # print("Schema of the collection:", schema)
     return schema
 
 
@@ -419,6 +371,17 @@ def main():
     rows = collect(db)
     if len(rows) == 0:
         return
+    # 预处理 auth 列，转换为列表，处理 None 值
+    def convert_auth(auth_str):
+        if auth_str is None:
+            return []  # 如果 auth 为 None，转换为空列表
+        try:
+            return json.loads(auth_str) if isinstance(auth_str, str) else auth_str
+        except json.JSONDecodeError:
+            cron_logger.error(f"Failed to decode auth field: {auth_str}")
+            return []  # 解析失败时，返回空列表
+
+    rows['auth'] = rows['auth'].apply(convert_auth)
 
     for _, r in rows.iterrows():
         callback = partial(set_progress, db, r["id"], r["from_page"], r["to_page"])
@@ -468,38 +431,9 @@ def main():
         chunk_count = len(set([c["pk"] for c in cks]))
         st = timer()
         milvus_r = ""
-        milvus_bulk_size = 16
-
         # 获取集合的schema
         schema = get_schema(search.index_name_one(r["tenant_id"], kb.name))
 
-        # for b in range(0, len(cks), milvus_bulk_size):
-        #     # 转换数据类型
-        #     converted_data = convert_data_types(cks[b:b + milvus_bulk_size], schema)
-        #     # try:
-        #     #     MILVUS_CONNECTION.bulk_upsert_to_milvus(search.index_name_one(r["tenant_id"], kb.name),
-        #     #                                             converted_data)
-        #     # except Exception as e:
-        #     #     print("Upsert error:", e)
-        #     #     # 打印更多调试信息
-        #     #     print("Data being inserted:", converted_data)
-        #     #
-        #     # if b % 128 == 0:
-        #     #     callback(prog=0.8 + 0.1 * (b + 1) / len(cks), msg="")
-        #
-        #     try:
-        #         MILVUS_CONNECTION.upsert(
-        #             collection_name=search.index_name_one(r["tenant_id"], kb.name),
-        #             data=converted_data
-        #         )
-        #         print("Successfully upserted records to Milvus")
-        #     except Exception as e:
-        #         print("Upsert error:", e)
-        #         # Print more debug information
-        #         print("Data being inserted:", converted_data)
-        #
-        #     if b % 128 == 0:
-        #         callback(prog=0.8 + 0.1 * (b + 1) / len(cks), msg="")
         # 逐条插入数据
         for record in cks:
             # 转换数据类型
@@ -514,13 +448,10 @@ def main():
                 print("Successfully inserted record to Milvus")
             except Exception as e:
                 print("Insert error:", e)
-                # 打印更多调试信息
                 print("Data being inserted:", converted_record)
         cron_logger.info("Indexing elapsed({}): {:.2f}".format(r["name"], timer() - st))
         if milvus_r:
             callback(-1, f"Insert chunk error, detail info please check logs/api/cron_logger.log. Please also check Milvus status!")
-            # ELASTICSEARCH.deleteByQuery(
-            #     Q("match", doc_id=r["doc_id"]), idxnm=search.index_name(r["tenant_id"], kb.name))
             # 构建 Milvus 集合名称
             collection_name = search.index_name_one(r["tenant_id"], kb.name)
             # 检查集合是否存在并删除 Milvus 中的数据
@@ -529,15 +460,12 @@ def main():
                     MILVUS_CONNECTION.delete(
                         collection_name=collection_name,
                         filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
-                        # filter=f"doc_id == '{doc.id}'"
                     )
             except MilvusException as e:
                 return e
             cron_logger.error(str(milvus_r))
         else:
             if TaskService.do_cancel(db, r["id"]):
-                # ELASTICSEARCH.deleteByQuery(
-                #     Q("match", doc_id=r["doc_id"]), idxnm=search.index_name(r["tenant_id"], kb.name))
                 # 构建 Milvus 集合名称
                 collection_name = search.index_name_one(r["tenant_id"], kb.name)
                 # 检查集合是否存在并删除 Milvus 中的数据

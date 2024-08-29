@@ -6,6 +6,7 @@
 @date：2024/7/15 15:00
 @desc:
 """
+import json
 import re
 import os
 from sqlalchemy.orm import Session, aliased
@@ -294,7 +295,7 @@ class FileService(CommonService):
             raise RuntimeError("Database error (File move)!")
 
     @classmethod
-    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: List, current_user) -> (List[str], List[Dict]):
+    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: List, current_user, labels: Optional[List[str]] = None) -> (List[str], List[Dict]):
         # 初始化根文件夹和知识库文件夹
         root_folder = cls.get_root_folder(db, current_user.id)
         pf_id = root_folder["id"]
@@ -324,8 +325,14 @@ class FileService(CommonService):
                     location += "_"
                 MINIO.put(kb.id, location, file_blob)
 
+                # 根据 labels 是否有值来决定 id 的生成方式
+                if labels:
+                    file_id = os.path.splitext(filename)[0]  # 使用文件名的部分
+                else:
+                    file_id = get_uuid()  # 默认使用 UUID
+
                 doc = {
-                    "id": get_uuid(),
+                    "id": file_id,
                     "kb_id": kb.id,
                     "parser_id": kb.parser_id,
                     "parser_config": kb.parser_config,
@@ -334,7 +341,8 @@ class FileService(CommonService):
                     "name": filename,
                     "location": location,
                     "size": len(file_blob),
-                    "thumbnail": thumbnail(filename, file_blob)
+                    "thumbnail": thumbnail(filename, file_blob),
+                    "auth": json.dumps(labels) if labels else None  # 将 labels 转换为 JSON 字符串
                 }
 
                 if doc["type"] == FileType.VISUAL:

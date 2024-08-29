@@ -618,8 +618,11 @@ class MilvusConnection:
                     fields.append(FieldSchema(name=match_pattern, dtype=DataType.FLOAT))
                 elif mapping_type == "JSON":
                     fields.append(FieldSchema(name=match_pattern, dtype=DataType.JSON))
+                elif mapping_type == "Array":
+                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.ARRAY, element_type=DataType.VARCHAR,
+                                              max_length=256, max_capacity=4096))
         # todo 测试一下能否在下面使用动态字段
-        schema = CollectionSchema(fields=fields, description="Created from mapping file")
+        schema = CollectionSchema(fields=fields, description="Created from mapping file", enable_dynamic_field=True)
 
         self.create_collection(collection_name, schema=schema)
 

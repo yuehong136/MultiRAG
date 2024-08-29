@@ -49,6 +49,9 @@ class CompletionRequest(BaseModel):
     stream: Optional[bool] = True
     """是否使用流式响应，默认值为 True。"""
 
+    filter_condition: Optional[str] = ""
+    """过滤条件，可以根据实际需求自定义结构。"""
+
 
 class RemoveConversationRequest(BaseModel):
     conversation_ids: List[str]
@@ -216,26 +219,27 @@ async def list_conversation(conversation_id: str, db: Session = Depends(get_db),
         return server_error_response(e)
 
 
-@router.post('/completion', summary="完成会话", response_description="成功完成会话")
+@router.post('/completion', summary="生成对话", response_description="成功生成对话")
 async def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    完成会话
+        完成会话
 
-    该接口用于完成指定会话，生成对话内容。
+        该接口用于完成指定会话，生成对话内容。
 
-    参数:
-    - request: CompletionRequest对象，包含会话的详细信息
-        - conversation_id: str 会话的唯一标识符
-        - messages: List[dict] 消息列表，每个消息包含角色和内容
-        - quote: Optional[bool] 是否引用，默认值为 False
-        - stream: Optional[bool] 是否使用流式响应，默认值为 True
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
+        参数:
+        - request: CompletionRequest对象，包含会话的详细信息
+            - conversation_id: str 会话的唯一标识符
+            - messages: List[dict] 消息列表，每个消息包含角色和内容
+            - quote: Optional[bool] 是否引用，默认值为 False
+            - stream: Optional[bool] 是否使用流式响应，默认值为 True
+            - filter_condition: Optional[dict] 过滤条件
+        - db: Session 数据库会话对象
+        - user: 当前用户对象
 
-    返回:
-    - 成功时返回生成的对话内容
-    - 失败时返回错误信息
-    """
+        返回:
+        - 成功时返回生成的对话内容
+        - 失败时返回错误信息
+        """
     req = request.model_dump()
     if not req.get("conversation_id") or not req.get("messages"):
         return get_data_error_result(retmsg="Missing conversation_id or messages!")

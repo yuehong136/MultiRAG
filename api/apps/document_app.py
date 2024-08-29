@@ -6,12 +6,13 @@
 @date：2024/7/29 17:17
 @desc:
 """
+import json
 import os
 import pathlib
 import re
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request, Query
 from fastapi.responses import StreamingResponse
 from pymilvus import MilvusException
 from sqlalchemy.orm import Session
@@ -86,9 +87,39 @@ class ChangeParserRequest(BaseModel):
 async def upload(
         kb_id: str,
         files: List[UploadFile] = File(...),
+        labels: Optional[str] = Query(None),  # labels 是一个 JSON 格式的字符串
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
+    """
+    上传文件到指定的知识库。
+
+    该路由允许用户上传多个文件并将其关联到特定的知识库（Knowledgebase）。用户还可以选择传递
+    `labels` 参数，该参数为一个 JSON 格式的字符串，用于标注文件的相关属性或责任。
+
+    参数:
+    - kb_id (str): 知识库的唯一标识符。
+    - files (List[UploadFile]): 要上传的文件列表。用户可以一次上传多个文件。
+    - labels (Optional[str]): 一个可选的 JSON 字符串，用于标注文件的属性或责任。示例：`["label1", "label2"]`。
+    - db (Session): 数据库会话，用于与数据库进行交互。
+    - user: 当前登录用户信息，通过依赖注入获取。
+
+    返回值:
+    - JSON 响应对象，包含上传文件的处理结果。如果操作成功，返回已上传文件的信息；如果操作失败，
+      返回错误消息和状态码。
+
+    异常:
+    - HTTPException: 如果 `kb_id` 对应的知识库不存在，返回 404 错误。
+    - 其他服务器相关错误，如文件类型不支持或超过最大文件数量限制。
+
+    逻辑流程:
+    1. 验证 `kb_id` 和 `files` 是否存在，如果缺失则返回错误消息。
+    2. 根据 `kb_id` 获取对应的知识库，如果找不到则返回 404 错误。
+    3. 读取并存储每个文件的内容。
+    4. 如果提供了 `labels` 参数，将其从 JSON 字符串转换为 Python 列表。
+    5. 调用 `FileService.upload_document` 方法，将文件和 `labels` 一起上传。
+    6. 如果上传过程中发生错误，返回错误消息；否则返回上传成功的文件信息。
+    """
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
     if not files:
@@ -100,54 +131,11 @@ async def upload(
     file_contents = []
     for file in files:
         file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
-    err, files = FileService.upload_document(db, kb, file_contents, user)
-    # root_folder = FileService.get_root_folder(db, user.id)
-    # pf_id = root_folder['id']
-    # FileService.init_knowledgebase_docs(db, pf_id, user.id)
-    # kb_root_folder = FileService.get_kb_folder(db, user.id)
-    # kb_folder = FileService.new_a_file_from_kb(db, kb.tenant_id, kb.name, kb_root_folder["id"])
-    #
-    # err = []
-    # uploaded_docs_json = []
-    # for file in files:
-    #     try:
-    #         MAX_FILE_NUM_PER_USER = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
-    #         if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, kb.tenant_id):
-    #             raise RuntimeError("Exceed the maximum file number of a free user!")
-    #
-    #         filename = duplicate_name(DocumentService.query, db=db, name=file.filename, kb_id=kb.id)
-    #         filetype = filename_type(filename)
-    #         if filetype == FileType.OTHER.value:
-    #             raise RuntimeError("This type of file has not been supported yet!")
-    #
-    #         location = filename
-    #         while MINIO.obj_exist(kb_id, location):
-    #             location += "_"
-    #         blob = await file.read()
-    #         MINIO.put(kb_id, location, blob)
-    #         doc = {
-    #             "id": get_uuid(),
-    #             "kb_id": kb.id,
-    #             "parser_id": kb.parser_id,
-    #             "parser_config": kb.parser_config,
-    #             "created_by": user.id,
-    #             "type": filetype,
-    #             "name": filename,
-    #             "location": location,
-    #             "size": len(blob),
-    #             "thumbnail": thumbnail(filename, blob)
-    #         }
-    #         if doc["type"] == FileType.VISUAL:
-    #             doc["parser_id"] = ParserType.PICTURE.value
-    #         if re.search(r"\.(ppt|pptx|pages)$", filename):
-    #             doc["parser_id"] = ParserType.PRESENTATION.value
-    #         DocumentService.insert(db, doc)
-    #
-    #         FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
-    #         uploaded_docs_json.append(doc)
-    #
-    #     except Exception as e:
-    #         err.append(file.filename + ": " + str(e))
+    # 将 JSON 字符串转换为列表
+    if labels:
+        labels = json.loads(labels)
+    # err, files = FileService.upload_document(db, kb, file_contents, user)
+    err, files = FileService.upload_document(db, kb, file_contents, user, labels)  # 传递labels参数
     if err:
         return construct_json_result(data=False, message="\n".join(err), code=RetCode.SERVER_ERROR)
     return construct_json_result(data=files, code=RetCode.SUCCESS)

@@ -136,6 +136,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
 
     # 提取用户提出的问题
     questions = [m["content"] for m in messages if m["role"] == "user"]
+    filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
     attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None
     if "doc_ids" in messages[-1]:
         attachments = messages[-1]["doc_ids"]
@@ -199,7 +200,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         if prompt_config.get("keyword", False):
             questions[-1] += keyword_extraction(chat_mdl, questions[-1])
 
-        kbinfos = retrievaler.retrieval(" ".join(questions), embd_mdl, dialog.tenant_id, kb_names, 1, dialog.top_n,
+        kbinfos = retrievaler.retrieval(" ".join(questions), filter_exp, embd_mdl, dialog.tenant_id, kb_names, 1, dialog.top_n,
                                         dialog.similarity_threshold,
                                         dialog.vector_similarity_weight,
                                         doc_ids=attachments,
@@ -213,7 +214,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     if dialog.prompt_config.get("self_rag") and not relevant(dialog.tenant_id, dialog.llm_id, questions[-1],
                                                              knowledges, db):
         questions[-1] = rewrite(dialog.tenant_id, dialog.llm_id, questions[-1], db)
-        kbinfos = retrievaler.retrieval(" ".join(questions), embd_mdl, dialog.tenant_id, kb_names, 1, dialog.top_n,
+        kbinfos = retrievaler.retrieval(" ".join(questions), filter_exp, embd_mdl, dialog.tenant_id, kb_names, 1, dialog.top_n,
                                         dialog.similarity_threshold,
                                         dialog.vector_similarity_weight,
                                         doc_ids=attachments,

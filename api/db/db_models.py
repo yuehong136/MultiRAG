@@ -191,6 +191,7 @@ class Document(BaseModel):
     name = Column(String(255), index=True, nullable=True, doc="file name")
     location = Column(String(255), index=True, nullable=True, doc="where dose it store")
     size = Column(Integer, index=True, nullable=False, default=0)
+    auth = Column(Text, index=False, nullable=True, doc="attribution of data rights and responsibilities")
     token_num = Column(Integer, index=True, nullable=False, default=0)
     chunk_num = Column(Integer, index=True, nullable=False, default=0)
     progress = Column(Float, index=True, nullable=False, default=0)

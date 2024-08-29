@@ -59,7 +59,7 @@ class Dealer:
 
         src = req.get("fields", ["docnm_kwd", "content_ltks", "kb_id", "img_id", "title_tks",
                                  "doc_id", "vector", "position_int", "content_with_weight"])
-
+        filter = req.get("filter_exp", "")
         # Vector search parameters
         vector_search_params = self._vector(qst, embd_mdl, req.get("similarity", 0.1), req.get("topk", 1024))
         query_vector = vector_search_params["query_vector"]
@@ -86,9 +86,8 @@ class Dealer:
                     anns_field=vector_search_params["field"],
                     limit=req.get("size", 10),
                     search_params={"metric_type": "COSINE", "params": {"nprobe": 10}},
-                    # output_fields=["content_with_weight"]  # 指定要返回的字段
-                    output_fields=src  # 指定要返回的字段
-                    #expression="" # todo 如何用起来过滤，后续处理
+                    output_fields=src,
+                    filter=filter
                 )
 
                 milvus_logger.info(f"Search results for {idxnm}: {search_results}")
@@ -277,7 +276,7 @@ class Dealer:
                                            rag_tokenizer.tokenize(ans).split(" "),
                                            rag_tokenizer.tokenize(inst).split(" "))
 
-    def retrieval(self, question, embd_mdl, tenant_id, kb_names, page, page_size, similarity_threshold=0.2,
+    def retrieval(self, question, filter_exp, embd_mdl, tenant_id, kb_names, page, page_size, similarity_threshold=0.2,
                   vector_similarity_weight=0.3, top=1024, doc_ids=None, aggs=True, rerank_mdl=None):
         ranks = {"total": 0, "chunks": [], "doc_aggs": {}}
         if not question:
@@ -285,7 +284,7 @@ class Dealer:
         req = {"kb_names": kb_names, "doc_ids": doc_ids, "size": page_size,
                "question": question, "vector": True, "topk": top,
                "similarity": similarity_threshold,
-               "available_int": 1}
+               "available_int": 1, "filter_exp": filter_exp}
         idxnms = index_name(tenant_id, kb_names)
         sres = self.search(req, idxnms, embd_mdl)
 
