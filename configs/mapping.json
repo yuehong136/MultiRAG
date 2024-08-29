@@ -141,6 +141,14 @@
             "max_length": 256
           }
         }
+      },
+      {
+        "text_template": {
+          "match": "auth",
+          "mapping": {
+            "type": "Array"
+          }
+        }
       }
     ]
   }
