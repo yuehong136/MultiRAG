@@ -391,14 +391,15 @@ async def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), u
         conv["message"].pop(i)
         if i < len(conv["message"]):
             conv["message"].pop(i)  # 因为前面 pop 了一次，后面的索引需要调整
-        # todo 待解决：目前无法完全符合预期删除reference
+        # todo 待解决：目前无法完全符合预期删除reference（20240828）
+        # todo ragflow修复了上面的问题，待测试（20240830）
         if i < len(conv["reference"]):
             conv["reference"].pop(i)  # 同样对 reference 做相应的 pop 操作
         break
         # assert conv["message"][i + 1]["id"] == req["message_id"]
         # conv["message"].pop(i)
         # conv["message"].pop(i)
-        # conv["reference"].pop(i)
+        # conv["reference"].pop(max(0, i//2-1))
         # break
     ConversationService.update_by_id(db, conv["id"], conv)
     return get_json_result(data=conv)
