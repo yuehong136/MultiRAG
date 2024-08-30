@@ -255,6 +255,7 @@ class Task(BaseModel):
     process_duration = Column(Float, index=False, nullable=False, default=0)
     progress = Column(Float, index=True, nullable=False, default=0)
     progress_msg = Column(Text, index=False, nullable=True, default="", doc="process message")
+    retry_count = Column(Integer, index=False, nullable=True, default=0)
 
 
 class Dialog(BaseModel):

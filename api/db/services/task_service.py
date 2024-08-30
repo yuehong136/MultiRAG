@@ -65,9 +65,15 @@ class TaskService(CommonService):
         # 将查询结果转换为字典
         task = docs[0]._asdict()  # 转换为字典
 
+        msg = "\nTask has been received."
+        prog = random.random() / 10.
+        if task["retry_count"] >= 3:
+            msg = "\nERROR: Task is abandoned after 3 times attempts."
+            prog = -1
+
         # 更新进度消息和进度
-        task["progress_msg"] = task["progress_msg"] + "\n" + "Task has been received."
-        task["progress"] = random.random() / 10.
+        task["progress_msg"] = task["progress_msg"] + "\n" + msg
+        task["progress"] = prog
 
         # 将更新写入数据库
         db.query(cls.model).filter(cls.model.id == task["id"]).update({
@@ -76,6 +82,10 @@ class TaskService(CommonService):
         })
 
         db.commit()
+
+        if task["retry_count"] >= 3:
+            return []
+
         return docs
 
     @classmethod
