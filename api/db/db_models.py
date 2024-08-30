@@ -351,11 +351,34 @@ def init_database_tables():
     # 需要创建的 schema 名称
     schema_name = 'local_dev'
 
-    # 检查并创建 schema
-    with engine.connect() as connection:
-        connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+    # # 检查并创建 schema
+    # with engine.connect() as connection:
+    #     connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+    #
+    #     connection.execute(text("COMMIT"))  # 提交创建schema的事务
 
-        connection.execute(text("COMMIT"))  # 提交创建schema的事务
+    # 检查 schema 是否存在
+    schema_exists = False
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name = :schema_name"
+            ), {"schema_name": schema_name})
+            schema_exists = result.fetchone() is not None
+
+        # 如果 schema 不存在，则创建 schema
+        if not schema_exists:
+            LOGGER.info(f"Schema {schema_name} does not exist. Creating schema...")
+            with engine.connect() as connection:
+                connection.execute(text(f"CREATE SCHEMA {schema_name}"))
+                connection.execute(text("COMMIT"))
+            LOGGER.info(f"Schema {schema_name} created successfully.")
+        else:
+            LOGGER.info(f"Schema {schema_name} already exists. Skipping schema creation.")
+
+    except OperationalError as e:
+        LOGGER.exception(f"OperationalError while checking or creating schema: {e}")
+        return f"OperationalError: {str(e)}"
 
     # # 构建相对路径到 alembic.ini 和迁移脚本目录
     # current_dir = os.path.dirname(__file__)
