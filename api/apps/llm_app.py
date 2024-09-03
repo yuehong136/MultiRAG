@@ -22,7 +22,6 @@ from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel
 from pydantic import BaseModel
 from typing import Optional
 import requests
-import ast
 
 
 class SetAPIKeyRequest(BaseModel):
@@ -275,6 +274,14 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
         llm_name = req["llm_name"]
         api_key = '{' + f'"fish_audio_ak": "{req.get("fish_audio_ak", "")}", ' \
                 f'"fish_audio_refid": "{req.get("fish_audio_refid", "59cb5986671546eaa6ca8ae6f29f6d22")}"' + '}'
+    elif factory == "Google Cloud":
+        llm_name = req["llm_name"]
+        api_key = (
+            "{" + f'"google_project_id": "{req.get("google_project_id", "")}", '
+            f'"google_region": "{req.get("google_region", "")}", '
+            f'"google_service_account_key": "{req.get("google_service_account_key", "")}"'
+            + "}"
+        )
     else:
         llm_name = req["llm_name"]
         api_key = req.get("api_key", "xxxxxxxxxxxxxxx")
