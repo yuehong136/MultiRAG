@@ -427,7 +427,8 @@ async def rename(
         file = FileService.get_by_id(db, req["file_id"])
         if not file:
             return get_data_error_result(retmsg="File not found!")
-        if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
+        if file.type != FileType.FOLDER.value \
+                and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
             return construct_json_result(data=False, retmsg="The extension of file can't be changed",
                                          retcode=RetCode.ARGUMENT_ERROR)
         for f in FileService.query(db, name=req["name"], pf_id=file.parent_id):
