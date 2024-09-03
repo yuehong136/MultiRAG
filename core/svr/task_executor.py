@@ -214,15 +214,20 @@ def build(row, db: Session):
             del d["image"]  # 如果 image 字段为空，则删除该条记录的image
             docs.append(d)
             continue
-        output_buffer = BytesIO()
-        if isinstance(d["image"], bytes):
-            output_buffer = BytesIO(d["image"])
-        else:
-            d["image"].save(output_buffer, format='JPEG')
+        try:
+            output_buffer = BytesIO()
+            if isinstance(d["image"], bytes):
+                output_buffer = BytesIO(d["image"])
+            else:
+                d["image"].save(output_buffer, format='JPEG')
 
-        st = timer()
-        MINIO.put(row["kb_id"], d["pk"], output_buffer.getvalue())
-        el += timer() - st
+            st = timer()
+            MINIO.put(row["kb_id"], d["pk"], output_buffer.getvalue())
+            el += timer() - st
+        except Exception as e:
+            cron_logger.error(str(e))
+            traceback.print_exc()
+
         d["img_id"] = "{}-{}".format(row["kb_id"], d["pk"])
         del d["image"]
         docs.append(d)
