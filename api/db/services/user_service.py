@@ -193,3 +193,47 @@ class UserTenantService(CommonService):
             raise e
         db.refresh(user_tenant)
         return user_tenant
+
+
+    @classmethod
+    def get_by_tenant_id(cls, db: Session, tenant_id):
+        query = (
+            db.query(
+                cls.model.user_id,
+                cls.model.tenant_id,
+                cls.model.role,
+                cls.model.status,
+                User.nickname,
+                User.email,
+                User.avatar,
+                User.is_authenticated,
+                User.is_active,
+                User.is_anonymous,
+                User.status,
+                User.is_superuser,
+            )
+            .join(User, cls.model.user_id == User.id)
+            .filter(
+                cls.model.tenant_id == tenant_id,
+                cls.model.status == StatusEnum.VALID.value
+            )
+        )
+        results = query.all()
+        users_data = [
+            {
+                "user_id": result[0],
+                "tenant_id": result[1],
+                "role": result[2],
+                "status": result[3],
+                "nickname": result[4],
+                "email": result[5],
+                "avatar": result[6],
+                "is_authenticated": result[7],
+                "is_active": result[8],
+                "is_anonymous": result[9],
+                "user_status": result[10],
+                "is_superuser": result[11],
+            }
+            for result in results
+        ]
+        return users_data
