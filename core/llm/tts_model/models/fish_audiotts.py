@@ -44,10 +44,11 @@ class FishAudioTTS(Base):
         self.ref_id = key.get("fish_audio_refid")
         self.base_url = base_url
 
-    def transcription(self, text):
+    def tts(self, text):
         from http import HTTPStatus
 
-        request = request = ServeTTSRequest(text=text, reference_id=self.ref_id)
+        text = self.normalize_text(text)
+        request = ServeTTSRequest(text=text, reference_id=self.ref_id)
 
         with httpx.Client() as client:
             try:

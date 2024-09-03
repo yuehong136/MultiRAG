@@ -334,14 +334,12 @@ async def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(m
 
     def stream_audio() -> Generator[bytes, None, None]:
         try:
-            for chunk in tts_mdl(text):
+            for chunk in tts_mdl.tts(text):
                 yield chunk
         except Exception as e:
-            error_message = json.dumps({
-                "retcode": 500,
-                "retmsg": str(e),
-                "data": {"answer": "**ERROR**: " + str(e)}
-            }, ensure_ascii=False).encode('utf-8')
+            error_message = ("data:" + json.dumps({"retcode": 500, "retmsg": str(e),
+                            "data": {"answer": "**ERROR**: "+str(e)}},
+                            ensure_ascii=False)).encode('utf-8')
             yield error_message
 
     headers = {
