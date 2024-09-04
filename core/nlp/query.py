@@ -96,10 +96,10 @@ class MilvusQueryer:
                         m) for m in sm]
                 sm = [MilvusQueryer.subSpecialChar(m) for m in sm if len(m) > 1]
                 sm = [m for m in sm if len(m) > 1]
-                if len(sm) < 2:
-                    sm = []
+
 
                 keywords.append(re.sub(r"[ \\\"']+", "", tk))
+                keywords.extend(sm)
                 if len(keywords) >= 12: break
 
                 tk_syns = self.syn.lookup(tk)
