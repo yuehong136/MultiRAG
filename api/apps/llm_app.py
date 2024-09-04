@@ -18,7 +18,7 @@ from api.settings import RetCode
 from api.utils.api_utils import get_json_result, server_error_response, validate_request, get_data_error_result
 from api.db import StatusEnum, LLMType
 from api.db.db_models import TenantLLM
-from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel
+from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 from pydantic import BaseModel
 from typing import Optional
 import requests
@@ -340,6 +340,15 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
             else:
                 pass
         except Exception as e:
+            msg += f"\nFail to access model({llm['llm_name']})." + str(e)
+    elif llm["model_type"] == LLMType.TTS:
+        mdl = TTSModel[factory](
+            key=llm["api_key"], model_name=llm["llm_name"], base_url=llm["api_base"]
+        )
+        try:
+            for resp in mdl.tts("Hello~ Ragflower!"):
+                pass
+        except RuntimeError as e:
             msg += f"\nFail to access model({llm['llm_name']})." + str(e)
     else:
         # TODO: check other type of models
