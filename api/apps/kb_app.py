@@ -106,6 +106,15 @@ async def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_
 @router.get('/detail', summary="获取知识库详情", response_description="成功获取知识库详情")
 async def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
+        tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
+        for m in tenants:
+            if KnowledgebaseService.query(
+                    db, tenant_id=m["tenant_id"], id=kb_id):
+                break
+        else:
+            return get_json_result(
+                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+                retcode=RetCode.OPERATING_ERROR)
         kb = KnowledgebaseService.get_detail(db, kb_id)
         if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
