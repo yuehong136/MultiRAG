@@ -347,7 +347,9 @@ class CanvasTemplate(BaseModel):
     canvas_type = Column(String(32), index=True, nullable=True, doc="Canvas type")
     dsl = Column(JSONB, index=False, nullable=True, default={})
 
-
+'''
+拥有权限，采用这种方式
+'''
 def init_database_tables():
     # 需要创建的 schema 名称
     schema_name = 'local_dev'
@@ -426,3 +428,55 @@ def init_database_tables():
     if create_failed_list:
         LOGGER.error(f"Failed to create tables: {create_failed_list}")
         raise Exception(f"Failed to create tables: {create_failed_list}")
+
+'''
+没有权限，采用这种方式
+'''
+# def init_database_tables():
+#     # 需要检查的 schema 名称
+#     schema_name = 'user_drm'
+#
+#     # 检查 schema 是否存在
+#     schema_exists = False
+#     try:
+#         with engine.connect() as connection:
+#             result = connection.execute(text(
+#                 "SELECT schema_name FROM information_schema.schemata WHERE schema_name = :schema_name"
+#             ), {"schema_name": schema_name})
+#             schema_exists = result.fetchone() is not None
+#
+#         # 如果 schema 不存在，则返回报错提示
+#         if not schema_exists:
+#             error_msg = f"Schema {schema_name} does not exist. Please ensure the schema is created before proceeding."
+#             LOGGER.error(error_msg)
+#             return error_msg
+#         else:
+#             LOGGER.info(f"Schema {schema_name} already exists. Continuing with table creation...")
+#
+#     except OperationalError as e:
+#         LOGGER.exception(f"OperationalError while checking schema existence: {e}")
+#         return f"OperationalError: {str(e)}"
+#
+#     # 获取现有表列表
+#     inspector = sa_inspect(engine)
+#     existing_tables = inspector.get_table_names(schema=schema_name)
+#     members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
+#     table_objs = []
+#     create_failed_list = []
+#
+#     for name, obj in members:
+#         if obj != BaseModel and issubclass(obj, BaseModel):
+#             table_objs.append(obj)
+#             LOGGER.info(f"Start creating table {obj.__name__} in schema {schema_name}")
+#             try:
+#                 # 检查表是否存在并创建表
+#                 if obj.__tablename__ not in existing_tables:
+#                     obj.__table__.create(bind=engine, checkfirst=True)
+#                     LOGGER.info(f"Successfully created table: {obj.__name__}")
+#             except OperationalError as e:
+#                 LOGGER.exception(f"Error creating table {obj.__name__}: {e}")
+#                 create_failed_list.append(obj.__name__)
+#
+#     if create_failed_list:
+#         LOGGER.error(f"Failed to create tables: {create_failed_list}")
+#         raise Exception(f"Failed to create tables: {create_failed_list}")
