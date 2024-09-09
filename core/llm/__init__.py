@@ -1,6 +1,7 @@
 from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
 from core.llm.chat_model.models.ollama_chat import OllamaChat
+from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
 from core.llm.chat_model.models.qwen_chat import QWenChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
@@ -60,7 +61,8 @@ ChatModel = {
     # "BaiChuan": BaiChuanChat,
     # "MiniMax": MiniMaxChat,
     # "Mistral": MistralChat,
-    "Doubao": DoubaoChat
+    "Doubao": DoubaoChat,
+    "OpenAI-API-Compatible": OpenAI_APIChat
 }
 
 RerankModel = {
