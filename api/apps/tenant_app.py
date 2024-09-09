@@ -10,6 +10,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import inspect
 
+from api.db import UserTenantRole, StatusEnum
+from api.db.db_models import UserTenant
+from api.settings import RetCode
+from api.utils import get_uuid
 from api.utils.api_utils import server_error_response
 from api.apps import manager
 from api.db.database import get_db
@@ -37,5 +41,40 @@ async def user_list(tenant_id, db: Session = Depends(get_db), user=Depends(manag
     try:
         users = UserTenantService.get_by_tenant_id(db, tenant_id)
         return get_json_result(data=users)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post('/<tenant_id>/user', summary="新增租户下用户", response_model=dict)
+def create(tenant_id, user_id, db: Session = Depends(get_db), user=Depends(manager)):
+    if not user_id:
+        return get_json_result(
+            data=False, retmsg='Lack of "USER ID"', retcode=RetCode.ARGUMENT_ERROR)
+
+    try:
+        user_tenants = UserTenantService.query(db, user_id=user_id, tenant_id=tenant_id)
+        if user_tenants:
+            uuid = user_tenants[0].id
+            return get_json_result(data={"id": uuid})
+
+        uuid = get_uuid()
+        UserTenantService.save(
+            db,
+            id=uuid,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            role=UserTenantRole.NORMAL.value,
+            status=StatusEnum.VALID.value)
+
+        return get_json_result(data={"id": uuid})
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.delete('/<tenant_id>/user/<user_id>', summary="删除租户下用户", response_model=dict)
+def rm(tenant_id, user_id, db: Session = Depends(get_db), user=Depends(manager)):
+    try:
+        UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id, UserTenant.user_id == user_id])
+        return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
