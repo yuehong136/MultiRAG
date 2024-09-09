@@ -13,11 +13,13 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from api.db.services.canvas_service import CanvasTemplateService, UserCanvasService
 from api.utils import get_uuid
-from api.utils.api_utils import get_json_result, server_error_response
+from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from api.db.database import get_db
 from api.apps import manager
 from agent.canvas import Canvas
@@ -44,6 +46,14 @@ class RunCanvasRequest(BaseModel):
 class ResetCanvasRequest(BaseModel):
     id: str
 
+
+class DBConnectionRequest(BaseModel):
+    db_type: str
+    database: str
+    username: str
+    host: str
+    port: int
+    password: str
 
 @router.get('/templates', summary="获取所有画布模板", response_description="成功获取所有画布模板")
 async def templates(db: Session = Depends(get_db), user=Depends(manager)):
@@ -79,7 +89,7 @@ async def save(request: SaveCanvasRequest, db: Session = Depends(get_db), user=D
             return server_error_response(ValueError("Duplicated title."))
         req_data["id"] = get_uuid()
         if not UserCanvasService.save(db, **req_data):
-            return server_error_response("Fail to save canvas.")
+            return get_data_error_result(retmsg="Fail to save canvas.")
     else:
         UserCanvasService.update_by_id(db, req_data["id"], req_data)
 
@@ -90,7 +100,7 @@ async def save(request: SaveCanvasRequest, db: Session = Depends(get_db), user=D
 async def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     c = UserCanvasService.get_by_id(db, canvas_id)
     if not c:
-        return server_error_response("canvas not found.")
+        return get_data_error_result(retmsg="canvas not found.")
     return get_json_result(data=c.to_dict())
 
 
@@ -100,7 +110,7 @@ async def run(request: RunCanvasRequest, db: Session = Depends(get_db), user=Dep
     stream = req_data.get("stream", True)
     cvs = UserCanvasService.get_by_id(db, req_data["id"])
     if not cvs:
-        return server_error_response("canvas not found.")
+        return get_data_error_result(retmsg="canvas not found.")
 
     if not isinstance(cvs.dsl, str):
         cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
@@ -158,7 +168,7 @@ async def reset(request: ResetCanvasRequest, db: Session = Depends(get_db), user
     try:
         user_canvas = UserCanvasService.get_by_id(db, req_data["id"])
         if not user_canvas:
-            return server_error_response("canvas not found.")
+            return get_data_error_result(retmsg="canvas not found.")
 
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id)
         canvas.reset()
@@ -167,3 +177,27 @@ async def reset(request: ResetCanvasRequest, db: Session = Depends(get_db), user
         return get_json_result(data=req_data["dsl"])
     except Exception as e:
         return server_error_response(e)
+
+
+@router.post('/test_db_connect', summary="测试数据库连接", response_description="成功测试数据库连接")
+def test_db_connect(request=DBConnectionRequest, user=Depends(manager)):
+    req = request.model_dump()
+    try:
+        # 根据 db_type 选择不同的数据库引擎
+        if req.db_type in ["mysql", "mariadb"]:
+            db_url = f"mysql+pymysql://{req.username}:{req.password}@{req.host}:{req.port}/{req.database}"
+        elif req.db_type == 'postgresql':
+            db_url = f"postgresql+psycopg2://{req.username}:{req.password}@{req.host}:{req.port}/{req.database}"
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported database type")
+
+        # 创建数据库引擎
+        engine = create_engine(db_url)
+
+        # 测试连接
+        with engine.connect() as connection:
+            connection.execute("SELECT 1")
+
+        return {"data": "Database Connection Successful!"}
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
