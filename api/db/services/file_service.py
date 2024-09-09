@@ -325,12 +325,12 @@ class FileService(CommonService):
                     location += "_"
                 MINIO.put(kb.id, location, file_blob)
 
-                # 根据 labels 是否有值来决定 id 的生成方式
-                if labels:
-                    file_id = os.path.splitext(filename)[0]  # 使用文件名的部分
-                else:
-                    file_id = get_uuid()  # 默认使用 UUID
-
+                # # 根据 labels 是否有值来决定 id 的生成方式
+                # if labels:
+                #     file_id = os.path.splitext(filename)[0]  # 使用文件名的部分
+                # else:
+                #     file_id = get_uuid()  # 默认使用 UUID
+                file_id = get_uuid()
                 doc = {
                     "id": file_id,
                     "kb_id": kb.id,
