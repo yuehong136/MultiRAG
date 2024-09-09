@@ -18,7 +18,7 @@ from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from api.db.services.user_service import TenantService
+from api.db.services.user_service import TenantService, UserTenantService
 from api.settings import RetCode
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
@@ -106,10 +106,10 @@ async def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_
 @router.get('/detail', summary="获取知识库详情", response_description="成功获取知识库详情")
 async def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
-        tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
-        for m in tenants:
+        tenants = UserTenantService.query(user_id=user.id)
+        for tenant in tenants:
             if KnowledgebaseService.query(
-                    db, tenant_id=m["tenant_id"], id=kb_id):
+                    tenant_id=tenant.tenant_id, id=kb_id):
                 break
         else:
             return get_json_result(
