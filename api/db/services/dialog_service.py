@@ -6,6 +6,7 @@
 @date：2024/7/24 21:00
 @desc:
 """
+import binascii
 import json
 import os
 import re
@@ -154,7 +155,9 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     # 获取提示配置和字段映射
     prompt_config = dialog.prompt_config
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
-
+    tts_mdl = None
+    if prompt_config.get("tts"):
+        tts_mdl = LLMBundle(dialog.tenant_id, LLMType.TTS)
     # 如果字段映射存在，尝试使用SQL检索答案
     # 检查field_map是否为空，如果不为空，则执行以下操作
     if field_map:
@@ -226,7 +229,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
 
     # 如果没有知识并且配置了空响应，返回空响应
     if not knowledges and prompt_config.get("empty_response"):
-        yield {"answer": prompt_config["empty_response"], "reference": kbinfos}
+        empty_res = prompt_config["empty_response"]
+        yield {"answer": empty_res, "reference": kbinfos, "audio_binary": tts(tts_mdl, empty_res)}
         return {"answer": prompt_config["empty_response"], "reference": kbinfos}
 
     kwargs["knowledge"] = "\n".join(knowledges)
@@ -283,27 +287,49 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
             answer += " Please set LLM API-Key in 'User Setting -> Model Providers -> API-Key'"
         return {"answer": answer, "reference": refs, "prompt": prompt}
 
-    # 根据是否启用流式输出生成回答
+    # # 根据是否启用流式输出生成回答
+    # if stream:
+    #     # 初始化答案变量，用于存储模型生成的解答
+    #     answer = ""
+    #     # 使用chat_streamly方法以流式处理方式获取答案
+    #     for ans in chat_mdl.chat_streamly(msg[0]["content"], msg[1:], gen_conf):
+    #         # 更新答案变量为最新的解答
+    #         answer = ans
+    #         # 生成并yield一个包含当前答案和空引用的字典
+    #         yield {"answer": answer, "reference": {}}
+    #     # 处理完成后，对最终答案进行装饰并yield
+    #     yield decorate_answer(answer)
+    # else:
+    #     # 使用chat方法直接获取答案
+    #     # answer = chat_mdl.chat(msg[0]["content"], msg[1:], gen_conf)
+    #     answer = chat_mdl.chat(prompt, msg[1:], gen_conf)
+    #     # 记录对话日志，包含用户消息和助手的回答
+    #     chat_logger.info("User: {}|Assistant: {}".format(
+    #         msg[-1]["content"], answer))
+    #     # 对答案进行装饰并yield
+    #     yield decorate_answer(answer)
+
     if stream:
-        # 初始化答案变量，用于存储模型生成的解答
+        last_ans = ""
         answer = ""
-        # 使用chat_streamly方法以流式处理方式获取答案
-        for ans in chat_mdl.chat_streamly(msg[0]["content"], msg[1:], gen_conf):
-            # 更新答案变量为最新的解答
+        for ans in chat_mdl.chat_streamly(prompt, msg[1:], gen_conf):
             answer = ans
-            # 生成并yield一个包含当前答案和空引用的字典
-            yield {"answer": answer, "reference": {}}
-        # 处理完成后，对最终答案进行装饰并yield
+            delta_ans = ans[len(last_ans):]
+            if num_tokens_from_string(delta_ans) < 12:
+                continue
+            last_ans = answer
+            yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
+        delta_ans = answer[len(last_ans):]
+        if delta_ans:
+            yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
         yield decorate_answer(answer)
     else:
-        # 使用chat方法直接获取答案
-        # answer = chat_mdl.chat(msg[0]["content"], msg[1:], gen_conf)
         answer = chat_mdl.chat(prompt, msg[1:], gen_conf)
-        # 记录对话日志，包含用户消息和助手的回答
         chat_logger.info("User: {}|Assistant: {}".format(
             msg[-1]["content"], answer))
-        # 对答案进行装饰并yield
-        yield decorate_answer(answer)
+        res = decorate_answer(answer)
+        res["audio_binary"] = tts(tts_mdl, answer)
+        yield res
 
 def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
     sys_prompt = "你是一个DBA。你需要这对以下表的字段结构，根据用户的问题列表，写出最后一个问题对应的SQL。"
@@ -471,3 +497,12 @@ def rewrite(tenant_id, llm_id, question,db: Session):
     """
     ans = chat_mdl.chat(prompt, [{"role": "user", "content": question}], {"temperature": 0.8})
     return ans
+
+
+def tts(tts_mdl, text):
+    return
+    if not tts_mdl or not text: return
+    bin = b""
+    for chunk in tts_mdl.tts(text):
+        bin += chunk
+    return binascii.hexlify(bin).decode("utf-8")
