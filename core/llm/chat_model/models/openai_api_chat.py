@@ -1,6 +1,6 @@
 import os
 
-from test.core.llm.chat_model.base import Base
+from core.llm.chat_model.base import Base
 
 
 class OpenAI_APIChat(Base):
