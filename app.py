@@ -45,7 +45,6 @@ class Mode(str, Enum):
 #   st.warning('Please input a real name.')
 #   st.stop()
 # st.success('Thank you for inputting a name.')
-default_model = 'GLM-4-520'
 
 # HELP = """
 # 请在下方选取一个功能。
@@ -468,11 +467,11 @@ with st.sidebar:
         if save_btn.button("保存", use_container_width=True):
             st.session_state.show_save_input = True
             handle_session_saving(selected_file_full_path)
-        # if load_btn.button("加载", use_container_width=True):
-        #     st.success('当前会话已成功加载！')
-        #     st.session_state.messages = display_chat_history(selected_file_full_path)
-        #     display_conversations()
-        #     st.session_state.from_history = True  # 标记为从历史会话加载
+        if load_btn.button("加载", use_container_width=True):
+            st.success('当前会话已成功加载！')
+            st.session_state.messages = display_chat_history(selected_file_full_path)
+            display_conversations()
+            st.session_state.from_history = True  # 标记为从历史会话加载
         if del_btn.button("删除", use_container_width=True):
             st.success('当前会话已成功删除！')
             handle_session_deleting()

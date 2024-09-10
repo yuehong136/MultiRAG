@@ -136,3 +136,4 @@ pyexcel-xlsx >= 0.6.0
 Aspose.Slides >= 24.8.0
 # ormsgpack 是一个适用于 Python 的快速 msgpack 库。它是orjson的分支/重启版本， 序列化速度比msgpack-python更快，反序列化速度稍慢（目前）。它原生支持序列化： dataclass、 datetime、 numpy、 pydantic和 UUID实例。
 ormsgpack >= 1.5.0
+email-validator >= 2.2.0

@@ -358,7 +358,7 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
             key=llm["api_key"], model_name=llm["llm_name"], base_url=llm["api_base"]
         )
         try:
-            for resp in mdl.tts("Hello~ Ragflower!"):
+            for resp in mdl.tts("Hello~ Multirager!"):
                 pass
         except RuntimeError as e:
             msg += f"\nFail to access model({llm['llm_name']})." + str(e)
