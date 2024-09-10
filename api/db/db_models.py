@@ -24,7 +24,7 @@ LOGGER = getLogger()
 
 class User(BaseModel):
     __tablename__ = "t_ai_users"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     access_token = Column(String(255), index=True, nullable=True)
@@ -56,7 +56,7 @@ class User(BaseModel):
 
 class Tenant(BaseModel):
     __tablename__ = "t_ai_tenants"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     name = Column(String(100), index=True, nullable=True, doc="Tenant name")
@@ -85,7 +85,7 @@ class Tenant(BaseModel):
 
 class UserTenant(BaseModel):
     __tablename__ = "t_ai_user_tenants"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
     id = Column(String(128), primary_key=True, index=False, nullable=False)
     user_id = Column(String(128), index=True, nullable=False)
@@ -115,7 +115,7 @@ class UserTenant(BaseModel):
 
 class LLMFactories(BaseModel):
     __tablename__ = "t_ai_llm_factories"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
     name = Column(String(128), primary_key=True, index=False, nullable=False, doc="LLM factory name")
     logo = Column(Text, index=False, nullable=True)
@@ -125,7 +125,7 @@ class LLMFactories(BaseModel):
 
 class LLM(BaseModel):
     __tablename__ = "t_ai_llms"
-    __table_args__ = {"schema": "local_dev"}
+    __table_args__ = {"schema": "usr_ai"}
 
     llm_name = Column(String(128), primary_key=True, index=True, nullable=False)
     mdl_type = Column(String(128), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, ASR")
@@ -137,7 +137,7 @@ class LLM(BaseModel):
 
 class TenantLLM(BaseModel):
     __tablename__ = "t_ai_tenant_llms"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
     tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
     llm_factory = Column(String(128), primary_key=True, index=True, nullable=False, doc="LLM factory name")
@@ -151,7 +151,7 @@ class TenantLLM(BaseModel):
 class Knowledgebase(BaseModel):
 
     __tablename__ = "t_ai_knowledgebases"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
@@ -177,7 +177,7 @@ class Knowledgebase(BaseModel):
 class Document(BaseModel):
 
     __tablename__ = "t_ai_documents"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
@@ -205,7 +205,7 @@ class Document(BaseModel):
 
 class File(BaseModel):
     __tablename__ = "t_ai_files"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
@@ -234,7 +234,7 @@ class File(BaseModel):
 
 class File2Document(BaseModel):
     __tablename__ = "t_ai_file2documents"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
@@ -244,7 +244,7 @@ class File2Document(BaseModel):
 
 class Task(BaseModel):
     __tablename__ = "t_ai_tasks"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
@@ -260,7 +260,7 @@ class Task(BaseModel):
 
 class Dialog(BaseModel):
     __tablename__ = "t_ai_dialogs"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     tenant_id = Column(String(32), index=True, nullable=False)
@@ -288,7 +288,7 @@ class Dialog(BaseModel):
 
 class Conversation(BaseModel):
     __tablename__ = "t_ai_conversations"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     dialog_id = Column(String(32), index=True, nullable=False)
@@ -299,7 +299,7 @@ class Conversation(BaseModel):
 
 class APIToken(BaseModel):
     __tablename__ = "t_ai_api_tokens"
-    __table_args__ = {"schema": "local_dev"}  
+    __table_args__ = {"schema": "usr_ai"}  
 
     tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
     token = Column(String(255), primary_key=True, index=True, nullable=False)
@@ -309,7 +309,7 @@ class APIToken(BaseModel):
 
 class API4Conversation(BaseModel):
     __tablename__ = "t_ai_api4conversations"
-    __table_args__ = {"schema": "local_dev"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     dialog_id = Column(String(32), index=True, nullable=False)
@@ -325,7 +325,7 @@ class API4Conversation(BaseModel):
 
 class UserCanvas(BaseModel):
     __tablename__ = "t_ai_user_canvases"
-    __table_args__ = {"schema": "local_dev"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
@@ -338,7 +338,7 @@ class UserCanvas(BaseModel):
 
 class CanvasTemplate(BaseModel):
     __tablename__ = "t_ai_canvas_templates"
-    __table_args__ = {"schema": "local_dev"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
@@ -350,91 +350,15 @@ class CanvasTemplate(BaseModel):
 '''
 拥有权限，采用这种方式
 '''
-def init_database_tables():
-    # 需要创建的 schema 名称
-    schema_name = 'local_dev'
-
-    # # 检查并创建 schema
-    # with engine.connect() as connection:
-    #     connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
-    #
-    #     connection.execute(text("COMMIT"))  # 提交创建schema的事务
-
-    # 检查 schema 是否存在
-    schema_exists = False
-    try:
-        with engine.connect() as connection:
-            result = connection.execute(text(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name = :schema_name"
-            ), {"schema_name": schema_name})
-            schema_exists = result.fetchone() is not None
-
-        # 如果 schema 不存在，则创建 schema
-        if not schema_exists:
-            LOGGER.info(f"Schema {schema_name} does not exist. Creating schema...")
-            with engine.connect() as connection:
-                connection.execute(text(f"CREATE SCHEMA {schema_name}"))
-                connection.execute(text("COMMIT"))
-            LOGGER.info(f"Schema {schema_name} created successfully.")
-        else:
-            LOGGER.info(f"Schema {schema_name} already exists. Skipping schema creation.")
-
-    except OperationalError as e:
-        LOGGER.exception(f"OperationalError while checking or creating schema: {e}")
-        return f"OperationalError: {str(e)}"
-
-    # # 构建相对路径到 alembic.ini 和迁移脚本目录
-    # current_dir = os.path.dirname(__file__)
-    # alembic_ini_path = os.path.join(current_dir, '..', '..', 'configs', 'alembic.ini')
-    # migrations_path = os.path.join(current_dir, '..', '..', 'configs', 'alembic')
-    #
-    # # 执行 Alembic 迁移
-    # alembic_cfg = Config(r"E:\Project\python\study\RAG\configs\alembic.ini")
-    # print("Generated SQLAlchemy URL:", str(engine.url))
-    # alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
-    # alembic_cfg.set_main_option("script_location", r"E:\Project\python\study\RAG\configs\alembic")
-    #
-    # try:
-    #     LOGGER.info("Starting Alembic migration...")
-    #     command.upgrade(alembic_cfg, "head")
-    #     LOGGER.info("Alembic migration completed successfully.")
-    # except UnicodeDecodeError as e:
-    #     LOGGER.error(f"UnicodeDecodeError: {e}")
-    #     raise
-    # except Exception as e:
-    #     LOGGER.exception(f"Alembic migration failed: {e}")
-    #     raise
-
-    # 获取现有表列表
-    inspector = sa_inspect(engine)
-    existing_tables = inspector.get_table_names(schema=schema_name)
-    members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
-    table_objs = []
-    create_failed_list = []
-
-    for name, obj in members:
-        if obj != BaseModel and issubclass(obj, BaseModel):
-            table_objs.append(obj)
-            LOGGER.info(f"Start creating table {obj.__name__} in schema {schema_name}")
-            try:
-                # 检查表是否存在并创建表
-                if obj.__tablename__ not in existing_tables:
-                    obj.__table__.create(bind=engine, checkfirst=True)
-                    LOGGER.info(f"Successfully created table: {obj.__name__}")
-            except OperationalError as e:
-                LOGGER.exception(f"Error creating table {obj.__name__}: {e}")
-                create_failed_list.append(obj.__name__)
-
-    if create_failed_list:
-        LOGGER.error(f"Failed to create tables: {create_failed_list}")
-        raise Exception(f"Failed to create tables: {create_failed_list}")
-
-'''
-没有权限，采用这种方式
-'''
 # def init_database_tables():
-#     # 需要检查的 schema 名称
-#     schema_name = 'user_drm'
+#     # 需要创建的 schema 名称
+#     schema_name = 'usr_ai'
+#
+#     # # 检查并创建 schema
+#     # with engine.connect() as connection:
+#     #     connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+#     #
+#     #     connection.execute(text("COMMIT"))  # 提交创建schema的事务
 #
 #     # 检查 schema 是否存在
 #     schema_exists = False
@@ -445,17 +369,41 @@ def init_database_tables():
 #             ), {"schema_name": schema_name})
 #             schema_exists = result.fetchone() is not None
 #
-#         # 如果 schema 不存在，则返回报错提示
+#         # 如果 schema 不存在，则创建 schema
 #         if not schema_exists:
-#             error_msg = f"Schema {schema_name} does not exist. Please ensure the schema is created before proceeding."
-#             LOGGER.error(error_msg)
-#             return error_msg
+#             LOGGER.info(f"Schema {schema_name} does not exist. Creating schema...")
+#             with engine.connect() as connection:
+#                 connection.execute(text(f"CREATE SCHEMA {schema_name}"))
+#                 connection.execute(text("COMMIT"))
+#             LOGGER.info(f"Schema {schema_name} created successfully.")
 #         else:
-#             LOGGER.info(f"Schema {schema_name} already exists. Continuing with table creation...")
+#             LOGGER.info(f"Schema {schema_name} already exists. Skipping schema creation.")
 #
 #     except OperationalError as e:
-#         LOGGER.exception(f"OperationalError while checking schema existence: {e}")
+#         LOGGER.exception(f"OperationalError while checking or creating schema: {e}")
 #         return f"OperationalError: {str(e)}"
+#
+#     # # 构建相对路径到 alembic.ini 和迁移脚本目录
+#     # current_dir = os.path.dirname(__file__)
+#     # alembic_ini_path = os.path.join(current_dir, '..', '..', 'configs', 'alembic.ini')
+#     # migrations_path = os.path.join(current_dir, '..', '..', 'configs', 'alembic')
+#     #
+#     # # 执行 Alembic 迁移
+#     # alembic_cfg = Config(r"E:\Project\python\study\RAG\configs\alembic.ini")
+#     # print("Generated SQLAlchemy URL:", str(engine.url))
+#     # alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+#     # alembic_cfg.set_main_option("script_location", r"E:\Project\python\study\RAG\configs\alembic")
+#     #
+#     # try:
+#     #     LOGGER.info("Starting Alembic migration...")
+#     #     command.upgrade(alembic_cfg, "head")
+#     #     LOGGER.info("Alembic migration completed successfully.")
+#     # except UnicodeDecodeError as e:
+#     #     LOGGER.error(f"UnicodeDecodeError: {e}")
+#     #     raise
+#     # except Exception as e:
+#     #     LOGGER.exception(f"Alembic migration failed: {e}")
+#     #     raise
 #
 #     # 获取现有表列表
 #     inspector = sa_inspect(engine)
@@ -480,3 +428,55 @@ def init_database_tables():
 #     if create_failed_list:
 #         LOGGER.error(f"Failed to create tables: {create_failed_list}")
 #         raise Exception(f"Failed to create tables: {create_failed_list}")
+
+'''
+没有权限，采用这种方式
+'''
+def init_database_tables():
+    # 需要检查的 schema 名称
+    schema_name = 'usr_ai'
+
+    # 检查 schema 是否存在
+    schema_exists = False
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name = :schema_name"
+            ), {"schema_name": schema_name})
+            schema_exists = result.fetchone() is not None
+
+        # 如果 schema 不存在，则返回报错提示
+        if not schema_exists:
+            error_msg = f"Schema {schema_name} does not exist. Please ensure the schema is created before proceeding."
+            LOGGER.error(error_msg)
+            return error_msg
+        else:
+            LOGGER.info(f"Schema {schema_name} already exists. Continuing with table creation...")
+
+    except OperationalError as e:
+        LOGGER.exception(f"OperationalError while checking schema existence: {e}")
+        return f"OperationalError: {str(e)}"
+
+    # 获取现有表列表
+    inspector = sa_inspect(engine)
+    existing_tables = inspector.get_table_names(schema=schema_name)
+    members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
+    table_objs = []
+    create_failed_list = []
+
+    for name, obj in members:
+        if obj != BaseModel and issubclass(obj, BaseModel):
+            table_objs.append(obj)
+            LOGGER.info(f"Start creating table {obj.__name__} in schema {schema_name}")
+            try:
+                # 检查表是否存在并创建表
+                if obj.__tablename__ not in existing_tables:
+                    obj.__table__.create(bind=engine, checkfirst=True)
+                    LOGGER.info(f"Successfully created table: {obj.__name__}")
+            except OperationalError as e:
+                LOGGER.exception(f"Error creating table {obj.__name__}: {e}")
+                create_failed_list.append(obj.__name__)
+
+    if create_failed_list:
+        LOGGER.error(f"Failed to create tables: {create_failed_list}")
+        raise Exception(f"Failed to create tables: {create_failed_list}")

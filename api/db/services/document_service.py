@@ -10,6 +10,7 @@ import hashlib
 import json
 import random
 import re
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
@@ -18,6 +19,7 @@ from io import BytesIO
 from typing import Optional, List, Dict
 
 from pymilvus import MilvusException
+from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 
@@ -107,8 +109,6 @@ class DocumentService(CommonService):
 
     @classmethod
     def remove_document(cls, db: Session, doc: Document, tenant_id: str):
-        # ELASTICSEARCH.delete_by_query(
-        #     Q("match", doc_id=doc.id), index=search.index_name(tenant_id))
         document = DocumentService.get_by_doc_id(db, doc.id)
         kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
         # 构建 Milvus 集合名称
@@ -229,17 +229,51 @@ class DocumentService(CommonService):
         return kb_update
 
     @classmethod
-    def clear_chunk_num(cls, db: Session, doc_id: str):
+    def clear_chunk_num(cls, db: Session, doc_id: str, max_retries=3):
         doc = cls.get_by_id(db, doc_id)
         if not doc:
             raise LookupError("Can't find document in database.")
+        retries = 0
+        while retries < max_retries:
+            try:
+                # 读取数据
+                kb_record = db.query(Knowledgebase).filter_by(id=doc.kb_id).first()
 
-        kb_update = db.query(Knowledgebase).filter_by(id=doc.kb_id).update({
-            Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
-            Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
-            Knowledgebase.doc_num: Knowledgebase.doc_num - 1
-        })
-        return kb_update
+                # 检查数据是否存在，进行更新
+                if kb_record:
+                    kb_update = db.query(Knowledgebase).filter_by(id=doc.kb_id).update({
+                        Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
+                        Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
+                        Knowledgebase.doc_num: Knowledgebase.doc_num - 1
+                    })
+                    db.commit()
+
+                    return kb_update
+
+            except OperationalError as e:
+                # 如果检测到锁冲突（例如数据库锁定），可以选择重试
+                db.rollback()
+                retries += 1
+                wait_time = 2 ** retries  # 使用指数退避策略
+                time.sleep(wait_time)
+                if retries >= max_retries:
+                    raise e  # 达到最大重试次数后抛出异常
+
+            except NoResultFound:
+                db.rollback()
+                raise LookupError("Knowledgebase entry not found.")
+
+            except Exception as e:
+                db.rollback()  # 回滚事务以防止不一致性
+                raise e
+
+        return None
+        # kb_update = db.query(Knowledgebase).filter_by(id=doc.kb_id).update({
+        #     Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
+        #     Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
+        #     Knowledgebase.doc_num: Knowledgebase.doc_num - 1
+        # })
+        # return kb_update
 
     @classmethod
     def get_tenant_id(cls, db: Session, doc_id: str):

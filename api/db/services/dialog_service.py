@@ -157,7 +157,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
     tts_mdl = None
     if prompt_config.get("tts"):
-        tts_mdl = LLMBundle(dialog.tenant_id, LLMType.TTS)
+        tts_mdl = LLMBundle(db, dialog.tenant_id, LLMType.TTS)
     # 如果字段映射存在，尝试使用SQL检索答案
     # 检查field_map是否为空，如果不为空，则执行以下操作
     if field_map:

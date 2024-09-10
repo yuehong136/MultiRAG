@@ -88,7 +88,7 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1,
     except Exception as e:
         cron_logger.error("set_progress:({}), {}".format(task_id, str(e)))
 
-    db.close()
+    # db.close()
     if cancel:
         if PAYLOAD:
             PAYLOAD.ack()
@@ -372,124 +372,133 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
 
 
 def main():
-    db = SessionLocal()
-    rows = collect(db)
-    if len(rows) == 0:
-        return
-    # 预处理 auth 列，转换为列表，处理 None 值
-    def convert_auth(auth_str):
-        if auth_str is None:
-            return []  # 如果 auth 为 None，转换为空列表
+    # 使用 with 语句确保事务的正确结束和会话关闭
+    with SessionLocal() as db:
         try:
-            return json.loads(auth_str) if isinstance(auth_str, str) else auth_str
-        except json.JSONDecodeError:
-            cron_logger.error(f"Failed to decode auth field: {auth_str}")
-            return []  # 解析失败时，返回空列表
-
-    rows['auth'] = rows['auth'].apply(convert_auth)
-
-    for _, r in rows.iterrows():
-        callback = partial(set_progress, db, r["id"], r["from_page"], r["to_page"])
-        try:
-            embd_mdl = LLMBundle(db, r["tenant_id"], LLMType.EMBEDDING, llm_name=r["embd_id"], lang=r["language"])
-        except Exception as e:
-            callback(-1, msg=str(e))
-            cron_logger.error(str(e))
-            continue
-
-        if r.get("task_type", "") == "raptor":
-            try:
-                chat_mdl = LLMBundle(db, r["tenant_id"], LLMType.CHAT, llm_name=r["llm_id"], lang=r["language"])
-                cks, tk_count = run_raptor(r, chat_mdl, embd_mdl, callback)
-            except Exception as e:
-                callback(-1, msg=str(e))
-                cron_logger.error(str(e))
-                continue
-        else:
-            st = timer()
-            cks = build(r, db)
-            cron_logger.info("Build chunks({}): {}".format(r["name"], timer() - st))
-            if cks is None:
-                continue
-            if not cks:
-                callback(1., "No chunk! Done!")
-                continue
-            # TODO: exception handler
-            ## set_progress(r["did"], -1, "ERROR: ")
-            callback(
-                msg="Finished slicing files(%d). Start to embedding the content." %
-                    len(cks))
-            st = timer()
-            try:
-                tk_count = embedding(cks, embd_mdl, r["parser_config"], callback)
-            except Exception as e:
-                callback(-1, "Embedding error:{}".format(str(e)))
-                cron_logger.error(str(e))
-                tk_count = 0
-            cron_logger.info("Embedding elapsed({}): {:.2f}".format(r["name"], timer() - st))
-            callback(msg="Finished embedding({:.2f})! Start to build index!".format(timer() - st))
-
-        kb_id = DocumentService.get_by_doc_id(db, r["doc_id"])["kb_id"]
-        kb = KnowledgebaseService.get_by_id(db, kb_id)
-        init_kb(r, kb.name)
-
-        chunk_count = len(set([c["pk"] for c in cks]))
-        st = timer()
-        milvus_r = ""
-        # 获取集合的schema
-        schema = get_schema(search.index_name_one(r["tenant_id"], kb.name))
-
-        # 逐条插入数据
-        for record in cks:
-            # 转换数据类型
-            converted_record = convert_data_types(record, schema)
-
-            try:
-                # 使用 Milvus 的插入方法插入数据
-                MILVUS_CONNECTION.insert(
-                    collection_name=search.index_name_one(r["tenant_id"], kb.name),
-                    data=converted_record
-                )
-                print("Successfully inserted record to Milvus")
-            except Exception as e:
-                print("Insert error:", e)
-                print("Data being inserted:", converted_record)
-        cron_logger.info("Indexing elapsed({}): {:.2f}".format(r["name"], timer() - st))
-        if milvus_r:
-            callback(-1, f"Insert chunk error, detail info please check logs/api/cron_logger.log. Please also check Milvus status!")
-            # 构建 Milvus 集合名称
-            collection_name = search.index_name_one(r["tenant_id"], kb.name)
-            # 检查集合是否存在并删除 Milvus 中的数据
-            try:
-                if MILVUS_CONNECTION.has_collection(collection_name):
-                    MILVUS_CONNECTION.delete(
-                        collection_name=collection_name,
-                        filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
-                    )
-            except MilvusException as e:
-                return e
-            cron_logger.error(str(milvus_r))
-        else:
-            if TaskService.do_cancel(db, r["id"]):
-                # 构建 Milvus 集合名称
-                collection_name = search.index_name_one(r["tenant_id"], kb.name)
-                # 检查集合是否存在并删除 Milvus 中的数据
+            db = SessionLocal()
+            rows = collect(db)
+            if len(rows) == 0:
+                return
+            # 预处理 auth 列，转换为列表，处理 None 值
+            def convert_auth(auth_str):
+                if auth_str is None:
+                    return []  # 如果 auth 为 None，转换为空列表
                 try:
-                    if MILVUS_CONNECTION.has_collection(collection_name):
-                        MILVUS_CONNECTION.delete(
-                            collection_name=collection_name,
-                            filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
-                            # filter=f"doc_id == '{doc.id}'"
+                    return json.loads(auth_str) if isinstance(auth_str, str) else auth_str
+                except json.JSONDecodeError:
+                    cron_logger.error(f"Failed to decode auth field: {auth_str}")
+                    return []  # 解析失败时，返回空列表
+
+            rows['auth'] = rows['auth'].apply(convert_auth)
+
+            for _, r in rows.iterrows():
+                callback = partial(set_progress, db, r["id"], r["from_page"], r["to_page"])
+                try:
+                    embd_mdl = LLMBundle(db, r["tenant_id"], LLMType.EMBEDDING, llm_name=r["embd_id"], lang=r["language"])
+                except Exception as e:
+                    callback(-1, msg=str(e))
+                    cron_logger.error(str(e))
+                    continue
+
+                if r.get("task_type", "") == "raptor":
+                    try:
+                        chat_mdl = LLMBundle(db, r["tenant_id"], LLMType.CHAT, llm_name=r["llm_id"], lang=r["language"])
+                        cks, tk_count = run_raptor(r, chat_mdl, embd_mdl, callback)
+                    except Exception as e:
+                        callback(-1, msg=str(e))
+                        cron_logger.error(str(e))
+                        continue
+                else:
+                    st = timer()
+                    cks = build(r, db)
+                    cron_logger.info("Build chunks({}): {}".format(r["name"], timer() - st))
+                    if cks is None:
+                        continue
+                    if not cks:
+                        callback(1., "No chunk! Done!")
+                        continue
+                    # TODO: exception handler
+                    ## set_progress(r["did"], -1, "ERROR: ")
+                    callback(
+                        msg="Finished slicing files(%d). Start to embedding the content." %
+                            len(cks))
+                    st = timer()
+                    try:
+                        tk_count = embedding(cks, embd_mdl, r["parser_config"], callback)
+                    except Exception as e:
+                        callback(-1, "Embedding error:{}".format(str(e)))
+                        cron_logger.error(str(e))
+                        tk_count = 0
+                    cron_logger.info("Embedding elapsed({}): {:.2f}".format(r["name"], timer() - st))
+                    callback(msg="Finished embedding({:.2f})! Start to build index!".format(timer() - st))
+
+                kb_id = DocumentService.get_by_doc_id(db, r["doc_id"])["kb_id"]
+                kb = KnowledgebaseService.get_by_id(db, kb_id)
+                init_kb(r, kb.name)
+
+                chunk_count = len(set([c["pk"] for c in cks]))
+                st = timer()
+                milvus_r = ""
+                # 获取集合的schema
+                schema = get_schema(search.index_name_one(r["tenant_id"], kb.name))
+
+                # 逐条插入数据
+                for record in cks:
+                    # 转换数据类型
+                    converted_record = convert_data_types(record, schema)
+
+                    try:
+                        # 使用 Milvus 的插入方法插入数据
+                        MILVUS_CONNECTION.insert(
+                            collection_name=search.index_name_one(r["tenant_id"], kb.name),
+                            data=converted_record
                         )
-                except MilvusException as e:
-                    return e
-                continue
-            callback(1., "Done!")
-            DocumentService.increment_chunk_num(
-                db, r["doc_id"], r["kb_id"], tk_count, chunk_count, 0)
-            cron_logger.info(
-                "Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(
-                    r["id"], tk_count, len(cks), timer() - st))
+                        print("Successfully inserted record to Milvus")
+                    except Exception as e:
+                        print("Insert error:", e)
+                        print("Data being inserted:", converted_record)
+                cron_logger.info("Indexing elapsed({}): {:.2f}".format(r["name"], timer() - st))
+                if milvus_r:
+                    callback(-1, f"Insert chunk error, detail info please check logs/api/cron_logger.log. Please also check Milvus status!")
+                    # 构建 Milvus 集合名称
+                    collection_name = search.index_name_one(r["tenant_id"], kb.name)
+                    # 检查集合是否存在并删除 Milvus 中的数据
+                    try:
+                        if MILVUS_CONNECTION.has_collection(collection_name):
+                            MILVUS_CONNECTION.delete(
+                                collection_name=collection_name,
+                                filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
+                            )
+                    except MilvusException as e:
+                        return e
+                    cron_logger.error(str(milvus_r))
+                else:
+                    if TaskService.do_cancel(db, r["id"]):
+                        # 构建 Milvus 集合名称
+                        collection_name = search.index_name_one(r["tenant_id"], kb.name)
+                        # 检查集合是否存在并删除 Milvus 中的数据
+                        try:
+                            if MILVUS_CONNECTION.has_collection(collection_name):
+                                MILVUS_CONNECTION.delete(
+                                    collection_name=collection_name,
+                                    filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
+                                    # filter=f"doc_id == '{doc.id}'"
+                                )
+                        except MilvusException as e:
+                            return e
+                        continue
+                    callback(1., "Done!")
+                    DocumentService.increment_chunk_num(
+                        db, r["doc_id"], r["kb_id"], tk_count, chunk_count, 0)
+                    cron_logger.info(
+                        "Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(
+                            r["id"], tk_count, len(cks), timer() - st))
+        except Exception as e:
+            cron_logger.error(f"Error in main loop: {str(e)}")
+            db.rollback()  # 回滚事务
+            raise
+        else:
+            db.commit()  # 提交事务
 
 
 def report_status():
