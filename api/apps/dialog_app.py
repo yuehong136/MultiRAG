@@ -15,7 +15,8 @@ from api.apps import manager
 from api.db.services.dialog_service import DialogService
 from api.db import StatusEnum
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.user_service import TenantService
+from api.db.services.user_service import TenantService, UserTenantService
+from api.settings import RetCode
 from api.utils.api_utils import server_error_response, get_data_error_result, validate_request
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
@@ -241,7 +242,7 @@ async def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
     except Exception as e:
         return server_error_response(e)
 
-@router.post('/rm', summary="删除对话", response_description="成功删除对话")
+@router.post('/rm', summary="删除对话应用", response_description="成功删除对话应用")
 async def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除对话
@@ -258,16 +259,20 @@ async def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=D
     - 成功时返回成功删除的JSON结果
     - 失败时返回错误信息
     """
-    # try:
-    #     DialogService.update_many_by_id(
-    #         db, [{"id": id, "status": StatusEnum.INVALID.value} for id in request.dialog_ids])
-    #     return get_json_result(data=True)
-    # except Exception as e:
-    #     return server_error_response(e)
-
+    dialog_list=[]
+    tenants = UserTenantService.query(db, user_id=user.id)
     try:
-        for cid in request.dialog_ids:
-            DialogService.delete_by_id(db, cid)
+        for id in request.dialog_ids:
+            for tenant in tenants:
+                if DialogService.query(db, tenant_id=tenant.tenant_id, id=id):
+                    break
+            else:
+                return get_json_result(
+                    data=False, retmsg=f'Only owner of dialog authorized for this operation.',
+                    retcode=RetCode.OPERATING_ERROR)
+            dialog_list.append({"id": id, "status": StatusEnum.INVALID.value})
+        DialogService.update_many_by_id(db, dialog_list)
+        # DialogService.delete_by_id(db, id)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)

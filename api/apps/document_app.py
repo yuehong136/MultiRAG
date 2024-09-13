@@ -30,6 +30,7 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, queue_tasks
+from api.db.services.user_service import UserTenantService
 from api.settings import RetCode, stat_logger
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result
@@ -249,6 +250,16 @@ async def list_docs(
 ):
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
+
+    tenants = UserTenantService.query(db, user_id=user.id)
+    for tenant in tenants:
+        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
+            break
+    else:
+        return get_json_result(
+            data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+            retcode=RetCode.OPERATING_ERROR)
+
     try:
         docs, tol = DocumentService.get_by_kb_id(db, kb_id, page, page_size, orderby, desc, keywords)
         docs = [convert_datetime_to_str(d) for d in docs]

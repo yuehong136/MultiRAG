@@ -16,6 +16,8 @@ from typing import List, Optional, Generator
 from api.db.services.dialog_service import DialogService, ConversationService, chat
 from api.db.services.llm_service import LLMBundle, TenantService
 from api.db import LLMType
+from api.db.services.user_service import UserTenantService
+from api.settings import RetCode
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
@@ -159,6 +161,14 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
         conv = ConversationService.get_by_id(db, conversation_id)
         if not conv:
             return get_data_error_result(retmsg="Conversation not found!")
+        tenants = UserTenantService.query(db, user_id=user.id)
+        for tenant in tenants:
+            if DialogService.query(db, tenant_id=tenant.tenant_id, id=conv.dialog_id):
+                break
+        else:
+            return get_json_result(
+                data=False, retmsg=f'Only owner of conversation authorized for this operation.',
+                retcode=RetCode.OPERATING_ERROR)
         conv = conv.to_dict()
         return get_json_result(data=conv)
     except Exception as e:
@@ -184,6 +194,17 @@ async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), 
     """
     try:
         for cid in request.conversation_ids:
+            conv = ConversationService.get_by_id(db, cid)
+            if not conv:
+                return get_data_error_result(retmsg="Conversation not found!")
+            tenants = UserTenantService.query(db, user_id=user.id)
+            for tenant in tenants:
+                if DialogService.query(db, tenant_id=tenant.tenant_id, id=conv.dialog_id):
+                    break
+            else:
+                return get_json_result(
+                    data=False, retmsg=f'Only owner of conversation authorized for this operation.',
+                    retcode=RetCode.OPERATING_ERROR)
             ConversationService.delete_by_id(db, cid)
         return get_json_result(data=True)
     except Exception as e:
@@ -191,14 +212,14 @@ async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), 
 
 
 @router.get('/list', summary="列出会话", response_description="成功列出会话")
-async def list_conversation(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     列出会话
 
     该接口用于列出指定对话的所有会话。
 
     参数:
-    - conversation_id: str 对话的唯一标识符
+    - dialog_id: str 对话所说应用id
     - db: Session 数据库会话对象
     - user: 当前用户对象
 
@@ -207,10 +228,13 @@ async def list_conversation(conversation_id: str, db: Session = Depends(get_db),
     - 失败时返回错误信息
     """
     try:
+        if not DialogService.query(db, tenant_id=user.id, id=dialog_id):
+            return get_json_result(
+                data=False, retmsg=f'Only owner of dialog authorized for this operation.',
+                retcode=RetCode.OPERATING_ERROR)
         convs = ConversationService.query(
             db,
-            id=conversation_id,
-            # order_by=ConversationService.model.create_time,
+            id=dialog_id,
             order_by="create_time",
             reverse=True)
         convs = [d.to_dict() for d in convs]
@@ -220,7 +244,7 @@ async def list_conversation(conversation_id: str, db: Session = Depends(get_db),
 
 
 @router.post('/completion', summary="生成对话", response_description="成功生成对话")
-async def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
         完成会话
 
@@ -255,7 +279,8 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
         # if "doc_ids" in m:
         #     msg[-1]["doc_ids"] = m["doc_ids"]
         msg.append(m)
-    if not msg[-1].get("id"): msg[-1]["id"] = get_uuid()
+    if not msg[-1].get("id"):
+        msg[-1]["id"] = get_uuid()
     message_id = msg[-1].get("id")
 
     if not msg:

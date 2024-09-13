@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from api.db.services.canvas_service import CanvasTemplateService, UserCanvasService
+from api.settings import RetCode
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from api.db.database import get_db
@@ -71,6 +72,10 @@ async def canvas_list(db: Session = Depends(get_db), user=Depends(manager)):
 @router.post('/rm', summary="删除画布", response_description="成功删除画布")
 async def rm(request: RemoveCanvasRequest, db: Session = Depends(get_db), user=Depends(manager)):
     for canvas_id in request.canvas_ids:
+        if not UserCanvasService.query(db, user_id=user.id,id=canvas_id):
+            return get_json_result(
+                data=False, retmsg=f'Only owner of canvas authorized for this operation.',
+                retcode=RetCode.OPERATING_ERROR)
         UserCanvasService.delete_by_id(db, canvas_id)
     return get_json_result(data=True)
 
