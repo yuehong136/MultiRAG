@@ -160,12 +160,11 @@ class CommonService:
     def update_many_by_id(cls, db: Session, data_list: List[Dict[str, Any]]):
         now = cls.current_timestamp()
         now_datetime = cls.current_datetime()
-        with db.begin():
-            for data in data_list:
-                data["update_time"] = now
-                data["update_date"] = now_datetime
-                db.query(cls.model).filter_by(id=data["id"]).update(data)
-            db.commit()
+        for data in data_list:
+            data["update_time"] = now
+            data["update_date"] = now_datetime
+            db.query(cls.model).filter_by(id=data["id"]).update(data)
+        db.commit()
 
     @classmethod
     def update_by_id(cls, db: Session, pid: str, data: Dict[str, Any]) -> int:
