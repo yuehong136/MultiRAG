@@ -100,7 +100,8 @@ async def factories(db: Session = Depends(get_db), user=Depends(manager)):
                 mdl_types[m.fid] = set([])
             mdl_types[m.fid].add(m.mdl_type)
         for f in fac:
-            f["mdl_type"] = list(mdl_types.get(f["name"], []))
+            f["model_types"] = list(mdl_types.get(f["name"], [LLMType.CHAT, LLMType.EMBEDDING, LLMType.RERANK,
+                                                              LLMType.IMAGE2TEXT, LLMType.SPEECH2TEXT, LLMType.TTS]))
         return get_json_result(data=fac)
     except Exception as e:
         return server_error_response(e)
