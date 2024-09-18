@@ -137,3 +137,13 @@ Aspose.Slides >= 24.8.0
 # ormsgpack 是一个适用于 Python 的快速 msgpack 库。它是orjson的分支/重启版本， 序列化速度比msgpack-python更快，反序列化速度稍慢（目前）。它原生支持序列化： dataclass、 datetime、 numpy、 pydantic和 UUID实例。
 ormsgpack >= 1.5.0
 email-validator >= 2.2.0
+# 这个库是用来操作Azure Blob存储服务的，它允许用户上传、下载、列出和删除存储在Azure Blob容器中的块 blob、追加 blob 和页 blob。
+azure-storage-blob == 12.22.0
+# 这个库提供了用于身份验证的客户端库，支持开发者通过多种方式对Azure服务进行身份验证。
+azure-identity == 1.17.1
+# 这个库用于与Azure Data Lake Storage Gen2服务进行交互，它建立在Azure Blob存储之上，并提供了对文件系统的支持。
+azure-storage-file-datalake == 12.16.0
+# boto3 是AWS的Python SDK，它为Python开发者提供了访问AWS服务的接口。它是一个高级的、面向对象的API，允许开发者轻松地与AWS服务进行交互。使用boto3，开发者可以管理各种AWS资源，如S3存储桶、EC2实例、IAM用户、DynamoDB表等。
+boto3 >= 1.35.21
+# botocore 是boto3背后的核心库，它负责处理底层的HTTP请求和响应，并提供了低级别的接口来与AWS服务进行交互。
+botocore >= 1.35.21

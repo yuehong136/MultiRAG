@@ -6,16 +6,9 @@
 @date：2024/8/14 11:00
 @desc:
 """
-import hashlib
-import json
 import random
-import re
 import time
-import traceback
-from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
 from datetime import datetime
-from io import BytesIO
 from typing import Optional, List, Dict
 
 from pymilvus import MilvusException
@@ -23,18 +16,17 @@ from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 
-from api.db import FileType, TaskStatus, StatusEnum, ParserType, LLMType
+from api.db import FileType, TaskStatus, StatusEnum
 from api.db.db_models import Document, Knowledgebase, Tenant, Task
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.settings import stat_logger, RetCode
 from api.utils import current_timestamp, get_format_time, get_uuid
-from api.utils.api_utils import construct_json_result
 from api.utils.db_utils import bulk_insert_into_db
 from core.nlp import search, rag_tokenizer
 from core.settings import SVR_QUEUE_NAME
 from core.utils.milvus_conn import MILVUS_CONNECTION
-from core.utils.minio_conn import MINIO
+from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
 
 

@@ -10,14 +10,11 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from fastapi_login import LoginManager
-
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import get_json_result
 from api.versions import get_rag_version
 from core.settings import SVR_QUEUE_NAME
-# from core.utils.es_conn import ELASTICSEARCH
-from core.utils.minio_conn import MINIO
+from core.utils.storage_factory import STORAGE_IMPL
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN
 from api.db.database import get_db
@@ -41,7 +38,7 @@ async def status(db: Session = Depends(get_db)):
 
     st = timer()
     try:
-        MINIO.health()
+        STORAGE_IMPL.health()
         res["minio"] = {"status": "green", "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
     except Exception as e:
         res["minio"] = {"status": "red", "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}

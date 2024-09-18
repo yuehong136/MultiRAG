@@ -18,13 +18,9 @@ from io import BytesIO
 from urllib.parse import quote
 
 from PIL import Image
-# from elasticsearch_dsl import Q
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, UploadFile, File as Fe
 from fastapi.responses import StreamingResponse
-from fastapi.security import OAuth2PasswordBearer
-from pymilvus import MilvusException
 from sqlalchemy.orm import Session
-from typing import List, Optional, Annotated
 
 from api.contants import NAME_LENGTH_LIMIT
 from api.db import FileType, ParserType, FileSource, TaskStatus
@@ -45,9 +41,7 @@ from api.utils.file_utils import filename_type, thumbnail
 from core.app import book, laws, manual, naive, one, paper, presentation, qa, resume, table, picture, email
 from core.nlp import search
 from core.utils.milvus_conn import MILVUS_CONNECTION
-# from core.nlp import search
-# from core.utils.es_conn import ELASTICSEARCH
-from core.utils.minio_conn import MINIO
+from core.utils.storage_factory import STORAGE_IMPL
 from api.db.database import get_db
 from api.apps import manager
 from pydantic import BaseModel, Field
@@ -452,7 +446,7 @@ async def upload_documents(
 
             # 生成文件在存储系统中的唯一位置
             location = filename
-            while MINIO.obj_exist(dataset_id, location):
+            while STORAGE_IMPL.obj_exist(dataset_id, location):
                 location += "_"
 
             # 读取文件内容并上传到存储系统
@@ -461,7 +455,7 @@ async def upload_documents(
             if blob == b'':
                 warnings.warn(f"[WARNING]: The content of the file {filename} is empty.")
 
-            MINIO.put(dataset_id, location, blob)
+            STORAGE_IMPL.put(dataset_id, location, blob)
 
             # 构建文档数据库记录的字典
             doc = {
@@ -549,7 +543,7 @@ async def delete_document(
         FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == file_to_doc[0].file_id])
         File2DocumentService.delete_by_document_id(db, document_id)
 
-        MINIO.rm(dataset_id, location)
+        STORAGE_IMPL.rm(dataset_id, location)
     except Exception as e:
         errors += str(e)
 
@@ -729,7 +723,7 @@ async def download_document(
                                 detail=f"This document '{document_id}' cannot be found!")
 
         doc_id, doc_location = File2DocumentService.get_minio_address(db, doc_id=document_id)
-        file_stream = MINIO.get(doc_id, doc_location)
+        file_stream = STORAGE_IMPL.get(doc_id, doc_location)
         if not file_stream:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This file is empty.")
 
@@ -901,7 +895,7 @@ async def parsing_document_internal(db: Session, id: str):
         doc_attributes = DocumentService.get_by_id(db, id).to_dict()
         doc_id = doc_attributes["id"]
         bucket, doc_name = File2DocumentService.get_minio_address(db, doc_id=doc_id)
-        binary = MINIO.get(bucket, doc_name)
+        binary = STORAGE_IMPL.get(bucket, doc_name)
         parser_name = doc_attributes["parser_id"]
         if binary:
             res = doc_parse(binary, doc_name, parser_name, tenant_id, doc_id)

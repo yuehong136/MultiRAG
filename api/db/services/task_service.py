@@ -6,9 +6,8 @@
 @date：2024/7/22 15:10
 @desc:
 """
-import os
 import random
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from api.utils.db_utils import bulk_insert_into_db
 from deepdoc.parser import PdfParser
@@ -19,7 +18,7 @@ from api.db.services.document_service import DocumentService
 from api.utils import current_timestamp, get_uuid
 from deepdoc.parser.excel_parser import RAGFlowExcelParser
 from core.settings import SVR_QUEUE_NAME
-from core.utils.minio_conn import MINIO
+from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
 
 
@@ -143,7 +142,7 @@ def queue_tasks(db: Session, doc, bucket, name):
     tsks = []
 
     if doc["type"] == FileType.PDF.value:
-        file_bin = MINIO.get(bucket, name)
+        file_bin = STORAGE_IMPL.get(bucket, name)
         do_layout = doc["parser_config"].get("layout_recognize", True)
         pages = PdfParser.total_page_number(doc["name"], file_bin)
         page_size = doc["parser_config"].get("task_page_size", 12)
@@ -167,7 +166,7 @@ def queue_tasks(db: Session, doc, bucket, name):
                 tsks.append(task)
 
     elif doc["parser_id"] == "table":
-        file_bin = MINIO.get(bucket, name)
+        file_bin = STORAGE_IMPL.get(bucket, name)
         rn = RAGFlowExcelParser.row_number(doc["name"], file_bin)
         for i in range(0, rn, 3000):
             task = new_task()

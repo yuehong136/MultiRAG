@@ -39,7 +39,7 @@ from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import html2pdf, is_valid_url
 from core.nlp import search
 from core.utils.milvus_conn import MILVUS_CONNECTION
-from core.utils.minio_conn import MINIO
+from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 
 from pydantic import BaseModel, Field
@@ -174,9 +174,9 @@ async def web_crawl(
             raise RuntimeError("This type of file has not been supported yet!")
 
         location = filename
-        while MINIO.obj_exist(kb_id, location):
+        while STORAGE_IMPL.obj_exist(kb_id, location):
             location += "_"
-        MINIO.put(kb_id, location, blob)
+        STORAGE_IMPL.put(kb_id, location, blob)
         doc = {
             "id": get_uuid(),
             "kb_id": kb.id,
@@ -388,7 +388,7 @@ async def remove_document(
                                            db_models.File.id == f2d[0].file_id])
             File2DocumentService.delete_by_document_id(db, doc_id)
 
-            MINIO.rm(b, n)
+            STORAGE_IMPL.rm(b, n)
         except Exception as e:
             errors += str(e)
 
@@ -506,7 +506,7 @@ async def get_document(
 
         b, n = File2DocumentService.get_minio_address(db, doc_id=doc_id)
 
-        file_content = MINIO.get(b, n)
+        file_content = STORAGE_IMPL.get(b, n)
         if not file_content:
             raise HTTPException(status_code=404, detail="File not found in storage")
 
@@ -624,7 +624,7 @@ async def get_image(
         bkt, nm = image_id.split("-")
 
         # 获取文件内容
-        file_content = MINIO.get(bkt, nm)
+        file_content = STORAGE_IMPL.get(bkt, nm)
 
         # 确认 file_content 是字节流对象
         if not isinstance(file_content, (bytes, bytearray)):

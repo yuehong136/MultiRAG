@@ -28,7 +28,7 @@ from api.settings import RetCode
 from api.utils.api_utils import construct_json_result, construct_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type
-from core.utils.minio_conn import MINIO
+from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -124,7 +124,7 @@ async def upload(
 
             filetype = filename_type(file_obj_names[file_len - 1])
             location = file_obj_names[file_len - 1]
-            while MINIO.obj_exist(last_folder.id, location):
+            while STORAGE_IMPL.obj_exist(last_folder.id, location):
                 location += "_"
             blob = await file_obj.read()
             filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
@@ -140,7 +140,7 @@ async def upload(
                 "size": len(blob),
             }
             file = FileService.insert(db, file_data)
-            MINIO.put(last_folder.id, location, blob)
+            STORAGE_IMPL.put(last_folder.id, location, blob)
             file_dict = {
                 "id": file.id,
                 "parent_id": file.parent_id,
@@ -380,7 +380,7 @@ async def rm(
                     file = FileService.get_by_id(db, inner_file_id)
                     if not file:
                         return get_data_error_result(retmsg="File not found!")
-                    MINIO.rm(file.parent_id, file.location)
+                    STORAGE_IMPL.rm(file.parent_id, file.location)
                 FileService.delete_folder_by_pf_id(db, user.id, file_id)
             else:
                 if not FileService.delete(db, file):
@@ -470,7 +470,7 @@ async def get_file(
         if not file:
             return get_data_error_result(retmsg="Document not found!")
         b, n = File2DocumentService.get_minio_address(db, file_id=file_id)
-        file_content = MINIO.get(b, n)
+        file_content = STORAGE_IMPL.get(b, n)
         if not file_content:
             raise HTTPException(status_code=404, detail="File not found in storage")
 

@@ -11,7 +11,7 @@ import re
 import os
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
-from typing import List, Optional, Dict, Tuple, Any
+from typing import List, Optional, Dict
 
 from api.db import FileType, KNOWLEDGEBASE_FOLDER_NAME, FileSource, ParserType
 from api.db.db_models import File, Document, Knowledgebase, File2Document
@@ -21,7 +21,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type, thumbnail
-from core.utils.minio_conn import MINIO
+from core.utils.storage_factory import STORAGE_IMPL
 
 
 class FileService(CommonService):
@@ -321,9 +321,9 @@ class FileService(CommonService):
                     raise RuntimeError("暂不支持此文件类型！")
 
                 location = filename
-                while MINIO.obj_exist(kb.id, location):
+                while STORAGE_IMPL.obj_exist(kb.id, location):
                     location += "_"
-                MINIO.put(kb.id, location, file_blob)
+                STORAGE_IMPL.put(kb.id, location, file_blob)
 
                 # # 根据 labels 是否有值来决定 id 的生成方式
                 # if labels:

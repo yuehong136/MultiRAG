@@ -12,25 +12,22 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 from pymilvus import MilvusException, DataType
-from sqlalchemy.orm import Session, session
+from sqlalchemy.orm import Session
 
 from api.db.database import SessionLocal
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.settings import retrievaler
-from api.utils.api_utils import construct_json_result
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from core.utils.minio_conn import MINIO
+from core.utils.storage_factory import STORAGE_IMPL
 from core.settings import database_logger, SVR_QUEUE_NAME
 from core.settings import cron_logger, DOC_MAXIMUM_SIZE
-from multiprocessing import Pool
 import numpy as np
-# from elasticsearch_dsl import Q, Search
 from multiprocessing.context import TimeoutError
 from api.db.services.task_service import TaskService
 from core.utils.milvus_conn import MILVUS_CONNECTION
 from timeit import default_timer as timer
-from core.utils import rmSpace, findMaxTm, num_tokens_from_string
+from core.utils import rmSpace, num_tokens_from_string
 
 from core.nlp import search, rag_tokenizer
 from io import BytesIO
@@ -131,7 +128,7 @@ def collect(db: Session):
 
 
 def get_minio_binary(bucket, name):
-    return MINIO.get(bucket, name)
+    return STORAGE_IMPL.get(bucket, name)
 
 
 def build(row, db: Session):
@@ -222,7 +219,7 @@ def build(row, db: Session):
                 d["image"].save(output_buffer, format='JPEG')
 
             st = timer()
-            MINIO.put(row["kb_id"], d["pk"], output_buffer.getvalue())
+            STORAGE_IMPL.put(row["kb_id"], d["pk"], output_buffer.getvalue())
             el += timer() - st
         except Exception as e:
             cron_logger.error(str(e))
