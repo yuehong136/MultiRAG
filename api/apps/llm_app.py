@@ -133,7 +133,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
     chat_passed, embd_passed, rerank_passed = False, False, False
     factory = req["llm_factory"]
     msg = ""
-    for llm in LLMService.query(db, fid=factory):
+    for llm in LLMService.query(db, fid=factory)[:3]:
         # todo 适配其他模型的测试，目前只有chat进行了测试
         # if not embd_passed and llm.mdl_type == LLMType.EMBEDDING.value:
         #     mdl = EmbeddingModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
