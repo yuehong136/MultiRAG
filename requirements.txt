@@ -56,8 +56,8 @@ fastapi_login >= 1.10.1
 pydantic_settings >= 2.3.4
 # ruamel.yaml 是一种 YAML 解析器/发射器，支持注释、seq/映射流风格和映射键顺序的往返保存。
 ruamel.yaml >= 0.18.6
-# 4.42.3是目前版本
-#transformers==4.36.2
+# 升级transformers版本
+transformers >= 4.44.2
 # 阿里系模型调用
 dashscope >= 1.20.1
 # api/utils/file_utils使用
@@ -70,7 +70,7 @@ redis >= 5.0.7
 # 使用 datrie 库构建和加载字典树（trie）
 datrie >= 0.8.2
 # 使用 nltk 进行英文词干提取和词形还原
-nltk >= 3.8.1
+nltk >= 3.9
 # HanziConv 用于中英文转换
 hanziconv >= 0.3.2
 # 用于将罗马数字转换为阿拉伯数字
