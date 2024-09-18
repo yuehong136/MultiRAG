@@ -96,6 +96,10 @@ async def save(request: SaveCanvasRequest, db: Session = Depends(get_db), user=D
         if not UserCanvasService.save(db, **req_data):
             return get_data_error_result(retmsg="Fail to save canvas.")
     else:
+        if not UserCanvasService.query(db, user_id=user.id, id=req_data["id"]):
+            return get_json_result(
+                data=False, retmsg=f'Only owner of canvas authorized for this operation.',
+                retcode=RetCode.OPERATING_ERROR)
         UserCanvasService.update_by_id(db, req_data["id"], req_data)
 
     return get_json_result(data=req_data)
