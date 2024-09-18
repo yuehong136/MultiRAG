@@ -310,20 +310,23 @@ async def set_conversation(request: NewConversationRequest, db: Session = Depend
 
         print("APIToken found:", objs)
         if objs[0].source == "agent":
-            e, c = UserCanvasService.get_by_id(objs[0].dialog_id)
-            if not e:
+            cvs = UserCanvasService.get_by_id(db, objs[0].dialog_id)
+            if not cvs:
                 return server_error_response("canvas not found.")
+            if not isinstance(cvs.dsl, str):
+                cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
+            canvas = Canvas(cvs.dsl, objs[0].tenant_id)
             conv = {
                 "id": get_uuid(),
-                "dialog_id": c.id,
+                "dialog_id": cvs.id,
                 "user_id": request.args.get("user_id", ""),
-                "message": [{"role": "assistant", "content": "Hi there!"}],
+                "message": [{"role": "assistant", "content": canvas.get_prologue()}],
                 "source": "agent"
             }
             API4ConversationService.save(**conv)
             return get_json_result(data=conv)
         else:
-            e, dia = DialogService.get_by_id(objs[0].dialog_id)
+            e, dia = DialogService.get_by_id(db, objs[0].dialog_id)
             if not e:
                 return get_data_error_result(retmsg="Dialog not found")
             conv = {
