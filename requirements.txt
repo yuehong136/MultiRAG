@@ -147,3 +147,5 @@ azure-storage-file-datalake == 12.16.0
 boto3 >= 1.35.21
 # botocore 是boto3背后的核心库，它负责处理底层的HTTP请求和响应，并提供了低级别的接口来与AWS服务进行交互。
 botocore >= 1.35.21
+# ranx 是一个用于信息检索评估的 Python 库。它提供了快速、灵活的工具来评估和比较不同的检索系统或模型，常用于自然语言处理（NLP）、信息检索（IR）等领域。
+ranx >= 0.3.20
