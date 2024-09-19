@@ -25,7 +25,7 @@ from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import TenantLLMService
+from api.db.services.llm_service import TenantLLMService, LLMBundle
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.db.services.document_service import DocumentService
@@ -214,11 +214,10 @@ async def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depe
             return get_data_error_result(retmsg="Tenant not found!")
 
         embd_id = DocumentService.get_embd_id(db, request.doc_id)
-        embd_mdl = TenantLLMService.model_instance(
-            db, tenant_id, LLMType.EMBEDDING.value, embd_id)
+        embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embd_id)
 
-        e, doc = DocumentService.get_by_id(db, request.doc_id)
-        if not e:
+        doc = DocumentService.get_by_id(db, request.doc_id)
+        if not doc:
             return get_data_error_result(retmsg="Document not found!")
 
         d = {
@@ -351,8 +350,8 @@ async def create(request: CreateChunkRequest, db: Session = Depends(get_db), use
             "create_timestamp_flt": datetime.datetime.now().timestamp()
         }
 
-        e, doc = DocumentService.get_by_id(db, request.doc_id)
-        if not e:
+        doc = DocumentService.get_by_id(db, request.doc_id)
+        if not doc:
             return get_data_error_result(retmsg="Document not found!")
         d["kb_id"] = [doc.kb_id]
         d["docnm_kwd"] = doc.name
@@ -363,8 +362,7 @@ async def create(request: CreateChunkRequest, db: Session = Depends(get_db), use
             return get_data_error_result(retmsg="Tenant not found!")
 
         embd_id = DocumentService.get_embd_id(db, request.doc_id)
-        embd_mdl = TenantLLMService.model_instance(
-            db, tenant_id, LLMType.EMBEDDING.value, embd_id)
+        embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embd_id)
 
         v, c = embd_mdl.encode([doc.name, request.content_with_weight])
         v = 0.1 * v[0] + 0.9 * v[1]
@@ -421,22 +419,21 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
         if not kb:
             return get_data_error_result(retmsg="Knowledgebase not found!")
 
-        embd_mdl = TenantLLMService.model_instance(
-            db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+        embd_mdl = LLMBundle(db, db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
 
         rerank_mdl = None
-        if request.rerank_id:
-            rerank_mdl = TenantLLMService.model_instance(
-                db, kb.tenant_id, LLMType.RERANK.value, llm_name=request.rerank_id)
+        if req.get("rerank_id"):
+            rerank_mdl = LLMBundle(kb.tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
 
-        question = request.question
-        if request.keyword:
-            chat_mdl = TenantLLMService.model_instance(db, kb.tenant_id, LLMType.CHAT)
+        question = req["question"]
+        if req.get("keyword", False):
+            chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
-
-        ranks = retrievaler.retrieval(question, embd_mdl, kb.tenant_id, [request.kb_id], request.page, request.size,
-                                      request.similarity_threshold, request.vector_similarity_weight, request.top_k,
-                                      request.doc_ids, rerank_mdl=rerank_mdl)
+        filter_exp = ""
+        kb = KnowledgebaseService.get_by_id(db, req["kb_id"])
+        ranks = retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, kb.name, req["page"], req["size"],
+                                      req["similarity_threshold"], req["vector_similarity_weight"], req["top_k"],
+                                      req["doc_ids"], rerank_mdl=rerank_mdl)
         for c in ranks["chunks"]:
             if "vector" in c:
                 del c["vector"]

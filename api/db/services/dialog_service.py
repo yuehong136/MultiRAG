@@ -93,6 +93,7 @@ def message_fit_in(msg, max_length=4000):
 
 
 def llm_id2llm_type(llm_id):
+    llm_id = llm_id.split("@")[0]
     fnm = os.path.join(get_project_base_directory(), "configs")
     llm_factories = json.load(open(os.path.join(fnm, "llm_factories.json"), "r", encoding="utf-8"))
     for llm_factory in llm_factories["factory_llm_infos"]:
@@ -104,12 +105,19 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
     st = timer()
+    tmp = dialog.llm_id.split("@")
+    fid = None
+    llm_id = tmp[0]
+    if len(tmp)>1:
+        fid = tmp[1]
+
     # 从数据库中查询LLM模型
-    llm = LLMService.query(db, llm_name=dialog.llm_id)
+    llm = LLMService.query(db, llm_name=llm_id) if not fid else LLMService.query(db, llm_name=llm_id, fid=fid)
     # print("LLMService.query result:", llm)
     if not llm:
         # 如果查询不到，则根据租户ID查询LLM模型
-        llm = TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=dialog.llm_id)
+        llm = TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id) if not fid else \
+            TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id, llm_factory=fid)
         print("TenantLLMService.query result:", llm)
         if not llm:
             # 如果仍然查询不到，则抛出异常
