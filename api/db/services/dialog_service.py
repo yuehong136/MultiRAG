@@ -286,7 +286,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         # return {"answer": answer, "reference": refs, "prompt": prompt}
         done_tm = timer()
         prompt += "\n### Elapsed\n  - Retrieval: %.1f ms\n  - LLM: %.1f ms" % ((retrieval_tm - st) * 1000, (done_tm - st) * 1000)
-        return {"answer": answer, "reference": refs, "prompt": re.sub(r"\n", "<br/>", prompt)}
+        return {"answer": answer, "reference": refs, "prompt": prompt}
     # # 根据是否启用流式输出生成回答
     # if stream:
     #     # 初始化答案变量，用于存储模型生成的解答
@@ -508,18 +508,19 @@ def tts(tts_mdl, text):
     return binascii.hexlify(bin).decode("utf-8")
 
 
-def ask(question, kb_ids, tenant_id):
-    kbs = KnowledgebaseService.get_by_ids(kb_ids)
+def ask(db: Session, question, kb_ids, tenant_id):
+    kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     embd_nms = list(set([kb.embd_id for kb in kbs]))
     # todo 测试kg，并开放下面写法
     # is_kg = all([kb.parser_id == ParserType.KG for kb in kbs])
     # retr = retrievaler if not is_kg else kg_retrievaler
 
-    embd_mdl = LLMBundle(tenant_id, LLMType.EMBEDDING, embd_nms[0])
-    chat_mdl = LLMBundle(tenant_id, LLMType.CHAT)
+    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embd_nms[0])
+    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT)
     max_tokens = chat_mdl.max_length
-
-    kbinfos = retrievaler.retrieval(question, embd_mdl, tenant_id, kb_ids, 1, 12, 0.1, 0.3, aggs=False)
+    filter_exp = "" # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
+    kb_names = list([kb.name for kb in kbs])
+    kbinfos = retrievaler.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, 1, 12, 0.1, 0.3, aggs=False)
     knowledges = [ck["text"] for ck in kbinfos["chunks"]]
 
     used_token_count = 0

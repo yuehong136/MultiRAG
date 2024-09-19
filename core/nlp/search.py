@@ -4,6 +4,9 @@ from copy import deepcopy
 from typing import List, Optional, Dict, Union
 from dataclasses import dataclass
 import numpy as np
+
+from api.db.services.document_service import DocumentService
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from core.settings import milvus_logger
 from core.utils import rmSpace
 from core.nlp import rag_tokenizer, query
@@ -50,9 +53,42 @@ class Dealer:
             "query_vector": [float(v) for v in qv]
         }
 
+    def _add_filters(self, base_filter, req):
+        filters = []
+
+        # 添加知识库ID过滤条件
+        if req.get("kb_ids"):
+            kb_ids_filter = f"kb_id in {tuple(req['kb_ids'])}"
+            filters.append(kb_ids_filter)
+
+        # 添加文档ID过滤条件
+        if req.get("doc_ids"):
+            doc_ids_filter = f"doc_id in {tuple(req['doc_ids'])}"
+            filters.append(doc_ids_filter)
+
+        # 添加知识图谱关键字过滤条件
+        if req.get("knowledge_graph_kwd"):
+            kg_kwd_filter = f"knowledge_graph_kwd in {tuple(req['knowledge_graph_kwd'])}"
+            filters.append(kg_kwd_filter)
+
+        # 添加可用性过滤条件
+        if "available_int" in req:
+            if req["available_int"] == 0:
+                available_int_filter = "available_int < 1"
+            else:
+                available_int_filter = "available_int >= 1"
+            filters.append(available_int_filter)
+
+        # 将所有过滤条件组合成SQL风格的表达式
+        if filters:
+            combined_filter = " AND ".join(filters)
+            base_filter = f"{base_filter} AND {combined_filter}" if base_filter else combined_filter
+
+        return base_filter
+
     def search(self, req, idxnms, embd_mdl=None):
         qst = req.get("question", "")
-        bqry, keywords = self.qryr.question(qst)
+        bqry, keywords = self.qryr.question(qst, min_match="30%")
 
         if bqry is None:
             raise ValueError("Failed to generate query for the given question.")
@@ -315,21 +351,10 @@ class Dealer:
                 break
             id = sres.ids[i]
             text = sres.field[id]["content_with_weight"]
-            # dnm = sres.field[id]["docnm_kwd"]
             dnm = sres.field[id].get("docnm_kwd","")
             did = sres.field[id]["doc_id"]
-            # d = {
-            #     "chunk_id": id,
-            #     "text": text,
-            #     "similarity": sim[i],
-            #     "vector_similarity": vsim[i],
-            #     "term_similarity": tsim[i],
-            #     "vector": self.trans2floats("\t".join(map(str, sres.query_vector))),
-            #     # Ensure this is the correct format
-            # }
             d = {
                 "chunk_id": id,
-                # "content_ltks": sres.field[id]["content_ltks"],
                 "content_ltks": sres.field[id].get("content_ltks", ""),
                 "text": text,
                 "doc_id": sres.field[id]["doc_id"],
@@ -358,16 +383,6 @@ class Dealer:
                               "count": v["count"]} for k,
                              v in sorted(ranks["doc_aggs"].items(),
                                          key=lambda x: x[1]["count"] * -1)]
-        # # Ensure doc_aggs is a dictionary
-        # if not isinstance(ranks["doc_aggs"], dict):
-        #     ranks["doc_aggs"] = {}
-        #
-        # # 对文档聚合结果进行排序，依据是文档出现的次数，次数多的排在前面
-        # ranks["doc_aggs"] = [{"doc_name": k,
-        #                       "doc_id": v["doc_id"],
-        #                       "count": v["count"]} for k,
-        #                      v in sorted(ranks["doc_aggs"].items(),
-        #                                  key=lambda x: x[1]["count"] * -1)]
         return ranks
 
     def sql_retrieval(self, sql, fetch_size=128, format="json"):
@@ -399,27 +414,19 @@ class Dealer:
             chat_logger.error(f"SQL failure: {sql} =>" + str(e))
             return {"error": str(e)}
 
-    def chunk_list(self, doc_id, tenant_id, max_count=1024, fields=["docnm_kwd", "content_with_weight", "img_id"]):
-        s = {
-            "query": {
-                "bool": {
-                    "must": [
-                        {"term": {"doc_id": doc_id}}
-                    ]
-                }
-            },
-            "_source": fields,
-            "size": max_count
-        }
-        milvus_res = self.milvus_conn.search(
-            collection_name=index_name(tenant_id, kb_names),
-            data=s["query"]["bool"]["must"],
+    def chunk_list(self, doc_id, tenant_id, max_count=1024, fields=None):
+        if fields is None:
+            fields = ["docnm_kwd", "content_with_weight", "img_id"]
+        kb_id = DocumentService.get_by_doc_id(db, doc_id)["kb_id"]
+        kb = KnowledgebaseService.get_by_id(db, kb_id)
+        milvus_res = self.milvus_conn.query(
+            collection_name=index_name(tenant_id, kb.name),
+            filter=f"doc_id == {doc_id}",
             anns_field="doc_id",
             limit=max_count,
-            search_params={"metric_type": "COSINE", "params": {"nprobe": 10}}
+            output_fields=fields
         )
         res = []
         for index, chunk in enumerate(milvus_res[0]):
             res.append({fld: chunk.entity.get(fld) for fld in fields})
         return res
-

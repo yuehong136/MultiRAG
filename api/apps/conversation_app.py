@@ -7,22 +7,25 @@
 @desc: 会话管理接口
 """
 import json
+import re
 from copy import deepcopy
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional, Generator
-from api.db.services.dialog_service import DialogService, ConversationService, chat
-from api.db.services.llm_service import LLMBundle, TenantService
+from api.db.services.dialog_service import DialogService, ConversationService, chat, ask
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.llm_service import LLMBundle, TenantService, TenantLLMService
 from api.db import LLMType
 from api.db.services.user_service import UserTenantService
-from api.settings import RetCode
+from api.settings import RetCode, retrievaler
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
 from api.db.database import get_db
 from api.apps import manager
+from graphrag.mind_map_extractor import MindMapExtractor
 
 
 class SetConversationRequest(BaseModel):
@@ -67,6 +70,7 @@ class DeleteMsgRequest(BaseModel):
     message_id: str
     """消息ID"""
 
+
 class ThumbupRequest(BaseModel):
     conversation_id: str
     """会话的唯一标识符。"""
@@ -80,9 +84,32 @@ class ThumbupRequest(BaseModel):
     feedback: str
     """反馈"""
 
+
 class TTSRequest(BaseModel):
     text: str
     """文本内容"""
+
+
+class AskAboutRequest(BaseModel):
+    question: str
+    """用户提出的问题"""
+
+    kb_ids: List[str]
+    """知识库ID列表"""
+
+
+class MindmapRequest(BaseModel):
+    question: str
+    """用户提出的问题"""
+
+    kb_ids: List[str]
+    """知识库ID列表"""
+
+
+class RelatedQuestionsRequest(BaseModel):
+    question: str
+    """用户提出的关键词"""
+
 
 router = APIRouter()
 
@@ -291,7 +318,7 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
         if not conv:
             return get_data_error_result(retmsg="Conversation not found!")
         # conv.message.append(deepcopy(msg[-1]))
-        conv.message = deepcopy(req["messages"]) # re-generate for conversation
+        conv.message = deepcopy(req["messages"])  # re-generate for conversation
         dia = DialogService.get_by_id(db, conv.dialog_id)
         if not dia:
             return get_data_error_result(retmsg="Dialog not found!")
@@ -363,8 +390,8 @@ async def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(m
                 yield chunk
         except Exception as e:
             error_message = ("data:" + json.dumps({"retcode": 500, "retmsg": str(e),
-                            "data": {"answer": "**ERROR**: "+str(e)}},
-                            ensure_ascii=False)).encode('utf-8')
+                                                   "data": {"answer": "**ERROR**: " + str(e)}},
+                                                  ensure_ascii=False)).encode('utf-8')
             yield error_message
 
     headers = {
@@ -429,7 +456,6 @@ async def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), u
     return get_json_result(data=conv)
 
 
-
 @router.post('/thumbup', summary="点赞", response_description="成功点赞")
 async def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
@@ -451,3 +477,107 @@ async def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=D
 
     ConversationService.update_by_id(db, conv["id"], conv)
     return get_json_result(data=conv)
+
+
+@router.post('/ask', summary="问答接口", response_description="返回答案")
+async def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    问答接口
+
+    该接口用于根据用户的问题从知识库中获取答案。
+
+    参数:
+    - question: 用户提出的问题
+    - kb_ids: 知识库ID列表
+    - user: 当前用户对象
+
+    返回:
+    - 实时流式返回答案数据
+    """
+    req = request.model_dump()
+    uid = user.id
+
+    def stream():
+        try:
+            for ans in ask(db, req["question"], req["kb_ids"], uid):
+                yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
+        except Exception as e:
+            yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e),
+                                        "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
+                                       ensure_ascii=False) + "\n\n"
+        yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False) + "\n\n"
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no"
+    }
+    return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
+
+
+# 定义 mindmap 接口
+@router.post('/mindmap', summary="生成思维导图", response_description="返回思维导图")
+async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    生成思维导图
+
+    根据知识库内容生成思维导图。
+
+    参数:
+    - question: 用户提出的问题
+    - kb_ids: 知识库ID列表
+    - user: 当前用户对象
+
+    返回:
+    - 思维导图数据
+    """
+    req = request.model_dump()
+    kb_ids = req["kb_ids"]
+    kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
+    if not kb:
+        return get_data_error_result(retmsg="Knowledgebase not found!")
+
+    embd_mdl = TenantLLMService.model_instance(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+    chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
+    filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
+    kb_names = list([kb.name])
+    ranks = retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3, aggs=False)
+    mindmap = MindMapExtractor(chat_mdl)
+    mind_map = mindmap([c["text"] for c in ranks["chunks"]]).output
+
+    return get_json_result(data=mind_map)
+
+
+# 定义 related_questions 接口
+@router.post('/related_questions', summary="生成相关问题", response_description="返回相关问题")
+async def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    生成相关问题
+
+    根据用户的关键词生成相关搜索问题。
+
+    参数:
+    - question: 用户提出的关键词
+    - user: 当前用户对象
+
+    返回:
+    - 相关搜索问题列表
+    """
+    req = request.model_dump()
+    question = req["question"]
+
+    chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
+    prompt = """
+    Objective: To generate search terms related to the user's search keywords, helping users find more valuable information.
+    Instructions:
+     - Based on the keywords provided by the user, generate 5-10 related search terms.
+     - Each search term should be directly or indirectly related to the keyword, guiding the user to find more valuable information.
+     - Use common, general terms as much as possible, avoiding obscure words or technical jargon.
+     - Keep the term length between 2-4 words, concise and clear.
+     - DO NOT translate, use the language of the original keywords.
+    """
+
+    ans = chat_mdl.chat(prompt, [{"role": "user", "content": f"Keywords: {question}\nRelated search terms:"}], {"temperature": 0.9})
+    related_terms = [re.sub(r"^[0-9]\. ", "", a) for a in ans.split("\n") if re.match(r"^[0-9]\. ", a)]
+
+    return get_json_result(data=related_terms)

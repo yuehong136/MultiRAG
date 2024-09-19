@@ -194,7 +194,7 @@ class LLMBundle(object):
         self.mdl = TenantLLMService.model_instance(db, tenant_id, llm_type, llm_name)
         if not self.mdl:
             raise ValueError(f"Can't find model for {tenant_id}/{llm_type}/{llm_name}")
-        self.max_length = 512
+        self.max_length = 8192
         for lm in LLMService.query(db, llm_name=llm_name):
             self.max_length = lm.max_tokens
             break

@@ -404,9 +404,21 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     - 成功时返回包含检索结果的JSON结果
     - 失败时返回错误信息
     """
+    req = request.model_dump()
     try:
-        e, kb = KnowledgebaseService.get_by_id(db, request.kb_id)
-        if not e:
+        tenants = UserTenantService.query(db, user_id=user.id)
+        for kid in req["kb_id"]:
+            for tenant in tenants:
+                if KnowledgebaseService.query(
+                        db, tenant_id=tenant.tenant_id, id=kid):
+                    break
+            else:
+                return get_json_result(
+                    data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+                    retcode=RetCode.OPERATING_ERROR)
+
+        kb = KnowledgebaseService.get_by_id(db, request.kb_id)
+        if not kb:
             return get_data_error_result(retmsg="Knowledgebase not found!")
 
         embd_mdl = TenantLLMService.model_instance(
