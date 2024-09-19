@@ -80,7 +80,7 @@ async def convert(
                     doc = DocumentService.insert(db, {
                         "id": get_uuid(),
                         "kb_id": kb.id,
-                        "parser_id": kb.parser_id,
+                        "parser_id": FileService.get_parser(file.type, file.name, kb.parser_id),
                         "parser_config": kb.parser_config,
                         "created_by": user.id,
                         "type": file.type,
@@ -88,7 +88,6 @@ async def convert(
                         "location": file.location,
                         "size": file.size
                     })
-                    FileService.set_constant_parser(doc, file.name)
                     file2document = File2DocumentService.insert(db, {
                         "id": get_uuid(),
                         "file_id": id,
