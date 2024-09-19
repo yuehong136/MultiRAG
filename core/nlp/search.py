@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 from core.settings import milvus_logger
 from core.utils import rmSpace
-from core.nlp import rag_tokenizer, query
+from core.nlp import rag_tokenizer, query, is_english
 
 
 def index_name(uid, kb_names):
@@ -139,13 +139,67 @@ class Dealer:
             except Exception as e:
                 milvus_logger.error(f"Error searching in collection {idxnm}: {str(e)}")
 
+        kwds = set([])
+        for k in keywords:
+            kwds.add(k)
+            for kk in rag_tokenizer.fine_grained_tokenize(k).split(" "):
+                if len(kk) < 2:
+                    continue
+                if kk in kwds:
+                    continue
+                kwds.add(kk)
+
+        aggs = self.getAggregation(search_results, "docnm_kwd")
+
         return self.SearchResult(
             total=total,
             ids=ids,
             query_vector=query_vector,
+            aggregation=aggs,
+            highlight=self.getHighlight(search_results, keywords, "content_with_weight"),
             field=fields,
-            keywords=keywords
+            keywords=list(kwds)
         )
+
+    def getAggregation(self, res, g):
+        if not "aggregations" in res or "aggs_" + g not in res["aggregations"]:
+            return
+        bkts = res["aggregations"]["aggs_" + g]["buckets"]
+        return [(b["key"], b["doc_count"]) for b in bkts]
+
+    def getHighlight(self, res, keywords, fieldnm):
+        ans = {}
+        for d in res[0]:
+            # 从字典中提取 'entity' 部分
+            entity = d.get('entity', {})
+            # 'highlight' 字段可能不存在，因此需要通过 get 方法来访问
+            hlts = entity.get("highlight")
+            if not hlts:
+                continue
+            txt = "...".join([a for a in list(hlts.items())[0][1]])
+
+            # 判断文本是否为英文
+            if not is_english(txt.split(" ")):
+                ans[entity.get("doc_id", "")] = txt
+                continue
+
+            # 如果不是英文文本，则获取字段对应的文本
+            txt = d["_source"][fieldnm]
+            txt = re.sub(r"[\r\n]", " ", txt, flags=re.IGNORECASE | re.MULTILINE)
+            txts = []
+
+            # 分割文本并为关键词加上高亮标记
+            for t in re.split(r"[.?!;\n]", txt):
+                for w in keywords:
+                    t = re.sub(r"(^|[ .?/'\"\(\)!,:;-])(%s)([ .?/'\"\(\)!,:;-])" % re.escape(w), r"\1<em>\2</em>\3", t,
+                               flags=re.IGNORECASE | re.MULTILINE)
+                if not re.search(r"<em>[^<>]+</em>", t, flags=re.IGNORECASE | re.MULTILINE): continue
+                txts.append(t)
+
+            # 拼接并返回最终结果
+            ans[entity.get("doc_id", "")] = "...".join(txts) if txts else txt
+
+        return ans
 
     @staticmethod
     def trans2floats(txt):
@@ -317,7 +371,7 @@ class Dealer:
         if not question:
             return ranks
         RERANK_PAGE_LIMIT = 3
-        req = {"kb_names": kb_names, "doc_ids": doc_ids, "size": page_size*RERANK_PAGE_LIMIT,
+        req = {"kb_names": kb_names, "doc_ids": doc_ids, "size": page_size * RERANK_PAGE_LIMIT,
                "question": question, "vector": True, "topk": top,
                "similarity": similarity_threshold,
                "available_int": 1, "filter_exp": filter_exp}
@@ -339,7 +393,7 @@ class Dealer:
             else:
                 sim, tsim, vsim = self.rerank(
                     sres, question, 1 - vector_similarity_weight, vector_similarity_weight)
-            idx = np.argsort(sim * -1)[(page-1)*page_size:page*page_size]
+            idx = np.argsort(sim * -1)[(page - 1) * page_size:page * page_size]
         else:
             sim = tsim = vsim = [1] * len(sres.ids)
             idx = list(range(len(sres.ids)))
