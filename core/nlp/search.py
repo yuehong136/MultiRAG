@@ -4,9 +4,6 @@ from copy import deepcopy
 from typing import List, Optional, Dict, Union
 from dataclasses import dataclass
 import numpy as np
-
-from api.db.services.document_service import DocumentService
-from api.db.services.knowledgebase_service import KnowledgebaseService
 from core.settings import milvus_logger
 from core.utils import rmSpace
 from core.nlp import rag_tokenizer, query
@@ -433,6 +430,9 @@ class Dealer:
     def chunk_list(self, doc_id, tenant_id, max_count=1024, fields=None):
         if fields is None:
             fields = ["docnm_kwd", "content_with_weight", "img_id"]
+        from api.db.services.document_service import DocumentService
+        from api.db.services.knowledgebase_service import KnowledgebaseService
+
         kb_id = DocumentService.get_by_doc_id(db, doc_id)["kb_id"]
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         milvus_res = self.milvus_conn.query(
