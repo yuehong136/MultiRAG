@@ -345,14 +345,7 @@ class FileService(CommonService):
                     "auth": json.dumps(labels) if labels else None  # 将 labels 转换为 JSON 字符串
                 }
 
-                if doc["type"] == FileType.VISUAL:
-                    doc["parser_id"] = ParserType.PICTURE.value
-                if doc["type"] == FileType.AURAL:
-                    doc["parser_id"] = ParserType.AUDIO.value
-                if re.search(r"\.(ppt|pptx|pages)$", filename):
-                    doc["parser_id"] = ParserType.PRESENTATION.value
-                if re.search(r"\.(eml)$", filename):
-                    doc["parser_id"] = ParserType.EMAIL.value
+                cls.set_constant_parser(doc, filename)
                 DocumentService.insert(db, doc)
 
                 cls.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
@@ -361,3 +354,14 @@ class FileService(CommonService):
                 err.append(f"{filename}: {str(e)}")
 
         return err, files_info
+
+    @staticmethod
+    def set_constant_parser(doc, filename):
+        if doc["type"] == FileType.VISUAL:
+            doc["parser_id"] = ParserType.PICTURE.value
+        if doc["type"] == FileType.AURAL:
+            doc["parser_id"] = ParserType.AUDIO.value
+        if re.search(r"\.(ppt|pptx|pages)$", filename):
+            doc["parser_id"] = ParserType.PRESENTATION.value
+        if re.search(r"\.(eml)$", filename):
+            doc["parser_id"] = ParserType.EMAIL.value
