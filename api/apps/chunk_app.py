@@ -75,7 +75,7 @@ class RetrievalTestRequest(BaseModel):
     page: Optional[int] = 1
     size: Optional[int] = 30
     doc_ids: Optional[List[str]] = []
-    similarity_threshold: Optional[float] = 0.2
+    similarity_threshold: Optional[float] = 0.0
     vector_similarity_weight: Optional[float] = 0.3
     top_k: Optional[int] = 1024
     rerank_id: Optional[str] = None

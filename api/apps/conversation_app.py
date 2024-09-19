@@ -8,6 +8,7 @@
 """
 import json
 import re
+import traceback
 from copy import deepcopy
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
@@ -544,7 +545,8 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
     ranks = retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3, aggs=False)
     mindmap = MindMapExtractor(chat_mdl)
     mind_map = mindmap([c["text"] for c in ranks["chunks"]]).output
-
+    if "error" in mind_map:
+        return server_error_response(Exception(mind_map["error"]))
     return get_json_result(data=mind_map)
 
 

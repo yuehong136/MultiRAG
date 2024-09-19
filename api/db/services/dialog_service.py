@@ -315,7 +315,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         for ans in chat_mdl.chat_streamly(prompt, msg[1:], gen_conf):
             answer = ans
             delta_ans = ans[len(last_ans):]
-            if num_tokens_from_string(delta_ans) < 12:
+            if num_tokens_from_string(delta_ans) < 16:
                 continue
             last_ans = answer
             yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
@@ -500,8 +500,8 @@ def rewrite(tenant_id, llm_id, question,db: Session):
 
 
 def tts(tts_mdl, text):
-    return
-    if not tts_mdl or not text: return
+    if not tts_mdl or not text:
+        return
     bin = b""
     for chunk in tts_mdl.tts(text):
         bin += chunk

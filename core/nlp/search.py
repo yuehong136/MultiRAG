@@ -157,6 +157,8 @@ class Dealer:
     def insert_citations(self, answer, chunks, chunk_v,
                          embd_mdl, tkweight=0.1, vtweight=0.9):
         assert len(chunks) == len(chunk_v)
+        if not chunks:
+            return answer, set([])
         pieces = re.split(r"(```)", answer)
         if len(pieces) >= 3:
             i = 0
@@ -317,41 +319,50 @@ class Dealer:
         ranks = {"total": 0, "chunks": [], "doc_aggs": {}}
         if not question:
             return ranks
-        req = {"kb_names": kb_names, "doc_ids": doc_ids, "size": page_size,
+        RERANK_PAGE_LIMIT = 3
+        req = {"kb_names": kb_names, "doc_ids": doc_ids, "size": page_size*RERANK_PAGE_LIMIT,
                "question": question, "vector": True, "topk": top,
                "similarity": similarity_threshold,
                "available_int": 1, "filter_exp": filter_exp}
         idxnms = index_name(tenant_id, kb_names)
+        if page > RERANK_PAGE_LIMIT:
+            req["page"] = page
+            req["size"] = page_size
         sres = self.search(req, idxnms, embd_mdl)
+        ranks["total"] = sres.total
 
         if not sres.ids:
             return ranks
 
-        if rerank_mdl:
-            sim, tsim, vsim = self.rerank_by_model(rerank_mdl,
-                                                   sres, question, 1 - vector_similarity_weight,
-                                                   vector_similarity_weight)
+        if page <= RERANK_PAGE_LIMIT:
+            if rerank_mdl:
+                sim, tsim, vsim = self.rerank_by_model(rerank_mdl,
+                                                       sres, question, 1 - vector_similarity_weight,
+                                                       vector_similarity_weight)
+            else:
+                sim, tsim, vsim = self.rerank(
+                    sres, question, 1 - vector_similarity_weight, vector_similarity_weight)
+            idx = np.argsort(sim * -1)[(page-1)*page_size:page*page_size]
         else:
-            sim, tsim, vsim = self.rerank(
-                sres, question, 1 - vector_similarity_weight, vector_similarity_weight)
-        idx = np.argsort(sim * -1)
+            sim = tsim = vsim = [1] * len(sres.ids)
+            idx = list(range(len(sres.ids)))
 
         dim = len(sres.query_vector)
-        start_idx = (page - 1) * page_size
+        # start_idx = (page - 1) * page_size
         for i in idx:
             if sim[i] < similarity_threshold:
                 break
-            ranks["total"] += 1
-            start_idx -= 1
-            if start_idx >= 0:
-                continue
+            # ranks["total"] += 1
+            # start_idx -= 1
+            # if start_idx >= 0:
+            #     continue
             if len(ranks["chunks"]) >= page_size:
                 if aggs:
                     continue
                 break
             id = sres.ids[i]
             text = sres.field[id]["content_with_weight"]
-            dnm = sres.field[id].get("docnm_kwd","")
+            dnm = sres.field[id].get("docnm_kwd", "")
             did = sres.field[id]["doc_id"]
             d = {
                 "chunk_id": id,
@@ -368,6 +379,11 @@ class Dealer:
                 "vector": self.trans2floats("\t".join(map(str, sres.query_vector))),
                 "positions": sres.field[id].get("position_int", "").split("\t")
             }
+            # if highlight:
+            #     if id in sres.highlight:
+            #         d["highlight"] = rmSpace(sres.highlight[id])
+            #     else:
+            #         d["highlight"] = d["content_with_weight"]
             if len(d["positions"]) % 5 == 0:
                 poss = []
                 for i in range(0, len(d["positions"]), 5):
