@@ -17,6 +17,7 @@ from core.llm.sequence2txt_model.ollamaseq2txt import OllamaSeq2txt
 from core.llm.sequence2txt_model.qwenseq2txt import QWenSeq2txt
 from core.llm.sequence2txt_model.xinferenceseq2txt import XinferenceSeq2txt
 from core.llm.tts_model.models.fish_audiotts import FishAudioTTS
+from core.llm.tts_model.models.openaitts import OpenAITTS
 from core.llm.tts_model.models.qwentts import QwenTTS
 
 # from core.llm.ocr_model.models.local_cv import LocalCV
@@ -84,5 +85,6 @@ Seq2txtModel = {
 
 TTSModel = {
     "Fish Audio": FishAudioTTS,
-    "Tongyi-Qianwen": QwenTTS
+    "Tongyi-Qianwen": QwenTTS,
+    "OpenAI":OpenAITTS
 }
