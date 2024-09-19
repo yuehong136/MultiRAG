@@ -149,3 +149,9 @@ boto3 >= 1.35.21
 botocore >= 1.35.21
 # ranx 是一个用于信息检索评估的 Python 库。它提供了快速、灵活的工具来评估和比较不同的检索系统或模型，常用于自然语言处理（NLP）、信息检索（IR）等领域。
 ranx >= 0.3.20
+# 一款将 Markdown（CommonMark 方言）数据转换为 JSON 的简单工具。它使用标题作为 JSON 键，标题后面的内容作为值。列表转换为数组。较高的标题值会产生嵌套的 JSON 键。
+markdown_to_json >= 2.1.1
+# 编辑距离（Levenshtein distance）的快速实现。
+editdistance >= 0.8.1
+# graspologic是一个图形统计算法包。
+graspologic >= 3.4.1
