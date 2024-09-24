@@ -387,8 +387,9 @@ async def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(m
 
     def stream_audio() -> Generator[bytes, None, None]:
         try:
-            for chunk in tts_mdl.tts(text):
-                yield chunk
+            for txt in re.split(r"[，。/《》？；：！\n\r:;]+", text):
+                for chunk in tts_mdl.tts(txt):
+                    yield chunk
         except Exception as e:
             error_message = ("data:" + json.dumps({"retcode": 500, "retmsg": str(e),
                                                    "data": {"answer": "**ERROR**: " + str(e)}},
