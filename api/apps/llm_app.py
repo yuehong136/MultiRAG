@@ -519,6 +519,7 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
     - 模型信息按模型工厂分类，每个工厂下包含多个模型信息。
     - 可选的模型类型参数用于筛选模型信息，只返回指定类型的模型。
     """
+    self_deploied = ["Youdao","FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio"]
     try:
         objs = TenantLLMService.query(db, tenant_id=user.id)
         facts = set(o.llm_factory for o in objs if o.api_key)
@@ -526,9 +527,7 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
         llms = [m.to_dict() for m in llms if m.status == StatusEnum.VALID.value]
 
         for m in llms:
-            m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in ["Youdao",
-                                                                                                            "FastEmbed",
-                                                                                                            "BAAI"]
+            m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in self_deploied
 
         llm_set = set(m["llm_name"] for m in llms)
         for o in objs:
