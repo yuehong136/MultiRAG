@@ -14,7 +14,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import get_json_result
 from api.versions import get_rag_version
 from core.settings import SVR_QUEUE_NAME
-from core.utils.storage_factory import STORAGE_IMPL
+from core.utils.storage_factory import STORAGE_IMPL, STORAGE_IMPL_TYPE
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN
 from api.db.database import get_db
@@ -39,16 +39,21 @@ async def status(db: Session = Depends(get_db)):
     st = timer()
     try:
         STORAGE_IMPL.health()
-        res["minio"] = {"status": "green", "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
+        res["storage"] = {"storage": STORAGE_IMPL_TYPE.lower(), "status": "green",
+                          "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
     except Exception as e:
-        res["minio"] = {"status": "red", "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+        res["storage"] = {"storage": STORAGE_IMPL_TYPE.lower(), "status": "red",
+                          "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
 
     st = timer()
     try:
-        KnowledgebaseService.get_by_id(db, "x")
-        res["mysql"] = {"status": "green", "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
+        KnowledgebaseService.get_by_id("x")
+        res["database"] = {"database": "postgres", "status": "green",
+                           "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
     except Exception as e:
-        res["mysql"] = {"status": "red", "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+        res["database"] = {"database": "postgres", "status": "red",
+                           "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+
 
     st = timer()
     try:
