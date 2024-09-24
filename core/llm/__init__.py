@@ -7,10 +7,13 @@ from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.cv_model.models.gptv4 import GptV4
+from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
+from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
 from core.llm.rerank_model.default_rerank import DefaultRerank
+from core.llm.rerank_model.xinference_rerank import XInferenceRerank
 from core.llm.rerank_model.youdao_rerank import YoudaoRerank
 from core.llm.sequence2txt_model.azureseq2txt import AzureSeq2txt
 from core.llm.sequence2txt_model.gptseq2txt import GPTSeq2txt
@@ -27,7 +30,7 @@ from core.llm.tts_model.models.qwentts import QwenTTS
 EmbeddingModel = {
     # "Ollama": OllamaEmbed,
     # "OpenAI": OpenAIEmbed,
-    # "Xinference": XinferenceEmbed,
+    "Xinference": XinferenceEmbed,
     # "Tongyi-Qianwen": QWenEmbed,
     "ZHIPU-AI": ZhipuEmbed,
     # "FastEmbed": FastEmbed,
@@ -42,7 +45,7 @@ CvModel = {
     "OpenAI": GptV4,
     # "Azure-OpenAI": AzureGptV4,
     # "Ollama": OllamaCV,
-    # "Xinference": XinferenceCV,
+    "Xinference": XinferenceCV,
     # "Tongyi-Qianwen": QWenCV,
     "ZHIPU-AI": Zhipu4V,
     # "Moonshot": LocalCV,
@@ -73,6 +76,7 @@ RerankModel = {
     "BAAI": DefaultRerank,
     # "Jina": JinaRerank,
     "Youdao": YoudaoRerank,
+    "Xinference": XInferenceRerank,
 }
 
 
