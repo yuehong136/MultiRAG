@@ -3,6 +3,7 @@ from core.llm.chat_model.models.gptturbo import GptTurbo
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
 from core.llm.chat_model.models.qwen_chat import QWenChat
+from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.cv_model.models.gptv4 import GptV4
@@ -59,6 +60,7 @@ ChatModel = {
     "Xinference": XinferenceChat,
     # "Moonshot": MoonshotChat,
     # "DeepSeek": DeepSeekChat,
+    "VolcEngine": VolcEngineChat,
     "VolcEngine": DoubaoChat,
     # "BaiChuan": BaiChuanChat,
     # "MiniMax": MiniMaxChat,
