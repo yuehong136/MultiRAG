@@ -377,7 +377,7 @@ async def remove_document(
             if not tenant_id:
                 return construct_json_result(data=False, message="Tenant not found!", code=RetCode.ARGUMENT_ERROR)
 
-            b, n = File2DocumentService.get_minio_address(db, doc_id=doc_id)
+            b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
 
             if not DocumentService.remove_document(db, doc, tenant_id):
                 return construct_json_result(data=False, message="Database error (Document removal)!",
@@ -440,7 +440,7 @@ async def run(
                 TaskService.filter_delete(db, [Task.doc_id == id])
                 doc = DocumentService.get_by_id(db, id).to_dict()
                 doc["tenant_id"] = tenant_id
-                bucket, name = File2DocumentService.get_minio_address(db, doc_id=doc["id"])
+                bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])
                 queue_tasks(db, doc, bucket, name)
         return construct_json_result(data=True)
     except Exception as e:
@@ -452,7 +452,7 @@ async def run(
     #             TaskService.filter_delete(db, [Task.doc_id == id])
     #             doc = DocumentService.get_by_id(db, id).to_dict()
     #             doc["tenant_id"] = tenant_id
-    #             bucket, name = File2DocumentService.get_minio_address(db, doc_id=doc["id"])
+    #             bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])
     #             queue_tasks(doc, bucket, name)
     #
     #     return construct_json_result(data=True)
@@ -504,7 +504,7 @@ async def get_document(
         if not doc:
             return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
 
-        b, n = File2DocumentService.get_minio_address(db, doc_id=doc_id)
+        b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
 
         file_content = STORAGE_IMPL.get(b, n)
         if not file_content:

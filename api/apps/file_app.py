@@ -469,7 +469,7 @@ async def get_file(
         file = FileService.get_by_id(db, file_id)
         if not file:
             return get_data_error_result(retmsg="Document not found!")
-        b, n = File2DocumentService.get_minio_address(db, file_id=file_id)
+        b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
         file_content = STORAGE_IMPL.get(b, n)
         if not file_content:
             raise HTTPException(status_code=404, detail="File not found in storage")

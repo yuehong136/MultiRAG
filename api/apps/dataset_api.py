@@ -528,7 +528,7 @@ async def delete_document(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"You cannot delete this document {document_id} due to the authorization reason!")
 
-        real_dataset_id, location = File2DocumentService.get_minio_address(db, doc_id=document_id)
+        real_dataset_id, location = File2DocumentService.get_storage_address(db, doc_id=document_id)
         if real_dataset_id != dataset_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail=f"The document {document_id} is not in the dataset: {dataset_id}, but in the dataset: {real_dataset_id}.")
@@ -722,7 +722,7 @@ async def download_document(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail=f"This document '{document_id}' cannot be found!")
 
-        doc_id, doc_location = File2DocumentService.get_minio_address(db, doc_id=document_id)
+        doc_id, doc_location = File2DocumentService.get_storage_address(db, doc_id=document_id)
         file_stream = STORAGE_IMPL.get(doc_id, doc_location)
         if not file_stream:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This file is empty.")
@@ -894,7 +894,7 @@ async def parsing_document_internal(db: Session, id: str):
 
         doc_attributes = DocumentService.get_by_id(db, id).to_dict()
         doc_id = doc_attributes["id"]
-        bucket, doc_name = File2DocumentService.get_minio_address(db, doc_id=doc_id)
+        bucket, doc_name = File2DocumentService.get_storage_address(db, doc_id=doc_id)
         binary = STORAGE_IMPL.get(bucket, doc_name)
         parser_name = doc_attributes["parser_id"]
         if binary:

@@ -70,7 +70,7 @@ class File2DocumentService(CommonService):
         return updated_obj
 
     @classmethod
-    def get_minio_address(cls, db: Session, doc_id: str = None, file_id: str = None):
+    def get_storage_address(cls, db: Session, doc_id: str = None, file_id: str = None):
         if doc_id:
             f2d = cls.get_by_document_id(db, doc_id)
         else:
