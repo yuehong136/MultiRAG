@@ -215,12 +215,10 @@ class CommonService:
         now_datetime = cls.current_datetime()
         update_data["update_time"] = now
         update_data["update_date"] = now_datetime
-        if not db.in_transaction():
-            with db.begin():
-                db.query(cls.model).filter(*filters).update(update_data, synchronize_session=False)
-                db.commit()
-        else:
-            db.query(cls.model).filter(*filters).update(update_data, synchronize_session=False)
+        # with db.begin():
+        updated_rows= db.query(cls.model).filter(*filters).update(update_data, synchronize_session=False)
+        db.commit()
+        return updated_rows > 0  # Return True if any rows were updated
 
     @classmethod
     def filter_delete(cls, db: Session, filters: List[Any]) -> int:

@@ -181,26 +181,31 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
     if msg:
         return get_data_error_result(retmsg=msg)
 
-    llm = {
+    llm_config = {
         "api_key": req["api_key"],
         "api_base": req.get("base_url", "")
     }
     for n in ["mdl_type", "llm_name"]:
         if n in req:
-            llm[n] = req[n]
+            llm_config[n] = req[n]
 
     try:
-        if not TenantLLMService.filter_update(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == factory],
-                                              llm):
-            for llm in LLMService.query(db, fid=factory):
+        for llm in LLMService.query(db, fid=factory):
+            if not TenantLLMService.filter_update(
+                    db,
+                    [TenantLLM.tenant_id == user.id,
+                     TenantLLM.llm_factory == factory,
+                     TenantLLM.llm_name == llm.llm_name],
+                    llm_config
+            ):
                 TenantLLMService.save(
                     db,
                     tenant_id=user.id,
                     llm_factory=factory,
                     llm_name=llm.llm_name,
                     mdl_type=llm.mdl_type,
-                    api_key=req["api_key"],
-                    api_base=req.get("base_url", "")
+                    api_key=llm_config["api_key"],
+                    api_base=llm_config["api_base"]
                 )
     except IntegrityError as e:
         raise HTTPException(status_code=400, detail="API key already exists for this LLM factory and name.")
