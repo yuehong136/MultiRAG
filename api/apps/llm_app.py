@@ -54,6 +54,10 @@ class ListLLMRequest(BaseModel):
     mdl_type: Optional[str] = None
 
 
+class DeleteFactoryRequest(BaseModel):
+    llm_factory: Optional[str] = None
+
+
 router = APIRouter()
 
 
@@ -161,9 +165,10 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
         if not chat_passed and llm.mdl_type == LLMType.CHAT.value:
             mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
             try:
-                m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}], {"temperature": 0.9,'max_tokens':50})
+                m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}],
+                                 {"temperature": 0.9, 'max_tokens': 50})
                 print(m)
-                if m.find("**ERROR**") >=0:
+                if m.find("**ERROR**") >= 0:
                     raise Exception(m)
             except Exception as e:
                 msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
@@ -178,7 +183,6 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
         #     except Exception as e:
         #         msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
         #     rerank_passed = True
-
 
     if msg:
         return get_data_error_result(retmsg=msg)
@@ -278,19 +282,19 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
         api_key = apikey_json(["bedrock_ak", "bedrock_sk", "bedrock_region"])
 
     elif factory == "LocalAI":
-        llm_name = req["llm_name"]+"___LocalAI"
+        llm_name = req["llm_name"] + "___LocalAI"
         api_key = "xxxxxxxxxxxxxxx"
 
     elif factory == "OpenAI-API-Compatible":
-        llm_name = req["llm_name"]+"___OpenAI-API"
-        api_key = req.get("api_key","xxxxxxxxxxxxxxx")
+        llm_name = req["llm_name"] + "___OpenAI-API"
+        api_key = req.get("api_key", "xxxxxxxxxxxxxxx")
 
-    elif factory =="XunFei Spark":
+    elif factory == "XunFei Spark":
         llm_name = req["llm_name"]
         if req["model_type"] == "chat":
             api_key = req.get("spark_api_password", "xxxxxxxxxxxxxxx")
         elif req["model_type"] == "tts":
-            api_key = apikey_json(["spark_app_id", "spark_api_secret","spark_api_key"])
+            api_key = apikey_json(["spark_app_id", "spark_api_secret", "spark_api_key"])
 
     elif factory == "BaiduYiyan":
         llm_name = req["llm_name"]
@@ -336,8 +340,9 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
             base_url=llm["api_base"]
         )
         try:
-            m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}], {"temperature": 0.9,'max_tokens':50})
-            if m.find("**ERROR**") >=0:
+            m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}],
+                             {"temperature": 0.9, 'max_tokens': 50})
+            if m.find("**ERROR**") >= 0:
                 raise Exception(m)
         except Exception as e:
             msg += f"\nFail to access model({llm['llm_name']})." + str(e)
@@ -440,6 +445,15 @@ async def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), u
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post('/delete_factory')
+def delete_llm(request: DeleteFactoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    req = request.model_dump()
+    TenantLLMService.filter_delete(
+        db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == req["llm_factory"]])
+    return get_json_result(data=True)
+
+
 @router.get('/my_llms', summary="获取用户的所有模型", response_description="成功获取到用户的所有模型")
 async def my_llms(db: Session = Depends(get_db), user=Depends(manager)):
     """
@@ -522,7 +536,7 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
     - 模型信息按模型工厂分类，每个工厂下包含多个模型信息。
     - 可选的模型类型参数用于筛选模型信息，只返回指定类型的模型。
     """
-    self_deploied = ["Youdao","FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio"]
+    self_deploied = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio"]
     try:
         objs = TenantLLMService.query(db, tenant_id=user.id)
         facts = set(o.llm_factory for o in objs if o.api_key)
