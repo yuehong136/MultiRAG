@@ -245,7 +245,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         yield {"answer": empty_res, "reference": kbinfos, "audio_binary": tts(tts_mdl, empty_res)}
         return {"answer": prompt_config["empty_response"], "reference": kbinfos}
 
-    kwargs["knowledge"] = "\n------\n".join(knowledges)
+    kwargs["knowledge"] = "\n\n------\n\n".join(knowledges)
     gen_conf = dialog.llm_setting
     # print(gen_conf)
 
@@ -299,7 +299,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
             answer += " Please set LLM API-Key in 'User Setting -> Model Providers -> API-Key'"
         # return {"answer": answer, "reference": refs, "prompt": prompt}
         done_tm = timer()
-        prompt += "\n### Elapsed\n  - Retrieval: %.1f ms\n  - LLM: %.1f ms" % ((retrieval_tm - st) * 1000, (done_tm - st) * 1000)
+        prompt += "\n\n### Elapsed\n  - Retrieval: %.1f ms\n  - LLM: %.1f ms"%((retrieval_tm-st)*1000, (done_tm-st)*1000)
         return {"answer": answer, "reference": refs, "prompt": prompt}
     # # 根据是否启用流式输出生成回答
     # if stream:
