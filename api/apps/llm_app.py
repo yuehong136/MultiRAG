@@ -447,7 +447,7 @@ async def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), u
 
 
 @router.post('/delete_factory')
-def delete_llm(request: DeleteFactoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def delete_factory(request: DeleteFactoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     TenantLLMService.filter_delete(
         db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == req["llm_factory"]])

@@ -18,6 +18,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from api.db.services.canvas_service import CanvasTemplateService, UserCanvasService
+from api.db.services.dialog_service import full_question
+from api.db.services.user_service import TenantService
 from api.settings import RetCode
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
@@ -130,6 +132,9 @@ async def run(request: RunCanvasRequest, db: Session = Depends(get_db), user=Dep
         canvas = Canvas(cvs.dsl, user.id)
         if "message" in req_data:
             canvas.messages.append({"role": "user", "content": req_data["message"], "id": message_id})
+            if len([m for m in canvas.messages if m["role"] == "user"]) > 1:
+                ten = TenantService.get_by_user_id(db, user.id)[0]
+                req["message"] = full_question(db, ten["tenant_id"], ten["llm_id"], canvas.messages)
             canvas.add_user_input(req_data["message"])
         answer = canvas.run(stream=stream)
     except Exception as e:
