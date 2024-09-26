@@ -42,6 +42,7 @@ def main():
         st.page_link("pages/work_flow.py", label="工作流管理", icon="⚡", use_container_width=True)
         st.page_link("pages/flowchat.py", label="流程可视化", icon="🎨", use_container_width=True)
         st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
+        st.page_link("pages/visual_data_analysis.py", label="可视化数据分析", icon="🔎️", use_container_width=True)
 
     st.header("工作流程可视化")
     # st.markdown("*" + "可在侧边栏添加编排功能组件构建流程应用，可选择开放API供三方调用。" + "*")

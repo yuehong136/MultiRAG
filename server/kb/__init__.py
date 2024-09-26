@@ -9,7 +9,7 @@ client = MilvusClient(
 kb_list = client.list_collections()
 
 def request_milvus() -> list:
-    url = "http://192.168.46.1:8010/milvus/search"
+    url = "http://192.168.188.60:8010/milvus/search"
     params = {'query': st.session_state.get('kb_query'), 'collection_name': st.session_state.get('selected_kb'), 'topn': st.session_state.get('kb_topn', 10)}
     headers = {'accept': 'application/json'}
 

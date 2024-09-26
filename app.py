@@ -296,6 +296,7 @@ with st.sidebar:
     st.page_link("pages/work_flow.py", label="工作流管理", icon="⚡", use_container_width=True)
     st.page_link("pages/flowchat.py", label="流程可视化", icon="🎨", use_container_width=True)
     st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
+    st.page_link("pages/visual_data_analysis.py", label="可视化数据分析", icon="🔎️", use_container_width=True)
 
     import datetime
 
@@ -708,11 +709,11 @@ with st.sidebar:
         sql_blocks = [block[1] if block[0].startswith('```sql') else block[0] for block in sql_blocks]
         return sql_blocks[0] if sql_blocks else ""
 
-if load_btn.button("加载", use_container_width=True):
-    st.success('当前会话已成功加载！')
-    st.session_state.messages = display_chat_history(selected_file_full_path)
-    display_conversations()
-    st.session_state.from_history = True  # 标记为从历史会话加载
+# if load_btn.button("加载", use_container_width=True):
+#     st.success('当前会话已成功加载！')
+#     st.session_state.messages = display_chat_history(selected_file_full_path)
+#     display_conversations()
+#     st.session_state.from_history = True  # 标记为从历史会话加载
 
 uploaded_texts = st.session_state.get("uploaded_texts", "")
 

@@ -31,6 +31,7 @@ with st.sidebar:
     st.page_link("pages/work_flow.py", label="工作流管理", icon="⚡", use_container_width=True)
     st.page_link("pages/flowchat.py", label="流程可视化", icon="🎨", use_container_width=True)
     st.page_link("pages/agent_serve.py", label="Agent智能体", icon="⭐", use_container_width=True)
+    st.page_link("pages/visual_data_analysis.py", label="可视化数据分析", icon="🔎️", use_container_width=True)
 
 # 主界面
 st.title("知识库管理")
