@@ -1,4 +1,5 @@
 # Project Name: LLM RAG Application Project
+![Static Badge](https://img.shields.io/badge/python-3.9_%7C_3.10%7C_3.11%7C_3.12-blue?color=blue)
 
 <p align="center">
 <a href="README.md"><img src="https://img.shields.io/badge/文档-中文版-blue.svg" alt="CN doc"></a>
@@ -22,6 +23,7 @@ This project is an application of LLM RAG (Retrieval-Augmented Generation), comb
 4. **Workflow Management**: Orchestrate built-in functional components into workflows, supporting page execution display and API calls.
 5. **Process visualization**: Convert the content described by the user into a flowchart.
 6. **Agent Service**: Call existing tools, combine role cognition and memory management for intelligent reasoning, and optionally provide open APIs for third-party calls.
+7. **Agent Service**: Allows data scientists to visualize/cleanse/annotate data through simple drag-and-drop operations or even natural language queries.
 
 
 ## User Guide
@@ -68,6 +70,8 @@ Before using this project, please ensure the following dependencies are installe
 ![Workflow](./assets/source/workflow.png)
 ![Process visualization](./assets/source/flowchat.png)
 ![Agent service](./assets/source/agent.png)
+![Visual data analysis](./assets/source/visual_data_analysis.png)
+
 ## Feature Demonstrations
 
 - **Conversation Interface**: Interact with the model, with the conversation content displayed in the right area.
@@ -76,6 +80,8 @@ Before using this project, please ensure the following dependencies are installe
 - **Workflow**: Orchestrate functional components into workflow applications, with optional open APIs for third-party calls.
 - **Process visualization**: Convert the content described by the user into a flowchart.
 - **Agent service**: Call existing tools, combine role cognition and memory management for intelligent reasoning, with optional open APIs for third-party calls.
+- **Visual data analysis**: Allows data scientists to visualize/cleanse/annotate data through simple drag-and-drop operations or even natural language queries.
+
 
 ## Future Plans
 

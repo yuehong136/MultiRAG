@@ -1,9 +1,11 @@
 # 项目名称：大模型LLM的RAG应用项目
+![Static Badge](https://img.shields.io/badge/python-3.9_%7C_3.10%7C_3.11%7C_3.12-blue?color=blue)
 
 <p align="center">
 <a href="README.md"><img src="https://img.shields.io/badge/文档-中文版-blue.svg" alt="CN doc"></a>
 <a href="README_EN.md"><img src="https://img.shields.io/badge/document-English-blue.svg" alt="EN doc"></a>
 </p>
+
 
 ## 项目简介
 
@@ -22,6 +24,7 @@
 4. **工作流管理**：将内置的功能组件编排成工作流，支持页面执行展示、API接口调用。
 5. **流程可视化**：将用户描述的内容转为流程图。
 6. **Agent服务**：调用已有工具、结合角色认知、记忆管理进行智能推理，可选择开放API供三方调用。
+7. **可视化数据分析**：允许数据科学家通过简单的拖放操作甚至自然语言查询来可视化/清理/注释数据。
 
 
 ## 使用教程
@@ -68,6 +71,8 @@
 ![工作流管理](./assets/source/workflow.png)
 ![流程可视化](./assets/source/flowchat.png)
 ![Agent服务](./assets/source/agent.png)
+![可视化数据分析](./assets/source/visual_data_analysis.png)
+
 ## 功能展示
 
 - **对话界面**：与大模型进行交互，对话内容将显示在右侧区域。
@@ -76,6 +81,7 @@
 - **工作流管理**：编排功能组件构建流程应用，可选择开放API供三方调用。
 - **流程可视化**：将用户描述的内容转为流程图。
 - **Agent服务**：调用已有工具、结合角色认知、记忆管理进行智能推理，可选择开放API供三方调用。
+- **可视化数据分析**：允许数据科学家通过简单的拖放操作甚至自然语言查询来可视化/清理/注释数据。
 
 ## 未来计划
 
