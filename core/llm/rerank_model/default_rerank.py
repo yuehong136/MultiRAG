@@ -3,11 +3,11 @@ import os
 import re
 import threading
 
-import torch
 import numpy as np
 
-from FlagEmbedding import FlagReranker
 from huggingface_hub import snapshot_download
+
+from api.settings import LIGHTEN
 from core.llm.rerank_model.base import Base, sigmoid
 from api.utils.file_utils import get_home_cache_dir
 from core.utils import num_tokens_from_string, truncate
@@ -29,7 +29,9 @@ class DefaultRerank(Base):
         ^_-
 
         """
-        if not DefaultRerank._model:
+        if not LIGHTEN and not DefaultRerank._model:
+            import torch
+            from FlagEmbedding import FlagReranker
             with DefaultRerank._model_lock:
                 if not DefaultRerank._model:
                     try:
