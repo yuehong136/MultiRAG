@@ -1,9 +1,9 @@
 import os
-import re
 import threading
 
 import numpy as np
 
+from api.settings import LIGHTEN
 from api.utils.file_utils import get_home_cache_dir
 from core.llm.rerank_model.base import sigmoid
 from core.llm.rerank_model.default_rerank import DefaultRerank
@@ -18,8 +18,8 @@ class YoudaoRerank(DefaultRerank):
         self.model_name = model_name  # 修复：显式定义 model_name
         model_path = self.get_model_path(self.model_name.split("/")[-1] if "/" in self.model_name else self.model_name)
 
-        from BCEmbedding import RerankerModel
-        if not YoudaoRerank._model:
+        if not LIGHTEN and not YoudaoRerank._model:
+            from BCEmbedding import RerankerModel
             with YoudaoRerank._model_lock:
                 if not YoudaoRerank._model:
                     try:
