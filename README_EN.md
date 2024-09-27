@@ -1,5 +1,5 @@
 # Project Name: LLM RAG Application Project
-![Static Badge](https://img.shields.io/badge/python-3.9_%7C_3.10%7C_3.11%7C_3.12-blue?color=blue)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-31013/)
 
 <p align="center">
 <a href="README.md"><img src="https://img.shields.io/badge/文档-中文版-blue.svg" alt="CN doc"></a>
