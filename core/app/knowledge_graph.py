@@ -1,17 +1,9 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： knowledge_graph.py
-@date：2024/8/5 9:45
-@desc:
-"""
 import re
 
-# from graphrag.index import build_knowlege_graph_chunks
+from api.db.database import SessionLocal
+from graphrag.index import build_knowledge_graph_chunks
 from core.app import naive
 from core.nlp import rag_tokenizer, tokenize_chunks
-
 
 def chunk(filename, binary, tenant_id, from_page=0, to_page=100000,
           lang="Chinese", callback=None, **kwargs):
@@ -21,10 +13,12 @@ def chunk(filename, binary, tenant_id, from_page=0, to_page=100000,
     eng = lang.lower() == "english"
 
     parser_config["layout_recognize"] = False
-    sections = naive.chunk(filename, binary, from_page=from_page, to_page=to_page, section_only=True, parser_config=parser_config)
-    chunks = build_knowlege_graph_chunks(tenant_id, sections, callback,
-                                         parser_config.get("entity_types", ["organization", "person", "location", "event", "time"])
-                                         )
+    db = SessionLocal()
+    sections = naive.chunk(filename, binary, from_page=from_page, to_page=to_page, section_only=True,
+                           parser_config=parser_config, callback=callback)
+    chunks = build_knowledge_graph_chunks(db, tenant_id, sections, callback,
+                                          parser_config.get("entity_types", ["organization", "person", "location", "event", "time"])
+                                          )
     for c in chunks: c["docnm_kwd"] = filename
 
     doc = {

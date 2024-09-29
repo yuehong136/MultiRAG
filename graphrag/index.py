@@ -1,15 +1,16 @@
-import re
 from concurrent.futures import ThreadPoolExecutor
 import json
 from functools import reduce
 from typing import List
 import networkx as nx
+from sqlalchemy.orm import Session
+
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import TenantService
 from graphrag.community_reports_extractor import CommunityReportsExtractor
 from graphrag.entity_resolution import EntityResolution
-from graphrag.graph_extractor import GraphExtractor
+from graphrag.graph_extractor import GraphExtractor, DEFAULT_ENTITY_TYPES
 from graphrag.mind_map_extractor import MindMapExtractor
 from core.nlp import rag_tokenizer
 from core.utils import num_tokens_from_string
@@ -37,9 +38,9 @@ def graph_merge(g1, g2):
     return g
 
 
-def build_knowlege_graph_chunks(tenant_id: str, chunks: List[str], callback, entity_types=["organization", "person", "location", "event", "time"]):
-    _, tenant = TenantService.get_by_id(tenant_id)
-    llm_bdl = LLMBundle(tenant_id, LLMType.CHAT, tenant.llm_id)
+def build_knowledge_graph_chunks(db: Session, tenant_id: str, chunks: List[str], callback, entity_types=DEFAULT_ENTITY_TYPES):
+    tenant = TenantService.get_by_id(db, tenant_id)
+    llm_bdl = LLMBundle(db, tenant_id, LLMType.CHAT, tenant.llm_id)
     ext = GraphExtractor(llm_bdl)
     left_token_count = llm_bdl.max_length - ext.prompt_token_count - 1024
     left_token_count = max(llm_bdl.max_length * 0.6, left_token_count)
