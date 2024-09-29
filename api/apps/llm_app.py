@@ -285,6 +285,10 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
         llm_name = req["llm_name"] + "___LocalAI"
         api_key = "xxxxxxxxxxxxxxx"
 
+    elif factory == "HuggingFace":
+        llm_name = req["llm_name"] + "___HuggingFace"
+        api_key = "xxxxxxxxxxxxxxx"
+
     elif factory == "OpenAI-API-Compatible":
         llm_name = req["llm_name"] + "___OpenAI-API"
         api_key = req.get("api_key", "xxxxxxxxxxxxxxx")

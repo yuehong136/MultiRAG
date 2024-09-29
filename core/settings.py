@@ -7,6 +7,7 @@
 @desc:
 """
 import os
+import logging
 from api.utils import get_base_config, decrypt_database_config
 from api.utils.file_utils import get_project_base_directory
 from api.utils.log_utils import LoggerFactory, getLogger
@@ -46,6 +47,13 @@ cron_logger = getLogger("cron_logger")
 cron_logger.setLevel(20)
 chunk_logger = getLogger("chunk_logger")
 database_logger = getLogger("database")
+
+for logger in [milvus_logger, minio_logger, s3_logger, azure_logger, cron_logger, chunk_logger, database_logger]:
+    logger.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)-15s %(levelname)-8s (%(process)d) %(message)s",
+    )
+
 
 SVR_QUEUE_NAME = "multi_rag_svr_queue"
 SVR_QUEUE_RETENTION = 60*60
