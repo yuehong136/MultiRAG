@@ -36,7 +36,7 @@ class SetConversationRequest(BaseModel):
     dialog_id: Optional[str] = None
     """对话的唯一标识符。"""
 
-    name: Optional[str] = None
+    name: Optional[str] = "New conversation"
     """会话的名称。"""
 
     # 其他可能的字段
