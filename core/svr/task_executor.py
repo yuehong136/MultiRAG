@@ -33,7 +33,8 @@ from core.nlp import search, rag_tokenizer
 from io import BytesIO
 import pandas as pd
 
-from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, email#, knowledge_graph
+from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, email, \
+    knowledge_graph
 
 from api.db import LLMType, ParserType
 from api.db.services.document_service import DocumentService
@@ -58,7 +59,7 @@ FACTORY = {
     ParserType.ONE.value: one,
     ParserType.AUDIO.value: audio,
     ParserType.EMAIL.value: email,
-    # ParserType.KG.value: knowledge_graph
+    ParserType.KG.value: knowledge_graph
 }
 
 CONSUMEER_NAME = "task_consumer_" + ("0" if len(sys.argv) < 2 else sys.argv[1])

@@ -1,8 +1,6 @@
 import os
 import numpy as np
 from typing import List, Optional
-
-from api.settings import LIGHTEN
 from core.llm.embedding_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
 from core.utils import num_tokens_from_string
@@ -16,6 +14,7 @@ class YoudaoEmbed(Base):
         self.base_url = base_url
         self.kwargs = kwargs
         model_path = self.get_model_path(self.model_name.split("/")[-1] if "/" in self.model_name else self.model_name)
+        from api.settings import LIGHTEN
         if not LIGHTEN and not YoudaoEmbed._client:
             from BCEmbedding import EmbeddingModel as qanthing
             try:

@@ -2,12 +2,8 @@
 import os
 import re
 import threading
-
 import numpy as np
-
 from huggingface_hub import snapshot_download
-
-from api.settings import LIGHTEN
 from core.llm.rerank_model.base import Base, sigmoid
 from api.utils.file_utils import get_home_cache_dir
 from core.utils import num_tokens_from_string, truncate
@@ -29,6 +25,7 @@ class DefaultRerank(Base):
         ^_-
 
         """
+        from api.settings import LIGHTEN
         if not LIGHTEN and not DefaultRerank._model:
             import torch
             from FlagEmbedding import FlagReranker

@@ -16,9 +16,9 @@ import pandas as pd
 from graphrag import leiden
 from graphrag.community_report_prompt import COMMUNITY_REPORT_PROMPT
 from graphrag.leiden import add_community_info2graph
-from rag.llm.chat_model import Base as CompletionLLM
+from core.llm.chat_model.base import Base as CompletionLLM
 from graphrag.utils import ErrorHandlerFn, perform_variable_replacements, dict_has_keys_with_types
-from rag.utils import num_tokens_from_string
+from core.utils import num_tokens_from_string
 from timeit import default_timer as timer
 
 log = logging.getLogger(__name__)
