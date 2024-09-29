@@ -132,7 +132,7 @@ class TaskService(CommonService):
         db.commit()
 
 
-def queue_tasks(db: Session, doc, bucket, name):
+def queue_tasks(db: Session, doc: dict, bucket: str, name: str):
     def new_task():
         return {
             "id": get_uuid(),
@@ -148,13 +148,9 @@ def queue_tasks(db: Session, doc, bucket, name):
         page_size = doc["parser_config"].get("task_page_size", 12)
         if doc["parser_id"] == "paper":
             page_size = doc["parser_config"].get("task_page_size", 22)
-        if doc["parser_id"] == "one":
-            page_size = 1000000000
-        if not do_layout:
-            page_size = 1000000000
-        page_ranges = doc["parser_config"].get("pages")
-        if not page_ranges:
-            page_ranges = [(1, 100000)]
+        if doc["parser_id"] in ["one", "knowledge_graph"] or not do_layout:
+            page_size = 10 ** 9
+        page_ranges = doc["parser_config"].get("pages") or [(1, 10 ** 5)]
         for s, e in page_ranges:
             s -= 1
             s = max(0, s)
