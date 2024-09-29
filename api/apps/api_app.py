@@ -631,6 +631,8 @@ async def upload(request: Request, db: Session = Depends(get_db)):
             doc["parser_id"] = ParserType.PICTURE.value
         if re.search(r"\.(ppt|pptx|pages)$", filename):
             doc["parser_id"] = ParserType.PRESENTATION.value
+        if re.search(r"\.(eml)$", filename):
+            doc["parser_id"] = ParserType.EMAIL.value
 
         doc_result = DocumentService.insert(db, doc)
         FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)

@@ -475,6 +475,8 @@ async def upload_documents(
                 doc["parser_id"] = ParserType.PICTURE.value
             if re.search(r"\.(ppt|pptx|pages)$", filename):
                 doc["parser_id"] = ParserType.PRESENTATION.value
+            if re.search(r"\.(eml)$", filename):
+                doc["parser_id"] = ParserType.EMAIL.value
             # 插入文档记录到数据库
             DocumentService.insert(db, doc)
 
