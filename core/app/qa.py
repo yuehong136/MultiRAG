@@ -17,8 +17,8 @@ from timeit import default_timer as timer
 from nltk import word_tokenize
 from openpyxl import load_workbook
 
-from deepdoc.parser.utils import get_txt
-from core.nlp import is_english, random_choices, find_codec, qbullets_category, add_positions, has_qbullet, docx_question_level
+from deepdoc.parser.utils import get_text
+from core.nlp import is_english, random_choices, qbullets_category, add_positions, has_qbullet, docx_question_level
 from core.nlp import rag_tokenizer, tokenize_table, concat_img
 from core.settings import cron_logger
 from deepdoc.parser import PdfParser, ExcelParser, DocxParser
@@ -307,7 +307,7 @@ def chunk(filename, binary=None, lang="Chinese", callback=None, **kwargs):
         return res
     elif re.search(r"\.(txt|csv)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
-        txt = get_txt(filename, binary)
+        txt = get_text(filename, binary)
         lines = txt.split("\n")
         comma, tab = 0, 0
         for l in lines:
@@ -350,7 +350,7 @@ def chunk(filename, binary=None, lang="Chinese", callback=None, **kwargs):
         return res
     elif re.search(r"\.(md|markdown)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
-        txt = get_txt(filename, binary)
+        txt = get_text(filename, binary)
         lines = txt.split("\n")
         last_question, last_answer = "", ""
         question_stack, level_stack = [], []

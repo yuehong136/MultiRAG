@@ -1,7 +1,7 @@
 from core.nlp import find_codec
 
 
-def get_txt(fnm: str, binary=None) -> str:
+def get_text(fnm: str, binary=None) -> str:
     txt = ""
     if binary:
         encoding = find_codec(binary)

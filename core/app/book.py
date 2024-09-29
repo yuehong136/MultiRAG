@@ -10,12 +10,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-import copy
 from tika import parser
 import re
 from io import BytesIO
 
-from deepdoc.parser.utils import get_txt
+from deepdoc.parser.utils import get_text
 from core.nlp import bullets_category, is_english, tokenize, remove_contents_table, \
     hierarchical_merge, make_colon_as_title, naive_merge, random_choices, tokenize_table, add_positions, \
     tokenize_chunks, find_codec
@@ -89,7 +88,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
     elif re.search(r"\.txt$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
-        txt = get_txt(filename, binary)
+        txt = get_text(filename, binary)
         sections = txt.split("\n")
         sections = [(l, "") for l in sections if l]
         remove_contents_table(sections, eng=is_english(

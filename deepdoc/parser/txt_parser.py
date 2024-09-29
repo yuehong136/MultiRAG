@@ -6,12 +6,12 @@
 @date：2024/8/6 17:40
 @desc:
 """
-from deepdoc.parser.utils import get_txt
+from deepdoc.parser.utils import get_text
 from core.nlp import num_tokens_from_string
 
 class RAGFlowTxtParser:
     def __call__(self, fnm, binary=None, chunk_token_num=128, delimiter="\n!?;。；！？"):
-        txt = get_txt(fnm, binary)
+        txt = get_text(fnm, binary)
         return self.parser_txt(txt, chunk_token_num, delimiter)
 
     @classmethod
