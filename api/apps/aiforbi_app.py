@@ -52,18 +52,20 @@ class DynamicChartOptionFunctionReqBody(BaseModel):
 
 
 @router.post("/nl2sql")
-async def nl2sql(body: NL2SQLReqBody = Body(...)):
-    sql = await AIForBIService.nl2sql(nl2sql_req_body=body)
+async def nl2sql(body: NL2SQLReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
+    sql = await AIForBIService.nl2sql(nl2sql_req_body=body, db=db, user_id=user.id)
     return ResponseSchema(status="success", data=sql)
 
 
 @router.post("/chart-type")
-async def chart_type(body: ChartTypeReqBody = Body(...)):
-    chart_type_list = await AIForBIService.chart_type(chart_type_req_body=body)
+async def chart_type(body: ChartTypeReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
+    chart_type_list = await AIForBIService.chart_type(chart_type_req_body=body, db=db, user_id=user.id)
     return ResponseSchema(status="success", data=chart_type_list)
 
 
 @router.post("/dynamic-chart-option-function")
-async def dynamic_chart_option_function(body: DynamicChartOptionFunctionReqBody = Body(...)):
-    func = await AIForBIService.dynamic_chart_option_function(dynamic_chart_option_function_req_body=body)
+async def dynamic_chart_option_function(body: DynamicChartOptionFunctionReqBody = Body(...),
+                                        db: Session = Depends(get_db), user=Depends(manager)):
+    func = await AIForBIService.dynamic_chart_option_function(dynamic_chart_option_function_req_body=body, db=db,
+                                                              user_id=user.id)
     return ResponseSchema(status="success", data=func)
