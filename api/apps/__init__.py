@@ -23,12 +23,13 @@ from sqlalchemy.orm import Session
 from api.db.database import get_db, SessionLocal
 from api.db.services import UserService
 from api.settings import SECRET_KEY, stat_logger, access_logger, API_VERSION
+from errors.exceptions import AITranslateException
+
 # 初始化FastAPI应用的日志记录
 logger = logging.getLogger('fastapi.app')
 logger.setLevel(logging.INFO)
 for h in access_logger.handlers:
     logger.addHandler(h)
-
 
 description = """
 Multi-RAG API helps you do awesome stuff. 🚀
@@ -77,7 +78,7 @@ app.add_middleware(
 )
 
 # 初始化登录管理器，设置密钥和令牌URL
-manager = LoginManager(SECRET_KEY, token_url='/auth/token',default_expiry=timedelta(days=1))
+manager = LoginManager(SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))
 
 
 # 定义一个函数，根据电子邮件加载用户
@@ -133,6 +134,14 @@ pages_dir = [
 for dir in pages_dir:
     for path in search_pages_path(dir):
         register_page(path)
+
+
+@app.exception_handler(AITranslateException)
+async def ai_translate_exception_handler(request: Request, exc: AITranslateException):
+    return JSONResponse(
+        status_code=200,
+        content={"status": "error", "message": exc.message},
+    )
 
 
 # 定义FastAPI应用的自定义异常处理器

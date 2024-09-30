@@ -199,6 +199,11 @@ AIFORBI_BASE_URL = AIFORBI_BASE_CONFIG.get("base_url")
 AIFORBI_API_KEY = AIFORBI_BASE_CONFIG.get("api_key")
 AIFORBI_MODEL_ID = AIFORBI_BASE_CONFIG.get("model_id")
 
+AI_TRANSLATE_BASE_CONFIG = get_base_config("ai_translate", {})
+AI_TRANSLATE_BASE_URL = AI_TRANSLATE_BASE_CONFIG.get("base_url")
+AI_TRANSLATE_API_KEY = AI_TRANSLATE_BASE_CONFIG.get("api_key")
+AI_TRANSLATE_MODEL_ID = AI_TRANSLATE_BASE_CONFIG.get("model_id")
+
 
 class CustomEnum(Enum):
     @classmethod
