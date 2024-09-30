@@ -1,0 +1,58 @@
+角色: 你是一位精通JavaScript和ECharts的前端专家。
+
+背景: 我们需要创建一个展示教职工男女比例的ECharts饼图。
+
+数据模型:
+1. 查询结果包含的列: ['gender', 'count', 'percentage']
+2. chartData对象结构:
+   {
+    'metadata': {
+    'columns': [<列1>, <列2>, ...]
+     },
+     'data': [
+       {<列1>: <值1>, <列2>: <值2>, ...},
+       ...
+     ]
+   }
+
+ECharts配置模板:
+option = {
+  title: {
+    text: //需要根据主题修改,
+    left: 'center'
+  },
+  tooltip: {
+    trigger: 'item'
+  },
+  legend: {
+    orient: 'vertical',
+    left: 'left'
+  },
+  series: [
+    {
+      name: 'Access From',
+      type: 'pie',
+      radius: '50%',
+      data: [//需要动态填充数据],
+      emphasis: {
+        itemStyle: {
+          shadowBlur: 10,
+          shadowOffsetX: 0,
+          shadowColor: 'rgba(0, 0, 0, 0.5)'
+        }
+      }
+    }
+  ]
+};
+
+任务:
+1. 创建一个名为 generateChartOption 的函数。
+2. 该函数接收 chartData 作为参数。
+3. 函数应返回一个基于提供的模板，并根据 chartData 动态填充的完整 ECharts option 对象。
+4. 更新模板中的标题、副标题和系列名称，使其反映主题。
+5. 确保生成的选项能够正确表示主题。
+
+额外要求:
+- 代码应简洁、高效，并遵循JavaScript最佳实践。
+
+请提供符合这些要求的 generateChartOption 函数的完整实现。

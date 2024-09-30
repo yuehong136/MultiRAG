@@ -193,6 +193,12 @@ CHECK_NODES_IDENTITY = False
 retrievaler = search.Dealer(MILVUS_CONNECTION)
 kg_retrievaler = kg_search.KGSearch(MILVUS_CONNECTION)
 
+# AIFORBI
+AIFORBI_BASE_CONFIG = get_base_config("aiforbi", {})
+AIFORBI_BASE_URL = AIFORBI_BASE_CONFIG.get("base_url")
+AIFORBI_API_KEY = AIFORBI_BASE_CONFIG.get("api_key")
+AIFORBI_MODEL_ID = AIFORBI_BASE_CONFIG.get("model_id")
+
 
 class CustomEnum(Enum):
     @classmethod

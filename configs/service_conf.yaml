@@ -123,3 +123,8 @@ permission:
   component: false
   # 是否启用数据集权限检查
   dataset: false
+
+aiforbi:
+  base_url: https://ark.cn-beijing.volces.com/api/v3
+  api_key: 5ee5267f-0890-4f3c-9540-80c744ddcb0b
+  model_id: ep-20240929094134-47cvj

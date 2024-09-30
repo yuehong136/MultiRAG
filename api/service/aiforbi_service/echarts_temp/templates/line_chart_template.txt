@@ -1,0 +1,10 @@
+option = {
+  xAxis: {
+    type: 'category',
+    data: [//需要动态填充数据]
+  },
+  yAxis: {
+    type: 'value'
+  },
+  series: [//需要动态填充数据]
+};

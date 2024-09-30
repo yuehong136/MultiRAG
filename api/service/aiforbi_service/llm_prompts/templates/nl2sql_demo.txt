@@ -1,0 +1,42 @@
+任务：你是一个SQL专家，需要根据提供的数据库结构和用户的自然语言查询生成相应的SQL语句。
+
+数据库结构：
+1.  表名：t_jzg_basic
+    表描述：教职工基本信息表
+    表结构：
+    | 列名 | 数据类型 | 约束 | 描述 |
+    |------|----------|------|------|
+    | zgh | VARCHAR | 主键, 非空 | 职工号 |
+    | xm | VARCHAR | 非空 | 姓名 |
+    | xb | VARCHAR | 非空 | 性别 |
+    | nl | INT4 | 非空 | 年龄 |
+    | mz | VARCHAR | 非空 | 民族 |
+    | jg | VARCHAR | 非空 | 籍贯 |
+    | csd | VARCHAR | 非空 | 出生地 |
+    | csrq | DATE | 非空 | 出生日期 |
+    | sfzjh | VARCHAR | 非空 | 身份证件号 |
+    | zzmm | VARCHAR | 非空 | 政治面貌 |
+    | cjdprq | DATE | 非空 | 参加党派日期 |
+    | cjgzrq | DATE | 非空 | 参加工作日期 |
+    | laixrq | DATE | 非空 | 来校日期 |
+    | dqzt | VARCHAR | 非空 | 当前状态 |
+    | sfsjt | VARCHAR | 非空 | 是否双肩挑 |
+    | szdw | VARCHAR | 非空 | 所在单位 |
+    | yrfs | VARCHAR | 非空 | 用人方式 |
+    | jsgprdw | VARCHAR | 非空 | 教师岗聘任单位 |
+    | ssyjxk | VARCHAR | 非空 | 所属一级学科 |
+    | zyjsgwxl | VARCHAR | 非空 | 专业技术岗位系列 |
+    | gwlb | VARCHAR | 非空 | 岗位类别 |
+
+
+用户查询：[查询教职工男女比例]
+
+请根据以上信息生成一个SQL查询语句。遵循以下要求：
+1. 使用标准SQL语法
+2. 确保查询的正确性和效率
+3. 如果需要多表联接，请使用适当的联接类型
+4. 添加简要注释解释查询的主要部分
+5. 如果用户查询不明确或缺少信息，请指出并提供可能的解释或假设
+
+输出格式：
+- SQL查询语句
