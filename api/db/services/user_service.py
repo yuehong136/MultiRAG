@@ -141,6 +141,7 @@ class TenantService(CommonService):
                 "rerank_id": tenant.rerank_id,
                 "asr_id": tenant.asr_id,
                 "img2txt_id": tenant.img2txt_id,
+                "tts_id": tenant.tts_id,
                 "parser_ids": tenant.parser_ids,
                 "role": tenant.role
             }

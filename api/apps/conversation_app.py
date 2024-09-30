@@ -10,7 +10,7 @@ import json
 import re
 import traceback
 from copy import deepcopy
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -369,9 +369,8 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
     except Exception as e:
         return server_error_response(e)
 
-
 @router.post('/tts', summary="文本转语音", response_description="成功文本转语音")
-async def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     text = req.get("text")
 
@@ -383,23 +382,34 @@ async def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(m
     if not tts_id:
         raise HTTPException(status_code=400, detail="No default TTS model is set")
 
-    tts_mdl = LLMBundle(db, tenants[0]["tenant_id"], "TTS", tts_id)
+    tts_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.TTS, tts_id)
 
     def stream_audio() -> Generator[bytes, None, None]:
         try:
-            for txt in re.split(r"[，。/《》？；：！\n\r:;]+", text):
-                for chunk in tts_mdl.tts(txt):
-                    yield chunk
+            # Split the text and filter out empty strings
+            for txt in filter(None, re.split(r"[，。/《》？；：！\n\r:;]+", text)):
+                # Proceed only if txt is not empty after stripping whitespace
+                if txt.strip():
+                    # Add logging to see the text segments being processed
+                    # print(f"Processing text segment: {txt}")
+                    for chunk in tts_mdl.tts(txt):
+                        # Add logging to check the size of each chunk
+                        # print(f"Yielding chunk of size: {len(chunk)} bytes")
+                        yield chunk
         except Exception as e:
-            error_message = ("data:" + json.dumps({"retcode": 500, "retmsg": str(e),
-                                                   "data": {"answer": "**ERROR**: " + str(e)}},
-                                                  ensure_ascii=False)).encode('utf-8')
+            error_message = json.dumps({
+                "retcode": 500,
+                "retmsg": str(e),
+                "data": {"answer": "**ERROR**: " + str(e)}
+            }, ensure_ascii=False).encode('utf-8')
             yield error_message
 
     headers = {
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
-        "X-Accel-Buffering": "no"
+        "X-Accel-Buffering": "no",
+        "Content-Type": "audio/mpeg",
+        "Content-Disposition": 'attachment; filename="tts_output.mp3"'
     }
     return StreamingResponse(stream_audio(), media_type="audio/mpeg", headers=headers)
 

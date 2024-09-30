@@ -241,14 +241,19 @@ class LLMBundle(object):
         return txt
 
     def tts(self, text):
-        for chunk in self.mdl.tts(text):
-            if isinstance(chunk,int):
-                if not TenantLLMService.increase_usage(
-                    self.db, self.tenant_id, self.llm_type, chunk, self.llm_name):
+        if not text.strip():
+            return  # Skip processing if text is empty or whitespace
+        try:
+            for chunk in self.mdl.tts(text):
+                if isinstance(chunk, int):
+                    if not TenantLLMService.increase_usage(
+                            self.db, self.tenant_id, self.llm_type, chunk, self.llm_name):
                         database_logger.error(
                             "Can't update token usage for {}/TTS".format(self.tenant_id))
-                return
-            yield chunk
+                    return
+                yield chunk
+        except Exception as e:
+            database_logger.error(f"TTS processing failed for text '{text}': {e}")
 
     def chat(self, system, history, gen_conf):
         txt, used_tokens = self.mdl.chat(system, history, gen_conf)

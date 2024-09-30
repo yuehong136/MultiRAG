@@ -295,9 +295,9 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
 
     elif factory == "XunFei Spark":
         llm_name = req["llm_name"]
-        if req["model_type"] == "chat":
+        if req["mdl_type"] == "chat":
             api_key = req.get("spark_api_password", "xxxxxxxxxxxxxxx")
-        elif req["model_type"] == "tts":
+        elif req["mdl_type"] == "tts":
             api_key = apikey_json(["spark_app_id", "spark_api_secret", "spark_api_key"])
 
     elif factory == "BaiduYiyan":
@@ -350,7 +350,7 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
                 raise Exception(m)
         except Exception as e:
             msg += f"\nFail to access model({llm['llm_name']})." + str(e)
-    elif llm["model_type"] == LLMType.RERANK:
+    elif llm["mdl_type"] == LLMType.RERANK:
         mdl = RerankModel[factory](
             key=llm["api_key"],
             model_name=llm["llm_name"],
@@ -384,7 +384,7 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
                 pass
         except Exception as e:
             msg += f"\nFail to access model({llm['llm_name']})." + str(e)
-    elif llm["model_type"] == LLMType.TTS:
+    elif llm["mdl_type"] == LLMType.TTS:
         mdl = TTSModel[factory](
             key=llm["api_key"], model_name=llm["llm_name"], base_url=llm["api_base"]
         )

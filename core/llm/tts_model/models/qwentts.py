@@ -56,7 +56,8 @@ class QwenTTS(Base):
         try:
             for data in callback._run():
                 yield data
-            yield num_tokens_from_string(text)
+            # yield num_tokens_from_string(text)
+            self.token_count = num_tokens_from_string(text)
 
         except Exception as e:
             raise RuntimeError(f"**ERROR**: {e}")
