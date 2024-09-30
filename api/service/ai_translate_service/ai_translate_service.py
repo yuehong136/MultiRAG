@@ -1,6 +1,11 @@
 import json
 
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
 
+from api.db import LLMType
+from api.db.services.llm_service import LLMBundle
+from api.db.services.user_service import TenantService
 from api.service.ai_translate_service.llm_prompts import PromptTemplateLoader
 from api.service.ai_translate_service.utils.llm_client import AsyncLLMClient
 from api.settings import AI_TRANSLATE_MODEL_ID
@@ -11,12 +16,17 @@ from errors.exceptions import AITranslateException
 class AITranslateService:
 
     @staticmethod
-    async def ai_translate(ai_translate_req_body):
+    async def ai_translate(ai_translate_req_body, db: Session, user_id):
         ai_translate_logger.info(f"ai_translate_req_body: {ai_translate_req_body}")
         loader = PromptTemplateLoader()
         prompt = loader.fill_template("ai_translate_temp.txt", input=ai_translate_req_body.zh_text)
-        llm_client = AsyncLLMClient(AI_TRANSLATE_MODEL_ID)
-        resp = await llm_client.standard_request(user_content=prompt)
+
+        tenants = TenantService.get_by_user_id(db, user_id)
+        if not tenants:
+            raise HTTPException(status_code=404, detail="Tenant not found!")
+
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, "ep-20240929094134-47cvj")
+        resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         ai_translate_logger.info(f"ai_translate resp: {resp}")
         if contains_chinese_unicode(resp):
             raise AITranslateException(message="翻译内容包含中文字符，请重新翻译")
@@ -27,12 +37,16 @@ class AITranslateService:
             return get_first_part_from_translated_text(resp)
 
     @staticmethod
-    async def ai_batch_translate(ai_batch_translate_req_body):
+    async def ai_batch_translate(ai_batch_translate_req_body, db: Session, user_id):
         ai_translate_logger.info(f"ai_batch_translate_req_body: {ai_batch_translate_req_body}")
         loader = PromptTemplateLoader()
         prompt = loader.fill_template("ai_batch_translate_temp.txt", input=ai_batch_translate_req_body.zh_text_list)
-        llm_client = AsyncLLMClient(AI_TRANSLATE_MODEL_ID)
-        resp = await llm_client.standard_request(user_content=prompt)
+        tenants = TenantService.get_by_user_id(db, user_id)
+        if not tenants:
+            raise HTTPException(status_code=404, detail="Tenant not found!")
+
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, "ep-20240929094134-47cvj")
+        resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         ai_translate_logger.info(f"ai_batch_translate resp: {resp}")
         if contains_chinese_unicode(resp):
             raise AITranslateException(message="翻译内容包含中文字符，请重新翻译")
