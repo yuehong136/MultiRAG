@@ -139,9 +139,9 @@ class LoggerFactory(object):
                                                delay=True)
         if level:
             handler.level = level
+
         # 添加日志格式器
-        formatter = logging.Formatter(
-            "[%(levelname)s] [%(asctime)s] [%(module)s.%(funcName)s] [line:%(lineno)d]: %(message)s")
+        formatter = logging.Formatter("%(asctime)-15s %(levelname)-8s (%(process)d) %(message)s")
         handler.setFormatter(formatter)  # 设置格式
 
         return handler
