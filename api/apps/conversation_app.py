@@ -10,7 +10,7 @@ import json
 import re
 import traceback
 from copy import deepcopy
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -89,6 +89,11 @@ class ThumbupRequest(BaseModel):
 class TTSRequest(BaseModel):
     text: str
     """文本内容"""
+
+
+class ASRRequest(BaseModel):
+    audio_file_path: str
+    """MP3音频文件的地址"""
 
 
 class AskAboutRequest(BaseModel):
@@ -369,6 +374,7 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
     except Exception as e:
         return server_error_response(e)
 
+
 @router.post('/tts', summary="文本转语音", response_description="成功文本转语音")
 def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
@@ -412,6 +418,62 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
         "Content-Disposition": 'attachment; filename="tts_output.mp3"'
     }
     return StreamingResponse(stream_audio(), media_type="audio/mpeg", headers=headers)
+
+
+@router.post('/asr', summary="语音识别", response_description="成功识别语音")
+def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    req = request.model_dump()
+    audio_file_path = req.get("audio_file_path")
+
+    # 获取用户信息和语音识别模型的信息
+    tenants = TenantService.get_by_user_id(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+
+    asr_id = tenants[0].get("asr_id")
+    if not asr_id:
+        raise HTTPException(status_code=400, detail="No default ASR model is set")
+
+    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_id)
+
+    # # 创建 QWenSeq2txt 实例
+    # qwen_seq2txt = QWenSeq2txt(key=asr_key)
+
+    # 调用 ASR 语音识别函数
+    # transcription_result, token_count = asr_mdl.transcription(audio=audio_file_path)
+    transcription_result = asr_mdl.transcription(audio=audio_file_path)
+
+    if "**ERROR**" in transcription_result:
+        raise HTTPException(status_code=500, detail=transcription_result)
+    return get_json_result(data=transcription_result)
+
+
+@router.post('/asr_upload', summary="语音识别上传", response_description="成功识别语音")
+def asr_upload(file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(manager)):
+    # 将上传的 MP3 文件保存到临时文件
+    import tempfile
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio_file:
+        temp_audio_file.write(file.file.read())
+        audio_file_path = temp_audio_file.name
+
+    # 获取用户信息和语音识别模型的信息
+    tenants = TenantService.get_by_user_id(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+
+    asr_id = tenants[0].get("asr_id")
+    if not asr_id:
+        raise HTTPException(status_code=400, detail="No default ASR model is set")
+
+    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_id)
+
+    # 调用 ASR 语音识别函数
+    transcription_result = asr_mdl.transcription(audio=audio_file_path)
+
+    if "**ERROR**" in transcription_result:
+        raise HTTPException(status_code=500, detail=transcription_result)
+
+    return get_json_result(data=transcription_result)
 
 
 @router.post('/delete_msg', summary="删除信息", response_description="成功删除信息")
@@ -553,7 +615,8 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
     chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name])
-    ranks = retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3, aggs=False)
+    ranks = retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3,
+                                  aggs=False)
     mindmap = MindMapExtractor(chat_mdl)
     mind_map = mindmap([c["text"] for c in ranks["chunks"]]).output
     if "error" in mind_map:
@@ -590,7 +653,8 @@ async def related_questions(request: RelatedQuestionsRequest, db: Session = Depe
      - DO NOT translate, use the language of the original keywords.
     """
 
-    ans = chat_mdl.chat(prompt, [{"role": "user", "content": f"Keywords: {question}\nRelated search terms:"}], {"temperature": 0.9})
+    ans = chat_mdl.chat(prompt, [{"role": "user", "content": f"Keywords: {question}\nRelated search terms:"}],
+                        {"temperature": 0.9})
     related_terms = [re.sub(r"^[0-9]\. ", "", a) for a in ans.split("\n") if re.match(r"^[0-9]\. ", a)]
 
     return get_json_result(data=related_terms)
