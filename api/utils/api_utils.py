@@ -67,24 +67,6 @@ def get_exponential_backoff_interval(retries, full_jitter=False):
     return max(0, countdown)
 
 
-# @app.exception_handler(StarletteHTTPException)
-# @app.exception_handler(RequestValidationError)
-# async def custom_http_exception_handler(request: Request, exc: Exception):
-#     return server_error_response(exc)
-
-
-def get_json_result(retcode=RetCode.SUCCESS, retmsg='success', data=None, job_id=None, meta=None):
-    result_dict = {
-        "retcode": retcode,
-        "retmsg": retmsg,
-        "data": data,
-        "jobId": job_id,
-        "meta": meta,
-    }
-    response = {key: value for key, value in result_dict.items() if value is not None or key == "retcode"}
-    return JSONResponse(content=jsonable_encoder(response))
-
-
 def get_data_error_result(retcode=RetCode.DATA_ERROR, retmsg='Sorry! Data missing!'):
     result_dict = {
         "retcode": retcode,
@@ -166,6 +148,22 @@ def send_file_in_mem(data, filename):
         'Content-Disposition': f'attachment; filename={filename}'
     })
 
+
+# def get_json_result(retcode=RetCode.SUCCESS, retmsg='success', data=None, job_id=None, meta=None):
+#     result_dict = {
+#         "retcode": retcode,
+#         "retmsg": retmsg,
+#         "data": data,
+#         "jobId": job_id,
+#         "meta": meta,
+#     }
+#     response = {key: value for key, value in result_dict.items() if value is not None or key == "retcode"}
+#     return JSONResponse(content=jsonable_encoder(response))
+
+
+def get_json_result(retcode=RetCode.SUCCESS, retmsg='success', data=None):
+    response = {"retcode": retcode, "retmsg": retmsg, "data": data}
+    return JSONResponse(content=jsonable_encoder(response))
 
 def construct_response(retcode=RetCode.SUCCESS, retmsg='success', data=None, auth=None):
     result_dict = {"retcode": retcode, "retmsg": retmsg, "data": data}
