@@ -155,3 +155,5 @@ markdown_to_json >= 2.1.1
 editdistance >= 0.8.1
 # graspologic是一个图形统计算法包。
 graspologic >= 3.4.1
+# tencentcloud-sdk-python 腾讯云Python SDK是官方的软件开发工具包，允许Pythons开发人员编写使用腾讯云服务（如CVM和CBS）的软件。
+tencentcloud-sdk-python >= 3.0.1244
