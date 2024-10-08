@@ -371,7 +371,7 @@ class Dealer:
         if not question:
             return ranks
         RERANK_PAGE_LIMIT = 3
-        req = {"kb_names": kb_names, "doc_ids": doc_ids, "size": page_size * RERANK_PAGE_LIMIT,
+        req = {"kb_names": kb_names, "doc_ids": doc_ids, "size": max(page_size * RERANK_PAGE_LIMIT, 128),
                "question": question, "vector": True, "topk": top,
                "similarity": similarity_threshold,
                "available_int": 1, "filter_exp": filter_exp}
