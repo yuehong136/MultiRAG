@@ -6,9 +6,7 @@
 @date：2024/7/26 11:00
 @desc:
 """
-import io
 import re
-import numpy as np
 
 from api.db import LLMType
 from core.nlp import rag_tokenizer

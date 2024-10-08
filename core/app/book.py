@@ -15,9 +15,8 @@ import re
 from io import BytesIO
 
 from deepdoc.parser.utils import get_text
-from core.nlp import bullets_category, is_english, tokenize, remove_contents_table, \
-    hierarchical_merge, make_colon_as_title, naive_merge, random_choices, tokenize_table, add_positions, \
-    tokenize_chunks, find_codec
+from core.nlp import bullets_category, is_english, remove_contents_table, \
+    hierarchical_merge, make_colon_as_title, naive_merge, random_choices, tokenize_table, tokenize_chunks
 from core.nlp import rag_tokenizer
 from deepdoc.parser import PdfParser, DocxParser, PlainParser, HtmlParser
 
