@@ -1,4 +1,5 @@
 from core.llm.chat_model.models.doubao_chat import DoubaoChat
+from core.llm.chat_model.models.gemini_chat import GeminiChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
@@ -73,6 +74,7 @@ ChatModel = {
     # "BaiChuan": BaiChuanChat,
     # "MiniMax": MiniMaxChat,
     # "Mistral": MistralChat,
+    "Gemini": GeminiChat,
     "Doubao": DoubaoChat,
     "OpenAI-API-Compatible": OpenAI_APIChat
 }
