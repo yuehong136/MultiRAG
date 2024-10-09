@@ -79,7 +79,7 @@ class TenantLLMService(CommonService):
         print(f"Debug: Fetching model instance for tenant_id={tenant_id}, mdlnm={mdlnm}")
 
         model_config = cls.get_api_key(db, tenant_id, mdlnm)
-        print("model_config:", model_config)
+        # print("model_config:", model_config)
 
         tmp = mdlnm.split("@")
         fid = None if len(tmp) < 2 else tmp[1]
@@ -139,9 +139,12 @@ class TenantLLMService(CommonService):
         if llm_type == LLMType.SPEECH2TEXT:
             if model_config["llm_factory"] not in Seq2txtModel:
                 return
+            # return Seq2txtModel[model_config["llm_factory"]](
+            #     model_config["api_key"], model_config["llm_name"], lang,
+            #     base_url=model_config["api_base"]
+            # )
             return Seq2txtModel[model_config["llm_factory"]](
-                model_config["api_key"], model_config["llm_name"], lang,
-                base_url=model_config["api_base"]
+                model_config["api_key"], model_config["llm_name"]
             )
 
         if llm_type == LLMType.TTS:
@@ -235,7 +238,7 @@ class LLMBundle(object):
     def transcription(self, audio):
         txt, used_tokens = self.mdl.transcription(audio)
         if not TenantLLMService.increase_usage(
-                self.tenant_id, self.llm_type, used_tokens):
+                self.db, self.tenant_id, self.llm_type, used_tokens):
             database_logger.error(
                 "Can't update token usage for {}/SEQUENCE2TXT".format(self.tenant_id))
         return txt

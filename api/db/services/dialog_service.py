@@ -265,6 +265,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     # 如果消息长度小于2，说明函数可能存在bug，需要进行调试
     assert len(msg) >= 2, f"message_fit_in has bug: {msg}"
     prompt = msg[0]["content"]
+    prompt += "\n\n### Query:\n%s" % " ".join(questions)
 
     # 调整生成配置中的最大token数
     if "max_tokens" in gen_conf:

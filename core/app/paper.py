@@ -12,13 +12,11 @@
 #
 import copy
 import re
-from collections import Counter
 
 from api.db import ParserType
 from core.nlp import rag_tokenizer, tokenize, tokenize_table, add_positions, bullets_category, title_frequency, tokenize_chunks
 from deepdoc.parser import PdfParser, PlainParser
 import numpy as np
-from core.utils import num_tokens_from_string
 
 
 class Pdf(PdfParser):

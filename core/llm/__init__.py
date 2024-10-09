@@ -20,11 +20,13 @@ from core.llm.sequence2txt_model.azureseq2txt import AzureSeq2txt
 from core.llm.sequence2txt_model.gptseq2txt import GPTSeq2txt
 from core.llm.sequence2txt_model.ollamaseq2txt import OllamaSeq2txt
 from core.llm.sequence2txt_model.qwenseq2txt import QWenSeq2txt
+from core.llm.sequence2txt_model.tencentcloudseq2txt import TencentCloudSeq2txt
 from core.llm.sequence2txt_model.xinferenceseq2txt import XinferenceSeq2txt
 from core.llm.tts_model.models.fish_audiotts import FishAudioTTS
 from core.llm.tts_model.models.openaitts import OpenAITTS
 from core.llm.tts_model.models.qwentts import QwenTTS
 from core.llm.tts_model.models.sparktts import SparkTTS
+from core.llm.tts_model.models.xinferencetts import XinferenceTTS
 
 # from core.llm.ocr_model.models.local_cv import LocalCV
 # from core.llm.ocr_model.models.zhipu_4v import Zhipu4V
@@ -84,11 +86,12 @@ RerankModel = {
 
 
 Seq2txtModel = {
+    "Ollama": OllamaSeq2txt,
     "OpenAI": GPTSeq2txt,
     "Tongyi-Qianwen": QWenSeq2txt,
-    "Ollama": OllamaSeq2txt,
     "Azure-OpenAI": AzureSeq2txt,
-    "Xinference": XinferenceSeq2txt
+    "Xinference": XinferenceSeq2txt,
+    "Tencent Cloud": TencentCloudSeq2txt
 }
 
 
@@ -96,5 +99,6 @@ TTSModel = {
     "Fish Audio": FishAudioTTS,
     "Tongyi-Qianwen": QwenTTS,
     "OpenAI":OpenAITTS,
-    "XunFei Spark": SparkTTS
+    "XunFei Spark": SparkTTS,
+    "Xinference": XinferenceTTS
 }

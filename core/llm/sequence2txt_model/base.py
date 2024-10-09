@@ -6,6 +6,8 @@
 @date：2024/8/12 9:00
 @desc:
 """
+import base64
+import io
 from abc import ABC
 from core.utils import num_tokens_from_string
 
@@ -21,3 +23,10 @@ class Base(ABC):
             response_format="text"
         )
         return transcription.text.strip(), num_tokens_from_string(transcription.text.strip())
+
+    def audio2base64(self, audio):
+        if isinstance(audio, bytes):
+            return base64.b64encode(audio).decode("utf-8")
+        if isinstance(audio, io.BytesIO):
+            return base64.b64encode(audio.getvalue()).decode("utf-8")
+        raise TypeError("The input audio file should be in binary format.")
