@@ -267,7 +267,7 @@ async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=
                 retcode=RetCode.OPERATING_ERROR)
         convs = ConversationService.query(
             db,
-            id=dialog_id,
+            dialog_id=dialog_id,
             order_by="create_time",
             reverse=True)
         convs = [d.to_dict() for d in convs]
