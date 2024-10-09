@@ -38,28 +38,32 @@ class ResponseSchema(BaseModel):
 class NL2SQLReqBody(BaseModel):
     user_question: str
     table_structure: str
+    llm_name: str
 
 
 class ChartTypeReqBody(BaseModel):
     user_question: str
     sql_result: Dict[str, Any]
+    llm_name: str
 
 
 class DynamicChartOptionFunctionReqBody(BaseModel):
     user_question: str
     sql_result: Dict[str, Any]
     chart_type: str
+    llm_name: str
 
 
 @router.post("/nl2sql")
 async def nl2sql(body: NL2SQLReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
-    sql = await AIForBIService.nl2sql(nl2sql_req_body=body, db=db, user_id=user.id)
+    sql = await AIForBIService.nl2sql(nl2sql_req_body=body, db=db, user_id=user.id, llm_name=body.llm_name)
     return ResponseSchema(status="success", data=sql)
 
 
 @router.post("/chart-type")
 async def chart_type(body: ChartTypeReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
-    chart_type_list = await AIForBIService.chart_type(chart_type_req_body=body, db=db, user_id=user.id)
+    chart_type_list = await AIForBIService.chart_type(chart_type_req_body=body, db=db, user_id=user.id,
+                                                      llm_name=body.llm_name)
     return ResponseSchema(status="success", data=chart_type_list)
 
 
@@ -67,5 +71,5 @@ async def chart_type(body: ChartTypeReqBody = Body(...), db: Session = Depends(g
 async def dynamic_chart_option_function(body: DynamicChartOptionFunctionReqBody = Body(...),
                                         db: Session = Depends(get_db), user=Depends(manager)):
     func = await AIForBIService.dynamic_chart_option_function(dynamic_chart_option_function_req_body=body, db=db,
-                                                              user_id=user.id)
+                                                              user_id=user.id, llm_name=body.llm_name)
     return ResponseSchema(status="success", data=func)

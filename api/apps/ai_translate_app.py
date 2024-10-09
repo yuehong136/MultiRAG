@@ -26,29 +26,15 @@ class ResponseSchema(BaseModel):
     data: Optional[Any] = None
 
 
-class NL2SQLReqBody(BaseModel):
-    user_question: str
-    table_structure: str
-
-
-class ChartTypeReqBody(BaseModel):
-    user_question: str
-    sql_result: Dict[str, Any]
-
-
-class DynamicChartOptionFunctionReqBody(BaseModel):
-    user_question: str
-    sql_result: Dict[str, Any]
-    chart_type: str
-
-
 class AITranslateReqBody(BaseModel):
     zh_text: str
+    llm_name: str
 
 
 @router.post("/ai-translate")
 async def ai_translate(body: AITranslateReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
-    translate = await AITranslateService.ai_translate(ai_translate_req_body=body, db=db, user_id=user.id)
+    translate = await AITranslateService.ai_translate(ai_translate_req_body=body, db=db, user_id=user.id,
+                                                      llm_name=body.llm_name)
     return ResponseSchema(status="success", data={
         "zh_text": body.zh_text,
         "en_text": translate
@@ -57,11 +43,13 @@ async def ai_translate(body: AITranslateReqBody = Body(...), db: Session = Depen
 
 class AIBatchTranslateReqBody(BaseModel):
     zh_text_list: List[str]
+    llm_name: str
 
 
 @router.post("/ai-batch-translate")
 async def ai_translate(body: AIBatchTranslateReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
-    translate_list = await AITranslateService.ai_batch_translate(ai_batch_translate_req_body=body, db=db, user_id=user.id)
+    translate_list = await AITranslateService.ai_batch_translate(ai_batch_translate_req_body=body, db=db,
+                                                                 user_id=user.id, llm_name=body.llm_name)
     return ResponseSchema(status="success", data={
         "zh_text_list": body.zh_text_list,
         "en_text_list": translate_list

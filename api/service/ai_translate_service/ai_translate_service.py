@@ -16,7 +16,7 @@ from errors.exceptions import AITranslateException
 class AITranslateService:
 
     @staticmethod
-    async def ai_translate(ai_translate_req_body, db: Session, user_id):
+    async def ai_translate(ai_translate_req_body, db: Session, user_id, llm_name):
         ai_translate_logger.info(f"ai_translate_req_body: {ai_translate_req_body}")
         loader = PromptTemplateLoader()
         prompt = loader.fill_template("ai_translate_temp.txt", input=ai_translate_req_body.zh_text)
@@ -25,7 +25,7 @@ class AITranslateService:
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, "ep-20240929094134-47cvj")
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         ai_translate_logger.info(f"ai_translate resp: {resp}")
         if contains_chinese_unicode(resp):
@@ -37,7 +37,7 @@ class AITranslateService:
             return get_first_part_from_translated_text(resp)
 
     @staticmethod
-    async def ai_batch_translate(ai_batch_translate_req_body, db: Session, user_id):
+    async def ai_batch_translate(ai_batch_translate_req_body, db: Session, user_id, llm_name):
         ai_translate_logger.info(f"ai_batch_translate_req_body: {ai_batch_translate_req_body}")
         loader = PromptTemplateLoader()
         prompt = loader.fill_template("ai_batch_translate_temp.txt", input=ai_batch_translate_req_body.zh_text_list)
@@ -45,7 +45,7 @@ class AITranslateService:
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, "ep-20240929094134-47cvj")
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         ai_translate_logger.info(f"ai_batch_translate resp: {resp}")
         if contains_chinese_unicode(resp):

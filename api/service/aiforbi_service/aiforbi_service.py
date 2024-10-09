@@ -17,7 +17,7 @@ from core.settings import aiforbi_logger
 class AIForBIService:
 
     @staticmethod
-    async def nl2sql(nl2sql_req_body, db, user_id):
+    async def nl2sql(nl2sql_req_body, db, user_id, llm_name):
         loader = PromptTemplateLoader()
         prompt = loader.fill_template("nl2sql_temp.txt", nl2sql_req_body)
         aiforbi_logger.info(f"nl2sql prompt: {prompt}")
@@ -25,13 +25,13 @@ class AIForBIService:
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, "ep-20240929094134-47cvj")
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         aiforbi_logger.info(f"nl2sql resp: {resp}")
         return resp
 
     @staticmethod
-    async def chart_type(chart_type_req_body, db, user_id):
+    async def chart_type(chart_type_req_body, db, user_id, llm_name):
         pd_df = pd.DataFrame(chart_type_req_body.sql_result['data'])
         columns = chart_type_req_body.sql_result['metadata']['columns']
         loader = PromptTemplateLoader()
@@ -45,14 +45,14 @@ class AIForBIService:
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, "ep-20240929094134-47cvj")
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         aiforbi_logger.info(f"chart_type resp: {resp}")
         chart_type_list = json.loads(resp)
         return chart_type_list
 
     @staticmethod
-    async def dynamic_chart_option_function(dynamic_chart_option_function_req_body, db, user_id):
+    async def dynamic_chart_option_function(dynamic_chart_option_function_req_body, db, user_id, llm_name):
         chart_template = load_chart_template(dynamic_chart_option_function_req_body.chart_type)
 
         loader = PromptTemplateLoader()
@@ -66,7 +66,7 @@ class AIForBIService:
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, "ep-20240929094134-47cvj")
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         aiforbi_logger.info(f"dynamic_chart_option_function resp: {resp}")
         return resp
