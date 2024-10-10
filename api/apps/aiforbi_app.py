@@ -1,18 +1,9 @@
-import json
-import os
-
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request, Body, Form
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-import os
-from pathlib import Path
+from fastapi import APIRouter, Depends, Body
+from typing import Dict
 
 from api.apps import manager
 from api.db.database import get_db
 from api.service.aiforbi_service.aiforbi_service import AIForBIService
-from workflow.WorkflowParser import WorkflowParser
 from sqlalchemy.orm import Session
 
 # AI生成图表
@@ -54,6 +45,11 @@ class DynamicChartOptionFunctionReqBody(BaseModel):
     llm_name: str
 
 
+class StaticChartOptionReqBody(BaseModel):
+    raw_data: str
+    llm_name: str
+
+
 @router.post("/nl2sql")
 async def nl2sql(body: NL2SQLReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
     sql = await AIForBIService.nl2sql(nl2sql_req_body=body, db=db, user_id=user.id, llm_name=body.llm_name)
@@ -71,5 +67,13 @@ async def chart_type(body: ChartTypeReqBody = Body(...), db: Session = Depends(g
 async def dynamic_chart_option_function(body: DynamicChartOptionFunctionReqBody = Body(...),
                                         db: Session = Depends(get_db), user=Depends(manager)):
     func = await AIForBIService.dynamic_chart_option_function(dynamic_chart_option_function_req_body=body, db=db,
+                                                              user_id=user.id, llm_name=body.llm_name)
+    return ResponseSchema(status="success", data=func)
+
+
+@router.post("/static-chart-option")
+async def static_chart_option(body: StaticChartOptionReqBody = Body(...),
+                                        db: Session = Depends(get_db), user=Depends(manager)):
+    func = await AIForBIService.static_chart_option(static_chart_pption_req_body=body, db=db,
                                                               user_id=user.id, llm_name=body.llm_name)
     return ResponseSchema(status="success", data=func)
