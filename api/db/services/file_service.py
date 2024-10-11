@@ -20,7 +20,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.utils import get_uuid
-from api.utils.file_utils import filename_type, thumbnail
+from api.utils.file_utils import filename_type, thumbnail, thumbnail_img
 from core.utils.storage_factory import STORAGE_IMPL
 
 
@@ -330,7 +330,15 @@ class FileService(CommonService):
                 #     file_id = os.path.splitext(filename)[0]  # 使用文件名的部分
                 # else:
                 #     file_id = get_uuid()  # 默认使用 UUID
+
                 file_id = get_uuid()
+
+                img = thumbnail_img(filename, file_blob)
+                thumbnail_location = f'thumbnail_{file_id}.png'
+                STORAGE_IMPL.put(kb.id, thumbnail_location, img)
+
+
+
                 doc = {
                     "id": file_id,
                     "kb_id": kb.id,

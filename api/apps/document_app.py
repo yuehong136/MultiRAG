@@ -18,6 +18,8 @@ from pymilvus import MilvusException
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 from typing import List
+
+from api.contants import IMG_BASE64_PREFIX
 # from elasticsearch_dsl import Q
 # from core.nlp import search
 # from core.utils.es_conn import ELASTICSEARCH
@@ -265,6 +267,11 @@ async def list_docs(
     try:
         docs, tol = DocumentService.get_by_kb_id(db, kb_id, page, page_size, orderby, desc, keywords)
         docs = [convert_datetime_to_str(d) for d in docs]
+
+        for doc_item in docs:
+            if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
+                doc_item['thumbnail'] = f'/v1/document/image/{kb_id}-{doc_item['thumbnail']}'
+
         return construct_json_result(data={"total": tol, "docs": docs})
     except Exception as e:
         return construct_error_response(e)
