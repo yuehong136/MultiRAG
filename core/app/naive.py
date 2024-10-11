@@ -12,7 +12,7 @@ from core.utils import num_tokens_from_string
 from PIL import Image
 from functools import reduce
 from markdown import markdown
-from docx.image.exceptions import UnrecognizedImageError
+from docx.image.exceptions import UnrecognizedImageError, UnexpectedEndOfFileError, InvalidImageStreamError
 
 
 class Docx(DocxParser):
@@ -30,6 +30,12 @@ class Docx(DocxParser):
             image_blob = related_part.image.blob
         except UnrecognizedImageError:
             print("Unrecognized image format. Skipping image.")
+            return None
+        except UnexpectedEndOfFileError:
+            print("EOF was unexpectedly encountered while reading an image stream. Skipping image.")
+            return None
+        except InvalidImageStreamError:
+            print("The recognized image stream appears to be corrupted. Skipping image.")
             return None
         try:
             image = Image.open(BytesIO(image_blob)).convert('RGB')
