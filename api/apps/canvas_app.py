@@ -134,7 +134,7 @@ async def run(request: RunCanvasRequest, db: Session = Depends(get_db), user=Dep
             canvas.messages.append({"role": "user", "content": req_data["message"], "id": message_id})
             if len([m for m in canvas.messages if m["role"] == "user"]) > 1:
                 ten = TenantService.get_by_user_id(db, user.id)[0]
-                req["message"] = full_question(db, ten["tenant_id"], ten["llm_id"], canvas.messages)
+                # req["message"] = full_question(db, ten["tenant_id"], ten["llm_id"], canvas.messages)
             canvas.add_user_input(req_data["message"])
         answer = canvas.run(stream=stream)
     except Exception as e:
