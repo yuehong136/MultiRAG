@@ -213,3 +213,33 @@ def convert_datetime_to_str(data: dict):
         if isinstance(value, datetime):
             data[key] = value.strftime('%Y-%m-%d %H:%M:%S')
     return data
+
+
+def get_result(retcode=RetCode.SUCCESS, retmsg='error', data=None):
+    if retcode == 0:
+        if data is not None:
+            response = {"code": retcode, "data": data}
+        else:
+            response = {"code": retcode}
+    else:
+            response = {"code": retcode, "message": retmsg}
+    return JSONResponse(content=jsonable_encoder(response))
+
+def get_error_data_result(retcode=RetCode.DATA_ERROR,
+                          retmsg='Sorry! Data missing!'):
+    import re
+    result_dict = {
+        "code": retcode,
+        "message": re.sub(
+            r"rag",
+            "seceum",
+            retmsg,
+            flags=re.IGNORECASE)}
+    response = {}
+    for key, value in result_dict.items():
+        if value is None and key != "code":
+            continue
+        else:
+            response[key] = value
+    return JSONResponse(content=jsonable_encoder(response))
+

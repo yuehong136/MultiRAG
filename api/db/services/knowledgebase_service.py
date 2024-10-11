@@ -206,3 +206,42 @@ class KnowledgebaseService(CommonService):
         """
         ids = db.query(cls.model.id).all()
         return [id[0] for id in ids]
+
+    @classmethod
+    def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name):
+        """
+        根据租户ID列表、用户ID、知识库ID和名称获取知识库列表。
+
+        :param db: 数据库会话对象。
+        :param joined_tenant_ids: 用户加入的租户ID列表。
+        :param user_id: 用户ID。
+        :param page_number: 页码。
+        :param items_per_page: 每页项数。
+        :param orderby: 排序字段。
+        :param desc: 是否降序排序。
+        :param id: 知识库ID（可选）。
+        :param name: 知识库名称（可选）。
+        :return: 符合条件的知识库列表的字典形式。
+        """
+        # 构建基础查询条件
+        query = db.query(cls.model).filter(
+            ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) |
+             (cls.model.tenant_id == user_id)) &
+            (cls.model.status == StatusEnum.VALID.value)
+        )
+
+        # 根据ID和名称进行进一步过滤（如果有提供）
+        if id:
+            query = query.filter(cls.model.id == id)
+        if name:
+            query = query.filter(cls.model.name == name)
+
+        # 根据desc参数确定排序方式
+        if desc:
+            query = query.order_by(getattr(cls.model, orderby).desc())
+        else:
+            query = query.order_by(getattr(cls.model, orderby).asc())
+
+        # 分页查询并返回结果的字典形式
+        kbs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
+        return [kb.to_dict() for kb in kbs]
