@@ -2,6 +2,7 @@ from core.llm.chat_model.models.azure_chat import AzureChat
 from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gemini_chat import GeminiChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
+from core.llm.chat_model.models.huggingface_chat import HuggingFaceChat
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
 from core.llm.chat_model.models.qwen_chat import QWenChat
@@ -79,7 +80,8 @@ ChatModel = {
     # "Mistral": MistralChat,
     "Gemini": GeminiChat,
     "Doubao": DoubaoChat,
-    "OpenAI-API-Compatible": OpenAI_APIChat
+    "OpenAI-API-Compatible": OpenAI_APIChat,
+    "HuggingFace": HuggingFaceChat
 }
 
 RerankModel = {
