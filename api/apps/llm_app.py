@@ -546,7 +546,7 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
     - 可选的模型类型参数用于筛选模型信息，只返回指定类型的模型。
     """
     self_deploied = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio"]
-    weighted = ["Youdao","FastEmbed", "BAAI"] if not LIGHTEN else []
+    weighted = ["Youdao","FastEmbed", "BAAI"] if LIGHTEN != 0 else []
     try:
         objs = TenantLLMService.query(db, tenant_id=user.id)
         facts = set(o.llm_factory for o in objs if o.api_key)
