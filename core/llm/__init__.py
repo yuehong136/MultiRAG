@@ -1,3 +1,4 @@
+from core.llm.chat_model.models.azure_chat import AzureChat
 from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gemini_chat import GeminiChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
@@ -7,6 +8,7 @@ from core.llm.chat_model.models.qwen_chat import QWenChat
 from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
+from core.llm.cv_model.models.azuregptv4 import AzureGptV4
 from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
@@ -49,7 +51,7 @@ EmbeddingModel = {
 
 CvModel = {
     "OpenAI": GptV4,
-    # "Azure-OpenAI": AzureGptV4,
+    "Azure-OpenAI": AzureGptV4,
     # "Ollama": OllamaCV,
     "Xinference": XinferenceCV,
     # "Tongyi-Qianwen": QWenCV,
@@ -63,6 +65,7 @@ CvModel = {
 
 ChatModel = {
     "OpenAI": GptTurbo,
+    "Azure-OpenAI": AzureChat,
     "ZHIPU-AI": ZhipuChat,
     "Tongyi-Qianwen": QWenChat,
     "Ollama": OllamaChat,

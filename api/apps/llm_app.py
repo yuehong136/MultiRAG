@@ -151,18 +151,18 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
     chat_passed, embd_passed, rerank_passed = False, False, False
     factory = req["llm_factory"]
     msg = ""
-    for llm in LLMService.query(db, fid=factory)[:3]:
+    for llm in LLMService.query(db, fid=factory):
         # todo 适配其他模型的测试，目前只有chat进行了测试
-        # if not embd_passed and llm.mdl_type == LLMType.EMBEDDING.value:
-        #     mdl = EmbeddingModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
-        #     try:
-        #         arr, tc = mdl.encode(["Test if the api key is available"])
-        #         if len(arr[0]) == 0:
-        #             raise Exception("Fail")
-        #         embd_passed = True
-        #     except Exception as e:
-        #         msg += f"\nFail to access embedding model({llm.llm_name}) using this api key." + str(e)
-        if not chat_passed and llm.mdl_type == LLMType.CHAT.value:
+        if not embd_passed and llm.mdl_type == LLMType.EMBEDDING.value:
+            mdl = EmbeddingModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
+            try:
+                arr, tc = mdl.encode(["Test if the api key is available"])
+                if len(arr[0]) == 0:
+                    raise Exception("Fail")
+                embd_passed = True
+            except Exception as e:
+                msg += f"\nFail to access embedding model({llm.llm_name}) using this api key." + str(e)
+        elif not chat_passed and llm.mdl_type == LLMType.CHAT.value:
             mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
             try:
                 m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}],
@@ -174,15 +174,16 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
                 msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
             # todo 是否有必要每一个模型都测试呢？目前都是我内置的型号，都是可靠的，如果除本项目维护人员，进行自由添加可能出现问题
             chat_passed = True
-        # elif not rerank_passed and llm.mdl_type == LLMType.RERANK:
-        #     mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
-        #     try:
-        #         arr, tc = mdl.similarity("What's the weather?", ["Is it sunny today?"])
-        #         if len(arr) == 0 or tc == 0:
-        #             raise Exception("Fail")
-        #     except Exception as e:
-        #         msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
-        #     rerank_passed = True
+        elif not rerank_passed and llm.model_type == LLMType.RERANK:
+            mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
+            try:
+                arr, tc = mdl.similarity("What's the weather?", ["Is it sunny today?"])
+                if len(arr) == 0 or tc == 0:
+                    raise Exception("Fail")
+                rerank_passed = True
+                print(f'passed model rerank{llm.llm_name}', flush=True)
+            except Exception as e:
+                msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
 
     if msg:
         return get_data_error_result(retmsg=msg)
@@ -311,6 +312,10 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     elif factory == "Google Cloud":
         llm_name = req["llm_name"]
         api_key = apikey_json(["google_project_id", "google_region", "google_service_account_key"])
+
+    elif factory == "Azure-OpenAI":
+        llm_name = req["llm_name"]
+        api_key = apikey_json(["api_key", "api_version"])
 
     else:
         llm_name = req["llm_name"]
