@@ -334,8 +334,10 @@ class FileService(CommonService):
                 file_id = get_uuid()
 
                 img = thumbnail_img(filename, file_blob)
-                thumbnail_location = f'thumbnail_{file_id}.png'
-                STORAGE_IMPL.put(kb.id, thumbnail_location, img)
+                thumbnail_location = ''
+                if img is not None:
+                    thumbnail_location = f'thumbnail_{file_id}.png'
+                    STORAGE_IMPL.put(kb.id, thumbnail_location, img)
 
 
 
@@ -349,7 +351,7 @@ class FileService(CommonService):
                     "name": filename,
                     "location": location,
                     "size": len(file_blob),
-                    "thumbnail": thumbnail(filename, file_blob),
+                    "thumbnail": thumbnail_location,
                     "auth": json.dumps(labels) if labels else None  # 将 labels 转换为 JSON 字符串
                 }
                 DocumentService.insert(db, doc)

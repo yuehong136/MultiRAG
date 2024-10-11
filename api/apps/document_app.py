@@ -301,6 +301,10 @@ async def thumbnails(
     try:
         docs = DocumentService.get_thumbnails(db, doc_ids_list)
 
+        for doc_item in docs:
+            if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
+                doc_item['thumbnail'] = f"/v1/document/image/{doc_item['kb_id']}-{doc_item['thumbnail']}"
+
         # docs 是一个包含元组的列表，每个元组包含两个元素：文档 ID 和缩略图
         thumbnail_dict = {doc[0]: doc[1] for doc in docs}
 

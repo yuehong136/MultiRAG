@@ -309,7 +309,7 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_thumbnails(cls, db: Session, doc_ids: List[str]):
-        query = db.query(cls.model.id, cls.model.thumbnail).filter(cls.model.id.in_(doc_ids))
+        query = db.query(cls.model.id, cls.model.kb_id, cls.model.thumbnail).filter(cls.model.id.in_(doc_ids))
         return query.all()
 
     @classmethod
