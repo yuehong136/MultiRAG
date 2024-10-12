@@ -15,14 +15,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from api.apps import manager
 from api.db.database import get_db
-from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService
+from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService, LLMBundle
+from api.db.services.user_service import TenantService
 from api.settings import RetCode, LIGHTEN
 from api.utils.api_utils import get_json_result, server_error_response, validate_request, get_data_error_result
 from api.db import StatusEnum, LLMType
 from api.db.db_models import TenantLLM
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 import requests
 
 
@@ -57,6 +58,12 @@ class ListLLMRequest(BaseModel):
 class DeleteFactoryRequest(BaseModel):
     llm_factory: Optional[str] = None
 
+
+class LLMServiceRequest(BaseModel):
+    prompt: Optional[str] = None
+    messages: list[dict] = []
+    llm_name: str
+    gen_conf: dict[str, Any] = {}
 
 router = APIRouter()
 
@@ -455,7 +462,7 @@ async def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), u
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/delete_factory')
+@router.post('/delete_factory', summary="删除模型厂商", response_description="成功删除模型厂商")
 def delete_factory(request: DeleteFactoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     TenantLLMService.filter_delete(
@@ -575,3 +582,17 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
         return get_json_result(data=res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post('/chat_service', summary="模型对话服务", response_description="成功调用对话模型")
+async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    req = request.model_dump()
+    tenants = TenantService.get_by_user_id(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
+
+    print(req["prompt"], req["messages"],req["gen_conf"])
+    data =  chat_mdl.chat(req["prompt"], req["messages"],req["gen_conf"])
+    # data =  chat_mdl.chat(system="", history=[{"role": "user", "content": "请写一份思想回答"}], gen_conf={})
+
+    return get_json_result(data=data)
