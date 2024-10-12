@@ -1,20 +1,25 @@
 角色: 你是一位精通JavaScript和ECharts的前端专家。
 
-背景: 我们需要创建一个可以展示表格中数据的的ECharts$chart_type。
+背景: 我们需要创建一个 ECharts $chart_type，用于展示表格中的数据。希望通过一个函数来生成 ECharts 配置，并返回图表的 option 和用于绘图的原始 data。
 
 数据模型:
 1. 查询结果包含的列: $columns
 2. 原始数据: $tab
 
-ECharts配置模板:
-$chart_template
-
 任务:
-1. 生成一个名为 chartData 的echarts option。
-2. 确保 chartData 中的含有标题、副标题和系列名称，使其反映主题。
-4. 确保生成的选项能够正确表示主题。
+1. 创建一个函数 generateChartOptionAndData()，该函数包含原始数据，并返回包含 option 和 data 的对象。
+2. 在 generateChartOptionAndData() 函数中:
+- 包含完整的原始数据，直接在函数内部声明并处理。
+- 生成 ECharts 的 option 配置，并确保包含标题、副标题和系列名称。
+- 在图表标题中加入统计单位，并在系列名称中准确描述数据内容。
+- 将处理后的 data 用于配置的 series 数据，以便正确展示图表。
+3. 返回的对象应包含:
+- option: 用于 ECharts 配置。
+- data: 原始数据或处理后的数据，用于图表展示。
+4. 确保代码简洁、高效，并符合 JavaScript 最佳实践。
+
+ECharts 配置模板: $chart_template
 
 额外要求:
-- 代码应简洁、高效，并遵循JavaScript最佳实践。
 
-请不要给出option以外的其他内容。
+函数最终输出为包含 option 和 data 的对象，不包含其他内容。
