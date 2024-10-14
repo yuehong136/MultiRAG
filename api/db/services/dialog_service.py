@@ -12,9 +12,11 @@ import os
 import re
 from copy import deepcopy
 from timeit import default_timer as timer
+
+from sqlalchemy import asc
 from sqlalchemy.orm import Session
 
-from api.db import LLMType
+from api.db import LLMType, StatusEnum
 from api.db.db_models import Dialog, Conversation
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -30,6 +32,33 @@ from core.utils import rmSpace, num_tokens_from_string, encoder
 class DialogService(CommonService):
     model = Dialog
 
+    @classmethod
+    def get_list(cls, db: Session, tenant_id,
+                 page_number, items_per_page, orderby, desc, id, name):
+
+        query = db.query(cls.model)
+
+        if id:
+            query = query.filter(cls.model.id == id)
+        if name:
+            query = query.filter(cls.model.name == name)
+
+        query = query.filter(
+            (cls.model.tenant_id == tenant_id) &
+            (cls.model.status == StatusEnum.VALID.value)
+        )
+
+        # Order by specified field in ascending or descending order
+        order_clause = getattr(cls.model, orderby)
+        query = query.order_by(desc(order_clause) if desc else asc(order_clause))
+
+        # Apply pagination
+        query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
+
+        # Fetch results and convert to dictionary format
+        results = query.all()
+        return [item.__dict__ for item in results]
+
 
 class ConversationService(CommonService):
     model = Conversation
@@ -43,6 +72,7 @@ def message_fit_in(msg, max_length=4000):
     :param max_length: 允许的最大长度。
     :return: 调整后的消息长度和消息列表。
     """
+
     def count():
         """
         计算消息中所有内容的令牌总数。
@@ -76,7 +106,6 @@ def message_fit_in(msg, max_length=4000):
     if c < max_length:
         return c, msg
 
-
     # 如果系统消息仍超出长度，尝试截断长消息
     ll = num_tokens_from_string(msg_[0]["content"])
     l = num_tokens_from_string(msg_[-1]["content"])
@@ -101,6 +130,7 @@ def llm_id2llm_type(llm_id):
             if llm_id == llm["llm_name"]:
                 return llm["mdl_type"].strip(",")[-1]
 
+
 def chat(dialog, messages, db: Session, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
@@ -108,7 +138,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     tmp = dialog.llm_id.split("@")
     fid = None
     llm_id = tmp[0]
-    if len(tmp)>1:
+    if len(tmp) > 1:
         fid = tmp[1]
 
     # 从数据库中查询LLM模型
@@ -152,12 +182,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         for m in messages[:-1]:
             if "doc_ids" in m:
                 attachments.extend(m["doc_ids"])
-    # 初始化嵌入模型，用于将文本转换为向量表示
     if len(embd_nms) != 0:
         embd_mdl = LLMBundle(db, dialog.tenant_id, LLMType.EMBEDDING, embd_nms[0])
-    # todo 没做向量模型测试，目前写死了
-    # embd_mdl = LLMBundle(db, dialog.tenant_id, LLMType.EMBEDDING, "BAAI/bge-large-zh-v1.5")
-    # 初始化聊天模型，用于生成对话响应
     chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
 
     # 获取提示配置和字段映射
@@ -197,7 +223,6 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     else:
         questions = questions[-1:]
 
-
     # 如果存在重新排序模型，初始化重新排序模型
     rerank_mdl = None
     if dialog.rerank_id:
@@ -217,7 +242,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         if prompt_config.get("keyword", False):
             questions[-1] += keyword_extraction(chat_mdl, questions[-1])
 
-        kbinfos = retrievaler.retrieval(" ".join(questions), filter_exp, embd_mdl, dialog.tenant_id, kb_names, 1, dialog.top_n,
+        kbinfos = retrievaler.retrieval(" ".join(questions), filter_exp, embd_mdl, dialog.tenant_id, kb_names, 1,
+                                        dialog.top_n,
                                         dialog.similarity_threshold,
                                         dialog.vector_similarity_weight,
                                         doc_ids=attachments,
@@ -300,8 +326,10 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
             answer += " Please set LLM API-Key in 'User Setting -> Model Providers -> API-Key'"
         # return {"answer": answer, "reference": refs, "prompt": prompt}
         done_tm = timer()
-        prompt += "\n\n### Elapsed\n  - Retrieval: %.1f ms\n  - LLM: %.1f ms"%((retrieval_tm-st)*1000, (done_tm-st)*1000)
+        prompt += "\n\n### Elapsed\n  - Retrieval: %.1f ms\n  - LLM: %.1f ms" % (
+        (retrieval_tm - st) * 1000, (done_tm - st) * 1000)
         return {"answer": answer, "reference": refs, "prompt": prompt}
+
     # # 根据是否启用流式输出生成回答
     # if stream:
     #     # 初始化答案变量，用于存储模型生成的解答
@@ -346,6 +374,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         res["audio_binary"] = tts(tts_mdl, answer)
         yield res
 
+
 def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
     sys_prompt = "你是一个DBA。你需要这对以下表的字段结构，根据用户的问题列表，写出最后一个问题对应的SQL。"
     user_promt = """
@@ -357,10 +386,10 @@ def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
         {}
         请写出SQL, 且只要SQL，不要有其他说明及文字。
     """.format(
-            index_name(tenant_id),
-            "\n".join([f"{k}: {v}" for k, v in field_map.items()]),
-            question
-        )
+        index_name(tenant_id),
+        "\n".join([f"{k}: {v}" for k, v in field_map.items()]),
+        question
+    )
     tried_times = 0
 
     def get_table():
@@ -496,7 +525,7 @@ def relevant(tenant_id, llm_id, question, contents: list, db: Session):
     return False
 
 
-def rewrite(tenant_id, llm_id, question,db: Session):
+def rewrite(tenant_id, llm_id, question, db: Session):
     if llm_id2llm_type(llm_id) == "image2text":
         chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
     else:
@@ -586,7 +615,7 @@ def ask(db: Session, question, kb_ids, tenant_id):
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embd_nms[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT)
     max_tokens = chat_mdl.max_length
-    filter_exp = "" # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
+    filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
     kbinfos = retrievaler.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, 1, 12, 0.1, 0.3, aggs=False)
     knowledges = [ck["text"] for ck in kbinfos["chunks"]]
@@ -619,13 +648,13 @@ def ask(db: Session, question, kb_ids, tenant_id):
     def decorate_answer(answer):
         nonlocal knowledges, kbinfos, prompt
         answer, idx = retrievaler.insert_citations(answer,
-                                            [ck["content_ltks"]
-                                             for ck in kbinfos["chunks"]],
-                                            [ck["vector"]
-                                             for ck in kbinfos["chunks"]],
-                                            embd_mdl,
-                                            tkweight=0.7,
-                                            vtweight=0.3)
+                                                   [ck["content_ltks"]
+                                                    for ck in kbinfos["chunks"]],
+                                                   [ck["vector"]
+                                                    for ck in kbinfos["chunks"]],
+                                                   embd_mdl,
+                                                   tkweight=0.7,
+                                                   vtweight=0.3)
         idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
         recall_docs = [
             d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
@@ -645,4 +674,3 @@ def ask(db: Session, question, kb_ids, tenant_id):
         answer = ans
         yield {"answer": answer, "reference": {}}
     yield decorate_answer(answer)
-

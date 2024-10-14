@@ -242,4 +242,3 @@ def get_error_data_result(retcode=RetCode.DATA_ERROR,
         else:
             response[key] = value
     return JSONResponse(content=jsonable_encoder(response))
-
