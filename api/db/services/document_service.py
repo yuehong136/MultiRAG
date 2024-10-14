@@ -14,7 +14,7 @@ from typing import Optional, List, Dict
 from pymilvus import MilvusException
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func
+from sqlalchemy import func, asc
 
 from api.db import FileType, TaskStatus, StatusEnum
 from api.db.db_models import Document, Knowledgebase, Tenant, Task
@@ -35,6 +35,36 @@ class DocumentService(CommonService):
 
     def __init__(self):
         super().__init__(Document)
+
+    @classmethod
+    def get_list(cls, db: Session, kb_id, page_number, items_per_page, orderby, desc, keywords=None, id=None):
+        # 初始化查询
+        query = db.query(cls.model).filter(cls.model.kb_id == kb_id)
+
+        # 根据 id 添加过滤条件
+        if id:
+            query = query.filter(cls.model.id == id)
+
+        # 根据 keywords 添加模糊匹配过滤条件
+        if keywords:
+            query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
+
+        # 获取记录总数
+        count = query.count()
+
+        # 根据 desc 确定排序方式
+        order_clause = getattr(cls.model, orderby)
+        if desc:
+            query = query.order_by(desc(order_clause))
+        else:
+            query = query.order_by(asc(order_clause))
+
+        # 添加分页
+        query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
+
+        # 执行查询并返回结果
+        results = query.all()
+        return [item.__dict__ for item in results], count
 
     @classmethod
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,
@@ -433,7 +463,6 @@ def queue_raptor_tasks(db: Session, doc):
     bulk_insert_into_db(db, Task, [task], True)
     task["type"] = "raptor"
     assert REDIS_CONN.queue_product(SVR_QUEUE_NAME, message=task), "Can't access Redis. Please check the Redis' status."
-
 
 # def doc_upload_and_parse(conversation_id, file_objs, user_id):
 #     from core.app import presentation, picture, naive, audio, email

@@ -63,6 +63,32 @@ class DialogService(CommonService):
 class ConversationService(CommonService):
     model = Conversation
 
+    @classmethod
+    def get_list(cls, db: Session, dialog_id, page_number, items_per_page, orderby, desc, id=None, name=None):
+        # 使用 SQLAlchemy 的 query 方法开始查询
+        query = db.query(cls.model).filter(cls.model.dialog_id == dialog_id)
+
+        # 添加条件过滤器
+        if id:
+            query = query.filter(cls.model.id == id)
+        if name:
+            query = query.filter(cls.model.name == name)
+
+        # 根据 desc 参数确定排序方式
+        order_clause = getattr(cls.model, orderby)
+        if desc:
+            query = query.order_by(desc(order_clause))
+        else:
+            query = query.order_by(asc(order_clause))
+
+        # 应用分页
+        query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
+
+        # 执行查询并返回结果
+        results = query.all()
+        # 将结果转换为字典形式返回
+        return [item.__dict__ for item in results]
+
 
 def message_fit_in(msg, max_length=4000):
     """
@@ -327,7 +353,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         # return {"answer": answer, "reference": refs, "prompt": prompt}
         done_tm = timer()
         prompt += "\n\n### Elapsed\n  - Retrieval: %.1f ms\n  - LLM: %.1f ms" % (
-        (retrieval_tm - st) * 1000, (done_tm - st) * 1000)
+            (retrieval_tm - st) * 1000, (done_tm - st) * 1000)
         return {"answer": answer, "reference": refs, "prompt": prompt}
 
     # # 根据是否启用流式输出生成回答
