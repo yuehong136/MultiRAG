@@ -74,7 +74,6 @@ ChatModel = {
     # "Moonshot": MoonshotChat,
     # "DeepSeek": DeepSeekChat,
     "VolcEngine": VolcEngineChat,
-    "VolcEngine": DoubaoChat,
     # "BaiChuan": BaiChuanChat,
     # "MiniMax": MiniMaxChat,
     # "Mistral": MistralChat,
