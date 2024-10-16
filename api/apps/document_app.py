@@ -12,17 +12,13 @@ import pathlib
 import re
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from pymilvus import MilvusException
 from sqlalchemy.orm import Session
 from urllib.parse import quote
-from typing import List
 
 from api.contants import IMG_BASE64_PREFIX
-# from elasticsearch_dsl import Q
-# from core.nlp import search
-# from core.utils.es_conn import ELASTICSEARCH
 from api.db import FileType, TaskStatus, ParserType, FileSource, db_models
 from api.db.database import get_db
 from api.db.db_models import Task
@@ -33,7 +29,7 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, queue_tasks
 from api.db.services.user_service import UserTenantService
-from api.settings import RetCode, stat_logger
+from api.settings import RetCode
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result
 from api.utils import get_uuid
