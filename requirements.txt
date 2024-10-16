@@ -159,4 +159,3 @@ graspologic >= 3.4.1
 tencentcloud-sdk-python >= 3.0.1244
 # Google AI Python SDK 是 Python 开发人员使用 Gemini API 进行构建的最简单方法。Gemini API 可让您访问由Google DeepMind创建的Gemini模型。Gemini 模型从头开始构建为多模式，因此您可以在文本、图像和代码之间无缝推理。
 google-generativeai >= 0.8.3
-#
