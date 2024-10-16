@@ -303,7 +303,7 @@ class APIToken(BaseModel):
 
     tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
     token = Column(String(255), primary_key=True, index=True, nullable=False)
-    dialog_id = Column(String(32), index=True, nullable=False)
+    dialog_id = Column(String(32), index=True, nullable=True)
     source = Column(String(16), index=True, nullable=True, doc="none|agent|dialog")
 
 
