@@ -12,17 +12,22 @@ import time
 from datetime import datetime
 from functools import wraps
 from io import BytesIO
+from typing import Callable
+
 from fastapi import FastAPI, Request, Response, Depends
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from itsdangerous import URLSafeTimedSerializer
+from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from hmac import HMAC
 from base64 import b64encode
 from uuid import uuid1
 from urllib.parse import quote, urlencode
 import requests
+
+from api.db.services.api_service import APITokenService
 from api.settings import RetCode, REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC, stat_logger, CLIENT_AUTHENTICATION, \
     HTTP_APP_KEY, SECRET_KEY
 from api.utils import HTTP_STATUS_CODES, get_uuid
@@ -170,6 +175,33 @@ def send_file_in_mem(data, filename):
 def get_json_result(retcode=RetCode.SUCCESS, retmsg='success', data=None):
     response = {"retcode": retcode, "retmsg": retmsg, "data": data}
     return JSONResponse(content=jsonable_encoder(response))
+
+
+def apikey_required(func: Callable) -> Callable:
+    @wraps(func)
+    async def decorated_function(*args, **kwargs):
+        request: Request = kwargs.get('request')  # 从 kwargs 中获取 FastAPI Request 对象
+        db: Session = kwargs.get('db')  # 从 kwargs 中获取数据库会话对象
+
+        authorization_header = request.headers.get('Authorization')
+
+        token = authorization_header.split()[1]
+        objs = APITokenService.query(db, token=token, db=db)
+
+        if not objs:
+            return build_error_result(
+                error_msg='API-KEY is invalid!', retcode=RetCode.FORBIDDEN
+            )
+
+        kwargs['tenant_id'] = objs[0].tenant_id
+        return await func(*args, **kwargs)
+
+    return decorated_function
+
+
+def build_error_result(retcode=RetCode.FORBIDDEN, error_msg='success'):
+    response_content = {"error_code": retcode, "error_msg": error_msg}
+    return JSONResponse(content=response_content, status_code=retcode)
 
 
 def construct_response(retcode=RetCode.SUCCESS, retmsg='success', data=None, auth=None):
