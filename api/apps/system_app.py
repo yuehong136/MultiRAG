@@ -9,10 +9,11 @@
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
 
 from api.apps.api_app import generate_confirmation_token
+from api.db.db_models import APIToken
 from api.db.services.api_service import APITokenService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
@@ -226,5 +227,45 @@ def token_list(db: Session = Depends(get_db), user=Depends(manager)):
 
         objs = APITokenService.query(db, tenant_id=tenants[0].tenant_id)
         return get_json_result(data=[o.to_dict() for o in objs])
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post("/rm", summary="删除API访问令牌", response_description="成功删除指定的令牌")
+async def remove_tokens(
+    tokens: list[str] = Body(..., description="要删除的令牌列表"),
+    tenant_id: str = Body(..., description="租户ID"),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    删除指定API访问令牌的接口说明文档。
+
+    概要：根据提供的令牌列表和租户ID，删除对应的API访问令牌。
+    响应描述：成功删除指定的令牌后返回成功信息。
+
+    参数：
+    - **tokens** (List[str]): 要删除的API访问令牌列表。
+    - **tenant_id** (str): 租户ID，用于标识令牌所属的租户。
+
+    返回：
+    - dict: 返回一个包含删除操作成功的布尔值的 JSON 结果。
+
+    功能：
+    1. 使用提供的令牌列表和租户ID，依次删除匹配的令牌。
+    2. 对每个令牌进行数据库操作，确保删除符合条件的记录。
+
+    异常处理：
+    - 如果删除操作失败，将抛出 HTTP 异常，并返回错误信息。
+
+    注意：
+    - 用户必须已登录并拥有合适的权限才能删除令牌。
+    """
+    try:
+        for token in tokens:
+            APITokenService.filter_delete(
+                db, [APIToken.tenant_id == tenant_id, APIToken.token == token]
+            )
+        return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
