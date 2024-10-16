@@ -8,7 +8,6 @@
 """
 from typing import Dict, List, Optional, Union
 from uuid import uuid4
-import json
 
 from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
 from pymilvus.client.types import ExceptionsMessage, LoadState
@@ -231,6 +230,21 @@ class MilvusConnection:
             raise ex from ex
         return {"insert_count": res.insert_count, "ids": res.primary_keys}
 
+    def health(self) -> dict:
+        try:
+            # 尝试获取 Milvus 服务器的版本来检查是否连接正常
+            version = utility.get_server_version(using=self._using)
+            return {
+                "status": "healthy",
+                "version": version
+            }
+        except MilvusException as e:
+            # 捕获异常并返回不健康状态
+            return {
+                "status": "unhealthy",
+                "error": str(e)
+            }
+
     def upsert(
             self,
             collection_name: str,
@@ -298,6 +312,7 @@ class MilvusConnection:
             except Exception as e:
                 milvus_logger.error("Failed to upsert records to Milvus: " + str(e))
                 raise e
+
     # 使用示例
     # docs = [
     #     {"id": 1, "q_128_vec": [0.1, 0.2, 0.3], "field1": "value1"},
@@ -479,7 +494,8 @@ class MilvusConnection:
             elif isinstance(ids, list):
                 for id in ids:
                     if not isinstance(id, (int, str)):
-                        raise TypeError(f"wrong type of argument ids, expect list, int or str, got '{type(id).__name__}'")
+                        raise TypeError(
+                            f"wrong type of argument ids, expect list, int or str, got '{type(id).__name__}'")
                 pks.extend(ids)
             # 如果ids的类型不是预期的，抛出TypeError
             else:
@@ -535,7 +551,6 @@ class MilvusConnection:
             return ret_pks
 
         return {"delete_count": res.delete_count}
-
 
     def get_collection_stats(self, collection_name: str, timeout: Optional[float] = None) -> Dict:
         conn = self._get_connection()
@@ -641,6 +656,7 @@ class MilvusConnection:
 
         # 加载集合
         self.load_collection(collection_name)
+
     def close(self):
         connections.disconnect(self._using)
 
