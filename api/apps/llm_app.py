@@ -563,11 +563,11 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
         for m in llms:
             m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in self_deploied
 
-        llm_set = set(m["llm_name"] for m in llms)
+        llm_set = set([m["llm_name"]+"@"+m["fid"] for m in llms])
         for o in objs:
             if not o.api_key:
                 continue
-            if o.llm_name in llm_set:
+            if o.llm_name+"@"+o.llm_factory in llm_set:
                 continue
             llms.append({"llm_name": o.llm_name, "mdl_type": o.mdl_type, "fid": o.llm_factory, "available": True})
 
@@ -622,8 +622,6 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="Tenant not found!")
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
 
-    print(req["prompt"], req["messages"],req["gen_conf"])
     data =  chat_mdl.chat(req["prompt"], req["messages"],req["gen_conf"])
-    # data =  chat_mdl.chat(system="", history=[{"role": "user", "content": "请写一份思想回答"}], gen_conf={})
 
     return get_json_result(data=data)
