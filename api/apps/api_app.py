@@ -11,13 +11,12 @@ import os
 import re
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Query
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from api.db import FileType, LLMType, ParserType, FileSource
-from api.db.db_models import APIToken, API4Conversation, Task, File
+from api.db.db_models import APIToken, Task, File
 from api.db.services import duplicate_name
 from api.db.services.api_service import APITokenService, API4ConversationService
 from api.db.services.dialog_service import DialogService, chat
@@ -31,13 +30,13 @@ from api.db.services.llm_service import TenantLLMService
 
 from api.settings import RetCode, retrievaler
 from api.utils import get_uuid, current_timestamp, datetime_format
-from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
-from itsdangerous import URLSafeTimedSerializer
+from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result, \
+    generate_confirmation_token
 
 from api.utils.file_utils import filename_type, thumbnail
 from core.nlp import keyword_extraction
 from core.utils.storage_factory import STORAGE_IMPL
-from api.db.services.canvas_service import CanvasTemplateService, UserCanvasService
+from api.db.services.canvas_service import UserCanvasService
 from agent.canvas import Canvas
 from functools import partial
 
@@ -121,11 +120,6 @@ class CompletionFAQRequest(BaseModel):
 
 
 router = APIRouter()
-
-
-def generate_confirmation_token(tenant_id):
-    serializer = URLSafeTimedSerializer(tenant_id)
-    return "multirag-" + serializer.dumps(get_uuid(), salt=tenant_id)[2:34]
 
 
 @router.post('/new_token', summary="生成新的API令牌", response_description="成功生成新的API令牌")

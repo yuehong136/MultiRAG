@@ -16,14 +16,16 @@ from fastapi import FastAPI, Request, Response, Depends
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from itsdangerous import URLSafeTimedSerializer
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from hmac import HMAC
 from base64 import b64encode
 from uuid import uuid1
 from urllib.parse import quote, urlencode
 import requests
-from api.settings import RetCode, REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC, stat_logger, CLIENT_AUTHENTICATION, HTTP_APP_KEY, SECRET_KEY
-from api.utils import HTTP_STATUS_CODES
+from api.settings import RetCode, REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC, stat_logger, CLIENT_AUTHENTICATION, \
+    HTTP_APP_KEY, SECRET_KEY
+from api.utils import HTTP_STATUS_CODES, get_uuid
 
 
 def request(**kwargs):
@@ -86,7 +88,8 @@ def server_error_response(e):
     if len(e.args) > 1:
         return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=e.args[1])
     if repr(e).find("index_not_found_exception") >= 0:
-        return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg="No chunk found, please upload file and parse it.")
+        return get_json_result(retcode=RetCode.EXCEPTION_ERROR,
+                               retmsg="No chunk found, please upload file and parse it.")
     return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=repr(e))
 
 
@@ -123,10 +126,13 @@ def validate_request(*args, **kwargs):
                 if no_arguments:
                     error_string += f"required argument are missing: {', '.join(no_arguments)}; "
                 if error_arguments:
-                    error_string += "required argument values: " + ", ".join([f"{a[0]}={a[1]}" for a in error_arguments])
+                    error_string += "required argument values: " + ", ".join(
+                        [f"{a[0]}={a[1]}" for a in error_arguments])
                 return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg=error_string)
             return await func(request, *args, **kwargs)
+
         return decorated_function
+
     return wrapper
 
 
@@ -165,6 +171,7 @@ def get_json_result(retcode=RetCode.SUCCESS, retmsg='success', data=None):
     response = {"retcode": retcode, "retmsg": retmsg, "data": data}
     return JSONResponse(content=jsonable_encoder(response))
 
+
 def construct_response(retcode=RetCode.SUCCESS, retmsg='success', data=None, auth=None):
     result_dict = {"retcode": retcode, "retmsg": retmsg, "data": data}
     response_dict = {key: value for key, value in result_dict.items() if value is not None or key == "retcode"}
@@ -201,7 +208,8 @@ def construct_error_response(e):
     if len(e.args) > 1:
         return construct_json_result(code=RetCode.EXCEPTION_ERROR, message=repr(e.args[0]), data=e.args[1])
     if repr(e).find("index_not_found_exception") >= 0:
-        return construct_json_result(code=RetCode.EXCEPTION_ERROR, message="No chunk found, please upload file and parse it.")
+        return construct_json_result(code=RetCode.EXCEPTION_ERROR,
+                                     message="No chunk found, please upload file and parse it.")
     return construct_json_result(code=RetCode.EXCEPTION_ERROR, message=repr(e))
 
 
@@ -222,8 +230,9 @@ def get_result(retcode=RetCode.SUCCESS, retmsg='error', data=None):
         else:
             response = {"code": retcode}
     else:
-            response = {"code": retcode, "message": retmsg}
+        response = {"code": retcode, "message": retmsg}
     return JSONResponse(content=jsonable_encoder(response))
+
 
 def get_error_data_result(retcode=RetCode.DATA_ERROR,
                           retmsg='Sorry! Data missing!'):
@@ -242,3 +251,8 @@ def get_error_data_result(retcode=RetCode.DATA_ERROR,
         else:
             response[key] = value
     return JSONResponse(content=jsonable_encoder(response))
+
+
+def generate_confirmation_token(tenent_id):
+    serializer = URLSafeTimedSerializer(tenent_id)
+    return "ragflow-" + serializer.dumps(get_uuid(), salt=tenent_id)[2:34]
