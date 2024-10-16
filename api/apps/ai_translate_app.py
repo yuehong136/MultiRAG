@@ -33,6 +33,25 @@ class AITranslateReqBody(BaseModel):
 
 @router.post("/ai-translate")
 async def ai_translate(body: AITranslateReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    将中文文本翻译成英文的接口。
+
+    概要：使用AI翻译服务将中文文本翻译为英文文本。
+    响应描述：返回包含翻译结果的英文文本。
+
+    参数：
+    - body (AITranslateReqBody): 包含中文文本和模型名称的请求体。
+
+    返回：
+    - ResponseSchema: 返回包含原始中文文本和翻译后的英文文本的JSON结果。
+
+    功能：
+    1. 使用指定的语言模型将中文文本翻译成英文。
+    2. 返回翻译后的英文文本，供前端用户查看。
+
+    注意：
+    - 提供的中文文本应准确无误，以便获得正确的翻译结果。
+    """
     translate = await AITranslateService.ai_translate(ai_translate_req_body=body, db=db, user_id=user.id,
                                                       llm_name=body.llm_name)
     return ResponseSchema(status="success", data={
@@ -48,6 +67,25 @@ class AIBatchTranslateReqBody(BaseModel):
 
 @router.post("/ai-batch-translate")
 async def ai_translate(body: AIBatchTranslateReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    批量将中文文本翻译成英文的接口。
+
+    概要：使用AI翻译服务批量将多个中文文本翻译为英文文本。
+    响应描述：返回包含批量翻译结果的英文文本列表。
+
+    参数：
+    - body (AIBatchTranslateReqBody): 包含中文文本列表和模型名称的请求体。
+
+    返回：
+    - ResponseSchema: 返回包含原始中文文本列表和翻译后的英文文本列表的JSON结果。
+
+    功能：
+    1. 使用指定的语言模型批量将中文文本列表翻译成英文。
+    2. 返回所有翻译后的英文文本，以供进一步处理或查看。
+
+    注意：
+    - 输入的中文文本列表不应为空，以确保翻译服务能够正常处理。
+    """
     translate_list = await AITranslateService.ai_batch_translate(ai_batch_translate_req_body=body, db=db,
                                                                  user_id=user.id, llm_name=body.llm_name)
     return ResponseSchema(status="success", data={

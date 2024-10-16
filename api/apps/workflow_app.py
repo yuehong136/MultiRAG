@@ -26,18 +26,32 @@ async def run(
         user=Depends(manager)
 ):
     """
-    运行工作流接口
+    运行指定工作流的接口。
 
-    - **workflow_json**: 包含工作流数据的JSON字符串
-    - **dict_data**: 包含字典数据的JSON字符串
-    - **file**: 可选的上传文件
+    概要：通过解析和执行工作流请求参数来运行工作流。
+    响应描述：成功执行后，返回工作流执行的最终节点输出数据。
 
-    返回:
-    - **json_data**: 解析后的工作流JSON数据
-    - **dict_data**: 解析后的字典数据
-    - **file_info**: 如果上传了文件,则包含文件信息
+    参数：
+    - **workflow_json_str** (str): 包含工作流数据的 JSON 字符串。
+    - **input_data_str** (str, 可选): 包含字典数据的 JSON 字符串。
+    - **file** (UploadFile, 可选): 可上传的文件，作为工作流的附加输入数据。
+
+    返回：
+    - **dict**: 返回工作流执行结果的 JSON 对象，包含最终节点输出数据。
+
+    功能：
+    1. 解析工作流请求参数，确保为有效的 JSON 字符串。
+    2. 可选解析输入数据参数，如果存在的话。
+    3. 将上传的文件数据与其他输入参数一起传递给工作流执行引擎。
+    4. 执行工作流，返回最终节点的输出结果。
+
+    异常处理：
+    - 如果工作流或输入数据不是有效的 JSON 字符串，将抛出 HTTP 400 错误。
+    - 如果上传文件不为空，则将其添加到输入参数中。
+
+    注意：
+    - 工作流请求参数必须是有效的 JSON 字符串。
     """
-    # 解析JSON字符串
     try:
         json.loads(workflow_json_str)
     except json.JSONDecodeError:
@@ -72,12 +86,42 @@ async def run(
 
 @router.post("/run-test")
 async def run_test(user=Depends(manager)):
+    """
+    测试运行的接口，用于检查服务是否正常工作。
+
+    概要：用于测试接口的运行状态。
+    响应描述：成功运行返回简单的结果对象，表明接口可用。
+
+    返回：
+    - **dict**: 返回包含 "result" 键的 JSON 对象，表明测试成功。
+
+    注意：
+    - 此接口不涉及复杂操作，仅用于测试用途。
+    """
     print('okk')
     return {"result": "success"}
 
 
 @router.get("/download/{filename}")
 async def download_file(filename: str):
+    """
+    下载指定文件的接口。
+
+    概要：根据文件名从指定路径下载文件。
+    响应描述：成功找到并下载文件时，返回文件响应对象。
+
+    参数：
+    - **filename** (str): 要下载的文件名（不包括扩展名）。
+
+    返回：
+    - **FileResponse**: 返回指定文件的下载响应，包含文件内容。
+
+    异常处理：
+    - 如果文件未找到，将返回 HTTP 404 错误。
+
+    注意：
+    - 文件名应对应存在的文件，以确保成功下载。
+    """
     file_path = Path("/Users/naimehao/PycharmProjects/multrag/workflow/temp") / (filename + ".xlsx")
 
     if not file_path.is_file():

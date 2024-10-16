@@ -70,13 +70,13 @@ class AIForBIService:
         return resp
 
     @staticmethod
-    async def static_chart_option(static_chart_pption_req_body, db, user_id, llm_name):
+    async def static_chart_option(static_chart_option_req_body, db, user_id, llm_name):
         tenants = TenantService.get_by_user_id(db, user_id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
         chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
 
-        raw_data = static_chart_pption_req_body.raw_data
+        raw_data = static_chart_option_req_body.raw_data
         # 使用正则表达式提取所有 Markdown 格式的表格
         matches = re.finditer(r"(\|.*?\|(?:\n|$))+", raw_data)
         # 提取所有匹配到的表格内容并转换为字符串

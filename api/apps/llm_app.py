@@ -585,6 +585,37 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
 
 @router.post('/chat_service', summary="模型对话服务", response_description="成功调用对话模型")
 async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    模型对话服务的接口说明文档。
+
+    概要：调用对话模型来生成响应。
+    响应描述：成功调用对话模型并获得回复数据。
+
+    参数：
+    - request (LLMServiceRequest): 依赖注入的请求对象，包含模型参数、模型名称等信息。
+    - db (Session): 依赖注入的数据库会话，用于执行数据库操作。
+    - user：依赖注入的当前用户信息，由manager提供。
+
+    返回：
+    - dict: 返回包含模型对话结果的JSON结果。
+
+    功能：
+    1. 查询当前用户的租户信息，验证用户的租户身份。
+    2. 获取对应的调用模型，包括返回话答。
+    3. 使用chat_mdl对求问、消息和生成配置参数进行调用，并返回调用结果。
+
+    流程：
+    1. 用TenantService从数据库中获取当前用户的租户信息。
+    2. 如果租户不存在，抛出HTTP异常。
+    3. 获取LLMBundle来调用模型对话服务。
+    4. 返回对话模型的响应数据。
+
+    异常处理：
+    - 如果在查询用户或调用模型的过程中发生异常，将抛出HTTP异常，并返回相应的错误信息。
+
+    注意：
+    - 当前用户的租户信息必须存在，才能调用对话模型。
+    """
     req = request.model_dump()
     tenants = TenantService.get_by_user_id(db, user.id)
     if not tenants:
