@@ -6,14 +6,13 @@
 @date：2024/7/23 18:57
 @desc:
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi import File, UploadFile
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.api_utils import server_error_response, get_data_error_result, validate_request, get_json_result
+from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
 from api.utils import get_uuid
 from api.db import FileType
 from api.db.services.document_service import DocumentService
@@ -36,8 +35,6 @@ async def convert(
     参数:
     - kb_ids: 知识库ID列表。
     - file_ids: 文件ID列表。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 文件转换结果的JSON响应。
@@ -110,8 +107,6 @@ async def rm(
 
     参数:
     - file_ids: 文件ID列表。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 文件删除结果的JSON响应。

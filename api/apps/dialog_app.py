@@ -6,7 +6,7 @@
 @date：2024/8/12 16:00
 @desc: 对话管理接口
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
@@ -17,7 +17,7 @@ from api.db import StatusEnum
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.settings import RetCode
-from api.utils.api_utils import server_error_response, get_data_error_result, validate_request
+from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
 from api.db.database import get_db
@@ -89,7 +89,7 @@ def get_kb_names(kb_ids, db: Session):
     return ids, nms
 
 @router.post('/set', summary="设置对话", response_description="成功设置对话")
-async def set_dialog(request: DialogRequest, db: Session = Depends(get_db), req: Request = None, user=Depends(manager)):
+async def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     设置对话
 
@@ -114,9 +114,6 @@ async def set_dialog(request: DialogRequest, db: Session = Depends(get_db), req:
             - parameters: 参数列表，每个参数包含键值和是否可选
             - empty_response: 空响应消息
         - kb_ids: 知识库的ID列表，默认值为空列表
-    - db: 数据库会话对象
-    - req: 请求对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回包含对话信息的JSON结果
@@ -196,8 +193,6 @@ async def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manage
 
     参数:
     - dialog_id: str 对话的唯一标识符
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回包含对话信息的JSON结果
@@ -219,10 +214,6 @@ async def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
     列出对话
 
     该接口用于列出当前用户的所有对话。
-
-    参数:
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回包含对话列表的JSON结果
@@ -252,8 +243,6 @@ async def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=D
     参数:
     - request: RemoveDialogRequest对象，包含要删除的对话ID列表
         - dialog_ids: List[str] 要删除的对话ID列表
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回成功删除的JSON结果

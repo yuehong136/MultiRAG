@@ -33,19 +33,3 @@ class QWenSeq2txt(Base):
             return ans, num_tokens_from_string(ans)
 
         return "**ERROR**: " + result.message, 0
-
-if __name__ == "__main__":
-    # 设置API密钥和音频文件URL
-    api_key = "sk-4b492b0a99004a7da958b669858a2bdd"
-    audio_url = "test1.wav"  # 将此替换为有效的音频文件URL
-
-    # 初始化QWenSeq2txt类
-    model = QWenSeq2txt(api_key)
-
-    # 异步调用转写方法并获取结果
-    transcription, token_count = model.transcription(audio=audio_url)
-
-    # 输出转录结果
-    print("转录结果：")
-    print(transcription)
-    print("令牌数量：", token_count)

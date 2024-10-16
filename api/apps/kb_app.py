@@ -7,9 +7,9 @@
 @desc:
 """
 
-from typing import List, Optional
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -141,8 +141,6 @@ async def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db),
 
     参数:
     - request: 请求体，包含要删除的知识库ID。
-    - db: 数据库会话，通过依赖注入获取。
-    - user: 当前用户，通过依赖注入的身份验证器获取。
 
     返回:
     - 成功删除知识库时，返回包含成功标志的JSON结果。

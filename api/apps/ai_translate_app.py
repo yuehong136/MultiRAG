@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import List
 
 from fastapi import APIRouter, Body, Depends
 
@@ -31,7 +31,7 @@ class AITranslateReqBody(BaseModel):
     llm_name: str
 
 
-@router.post("/ai-translate")
+@router.post("/ai-translate", summary="翻译中文文本", response_description="成功返回英文翻译结果")
 async def ai_translate(body: AITranslateReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
     """
     将中文文本翻译成英文的接口。
@@ -65,7 +65,7 @@ class AIBatchTranslateReqBody(BaseModel):
     llm_name: str
 
 
-@router.post("/ai-batch-translate")
+@router.post("/ai-batch-translate", summary="批量翻译中文文本", response_description="成功返回英文翻译结果列表")
 async def ai_translate(body: AIBatchTranslateReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
     """
     批量将中文文本翻译成英文的接口。

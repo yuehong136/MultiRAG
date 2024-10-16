@@ -7,17 +7,16 @@
 @desc:
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends
 from sqlalchemy import inspect
 
 from api.db import UserTenantRole, StatusEnum
 from api.db.db_models import UserTenant
 from api.settings import RetCode
 from api.utils import get_uuid
-from api.utils.api_utils import server_error_response
 from api.apps import manager
 from api.db.database import get_db
-from api.utils.api_utils import get_json_result, server_error_response, validate_request, get_data_error_result
+from api.utils.api_utils import server_error_response
 from sqlalchemy.orm import Session
 from api.db.services.user_service import TenantService, UserTenantService
 from api.utils.api_utils import get_json_result

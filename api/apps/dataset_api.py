@@ -164,8 +164,6 @@ async def list_datasets(
    - count (int): 返回数据集的数量，默认值为-1表示返回所有。
    - orderby (str): 排序字段，默认值为"create_time"。
    - desc (bool): 是否降序排列，默认值为True。
-   - db (Session): 数据库会话。
-   - user: 当前用户信息。
 
    返回:
    - JSON: 数据集列表的JSON响应。
@@ -201,8 +199,6 @@ async def remove_dataset(
 
    参数:
    - dataset_id (str): 数据集ID。
-   - db (Session): 数据库会话。
-   - user: 当前用户信息。
 
    返回:
    - JSON: 删除操作的结果。
@@ -244,8 +240,6 @@ async def get_dataset(dataset_id: str, db: Session = Depends(get_db), user=Depen
 
     参数:
     - dataset_id (str): 数据集ID。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 数据集详细信息的JSON响应。
@@ -287,8 +281,6 @@ async def update_dataset(
       - token_num (Optional[int]): 令牌数量。
       - template_type (Optional[str]): 模板类型。
       - chunk_num (Optional[int]): 分块数量。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 更新后的数据集详细信息的JSON响应。
@@ -389,8 +381,6 @@ async def upload_documents(
     参数:
     - dataset_id (str): 数据集ID。
     - files (UploadFile | None): 上传的文件。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 上传文件的详细信息的JSON响应。
@@ -510,8 +500,6 @@ async def delete_document(
     参数:
     - dataset_id (str): 数据集ID。
     - document_id (str): 文件ID。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 删除操作的结果。
@@ -578,8 +566,6 @@ async def list_documents(
     - count (int): 返回文件的数量，默认值为-1表示返回所有。
     - order_by (str): 排序字段，默认值为"create_time"。
     - descend (bool): 是否降序排列，默认值为True。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 文件列表的JSON响应。
@@ -616,8 +602,6 @@ async def update_document(
     - dataset_id (str): 数据集ID。
     - document_id (str): 文件ID。
     - request (UpdateDocumentRequest): 更新请求对象，包含更新的详细信息。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 更新后的文件详细信息的JSON响应。
@@ -707,8 +691,6 @@ async def download_document(
     参数:
     - dataset_id (str): 数据集ID。
     - document_id (str): 文件ID。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - StreamingResponse: 文件流响应。
@@ -795,8 +777,6 @@ async def parse_document(
     参数:
     - dataset_id (str): 数据集ID。
     - document_id (str): 文件ID。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 解析操作的结果。

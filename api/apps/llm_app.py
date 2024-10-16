@@ -8,17 +8,15 @@
 """
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordRequestForm
-from fastapi_login.exceptions import InvalidCredentialsException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from api.apps import manager
 from api.db.database import get_db
 from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService, LLMBundle
 from api.db.services.user_service import TenantService
-from api.settings import RetCode, LIGHTEN
-from api.utils.api_utils import get_json_result, server_error_response, validate_request, get_data_error_result
+from api.settings import LIGHTEN
+from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from api.db import StatusEnum, LLMType
 from api.db.db_models import TenantLLM
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
@@ -75,10 +73,6 @@ async def factories(db: Session = Depends(get_db), user=Depends(manager)):
     摘要: 获取模型供应商信息
     响应描述: 成功获取到所有模型供应商信息
 
-    参数:
-    - db (Session): 依赖注入的数据库会话，用于执行数据库查询。
-    - user: 依赖注入的当前用户信息，由manager提供，但在此函数中未使用。
-
     返回:
     - dict: 包含模型供应商信息的JSON结果，数据部分是一个字典列表，每个字典代表一个供应商的信息。
 
@@ -129,8 +123,6 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
 
     参数:
     - request (SetAPIKeyRequest): 一个依赖注入的请求对象，包含模型工厂ID、API密钥等信息。
-    - db (Session): 依赖注入的数据库会话，用于执行数据库操作。
-    - user: 依赖注入的当前用户信息，由manager提供。
 
     返回:
     - dict: 成功时返回一个表示操作成功的JSON结果；失败时返回一个包含错误信息的JSON结果。
@@ -236,8 +228,6 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
 
     参数:
     - request (AddLLMRequest): 一个依赖注入的请求对象，包含模型供应商、模型类型、模型名称、API密钥等信息。
-    - db (Session): 依赖注入的数据库会话，用于执行数据库操作。
-    - user: 依赖注入的当前用户信息，由manager提供。
 
     返回:
     - dict: 成功时返回一个表示操作成功的JSON结果。
@@ -431,8 +421,6 @@ async def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), u
 
     参数:
     - request (DeleteLLMRequest): 一个依赖注入的请求对象，包含模型供应商和模型名称的信息。
-    - db (Session): 依赖注入的数据库会话，用于执行数据库操作。
-    - user: 依赖注入的当前用户信息，由manager提供。
 
     返回:
     - dict: 成功时返回一个表示操作成功的JSON结果。
@@ -476,10 +464,6 @@ async def my_llms(db: Session = Depends(get_db), user=Depends(manager)):
     获取当前用户的所有模型信息。
     摘要: 获取用户的所有模型
     响应描述: 成功获取到用户的所有模型
-
-    参数:
-    - db (Session): 依赖注入的数据库会话，用于执行数据库查询。
-    - user: 依赖注入的当前用户信息，由manager提供。
 
     返回:
     - dict: 包含用户所有模型信息的JSON结果，数据部分是一个字典，其中每个键代表一个模型工厂，值是该工厂下的模型信息列表。
@@ -527,8 +511,6 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
 
     参数:
     - mdl_type (Optional[str]): 可选的模型类型，用于筛选模型。
-    - db (Session): 依赖注入的数据库会话，用于执行数据库查询。
-    - user: 依赖注入的当前用户信息，由manager提供。
 
     返回:
     - dict: 包含所有模型信息的JSON结果，数据部分是一个字典，其中每个键代表一个模型工厂，值是该工厂下的模型信息列表。

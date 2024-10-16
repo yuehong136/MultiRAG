@@ -12,13 +12,12 @@ import re
 from io import BytesIO
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
-from typing import List
 
 from starlette.responses import StreamingResponse
 
-from api.db import FileType, FileSource, StatusEnum
+from api.db import FileType, FileSource
 from api.db.database import get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
@@ -73,8 +72,6 @@ async def upload(
     参数:
     - parent_id: 父文件夹ID。
     - files: 上传的文件列表。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 上传文件结果的JSON响应。
@@ -167,8 +164,6 @@ async def create(
 
     参数:
     - request_body: 请求体，包含创建文件或文件夹的信息。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 创建结果的JSON响应。
@@ -240,8 +235,6 @@ async def list_files(
     - page_size: 每页显示数量。
     - orderby: 排序字段。
     - desc: 是否降序排列。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 列出结果的JSON响应。
@@ -274,10 +267,6 @@ async def get_root_folder(
     """
     获取根文件夹。
 
-    参数:
-    - db: 数据库会话。
-    - user: 当前用户信息。
-
     返回:
     - JSON: 根文件夹的JSON响应。
     """
@@ -299,8 +288,6 @@ async def get_parent_folder(
 
     参数:
     - file_id: 文件ID。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 父文件夹的JSON响应。
@@ -327,8 +314,6 @@ async def get_all_parent_folders(
 
     参数:
     - file_id: 文件ID。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 所有父文件夹的JSON响应。
@@ -356,8 +341,6 @@ async def rm(
 
     参数:
     - request_body: 请求体，包含删除文件或文件夹的信息。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 删除结果的JSON响应。
@@ -416,8 +399,6 @@ async def rename(
 
     参数:
     - request_body: 请求体，包含重命名文件或文件夹的信息。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 重命名结果的JSON响应。
@@ -459,8 +440,6 @@ async def get_file(
 
     参数:
     - file_id: 文件ID。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - 响应对象: 文件内容的响应。
@@ -503,8 +482,6 @@ async def move(
 
     参数:
     - request_body: 请求体，包含移动文件或文件夹的信息。
-    - db: 数据库会话。
-    - user: 当前用户信息。
 
     返回:
     - JSON: 移动结果的JSON响应。

@@ -12,13 +12,9 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from fastapi.security import OAuth2PasswordRequestForm
-from fastapi_login import LoginManager
-from fastapi_login.exceptions import InvalidCredentialsException
 
 from api.apps import manager
 from api.db.database import get_db
@@ -87,7 +83,6 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     - request: LoginRequest对象，包含用户的登录信息
         - username: str 用户名，通常是用户的电子邮件地址
         - password: str 用户的密码
-    - db: Session 数据库会话对象
 
     返回:
     - 成功时返回包含访问令牌和用户信息的JSON结果
@@ -130,7 +125,6 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
 
     参数:
     - code: str 从GitHub获取的授权码
-    - db: Session 数据库会话对象
 
     返回:
     - 成功时返回包含访问令牌的JSON结果
@@ -184,7 +178,6 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
 
     参数:
     - code: str 从飞书获取的授权码
-    - db: Session 数据库会话对象
 
     返回:
     - 成功时返回包含访问令牌的JSON结果
@@ -243,9 +236,6 @@ async def log_out(db: Session = Depends(get_db), user=Depends(manager)):
 
     该接口用于用户退出登录。
 
-    参数:
-    - user: 当前用户对象
-
     返回:
     - 成功时返回成功退出的JSON结果
     """
@@ -267,8 +257,6 @@ async def setting_user(request: Request, db: Session = Depends(get_db), user=Dep
 
     参数:
     - request: Request 请求对象，包含用户更新信息
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回更新成功的JSON结果
@@ -300,9 +288,6 @@ async def user_profile(user=Depends(manager)):
     获取用户信息
 
     该接口用于获取当前登录用户的信息。
-
-    参数:
-    - user: 当前用户对象
 
     返回:
     - 成功时返回包含用户信息的JSON结果
@@ -336,7 +321,6 @@ def user_register(db: Session, user_id: str, user: dict):
     该函数用于注册新用户。
 
     参数:
-    - db: Session 数据库会话对象
     - user_id: str 用户的唯一标识符
     - user: dict 用户信息字典
 
@@ -408,7 +392,6 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
         - email: str 用户的电子邮件地址
         - nickname: str 用户的昵称
         - password: str 用户的密码
-    - db: Session 数据库会话对象
 
     返回:
     - 成功时返回包含访问令牌和用户信息的JSON结果
@@ -465,10 +448,6 @@ async def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
 
     该接口用于获取当前登录用户的租户信息。
 
-    参数:
-    - user: 当前用户对象
-    - db: Session 数据库会话对象
-
     返回:
     - 成功时返回包含租户信息的JSON结果
     """
@@ -495,8 +474,6 @@ async def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), 
         - img2txt_id: Optional[str] 图像转文本模型的ID
         - rerank_id: Optional[str] 重新排序模型的ID
         - tts_id: Optional[str] 文本转语音模型的ID
-    - user: 当前用户对象
-    - db: Session 数据库会话对象
 
     返回:
     - 成功时返回更新成功的JSON结果

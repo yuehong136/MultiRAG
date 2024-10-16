@@ -132,8 +132,6 @@ async def new_token(request: NewTokenRequest, db: Session = Depends(get_db), use
     参数:
     - request: NewTokenRequest对象，包含租户的唯一标识符
         - tenant_id: str 租户的唯一标识符
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回包含新API令牌的JSON结果
@@ -180,8 +178,6 @@ async def token_list(
     参数:
     - dialog_id: str 对话的唯一标识符
     - canvas_id: str 画布的唯一标识符
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回包含API令牌列表的JSON结果
@@ -214,8 +210,6 @@ async def rm(request: RemoveTokenRequest, db: Session = Depends(get_db), user=De
    - request: RemoveTokenRequest对象，包含要删除的API令牌和租户的唯一标识符
        - tokens: List[str] 要删除的API令牌列表
        - tenant_id: str 租户的唯一标识符
-   - db: Session 数据库会话对象
-   - user: 当前用户对象
 
    返回:
    - 成功时返回成功删除的JSON结果
@@ -241,8 +235,6 @@ async def stats(from_date: str = None, to_date: str = None, canvas_id: str = Non
    参数:
    - from_date: str 起始日期，格式为 YYYY-MM-DD，默认为过去7天
    - to_date: str 结束日期，格式为 YYYY-MM-DD，默认为当前日期
-   - db: Session 数据库会话对象
-   - user: 当前用户对象
 
    返回:
    - 成功时返回包含API使用统计的JSON结果
@@ -280,8 +272,6 @@ async def set_conversation(request: NewConversationRequest, db: Session = Depend
    参数:
    - request: NewConversationRequest对象，包含用户的唯一标识符
        - user_id: str 用户的唯一标识符
-   - db: Session 数据库会话对象
-   - req: Request 请求对象
 
    返回:
    - 成功时返回包含新对话信息的JSON结果
@@ -349,7 +339,6 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db)):
        - messages: List[dict] 消息列表，每个消息包含角色和内容
        - quote: Optional[bool] 是否引用，默认值为 False
        - stream: Optional[bool] 是否使用流式响应，默认值为 True
-   - db: Session 数据库会话对象
 
    返回:
    - 成功时返回生成的对话内容
@@ -524,7 +513,6 @@ async def get(conversation_id: str, db: Session = Depends(get_db)):
 
    参数:
    - conversation_id: str 对话的唯一标识符
-   - db: Session 数据库会话对象
 
    返回:
    - 成功时返回包含对话详情的JSON结果
@@ -704,7 +692,6 @@ async def list_kb_docs(request: ListKbDocsRequest, db: Session = Depends(get_db)
        - orderby: Optional[str] 排序字段，默认值为 "create_time"
        - desc: Optional[bool] 是否按降序排序，默认值为 True
        - keywords: Optional[str] 搜索关键字，默认值为空字符串
-   - db: Session 数据库会话对象
 
    返回:
    - 成功时返回包含文档列表的JSON结果
@@ -812,7 +799,6 @@ async def completion_faq(request: CompletionFAQRequest, db: Session = Depends(ge
         - Authorization: str 授权令牌
         - conversation_id: str 对话的唯一标识符
         - word: str 用户输入的关键词
-    - db: Session 数据库会话对象
 
     返回:
     - 成功时返回生成的对话内容

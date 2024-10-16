@@ -8,7 +8,6 @@
 """
 import json
 import re
-import traceback
 from copy import deepcopy
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
@@ -21,7 +20,7 @@ from api.db.services.llm_service import LLMBundle, TenantService, TenantLLMServi
 from api.db import LLMType
 from api.db.services.user_service import UserTenantService
 from api.settings import RetCode, retrievaler
-from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
+from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
 from api.db.database import get_db
@@ -132,8 +131,6 @@ async def set_conversation(request: SetConversationRequest, db: Session = Depend
         - conversation_id: 会话的唯一标识符，如果为空则表示创建新会话
         - dialog_id: 对话的唯一标识符
         - name: 会话的名称
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回包含会话信息的JSON结果
@@ -183,8 +180,6 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
 
     参数:
     - conversation_id: str 会话的唯一标识符
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回包含会话信息的JSON结果
@@ -218,8 +213,6 @@ async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), 
     参数:
     - request: RemoveConversationRequest对象，包含要删除的会话ID列表
         - conversation_ids: List[str] 要删除的会话ID列表
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回成功删除的JSON结果
@@ -253,8 +246,6 @@ async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=
 
     参数:
     - dialog_id: str 对话所说应用id
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回包含会话列表的JSON结果
@@ -290,8 +281,6 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
             - quote: Optional[bool] 是否引用，默认值为 False
             - stream: Optional[bool] 是否使用流式响应，默认值为 True
             - filter_condition: Optional[dict] 过滤条件
-        - db: Session 数据库会话对象
-        - user: 当前用户对象
 
         返回:
         - 成功时返回生成的对话内容
@@ -308,9 +297,6 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
             continue
         if m["role"] == "assistant" and not msg:
             continue
-        # msg.append({"role": m["role"], "content": m["content"]})
-        # if "doc_ids" in m:
-        #     msg[-1]["doc_ids"] = m["doc_ids"]
         msg.append(m)
     if not msg[-1].get("id"):
         msg[-1]["id"] = get_uuid()
@@ -323,7 +309,6 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
         conv = ConversationService.get_by_id(db, req["conversation_id"])
         if not conv:
             return get_data_error_result(retmsg="Conversation not found!")
-        # conv.message.append(deepcopy(msg[-1]))
         conv.message = deepcopy(req["messages"])  # re-generate for conversation
         dia = DialogService.get_by_id(db, conv.dialog_id)
         if not dia:
@@ -333,7 +318,6 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
 
         if not conv.reference:
             conv.reference = []
-        # conv.message.append({"role": "assistant", "content": ""})
         conv.message.append({"role": "assistant", "content": "", "id": message_id})
         conv.reference.append({"chunks": [], "doc_aggs": []})
 
@@ -343,7 +327,6 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
                 conv.reference.append(ans["reference"])
             else:
                 conv.reference[-1] = ans["reference"]
-            # conv.message[-1] = {"role": "assistant", "content": ans["answer"]}
             conv.message[-1] = {"role": "assistant", "content": ans["answer"],
                                 "id": message_id, "prompt": ans.get("prompt", "")}
             ans["id"] = message_id
@@ -377,6 +360,29 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
 
 @router.post('/tts', summary="文本转语音", response_description="成功文本转语音")
 def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    文本转语音
+
+    该接口用于将输入的文本内容转换为语音，并以音频流的方式返回。
+
+    参数:
+    - request: TTSRequest对象，包含要转换的文本内容
+        - text: str 要转换为语音的文本内容
+
+    返回:
+    - 成功时返回包含音频流的响应
+    - 失败时返回错误信息
+
+    逻辑说明:
+    - 首先，根据用户ID获取租户信息。如果租户信息不存在，返回404错误。
+    - 获取用户的默认TTS模型ID，并验证其是否存在。
+    - 使用该模型将文本逐段转化为语音流，并逐段返回。
+    - 若在转换过程中出现错误，则返回错误信息。
+
+    注意事项:
+    - 文本内容不应为空。
+    - 返回结果为MPEG音频流，可供下载或直接播放。
+    """
     req = request.model_dump()
     text = req.get("text")
 
@@ -422,6 +428,28 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
 
 @router.post('/asr', summary="语音识别", response_description="成功识别语音")
 def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    语音识别
+
+    该接口用于将输入的音频文件转换为文本。
+
+    参数:
+    - request: ASRRequest对象，包含音频文件的路径
+        - audio_file_path: str 音频文件的路径
+
+    返回:
+    - 成功时返回包含识别文本的JSON结果
+    - 失败时返回错误信息
+
+    逻辑说明:
+    - 根据用户ID获取租户信息，确保租户存在并获取默认ASR模型ID。
+    - 使用该ASR模型处理音频文件，返回识别的文本。
+    - 若在处理过程中出现错误，则返回错误信息。
+
+    注意事项:
+    - 音频文件路径应为有效路径。
+    - 确保租户已配置默认ASR模型，否则将返回错误信息。
+    """
     req = request.model_dump()
     audio_file_path = req.get("audio_file_path")
 
@@ -436,11 +464,7 @@ def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager
 
     asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_id)
 
-    # # 创建 QWenSeq2txt 实例
-    # qwen_seq2txt = QWenSeq2txt(key=asr_key)
-
     # 调用 ASR 语音识别函数
-    # transcription_result, token_count = asr_mdl.transcription(audio=audio_file_path)
     transcription_result = asr_mdl.transcription(audio=audio_file_path)
 
     if "**ERROR**" in transcription_result:
@@ -450,6 +474,27 @@ def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager
 
 @router.post('/asr_upload', summary="语音识别上传", response_description="成功识别语音")
 def asr_upload(file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    语音识别上传
+
+    该接口用于上传音频文件并将其转换为文本。
+
+    参数:
+    - file: UploadFile 上传的音频文件
+
+    返回:
+    - 成功时返回包含识别文本的JSON结果
+    - 失败时返回错误信息
+
+    逻辑说明:
+    - 将上传的音频文件保存到临时路径，并验证用户和模型信息。
+    - 使用默认ASR模型识别音频文件内容，并将识别结果返回。
+    - 若在处理过程中出现错误，则返回错误信息。
+
+    注意事项:
+    - 确保上传文件格式为有效的音频格式（如mp3）。
+    - 确保租户已配置默认ASR模型，否则将返回错误信息。
+    """
     # 将上传的 MP3 文件保存到临时文件
     import tempfile
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio_file:
@@ -487,8 +532,6 @@ async def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), u
     - request: DeleteMsgRequest对象，包含会话ID和消息ID
         - conversation_id: str 会话的唯一标识符
         - message_id: List[dict] 消息ID列表
-    - db: Session 数据库会话对象
-    - user: 当前用户对象
 
     返回:
     - 成功时返回更新后的会话信息的JSON结果
@@ -532,6 +575,32 @@ async def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), u
 
 @router.post('/thumbup', summary="点赞", response_description="成功点赞")
 async def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    点赞接口
+
+    该接口用于为特定会话中的消息点赞或取消点赞，并添加反馈信息。
+
+    参数:
+    - request: ThumbupRequest对象，包含点赞的详细信息
+        - conversation_id: str 会话的唯一标识符
+        - message_id: str 消息的唯一标识符
+        - set: Optional[bool] 点赞状态（True表示点赞，False表示取消点赞）
+        - feedback: str 反馈信息，当取消点赞时可以提供反馈内容
+
+    返回:
+    - 成功时返回更新后的会话信息的JSON结果
+    - 失败时返回错误信息
+
+    逻辑说明:
+    - 根据会话ID查找指定会话，如果未找到则返回错误。
+    - 在会话的消息列表中查找匹配的消息ID，并根据请求中的点赞状态设置相应的字段。
+    - 若取消点赞且提供了反馈信息，则在消息中记录该反馈。
+    - 更新会话信息并将结果返回。
+
+    注意事项:
+    - 仅支持为"assistant"角色的消息点赞。
+    - 若请求中未设置点赞状态，默认为取消点赞。
+    """
     req = request.model_dump()
     conv = ConversationService.get_by_id(db, req["conversation_id"])
     if not conv:
@@ -546,7 +615,8 @@ async def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=D
                 if "feedback" in msg: del msg["feedback"]
             else:
                 msg["thumbup"] = False
-                if feedback: msg["feedback"] = feedback
+                if feedback:
+                    msg["feedback"] = feedback
             break
 
     ConversationService.update_by_id(db, conv["id"], conv)
