@@ -38,7 +38,7 @@ def update_progress():
     定期更新文档服务进度
     """
     while True:
-        time.sleep(1)
+        time.sleep(3)
         db = None
         try:
             db = SessionLocal()  # 创建数据库会话

@@ -26,7 +26,8 @@ from api.db import UserTenantRole, LLMType, FileType, StatusEnum, TaskStatus
 from api.utils import get_uuid, get_format_time, download_img, current_timestamp, datetime_format
 from api.settings import RetCode, GITHUB_OAUTH, FEISHU_OAUTH, CHAT_MDL, EMBEDDING_MDL, ASR_MDL, IMAGE2TEXT_MDL, PARSERS, \
     API_KEY, LLM_FACTORY, LLM_BASE_URL, RERANK_MDL, stat_logger
-from api.utils.api_utils import get_json_result, server_error_response, validate_request, construct_response
+from api.utils.api_utils import get_json_result, server_error_response, validate_request, construct_response, \
+    get_data_error_result
 
 router = APIRouter()
 
@@ -452,8 +453,10 @@ async def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
     - 成功时返回包含租户信息的JSON结果
     """
     try:
-        tenants = TenantService.get_by_user_id(db, user.id)
-        return get_json_result(data=tenants)
+        tenants = TenantService.get_info_by(db, user.id)[0]
+        if not tenants:
+            return get_data_error_result(retmsg="Tenant not found!")
+        return get_json_result(data=tenants[0])
     except Exception as e:
         return server_error_response(e)
 

@@ -285,6 +285,6 @@ def get_error_data_result(retcode=RetCode.DATA_ERROR,
     return JSONResponse(content=jsonable_encoder(response))
 
 
-def generate_confirmation_token(tenent_id):
+def generate_confirmation_token(tenent_id: object) -> object:
     serializer = URLSafeTimedSerializer(tenent_id)
-    return "ragflow-" + serializer.dumps(get_uuid(), salt=tenent_id)[2:34]
+    return "multirag-" + serializer.dumps(get_uuid(), salt=tenent_id)[2:34]

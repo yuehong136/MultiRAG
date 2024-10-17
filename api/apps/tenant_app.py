@@ -3,8 +3,8 @@
 @project: multirag
 @Author：龙
 @file： tenant_app.py
-@date：2024/9/13 9:19
-@desc:
+@date：2024/10/17 14:24
+@desc: 用于处理租户用户操作的路由，包括添加、获取、删除和更新租户成员。
 """
 
 from fastapi import APIRouter, Depends
@@ -12,68 +12,143 @@ from sqlalchemy import inspect
 
 from api.db import UserTenantRole, StatusEnum
 from api.db.db_models import UserTenant
-from api.settings import RetCode
-from api.utils import get_uuid
+from api.utils import get_uuid, delta_seconds
 from api.apps import manager
 from api.db.database import get_db
-from api.utils.api_utils import server_error_response
+from api.utils.api_utils import server_error_response, get_data_error_result
 from sqlalchemy.orm import Session
-from api.db.services.user_service import TenantService, UserTenantService
+from api.db.services.user_service import UserTenantService, UserService
 from api.utils.api_utils import get_json_result
 
 router = APIRouter()
 
+
 def object_as_dict(obj):
     return {c.key: getattr(obj, c.key) for c in inspect(obj).mapper.column_attrs}
 
+
 @router.get("/list", summary="获取租户列表", response_model=dict)
 async def tenant_list(db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    获取当前用户关联的租户列表。
+
+    此接口返回用户为成员的租户列表，以及距离上次更新的时间差。
+
+    返回:
+        JSON 响应，其中包含租户列表以及每个租户距离上次更新的时间差（秒）。
+    """
     try:
-        tenants = TenantService.get_by_user_id(db, user.id)
-        return get_json_result(data=tenants)
+        users = UserTenantService.get_tenants_by_user_id(db, user.id)
+        for u in users:
+            u["delta_seconds"] = delta_seconds(u["update_date"])
+        return get_json_result(data=users)
     except Exception as e:
         return server_error_response(e)
 
 
 @router.get("/<tenant_id>/user/list", summary="获取租户下用户列表", response_model=dict)
 async def user_list(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    获取特定租户下的用户列表。
+
+    参数:
+       - tenant_id (str): 租户 ID。
+
+    返回:
+        JSON 响应，其中包含租户下的用户列表，以及每个用户距离上次更新的时间差（秒）。
+    """
     try:
         users = UserTenantService.get_by_tenant_id(db, tenant_id)
+        for u in users:
+            u["delta_seconds"] = delta_seconds(str(u["update_date"]))
         return get_json_result(data=users)
     except Exception as e:
         return server_error_response(e)
 
 
 @router.post('/<tenant_id>/user', summary="新增租户下用户", response_model=dict)
-def create(tenant_id, user_id, db: Session = Depends(get_db), user=Depends(manager)):
-    if not user_id:
-        return get_json_result(
-            data=False, retmsg='Lack of "USER ID"', retcode=RetCode.ARGUMENT_ERROR)
+def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    添加新用户到指定租户。
 
-    try:
-        user_tenants = UserTenantService.query(db, user_id=user_id, tenant_id=tenant_id)
-        if user_tenants:
-            uuid = user_tenants[0].id
-            return get_json_result(data={"id": uuid})
+    此接口根据用户邮箱添加用户到租户中。如果用户未找到或已是团队成员，将返回相应提示信息。
 
-        uuid = get_uuid()
-        UserTenantService.save(
-            db,
-            id=uuid,
-            user_id=user_id,
-            tenant_id=tenant_id,
-            role=UserTenantRole.NORMAL.value,
-            status=StatusEnum.VALID.value)
+    参数:
+       - tenant_id (str): 租户 ID。
+       - email (str): 要添加的用户邮箱。
 
-        return get_json_result(data={"id": uuid})
-    except Exception as e:
-        return server_error_response(e)
+    返回:
+        JSON 响应，其中包含成功添加的用户信息。
+    """
+    usrs = UserService.query(db, email=email)
+
+    if not usrs:
+        return get_data_error_result(retmsg="User not found.")
+
+    user_id = usrs[0].id
+    user_tenants = UserTenantService.query(db, user_id=user_id, tenant_id=tenant_id)
+    if user_tenants:
+        if user_tenants[0].status == UserTenantRole.NORMAL.value:
+            return get_data_error_result(retmsg="This user is in the team already.")
+        return get_data_error_result(retmsg="Invitation notification is sent.")
+
+    UserTenantService.save(
+        db=db,
+        id=get_uuid(),
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role=UserTenantRole.INVITE,
+        invited_by=user.id,  # 默认当前操作的用户是邀请人
+        status=StatusEnum.VALID.value)
+
+    # usr = list(usrs.dicts())[0]
+    # usr = {k: v for k, v in usr.items() if k in ["id", "avatar", "email", "nickname"]}
+    usr = {
+        "id": usrs[0].id,
+        "avatar": usrs[0].avatar,
+        "email": usrs[0].email,
+        "nickname": usrs[0].nickname,
+    }
+
+    return get_json_result(data=usr)
 
 
 @router.delete('/<tenant_id>/user/<user_id>', summary="删除租户下用户", response_model=dict)
 def rm(tenant_id, user_id, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    从租户中删除指定用户。
+
+    此接口从指定租户中删除指定用户。
+
+    参数:
+       - tenant_id (str): 租户 ID。
+       - user_id (str): 要删除的用户 ID。
+
+    返回:
+        JSON 响应，指示操作是否成功。
+    """
     try:
         UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id, UserTenant.user_id == user_id])
+        return get_json_result(data=True)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.get("/agree/<tenant_id>", summary="同意加入租户", response_model=dict)
+def agree(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    同意加入租户。
+
+    此接口用于用户接受加入租户的邀请。
+
+    参数:
+       - tenant_id (str): 要加入的租户 ID。
+
+    返回:
+        JSON 响应，指示操作是否成功。
+    """
+    try:
+        UserTenantService.filter_update(db, [UserTenant.tenant_id == tenant_id, UserTenant.user_id == user.id], {"role": UserTenantRole.NORMAL})
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)

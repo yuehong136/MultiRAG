@@ -232,40 +232,25 @@ def token_list(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post("/rm", summary="删除API访问令牌", response_description="成功删除指定的令牌")
-async def remove_tokens(
-    tokens: list[str] = Body(..., description="要删除的令牌列表"),
-    tenant_id: str = Body(..., description="租户ID"),
+async def rm(
+    token: str = Body(..., description="要删除的令牌"),
     db: Session = Depends(get_db),
     user=Depends(manager)
 ):
     """
-    删除指定API访问令牌的接口说明文档。
+    删除指定的API访问令牌。
 
-    概要：根据提供的令牌列表和租户ID，删除对应的API访问令牌。
-    响应描述：成功删除指定的令牌后返回成功信息。
+    此接口允许用户删除指定的API访问令牌。
+    用户需提供要删除的令牌，系统会根据令牌和用户ID从数据库中删除匹配的记录。
 
-    参数：
-    - **tokens** (List[str]): 要删除的API访问令牌列表。
-    - **tenant_id** (str): 租户ID，用于标识令牌所属的租户。
+    参数:
+       - token (str): 要删除的令牌。
 
-    返回：
-    - dict: 返回一个包含删除操作成功的布尔值的 JSON 结果。
-
-    功能：
-    1. 使用提供的令牌列表和租户ID，依次删除匹配的令牌。
-    2. 对每个令牌进行数据库操作，确保删除符合条件的记录。
-
-    异常处理：
-    - 如果删除操作失败，将抛出 HTTP 异常，并返回错误信息。
-
-    注意：
-    - 用户必须已登录并拥有合适的权限才能删除令牌。
+    返回:
+        JSON 响应，指示删除操作是否成功。
     """
-    try:
-        for token in tokens:
-            APITokenService.filter_delete(
-                db, [APIToken.tenant_id == tenant_id, APIToken.token == token]
-            )
-        return get_json_result(data=True)
-    except Exception as e:
-        return server_error_response(e)
+    APITokenService.filter_delete(
+        db, [APIToken.tenant_id == user.id, APIToken.token == token]
+    )
+    return get_json_result(data=True)
+

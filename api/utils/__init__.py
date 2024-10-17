@@ -331,6 +331,13 @@ def download_img(url):
            "base64," + base64.b64encode(response.content).decode("utf-8")
 
 
+def delta_seconds(date_string: str):
+    if isinstance(date_string, str):
+        date_string = datetime.datetime.strptime(date_string, "%Y-%m-%d %H:%M:%S")
+    now = datetime.datetime.now()
+    delta = now - date_string
+    return delta.total_seconds()
+
 
 HTTP_STATUS_CODES = {
     100: "Continue",

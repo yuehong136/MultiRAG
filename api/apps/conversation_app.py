@@ -386,7 +386,7 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
     req = request.model_dump()
     text = req.get("text")
 
-    tenants = TenantService.get_by_user_id(db, user.id)
+    tenants = TenantService.get_info_by(db, user.id)
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
 

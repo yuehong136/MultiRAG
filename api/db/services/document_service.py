@@ -381,7 +381,6 @@ class DocumentService(CommonService):
         docs = cls.get_unfinished_docs(db)
         for d in docs:
             try:
-                # tsks = db.query(Task).filter_by(doc_id=d["id"]).order_by(Task.create_time).all()
                 tsks = db.query(Task).filter_by(doc_id=d.id).order_by(Task.create_time).all()
                 if not tsks:
                     continue
@@ -393,7 +392,6 @@ class DocumentService(CommonService):
                 doc = DocumentService.get_by_id(db, d.id)
                 status = doc.run  # TaskStatus.RUNNING.value
 
-                # status = TaskStatus.RUNNING.value
                 for t in tsks:
                     if 0 <= t.progress < 1:
                         finished = False
@@ -402,7 +400,6 @@ class DocumentService(CommonService):
                     if t.progress_msg not in msg:
                         msg.append(t.progress_msg)
 
-                    # msg.append(t.progress_msg)
                     if t.progress == -1:
                         bad += 1
                 prg /= len(tsks)
@@ -410,18 +407,16 @@ class DocumentService(CommonService):
                     prg = -1
                     status = TaskStatus.FAIL.value
                 elif finished:
-                    # if d["parser_config"].get("raptor", {}).get("use_raptor") and d["progress_msg"].lower().find(
                     if d.parser_config.get("raptor", {}).get("use_raptor") and d.progress_msg.lower().find(
                             " raptor") < 0:
                         queue_raptor_tasks(db, d)
-                        prg *= 0.98
+                        prg = 0.98 * len(tsks)/(len(tsks)+1)
                         msg.append("------ RAPTOR -------")
                     else:
                         status = TaskStatus.DONE.value
 
                 msg = "\n".join(msg)
                 info = {
-                    # "process_duration": datetime.timestamp(datetime.now()) - d["process_begin_at"].timestamp(),
                     "process_duration": datetime.timestamp(datetime.now()) - d.process_begin_at.timestamp(),
                     "run": status
                 }
@@ -429,10 +424,10 @@ class DocumentService(CommonService):
                     info["progress"] = prg
                 if msg:
                     info["progress_msg"] = msg
-                # cls.update_by_id(db, d["id"], info)
                 cls.update_by_id(db, d.id, info)
             except Exception as e:
-                stat_logger.error("fetch task exception:" + str(e))
+                if str(e).find("'0'") < 0:
+                    stat_logger.error("fetch task exception:" + str(e))
 
     @classmethod
     def get_kb_doc_count(cls, db: Session, kb_id: str):

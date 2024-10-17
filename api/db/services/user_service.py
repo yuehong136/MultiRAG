@@ -112,7 +112,7 @@ class TenantService(CommonService):
     model = Tenant
 
     @classmethod
-    def get_by_user_id(cls, db: Session, user_id: str):
+    def get_info_by(cls, db: Session, user_id: str):
         fields = [
             cls.model.id.label("tenant_id"),
             cls.model.name,
@@ -125,9 +125,13 @@ class TenantService(CommonService):
             cls.model.parser_ids,
             UserTenant.role.label("role")
         ]
-        tenants = db.query(*fields).join(UserTenant, (cls.model.id == UserTenant.tenant_id)).filter(
+        tenants = db.query(*fields).join(
+            UserTenant,
+            (cls.model.id == UserTenant.tenant_id)
+        ).filter(
             UserTenant.user_id == user_id,
             UserTenant.status == StatusEnum.VALID.value,
+            UserTenant.role == UserTenantRole.OWNER,
             cls.model.status == StatusEnum.VALID.value
         ).all()
 
@@ -163,7 +167,7 @@ class TenantService(CommonService):
         return db.query(*fields).join(UserTenant, (cls.model.id == UserTenant.tenant_id)).filter(
             UserTenant.user_id == user_id,
             UserTenant.status == StatusEnum.VALID.value,
-            UserTenant.role == UserTenantRole.NORMAL.value,
+            UserTenant.role == UserTenantRole.NORMAL,
             cls.model.status == StatusEnum.VALID.value
         ).all()
 
@@ -195,15 +199,13 @@ class UserTenantService(CommonService):
         db.refresh(user_tenant)
         return user_tenant
 
-
     @classmethod
     def get_by_tenant_id(cls, db: Session, tenant_id):
         query = (
             db.query(
                 cls.model.user_id,
-                cls.model.tenant_id,
-                cls.model.role,
                 cls.model.status,
+                cls.model.role,
                 User.nickname,
                 User.email,
                 User.avatar,
@@ -211,30 +213,68 @@ class UserTenantService(CommonService):
                 User.is_active,
                 User.is_anonymous,
                 User.status,
+                User.update_date,
                 User.is_superuser,
             )
             .join(User, cls.model.user_id == User.id)
             .filter(
                 cls.model.tenant_id == tenant_id,
-                cls.model.status == StatusEnum.VALID.value
+                cls.model.status == StatusEnum.VALID.value,
+                cls.model.role != UserTenantRole.OWNER
             )
         )
         results = query.all()
         users_data = [
             {
                 "user_id": result[0],
-                "tenant_id": result[1],
+                "status": result[1],
                 "role": result[2],
-                "status": result[3],
-                "nickname": result[4],
-                "email": result[5],
-                "avatar": result[6],
-                "is_authenticated": result[7],
-                "is_active": result[8],
-                "is_anonymous": result[9],
-                "user_status": result[10],
+                "nickname": result[3],
+                "email": result[4],
+                "avatar": result[5],
+                "is_authenticated": result[6],
+                "is_active": result[7],
+                "is_anonymous": result[8],
+                "user_status": result[9],
+                "update_date": result[10],
                 "is_superuser": result[11],
             }
             for result in results
         ]
         return users_data
+
+    @classmethod
+    def get_tenants_by_user_id(cls, db: Session, user_id: str):
+        fields = [
+            cls.model.tenant_id.label("tenant_id"),
+            cls.model.role.label("role"),
+            User.nickname,
+            User.email,
+            User.avatar,
+            User.update_date
+        ]
+
+        tenants = (
+            db.query(*fields)
+            .join(User, cls.model.tenant_id == User.id)
+            .filter(
+                cls.model.user_id == user_id,
+                cls.model.status == StatusEnum.VALID.value,
+                UserTenant.status == StatusEnum.VALID.value
+            )
+            .all()
+        )
+
+        tenant_list = [
+            {
+                "tenant_id": tenant.tenant_id,
+                "role": tenant.role,
+                "nickname": tenant.nickname,
+                "email": tenant.email,
+                "avatar": tenant.avatar,
+                "update_date": tenant.update_date
+            }
+            for tenant in tenants
+        ]
+
+        return tenant_list
