@@ -49,9 +49,6 @@ class DocumentService(CommonService):
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
 
-        # 获取记录总数
-        count = query.count()
-
         # 根据 desc 确定排序方式
         order_clause = getattr(cls.model, orderby)
         if desc:
@@ -64,6 +61,10 @@ class DocumentService(CommonService):
 
         # 执行查询并返回结果
         results = query.all()
+
+        # 获取记录总数
+        count = query.count()
+
         return [item.__dict__ for item in results], count
 
     @classmethod
