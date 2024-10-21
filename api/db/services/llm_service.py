@@ -176,11 +176,13 @@ class TenantLLMService(CommonService):
         else:
             raise ValueError("LLM type error")
 
+        llm_name = mdlnm.split("@")[0] if "@" in mdlnm else mdlnm
+
         num = 0
         try:
-            for u in cls.query(db, tenant_id=tenant_id, llm_name=mdlnm):
+            for u in cls.query(db, tenant_id=tenant_id, llm_name=llm_name):
                 num += cls.model.update({cls.model.used_tokens: u.used_tokens + used_tokens}).where(
-                    cls.model.tenant_id == tenant_id, cls.model.llm_name == mdlnm
+                    cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name
                 ).execute()
         except Exception as e:
             pass
@@ -214,25 +216,25 @@ class LLMBundle(object):
     def encode(self, texts: list, batch_size: int = 32):
         emd, used_tokens = self.mdl.encode(texts, batch_size)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
-            database_logger.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING")
+            database_logger.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
         return emd, used_tokens
 
     def encode_queries(self, query: str):
         emd, used_tokens = self.mdl.encode_queries(query)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
-            database_logger.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING")
+            database_logger.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
         return emd, used_tokens
 
     def similarity(self, query: str, texts: list):
         sim, used_tokens = self.mdl.similarity(query, texts)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
-            database_logger.error(f"Can't update token usage for {self.tenant_id}/RERANK")
+            database_logger.error(f"Can't update token usage for {self.tenant_id}/RERANK used_tokens: {used_tokens}")
         return sim, used_tokens
 
     def describe(self, image, max_tokens: int = 300):
         txt, used_tokens = self.mdl.describe(image, max_tokens)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
-            database_logger.error(f"Can't update token usage for {self.tenant_id}/IMAGE2TEXT")
+            database_logger.error(f"Can't update token usage for {self.tenant_id}/IMAGE2TEXT used_tokens: {used_tokens}")
         return txt
 
     def transcription(self, audio):
@@ -240,7 +242,7 @@ class LLMBundle(object):
         if not TenantLLMService.increase_usage(
                 self.db, self.tenant_id, self.llm_type, used_tokens):
             database_logger.error(
-                "Can't update token usage for {}/SEQUENCE2TXT".format(self.tenant_id))
+                "Can't update token usage for {}/SEQUENCE2TXT used_tokens: {}".format(self.tenant_id, used_tokens))
         return txt
 
     def tts(self, text):
@@ -260,14 +262,14 @@ class LLMBundle(object):
 
     def chat(self, system, history, gen_conf):
         txt, used_tokens = self.mdl.chat(system, history, gen_conf)
-        if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
-            database_logger.error(f"Can't update token usage for {self.tenant_id}/CHAT")
+        if isinstance(txt, int) and  not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+            database_logger.error(f"Can't update token usage for {self.tenant_id}/CHAT used_tokens: {used_tokens}")
         return txt
 
     def chat_streamly(self, system, history, gen_conf):
         for txt in self.mdl.chat_streamly(system, history, gen_conf):
             if isinstance(txt, int):
                 if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, txt, self.llm_name):
-                    database_logger.error(f"Can't update token usage for {self.tenant_id}/CHAT")
+                    database_logger.error(f"Can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, content: {txt}")
                 return
             yield txt
