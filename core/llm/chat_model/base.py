@@ -1,4 +1,5 @@
 # base.py
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import openai
@@ -17,7 +18,8 @@ class Base(ABC):
     client: OpenAI = field(init=False)
 
     def __post_init__(self):
-        self.client = OpenAI(api_key=self.key, base_url=self.base_url)
+        timeout = int(os.environ.get('LM_TIMEOUT_SECONDS', 600))
+        self.client = OpenAI(api_key=self.key, base_url=self.base_url, timeout=timeout)
 
     def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]) -> Tuple[str, int]:
         if system:
