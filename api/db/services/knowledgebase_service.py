@@ -9,7 +9,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import NoResultFound
 from api.db import StatusEnum, TenantPermission
-from api.db.db_models import Knowledgebase, Tenant, User
+from api.db.db_models import Knowledgebase, Tenant, User, UserTenant
 from api.db.services.common_service import CommonService
 
 
@@ -271,3 +271,28 @@ class KnowledgebaseService(CommonService):
         # 分页查询并返回结果的字典形式
         kbs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
         return [kb.to_dict() for kb in kbs]
+
+    @classmethod
+    def accessible(cls, db: Session, kb_id, user_id):
+        docs = db.query(cls.model.id).join(
+            UserTenant, UserTenant.tenant_id == Knowledgebase.tenant_id
+        ).filter(
+            cls.model.id == kb_id,
+            UserTenant.user_id == user_id
+        ).limit(1).all()
+
+        if not docs:
+            return False
+        return True
+
+    @classmethod
+    def accessible4deletion(cls, db: Session, kb_id, user_id):
+        docs = db.query(cls.model.id).filter(
+            cls.model.id == kb_id,
+            cls.model.created_by == user_id
+        ).limit(1).all()
+
+        if not docs:
+            return False
+        return True
+

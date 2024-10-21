@@ -271,7 +271,14 @@ async def list_docs(
 
 
 @router.post('/infos', summary="获取文档信息", response_description="成功获取文档信息")
-def docinfos(doc_ids: list[str],db: Session = Depends(get_db), user=Depends(manager)):
+def docinfos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)):
+    for doc_id in doc_ids:
+        if not DocumentService.accessible(db, doc_id, user.id):
+            return get_json_result(
+                data=False,
+                retmsg='No authorization.',
+                retcode=RetCode.AUTHENTICATION_ERROR
+            )
     docs = DocumentService.get_by_ids(db, doc_ids)
     # 将每个文档对象转换为字典
     docs_dicts = [doc.__dict__ for doc in docs]
@@ -316,6 +323,11 @@ async def change_status(
     if str(req["status"]) not in ["0", "1"]:
         return construct_json_result(data=False, message='"Status" must be either 0 or 1!',
                                      code=RetCode.ARGUMENT_ERROR)
+    if not DocumentService.accessible(db, req["doc_id"], user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=RetCode.AUTHENTICATION_ERROR)
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
@@ -361,7 +373,7 @@ async def change_status(
 
 
 @router.post("/rm", summary="删除文档", response_description="成功删除文档")
-async def remove_document(
+async def rm(
         request_body: RemoveRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -370,6 +382,15 @@ async def remove_document(
     doc_ids = req["doc_id"]
     if isinstance(doc_ids, str):
         doc_ids = [doc_ids]
+
+    for doc_id in doc_ids:
+        if not DocumentService.accessible4deletion(db, doc_id, user.id):
+            return get_json_result(
+                data=False,
+                retmsg='No authorization.',
+                retcode=RetCode.AUTHENTICATION_ERROR
+            )
+
     root_folder = FileService.get_root_folder(db, user.id)
     pf_id = root_folder["id"]
     FileService.init_knowledgebase_docs(db, pf_id, user.id)
@@ -411,6 +432,15 @@ async def run(
         user=Depends(manager)
 ):
     req = request_body.model_dump()
+
+    for doc_id in req["doc_ids"]:
+        if not DocumentService.accessible(db, doc_id, user.id):
+            return get_json_result(
+                data=False,
+                retmsg='No authorization.',
+                retcode=RetCode.AUTHENTICATION_ERROR
+            )
+
     try:
         for id in req["doc_ids"]:
             info = {"run": str(req["run"]), "progress": 0}
@@ -452,19 +482,6 @@ async def run(
     except Exception as e:
         return construct_error_response(e)
 
-    #         ELASTICSEARCH.deleteByQuery(Q("match", doc_id=id), idxnm=search.index_name(tenant_id))
-    #
-    #         if str(req["run"]) == TaskStatus.RUNNING.value:
-    #             TaskService.filter_delete(db, [Task.doc_id == id])
-    #             doc = DocumentService.get_by_id(db, id).to_dict()
-    #             doc["tenant_id"] = tenant_id
-    #             bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])
-    #             queue_tasks(doc, bucket, name)
-    #
-    #     return construct_json_result(data=True)
-    # except Exception as e:
-    #     return construct_error_response(e)
-
 
 @router.post("/rename", summary="重命名文档", response_description="成功重命名文档")
 async def rename(
@@ -473,6 +490,15 @@ async def rename(
         user=Depends(manager)
 ):
     req = request_body.model_dump()
+
+    for doc_id in req["doc_ids"]:
+        if not DocumentService.accessible(db, doc_id, user.id):
+            return get_json_result(
+                data=False,
+                retmsg='No authorization.',
+                retcode=RetCode.AUTHENTICATION_ERROR
+            )
+
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
@@ -503,7 +529,7 @@ async def rename(
 async def get_document(
         doc_id: str,
         db: Session = Depends(get_db),
-        user=Depends(manager)
+        # user=Depends(manager)
 ):
     try:
         doc = DocumentService.get_by_id(db, doc_id)
@@ -543,6 +569,15 @@ async def change_parser(
         user=Depends(manager)
 ):
     req = request_body.model_dump()
+
+    for doc_id in req["doc_ids"]:
+        if not DocumentService.accessible(db, doc_id, user.id):
+            return get_json_result(
+                data=False,
+                retmsg='No authorization.',
+                retcode=RetCode.AUTHENTICATION_ERROR
+            )
+
     try:
         # 根据文档ID获取文档信息
         doc = DocumentService.get_by_id(db, req["doc_id"])
