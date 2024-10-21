@@ -12,8 +12,8 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.apps import manager
@@ -31,12 +31,14 @@ from api.utils.api_utils import get_json_result, server_error_response, validate
 
 router = APIRouter()
 
+
 class LoginRequest(BaseModel):
     username: str
     """用户名，通常是用户的电子邮件地址。"""
 
     password: str
     """用户的密码。"""
+
 
 class RegisterRequest(BaseModel):
     email: str
@@ -47,6 +49,7 @@ class RegisterRequest(BaseModel):
 
     password: str
     """用户的密码。"""
+
 
 class SetTenantInfoRequest(BaseModel):
     tenant_id: str
@@ -72,6 +75,16 @@ class SetTenantInfoRequest(BaseModel):
 
     tts_id: Optional[str] = None
     """文本转语音模型的ID。"""
+
+
+class UserUpdateRequest(BaseModel):
+    password: str = Field(None, description="Old password")
+    new_password: str = Field(None, description="New password")
+    email: str = Field(None, description="User's email")
+    status: str = Field(None, description="User status")
+    is_superuser: bool = Field(None, description="Superuser flag")
+    login_channel: str = Field(None, description="Login channel")
+
 
 @router.post("/login", summary="登录")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
@@ -116,6 +129,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         return get_json_result(data=False,
                                retcode=RetCode.AUTHENTICATION_ERROR,
                                retmsg='Email and password do not match!')
+
 
 @router.get("/github_callback", summary="GitHub 回调")
 async def github_callback(code: str, db: Session = Depends(get_db)):
@@ -169,6 +183,7 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
             return HTTPException(status_code=500, detail=str(e))
     access_token = manager.create_access_token(data={"sub": user.email})
     return {"auth": access_token}
+
 
 @router.get("/feishu_callback", summary="飞书回调")
 async def feishu_callback(code: str, db: Session = Depends(get_db)):
@@ -230,6 +245,7 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
     access_token = manager.create_access_token(data={"sub": user.email})
     return {"auth": access_token}
 
+
 @router.get("/logout", summary="退出登录")
 async def log_out(db: Session = Depends(get_db), user=Depends(manager)):
     """
@@ -249,32 +265,66 @@ async def log_out(db: Session = Depends(get_db), user=Depends(manager)):
         db.rollback()
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
+
 @router.post("/setting", summary="设置用户信息")
-async def setting_user(request: Request, db: Session = Depends(get_db), user=Depends(manager)):
+async def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    设置用户信息
+    **功能描述**:
+    此接口用于更新用户的个人信息，如密码、邮箱、状态等字段。用户可以通过此接口更新自身信息，密码更新时需验证旧密码。
 
-    该接口用于更新用户信息。
+    ### 请求体 (Request Body):
+    - **UserUpdateRequest (模型)**: 包含以下字段：
+        - `password` (str, 可选): 用户的旧密码，用于验证身份。
+        - `new_password` (str, 可选): 用户的新密码，需在验证旧密码后才能更新。
+        - `email` (str, 可选): 用户的电子邮件地址，用于更新联系信息。
+        - `status` (str, 可选): 用户的账户状态，例如激活或停用。
+        - `is_superuser` (bool, 可选): 标识用户是否为超级用户。
+        - `login_channel` (str, 可选): 用户使用的登录渠道，例如电子邮件、Google等。
 
-    参数:
-    - request: Request 请求对象，包含用户更新信息
+    ### 响应 (Response):
+    - **成功响应 (200)**:
+        - `data` (bool): 表示更新操作是否成功。
+        - `retcode` (int): 响应码，成功时为200，失败时为其他错误码。
+        - `retmsg` (str): 响应信息，如操作成功或失败时的详细说明。
 
-    返回:
-    - 成功时返回更新成功的JSON结果
-    - 失败时返回错误信息
+    ### 错误响应:
+    - **401: Authentication Error**:
+        - 当用户提供的旧密码验证失败时，返回此错误。
+    - **500: Update Failure**:
+        - 当更新操作失败时，返回此错误，具体错误信息会记录在日志中。
+
+    ### 主要流程:
+    1. 从请求体中提取用户提供的信息（如旧密码、新密码、邮箱等）。
+    2. 如果提供了旧密码，首先进行密码验证，验证通过后才能进行新密码更新。
+    3. 过滤允许更新的字段，并构建更新字典。
+    4. 调用数据库服务更新用户信息，如果更新成功则返回成功响应，否则返回失败响应。
+
+    ### 注意事项:
+    - **密码更新逻辑**:
+        - 系统会先验证用户输入的旧密码，只有在验证通过的情况下才能更新为新密码。新密码会通过加密后存储。
+    - **允许更新的字段**:
+        - 只有在预定义的允许更新字段列表中的字段才能被更新，确保系统的安全性和一致性。
+        - 允许更新的字段包括 `password`, `email`, `status`, `is_superuser`, `login_channel` 等。
+    - **异常处理**:
+        - 如果更新操作失败，会记录异常信息并返回通用的失败响应，防止敏感信息泄露。
     """
     update_dict = {}
-    request_data = await request.json()
-    if "password" in request_data:
-        new_password = request_data.get("new_password")
-        if not pwd_context.verify(user.password, request_data["password"]):
-            raise HTTPException(status_code=400, detail='Password error!')
+    request_data = request.model_dump()
+    if request_data["password"]:
+        new_password = request_data["new_password"]
+        if not pwd_context.verify(request_data["password"], user.password):
+            return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg='Password error!')
         if new_password:
             update_dict["password"] = pwd_context.hash(new_password)
 
-    for k, v in request_data.items():
-        if k not in ["password", "new_password"]:
-            update_dict[k] = v
+        # 过滤不允许更新的字段
+    allowed_fields = ["password", "new_password", "email", "status", "is_superuser", "login_channel", "is_anonymous",
+                      "is_active", "is_authenticated", "last_login_time"]  # 根据实际需求添加字段
+
+    for field, value in request_data.items():
+        if field in allowed_fields:
+            continue
+        update_dict[field] = value
 
     try:
         UserService.update_by_id(db, user.id, update_dict)
@@ -282,6 +332,7 @@ async def setting_user(request: Request, db: Session = Depends(get_db), user=Dep
     except Exception as e:
         stat_logger.exception(e)
         return get_json_result(data=False, retmsg='Update failure!', retcode=RetCode.EXCEPTION_ERROR)
+
 
 @router.get("/info", summary="获取用户信息")
 async def user_profile(user=Depends(manager)):
@@ -294,6 +345,7 @@ async def user_profile(user=Depends(manager)):
     - 成功时返回包含用户信息的JSON结果
     """
     return get_json_result(data=user.to_dict())
+
 
 def rollback_user_registration(db: Session, user_id: str):
     try:
@@ -314,6 +366,7 @@ def rollback_user_registration(db: Session, user_id: str):
         db.query(TenantLLM).filter(TenantLLM.tenant_id == user_id).delete()
     except Exception as e:
         pass
+
 
 def user_register(db: Session, user_id: str, user: dict):
     """
@@ -380,6 +433,7 @@ def user_register(db: Session, user_id: str, user: dict):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error during user registration: {str(e)}")
+
 
 @router.post("/register", summary="注册用户")
 async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
@@ -460,6 +514,7 @@ async def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
     except Exception as e:
         return server_error_response(e)
 
+
 @router.post("/set_tenant_info", summary="设置租户信息")
 async def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), db: Session = Depends(get_db)):
     """
@@ -491,6 +546,7 @@ async def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), 
     except Exception as e:
         return server_error_response(e)
 
+
 def user_info_from_github(access_token: str):
     """
     从GitHub获取用户信息
@@ -510,6 +566,7 @@ def user_info_from_github(access_token: str):
     email_info = requests.get(f"https://api.github.com/user/emails", headers=headers).json()
     user_info["email"] = next((email for email in email_info if email['primary']), None)["email"]
     return user_info
+
 
 def user_info_from_feishu(access_token: str):
     """

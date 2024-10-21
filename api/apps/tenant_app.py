@@ -134,7 +134,7 @@ def rm(tenant_id, user_id, db: Session = Depends(get_db), user=Depends(manager))
         return server_error_response(e)
 
 
-@router.get("/agree/<tenant_id>", summary="同意加入租户", response_model=dict)
+@router.put("/agree/<tenant_id>", summary="同意加入租户", response_model=dict)
 def agree(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
     """
     同意加入租户。
