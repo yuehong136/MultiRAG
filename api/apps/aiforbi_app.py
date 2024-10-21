@@ -53,23 +53,22 @@ class StaticChartOptionReqBody(BaseModel):
 @router.post("/nl2sql", summary="自然语言转SQL", response_description="成功生成SQL查询语句")
 async def nl2sql(body: NL2SQLReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
     """
-    将自然语言转化为SQL查询语句的接口。
+    自然语言转SQL接口
 
-    概要：通过解析用户的问题，并结合表结构信息，生成对应的SQL查询语句。
-    响应描述：返回生成的SQL查询语句。
+    此接口接收用户的自然语言问题、数据表结构和指定的语言模型名称，返回相应的SQL查询语句。
 
-    参数：
-    - body (NL2SQLReqBody): 包含用户问题、表结构和模型名称的请求体。
+    参数:
+    - body: NL2SQLReqBody
+      - user_question: 用户的自然语言问题
+      - table_structure: 数据表结构
+      - llm_name: 使用的语言模型名称
+    - db: 数据库会话，由FastAPI依赖注入
+    - user: 当前用户，由FastAPI依赖注入
 
-    返回：
-    - ResponseSchema: 返回包含生成的SQL查询语句的JSON结果。
-
-    功能：
-    1. 调用AI服务将自然语言问题转换为SQL查询。
-    2. 返回生成的SQL查询结果。
-
-    注意：
-    - 用户必须提供完整的问题描述和表结构信息以确保SQL语句的生成。
+    返回:
+    - ResponseSchema对象，包含:
+      - status: 操作状态（成功/失败）
+      - data: 生成的SQL查询语句
     """
     sql = await AIForBIService.nl2sql(nl2sql_req_body=body, db=db, user_id=user.id, llm_name=body.llm_name)
     return ResponseSchema(status="success", data=sql)
@@ -78,23 +77,22 @@ async def nl2sql(body: NL2SQLReqBody = Body(...), db: Session = Depends(get_db),
 @router.post("/chart-type", summary="获取推荐图表类型", response_description="成功获取推荐图表类型列表")
 async def chart_type(body: ChartTypeReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
     """
-    获取推荐的图表类型的接口。
+    图表类型推荐接口
 
-    概要：根据SQL查询结果和用户问题，推荐适合的数据可视化图表类型。
-    响应描述：返回推荐的图表类型列表。
+    此接口基于用户问题和SQL查询结果，推荐适合的图表类型。
 
-    参数：
-    - body (ChartTypeReqBody): 包含用户问题、SQL结果和模型名称的请求体。
+    参数:
+    - body: ChartTypeReqBody
+      - user_question: 用户的问题
+      - sql_result: SQL查询的结果
+      - llm_name: 使用的语言模型名称
+    - db: 数据库会话，由FastAPI依赖注入
+    - user: 当前用户，由FastAPI依赖注入
 
-    返回：
-    - ResponseSchema: 返回包含推荐图表类型的JSON结果。
-
-    功能：
-    1. 调用AI服务获取推荐的图表类型。
-    2. 返回图表类型的列表，以便前端用户进行选择。
-
-    注意：
-    - 用户需要提供SQL结果作为数据源以获取推荐的图表类型。
+    返回:
+    - ResponseSchema对象，包含:
+      - status: 操作状态（成功/失败）
+      - data: 推荐的图表类型列表
     """
     chart_type_list = await AIForBIService.chart_type(chart_type_req_body=body, db=db, user_id=user.id, llm_name=body.llm_name)
     return ResponseSchema(status="success", data=chart_type_list)
@@ -104,23 +102,23 @@ async def chart_type(body: ChartTypeReqBody = Body(...), db: Session = Depends(g
 async def dynamic_chart_option_function(body: DynamicChartOptionFunctionReqBody = Body(...),
                                         db: Session = Depends(get_db), user=Depends(manager)):
     """
-    动态生成图表配置的接口。
+    动态图表选项生成接口
 
-    概要：根据用户问题和SQL查询结果，动态生成图表配置函数，以便进行数据可视化。
-    响应描述：返回生成的图表配置函数。
+    此接口根据用户问题、SQL查询结果和选定的图表类型，生成用于创建图表的动态选项函数。
 
-    参数：
-    - body (DynamicChartOptionFunctionReqBody): 包含用户问题、SQL结果、图表类型和模型名称的请求体。
+    参数:
+    - body: DynamicChartOptionFunctionReqBody
+      - user_question: 用户的问题
+      - sql_result: SQL查询的结果
+      - chart_type: 选定的图表类型
+      - llm_name: 使用的语言模型名称
+    - db: 数据库会话，由FastAPI依赖注入
+    - user: 当前用户，由FastAPI依赖注入
 
-    返回：
-    - ResponseSchema: 返回包含图表配置函数的JSON结果。
-
-    功能：
-    1. 调用AI服务生成适合的数据可视化配置。
-    2. 返回配置函数，用于在前端呈现动态图表。
-
-    注意：
-    - 该接口根据图表类型生成适合的图表配置函数。
+    返回:
+    - ResponseSchema对象，包含:
+      - status: 操作状态（成功/失败）
+      - data: 生成的动态图表选项函数
     """
     func = await AIForBIService.dynamic_chart_option_function(dynamic_chart_option_function_req_body=body, db=db,
                                                               user_id=user.id, llm_name=body.llm_name)
