@@ -18,6 +18,7 @@ from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
 from core.llm.rerank_model.default_rerank import DefaultRerank
+from core.llm.rerank_model.openai_api_rerank import OpenAI_APIRerank
 from core.llm.rerank_model.xinference_rerank import XInferenceRerank
 from core.llm.rerank_model.youdao_rerank import YoudaoRerank
 from core.llm.sequence2txt_model.azureseq2txt import AzureSeq2txt
@@ -86,6 +87,7 @@ ChatModel = {
 RerankModel = {
     "BAAI": DefaultRerank,
     # "Jina": JinaRerank,
+    "OpenAI-API-Compatible": OpenAI_APIRerank,
     "Youdao": YoudaoRerank,
     "Xinference": XInferenceRerank,
 }
