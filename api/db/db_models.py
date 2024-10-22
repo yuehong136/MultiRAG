@@ -274,8 +274,8 @@ class Dialog(BaseModel):
                                   "max_tokens": 512})
     prompt_type = Column(String(16), index=True, nullable=False, default="simple", doc="simple|advanced")
     prompt_config = Column(JSONB, index=False, nullable=False,
-                           default={"system": "", "prologue": "您好，我是您的助手小樱，长得可爱又善良，can I help you?",
-                                    "parameters": [], "empty_response": "Sorry! 知识库中未找到相关内容！"})
+                           default={"system": "", "prologue": "Hi! I'm your assistant, what can I do for you?",
+                                    "parameters": [], "empty_response": "Sorry! No relevant content was found in the knowledge base!"})
     similarity_threshold = Column(Float, index=False, nullable=False, default=0.2)
     vector_similarity_weight = Column(Float, index=False, nullable=False, default=0.3)
     top_n = Column(Integer, index=False, nullable=False, default=6)

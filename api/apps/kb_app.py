@@ -77,6 +77,12 @@ async def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_
 async def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
     req_data["name"] = req_data["name"].strip()
+    if not KnowledgebaseService.accessible4deletion(db, req_data["kb_id"], user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=RetCode.AUTHENTICATION_ERROR
+        )
     try:
         if not KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"]):
             return get_json_result(
@@ -148,6 +154,12 @@ async def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db),
     """
     # 将请求体转换为字典
     req_data = request.model_dump()
+    if not KnowledgebaseService.accessible4deletion(db, req_data["kb_id"], user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=RetCode.AUTHENTICATION_ERROR
+        )
     try:
         # 查询知识库，确保只有知识库的创建者有权限删除
         kbs = KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"])

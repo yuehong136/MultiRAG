@@ -18,6 +18,8 @@ from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
 from core.llm.rerank_model.default_rerank import DefaultRerank
+from core.llm.rerank_model.openai_api_rerank import OpenAI_APIRerank
+from core.llm.rerank_model.qwen_rerank import QWenRerank
 from core.llm.rerank_model.xinference_rerank import XInferenceRerank
 from core.llm.rerank_model.youdao_rerank import YoudaoRerank
 from core.llm.sequence2txt_model.azureseq2txt import AzureSeq2txt
@@ -32,8 +34,6 @@ from core.llm.tts_model.models.qwentts import QwenTTS
 from core.llm.tts_model.models.sparktts import SparkTTS
 from core.llm.tts_model.models.xinferencetts import XinferenceTTS
 
-# from core.llm.ocr_model.models.local_cv import LocalCV
-# from core.llm.ocr_model.models.zhipu_4v import Zhipu4V
 
 EmbeddingModel = {
     # "Ollama": OllamaEmbed,
@@ -86,8 +86,10 @@ ChatModel = {
 RerankModel = {
     "BAAI": DefaultRerank,
     # "Jina": JinaRerank,
+    "OpenAI-API-Compatible": OpenAI_APIRerank,
     "Youdao": YoudaoRerank,
     "Xinference": XInferenceRerank,
+    "Tongyi-Qianwen": QWenRerank
 }
 
 

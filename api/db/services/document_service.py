@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, asc
 
 from api.db import FileType, TaskStatus, StatusEnum
-from api.db.db_models import Document, Knowledgebase, Tenant, Task
+from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.settings import stat_logger, RetCode
@@ -325,6 +325,38 @@ class DocumentService(CommonService):
         return query.tenant_id if query else None
 
     @classmethod
+    def accessible(cls, db: Session, doc_id, user_id):
+        # 使用 SQLAlchemy 查询文档是否可访问
+        docs = db.query(cls.model.id).join(
+            Knowledgebase, cls.model.kb_id == Knowledgebase.id
+        ).join(
+            UserTenant, UserTenant.tenant_id == Knowledgebase.tenant_id
+        ).filter(
+            cls.model.id == doc_id,
+            UserTenant.user_id == user_id
+        ).limit(1).all()
+
+        # 如果没有找到文档则返回 False
+        if not docs:
+            return False
+        return True
+
+    @classmethod
+    def accessible4deletion(cls, db: Session, doc_id, user_id):
+        # 使用 SQLAlchemy 查询文档是否可删除
+        docs = db.query(cls.model.id).join(
+            Knowledgebase, cls.model.kb_id == Knowledgebase.id
+        ).filter(
+            cls.model.id == doc_id,
+            Knowledgebase.created_by == user_id
+        ).limit(1).all()
+
+        # 如果没有找到文档则返回 False
+        if not docs:
+            return False
+        return True
+
+    @classmethod
     def get_embd_id(cls, db: Session, doc_id: str):
         query = db.query(Knowledgebase.embd_id).join(Knowledgebase, cls.model.kb_id == Knowledgebase.id
                                                      ).filter(
@@ -411,7 +443,7 @@ class DocumentService(CommonService):
                     if d.parser_config.get("raptor", {}).get("use_raptor") and d.progress_msg.lower().find(
                             " raptor") < 0:
                         queue_raptor_tasks(db, d)
-                        prg = 0.98 * len(tsks)/(len(tsks)+1)
+                        prg = 0.98 * len(tsks) / (len(tsks) + 1)
                         msg.append("------ RAPTOR -------")
                     else:
                         status = TaskStatus.DONE.value

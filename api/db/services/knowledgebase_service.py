@@ -9,7 +9,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import NoResultFound
 from api.db import StatusEnum, TenantPermission
-from api.db.db_models import Knowledgebase, Tenant
+from api.db.db_models import Knowledgebase, Tenant, User, UserTenant
 from api.db.services.common_service import CommonService
 
 
@@ -21,20 +21,25 @@ class KnowledgebaseService(CommonService):
 
     @classmethod
     def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc):
-        """
-        根据租户ID列表和用户ID获取知识库列表。
+        fields = [
+            cls.model.id,
+            cls.model.avatar,
+            cls.model.name,
+            cls.model.language,
+            cls.model.description,
+            cls.model.permission,
+            cls.model.doc_num,
+            cls.model.token_num,
+            cls.model.chunk_num,
+            cls.model.parser_id,
+            cls.model.embd_id,
+            User.nickname,
+            User.avatar.label('tenant_avatar'),
+            cls.model.update_time
+        ]
 
-        :param db: 数据库会话对象。
-        :param joined_tenant_ids: 用户加入的租户ID列表。
-        :param user_id: 用户ID。
-        :param page_number: 页码。
-        :param items_per_page: 每页项数。
-        :param orderby: 排序字段。
-        :param desc: 是否降序排序。
-        :return: 符合条件的知识库列表的字典形式。
-        """
         # 根据条件构建查询表达式
-        query = db.query(cls.model).filter(
+        query = db.query(*fields).join(User, cls.model.tenant_id == User.id).filter(
             ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) |
              (cls.model.tenant_id == user_id)) &
             (cls.model.status == StatusEnum.VALID.value)
@@ -48,7 +53,28 @@ class KnowledgebaseService(CommonService):
 
         # 分页查询并返回结果的字典形式
         kbs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
-        return [kb.to_dict() for kb in kbs]
+        # 将结果转换为字典列表
+        result = []
+        for kb in kbs:
+            kb_dict = {
+                'id': kb[0],
+                'avatar': kb[1],
+                'name': kb[2],
+                'language': kb[3],
+                'description': kb[4],
+                'permission': kb[5],
+                'doc_num': kb[6],
+                'token_num': kb[7],
+                'chunk_num': kb[8],
+                'parser_id': kb[9],
+                'embd_id': kb[10],
+                'nickname': kb[11],
+                'tenant_avatar': kb[12],
+                'update_time': kb[13],
+            }
+            result.append(kb_dict)
+
+        return result
 
     @classmethod
     def get_by_tenant_ids_by_offset(cls, db: Session, joined_tenant_ids, user_id, offset, count, orderby, desc):
@@ -245,3 +271,28 @@ class KnowledgebaseService(CommonService):
         # 分页查询并返回结果的字典形式
         kbs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
         return [kb.to_dict() for kb in kbs]
+
+    @classmethod
+    def accessible(cls, db: Session, kb_id, user_id):
+        docs = db.query(cls.model.id).join(
+            UserTenant, UserTenant.tenant_id == Knowledgebase.tenant_id
+        ).filter(
+            cls.model.id == kb_id,
+            UserTenant.user_id == user_id
+        ).limit(1).all()
+
+        if not docs:
+            return False
+        return True
+
+    @classmethod
+    def accessible4deletion(cls, db: Session, kb_id, user_id):
+        docs = db.query(cls.model.id).filter(
+            cls.model.id == kb_id,
+            cls.model.created_by == user_id
+        ).limit(1).all()
+
+        if not docs:
+            return False
+        return True
+

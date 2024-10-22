@@ -63,6 +63,13 @@ class LLMServiceRequest(BaseModel):
     llm_name: str
     gen_conf: dict[str, Any] = {}
 
+
+class FinePromptRequest(BaseModel):
+    prompt: str
+    llm_name: str
+    gen_conf: dict[str, Any] = {}
+
+
 router = APIRouter()
 
 
@@ -535,7 +542,7 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
     - 可选的模型类型参数用于筛选模型信息，只返回指定类型的模型。
     """
     self_deploied = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio"]
-    weighted = ["Youdao","FastEmbed", "BAAI"] if LIGHTEN != 0 else []
+    weighted = ["Youdao", "FastEmbed", "BAAI"] if LIGHTEN != 0 else []
     try:
         objs = TenantLLMService.query(db, tenant_id=user.id)
         facts = set(o.llm_factory for o in objs if o.api_key)
@@ -545,11 +552,11 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
         for m in llms:
             m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in self_deploied
 
-        llm_set = set([m["llm_name"]+"@"+m["fid"] for m in llms])
+        llm_set = set([m["llm_name"] + "@" + m["fid"] for m in llms])
         for o in objs:
             if not o.api_key:
                 continue
-            if o.llm_name+"@"+o.llm_factory in llm_set:
+            if o.llm_name + "@" + o.llm_factory in llm_set:
                 continue
             llms.append({"llm_name": o.llm_name, "mdl_type": o.mdl_type, "fid": o.llm_factory, "available": True})
 
@@ -564,6 +571,7 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
         return get_json_result(data=res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post('/chat_service', summary="模型对话服务", response_description="成功调用对话模型")
 async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
@@ -599,11 +607,101 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
     - 当前用户的租户信息必须存在，才能调用对话模型。
     """
     req = request.model_dump()
-    tenants = TenantService.get_by_user_id(db, user.id)
+    tenants = TenantService.get_info_by(db, user.id)
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
 
-    data =  chat_mdl.chat(req["prompt"], req["messages"],req["gen_conf"])
+    data = chat_mdl.chat(req["prompt"], req["messages"], req["gen_conf"])
+
+    return get_json_result(data=data)
+
+
+@router.post('/fine_prompt', summary="优化提示词", response_description="返回优化后的提示词")
+async def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    **功能描述**:
+    此接口用于根据用户输入的任务描述或现有提示词，优化生成详细的系统提示词，以便更好地引导语言模型完成任务。该接口结合预定义的优化提示模板 (META_PROMPT)，确保模型输出的提示词更加清晰、具体，并且能合理规划任务的完成步骤。
+
+    ### 请求体 (Request Body):
+    - **model_dump (dict)**: 包含以下字段：
+        - `prompt` (str): 用户提供的任务描述或现有提示词，将根据此内容进行优化。
+        - `llm_name` (str): 大语言模型名称，用于选择特定的模型来生成优化的提示词。
+        - `gen_conf` (dict, 可选): 生成配置，控制提示词生成的行为。
+
+    ### 响应 (Response):
+    - **成功响应 (200)**:
+        - `data` (dict): 返回包含优化后的提示词。格式可能包括简单的字符串或结构化的JSON，具体取决于模型输出的要求。
+
+    ### 错误响应:
+    - **404: Tenant not found**:
+        - 当根据用户ID查找租户信息失败时，返回此错误。
+
+    ### 主要流程:
+    1. 从请求中提取用户输入的提示词及相关配置信息。
+    2. 通过用户信息检索相关租户信息。如果租户信息未找到，抛出404错误。
+    3. 根据预定义的META_PROMPT，结合用户输入的任务描述，使用指定的LLM模型生成优化后的系统提示词。
+    4. 将生成的提示词返回给用户，格式可能为JSON或简单文本。
+
+    ### 注意事项:
+    - **优化策略**:
+        - 系统优先保留用户提供的内容，对于简单提示词进行微调，对于复杂提示词则在不改变原始结构的前提下增强清晰度。
+        - 系统会根据内容需要添加示例和步骤，确保输出提示词具有高可读性和清晰性。
+    - **常量与格式**:
+        - 提示词中应包括不易受到提示注入影响的常量，例如规则、评分标准等。
+        - 对于任务输出明确的结构化数据(如JSON)会更倾向于返回JSON格式，但不会使用代码块包装（除非明确要求）。
+    """
+    req = request.model_dump()
+    tenants = TenantService.get_info_by(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+    META_PROMPT = """
+    Given a task description or existing prompt, produce a detailed system prompt to guide a language model in completing the task effectively.
+
+    # Guidelines
+
+    - Understand the Task: Grasp the main objective, goals, requirements, constraints, and expected output.
+    - Minimal Changes: If an existing prompt is provided, improve it only if it's simple. For complex prompts, enhance clarity and add missing elements without altering the original structure.
+    - Reasoning Before Conclusions**: Encourage reasoning steps before any conclusions are reached. ATTENTION! If the user provides examples where the reasoning happens afterward, REVERSE the order! NEVER START EXAMPLES WITH CONCLUSIONS!
+        - Reasoning Order: Call out reasoning portions of the prompt and conclusion parts (specific fields by name). For each, determine the ORDER in which this is done, and whether it needs to be reversed.
+        - Conclusion, classifications, or results should ALWAYS appear last.
+    - Examples: Include high-quality examples if helpful, using placeholders [in brackets] for complex elements.
+       - What kinds of examples may need to be included, how many, and whether they are complex enough to benefit from placeholders.
+    - Clarity and Conciseness: Use clear, specific language. Avoid unnecessary instructions or bland statements.
+    - Formatting: Use markdown features for readability. DO NOT USE ``` CODE BLOCKS UNLESS SPECIFICALLY REQUESTED.
+    - Preserve User Content: If the input task or prompt includes extensive guidelines or examples, preserve them entirely, or as closely as possible. If they are vague, consider breaking down into sub-steps. Keep any details, guidelines, examples, variables, or placeholders provided by the user.
+    - Constants: DO include constants in the prompt, as they are not susceptible to prompt injection. Such as guides, rubrics, and examples.
+    - Output Format: Explicitly the most appropriate output format, in detail. This should include length and syntax (e.g. short sentence, paragraph, JSON, etc.)
+        - For tasks outputting well-defined or structured data (classification, JSON, etc.) bias toward outputting a JSON.
+        - JSON should never be wrapped in code blocks (```) unless explicitly requested.
+
+    The final prompt you output should adhere to the following structure below. Do not include any additional commentary, only output the completed system prompt. SPECIFICALLY, do not include any additional messages at the start or end of the prompt. (e.g. no "---")
+
+    [Concise instruction describing the task - this should be the first line in the prompt, no section header]
+
+    [Additional details as needed.]
+
+    [Optional sections with headings or bullet points for detailed steps.]
+
+    # Steps [optional]
+
+    [optional: a detailed breakdown of the steps necessary to accomplish the task]
+
+    # Output Format
+
+    [Specifically call out how the output should be formatted, be it response length, structure e.g. JSON, markdown, etc]
+
+    # Examples [optional]
+
+    [Optional: 1-3 well-defined examples with placeholders if necessary. Clearly mark where examples start and end, and what the input and output are. User placeholders as necessary.]
+    [If the examples are shorter than what a realistic example is expected to be, make a reference with () explaining how real examples should be longer / shorter / different. AND USE PLACEHOLDERS! ]
+
+    # Notes [optional]
+
+    [optional: edge cases, details, and an area to call or repeat out specific important considerations]
+    """.strip()
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
+
+    data = chat_mdl.chat(META_PROMPT, [{"role": "user", "content": "Task, Goal, or Current Prompt:\n" + req["prompt"]}], req["gen_conf"])
 
     return get_json_result(data=data)
