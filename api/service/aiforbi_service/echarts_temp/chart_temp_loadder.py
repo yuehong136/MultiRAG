@@ -2,6 +2,7 @@ chart_type_templates = {
     "饼图": "pie_chart_template.txt",
     "柱状图": "bar_chart_template.txt",
     "折线图": "line_chart_template.txt",
+    "仪表盘": "gauge_chart_template.txt",
 }
 
 import os

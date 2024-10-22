@@ -1,0 +1,20 @@
+option = {
+  tooltip: {
+    formatter: '{a} <br/>{b} : {c}%'
+  },
+  series: [
+    {
+      max: //需要大于动态填充的数据,
+      type: 'gauge',
+      detail: {
+        formatter: '{value}'
+      },
+      data: [
+        {
+          value: //需要动态填充数据,
+          name: '//需要根据主题修改'
+        }
+      ]
+    }
+  ]
+};
