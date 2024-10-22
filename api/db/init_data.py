@@ -142,22 +142,22 @@ def init_llm_factory(db: Session):
     TenantService.filter_update(db, [1 == 1], {
         "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email"})
     # insert openai two embedding models to the current openai user.
-    print("Start to insert 2 OpenAI embedding models...")
-    tenant_ids = set([row["tenant_id"] for row in TenantLLMService.get_openai_models(db)])
-    for tid in tenant_ids:
-        for row in TenantLLMService.query(db, llm_factory="OpenAI", tenant_id=tid):
-            row = row.to_dict()
-            row["mdl_type"] = LLMType.EMBEDDING.value
-            row["llm_name"] = "text-embedding-3-small"
-            row["used_tokens"] = 0
-            try:
-                TenantLLMService.save(db, **row)
-                row = deepcopy(row)
-                row["llm_name"] = "text-embedding-3-large"
-                TenantLLMService.save(db, **row)
-            except Exception as e:
-                pass
-            break
+    # print("Start to insert 2 OpenAI embedding models...")
+    # tenant_ids = set([row.tenant_id for row in TenantLLMService.get_openai_models(db)])
+    # for tid in tenant_ids:
+    #     for row in TenantLLMService.query(db, llm_factory="OpenAI", tenant_id=tid):
+    #         row = row.to_dict()
+    #         row["mdl_type"] = LLMType.EMBEDDING.value
+    #         row["llm_name"] = "text-embedding-3-small"
+    #         row["used_tokens"] = 0
+    #         try:
+    #             TenantLLMService.save(db, **row)
+    #             row = deepcopy(row)
+    #             row["llm_name"] = "text-embedding-3-large"
+    #             TenantLLMService.save(db, **row)
+    #         except Exception as e:
+    #             pass
+    #         break
     for kb_id in KnowledgebaseService.get_all_ids(db):
         KnowledgebaseService.update_by_id(db, kb_id, {"doc_num": DocumentService.get_kb_doc_count(db, kb_id)})
     """
