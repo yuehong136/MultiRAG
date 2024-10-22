@@ -9,7 +9,7 @@ option = {
   series: [
     {
         data: [//需要动态填充数据],
-        type: 'line',
+        type: 'bar',
     }
   ]
 };
