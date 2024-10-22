@@ -180,7 +180,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
                 msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
             # todo 是否有必要每一个模型都测试呢？目前都是我内置的型号，都是可靠的，如果除本项目维护人员，进行自由添加可能出现问题
             chat_passed = True
-        elif not rerank_passed and llm.model_type == LLMType.RERANK:
+        elif not rerank_passed and llm.mdl_type == LLMType.RERANK:
             mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
             try:
                 arr, tc = mdl.similarity("What's the weather?", ["Is it sunny today?"])
