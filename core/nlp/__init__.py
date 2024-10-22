@@ -556,15 +556,3 @@ def naive_merge_docx(sections, chunk_token_num=128, delimiter="\n。；！？"):
         add_chunk(sec, image, '')
 
     return cks, images
-
-
-def keyword_extraction(chat_mdl, content):
-    prompt = """
-    You're a question analyzer. 
-    1. Please give me the most important keyword/phrase of this question.
-    Answer format: (in language of user's question)
-     - keyword: 
-    """
-    kwd = chat_mdl.chat(prompt, [{"role": "user", "content": content}], {"temperature": 0.2})
-    if isinstance(kwd, tuple): return kwd[0]
-    return kwd

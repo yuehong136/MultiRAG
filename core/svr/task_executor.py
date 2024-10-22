@@ -22,6 +22,7 @@ from timeit import default_timer as timer
 
 
 from api.db.database import SessionLocal
+from api.db.services.dialog_service import keyword_extraction, question_proposal
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db import LLMType, ParserType
 from api.db.services.document_service import DocumentService
@@ -193,6 +194,22 @@ def build(row, db: Session):
         d["pk"] = md5.hexdigest()
         d["create_time"] = str(datetime.datetime.now()).replace("T", " ")[:19]
         d["create_timestamp_flt"] = datetime.datetime.now().timestamp()
+
+        if row["parser_config"].get("auto_keywords", 0):
+            chat_mdl = LLMBundle(db, row["tenant_id"], LLMType.CHAT, llm_name=row["llm_id"], lang=row["language"])
+            d["important_kwd"] = keyword_extraction(chat_mdl, ck["content_with_weight"],
+                                                    row["parser_config"]["auto_keywords"]).split(",")
+            d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
+
+        if row["parser_config"].get("auto_questions", 0):
+            chat_mdl = LLMBundle(db, row["tenant_id"], LLMType.CHAT, llm_name=row["llm_id"], lang=row["language"])
+            qst = question_proposal(chat_mdl, ck["content_with_weight"], row["parser_config"]["auto_keywords"])
+            ck["content_with_weight"] = f"Question: \n{qst}\n\nAnswer:\n" + ck["content_with_weight"]
+            qst = rag_tokenizer.tokenize(qst)
+            if "content_ltks" in ck:
+                ck["content_ltks"] += " " + qst
+            if "content_sm_ltks" in ck:
+                ck["content_sm_ltks"] += " " + rag_tokenizer.fine_grained_tokenize(qst)
 
         # 将数组字段转换为 JSON 字符串
         d["page_num_int"] = json.dumps(d.get("page_num_int", []))
