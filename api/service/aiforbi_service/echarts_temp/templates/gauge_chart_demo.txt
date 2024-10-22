@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECharts 图表</title>
+    <script src="./echarts.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        #refreshBtn {
+            margin-top: 10px;
+            padding: 5px 10px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+<div id="chart" style="width: 600px; height: 400px;"></div>
+<button id="refreshBtn">刷新数据</button>
+
+<script>
+    // 初始化 ECharts 实例
+    var myChart = echarts.init(document.getElementById('chart'));
+
+    // 显示加载动画
+    // myChart.showLoading();
+
+    // 准备请求数据
+    const apiUrl = 'http://localhost:8000/execute-sql-return-with-col';
+    const requestData = {
+        sql: `-- 以下 SQL 语句用于计算教职工的男女比例
+SELECT 
+    COUNT(CASE WHEN xb = '男' THEN 1 END) AS male_count,  -- 统计男性教职工数量
+    COUNT(CASE WHEN xb = '女' THEN 1 END) AS female_count,  -- 统计女性教职工数量
+    CAST(COUNT(CASE WHEN xb = '男' THEN 1 END) AS FLOAT) / COUNT(*) AS male_ratio,  -- 计算男性比例
+    CAST(COUNT(CASE WHEN xb = '女' THEN 1 END) AS FLOAT) / COUNT(*) AS female_ratio  -- 计算女性比例
+FROM t_jzg_basic;  -- 从教职工基本信息表中查询`  // 替换为实际的SQL查询
+    };
+
+    function generateChartOption(chartData) {
+        const maxValue = Math.max(...chartData.data.map(item => item.count));
+        const option = {
+            tooltip: {
+                formatter: '{a} <br/>{b} : {c}%'
+            },
+            series: [
+                {
+                    max: maxValue + 10, // 确保最大值有一定的余量
+                    type: 'gauge',
+                    detail: {
+                        formatter: '{value}'
+                    },
+                    data: [
+                        {
+                            value: chartData.data[0].count,
+                            name: '审批任务数量'
+                        }
+                    ]
+                }
+            ]
+        };
+        return option;
+    }
+
+    function fetchDataAndUpdateChart() {
+        const chartData = {
+            "metadata": {
+                "columns": ["count"]
+            },
+            "data": [
+                {
+                    "count": "110"
+                }
+            ]
+        };
+        let option = generateChartOption(chartData);
+        myChart.setOption(option);
+    }
+
+    // 初始加载数据
+    fetchDataAndUpdateChart();
+
+    // 设置自动刷新（每10秒）
+    setInterval(fetchDataAndUpdateChart, 10000);
+
+    // 添加刷新按钮事件监听
+    document.getElementById('refreshBtn').addEventListener('click', fetchDataAndUpdateChart);
+</script>
+</body>
+</html>
+    

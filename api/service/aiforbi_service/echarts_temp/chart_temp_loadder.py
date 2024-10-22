@@ -3,6 +3,7 @@ chart_type_templates = {
     "柱状图": "bar_chart_template.txt",
     "折线图": "line_chart_template.txt",
     "仪表盘": "gauge_chart_template.txt",
+    "散点图": "scatter_chart_template.txt"
 }
 
 import os

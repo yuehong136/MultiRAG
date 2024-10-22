@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECharts 图表</title>
+    <script src="./echarts.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        #refreshBtn {
+            margin-top: 10px;
+            padding: 5px 10px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+<div id="chart" style="width: 600px; height: 400px;"></div>
+<button id="refreshBtn">刷新数据</button>
+
+<script>
+    // 初始化 ECharts 实例
+    var myChart = echarts.init(document.getElementById('chart'));
+
+    // 显示加载动画
+    // myChart.showLoading();
+
+    // 准备请求数据
+    const apiUrl = 'http://localhost:8000/execute-sql-return-with-col';
+    const requestData = {
+        sql: `-- 以下 SQL 语句用于计算教职工的男女比例
+SELECT 
+    COUNT(CASE WHEN xb = '男' THEN 1 END) AS male_count,  -- 统计男性教职工数量
+    COUNT(CASE WHEN xb = '女' THEN 1 END) AS female_count,  -- 统计女性教职工数量
+    CAST(COUNT(CASE WHEN xb = '男' THEN 1 END) AS FLOAT) / COUNT(*) AS male_ratio,  -- 计算男性比例
+    CAST(COUNT(CASE WHEN xb = '女' THEN 1 END) AS FLOAT) / COUNT(*) AS female_ratio  -- 计算女性比例
+FROM t_jzg_basic;  -- 从教职工基本信息表中查询`  // 替换为实际的SQL查询
+    };
+
+    function generateChartOption(chartData) {
+        // 提取数据中的体重和身高列
+        const weights = chartData.data.map(item => item.weight);
+        const heights = chartData.data.map(item => item.height);
+
+        // 计算 x 轴（体重）和 y 轴（身高）的最小值和最大值
+        const minWeight = Math.min(...weights);
+        const maxWeight = Math.max(...weights);
+        const minHeight = Math.min(...heights);
+        const maxHeight = Math.max(...heights);
+
+        return {
+            title: {
+                text: '学生身高体重关系图'
+            },
+            tooltip: {
+                trigger: 'axis',
+                formatter: function (params) {
+                    return `体重: ${params.value[0]}kg, 身高: ${params.value[1]}cm`;
+                }
+            },
+            xAxis: {
+                type: 'value',
+                name: '体重（kg）',
+                nameLocation: 'middle',
+                nameGap: 30,
+                min: minWeight,
+                max: maxWeight
+            },
+            yAxis: {
+                type: 'value',
+                name: '身高（cm）',
+                nameLocation: 'middle',
+                nameGap: 30,
+                min: minHeight,
+                max: maxHeight
+            },
+            series: [{
+                type: 'scatter',
+                symbolSize: 8,
+                data: chartData.data.map(item => [item.weight, item.height]),
+                itemStyle: {
+                    color: '#4169E1',
+                    opacity: 0.7
+                },
+            }],
+            grid: {
+                left: '10%',
+                right: '10%',
+                top: '15%',
+                bottom: '15%'
+            },
+            toolbox: {
+                feature: {}
+            }
+        };
+    }
+
+    function fetchDataAndUpdateChart() {
+        const chartData = {
+            "metadata": {
+                "columns": ["weight", "height"]
+            },
+            "data": [
+                {
+                    "weight": 70,
+                    "height": 175
+                },
+                {
+                    "weight": 60,
+                    "height": 160
+                },
+                {
+                    "weight": 80,
+                    "height": 165
+                },
+                {
+                    "weight": 90,
+                    "height": 170
+                },
+                {
+                    "weight": 75,
+                    "height": 160
+                },
+                {
+                    "weight": 65,
+                    "height": 165
+                }
+
+            ]
+        };
+        let option = generateChartOption(chartData);
+        myChart.setOption(option);
+    }
+
+    // 初始加载数据
+    fetchDataAndUpdateChart();
+
+    // 设置自动刷新（每10秒）
+    setInterval(fetchDataAndUpdateChart, 10000);
+
+    // 添加刷新按钮事件监听
+    document.getElementById('refreshBtn').addEventListener('click', fetchDataAndUpdateChart);
+</script>
+</body>
+</html>
+    
