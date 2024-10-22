@@ -4,7 +4,8 @@ chart_type_templates = {
     "折线图": "line_chart_template.txt",
     "仪表盘": "gauge_chart_template.txt",
     "散点图": "scatter_chart_template.txt",
-    "词云图": "wordcloud_chart_template.txt"
+    "词云图": "wordcloud_chart_template.txt",
+    "矩形树图": "treemap_chart_template.txt"
 }
 
 import os

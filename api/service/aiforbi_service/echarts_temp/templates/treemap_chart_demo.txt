@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECharts 图表</title>
+    <script src="./echarts.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        #refreshBtn {
+            margin-top: 10px;
+            padding: 5px 10px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+<div id="chart" style="width: 600px; height: 400px;"></div>
+<button id="refreshBtn">刷新数据</button>
+
+<script>
+    // 初始化 ECharts 实例
+    var myChart = echarts.init(document.getElementById('chart'));
+
+    // 显示加载动画
+    // myChart.showLoading();
+
+    function generateChartOption(chartData) {
+  const option = {
+    title: {
+      text: '学校各部门教职工人数',
+      left: 'center'
+    },
+    tooltip: {
+      formatter: '{b}: {c}'
+    },
+    series: [{
+      type: 'treemap',
+      data: chartData.data.map(item => ({ name: item.part, value: item.count })),
+      itemStyle: {
+        borderColor: '#fff',
+        borderWidth: 1,
+      },
+      label: {
+        show: true,
+        formatter: '{b}\n{c}'
+      },
+      emphasis: {
+        itemStyle: {
+          shadowBlur: 10,
+          shadowColor: 'rgba(0, 0, 0, 0.5)'
+        }
+      }
+    }]
+  };
+  return option;
+}
+
+    function fetchDataAndUpdateChart() {
+        const chartData = {
+            "metadata": {
+                "columns": ["part", "count"]
+            },
+            "data": [
+                {
+                    "part": "学工处",
+                    "count": 1000
+                },
+                {
+                    "part": "学生处",
+                    "count": 2000
+                },
+                {
+                    "part": "教务处",
+                    "count": 3000
+                },
+                {
+                    "part": "学生服务处",
+                    "count": 4000
+                },
+                {
+                    "part": "人事处",
+                    "count": 5000
+                }
+            ]
+        };
+        let option = generateChartOption(chartData);
+        myChart.setOption(option);
+    }
+
+    // 初始加载数据
+    fetchDataAndUpdateChart();
+
+    // 设置自动刷新（每10秒）
+    setInterval(fetchDataAndUpdateChart, 10000);
+
+    // 添加刷新按钮事件监听
+    document.getElementById('refreshBtn').addEventListener('click', fetchDataAndUpdateChart);
+</script>
+</body>
+</html>
+    

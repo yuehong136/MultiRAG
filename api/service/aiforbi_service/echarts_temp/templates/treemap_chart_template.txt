@@ -1,0 +1,32 @@
+option = {
+  title: {
+    text: '//需要根据主题修改',
+    left: 'center'
+  },
+  tooltip: {
+    formatter: '{b}: {c}'
+  },
+  series: [{
+    type: 'treemap',
+    data: [
+      //需要动态填充数据，格式为[{name: '名称', value: 数值}]
+    ],
+    // 图形样式
+    itemStyle: {
+      borderColor: '#fff',
+      borderWidth: 1,
+    },
+    // 标签样式
+    label: {
+      show: true,
+      formatter: '{b}\n{c}'
+    },
+    // 高亮样式
+    emphasis: {
+      itemStyle: {
+        shadowBlur: 10,
+        shadowColor: 'rgba(0, 0, 0, 0.5)'
+      }
+    }
+  }]
+};
