@@ -210,8 +210,12 @@ def thumbnail_img(filename, blob):
 
 def thumbnail(filename, blob):
     img = thumbnail_img(filename, blob)
-    return IMG_BASE64_PREFIX + \
-        base64.b64encode(img).decode("utf-8")
+    if img is not None:
+        return IMG_BASE64_PREFIX + \
+            base64.b64encode(img).decode("utf-8")
+    else:
+        return ''
+
 
 def traversal_files(base):
     for root, ds, fs in os.walk(base):
