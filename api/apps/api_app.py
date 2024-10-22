@@ -19,7 +19,7 @@ from api.db import FileType, LLMType, ParserType, FileSource
 from api.db.db_models import APIToken, Task, File
 from api.db.services import duplicate_name
 from api.db.services.api_service import APITokenService, API4ConversationService
-from api.db.services.dialog_service import DialogService, chat
+from api.db.services.dialog_service import DialogService, chat, keyword_extraction
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
@@ -34,7 +34,6 @@ from api.utils.api_utils import server_error_response, get_data_error_result, ge
     generate_confirmation_token
 
 from api.utils.file_utils import filename_type, thumbnail
-from core.nlp import keyword_extraction
 from core.utils.storage_factory import STORAGE_IMPL
 from api.db.services.canvas_service import UserCanvasService
 from agent.canvas import Canvas
@@ -961,7 +960,7 @@ def retrieval(request, question, db: Session = Depends(get_db),):
     top = int(req.get("top_k", 1024))
 
     try:
-        kbs = KnowledgebaseService.get_by_ids(kb_ids)
+        kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
         embd_nms = list(set([kb.embd_id for kb in kbs]))
         if len(embd_nms) != 1:
             return get_json_result(
@@ -969,13 +968,13 @@ def retrieval(request, question, db: Session = Depends(get_db),):
                 retcode=RetCode.AUTHENTICATION_ERROR)
 
         embd_mdl = TenantLLMService.model_instance(
-            kbs[0].tenant_id, LLMType.EMBEDDING.value, llm_name=kbs[0].embd_id)
+            db, kbs[0].tenant_id, LLMType.EMBEDDING.value, llm_name=kbs[0].embd_id)
         rerank_mdl = None
         if req.get("rerank_id"):
             rerank_mdl = TenantLLMService.model_instance(
-                kbs[0].tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
+                db, kbs[0].tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
         if req.get("keyword", False):
-            chat_mdl = TenantLLMService.model_instance(kbs[0].tenant_id, LLMType.CHAT)
+            chat_mdl = TenantLLMService.model_instance(db, kbs[0].tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
         ranks = retrievaler.retrieval(question, embd_mdl, kbs[0].tenant_id, kb_ids, page, size,
                                       similarity_threshold, vector_similarity_weight, top,

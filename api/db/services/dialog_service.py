@@ -24,7 +24,6 @@ from api.db.services.llm_service import LLMService, TenantLLMService, LLMBundle
 from api.settings import chat_logger, retrievaler
 from api.utils.file_utils import get_project_base_directory
 from core.app.resume import forbidden_select_fields4resume
-from core.nlp import keyword_extraction
 from core.nlp.search import index_name
 from core.utils import rmSpace, num_tokens_from_string, encoder
 
@@ -567,6 +566,60 @@ def rewrite(tenant_id, llm_id, question, db: Session):
     """
     ans = chat_mdl.chat(prompt, [{"role": "user", "content": question}], {"temperature": 0.8})
     return ans
+
+
+def keyword_extraction(chat_mdl, content, topn=3):
+    prompt = f"""
+Role: You're a text analyzer. 
+Task: extract the most important keywords/phrases of a given piece of text content.
+Requirements: 
+  - Summarize the text content, and give top {topn} important keywords/phrases.
+  - The keywords MUST be in language of the given piece of text content.
+  - The keywords are delimited by ENGLISH COMMA.
+  - Keywords ONLY in output.
+
+### Text Content 
+{content}
+
+"""
+    msg = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": "Output: "}
+    ]
+    _, msg = message_fit_in(msg, chat_mdl.max_length)
+    kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.2})
+    if isinstance(kwd, tuple): kwd = kwd[0]
+    if kwd.find("**ERROR**") >= 0:
+        return ""
+    return kwd
+
+
+def question_proposal(chat_mdl, content, topn=3):
+    prompt = f"""
+Role: You're a text analyzer. 
+Task:  propose {topn} questions about a given piece of text content.
+Requirements: 
+  - Understand and summarize the text content, and propose top {topn} important questions.
+  - The questions SHOULD NOT have overlapping meanings.
+  - The questions SHOULD cover the main content of the text as much as possible.
+  - The questions MUST be in language of the given piece of text content.
+  - One question per line.
+  - Question ONLY in output.
+
+### Text Content 
+{content}
+
+"""
+    msg = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": "Output: "}
+    ]
+    _, msg = message_fit_in(msg, chat_mdl.max_length)
+    kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.2})
+    if isinstance(kwd, tuple): kwd = kwd[0]
+    if kwd.find("**ERROR**") >= 0:
+        return ""
+    return kwd
 
 
 def full_question(db: Session, tenant_id, llm_id, messages):

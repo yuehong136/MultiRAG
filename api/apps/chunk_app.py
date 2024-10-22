@@ -18,8 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from api.db.services.dialog_service import keyword_extraction
 from core.app.qa import rmPrefix, beAdoc
-from core.nlp import search, rag_tokenizer, keyword_extraction
+from core.nlp import search, rag_tokenizer
 # from core.utils.es_conn import ELASTICSEARCH
 from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils import rmSpace
