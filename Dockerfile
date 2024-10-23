@@ -17,6 +17,7 @@ ADD ./requirements.txt ./
 
 # 安装 Python 依赖
 RUN pip install --no-cache-dir --upgrade -r requirements.txt -i https://pypi.doubanio.com/simple
+RUN pip install --no-cache-dir --upgrade transformers -i https://pypi.doubanio.com/simple
 
 # 创建并添加 NLTK 数据
 RUN mkdir -p /root/nltk_data
@@ -30,13 +31,14 @@ ADD ./core ./core
 ADD ./agent ./agent
 ADD ./graphrag ./graphrag
 ADD ./workflow ./workflow
+ADD ./errors ./errors
 
 # 设置环境变量
 ENV PYTHONPATH=/multirag/
 ENV HF_ENDPOINT=https://hf-mirror.com
 
 # 添加并配置 entrypoint
-ADD docker/entrypoint.sh ./entrypoint.sh
+ADD ./docker/entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
 # 设置 entrypoint
