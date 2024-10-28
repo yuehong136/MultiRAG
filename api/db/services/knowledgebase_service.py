@@ -9,7 +9,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import NoResultFound
 from api.db import StatusEnum, TenantPermission
-from api.db.db_models import Knowledgebase, Tenant, User, UserTenant
+from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document
 from api.db.services.common_service import CommonService
 
 
@@ -18,6 +18,15 @@ class KnowledgebaseService(CommonService):
     知识库服务类，提供针对知识库的CRUD操作。
     """
     model = Knowledgebase
+
+    @classmethod
+    def list_documents_by_ids(cls, db: Session, kb_ids):
+        doc_ids = db.query(Document.id.label("document_id")).filter(
+            Document.kb_id.in_(kb_ids)
+        ).all()
+
+        # 提取查询结果中的文档ID并返回列表
+        return [doc.document_id for doc in doc_ids]
 
     @classmethod
     def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc):

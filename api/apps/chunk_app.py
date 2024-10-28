@@ -445,3 +445,42 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             return get_json_result(data=False, retmsg=f'No chunk found! Check the chunk status please!',
                                    retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
+
+
+@router.get('/knowledge_graph')
+def knowledge_graph(doc_id, db: Session = Depends(get_db), user=Depends(manager)):
+    req = {
+        "doc_ids":[doc_id],
+        "knowledge_graph_kwd": ["graph", "mind_map"]
+    }
+    tenant_id = DocumentService.get_tenant_id(db, doc_id)
+    sres = retrievaler.search(req, search.index_name_one(db, tenant_id))
+    obj = {"graph": {}, "mind_map": {}}
+    for id in sres.ids[:2]:
+        ty = sres.field[id]["knowledge_graph_kwd"]
+        try:
+            content_json = json.loads(sres.field[id]["content_with_weight"])
+        except Exception as e:
+            continue
+
+        if ty == 'mind_map':
+            node_dict = {}
+
+            def repeat_deal(content_json, node_dict):
+                if 'id' in content_json:
+                    if content_json['id'] in node_dict:
+                        node_name = content_json['id']
+                        content_json['id'] += f"({node_dict[content_json['id']]})"
+                        node_dict[node_name] += 1
+                    else:
+                        node_dict[content_json['id']] = 1
+                if 'children' in content_json and content_json['children']:
+                    for item in content_json['children']:
+                        repeat_deal(item, node_dict)
+
+            repeat_deal(content_json, node_dict)
+
+        obj[ty] = content_json
+
+    return get_json_result(data=obj)
+
