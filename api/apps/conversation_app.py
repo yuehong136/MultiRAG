@@ -454,7 +454,7 @@ def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager
     audio_file_path = req.get("audio_file_path")
 
     # 获取用户信息和语音识别模型的信息
-    tenants = TenantService.get_by_user_id(db, user.id)
+    tenants = TenantService.get_info_by(db, user.id)
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
 
@@ -502,7 +502,7 @@ def asr_upload(file: UploadFile = File(...), db: Session = Depends(get_db), user
         audio_file_path = temp_audio_file.name
 
     # 获取用户信息和语音识别模型的信息
-    tenants = TenantService.get_by_user_id(db, user.id)
+    tenants = TenantService.get_info_by(db, user.id)
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
 

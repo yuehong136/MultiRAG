@@ -19,7 +19,7 @@ class AIForBIService:
         loader = PromptTemplateLoader()
         prompt = loader.fill_template("nl2sql_temp.txt", nl2sql_req_body)
         aiforbi_logger.info(f"nl2sql prompt: {prompt}")
-        tenants = TenantService.get_by_user_id(db, user_id)
+        tenants = TenantService.get_info_by(db, user_id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
@@ -39,7 +39,7 @@ class AIForBIService:
                                       sql_result=chart_type_req_body.sql_result['data'],
                                       sql_result_pandas=pd_df)
         aiforbi_logger.info(f"chart_type prompt: {prompt}")
-        tenants = TenantService.get_by_user_id(db, user_id)
+        tenants = TenantService.get_info_by(db, user_id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
@@ -60,7 +60,7 @@ class AIForBIService:
                                       columns=dynamic_chart_option_function_req_body.sql_result['metadata']['columns'],
                                       chart_template=chart_template)
         aiforbi_logger.info(f"dynamic_chart_option_function prompt: {prompt}")
-        tenants = TenantService.get_by_user_id(db, user_id)
+        tenants = TenantService.get_info_by(db, user_id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
@@ -71,7 +71,7 @@ class AIForBIService:
 
     @staticmethod
     async def static_chart_option(static_chart_option_req_body, db, user_id, llm_name):
-        tenants = TenantService.get_by_user_id(db, user_id)
+        tenants = TenantService.get_info_by(db, user_id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
         chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)

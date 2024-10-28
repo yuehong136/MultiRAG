@@ -21,7 +21,7 @@ class AITranslateService:
         loader = PromptTemplateLoader()
         prompt = loader.fill_template("ai_translate_temp.txt", input=ai_translate_req_body.zh_text)
 
-        tenants = TenantService.get_by_user_id(db, user_id)
+        tenants = TenantService.get_info_by(db, user_id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
@@ -41,7 +41,7 @@ class AITranslateService:
         ai_translate_logger.info(f"ai_batch_translate_req_body: {ai_batch_translate_req_body}")
         loader = PromptTemplateLoader()
         prompt = loader.fill_template("ai_batch_translate_temp.txt", input=ai_batch_translate_req_body.zh_text_list)
-        tenants = TenantService.get_by_user_id(db, user_id)
+        tenants = TenantService.get_info_by(db, user_id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
