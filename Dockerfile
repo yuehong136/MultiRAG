@@ -4,9 +4,9 @@ USER root
 
 WORKDIR /multirag
 
-# 安装 OpenGL 依赖和 Redis
+# 安装 OpenGL 依赖、Redis、vim 和 net-tools
 RUN apt-get update && \
-    apt-get install -y libgl1-mesa-glx lsb-release curl gpg && \
+    apt-get install -y libgl1-mesa-glx lsb-release curl gpg vim net-tools && \
     curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
     chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list && \
