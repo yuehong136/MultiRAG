@@ -7,6 +7,7 @@
 @desc:
 """
 import os
+import re
 
 from dashscope import Generation
 
