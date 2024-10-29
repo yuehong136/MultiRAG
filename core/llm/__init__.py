@@ -15,6 +15,7 @@ from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.huggingface_embed import HuggingFaceEmbed
 from core.llm.embedding_model.openai_embed import OpenAIEmbed
+from core.llm.embedding_model.qwen_embed import QWenEmbed
 from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
@@ -40,7 +41,7 @@ EmbeddingModel = {
     # "Ollama": OllamaEmbed,
     "OpenAI": OpenAIEmbed,
     "Xinference": XinferenceEmbed,
-    # "Tongyi-Qianwen": QWenEmbed,
+    "Tongyi-Qianwen": QWenEmbed,
     "ZHIPU-AI": ZhipuEmbed,
     # "FastEmbed": FastEmbed,
     "Youdao": YoudaoEmbed,
