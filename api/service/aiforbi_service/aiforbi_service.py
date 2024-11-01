@@ -9,6 +9,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import TenantService
 from api.service.aiforbi_service.echarts_temp import load_chart_template
 from api.service.aiforbi_service.llm_prompts import PromptTemplateLoader
+from api.service.aiforbi_service.utils.extract_brackets import extract_brackets
 from core.settings import aiforbi_logger
 
 
@@ -46,7 +47,7 @@ class AIForBIService:
         chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         aiforbi_logger.info(f"chart_type resp: {resp}")
-        chart_type_list = json.loads(resp)
+        chart_type_list = extract_brackets(resp, merge=True)
         return chart_type_list
 
     @staticmethod
@@ -93,7 +94,8 @@ class AIForBIService:
         prompt4ChartType = loader.fill_template("static_chart_type.txt", tab=tab)
         aiforbi_logger.info(f"chart_type prompt: {prompt4ChartType}")
 
-        chart_type_res = chat_model.chat(system="", history=[{"role": "user", "content": prompt4ChartType}], gen_conf={})
+        chart_type_res = chat_model.chat(system="", history=[{"role": "user", "content": prompt4ChartType}],
+                                         gen_conf={})
         # 使用正则表达式匹配整个 JSON 数组格式的图表类型
         chart_type_pattern = r'\[(.*?)\]'
         match = re.search(chart_type_pattern, chart_type_res)
@@ -113,10 +115,10 @@ class AIForBIService:
 
         chart_template = load_chart_template(chart_type_str)
         prompt4Option = loader.fill_template("static_chart_option.txt",
-                                      chart_type=chart_type,
-                                      columns=columns,
-                                      tab=tab,
-                                      chart_template=chart_template)
+                                             chart_type=chart_type,
+                                             columns=columns,
+                                             tab=tab,
+                                             chart_template=chart_template)
         aiforbi_logger.info(f"static_chart_option prompt: {prompt4Option}")
 
         option = chat_model.chat(system="", history=[{"role": "user", "content": prompt4Option}], gen_conf={})
