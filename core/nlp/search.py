@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import List, Optional, Dict, Union
 from dataclasses import dataclass
 import numpy as np
+
 from core.settings import milvus_logger
 from core.utils import rmSpace
 from core.nlp import rag_tokenizer, query, is_english
@@ -486,11 +487,13 @@ class Dealer:
             fields = ["docnm_kwd", "content_with_weight", "img_id"]
         from api.db.services.document_service import DocumentService
         from api.db.services.knowledgebase_service import KnowledgebaseService
+        from api.db.database import SessionLocal
 
+        db = SessionLocal()
         kb_id = DocumentService.get_by_doc_id(db, doc_id)["kb_id"]
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         milvus_res = self.milvus_conn.query(
-            collection_name=index_name(tenant_id, kb.name),
+            collection_name=index_name_one(tenant_id, kb.name),
             filter=f"doc_id == {doc_id}",
             anns_field="doc_id",
             limit=max_count,

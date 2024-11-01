@@ -33,7 +33,7 @@ if __name__ == "__main__":
     # print(json.dumps(nx.node_link_data(graph.output), ensure_ascii=False,indent=2))
     print(json.dumps(comm, ensure_ascii=False, indent=2))
 
-    cr = CommunityReportsExtractor(LLMBundle(args.tenant_id, LLMType.CHAT))
+    cr = CommunityReportsExtractor(LLMBundle(db, args.tenant_id, LLMType.CHAT))
     cr = cr(graph.output)
     print("------------------ COMMUNITY REPORT ----------------------\n", cr.output)
     print(json.dumps(cr.structured_output, ensure_ascii=False, indent=2))
