@@ -10,6 +10,7 @@ RUN --mount=type=cache,id=multirag_production_apt,target=/var/cache/apt,sharing=
     apt install -y --no-install-recommends \
         libgl1-mesa-glx \
         lsb-release \
+        default-jdk \
         curl \
         gpg \
         vim \
