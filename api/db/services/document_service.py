@@ -37,13 +37,17 @@ class DocumentService(CommonService):
         super().__init__(Document)
 
     @classmethod
-    def get_list(cls, db: Session, kb_id, page_number, items_per_page, orderby, desc, keywords=None, id=None):
+    def get_list(cls, db: Session, kb_id, page_number, items_per_page, orderby, desc, keywords=None, id=None, name=None):
         # 初始化查询
         query = db.query(cls.model).filter(cls.model.kb_id == kb_id)
 
         # 根据 id 添加过滤条件
         if id:
             query = query.filter(cls.model.id == id)
+
+        # 根据 name 添加精确匹配过滤条件
+        if name:
+            query = query.filter(cls.model.name == name)
 
         # 根据 keywords 添加模糊匹配过滤条件
         if keywords:
