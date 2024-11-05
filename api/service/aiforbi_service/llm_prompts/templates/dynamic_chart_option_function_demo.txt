@@ -6,9 +6,7 @@
 1. 查询结果包含的列: ['gender', 'count', 'percentage']
 2. chartData对象结构:
    {
-    'metadata': {
-    'columns': [<列1>, <列2>, ...]
-     },
+     'columns': [<列1>, <列2>, ...],
      'data': [
        {<列1>: <值1>, <列2>: <值2>, ...},
        ...

@@ -1,0 +1,116 @@
+角色: 你是一位精通JavaScript和ECharts的前端专家。
+
+背景: 我们需要创建一个展示查询总数据量的ECharts 仪表盘。
+
+输入数据结构:
+```javascript
+const chartData = {
+    'columns': [<列1>, <列2>, ...],
+    'data': [
+        {<列1>: <值1>, <列2>: <值2>, ...},
+        ...
+    ]
+}
+```
+
+实际输入数据：
+```javascript
+const chartData = {
+        "columns": [
+            "total_count"
+        ],
+        "data": [
+            {
+                "total_count": "36921"
+            }
+        ]
+    }
+```
+
+期望输出格式:
+```javascript
+const option = {
+  tooltip: {
+    formatter: '{a} <br/>{b} : {c}%'
+  },
+  series: [
+    {
+      max: //需要大于动态填充的数据,
+      type: 'gauge',
+      detail: {
+        formatter: '{value}'
+      },
+      data: [
+        {
+          value: //需要动态填充数据,
+          name: '//需要根据主题修改'
+        }
+      ]
+    }
+  ]
+};
+```
+
+实现步骤:
+1. 创建函数框架
+```javascript
+function generateChartOption(chartData) {
+    // 步骤2将在这里实现数据提取
+    // 步骤3将在这里实现数据转换
+    // 步骤4将在这里组装并返回option对象
+}
+```
+
+2. 数据提取步骤:
+- 从 chartData.columns 获取列名
+- 从 chartData.data 数组获取数据记录
+- 使用直接对象访问方式（例如：record['xxx']）
+- 必须进行空值检查
+
+3. 数据转换要求:
+- 数值类型必须使用 parseInt 或 parseFloat 转换
+- 确保数组映射使用正确的字段名
+- 注意数据格式与图表类型的匹配
+
+4. 选项配置要求:
+- 标题使用中文
+- 所有标签要有合适的字体大小
+- tooltip 必须配置 formatter
+- 图例位置要合理布局
+
+验证步骤:
+1. 检查数据访问是否正确
+2. 确认数值转换是否完成
+3. 验证 option 结构是否完整
+
+注意事项:
+- 不要使用 forEach，优先使用 map 和 filter
+- 使用解构赋值简化代码
+- 添加基本的错误处理
+- 提供输入验证
+
+示例代码结构:
+```javascript
+function generateChartOption(chartData) {
+    // 1. 输入验证
+    if (!chartData?.columns || !chartData?.data) {
+        throw new Error('Invalid chart data format');
+    }
+
+    // 2. 数据提取
+    const { columns } = chartData;
+    const { data } = chartData;
+
+    // 3. 数据转换
+    const processedData = data.map(record => ({
+        // 在这里进行数据转换
+    }));
+
+    // 4. 返回配置
+    return {
+        // 在这里组装完整的 option 配置
+    };
+}
+```
+
+请根据以上要求，实现一个完整的 generateChartOption 函数。
