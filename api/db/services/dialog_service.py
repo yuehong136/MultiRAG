@@ -209,6 +209,9 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
                 attachments.extend(m["doc_ids"])
     if len(embd_nms) != 0:
         embd_mdl = LLMBundle(db, dialog.tenant_id, LLMType.EMBEDDING, embd_nms[0])
+        if not embd_mdl:
+            raise LookupError("Embedding model(%s) not found" % embd_nms[0])
+
     chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
 
     # 获取提示配置和字段映射
