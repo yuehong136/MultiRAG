@@ -309,7 +309,10 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
         conv = ConversationService.get_by_id(db, req["conversation_id"])
         if not conv:
             return get_data_error_result(retmsg="Conversation not found!")
-        conv.message = deepcopy(req["messages"])  # re-generate for conversation
+        if len(req["messages"]) != 1:
+            conv.message = deepcopy(req["messages"])  # re-generate for conversation
+        else:
+            conv.message.append(msg[0])
         dia = DialogService.get_by_id(db, conv.dialog_id)
         if not dia:
             return get_data_error_result(retmsg="Dialog not found!")
