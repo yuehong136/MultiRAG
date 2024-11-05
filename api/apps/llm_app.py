@@ -61,6 +61,7 @@ class LLMServiceRequest(BaseModel):
     prompt: Optional[str] = None
     messages: list[dict] = []
     llm_name: str
+    stream: bool = False
     gen_conf: dict[str, Any] = {}
 
 
@@ -611,8 +612,10 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
-
-    data = chat_mdl.chat(req["prompt"], req["messages"], req["gen_conf"])
+    if req["stream"]:
+        data = chat_mdl.chat_streamly(req["prompt"], req["messages"], req["gen_conf"])
+    else:
+        data = chat_mdl.chat(req["prompt"], req["messages"], req["gen_conf"])
 
     return get_json_result(data=data)
 
