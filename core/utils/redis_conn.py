@@ -7,7 +7,8 @@
 @desc:
 """
 import json
-
+# todo 后续将redis替换成valkey，docker里也要换
+# import valkey as redis
 import redis
 import logging
 from core import settings
@@ -48,7 +49,7 @@ class RedisDB:
                                            db=int(self.config.get("db", 1)),
                                            password=self.config.get("password"),
                                            decode_responses=True)
-        except Exception as e:
+        except Exception:
             logging.warning("Redis can't be connected.")
         return self.REDIS
 
