@@ -250,7 +250,7 @@ class Task(BaseModel):
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     doc_id = Column(String(32), index=True, nullable=False)
     from_page = Column(Integer, index=False, nullable=False, default=0)
-    to_page = Column(Integer, index=False, nullable=False, default=-1)
+    to_page = Column(Integer, index=False, nullable=False, default=100000000)
     begin_at = Column(DateTime, index=True, nullable=True)
     process_duration = Column(Float, index=False, nullable=False, default=0)
     progress = Column(Float, index=True, nullable=False, default=0)
