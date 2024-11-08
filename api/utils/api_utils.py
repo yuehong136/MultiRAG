@@ -27,6 +27,7 @@ from uuid import uuid1
 from urllib.parse import quote, urlencode
 import requests
 
+from api.db.db_models import APIToken
 from api.db.services.api_service import APITokenService
 from api.settings import RetCode, REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC, stat_logger, CLIENT_AUTHENTICATION, \
     HTTP_APP_KEY, SECRET_KEY
@@ -186,7 +187,7 @@ def apikey_required(func: Callable) -> Callable:
         authorization_header = request.headers.get('Authorization')
 
         token = authorization_header.split()[1]
-        objs = APITokenService.query(db, token=token, db=db)
+        objs = APITokenService.query(db, token=token)
 
         if not objs:
             return build_error_result(
@@ -253,6 +254,27 @@ def convert_datetime_to_str(data: dict):
         if isinstance(value, datetime):
             data[key] = value.strftime('%Y-%m-%d %H:%M:%S')
     return data
+
+
+def token_required(func):
+    @wraps(func)
+    def decorated_function(*args, **kwargs):
+        request: Request = kwargs.get('request')  # 从 kwargs 中获取 FastAPI Request 对象
+        db: Session = kwargs.get('db')  # 从 kwargs 中获取数据库会话对象
+
+        authorization_header = request.headers.get('Authorization')
+
+        token = authorization_header.split()[1]
+        objs = APIToken.query(db, token=token)
+
+        if not objs:
+            return get_json_result(
+                data=False, retmsg='Token is not valid!', retcode=RetCode.AUTHENTICATION_ERROR
+            )
+        kwargs['tenant_id'] = objs[0].tenant_id
+        return func(*args, **kwargs)
+
+    return decorated_function
 
 
 def get_result(retcode=RetCode.SUCCESS, retmsg='error', data=None):
