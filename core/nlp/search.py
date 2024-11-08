@@ -41,6 +41,15 @@ class Dealer:
         keywords: Optional[List[str]] = None
         group_docs: List[List] = None
 
+    @dataclass
+    class QueryResult:
+        total: int
+        ids: List[str]
+        field: Optional[Dict] = None
+        aggregation: Union[List, Dict, None] = None
+        keywords: Optional[List[str]] = None
+        group_docs: List[List] = None
+
     def _vector(self, txt, emb_mdl, sim=0.8, topk=10):
         qv, c = emb_mdl.encode_queries(txt)
         return {
@@ -87,7 +96,7 @@ class Dealer:
     def search(self, req, idxnms, embd_mdl=None):
         qst = req.get("question", "")
         bqry, keywords = self.qryr.question(qst, min_match="30%")
-
+        total, ids, fields = 0, [], {}
         if bqry is None:
             raise ValueError("Failed to generate query for the given question.")
 
@@ -95,50 +104,79 @@ class Dealer:
                                  "doc_id", "vector", "position_int", "content_with_weight"])
         filter = req.get("filter_exp", "")
         # Vector search parameters
-        vector_search_params = self._vector(qst, embd_mdl, req.get("similarity", 0.1), req.get("topk", 1024))
-        query_vector = vector_search_params["query_vector"]
+        if req.get("vector"):
+            assert embd_mdl, "No embedding model selected"
+            vector_search_params = self._vector(qst, embd_mdl, req.get("similarity", 0.1), req.get("topk", 1024))
+            query_vector = vector_search_params["query_vector"]
 
-        total = 0
-        ids = []
-        fields = {}
+            for idxnm in idxnms:
+                milvus_logger.info(f"正在搜索的集合: {idxnm}")
+                # todo 后续考虑不同维度字段检索情况，目前统一叫vector，eg.用户512维的输入无法比对718存储的vector，动态名字就可以了
+                try:
+                    # 在Milvus中执行搜索
+                    # 参数:
+                    # collection_name: 指定要搜索的集合名称
+                    # data: 查询向量
+                    # anns_field: 指定用于向量搜索的字段
+                    # limit: 要返回的结果数量，默认为10，如果未指定的话
+                    # search_params: 搜索参数，包括度量类型和nprobe值
+                    # output_fields: 指定要在搜索结果中返回的字段
+                    search_results = self.milvus_conn.search(
+                        collection_name=idxnm,
+                        data=[query_vector],
+                        anns_field=vector_search_params["field"],
+                        limit=req.get("size", 10),
+                        search_params={"metric_type": "COSINE", "params": {"nprobe": 10}},
+                        output_fields=src,
+                        filter=filter
+                    )
 
-        for idxnm in idxnms:
-            milvus_logger.info(f"正在搜索的集合: {idxnm}")
-            # todo 后续考虑不同维度字段检索情况，目前统一叫vector，eg.用户512维的输入无法比对718存储的vector，动态名字就可以了
-            try:
-                # 在Milvus中执行搜索
-                # 参数:
-                # collection_name: 指定要搜索的集合名称
-                # data: 查询向量
-                # anns_field: 指定用于向量搜索的字段
-                # limit: 要返回的结果数量，默认为10，如果未指定的话
-                # search_params: 搜索参数，包括度量类型和nprobe值
-                # output_fields: 指定要在搜索结果中返回的字段
-                search_results = self.milvus_conn.search(
-                    collection_name=idxnm,
-                    data=[query_vector],
-                    anns_field=vector_search_params["field"],
-                    limit=req.get("size", 10),
-                    search_params={"metric_type": "COSINE", "params": {"nprobe": 10}},
-                    output_fields=src,
-                    filter=filter
-                )
+                    milvus_logger.info(f"Search results for {idxnm}: {search_results}")
 
-                milvus_logger.info(f"Search results for {idxnm}: {search_results}")
+                    # Process search results
+                    if search_results:
+                        total += len(search_results[0])
+                        ids.extend([str(hit['id']) for hit in search_results[0]])
+                        for hit in search_results[0]:
+                            hit_fields = {}
+                            for field in src:
+                                hit_fields[field] = hit['entity'].get(field, "")  # Extract each field's data
+                            # 将字典存储在以id为键的字段字典中
+                            fields[str(hit['id'])] = hit_fields
+                            # fields[str(hit['id'])] = hit['entity'].get("content_with_weight", "")  # Extract the 'text' field
+                except Exception as e:
+                    milvus_logger.error(f"Error searching in collection {idxnm}: {str(e)}")
 
-                # Process search results
-                if search_results:
-                    total += len(search_results[0])
-                    ids.extend([str(hit['id']) for hit in search_results[0]])
-                    for hit in search_results[0]:
-                        hit_fields = {}
-                        for field in src:
-                            hit_fields[field] = hit['entity'].get(field, "")  # Extract each field's data
-                        # 将字典存储在以id为键的字段字典中
-                        fields[str(hit['id'])] = hit_fields
-                        # fields[str(hit['id'])] = hit['entity'].get("content_with_weight", "")  # Extract the 'text' field
-            except Exception as e:
-                milvus_logger.error(f"Error searching in collection {idxnm}: {str(e)}")
+        # 如果没有向量搜索条件，则执行基于doc_id的简单查询
+        else:
+            doc_ids = req.get("doc_ids")
+
+            if not doc_ids:
+                raise ValueError("doc_ids is required for non-vector search.")
+
+            fields_to_return = req.get("fields", ["pk", "content_with_weight", "doc_id", "docnm_kwd", "img_id", "position_int", "auth"])
+
+            for doc_id in doc_ids:
+                milvus_logger.info(f"正在从集合 {idxnms} 获取文档 ID 为 {doc_id} 的数据")
+                try:
+                    # 使用 Milvus query 方法进行简单查询
+                    search_results = self.milvus_conn.query(
+                        collection_name=idxnms,
+                        # filter=f"doc_id == {doc_id}",
+                        filter=f"doc_id == '{{doc_id}}'".format(doc_id=doc_id),
+                        output_fields=fields_to_return,
+                        limit=req.get("size", 1024)
+                    )
+                    if search_results:
+                        total += len(search_results)
+                        for hit in search_results:
+                            hit_id = str(hit["pk"])
+                            ids.append(hit_id)
+                            hit_fields = {field: hit.get(field, "") for field in fields_to_return}
+                            fields[hit_id] = hit_fields
+                    milvus_logger.info(f"Query results for {idxnms}->{doc_id}: {search_results}")
+                except Exception as e:
+                    milvus_logger.error(f"Error querying in collection {idxnms}->{doc_id}: {str(e)}")
 
         kwds = set([])
         for k in keywords:
@@ -151,16 +189,25 @@ class Dealer:
                 kwds.add(kk)
 
         aggs = self.getAggregation(search_results, "docnm_kwd")
+        if req.get("vector"):
+            return self.SearchResult(
+                total=total,
+                ids=ids,
+                query_vector=query_vector,
+                aggregation=aggs,
+                highlight=self.getHighlight(search_results, keywords, "content_with_weight"),
+                field=fields,
+                keywords=list(kwds)
+            )
 
-        return self.SearchResult(
-            total=total,
-            ids=ids,
-            query_vector=query_vector,
-            aggregation=aggs,
-            highlight=self.getHighlight(search_results, keywords, "content_with_weight"),
-            field=fields,
-            keywords=list(kwds)
-        )
+        else:
+            return self.QueryResult(
+                total=total,
+                ids=ids,
+                aggregation=aggs,
+                field=fields,
+                keywords=list(kwds)
+            )
 
     def getAggregation(self, res, g):
         if not "aggregations" in res or "aggs_" + g not in res["aggregations"]:
