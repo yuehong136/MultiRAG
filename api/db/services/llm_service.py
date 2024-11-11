@@ -260,14 +260,14 @@ class LLMBundle(object):
         except Exception as e:
             database_logger.error(f"TTS processing failed for text '{text}': {e}")
 
-    def chat(self, system, history, gen_conf):
-        txt, used_tokens = self.mdl.chat(system, history, gen_conf)
+    def chat(self, system, history, gen_conf, **kwargs):
+        txt, used_tokens = self.mdl.chat(system, history, gen_conf, **kwargs)
         if isinstance(txt, int) and  not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
             database_logger.error(f"Can't update token usage for {self.tenant_id}/CHAT used_tokens: {used_tokens}")
         return txt
 
-    def chat_streamly(self, system, history, gen_conf):
-        for txt in self.mdl.chat_streamly(system, history, gen_conf):
+    def chat_streamly(self, system, history, gen_conf, **kwargs):
+        for txt in self.mdl.chat_streamly(system, history, gen_conf, **kwargs):
             if isinstance(txt, int):
                 if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, txt, self.llm_name):
                     database_logger.error(f"Can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, content: {txt}")

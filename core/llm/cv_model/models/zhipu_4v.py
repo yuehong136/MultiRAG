@@ -18,7 +18,7 @@ from core.nlp import is_english
 @dataclass
 class Zhipu4V(Base):
     key: str
-    model_name: str = "glm-4v"
+    model_name: str = "glm-4v-plus"
     lang: str = "Chinese"
     client: ZhipuAI = field(init=False)
 
