@@ -18,7 +18,7 @@ from pymilvus import MilvusException
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 
-from api.contants import IMG_BASE64_PREFIX
+from api.constants import IMG_BASE64_PREFIX
 from api.db import FileType, TaskStatus, ParserType, FileSource, db_models
 from api.db.database import get_db
 from api.db.db_models import Task

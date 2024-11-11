@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from api.contants import NAME_LENGTH_LIMIT
+from api.constants import NAME_LENGTH_LIMIT
 from api.db import FileType, ParserType, FileSource, TaskStatus
 from api.db import StatusEnum
 from api.db.database import get_db, SessionLocal

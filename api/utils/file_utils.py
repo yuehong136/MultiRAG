@@ -12,7 +12,7 @@ from ruamel.yaml import YAML
 # from api.db import FileType
 from strenum import StrEnum
 
-from api.contants import IMG_BASE64_PREFIX
+from api.constants import IMG_BASE64_PREFIX
 
 
 class FileType(StrEnum):
