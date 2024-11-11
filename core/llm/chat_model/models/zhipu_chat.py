@@ -18,6 +18,8 @@ class ZhipuChat(Base):
     def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]) -> Tuple[str, int]:
         if system:
             history.insert(0, {"role": "system", "content": system})
+        if "presence_penalty" in gen_conf: del gen_conf["presence_penalty"]
+        if "frequency_penalty" in gen_conf: del gen_conf["frequency_penalty"]
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
