@@ -209,6 +209,12 @@
                     "mdl_type": "image2text"
                 },
                 {
+                    "llm_name": "glm-4v-plus",
+                    "tags": "LLM,CHAT,IMAGE2TEXT",
+                    "max_tokens": 8000,
+                    "mdl_type": "image2text"
+                },
+                {
                     "llm_name": "glm-4-9b",
                     "tags": "LLM,CHAT,",
                     "max_tokens": 8192,
@@ -1305,7 +1311,7 @@
             "llm": []
         },
         {
-            "name": "cohere",
+            "name": "Cohere",
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING, TEXT RE-RANK",
             "status": "1",
