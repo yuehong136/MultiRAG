@@ -191,6 +191,12 @@
                     "mdl_type": "chat"
                 },
                 {
+                    "llm_name": "glm-4-flashx",
+                    "tags": "LLM,CHAT,",
+                    "max_tokens": 128000,
+                    "mdl_type": "chat"
+                },
+                {
                     "llm_name": "glm-4-long",
                     "tags": "LLM,CHAT,",
                     "max_tokens": 1000000,
@@ -652,7 +658,7 @@
                     "llm_name": "gpt-4o",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
-                    "mdl_type": "chat,image2text"
+                    "mdl_type": "image2text"
                 },
                  {
                     "llm_name": "gpt-3.5-turbo",
