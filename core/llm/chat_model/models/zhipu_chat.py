@@ -34,6 +34,8 @@ class ZhipuChat(Base):
     def chat_streamly(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
+        if "presence_penalty" in gen_conf: del gen_conf["presence_penalty"]
+        if "frequency_penalty" in gen_conf: del gen_conf["frequency_penalty"]
         ans = ""
         try:
             response = self.client.chat.completions.create(

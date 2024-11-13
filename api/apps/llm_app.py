@@ -578,7 +578,7 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
 
 
 @router.post('/chat_service', summary="模型对话服务", response_description="成功调用对话模型")
-async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     **功能描述**:
     此接口用于调用对话模型，基于用户提供的输入生成对应的响应内容。支持文本生成、图像到文本转换、消息处理等多种模型类型。接口根据请求体中的配置，选择适当的模型及生成方式，提供流式和非流式响应模式。
@@ -634,9 +634,9 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
 
     llm_type = get_llm_type(req["llm_name"], my_llms)
     if llm_type:
-        cron_logger.debug(f"The llm_type for model '{req["llm_name"]}' is: {llm_type}")
+        cron_logger.debug(f"The llm_type for model {req['llm_name']} is: {llm_type}")
     else:
-        raise HTTPException(status_code=404, detail=f"Model '{req["llm_name"]}' not found in the list.")
+        raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
 
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
     # 构建调用参数
@@ -660,7 +660,7 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
 
 
 @router.post('/fine_prompt', summary="优化提示词", response_description="返回优化后的提示词")
-async def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     **功能描述**:
     此接口用于根据用户输入的任务描述或现有提示词，优化生成详细的系统提示词，以便更好地引导语言模型完成任务。该接口结合预定义的优化提示模板 (META_PROMPT)，确保模型输出的提示词更加清晰、具体，并且能合理规划任务的完成步骤。
