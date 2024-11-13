@@ -1,3 +1,4 @@
+from core.llm.chat_model.models.anthropic_chat import AnthropicChat
 from core.llm.chat_model.models.azure_chat import AzureChat
 from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gemini_chat import GeminiChat
@@ -75,6 +76,7 @@ ChatModel = {
     "Xinference": XinferenceChat,
     # "Moonshot": MoonshotChat,
     # "DeepSeek": DeepSeekChat,
+    "Anthropic": AnthropicChat,
     "VolcEngine": VolcEngineChat,
     # "BaiChuan": BaiChuanChat,
     # "MiniMax": MiniMaxChat,

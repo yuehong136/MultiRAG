@@ -9,13 +9,16 @@ RUN --mount=type=cache,id=multirag_production_apt,target=/var/cache/apt,sharing=
     apt update && \
     apt install -y --no-install-recommends \
         libgl1-mesa-glx \
+        libdatrie-dev \
         lsb-release \
         default-jdk \
         curl \
         gpg \
         vim \
         net-tools \
-        less && \
+        less \
+        gcc \
+        build-essential && \
     # 添加 Redis 的 GPG 密钥和源
     curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
     chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg && \
@@ -29,8 +32,10 @@ RUN --mount=type=cache,id=multirag_production_apt,target=/var/cache/apt,sharing=
 COPY ./requirements.txt ./
 
 # 安装 Python 依赖
-RUN pip install --no-cache-dir --upgrade -r requirements.txt -i https://pypi.doubanio.com/simple
-RUN pip install --no-cache-dir --upgrade transformers -i https://pypi.doubanio.com/simple
+RUN pip install --no-cache-dir --upgrade pip datrie && \
+    pip install --no-cache-dir --upgrade -r requirements.txt -i https://pypi.doubanio.com/simple
+    pip install --no-cache-dir --upgrade transformers -i https://pypi.doubanio.com/simple && \
+    pip install --no-cache-dir  anthropic >= 0.39.0
 
 # 创建并添加 NLTK 数据
 RUN mkdir -p /root/nltk_data
@@ -50,14 +55,15 @@ COPY ./agent ./agent
 COPY ./graphrag ./graphrag
 COPY ./workflow ./workflow
 COPY ./errors ./errors
+ADD ./docker ./docker
 
 # 设置环境变量
 ENV PYTHONPATH=/multirag/
 ENV HF_ENDPOINT=https://hf-mirror.com
 
 # 添加并配置 entrypoint
-COPY ./docker/entrypoint.sh ./entrypoint.sh
+ADD docker/entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
 # 设置 entrypoint
-ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["bash", "./entrypoint.sh"]
