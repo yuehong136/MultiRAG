@@ -14,10 +14,6 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-# import pyfiglet
-# from rich.text import Text
-# from rich import print as rprint
-# from rich.panel import Panel
 from api.apps import app
 import validation
 from api.db.database import SessionLocal
@@ -64,14 +60,6 @@ if __name__ == '__main__':
 
             """, flush=True)
 
-    # ascii_art = pyfiglet.figlet_format("M u l t i - R a g", font="slant")
-    #
-    # project_name = Text(
-    #     ascii_art,
-    #     style="bold blue"
-    # )
-    # rprint(Panel(project_name, title="[bold cyan]Start[/bold cyan]",
-    #              subtitle="[italic yellow]Over[/italic yellow]", border_style="red", expand=False))
     print(
         f'MultiRAG version: {MULITIRAG_VERSION_INFO}'
     )
