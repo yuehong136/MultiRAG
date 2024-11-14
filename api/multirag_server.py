@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 # from rich import print as rprint
 # from rich.panel import Panel
 from api.apps import app
+import validation
 from api.db.database import SessionLocal
 from api.db.runtime_config import RuntimeConfig
 from api.db.services.document_service import DocumentService
@@ -29,7 +30,7 @@ from api import utils
 
 from api.db.db_models import init_database_tables as init_web_db
 from api.db.init_data import init_web_data
-from api.versions import get_versions
+from api.versions import get_versions, MULITIRAG_VERSION_INFO
 import uvicorn
 
 
@@ -71,7 +72,10 @@ if __name__ == '__main__':
     # )
     # rprint(Panel(project_name, title="[bold cyan]Start[/bold cyan]",
     #              subtitle="[italic yellow]Over[/italic yellow]", border_style="red", expand=False))
-    stat_logger.info(
+    print(
+        f'MultiRAG version: {MULITIRAG_VERSION_INFO}'
+    )
+    print(
         f'project base: {utils.file_utils.get_project_base_directory()}'
     )
 
