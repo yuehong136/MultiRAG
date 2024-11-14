@@ -11,19 +11,33 @@ from datetime import datetime
 from fastapi import HTTPException
 from sqlalchemy.exc import NoResultFound, IntegrityError
 from sqlalchemy.orm import Session
-from passlib.context import CryptContext
+# from passlib.context import CryptContext
+import bcrypt
 
 from api.db import UserTenantRole, StatusEnum
 from api.db.db_models import User, Tenant, UserTenant
 from api.db.services.common_service import CommonService
 from api.utils import get_uuid, current_timestamp, datetime_format
 
-# 创建密码上下文
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
+# # 创建密码上下文
+# pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class UserService(CommonService):
     model = User
+
+    @staticmethod
+    def hash_password(password: str) -> str:
+        # 生成盐值
+        salt = bcrypt.gensalt()
+        # 哈希密码
+        hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+        # 返回哈希后的密码，解码为字符串
+        return hashed.decode('utf-8')
+
+    @staticmethod
+    def verify_password(password: str, hashed_password: str) -> bool:
+        # 验证密码
+        return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
 
     @classmethod
     def filter_by_id(cls, db: Session, user_id: str):
@@ -39,7 +53,8 @@ class UserService(CommonService):
             cls.model.email == email,
             cls.model.status == StatusEnum.VALID.value
         ).first()
-        if user and pwd_context.verify(password, user.password):
+        # if user and pwd_context.verify(password, user.password):
+        if user and cls.verify_password(password, user.password):
             return user
         else:
             return None
@@ -60,8 +75,8 @@ class UserService(CommonService):
         if "id" not in kwargs:
             kwargs["id"] = get_uuid()
         if "password" in kwargs:
-            kwargs["password"] = pwd_context.hash(str(kwargs["password"]))
-
+            # kwargs["password"] = pwd_context.hash(str(kwargs["password"]))
+            kwargs["password"] = cls.hash_password(str(kwargs["password"]))
         kwargs["create_time"] = current_timestamp()
         kwargs["create_date"] = datetime_format(datetime.now())
         kwargs["update_time"] = current_timestamp()

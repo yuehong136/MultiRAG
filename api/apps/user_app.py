@@ -20,14 +20,13 @@ from api.apps import manager
 from api.db.database import get_db
 from api.db.db_models import TenantLLM
 from api.db.services.llm_service import TenantLLMService, LLMService
-from api.db.services.user_service import UserService, TenantService, UserTenantService, pwd_context
+from api.db.services.user_service import UserService, TenantService, UserTenantService#, pwd_context
 from api.db.services.file_service import FileService
-from api.db import UserTenantRole, LLMType, FileType, StatusEnum, TaskStatus
+from api.db import UserTenantRole, FileType
 from api.utils import get_uuid, get_format_time, download_img, current_timestamp, datetime_format
 from api.settings import RetCode, GITHUB_OAUTH, FEISHU_OAUTH, CHAT_MDL, EMBEDDING_MDL, ASR_MDL, IMAGE2TEXT_MDL, PARSERS, \
     API_KEY, LLM_FACTORY, LLM_BASE_URL, RERANK_MDL, stat_logger
-from api.utils.api_utils import get_json_result, server_error_response, validate_request, construct_response, \
-    get_data_error_result
+from api.utils.api_utils import get_json_result, server_error_response, construct_response, get_data_error_result
 
 router = APIRouter()
 
@@ -312,10 +311,12 @@ async def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db)
     request_data = request.model_dump()
     if request_data["password"]:
         new_password = request_data["new_password"]
-        if not pwd_context.verify(request_data["password"], user.password):
+        # if not pwd_context.verify(request_data["password"], user.password):
+        if not UserService.verify_password(request_data["password"], user.password):
             return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg='Password error!')
         if new_password:
-            update_dict["password"] = pwd_context.hash(new_password)
+            # update_dict["password"] = pwd_context.hash(new_password)
+            update_dict["password"] = UserService.hash_password(new_password)
 
         # 过滤不允许更新的字段
     allowed_fields = ["password", "new_password", "email", "status", "is_superuser", "login_channel", "is_anonymous",

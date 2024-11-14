@@ -18,7 +18,7 @@ def python_version_validation():
 python_version_validation()
 
 # Download nltk data
-import nltk
-nltk.download('wordnet', halt_on_error=False, quiet=True)
-nltk.download('punkt_tab', halt_on_error=False, quiet=True)
-# print(f"默认已下载wordnet、punkt_tab。如有下载需求请进入api/validation.py解开注释")
+# import nltk
+# nltk.download('wordnet', halt_on_error=False, quiet=True)
+# nltk.download('punkt_tab', halt_on_error=False, quiet=True)
+print(f"默认已下载 wordnet、punkt_tab ~如有下载需求请进入 api/validation.py 解开注释")

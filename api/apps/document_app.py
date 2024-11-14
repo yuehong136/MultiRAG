@@ -720,7 +720,7 @@ async def parse(
 
         # 调用 parse_docs 处理文件内容
         txt = FileService.parse_docs(file_data, user.id)
-        print(f"[DEBUG] parse text from files: {txt}")  # Debug print
+        # print(f"[DEBUG] parse text from files: {txt}")  # Debug print
         return get_json_result(
             data=txt
         )

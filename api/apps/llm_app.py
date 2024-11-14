@@ -61,17 +61,17 @@ class DeleteFactoryRequest(BaseModel):
 
 class LLMServiceRequest(BaseModel):
     prompt: Optional[str] = None
-    messages: list[dict] = []
+    messages: list[dict]
     llm_name: str
     stream: bool = False
-    gen_conf: dict[str, Any] = {}
+    gen_conf: dict[str, Any]
     image: str = ""
 
 
 class FinePromptRequest(BaseModel):
     prompt: str
     llm_name: str
-    gen_conf: dict[str, Any] = {}
+    gen_conf: dict[str, Any]
 
 
 router = APIRouter()
