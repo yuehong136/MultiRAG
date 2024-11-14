@@ -17,9 +17,8 @@ def python_version_validation():
 
 python_version_validation()
 
-# todo 无网络环境不执行，启动就执行过于粗暴
-# # Download nltk data
-# import nltk
-# nltk.download('wordnet')
-# nltk.download('punkt_tab')
-print(f"默认已下载wordnet、punkt_tab。如有下载需求请进入api/validation.py解开注释")
+# Download nltk data
+import nltk
+nltk.download('wordnet', halt_on_error=False, quiet=True)
+nltk.download('punkt_tab', halt_on_error=False, quiet=True)
+# print(f"默认已下载wordnet、punkt_tab。如有下载需求请进入api/validation.py解开注释")
