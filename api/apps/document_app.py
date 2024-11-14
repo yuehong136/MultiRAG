@@ -9,9 +9,10 @@
 import json
 import pathlib
 import re
+import traceback
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form
 from fastapi.responses import StreamingResponse
 from pymilvus import MilvusException
 from sqlalchemy.orm import Session
@@ -685,21 +686,15 @@ async def get_image(
 
 @router.post("/parse", summary="解析网页或文件内容", response_description="成功解析内容")
 async def parse(
-    url: Optional[str] = Query(None, description="网页URL（可选）"),  # URL字段为可选查询参数
-    # files: Optional[List[UploadFile]] = File(None),  # 文件列表为可选上传参数
-    user=Depends(manager)  # 用户身份验证
+    url: Optional[str] = Form(None, description="网页URL（可选）"),
+    files: Optional[List[UploadFile]] = File(None),
+    user=Depends(manager)
 ):
-    # 检查输入是否满足条件（至少提供URL或文件之一）
-    if not url:
-        return get_json_result(data=False, retmsg="Either URL or files must be provided", retcode=RetCode.ARGUMENT_ERROR)
-
-    # 如果提供了URL，进行URL解析
     if url:
         if not is_valid_url(url):
-            return get_json_result(data=False, retmsg='The URL format is invalid', retcode=RetCode.ARGUMENT_ERROR)
+            return get_json_result(
+                data=False, retmsg='The URL format is invalid', retcode=RetCode.ARGUMENT_ERROR)
         from selenium.webdriver import Chrome, ChromeOptions
-
-        # 设置 Chrome WebDriver 选项
         options = ChromeOptions()
         options.add_argument('--headless')
         options.add_argument('--disable-gpu')
@@ -709,16 +704,31 @@ async def parse(
         try:
             driver = Chrome(options=options)
             driver.get(url)
-            sections = RAGFlowHtmlParser()("", binary=driver.page_source)
+            sections = RAGFlowHtmlParser().parser_txt(driver.page_source)
             driver.quit()
             return get_json_result(data="\n".join(sections))
         except Exception as e:
             return get_json_result(data=False, retmsg=str(e), retcode=RetCode.SERVER_ERROR)
 
-    # # 如果提供了文件，进行文件解析
-    # if files:
-    #     try:
-    #         txt = FileService.parse_docs(files, user.id)
-    #         return get_json_result(data=txt)
-    #     except Exception as e:
-    #         return get_json_result(data=False, retmsg=str(e), retcode=RetCode.SERVER_ERROR)
+    if not files:
+        return get_json_result(
+            data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
+
+    try:
+        # 读取每个文件的内容为字节数据，并将文件名与内容作为元组传递给 parse_docs
+        file_data = [(await file.read(), file.filename) for file in files]
+
+        # 调用 parse_docs 处理文件内容
+        txt = FileService.parse_docs(file_data, user.id)
+        print(f"[DEBUG] parse text from files: {txt}")  # Debug print
+        return get_json_result(
+            data=txt
+        )
+    except Exception as e:
+        print("[ERROR] File processing failed:", str(e))
+        traceback.print_exc()
+        return get_json_result(
+            retcode=RetCode.SERVER_ERROR,
+            retmsg=str(e),
+            data=False
+        )

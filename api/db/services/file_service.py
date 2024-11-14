@@ -9,6 +9,8 @@
 import json
 import re
 import os
+from concurrent.futures import ThreadPoolExecutor
+
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 from typing import List, Optional, Dict
@@ -362,6 +364,45 @@ class FileService(CommonService):
                 err.append(f"{filename}: {str(e)}")
 
         return err, files_info
+
+    @staticmethod
+    def parse_docs(file_data, user_id):
+        from core.app import presentation, picture, naive, audio, email
+
+        def dummy(prog=None, msg=""):
+            pass
+
+        FACTORY = {
+            ParserType.PRESENTATION.value: presentation,
+            ParserType.PICTURE.value: picture,
+            ParserType.AUDIO.value: audio,
+            ParserType.EMAIL.value: email
+        }
+        parser_config = {"chunk_token_num": 16096, "delimiter": "\n!?;。；！？", "layout_recognize": False}
+        exe = ThreadPoolExecutor(max_workers=12)
+        threads = []
+
+        for blob, filename in file_data:
+            kwargs = {
+                "lang": "English",
+                "callback": dummy,
+                "parser_config": parser_config,
+                "from_page": 0,
+                "to_page": 100000,
+                "tenant_id": user_id
+            }
+            filetype = filename_type(filename)
+            # 调用 chunk 方法并将文件内容传递进去
+            threads.append(
+                exe.submit(FACTORY.get(FileService.get_parser(filetype, filename, ""), naive).chunk, filename, blob,
+                           **kwargs)
+            )
+
+        res = []
+        for th in threads:
+            res.append("\n".join([ck["content_with_weight"] for ck in th.result()]))
+
+        return "\n\n".join(res)
 
     @staticmethod
     def get_parser(doc_type, filename, default):
