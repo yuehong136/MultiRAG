@@ -25,8 +25,12 @@ class RAGFlowHtmlParser:
     def __call__(self, fnm, binary=None):
         txt = ""
         if binary:
-            encoding = find_codec(binary)
-            txt = binary.decode(encoding, errors="ignore")
+            # 检查 binary 是否为字节类型，只有在其为字节类型时才进行解码
+            if isinstance(binary, bytes):
+                encoding = find_codec(binary)
+                txt = binary.decode(encoding, errors="ignore")
+            else:
+                txt = binary  # 如果已经是字符串，直接使用
         else:
             with open(fnm, "r",encoding=get_encoding(fnm)) as f:
                 txt = f.read()

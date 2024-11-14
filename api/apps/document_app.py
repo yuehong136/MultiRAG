@@ -7,7 +7,6 @@
 @desc:
 """
 import json
-import os
 import pathlib
 import re
 from io import BytesIO
@@ -29,6 +28,7 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, queue_tasks
 from api.db.services.user_service import UserTenantService
+from deepdoc.parser.html_parser import RAGFlowHtmlParser
 from api.settings import RetCode
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result
@@ -681,3 +681,44 @@ async def get_image(
         return construct_error_response(e)
 
 # todo ragflow的def upload_and_parse待补充
+
+
+@router.post("/parse", summary="解析网页或文件内容", response_description="成功解析内容")
+async def parse(
+    url: Optional[str] = Query(None, description="网页URL（可选）"),  # URL字段为可选查询参数
+    # files: Optional[List[UploadFile]] = File(None),  # 文件列表为可选上传参数
+    user=Depends(manager)  # 用户身份验证
+):
+    # 检查输入是否满足条件（至少提供URL或文件之一）
+    if not url:
+        return get_json_result(data=False, retmsg="Either URL or files must be provided", retcode=RetCode.ARGUMENT_ERROR)
+
+    # 如果提供了URL，进行URL解析
+    if url:
+        if not is_valid_url(url):
+            return get_json_result(data=False, retmsg='The URL format is invalid', retcode=RetCode.ARGUMENT_ERROR)
+        from selenium.webdriver import Chrome, ChromeOptions
+
+        # 设置 Chrome WebDriver 选项
+        options = ChromeOptions()
+        options.add_argument('--headless')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+
+        try:
+            driver = Chrome(options=options)
+            driver.get(url)
+            sections = RAGFlowHtmlParser()("", binary=driver.page_source)
+            driver.quit()
+            return get_json_result(data="\n".join(sections))
+        except Exception as e:
+            return get_json_result(data=False, retmsg=str(e), retcode=RetCode.SERVER_ERROR)
+
+    # # 如果提供了文件，进行文件解析
+    # if files:
+    #     try:
+    #         txt = FileService.parse_docs(files, user.id)
+    #         return get_json_result(data=txt)
+    #     except Exception as e:
+    #         return get_json_result(data=False, retmsg=str(e), retcode=RetCode.SERVER_ERROR)

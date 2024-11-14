@@ -100,7 +100,9 @@ shapely >= 2.0.5
 # 用来进行直线图形（比如多边形和矩形）的剪裁（clipping）操作的库
 pyclipper >= 1.3.0.post5
 # 主要用于从网页中提取主要内容。这个库的目标是从HTML文档中去除所有的样式、脚本和布局信息，留下纯净的文章内容
-readability >= 0.3.1
+#readability >= 0.3.1
+# 给定一个 html 文档，它会提取出正文并清理它。
+readability-lxml >= 0.8.1
 # 用于从HTML文档中提取文本内容
 html_text >= 0.6.2
 # 是 demjson 的一个分支，用于处理JSON数据
