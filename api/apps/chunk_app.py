@@ -304,7 +304,7 @@ async def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depend
     """
     try:
         if not ELASTICSEARCH.deleteByQuery(
-                Q("ids", values=request.chunk_ids), search.index_name(current_user.id)):
+                Q("ids", values=request.chunk_ids), search.index_name(user.id)):
             return get_data_error_result(retmsg="Index updating failure")
         e, doc = DocumentService.get_by_id(db, request.doc_id)
         if not e:
@@ -454,7 +454,9 @@ def knowledge_graph(doc_id, db: Session = Depends(get_db), user=Depends(manager)
         "knowledge_graph_kwd": ["graph", "mind_map"]
     }
     tenant_id = DocumentService.get_tenant_id(db, doc_id)
-    sres = retrievaler.search(req, search.index_name_one(db, tenant_id))
+    kb_names = KnowledgebaseService.get_kb_ids(db, tenant_id)
+    # todo 因为search参数里缺少knowledge_graph_kwd ，所以暂时无法使用，后续需要调整milvus集合创建的schema
+    sres = retrievaler.search(req, search.index_name_one(tenant_id, kb_names))
     obj = {"graph": {}, "mind_map": {}}
     for id in sres.ids[:2]:
         ty = sres.field[id]["knowledge_graph_kwd"]

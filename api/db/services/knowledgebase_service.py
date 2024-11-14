@@ -126,6 +126,20 @@ class KnowledgebaseService(CommonService):
         return [kb.to_dict() for kb in kbs[offset:offset + count]]
 
     @classmethod
+    def get_kb_ids(cls, db: Session, tenant_id):
+        fields = [cls.model.id]
+        kbs = db.query(*fields).filter(cls.model.tenant_id == tenant_id)
+        kb_ids = [kb.id for kb in kbs]
+        return kb_ids
+
+    @classmethod
+    def get_kb_names(cls, db: Session, tenant_id):
+        fields = [cls.model.id]
+        kbs = db.query(*fields).filter(cls.model.tenant_id == tenant_id)
+        kb_names = [kb.name for kb in kbs]
+        return kb_names
+
+    @classmethod
     def get_detail(cls, db: Session, kb_id):
         """
         根据知识库ID获取详细信息。
