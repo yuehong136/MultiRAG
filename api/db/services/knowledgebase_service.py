@@ -309,6 +309,24 @@ class KnowledgebaseService(CommonService):
         return True
 
     @classmethod
+    def get_kb_by_id(cls, db: Session, kb_id, user_id):
+        query = db.query(cls.model).join(UserTenant, UserTenant.tenant_id == cls.model.tenant_id).filter(
+            cls.model.id == kb_id,
+            UserTenant.user_id == user_id
+        ).limit(1)
+
+        return [kb.to_dict() for kb in query]
+
+    @classmethod
+    def get_kb_by_name(cls, db: Session, kb_name, user_id):
+        query = db.query(cls.model).join(UserTenant, UserTenant.tenant_id == cls.model.tenant_id).filter(
+            cls.model.name == kb_name,
+            UserTenant.user_id == user_id
+        ).limit(1)
+
+        return [kb.to_dict() for kb in query]
+
+    @classmethod
     def accessible4deletion(cls, db: Session, kb_id, user_id):
         docs = db.query(cls.model.id).filter(
             cls.model.id == kb_id,
