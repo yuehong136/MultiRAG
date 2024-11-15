@@ -18,7 +18,20 @@ RUN --mount=type=cache,id=multirag_production_apt,target=/var/cache/apt,sharing=
         net-tools \
         less \
         gcc \
-        build-essential && \
+        build-essential \
+        libglib2.0-0  \
+        libglx-mesa0  \
+        pkg-config  \
+        libicu-dev  \
+        libasound2t64  \
+        libatk-bridge2.0-0  \
+        libgtk-4-1  \
+        libnss3  \
+        xdg-utils  \
+        unzip  \
+        libgbm-dev  \
+        wget \
+        libgdiplus && \
     # 添加 Redis 的 GPG 密钥和源
     curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
     chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg && \
@@ -27,7 +40,16 @@ RUN --mount=type=cache,id=multirag_production_apt,target=/var/cache/apt,sharing=
     apt update && \
     apt install -y --no-install-recommends redis && \
     # 清理 apt 缓存和安装包
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/keyrings/redis-archive-keyring.gpg
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/keyrings/redis-archive-keyring.gpg && \
+    wget -q -O chrome-linux64.zip https://bit.ly/chrome-linux64-121-0-6167-85 && \
+    unzip chrome-linux64.zip && \
+    rm chrome-linux64.zip && \
+    mv chrome-linux64 /opt/chrome/ && \
+    ln -s /opt/chrome/chrome /usr/local/bin/ && \
+    wget -q -O chromedriver-linux64.zip https://bit.ly/chromedriver-linux64-121-0-6167-85 && \
+    unzip -j chromedriver-linux64.zip chromedriver-linux64/chromedriver && \
+    rm chromedriver-linux64.zip && \
+    mv chromedriver /usr/local/bin/ && rm -f /usr/bin/google-chrome
 
 COPY ./requirements.txt ./
 
