@@ -46,6 +46,9 @@ COPY ./nltk_data /root/nltk_data
 COPY tika-server-standard-3.0.0.jar tika-server-standard-3.0.0.jar.md5 ./
 ENV TIKA_SERVER_JAR="file:///ragflow/tika-server-standard.jar"
 
+# Copy cl100k_base
+COPY 9b5ad71b2ce5302211f9c61530b329a4922fc6a4 ./
+
 # 添加其他项目文件
 COPY ./api ./api
 COPY ./configs ./configs
