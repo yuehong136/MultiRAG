@@ -6,7 +6,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
-from api.versions import get_versions
+from api.versions import get_multirag_version
 from .reload_config_base import ReloadConfigBase
 
 
@@ -28,7 +28,7 @@ class RuntimeConfig(ReloadConfigBase):
 
     @classmethod
     def init_env(cls):
-        cls.ENV.update(get_versions())
+        cls.ENV.update({"version": get_multirag_version()})
 
     @classmethod
     def load_config_manager(cls):

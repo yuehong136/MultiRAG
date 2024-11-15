@@ -15,18 +15,17 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from api.apps import app
-import validation
 from api.db.database import SessionLocal
 from api.db.runtime_config import RuntimeConfig
 from api.db.services.document_service import DocumentService
 from api.settings import (
     HOST, HTTP_PORT, access_logger, database_logger, stat_logger,
 )
-from api import utils
+from api import utils, validation
 
 from api.db.db_models import init_database_tables as init_web_db
 from api.db.init_data import init_web_data
-from api.versions import get_versions, MULITIRAG_VERSION_INFO
+from api.versions import get_multirag_version
 import uvicorn
 
 
@@ -61,7 +60,7 @@ if __name__ == '__main__':
             """, flush=True)
 
     print(
-        f'MultiRAG version: {MULITIRAG_VERSION_INFO}'
+        f'MultiRAG version: {get_multirag_version()}'
     )
     print(
         f'project base: {utils.file_utils.get_project_base_directory()}'
@@ -76,11 +75,11 @@ if __name__ == '__main__':
 
     # 解析命令行参数
     parser = argparse.ArgumentParser()
-    parser.add_argument('--version', default=False, help="multi rag version", action='store_true')
+    parser.add_argument('--version', default=False, help="MultiRAG version", action='store_true')
     parser.add_argument('--debug', default=False, help="debug mode", action='store_true')
     args = parser.parse_args()
     if args.version:
-        print(get_versions())
+        print(get_multirag_version())
         sys.exit(0)
 
     RuntimeConfig.DEBUG = args.debug  # 设置调试模式
@@ -96,12 +95,12 @@ if __name__ == '__main__':
     sqlalchemy_logger.setLevel(database_logger.level)  # 设置日志级别
 
     # 启动进度更新线程
-    thr = ThreadPoolExecutor(max_workers=1)
-    thr.submit(update_progress)
+    thread = ThreadPoolExecutor(max_workers=1)
+    thread.submit(update_progress)
 
     # 使用 uvicorn 启动 FastAPI 应用
     try:
-        stat_logger.info("Multi RAG http server start...")
+        stat_logger.info("MultiRAG HTTP server start...")
         uvicorn_logger = logging.getLogger("uvicorn.access")  # 获取uvicorn的访问日志记录器
         for h in access_logger.handlers:
             uvicorn_logger.addHandler(h)  # 将access_logger的处理程序添加到uvicorn的访问日志记录器中

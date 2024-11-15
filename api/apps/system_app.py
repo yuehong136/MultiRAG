@@ -19,7 +19,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
 from api.utils import current_timestamp, datetime_format
 from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
-from api.versions import get_rag_version
+from api.versions import get_multirag_version
 from core.utils.storage_factory import STORAGE_IMPL, STORAGE_IMPL_TYPE
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN
@@ -51,7 +51,7 @@ async def version(user=Depends(manager)):
     注意：
     - 该接口不涉及数据库操作，仅返回静态版本信息。
     """
-    return get_json_result(data=get_rag_version())
+    return get_json_result(data=get_multirag_version())
 
 
 @router.get("/status", summary="获取系统状态", response_description="成功获取系统状态")
