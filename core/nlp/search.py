@@ -1,11 +1,8 @@
-import json
+import logging
 import re
-from copy import deepcopy
 from typing import List, Optional, Dict, Union
 from dataclasses import dataclass
 import numpy as np
-
-from core.settings import milvus_logger
 from core.utils import rmSpace
 from core.nlp import rag_tokenizer, query, is_english
 
@@ -110,7 +107,7 @@ class Dealer:
             query_vector = vector_search_params["query_vector"]
 
             for idxnm in idxnms:
-                milvus_logger.info(f"正在搜索的集合: {idxnm}")
+                logging.info(f"正在搜索的集合: {idxnm}")
                 # todo 后续考虑不同维度字段检索情况，目前统一叫vector，eg.用户512维的输入无法比对718存储的vector，动态名字就可以了
                 try:
                     # 在Milvus中执行搜索
@@ -131,7 +128,7 @@ class Dealer:
                         filter=filter
                     )
 
-                    milvus_logger.info(f"Search results for {idxnm}: {search_results}")
+                    logging.info(f"Search results for {idxnm}: {search_results}")
 
                     # Process search results
                     if search_results:
@@ -145,7 +142,7 @@ class Dealer:
                             fields[str(hit['id'])] = hit_fields
                             # fields[str(hit['id'])] = hit['entity'].get("content_with_weight", "")  # Extract the 'text' field
                 except Exception as e:
-                    milvus_logger.error(f"Error searching in collection {idxnm}: {str(e)}")
+                    logging.error(f"Error searching in collection {idxnm}: {str(e)}")
 
         # 如果没有向量搜索条件，则执行基于doc_id的简单查询
         else:
@@ -157,7 +154,7 @@ class Dealer:
             fields_to_return = req.get("fields", ["pk", "content_with_weight", "doc_id", "docnm_kwd", "img_id", "position_int", "auth"])
 
             for doc_id in doc_ids:
-                milvus_logger.info(f"正在从集合 {idxnms} 获取文档 ID 为 {doc_id} 的数据")
+                logging.info(f"正在从集合 {idxnms} 获取文档 ID 为 {doc_id} 的数据")
                 try:
                     # 使用 Milvus query 方法进行简单查询
                     search_results = self.milvus_conn.query(
@@ -174,9 +171,9 @@ class Dealer:
                             ids.append(hit_id)
                             hit_fields = {field: hit.get(field, "") for field in fields_to_return}
                             fields[hit_id] = hit_fields
-                    milvus_logger.info(f"Query results for {idxnms}->{doc_id}: {search_results}")
+                    logging.info(f"Query results for {idxnms}->{doc_id}: {search_results}")
                 except Exception as e:
-                    milvus_logger.error(f"Error querying in collection {idxnms}->{doc_id}: {str(e)}")
+                    logging.error(f"Error querying in collection {idxnms}->{doc_id}: {str(e)}")
 
         kwds = set([])
         for k in keywords:
@@ -291,7 +288,7 @@ class Dealer:
                 continue
             idx.append(i)
             pieces_.append(t)
-        milvus_logger.info("{} => {}".format(answer, pieces_))
+        logging.info("{} => {}".format(answer, pieces_))
         if not pieces_:
             return answer, set([])
 
@@ -312,7 +309,7 @@ class Dealer:
                                                                 chunks_tks,
                                                                 tkweight, vtweight)
                 mx = np.max(sim) * 0.99
-                milvus_logger.info("{} SIM: {}".format(pieces_[i], mx))
+                logging.info("{} SIM: {}".format(pieces_[i], mx))
                 if mx < thr:
                     continue
                 cites[idx[i]] = list(
@@ -502,10 +499,10 @@ class Dealer:
 
     def sql_retrieval(self, sql, fetch_size=128, format="json"):
 
-        from api.settings import chat_logger
+        # from api.settings import chat_logger
         sql = re.sub(r"[ `]+", " ", sql)
         sql = sql.replace("%", "")
-        milvus_logger.info(f"Get es sql: {sql}")
+        logging.info(f"Get es sql: {sql}")
         replaces = []
         for r in re.finditer(r" ([a-z_]+_l?tks)( like | ?= ?)'([^']+)'", sql):
             fld, v = r.group(1), r.group(3)
@@ -520,13 +517,13 @@ class Dealer:
 
         for p, r in replaces:
             sql = sql.replace(p, r, 1)
-        chat_logger.info(f"To es: {sql}")
+        logging.info(f"To es: {sql}")
 
         try:
             tbl = self.milvus_conn.sql(sql, fetch_size, format)
             return tbl
         except Exception as e:
-            chat_logger.error(f"SQL failure: {sql} =>" + str(e))
+            logging.error(f"SQL failure: {sql} =>" + str(e))
             return {"error": str(e)}
 
     def chunk_list(self, doc_id, tenant_id, max_count=1024, fields=None):

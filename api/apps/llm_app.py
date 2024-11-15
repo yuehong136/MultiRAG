@@ -6,6 +6,7 @@
 @date：2024/7/11 14:30
 @desc:
 """
+import logging
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,8 +24,6 @@ from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 from pydantic import BaseModel
 from typing import Optional, Any
 import requests
-
-from core.settings import cron_logger
 
 
 class SetAPIKeyRequest(BaseModel):
@@ -191,7 +190,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
                 if len(arr) == 0 or tc == 0:
                     raise Exception("Fail")
                 rerank_passed = True
-                print(f'passed model rerank{llm.llm_name}', flush=True)
+                logging.debug(f'passed model rerank {llm.llm_name}')
             except Exception as e:
                 msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
 
@@ -634,7 +633,7 @@ def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user
 
     llm_type = get_llm_type(req["llm_name"], my_llms)
     if llm_type:
-        cron_logger.debug(f"The llm_type for model {req['llm_name']} is: {llm_type}")
+        logging.debug(f"The llm_type for model {req['llm_name']} is: {llm_type}")
     else:
         raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
 

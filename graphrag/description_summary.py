@@ -5,19 +5,11 @@ Reference:
  - [graphrag](https://github.com/microsoft/graphrag)
 """
 
-import argparse
-import html
 import json
-import logging
-import numbers
-import re
-import traceback
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from graphrag.utils import ErrorHandlerFn, perform_variable_replacements
 from core.llm.chat_model.base import Base as CompletionLLM
-import networkx as nx
 
 from core.utils import num_tokens_from_string
 
@@ -101,7 +93,7 @@ class SummarizeExtractor:
             description=result or "",
         )
 
-    def _summarize_descriptions(
+    async def _summarize_descriptions(
         self, items: str | tuple[str, str], descriptions: list[str]
     ) -> str:
         """Summarize descriptions into a single description."""

@@ -4,7 +4,7 @@
 Reference:
  - [graphrag](https://github.com/microsoft/graphrag)
 """
-
+import logging
 import argparse
 import json
 import logging
@@ -24,7 +24,6 @@ DEFAULT_TUPLE_DELIMITER = "<|>"
 DEFAULT_RECORD_DELIMITER = "##"
 DEFAULT_COMPLETION_DELIMITER = "<|COMPLETE|>"
 CLAIM_MAX_GLEANINGS = 1
-log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -128,7 +127,7 @@ class ClaimExtractor:
                 ]
                 source_doc_map[document_id] = text
             except Exception as e:
-                log.exception("error extracting claim")
+                logging.exception("error extracting claim")
                 self._on_error(
                     e,
                     traceback.format_exc(),
@@ -265,4 +264,4 @@ if __name__ == "__main__":
         "claim_description": ""
     }
     claim = ex(info)
-    print(json.dumps(claim.output, ensure_ascii=False, indent=2))
+    logging.info(json.dumps(claim.output, ensure_ascii=False, indent=2))

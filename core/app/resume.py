@@ -10,6 +10,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import logging
 import base64
 import datetime
 import json
@@ -17,11 +18,12 @@ import re
 
 import pandas as pd
 import requests
+
+from api.db.database import SessionLocal
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from core.nlp import rag_tokenizer
 from deepdoc.parser.resume import refactor
 from deepdoc.parser.resume import step_one, step_two
-from core.settings import cron_logger
 from core.utils import rmSpace
 
 forbidden_select_fields4resume = [
@@ -64,8 +66,8 @@ def remote_call(filename, binary):
                                                       "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]))
             resume = step_two.parse(resume)
             return resume
-        except Exception as e:
-            cron_logger.error("Resume parser error: " + str(e))
+        except Exception:
+            logging.exception("Resume parser error")
     return {}
 
 
@@ -87,7 +89,7 @@ def chunk(filename, binary=None, callback=None, **kwargs):
         callback(-1, "Resume is not successfully parsed.")
         raise Exception("Resume parser remote call fail!")
     callback(0.6, "Done parsing. Chunking...")
-    print(json.dumps(resume, ensure_ascii=False, indent=2))
+    logging.debug("chunking resume: " + json.dumps(resume, ensure_ascii=False, indent=2))
 
     field_map = {
         "name_kwd": "姓名/名字",
@@ -159,9 +161,10 @@ def chunk(filename, binary=None, callback=None, **kwargs):
             resume[n] = rag_tokenizer.fine_grained_tokenize(resume[n])
         doc[n] = resume[n]
 
-    print(doc)
+    logging.debug("chunked resume to " + str(doc))
+    db = SessionLocal()
     KnowledgebaseService.update_parser_config(
-        kwargs["kb_id"], {"field_map": field_map})
+        db=db, id=kwargs["kb_id"], config={"field_map": field_map})
     return [doc]
 
 

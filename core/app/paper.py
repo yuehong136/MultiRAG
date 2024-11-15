@@ -10,11 +10,13 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import logging
 import copy
 import re
 
 from api.db import ParserType
-from core.nlp import rag_tokenizer, tokenize, tokenize_table, add_positions, bullets_category, title_frequency, tokenize_chunks
+from core.nlp import rag_tokenizer, tokenize, tokenize_table, add_positions, bullets_category, title_frequency, \
+    tokenize_chunks
 from deepdoc.parser import PdfParser, PlainParser
 import numpy as np
 
@@ -40,7 +42,7 @@ class Pdf(PdfParser):
         start = timer()
         self._layouts_rec(zoomin)
         callback(0.63, "Layout analysis finished")
-        print("layouts:", timer() - start)
+        logging.debug(f"layouts cost: {timer() - start}s")
         self._table_transformer_job(zoomin)
         callback(0.68, "Table analysis finished")
         self._text_merge()
@@ -52,8 +54,8 @@ class Pdf(PdfParser):
 
         # clean mess
         if column_width < self.page_images[0].size[0] / zoomin / 2:
-            print("two_column...................", column_width,
-                  self.page_images[0].size[0] / zoomin / 2)
+            logging.debug("two_column................... {} {}".format(column_width,
+                                                                       self.page_images[0].size[0] / zoomin / 2))
             self.boxes = self.sort_X_by_page(self.boxes, column_width / 2)
         for b in self.boxes:
             b["text"] = re.sub(r"([\t 　]|\u3000){2,}", " ", b["text"].strip())
@@ -76,7 +78,7 @@ class Pdf(PdfParser):
         title = ""
         authors = []
         i = 0
-        while i < min(32, len(self.boxes)-1):
+        while i < min(32, len(self.boxes) - 1):
             b = self.boxes[i]
             i += 1
             if b.get("layoutno", "").find("title") >= 0:
@@ -114,8 +116,8 @@ class Pdf(PdfParser):
                 from_page, min(
                     to_page, self.total_page)))
         for b in self.boxes:
-            print(b["text"], b.get("layoutno"))
-        print(tbls)
+            logging.debug("{} {}".format(b["text"], b.get("layoutno")))
+        logging.debug("{}".format(tbls))
 
         return {
             "title": title,
@@ -157,7 +159,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     doc["authors_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["authors_tks"])
     # is it English
     eng = lang.lower() == "english"  # pdf_parser.is_english
-    print("It's English.....", eng)
+    logging.debug("It's English.....{}".format(eng))
 
     res = tokenize_table(paper["tables"], doc, eng)
 
@@ -184,7 +186,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         if lvl <= most_level and i > 0 and lvl != levels[i - 1]:
             sid += 1
         sec_ids.append(sid)
-        print(lvl, sorted_sections[i][0], most_level, sid)
+        logging.debug("{} {} {} {}".format(lvl, sorted_sections[i][0], most_level, sid))
 
     chunks = []
     last_sid = -2
@@ -280,6 +282,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 if __name__ == "__main__":
     import sys
 
+
     def dummy(prog=None, msg=""):
         pass
+
+
     chunk(sys.argv[1], callback=dummy)

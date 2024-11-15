@@ -14,8 +14,8 @@
 #  limitations under the License.
 #
 
-import collections
 import logging
+import collections
 import os
 import re
 import logging
@@ -194,6 +194,6 @@ class MindMapExtractor:
         gen_conf = {"temperature": 0.5}
         response = self._llm.chat(text, [{"role": "user", "content": "Output:"}], gen_conf)
         response = re.sub(r"```[^\n]*", "", response)
-        print(response)
-        print("---------------------------------------------------\n", self._todict(markdown_to_json.dictify(response)))
+        logging.debug(response)
+        logging.debug(self._todict(markdown_to_json.dictify(response)))
         return self._todict(markdown_to_json.dictify(response))

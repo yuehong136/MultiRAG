@@ -1,5 +1,5 @@
-import itertools
 import logging
+import itertools
 import re
 import traceback
 from dataclasses import dataclass

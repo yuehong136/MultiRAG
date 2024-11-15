@@ -6,6 +6,7 @@
 @date：2024/8/14 11:00
 @desc:
 """
+import logging
 import random
 import time
 from datetime import datetime
@@ -20,7 +21,6 @@ from api.db import FileType, TaskStatus, StatusEnum
 from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.settings import stat_logger, RetCode
 from api.utils import current_timestamp, get_format_time, get_uuid
 from api.utils.db_utils import bulk_insert_into_db
 from core.nlp import search, rag_tokenizer
@@ -464,7 +464,7 @@ class DocumentService(CommonService):
                 cls.update_by_id(db, d.id, info)
             except Exception as e:
                 if str(e).find("'0'") < 0:
-                    stat_logger.error("fetch task exception:" + str(e))
+                    logging.exception("fetch task exception")
 
     @classmethod
     def get_kb_doc_count(cls, db: Session, kb_id: str):
@@ -612,8 +612,8 @@ def queue_raptor_tasks(db: Session, doc):
 #                     "content_with_weight": mind_map,
 #                     "knowledge_graph_kwd": "mind_map"
 #                 })
-#             except Exception as e:
-#                 stat_logger.error("Mind map generation error:", traceback.format_exc())
+#             except Exception:
+#                 logging.exception("Mind map generation error")
 #
 #         vects = embedding(doc_id, [c["content_with_weight"] for c in cks])
 #         assert len(cks) == len(vects)

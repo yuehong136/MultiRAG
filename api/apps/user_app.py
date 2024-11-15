@@ -7,6 +7,7 @@
 @desc: 用户管理接口
 """
 
+import logging
 import json
 import re
 from datetime import datetime
@@ -25,7 +26,7 @@ from api.db.services.file_service import FileService
 from api.db import UserTenantRole, FileType
 from api.utils import get_uuid, get_format_time, download_img, current_timestamp, datetime_format
 from api.settings import RetCode, GITHUB_OAUTH, FEISHU_OAUTH, CHAT_MDL, EMBEDDING_MDL, ASR_MDL, IMAGE2TEXT_MDL, PARSERS, \
-    API_KEY, LLM_FACTORY, LLM_BASE_URL, RERANK_MDL, stat_logger
+    API_KEY, LLM_FACTORY, LLM_BASE_URL, RERANK_MDL
 from api.utils.api_utils import get_json_result, server_error_response, construct_response, get_data_error_result
 
 router = APIRouter()
@@ -178,7 +179,7 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
             return {"auth": access_token}
         except Exception as e:
             rollback_user_registration(db, user_id)
-            stat_logger.exception(e)
+            logging.exception(e)
             return HTTPException(status_code=500, detail=str(e))
     access_token = manager.create_access_token(data={"sub": user.email})
     return {"auth": access_token}
@@ -239,7 +240,7 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
             return {"auth": access_token}
         except Exception as e:
             rollback_user_registration(db, user_id)
-            stat_logger.exception(e)
+            logging.exception(e)
             return HTTPException(status_code=500, detail=str(e))
     access_token = manager.create_access_token(data={"sub": user.email})
     return {"auth": access_token}
@@ -331,7 +332,7 @@ async def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db)
         UserService.update_by_id(db, user.id, update_dict)
         return get_json_result(data=True)
     except Exception as e:
-        stat_logger.exception(e)
+        logging.exception(e)
         return get_json_result(data=False, retmsg='Update failure!', retcode=RetCode.EXCEPTION_ERROR)
 
 
@@ -491,7 +492,7 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
         return construct_response(data=user.to_dict(), auth=access_token, retmsg=f"{nickname}, welcome aboard!")
     except Exception as e:
         rollback_user_registration(db, user_id)
-        stat_logger.exception(e)
+        logging.exception(e)
         return get_json_result(data=False,
                                retmsg=f'User registration failure, error: {str(e)}',
                                retcode=RetCode.EXCEPTION_ERROR)

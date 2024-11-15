@@ -6,6 +6,7 @@
 @date：2024/7/15 15:00
 @desc:
 """
+import logging
 import json
 import re
 import os
@@ -248,8 +249,8 @@ class FileService(CommonService):
             for file in files:
                 cls.delete_folder_by_pf_id(db, user_id, file.id)
             return db.query(cls.model).filter_by(tenant_id=user_id, id=folder_id).delete(synchronize_session=False)
-        except Exception as e:
-            print(e)
+        except Exception:
+            logging.exception("delete_folder_by_pf_id")
             raise RuntimeError("Database error (File retrieval)!")
 
     @classmethod
@@ -292,8 +293,8 @@ class FileService(CommonService):
     def move_file(cls, db: Session, file_ids: List[str], folder_id: str):
         try:
             cls.filter_update(db, [cls.model.id.in_(file_ids)], {'parent_id': folder_id})
-        except Exception as e:
-            print(e)
+        except Exception:
+            logging.exception("move_file")
             raise RuntimeError("Database error (File move)!")
 
     @classmethod

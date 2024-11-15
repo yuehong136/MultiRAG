@@ -1,3 +1,4 @@
+import logging
 import math
 import json
 import re
@@ -65,12 +66,12 @@ class Dealer:
         self.ne, self.df = {}, {}
         try:
             self.ne = json.load(open(os.path.join(fnm, "ner.json"), "r", encoding="utf-8"))
-        except Exception as e:
-            print("[WARNING] Load ner.json FAIL!")
+        except Exception:
+            logging.warning("Load ner.json FAIL!")
         try:
             self.df = load_dict(os.path.join(fnm, "term.freq"))
-        except Exception as e:
-            print("[WARNING] Load term.freq FAIL!")
+        except Exception:
+            logging.warning("Load term.freq FAIL!")
 
     def pretoken(self, txt, num=False, stpwd=True):
         patt = [

@@ -6,20 +6,17 @@
 @date：2024/8/7 17:00
 @desc:
 """
+import logging
 import os
 import sys
 import inspect
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.inspection import inspect as sa_inspect
-from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, ForeignKey, BigInteger, text
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, BigInteger, text
 from sqlalchemy.dialects.postgresql import JSONB
 from api.db.database import Base, BaseModel, engine
-from api.utils.log_utils import getLogger
 from alembic import command
 from alembic.config import Config
-
-LOGGER = getLogger()
 
 
 class User(BaseModel):
@@ -371,16 +368,16 @@ class CanvasTemplate(BaseModel):
 #
 #         # 如果 schema 不存在，则创建 schema
 #         if not schema_exists:
-#             LOGGER.info(f"Schema {schema_name} does not exist. Creating schema...")
+#             logging.info(f"Schema {schema_name} does not exist. Creating schema...")
 #             with engine.connect() as connection:
 #                 connection.execute(text(f"CREATE SCHEMA {schema_name}"))
 #                 connection.execute(text("COMMIT"))
-#             LOGGER.info(f"Schema {schema_name} created successfully.")
+#             logging.info(f"Schema {schema_name} created successfully.")
 #         else:
-#             LOGGER.info(f"Schema {schema_name} already exists. Skipping schema creation.")
+#             logging.info(f"Schema {schema_name} already exists. Skipping schema creation.")
 #
 #     except OperationalError as e:
-#         LOGGER.exception(f"OperationalError while checking or creating schema: {e}")
+#         logging.exception(f"OperationalError while checking or creating schema: {e}")
 #         return f"OperationalError: {str(e)}"
 #
 #     # # 构建相对路径到 alembic.ini 和迁移脚本目录
@@ -415,18 +412,18 @@ class CanvasTemplate(BaseModel):
 #     for name, obj in members:
 #         if obj != BaseModel and issubclass(obj, BaseModel):
 #             table_objs.append(obj)
-#             LOGGER.info(f"Start creating table {obj.__name__} in schema {schema_name}")
+#             logging.info(f"Start creating table {obj.__name__} in schema {schema_name}")
 #             try:
 #                 # 检查表是否存在并创建表
 #                 if obj.__tablename__ not in existing_tables:
 #                     obj.__table__.create(bind=engine, checkfirst=True)
-#                     LOGGER.info(f"Successfully created table: {obj.__name__}")
+#                     logging.info(f"Successfully created table: {obj.__name__}")
 #             except OperationalError as e:
-#                 LOGGER.exception(f"Error creating table {obj.__name__}: {e}")
+#                 logging.exception(f"Error creating table {obj.__name__}: {e}")
 #                 create_failed_list.append(obj.__name__)
 #
 #     if create_failed_list:
-#         LOGGER.error(f"Failed to create tables: {create_failed_list}")
+#         logging.error(f"Failed to create tables: {create_failed_list}")
 #         raise Exception(f"Failed to create tables: {create_failed_list}")
 
 '''
@@ -448,13 +445,13 @@ def init_database_tables():
         # 如果 schema 不存在，则返回报错提示
         if not schema_exists:
             error_msg = f"Schema {schema_name} does not exist. Please ensure the schema is created before proceeding."
-            LOGGER.error(error_msg)
+            logging.error(error_msg)
             return error_msg
         else:
-            LOGGER.info(f"Schema {schema_name} already exists. Continuing with table creation...")
+            logging.info(f"Schema {schema_name} already exists. Continuing with table creation...")
 
     except OperationalError as e:
-        LOGGER.exception(f"OperationalError while checking schema existence: {e}")
+        logging.exception(f"OperationalError while checking schema existence: {e}")
         return f"OperationalError: {str(e)}"
 
     # 获取现有表列表
@@ -467,16 +464,16 @@ def init_database_tables():
     for name, obj in members:
         if obj != BaseModel and issubclass(obj, BaseModel):
             table_objs.append(obj)
-            LOGGER.info(f"Start creating table {obj.__name__} in schema {schema_name}")
+            # logging.info(f"Start creating table {obj.__name__} in schema {schema_name}")
             try:
                 # 检查表是否存在并创建表
                 if obj.__tablename__ not in existing_tables:
                     obj.__table__.create(bind=engine, checkfirst=True)
-                    LOGGER.info(f"Successfully created table: {obj.__name__}")
+                    logging.info(f"Successfully created table: {obj.__name__}")
             except OperationalError as e:
-                LOGGER.exception(f"Error creating table {obj.__name__}: {e}")
+                logging.exception(f"Error creating table {obj.__name__}: {e}")
                 create_failed_list.append(obj.__name__)
 
     if create_failed_list:
-        LOGGER.error(f"Failed to create tables: {create_failed_list}")
+        logging.error(f"Failed to create tables: {create_failed_list}")
         raise Exception(f"Failed to create tables: {create_failed_list}")

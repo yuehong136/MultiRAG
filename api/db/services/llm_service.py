@@ -1,9 +1,8 @@
-# llm_services.py
+import logging
 from sqlalchemy.orm import Session
 from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
 
 from api.db.services.user_service import TenantService
-from api.settings import database_logger
 from api.db import LLMType
 from api.db.db_models import LLMFactories, LLM, TenantLLM
 from api.db.services.common_service import CommonService
@@ -28,7 +27,7 @@ class TenantLLMService(CommonService):
 
     @classmethod
     def get_api_key(cls, db: Session, tenant_id: str, model_name: str):
-        print(f"Debug: Fetching API key for tenant_id={tenant_id}, model_name={model_name}")
+        logging.info(f"Debug: Fetching API key for tenant_id={tenant_id}, model_name={model_name}")
         arr = model_name.split("@")
         if len(arr) < 2:
             objs = cls.query(db, tenant_id=tenant_id, llm_name=model_name)
@@ -37,7 +36,7 @@ class TenantLLMService(CommonService):
         if not objs:
             print("Debug: No API key found")
             return None
-        print(f"Debug: Found API key: {objs[0].api_key}")
+        logging.info(f"Debug: Found API key: {objs[0].api_key}")
         return objs[0]
 
     @classmethod
@@ -76,7 +75,7 @@ class TenantLLMService(CommonService):
         else:
             raise ValueError("LLM type error")
 
-        print(f"Debug: Fetching model instance for tenant_id={tenant_id}, mdlnm={mdlnm}")
+        logging.info(f"Debug: Fetching model instance for tenant_id={tenant_id}, mdlnm={mdlnm}")
 
         model_config = cls.get_api_key(db, tenant_id, mdlnm)
         # print("model_config:", model_config)
@@ -88,10 +87,10 @@ class TenantLLMService(CommonService):
         if model_config:
             model_config = model_config.to_dict()
         else:
-            print(f"Debug: No API key found for model {mdlnm}")
+            logging.info(f"Debug: No API key found for model {mdlnm}")
 
         if not model_config:
-            print(f"Debug: Model({mdlnm}) not authorized")
+            logging.info(f"Debug: Model({mdlnm}) not authorized")
             if llm_type in [LLMType.EMBEDDING, LLMType.RERANK]:
                 llm = LLMService.query(db, llm_name=mdlnm) if not fid else LLMService.query(db, llm_name=mdlnm, fid=fid)
                 if llm and llm[0].fid in ["Youdao", "FastEmbed", "BAAI"]:
@@ -108,7 +107,7 @@ class TenantLLMService(CommonService):
 
         if llm_type == LLMType.EMBEDDING.value:
             if model_config["llm_factory"] not in EmbeddingModel:
-                print(f"Debug: Embedding model factory not supported: {model_config['llm_factory']}")
+                logging.info(f"Debug: Embedding model factory not supported: {model_config['llm_factory']}")
                 return None
             return EmbeddingModel[model_config["llm_factory"]](
                 model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"]
@@ -122,7 +121,7 @@ class TenantLLMService(CommonService):
 
         if llm_type == LLMType.IMAGE2TEXT.value:
             if model_config["llm_factory"] not in CvModel:
-                print(f"Debug: Image2Text model factory not supported: {model_config['llm_factory']}")
+                logging.info(f"Debug: Image2Text model factory not supported: {model_config['llm_factory']}")
                 return None
             return CvModel[model_config["llm_factory"]](
                 model_config["api_key"], model_config["llm_name"], lang, base_url=model_config["api_base"]
@@ -130,7 +129,7 @@ class TenantLLMService(CommonService):
 
         if llm_type == LLMType.CHAT.value:
             if model_config["llm_factory"] not in ChatModel:
-                print(f"Debug: Chat model factory not supported: {model_config['llm_factory']}")
+                logging.info(f"Debug: Chat model factory not supported: {model_config['llm_factory']}")
                 return None
             return ChatModel[model_config["llm_factory"]](
                 model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"]
@@ -216,32 +215,32 @@ class LLMBundle(object):
     def encode(self, texts: list, batch_size: int = 32):
         emd, used_tokens = self.mdl.encode(texts, batch_size)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
-            database_logger.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
+            logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
         return emd, used_tokens
 
     def encode_queries(self, query: str):
         emd, used_tokens = self.mdl.encode_queries(query)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
-            database_logger.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
+            logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
         return emd, used_tokens
 
     def similarity(self, query: str, texts: list):
         sim, used_tokens = self.mdl.similarity(query, texts)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
-            database_logger.error(f"Can't update token usage for {self.tenant_id}/RERANK used_tokens: {used_tokens}")
+            logging.error(f"Can't update token usage for {self.tenant_id}/RERANK used_tokens: {used_tokens}")
         return sim, used_tokens
 
     def describe(self, image, max_tokens: int = 300):
         txt, used_tokens = self.mdl.describe(image, max_tokens)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
-            database_logger.error(f"Can't update token usage for {self.tenant_id}/IMAGE2TEXT used_tokens: {used_tokens}")
+            logging.error(f"Can't update token usage for {self.tenant_id}/IMAGE2TEXT used_tokens: {used_tokens}")
         return txt
 
     def transcription(self, audio):
         txt, used_tokens = self.mdl.transcription(audio)
         if not TenantLLMService.increase_usage(
                 self.db, self.tenant_id, self.llm_type, used_tokens):
-            database_logger.error(
+            logging.error(
                 "Can't update token usage for {}/SEQUENCE2TXT used_tokens: {}".format(self.tenant_id, used_tokens))
         return txt
 
@@ -253,23 +252,23 @@ class LLMBundle(object):
                 if isinstance(chunk, int):
                     if not TenantLLMService.increase_usage(
                             self.db, self.tenant_id, self.llm_type, chunk, self.llm_name):
-                        database_logger.error(
+                        logging.error(
                             "Can't update token usage for {}/TTS".format(self.tenant_id))
                     return
                 yield chunk
         except Exception as e:
-            database_logger.error(f"TTS processing failed for text '{text}': {e}")
+            logging.error(f"TTS processing failed for text '{text}': {e}")
 
     def chat(self, system, history, gen_conf, **kwargs):
         txt, used_tokens = self.mdl.chat(system, history, gen_conf, **kwargs)
         if isinstance(txt, int) and  not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
-            database_logger.error(f"Can't update token usage for {self.tenant_id}/CHAT used_tokens: {used_tokens}")
+            logging.error(f"Can't update token usage for {self.tenant_id}/CHAT used_tokens: {used_tokens}")
         return txt
 
     def chat_streamly(self, system, history, gen_conf, **kwargs):
         for txt in self.mdl.chat_streamly(system, history, gen_conf, **kwargs):
             if isinstance(txt, int):
                 if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, txt, self.llm_name):
-                    database_logger.error(f"Can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, content: {txt}")
+                    logging.error(f"Can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, content: {txt}")
                 return
             yield txt

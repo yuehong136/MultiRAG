@@ -1,3 +1,4 @@
+import logging
 import random
 from collections import Counter
 
@@ -222,7 +223,7 @@ def tokenize_chunks(chunks, doc, eng, pdf_parser=None):
     # wrap up as es documents
     for ck in chunks:
         if len(ck.strip()) == 0: continue
-        print("--", ck)
+        logging.debug("-- {}".format(ck))
         d = copy.deepcopy(doc)
         if pdf_parser:
             try:
@@ -241,7 +242,7 @@ def tokenize_chunks_docx(chunks, doc, eng, images):
     # wrap up as es documents
     for ck, image in zip(chunks, images):
         if len(ck.strip()) == 0: continue
-        print("--", ck)
+        logging.debug("-- {}".format(ck))
         d = copy.deepcopy(doc)
         d["image"] = image
         tokenize(d, ck, eng)
@@ -440,7 +441,7 @@ def hierarchical_merge(bull, sections, depth):
 
     for i in range(len(cks)):
         cks[i] = [sections[j] for j in cks[i][::-1]]
-        print("--------------\n", "\n* ".join(cks[i]))
+        logging.debug("\n* ".join(cks[i]))
 
     res = [[]]
     num = [0]

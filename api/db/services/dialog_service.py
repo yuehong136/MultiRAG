@@ -6,6 +6,7 @@
 @date：2024/7/24 21:00
 @desc:
 """
+import logging
 import binascii
 import json
 import os
@@ -22,7 +23,7 @@ from api.db.db_models import Dialog, Conversation
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMService, TenantLLMService, LLMBundle
-from api.settings import chat_logger, retrievaler
+from api.settings import retrievaler
 from api.utils.file_utils import get_project_base_directory
 from core.app.resume import forbidden_select_fields4resume
 from core.nlp.search import index_name
@@ -225,7 +226,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     # 检查field_map是否为空，如果不为空，则执行以下操作
     if field_map:
         # 使用日志记录器记录使用SQL进行检索的信息
-        chat_logger.info("Use SQL to retrieval:{}".format(questions[-1]))
+        logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
         # 调用use_sql函数尝试使用SQL查询获取答案
         ans = use_sql(questions[-1], field_map, dialog.tenant_id, chat_mdl, prompt_config.get("quote", True))
         # 如果查询到答案，则通过yield返回，并结束函数执行
@@ -290,7 +291,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     #                                     doc_ids=attachments,
     #                                     top=1024, aggs=False, rerank_mdl=rerank_mdl)
     #     knowledges = [ck["text"] for ck in kbinfos["chunks"]]
-    chat_logger.info(
+    logging.debug(
         "{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
     retrieval_tm = timer()
 
@@ -376,7 +377,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     #     # answer = chat_mdl.chat(msg[0]["content"], msg[1:], gen_conf)
     #     answer = chat_mdl.chat(prompt, msg[1:], gen_conf)
     #     # 记录对话日志，包含用户消息和助手的回答
-    #     chat_logger.info("User: {}|Assistant: {}".format(
+    #     logging.info("User: {}|Assistant: {}".format(
     #         msg[-1]["content"], answer))
     #     # 对答案进行装饰并yield
     #     yield decorate_answer(answer)
@@ -397,7 +398,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         yield decorate_answer(answer)
     else:
         answer = chat_mdl.chat(prompt, msg[1:], gen_conf)
-        chat_logger.info("User: {}|Assistant: {}".format(
+        logging.debug("User: {}|Assistant: {}".format(
             msg[-1]["content"], answer))
         res = decorate_answer(answer)
         res["audio_binary"] = tts(tts_mdl, answer)
@@ -426,7 +427,7 @@ def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
         sql = chat_mdl.chat(sys_prompt, [{"role": "user", "content": user_promt}], {
             "temperature": 0.06})
         print(user_promt, sql)
-        chat_logger.info(f"“{question}”==>{user_promt} get SQL: {sql}")
+        logging.debug(f"{question} ==> {user_promt} get SQL: {sql}")
         sql = re.sub(r"[\r\n]+", " ", sql.lower())
         sql = re.sub(r".*select ", "select ", sql.lower())
         sql = re.sub(r" +", " ", sql)
@@ -448,7 +449,7 @@ def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
 
         print(f"“{question}” get SQL(refined): {sql}")
 
-        chat_logger.info(f"“{question}” get SQL(refined): {sql}")
+        logging.debug(f"{question} get SQL(refined): {sql}")
         tried_times += 1
         return retrievaler.sql_retrieval(sql, format="json"), sql
 
@@ -477,9 +478,9 @@ def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
             question, sql, tbl["error"]
         )
         tbl, sql = get_table()
-        chat_logger.info("TRY it again: {}".format(sql))
+        logging.debug("TRY it again: {}".format(sql))
 
-    chat_logger.info("GET table: {}".format(tbl))
+    logging.debug("GET table: {}".format(tbl))
     print(tbl)
     if tbl.get("error") or len(tbl["rows"]) == 0:
         return None
@@ -509,7 +510,7 @@ def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
     rows = re.sub(r"T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+Z)?\|", "|", rows)
 
     if not docid_idx or not docnm_idx:
-        chat_logger.warning("SQL missing field: " + sql)
+        logging.warning("SQL missing field: " + sql)
         return {
             "answer": "\n".join([clmns, line, rows]),
             "reference": {"chunks": [], "doc_aggs": []},

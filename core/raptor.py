@@ -2,12 +2,12 @@
 """
 @project: multirag
 @Author：龙
-@file： xxx.py
+@file： raptor.py
 @date：2024/7/9 9:00
 @desc:
 """
+import logging
 import re
-import traceback
 from concurrent.futures import ThreadPoolExecutor, ALL_COMPLETED, wait
 from threading import Lock
 from typing import Tuple
@@ -15,8 +15,7 @@ import umap
 import numpy as np
 from sklearn.mixture import GaussianMixture
 
-from core.utils import num_tokens_from_string, truncate
-
+from core.utils import truncate
 
 class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
     def __init__(self, max_cluster, llm_model, embd_model, prompt, max_token=256, threshold=0.1):
@@ -55,15 +54,13 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
                                              {"temperature": 0.3, "max_tokens": self._max_token}
                                              )
                 cnt = re.sub("(······\n由于长度的原因，回答被截断了，要继续吗？|For the content length reason, it stopped, continue?)", "", cnt)
-                print("SUM:", cnt)
+                logging.debug(f"SUM: {cnt}")
                 embds, _ = self._embd_model.encode([cnt])
                 with lock:
-                    if not len(embds[0]):
-                        return
+                    if not len(embds[0]): return
                     chunks.append((cnt, embds[0]))
             except Exception as e:
-                print(e, flush=True)
-                traceback.print_stack(e)
+                logging.exception("summarize got exception")
                 return e
 
         labels = []
@@ -99,7 +96,7 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
                     ck_idx = [i+start for i in range(len(lbls)) if lbls[i] == c]
                     threads.append(executor.submit(summarize, ck_idx, lock))
                 wait(threads, return_when=ALL_COMPLETED)
-                print([t.result() for t in threads])
+                logging.debug(str([t.result() for t in threads]))
 
             assert len(chunks) - end == n_clusters, "{} vs. {}".format(len(chunks) - end, n_clusters)
             labels.extend(lbls)

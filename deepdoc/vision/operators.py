@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 
+import logging
 import sys
 import six
 import cv2
@@ -402,7 +403,7 @@ class DetResizeForTest(object):
                 return None, (None, None)
             img = cv2.resize(img, (int(resize_w), int(resize_h)))
         except BaseException:
-            print(img.shape, resize_w, resize_h)
+            logging.exception("{} {} {}".format(img.shape, resize_w, resize_h))
             sys.exit(0)
         ratio_h = resize_h / float(h)
         ratio_w = resize_w / float(w)

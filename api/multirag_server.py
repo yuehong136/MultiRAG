@@ -7,6 +7,16 @@
 @desc:
 """
 import logging
+import inspect
+from api.utils.log_utils import initRootLogger
+initRootLogger(inspect.getfile(inspect.currentframe()))
+for module in ["pdfminer"]:
+    module_logger = logging.getLogger(module)
+    module_logger.setLevel(logging.WARNING)
+for module in ["sqlalchemy"]:
+    module_logger = logging.getLogger(module)
+    module_logger.handlers.clear()
+    module_logger.propagate = True
 import os
 import signal
 import sys
@@ -19,7 +29,7 @@ from api.db.database import SessionLocal
 from api.db.runtime_config import RuntimeConfig
 from api.db.services.document_service import DocumentService
 from api.settings import (
-    HOST, HTTP_PORT, access_logger, database_logger, stat_logger,
+    HOST, HTTP_PORT
 )
 from api import utils, validation
 
@@ -40,16 +50,16 @@ def update_progress():
         try:
             db = SessionLocal()  # 创建数据库会话
             DocumentService.update_progress(db)  # 更新文档服务进度
-        except Exception as e:
-            stat_logger.error("update_progress exception:" + str(e))  # 记录异常
+        except Exception:
+            logging.exception("update_progress exception")
         finally:
             if db:
                 db.close()
 
 
 if __name__ == '__main__':
-    print(r"""
-┌─────────────────────────── ⭐ Project Starting ────────────────────────────┐
+    logging.info(r"""
+┌───────────────────────────  Project Starting ──────────────────────────────┐
 │     __  ___            __   __     _             ____     ___       ______ │
 │    /  |/  /  __  __   / /  / /_   (_)           / __ \   /   |     / ____/ │
 │   / /|_/ /  / / / /  / /  / __/  / /  ______   / /_/ /  / /| |    / / __   │
@@ -58,12 +68,13 @@ if __name__ == '__main__':
 │                                                                            │
 └─────────────────────────────── API Showing ────────────────────────────────┘
 
-            """, flush=True)
+            """)
 
-    print(
+
+    logging.info(
         f'MultiRAG version: {get_multirag_version()}'
     )
-    print(
+    logging.info(
         f'project base: {utils.file_utils.get_project_base_directory()}'
     )
     show_configs()
@@ -86,15 +97,10 @@ if __name__ == '__main__':
 
     RuntimeConfig.DEBUG = args.debug  # 设置调试模式
     if RuntimeConfig.DEBUG:
-        stat_logger.info("run on debug mode")
+        logging.info("run on debug mode")
 
     RuntimeConfig.init_env()  # 初始化环境变量
     RuntimeConfig.init_config(JOB_SERVER_HOST=HOST, HTTP_PORT=HTTP_PORT)  # 初始化配置
-
-    sqlalchemy_logger = logging.getLogger('sqlalchemy')  # 获取SQLAlchemy日志记录器
-    sqlalchemy_logger.propagate = False
-    sqlalchemy_logger.addHandler(database_logger.handlers[0])  # 添加数据库日志处理程序
-    sqlalchemy_logger.setLevel(database_logger.level)  # 设置日志级别
 
     # 启动进度更新线程
     thread = ThreadPoolExecutor(max_workers=1)
@@ -102,11 +108,8 @@ if __name__ == '__main__':
 
     # 使用 uvicorn 启动 FastAPI 应用
     try:
-        stat_logger.info("MultiRAG HTTP server start...")
+        logging.info("MultiRAG HTTP server start...")
         uvicorn_logger = logging.getLogger("uvicorn.access")  # 获取uvicorn的访问日志记录器
-        for h in access_logger.handlers:
-            uvicorn_logger.addHandler(h)  # 将access_logger的处理程序添加到uvicorn的访问日志记录器中
-        uvicorn_logger.setLevel(access_logger.level)  # 设置日志级别
         uvicorn.run("api.multirag_server:app", host=HOST, port=HTTP_PORT, log_level="info",
                     reload=RuntimeConfig.DEBUG)  # 启动 uvicorn 服务器
     except Exception:

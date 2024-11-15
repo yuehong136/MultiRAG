@@ -1,10 +1,9 @@
-import json
+import logging
 import re
 
 import pandas as pd
 from fastapi import HTTPException
 
-# from api.apps.ollama_client import OllamaClient
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle, TenantLLMService
 from api.db.services.user_service import TenantService
@@ -13,7 +12,6 @@ from api.service.aiforbi_service.llm_prompts import PromptTemplateLoader
 from api.service.aiforbi_service.utils.extract_brackets import extract_brackets
 from api.service.aiforbi_service.utils.extract_js_func import extract_js_function
 from api.service.aiforbi_service.utils.extract_sql import extract_sql
-from core.settings import aiforbi_logger
 
 
 class AIForBIService:
@@ -22,16 +20,16 @@ class AIForBIService:
     async def nl2sql(nl2sql_req_body, db, user_id, llm_name):
         loader = PromptTemplateLoader()
         prompt = loader.fill_template("nl2sql_temp.txt", nl2sql_req_body)
-        aiforbi_logger.info(f"====nl2sql prompt: {prompt}")
+        logging.info(f"====nl2sql prompt: {prompt}")
         tenants = TenantService.get_info_by(db, user_id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
         chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
-        aiforbi_logger.info(f"====nl2sql resp:\n {resp}")
+        logging.info(f"====nl2sql resp:\n {resp}")
         sql = extract_sql(resp)
-        aiforbi_logger.info("====经过提取后的SQL语句：\n" + sql)
+        logging.info("====经过提取后的SQL语句：\n" + sql)
         return sql
 
     @staticmethod
@@ -44,14 +42,14 @@ class AIForBIService:
                                       columns=columns,
                                       sql_result=chart_type_req_body.sql_result['data'],
                                       sql_result_pandas=pd_df)
-        aiforbi_logger.info(f"====chart_type prompt:\n {prompt}")
+        logging.info(f"====chart_type prompt:\n {prompt}")
         tenants = TenantService.get_info_by(db, user_id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
         chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
-        aiforbi_logger.info(f"====chart_type resp:\n {resp}")
+        logging.info(f"====chart_type resp:\n {resp}")
         chart_type_list = extract_brackets(resp, merge=True)
         return chart_type_list
 
@@ -67,7 +65,7 @@ class AIForBIService:
             if llm.llm_name == llm_name and llm.llm_factory in ["OpenAI-API-Compatible", "Ollama", "Xinference"]:
                 is_local_llm = True
                 break
-        aiforbi_logger.info(f"is_local_llm: {is_local_llm}")
+        logging.info(f"is_local_llm: {is_local_llm}")
 
         if is_local_llm:
             # 本地模型使用dynamic_chart_option_function_temp_for_local_llm.txt
@@ -91,16 +89,16 @@ class AIForBIService:
                                               'columns'],
                                           chart_template=chart_template)
 
-        aiforbi_logger.info(f"====dynamic_chart_option_function prompt: {prompt}")
+        logging.info(f"====dynamic_chart_option_function prompt: {prompt}")
 
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
         chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
-        aiforbi_logger.info(f"====dynamic_chart_option_function resp:\n {resp}")
+        logging.info(f"====dynamic_chart_option_function resp:\n {resp}")
         js_func = extract_js_function(resp, function_name="generateChartOption")
-        aiforbi_logger.info("====经过提取后的JS函数：\n" + js_func)
+        logging.info("====经过提取后的JS函数：\n" + js_func)
         return js_func
 
     @staticmethod
@@ -125,7 +123,7 @@ class AIForBIService:
         print(columns)
         loader = PromptTemplateLoader()
         prompt4ChartType = loader.fill_template("static_chart_type.txt", tab=tab)
-        aiforbi_logger.info(f"chart_type prompt: {prompt4ChartType}")
+        logging.info(f"chart_type prompt: {prompt4ChartType}")
 
         chart_type_res = chat_model.chat(system="", history=[{"role": "user", "content": prompt4ChartType}],
                                          gen_conf={})
@@ -142,9 +140,9 @@ class AIForBIService:
         if chart_type:
             chart_type = [chart_type[0]]
         # 将图表类型记录到日志中
-        aiforbi_logger.info(f"chart_type resp: {chart_type}")
+        logging.info(f"chart_type resp: {chart_type}")
         chart_type_str = ', '.join(chart_type)  # 将列表转换为字符串
-        aiforbi_logger.info(f"chart_type resp: {chart_type_str}")
+        logging.info(f"chart_type resp: {chart_type_str}")
 
         chart_template = load_chart_template(chart_type_str)
         prompt4Option = loader.fill_template("static_chart_option.txt",
@@ -152,8 +150,8 @@ class AIForBIService:
                                              columns=columns,
                                              tab=tab,
                                              chart_template=chart_template)
-        aiforbi_logger.info(f"static_chart_option prompt: {prompt4Option}")
+        logging.info(f"static_chart_option prompt: {prompt4Option}")
 
         option = chat_model.chat(system="", history=[{"role": "user", "content": prompt4Option}], gen_conf={})
-        aiforbi_logger.info(f"static_chart_option resp: {option}")
+        logging.info(f"static_chart_option resp: {option}")
         return option

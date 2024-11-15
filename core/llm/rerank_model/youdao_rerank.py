@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 
@@ -21,8 +22,7 @@ class YoudaoRerank(DefaultRerank):
             with YoudaoRerank._model_lock:
                 if not YoudaoRerank._model:
                     try:
-                        # print("LOADING BCE...")
-                        print(f"LOADING BCE from {model_path}...")
+                        logging.info("LOADING BCE from {model_path}...")
                         # YoudaoRerank._model = RerankerModel(model_name_or_path=os.path.join(
                         #     get_home_cache_dir(),
                         #     re.sub(r"^[a-zA-Z]+/", "", model_name)))
@@ -32,7 +32,7 @@ class YoudaoRerank(DefaultRerank):
                         # YoudaoRerank._model = RerankerModel(
                         #     model_name_or_path=model_name.replace(
                         #         "maidalun1020", "InfiniFlow"))
-                        print(f"Failed to load BCE from {model_path}: {e}")
+                        logging.info(f"Failed to load BCE from {model_path}: {e}")
                         default_path = os.path.join(get_home_cache_dir(), self.model_name)
                         YoudaoRerank._model = RerankerModel(model_name_or_path=default_path)
 

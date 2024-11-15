@@ -6,9 +6,11 @@
 @date：2024/7/31 10:12
 @desc:
 """
+import logging
 from typing import Dict, List, Optional, Union
 from uuid import uuid4
 
+import polars as pl
 from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
 from pymilvus.client.types import ExceptionsMessage, LoadState
 from pymilvus.exceptions import (
@@ -25,12 +27,12 @@ from pymilvus.orm.types import DataType
 from pymilvus import __version__
 
 from core import settings
-from core.settings import milvus_logger
+from core.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr, MatchDenseExpr
 
-milvus_logger.info("Milvus version: " + str(__version__))
+logging.info("Milvus version: " + str(__version__))
 
 
-class MilvusConnection:
+class MilvusConnection(DocStoreConnection):
     def __init__(
             self,
             uri: str = settings.MILVUS.get("hosts", ""),
@@ -45,6 +47,147 @@ class MilvusConnection:
             uri, user, password, db_name, token, timeout=timeout, **kwargs
         )
         self.is_self_hosted = bool(utility.get_server_type(using=self._using) == "milvus")
+
+    """
+        Implementing DocStoreConnection abstract methods
+        """
+
+    def dbType(self) -> str:
+        return "milvus"
+
+    def health(self) -> dict:
+        try:
+            version = utility.get_server_version(using=self._using)
+            return {"status": "healthy", "version": version}
+        except MilvusException as e:
+            return {"status": "unhealthy", "error": str(e)}
+
+    def createIdx(self, indexName: str, knowledgebaseId: str, vectorSize: int):
+        return self.create_collection(indexName, dimension=vectorSize)
+
+    def deleteIdx(self, indexName: str, knowledgebaseId: str):
+        return self.drop_collection(indexName)
+
+    def indexExist(self, indexName: str, knowledgebaseId: str) -> bool:
+        return self.has_collection(indexName)
+
+    # def insert(self, rows: list[dict], indexName: str, knowledgebaseId: str) -> list[str]:
+    #     res = self.insert(indexName, rows)
+    #     return res.get("ids", [])
+
+    def get(self, chunkId: str, indexName: str, knowledgebaseIds: list[str]) -> dict | None:
+        result = self.get_collection_data(indexName, chunkId)
+        return result[0] if result else None
+
+    def search(
+            self, selectFields: list[str], highlightFields: list[str], condition: dict,
+            matchExprs: list[MatchExpr], orderBy: OrderByExpr, offset: int, limit: int,
+            indexNames: str | list[str], knowledgebaseIds: list[str]
+    ) -> list[dict] | pl.DataFrame:
+        data = [expr.query_data for expr in matchExprs if isinstance(expr, MatchDenseExpr)]
+        if not data:
+            raise ValueError("No valid dense vector query data found in matchExprs")
+        search_res = self.search(indexNames[0], data, limit=limit)
+        return search_res
+
+    def delete(self, condition: dict, indexName: str, knowledgebaseId: str) -> int:
+        ids = condition.get("id", [])
+        if not ids:
+            return 0
+        delete_res = self.delete(indexName, ids=ids)
+        return delete_res.get("delete_count", 0)
+
+    def getTotal(self, res):
+        return len(res)
+
+    def getChunkIds(self, res):
+        return [hit["id"] for hit in res]
+
+    def getFields(self, res, fields: List[str]) -> Dict[str, dict]:
+        return {d["id"]: {f: d.get(f) for f in fields} for d in res}
+
+    def getAggregation(self, res, fieldnm: str) -> List[tuple]:
+        """
+        Milvus 不支持直接的聚合操作，因此这个方法需要自定义实现。
+        """
+        logging.warning("Aggregation is not natively supported in Milvus.")
+        return []  # 返回空列表或您可以添加自定义聚合逻辑
+
+    def getHighlight(self, res, keywords: List[str], fieldnm: str) -> Dict[str, str]:
+        """
+        Milvus 不支持高亮操作，因此此方法需要自定义实现。
+        """
+        logging.warning("Highlight is not natively supported in Milvus.")
+        return {}  # 返回空字典或自定义实现
+
+    def sql(self, sql: str, fetch_size: int, format: str):
+        """
+        执行一个伪SQL操作，通过将SQL语句转换为Milvus兼容的查询来实现。
+
+        :param sql: SQL样式的查询字符串
+        :param fetch_size: 要检索的记录数
+        :param format: 输出结果的格式
+        :return: 结果集或适当的错误消息
+        """
+        try:
+            # 简化的翻译逻辑（可以替换为实际解析逻辑）
+            # 这里只是一个简单示例，通过检查SQL中的基本关键词来模拟功能
+            if "SELECT" in sql.upper():
+                # 提取查询的基本部分（例如字段、条件、限制条件）
+                # 此处为示例，实际使用中需要完整的SQL解析并转换为Milvus查询
+                collection_name = "target_collection"  # 从SQL解析或提供默认值
+                limit = fetch_size  # 使用fetch_size作为查询的限制
+
+                # 在此处根据解析的SQL结构使用`query`或`search`执行查询
+                # 此示例中data只是一个示例数据，实际情况应替换为解析后的向量数据
+                data = [[0.1, 0.2, 0.3, 0.4]]  # 示例数据，用于搜索，可替换为实际数据
+                results = self.search(collection_name=collection_name, data=data, limit=limit)
+                return results
+            else:
+                raise ValueError("此简化SQL功能仅支持SELECT操作。")
+
+        except Exception as e:
+            logging.error(f"执行SQL失败: {sql}. 错误: {str(e)}")
+            return {"error": str(e)}
+
+    def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: str) -> bool:
+        """
+        使用“删除 + 重新插入”来模拟更新操作。
+
+        :param condition: 查询条件，指定要更新的记录
+        :param newValue: 更新后的新数据
+        :param indexName: 集合名称
+        :param knowledgebaseId: 知识库ID
+        :return: 操作是否成功
+        """
+        if "id" not in condition:
+            raise ValueError("Update operation requires 'id' in condition")
+
+        collection_name = indexName
+        collection = self.get_collection(collection_name)
+        expr = f"id == {condition['id']}" if isinstance(condition["id"], int) else f"id in {condition['id']}"
+
+        # Step 1: Delete existing records
+        try:
+            delete_res = collection.delete(expr)
+            logging.info(f"Deleted record with condition: {expr}")
+            collection.load()  # Ensure delete operation takes effect
+        except Exception as e:
+            logging.error(f"Failed to delete record(s) for update: {e}")
+            return False
+
+        # Step 2: Insert updated records
+        try:
+            insert_res = self.insert(collection_name, data=[newValue])
+            logging.info(f"Inserted updated record: {newValue}")
+            return True
+        except Exception as e:
+            logging.error(f"Failed to insert updated record(s): {e}")
+            return False
+
+    """
+    Existing methods from the original MilvusConnection class
+    """
 
     def create_collection(
             self,
@@ -118,9 +261,9 @@ class MilvusConnection:
             kwargs["consistency_level"] = DEFAULT_CONSISTENCY_LEVEL
         try:
             conn.create_collection(collection_name, schema, timeout=timeout, **kwargs)
-            milvus_logger.debug("Successfully created collection: %s", collection_name)
+            logging.debug("Successfully created collection: %s", collection_name)
         except Exception as ex:
-            milvus_logger.error("Failed to create collection: %s", collection_name)
+            logging.error("Failed to create collection: %s", collection_name)
             raise ex from ex
 
         index_params = IndexParams()
@@ -164,9 +307,9 @@ class MilvusConnection:
                 index_name=index_name,
                 **kwargs,
             )
-            milvus_logger.debug("Successfully created an index on collection: %s", collection_name)
+            logging.debug("Successfully created an index on collection: %s", collection_name)
         except Exception as ex:
-            milvus_logger.error("Failed to create an index on collection: %s", collection_name)
+            logging.error("Failed to create an index on collection: %s", collection_name)
             raise ex from ex
 
     # def create_index(
@@ -196,9 +339,9 @@ class MilvusConnection:
     #             index_name=index_name,
     #             **kwargs,
     #         )
-    #         milvus_logger.debug("Successfully created an index on collection: %s", collection_name)
+    #         logging.debug("Successfully created an index on collection: %s", collection_name)
     #     except Exception as ex:
-    #         milvus_logger.error("Failed to create an index on collection: %s", collection_name)
+    #         logging.error("Failed to create an index on collection: %s", collection_name)
     #         raise ex from ex
 
     def insert(
@@ -229,21 +372,6 @@ class MilvusConnection:
         except Exception as ex:
             raise ex from ex
         return {"insert_count": res.insert_count, "ids": res.primary_keys}
-
-    def health(self) -> dict:
-        try:
-            # 尝试获取 Milvus 服务器的版本来检查是否连接正常
-            version = utility.get_server_version(using=self._using)
-            return {
-                "status": "healthy",
-                "version": version
-            }
-        except MilvusException as e:
-            # 捕获异常并返回不健康状态
-            return {
-                "status": "unhealthy",
-                "error": str(e)
-            }
 
     def upsert(
             self,
@@ -308,9 +436,9 @@ class MilvusConnection:
         if records:
             try:
                 self.upsert(collection_name, records)
-                milvus_logger.info("Successfully upserted records to Milvus")
+                logging.info("Successfully upserted records to Milvus")
             except Exception as e:
-                milvus_logger.error("Failed to upsert records to Milvus: " + str(e))
+                logging.error("Failed to upsert records to Milvus: " + str(e))
                 raise e
 
     # 使用示例
@@ -346,9 +474,9 @@ class MilvusConnection:
                 partition_names=partition_names,
                 timeout=timeout,
                 **kwargs,
-            )
+                )
         except Exception as ex:
-            milvus_logger.error("Failed to search collection: %s", collection_name)
+            logging.error("Failed to search collection: %s", collection_name)
             raise ex from ex
 
         ret = []
@@ -383,7 +511,7 @@ class MilvusConnection:
         try:
             schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
         except Exception as ex:
-            milvus_logger.error("Failed to describe collection: %s", collection_name)
+            logging.error("Failed to describe collection: %s", collection_name)
             raise ex from ex
 
         if ids:
@@ -405,7 +533,7 @@ class MilvusConnection:
                 **kwargs,
             )
         except Exception as ex:
-            milvus_logger.error("Failed to query collection: %s", collection_name)
+            logging.error("Failed to query collection: %s", collection_name)
             raise ex from ex
 
         return res
@@ -429,7 +557,7 @@ class MilvusConnection:
         try:
             schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
         except Exception as ex:
-            milvus_logger.error("Failed to describe collection: %s", collection_name)
+            logging.error("Failed to describe collection: %s", collection_name)
             raise ex from ex
 
         if not output_fields:
@@ -449,7 +577,7 @@ class MilvusConnection:
                 **kwargs,
             )
         except Exception as ex:
-            milvus_logger.error("Failed to get collection: %s", collection_name)
+            logging.error("Failed to get collection: %s", collection_name)
             raise ex from ex
 
         return res
@@ -511,7 +639,7 @@ class MilvusConnection:
                 # 获取集合的schema以用于构造查询表达式
                 schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
             except Exception as ex:
-                milvus_logger.error("Failed to describe collection: %s", collection_name)
+                logging.error("Failed to describe collection: %s", collection_name)
                 raise ex from ex
 
             expr = self._pack_pks_expr(schema_dict, pks)
@@ -543,7 +671,7 @@ class MilvusConnection:
             if res.primary_keys:
                 ret_pks.extend(res.primary_keys)
         except Exception as ex:
-            milvus_logger.error("Failed to delete primary keys in collection: %s", collection_name)
+            logging.error("Failed to delete primary keys in collection: %s", collection_name)
             raise ex from ex
 
         # 如果有删除的主键，返回主键列表；否则，返回删除计数
@@ -600,9 +728,9 @@ class MilvusConnection:
             kwargs["consistency_level"] = DEFAULT_CONSISTENCY_LEVEL
         try:
             conn.create_collection(collection_name, schema, timeout=timeout, **kwargs)
-            milvus_logger.debug("Successfully created collection: %s", collection_name)
+            logging.debug("Successfully created collection: %s", collection_name)
         except Exception as ex:
-            milvus_logger.error("Failed to create collection: %s", collection_name)
+            logging.error("Failed to create collection: %s", collection_name)
             raise ex from ex
 
         if index_params:
@@ -676,10 +804,10 @@ class MilvusConnection:
         try:
             connections.connect(using, user, password, db_name, token, uri=uri, **kwargs)
         except Exception as ex:
-            milvus_logger.error("Failed to create new connection using: %s", using)
+            logging.error("Failed to create new connection using: %s", using)
             raise ex from ex
         else:
-            milvus_logger.debug("Created new connection using: %s", using)
+            logging.debug("Created new connection using: %s", using)
             return using
 
     def _extract_primary_field(self, schema_dict: Dict) -> dict:
@@ -721,7 +849,7 @@ class MilvusConnection:
         try:
             conn.load_collection(collection_name, timeout=timeout, **kwargs)
         except MilvusException as ex:
-            milvus_logger.error("Failed to load collection: %s", collection_name)
+            logging.error("Failed to load collection: %s", collection_name)
             raise ex from ex
 
     def release_collection(self, collection_name: str, timeout: Optional[float] = None, **kwargs):
@@ -729,7 +857,7 @@ class MilvusConnection:
         try:
             conn.release_collection(collection_name, timeout=timeout, **kwargs)
         except MilvusException as ex:
-            milvus_logger.error("Failed to load collection: %s", collection_name)
+            logging.error("Failed to load collection: %s", collection_name)
             raise ex from ex
 
     def get_load_state(

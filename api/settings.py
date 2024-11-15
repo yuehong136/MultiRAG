@@ -2,33 +2,15 @@ import os
 from datetime import date
 from enum import IntEnum, Enum
 from api.utils.file_utils import get_project_base_directory
-from api.utils.log_utils import LoggerFactory, getLogger
+import core.utils
 from core.nlp import search
 from graphrag import search as kg_search
 from core.utils.milvus_conn import MILVUS_CONNECTION
-
-# Logger
-LoggerFactory.set_directory(
-    os.path.join(
-        get_project_base_directory(),
-        "logs",
-        "api"))
-# {CRITICAL: 50, FATAL:50, ERROR:40, WARNING:30, WARN:30, INFO:20, DEBUG:10, NOTSET:0}
-LoggerFactory.LEVEL = 30
-
-stat_logger = getLogger("stat")
-access_logger = getLogger("access")
-database_logger = getLogger("database")
-chat_logger = getLogger("chat")
-
-
 from api.utils import get_base_config, decrypt_database_config
 
 API_VERSION = "v1"
 MULTI_RAG_SERVICE_NAME = "multirag"
 LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
-
-SUBPROCESS_STD_LOG_NAME = "std.log"
 
 REQUEST_WAIT_SEC = 2
 REQUEST_MAX_WAIT_SEC = 300
@@ -193,3 +175,19 @@ class RetCode(IntEnum, CustomEnum):
     SERVER_ERROR = 500
     FORBIDDEN = 403
     NOT_FOUND = 404
+
+# from api.utils.log_utils import LoggerFactory, getLogger
+
+# # Logger
+# LoggerFactory.set_directory(
+#     os.path.join(
+#         get_project_base_directory(),
+#         "logs",
+#         "api"))
+# # {CRITICAL: 50, FATAL:50, ERROR:40, WARNING:30, WARN:30, INFO:20, DEBUG:10, NOTSET:0}
+# LoggerFactory.LEVEL = 30
+#
+# stat_logger = getLogger("stat")
+# access_logger = getLogger("access")
+# database_logger = getLogger("database")
+# chat_logger = getLogger("chat")

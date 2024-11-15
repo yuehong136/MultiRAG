@@ -1,6 +1,16 @@
+import logging
+import inspect
+from api.utils.log_utils import initRootLogger
+initRootLogger(inspect.getfile(inspect.currentframe()))
+for module in ["pdfminer"]:
+    module_logger = logging.getLogger(module)
+    module_logger.setLevel(logging.WARNING)
+for module in ["sqlalchemy"]:
+    module_logger = logging.getLogger(module)
+    module_logger.handlers.clear()
+    module_logger.propagate = True
 import datetime
 import json
-import logging
 import os
 import hashlib
 import copy
@@ -34,8 +44,8 @@ from api.utils.file_utils import get_project_base_directory
 from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, email, knowledge_graph
 from core.nlp import search, rag_tokenizer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from core.settings import database_logger, SVR_QUEUE_NAME
-from core.settings import cron_logger, DOC_MAXIMUM_SIZE
+from core.settings import SVR_QUEUE_NAME
+from core.settings import DOC_MAXIMUM_SIZE
 from core.utils import rmSpace, num_tokens_from_string
 from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils.redis_conn import REDIS_CONN, Payload
@@ -83,7 +93,7 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
     try:
         TaskService.update_progress(db, task_id, d)
     except Exception as e:
-        cron_logger.error("set_progress:({}), {}".format(task_id, str(e)))
+        logging.error("set_progress:({}), {}".format(task_id, str(e)))
 
     # db.close()
     if cancel:
@@ -103,7 +113,7 @@ def collect(db: Session):
             time.sleep(1)
             return pd.DataFrame()
     except Exception as e:
-        cron_logger.error("Get task event from queue exception:" + str(e))
+        logging.error("Get task event from queue exception:" + str(e))
         return pd.DataFrame()
 
     msg = PAYLOAD.get_message()
@@ -111,13 +121,13 @@ def collect(db: Session):
         return pd.DataFrame()
 
     if TaskService.do_cancel(db, msg["id"]):
-        cron_logger.info("Task {} has been canceled.".format(msg["id"]))
+        logging.info("Task {} has been canceled.".format(msg["id"]))
         return pd.DataFrame()
     tasks = TaskService.get_tasks(db, msg["id"])
 
     # assert tasks, "{} empty task!".format(msg["id"])
     if not tasks:
-        cron_logger.warn("{} empty task!".format(msg["id"]))
+        logging.warning("{} empty task!".format(msg["id"]))
         return []
 
     tasks = pd.DataFrame(tasks)
@@ -148,11 +158,11 @@ def build(row, db: Session):
         st = timer()
         bucket, name = File2DocumentService.get_storage_address(db, doc_id=row["doc_id"])
         binary = get_storage_binary(bucket, name)
-        cron_logger.info(
+        logging.info(
             "From minio({}) {}/{}".format(timer() - st, row["location"], row["name"]))
     except TimeoutError:
         callback(-1, "Internal server error: Fetch file from minio timeout. Could you try it again.")
-        cron_logger.error(
+        logging.error(
             "Minio {}/{}: Fetch file from minio timeout.".format(row["location"], row["name"]))
         return
     except Exception as e:
@@ -167,11 +177,11 @@ def build(row, db: Session):
         cks = chunker.chunk(row["name"], binary=binary, from_page=row["from_page"],
                             to_page=row["to_page"], lang=row["language"], callback=callback,
                             kb_id=row["kb_id"], parser_config=row["parser_config"], tenant_id=row["tenant_id"])
-        cron_logger.info(
+        logging.info(
             "Chunking({}) {}/{}".format(timer() - st, row["location"], row["name"]))
     except Exception as e:
         callback(-1, "Internal server error while chunking: %s" % str(e).replace("'", ""))
-        cron_logger.error(
+        logging.error(
             "Chunking {}/{}: {}".format(row["location"], row["name"], str(e)))
         traceback.print_exc()
         return
@@ -236,13 +246,13 @@ def build(row, db: Session):
             STORAGE_IMPL.put(row["kb_id"], d["pk"], output_buffer.getvalue())
             el += timer() - st
         except Exception as e:
-            cron_logger.error(str(e))
+            logging.error(str(e))
             traceback.print_exc()
 
         d["img_id"] = "{}-{}".format(row["kb_id"], d["pk"])
         del d["image"]
         docs.append(d)
-    cron_logger.info("MINIO PUT({}):{}".format(row["name"], el))
+    logging.info("MINIO PUT({}):{}".format(row["name"], el))
 
     if row["parser_config"].get("auto_keywords", 0):
         st = timer()
@@ -423,7 +433,7 @@ def main():
                 try:
                     return json.loads(auth_str) if isinstance(auth_str, str) else auth_str
                 except json.JSONDecodeError:
-                    cron_logger.error(f"Failed to decode auth field: {auth_str}")
+                    logging.error(f"Failed to decode auth field: {auth_str}")
                     return []  # 解析失败时，返回空列表
 
             rows['auth'] = rows['auth'].apply(convert_auth)
@@ -434,7 +444,7 @@ def main():
                     embd_mdl = LLMBundle(db, r["tenant_id"], LLMType.EMBEDDING, llm_name=r["embd_id"], lang=r["language"])
                 except Exception as e:
                     callback(-1, msg=str(e))
-                    cron_logger.error(str(e))
+                    logging.error(str(e))
                     continue
 
                 if r.get("task_type", "") == "raptor":
@@ -443,12 +453,12 @@ def main():
                         cks, tk_count = run_raptor(r, chat_mdl, embd_mdl, callback)
                     except Exception as e:
                         callback(-1, msg=str(e))
-                        cron_logger.error(str(e))
+                        logging.error(str(e))
                         continue
                 else:
                     st = timer()
                     cks = build(r, db)
-                    cron_logger.info("Build chunks({}): {}".format(r["name"], timer() - st))
+                    logging.info("Build chunks({}): {}".format(r["name"], timer() - st))
                     if cks is None:
                         continue
                     if not cks:
@@ -465,9 +475,9 @@ def main():
                         tk_count = embedding(cks, embd_mdl, r["parser_config"], callback)
                     except Exception as e:
                         callback(-1, "Embedding error:{}".format(str(e)))
-                        cron_logger.error(str(e))
+                        logging.error(str(e))
                         tk_count = 0
-                    cron_logger.info("Embedding elapsed({}): {:.2f}".format(r["name"], timer() - st))
+                    logging.info("Embedding elapsed({}): {:.2f}".format(r["name"], timer() - st))
                     callback(msg="Finished embedding (in {:.2f}s)! Start to build index!".format(timer() - st))
 
                 kb_id = DocumentService.get_by_doc_id(db, r["doc_id"])["kb_id"]
@@ -491,13 +501,13 @@ def main():
                             collection_name=search.index_name_one(r["tenant_id"], kb.name),
                             data=converted_record
                         )
-                        print("Successfully inserted record to Milvus")
+                        logging.info("Successfully inserted record to Milvus")
                     except Exception as e:
-                        print("Insert error:", e)
-                        print("Data being inserted:", converted_record)
-                cron_logger.info("Indexing elapsed({}): {:.2f}".format(r["name"], timer() - st))
+                        logging.error("Insert error:", e)
+                        logging.error("Data being inserted:", converted_record)
+                logging.info("Indexing elapsed({}): {:.2f}".format(r["name"], timer() - st))
                 if milvus_r:
-                    callback(-1, f"Insert chunk error, detail info please check logs/api/cron_logger.log. Please also check Milvus status!")
+                    callback(-1, f"Insert chunk error, detail info please check logs/api/logging.log. Please also check Milvus status!")
                     # 构建 Milvus 集合名称
                     collection_name = search.index_name_one(r["tenant_id"], kb.name)
                     # 检查集合是否存在并删除 Milvus 中的数据
@@ -509,7 +519,7 @@ def main():
                             )
                     except MilvusException as e:
                         return e
-                    cron_logger.error(str(milvus_r))
+                    logging.error(str(milvus_r))
                 else:
                     if TaskService.do_cancel(db, r["id"]):
                         # 构建 Milvus 集合名称
@@ -529,11 +539,11 @@ def main():
                     callback(1., "Done!")
                     DocumentService.increment_chunk_num(
                         db, r["doc_id"], r["kb_id"], tk_count, chunk_count, 0)
-                    cron_logger.info(
+                    logging.info(
                         "Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(
                             r["id"], tk_count, len(cks), timer() - st))
         except Exception as e:
-            cron_logger.error(f"Error in main loop: {str(e)}")
+            logging.error(f"Error in main loop: {str(e)}")
             db.rollback()  # 回滚事务
             raise
         else:
@@ -557,11 +567,6 @@ def report_status():
 
 
 if __name__ == "__main__":
-    sqlalchemy_logger = logging.getLogger('sqlalchemy')
-    sqlalchemy_logger.propagate = False
-    sqlalchemy_logger.addHandler(database_logger.handlers[0])
-    sqlalchemy_logger.setLevel(database_logger.level)
-
     exe = ThreadPoolExecutor(max_workers=1)
     exe.submit(report_status)
 

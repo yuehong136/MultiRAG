@@ -6,7 +6,7 @@
 @date：2024/8/9 14:04
 @desc:
 """
-
+import logging
 import json
 from functools import partial
 from typing import List, Optional
@@ -138,6 +138,7 @@ async def run(request: RunCanvasRequest, db: Session = Depends(get_db), user=Dep
                 pass
             canvas.add_user_input(req_data["message"])
         answer = canvas.run(stream=stream)
+        logging.debug(canvas)
     except Exception as e:
         return server_error_response(e)
 

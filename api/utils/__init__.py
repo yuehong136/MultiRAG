@@ -49,8 +49,10 @@ CONFIGS = read_config()
 
 def show_configs():
     logging.info(f"Current configs, from {conf_realpath(SERVICE_CONF)}:")
+    logging.info("默认不展示service_conf.yaml,如有需要,请至 api/utils/__init__.py 解开注释")
     for k, v in CONFIGS.items():
-        logging.info(f"{k}: {v}")
+        # logging.info(f"{k}: {v}")
+        continue
 
 
 def get_base_config(key, default=None):

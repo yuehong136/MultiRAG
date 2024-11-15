@@ -1,10 +1,9 @@
-# init.py
+import logging
 import base64
 import json
 import os
 import time
 import uuid
-from copy import deepcopy
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -17,7 +16,6 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMFactoriesService, LLMService, TenantLLMService, LLMBundle
 from api.db.services.user_service import TenantService, UserTenantService
 from api.settings import CHAT_MDL, EMBEDDING_MDL, ASR_MDL, IMAGE2TEXT_MDL, PARSERS, LLM_FACTORY, API_KEY, LLM_BASE_URL
-# from api.utils.file_utils import get_project_base_directory
 from api.db.database import SessionLocal
 from api.utils.file_utils import get_project_base_directory
 
@@ -63,38 +61,51 @@ def init_superuser(db: Session):
                 "api_base": LLM_BASE_URL
             }
         )
-    print(tenant_llm)
+    # print(tenant_llm)
     if not UserService.save(db, **user_info):
-        print("\033[93m【ERROR】\033[0mcan't init admin.")
+        # print("\033[93m【ERROR】\033[0mcan't init admin.")
+        logging.error("can't init admin.")
         return
     TenantService.insert(db, **tenant)
     UserTenantService.insert(db, **usr_tenant)
     TenantLLMService.insert_many(db, tenant_llm)
-    print(
-        "【INFO】Super user initialized. \033[93memail: admin@datav.com, password: admin\033[0m. Changing the password after logging in is strongly recommended.")
+    # print(
+    #     "【INFO】Super user initialized. \033[93memail: admin@datav.com, password: admin\033[0m. Changing the password after logging in is strongly recommended.")
+    logging.info(
+        "Super user initialized. email: admin@ragflow.io, password: admin. Changing the password after login is strongly recommended.")
 
     try:
         chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])
-        print(f"Model instance created for {tenant['llm_id']}")
+        # print(f"Model instance created for {tenant['llm_id']}")
+        logging.info(f"Model instance created for {tenant['llm_id']}")
     except LookupError as e:
-        print(f"Error: {e}")
+        # print(f"Error: {e}")
+        logging.error(f"Error: {e}")
     msg = chat_mdl.chat(system="", history=[
         {"role": "user", "content": "Hello!"}], gen_conf={})
     if msg.find("ERROR: ") == 0:
-        print(
-            "\33[91m【ERROR】\33[0m: ",
-            "'{}' doesn't work. {}".format(
+        # print(
+        #     "\33[91m【ERROR】\33[0m: ",
+        #     "'{}' doesn't work. {}".format(
+        #         tenant["llm_id"],
+        #         msg))
+        logging.error(
+            "'{}' dosen't work. {}".format(
                 tenant["llm_id"],
                 msg))
     else:
-        print("【success！！！】" + msg)
-    # embd_mdl = LLMBundle(db, tenant["id"], LLMType.EMBEDDING, tenant["embd_id"])
-    # v, c = embd_mdl.encode(db, ["Hello!"])
-    # if c == 0:
-    #     print(
-    #         "\33[91m【ERROR】\33[0m:",
-    #         " '{}' doesn't work!".format(
-    #             tenant["embd_id"]))
+        # print("【success！！！】" + msg)
+        logging.info("【success！！！】" + msg)
+    embd_mdl = LLMBundle(db, tenant["id"], LLMType.EMBEDDING, tenant["embd_id"])
+    v, c = embd_mdl.encode(db, ["Hello!"])
+    if c == 0:
+        # print(
+        #     "\33[91m【ERROR】\33[0m:",
+        #     " '{}' doesn't work!".format(
+        #         tenant["embd_id"]))
+        logging.error(
+            "'{}' dosen't work!".format(
+                tenant["embd_id"]))
 
 
 def init_llm_factory(db: Session):
@@ -198,19 +209,23 @@ def add_graph_templates(db: Session):
                 try:
                     CanvasTemplateService.update_by_id(db, cnvs["id"], cnvs)
                 except Exception as e:
-                    print(f"Error updating template {cnvs['id']}: {e}")
+                    # print(f"Error updating template {cnvs['id']}: {e}")
+                    logging.exception(f"Error updating template {cnvs['id']}: {e}")
                     db.rollback()  # 回滚事务
             else:
                 # 如果记录不存在，则插入
                 try:
                     CanvasTemplateService.save(db, **cnvs)
                 except Exception as e:
-                    print(f"Error saving template {cnvs['id']}: {e}")
+                    # print(f"Error saving template {cnvs['id']}: {e}")
+                    logging.exception(f"Error saving template {cnvs['id']}: {e}")
                     db.rollback()  # 回滚事务
 
-        except Exception as e:
-            print("Add graph templates error: ", e)
-            print("------------", flush=True)
+        except Exception:
+            # print("Add graph templates error: ", e)
+            # print("------------", flush=True)
+            logging.exception("Add graph templates error: ")
+
             db.rollback()  # 回滚事务
 
 
@@ -223,7 +238,7 @@ def init_web_data(db: Session = SessionLocal()):
         init_superuser(db)
 
     add_graph_templates(db)
-    print("init web data success:{}".format(time.time() - start_time))
+    logging.info("init web data success:{}".format(time.time() - start_time))
 
 
 if __name__ == '__main__':

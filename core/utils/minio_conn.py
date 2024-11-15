@@ -6,12 +6,11 @@
 @date：2024/7/19 14:00
 @desc:
 """
-import os
+import logging
 import time
 from minio import Minio
 from io import BytesIO
 from core import settings
-from core.settings import minio_logger
 from core.utils import singleton
 
 
@@ -25,7 +24,7 @@ class MultiRAGMinio(object):
         try:
             if self.conn:
                 self.__close__()
-        except Exception as e:
+        except Exception:
             pass
 
         try:
@@ -34,9 +33,9 @@ class MultiRAGMinio(object):
                               secret_key=settings.MINIO["password"],
                               secure=False
                               )
-        except Exception as e:
-            minio_logger.error(
-                "Fail to connect %s " % settings.MINIO["host"] + str(e))
+        except Exception:
+            logging.exception(
+                "Fail to connect %s " % settings.MINIO["host"])
 
     def __close__(self):
         del self.conn
@@ -63,24 +62,24 @@ class MultiRAGMinio(object):
                                          len(binary)
                                          )
                 return r
-            except Exception as e:
-                minio_logger.error(f"Fail put {bucket}/{fnm}: " + str(e))
+            except Exception:
+                logging.exception(f"Fail put {bucket}/{fnm}:")
                 self.__open__()
                 time.sleep(1)
 
     def rm(self, bucket, fnm):
         try:
             self.conn.remove_object(bucket, fnm)
-        except Exception as e:
-            minio_logger.error(f"Fail rm {bucket}/{fnm}: " + str(e))
+        except Exception:
+            logging.exception(f"Fail put {bucket}/{fnm}:")
 
     def get(self, bucket, fnm):
         for _ in range(1):
             try:
                 r = self.conn.get_object(bucket, fnm)
                 return r.read()
-            except Exception as e:
-                minio_logger.error(f"fail get {bucket}/{fnm}: " + str(e))
+            except Exception:
+                logging.exception(f"Fail put {bucket}/{fnm}:")
                 self.__open__()
                 time.sleep(1)
         return
@@ -89,8 +88,8 @@ class MultiRAGMinio(object):
         try:
             if self.conn.stat_object(bucket, fnm):return True
             return False
-        except Exception as e:
-            minio_logger.error(f"Fail put {bucket}/{fnm}: " + str(e))
+        except Exception:
+            logging.exception(f"Fail put {bucket}/{fnm}:")
         return False
 
 
@@ -98,12 +97,11 @@ class MultiRAGMinio(object):
         for _ in range(10):
             try:
                 return self.conn.get_presigned_url("GET", bucket, fnm, expires)
-            except Exception as e:
-                minio_logger.error(f"fail get {bucket}/{fnm}: " + str(e))
+            except Exception:
+                logging.exception(f"Fail put {bucket}/{fnm}:")
                 self.__open__()
                 time.sleep(1)
         return
-
 
 MINIO = MultiRAGMinio()
 

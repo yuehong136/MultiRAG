@@ -6,6 +6,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+import logging
 import json
 import random
 import time
@@ -14,13 +15,11 @@ from functools import wraps
 from io import BytesIO
 from typing import Callable
 
-from fastapi import FastAPI, Request, Response, Depends
+from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
 from itsdangerous import URLSafeTimedSerializer
 from sqlalchemy.orm import Session
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from hmac import HMAC
 from base64 import b64encode
 from uuid import uuid1
@@ -29,7 +28,7 @@ import requests
 
 from api.db.db_models import APIToken
 from api.db.services.api_service import APITokenService
-from api.settings import RetCode, REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC, stat_logger, CLIENT_AUTHENTICATION, \
+from api.settings import RetCode, REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC, CLIENT_AUTHENTICATION, \
     HTTP_APP_KEY, SECRET_KEY
 from api.utils import HTTP_STATUS_CODES, get_uuid
 
@@ -85,7 +84,7 @@ def get_data_error_result(retcode=RetCode.DATA_ERROR, retmsg='Sorry! Data missin
 
 
 def server_error_response(e):
-    stat_logger.exception(e)
+    logging.exception(e)
     try:
         if e.code == 401:
             return get_json_result(retcode=401, retmsg=repr(e))
@@ -232,7 +231,7 @@ def construct_json_result(code=RetCode.SUCCESS, message='success', data=None):
 
 
 def construct_error_response(e):
-    stat_logger.exception(e)
+    logging.exception(e)
     try:
         if e.code == 401:
             return construct_json_result(code=RetCode.UNAUTHORIZED, message=repr(e))

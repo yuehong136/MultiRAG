@@ -6,6 +6,7 @@
 @date：2024/7/22 15:22
 @desc:
 """
+import logging
 import operator
 from functools import reduce
 from typing import Dict, Type, Union
@@ -17,11 +18,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from api.utils import current_timestamp, timestamp_to_date
 
 from api.db.database import BaseModel as DataBaseModel
-from api.utils.log_utils import getLogger
-from enum import Enum
 
 
-LOGGER = getLogger()
 
 
 def bulk_insert_into_db(db: Session, model, data_source, replace_on_conflict=False):
@@ -51,7 +49,7 @@ def bulk_insert_into_db(db: Session, model, data_source, replace_on_conflict=Fal
             db.commit()
         except SQLAlchemyError as e:
             db.rollback()
-            LOGGER.error(f"Error bulk inserting into DB: {e}")
+            logging.error(f"Error bulk inserting into DB: {e}")
             raise
 
 

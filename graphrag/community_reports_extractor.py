@@ -5,8 +5,8 @@ Reference:
  - [graphrag](https://github.com/microsoft/graphrag)
 """
 
-import json
 import logging
+import json
 import re
 import traceback
 from dataclasses import dataclass
@@ -20,8 +20,6 @@ from core.llm.chat_model.base import Base as CompletionLLM
 from graphrag.utils import ErrorHandlerFn, perform_variable_replacements, dict_has_keys_with_types
 from core.utils import num_tokens_from_string
 from timeit import default_timer as timer
-
-log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -82,7 +80,7 @@ class CommunityReportsExtractor:
                     response = re.sub(r"[^\}]*$", "", response)
                     response = re.sub(r"\{\{", "{", response)
                     response = re.sub(r"\}\}", "}", response)
-                    print(response)
+                    logging.debug(response)
                     response = json.loads(response)
                     if not dict_has_keys_with_types(response, [
                                 ("title", str),
@@ -94,7 +92,7 @@ class CommunityReportsExtractor:
                     response["weight"] = weight
                     response["entities"] = ents
                 except Exception as e:
-                    print("ERROR: ", traceback.format_exc())
+                    logging.exception("CommunityReportsExtractor got exception")
                     self._on_error(e, traceback.format_exc(), None)
                     continue
 
