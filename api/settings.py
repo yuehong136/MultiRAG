@@ -26,24 +26,12 @@ from api.utils import get_base_config, decrypt_database_config
 
 API_VERSION = "v1"
 MULTI_RAG_SERVICE_NAME = "multirag"
-SERVER_MODULE = "rag_flow_server.py"
-TEMP_DIRECTORY = os.path.join(get_project_base_directory(), "temp")
-RAG_FLOW_CONF_PATH = os.path.join(get_project_base_directory(), "conf")
 LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
 
 SUBPROCESS_STD_LOG_NAME = "std.log"
 
-ERROR_REPORT = True
-ERROR_REPORT_WITH_PATH = False
-
-MAX_TIMESTAMP_INTERVAL = 60
-SESSION_VALID_PERIOD = 7 * 24 * 60 * 60
-
-REQUEST_TRY_TIMES = 3
 REQUEST_WAIT_SEC = 2
 REQUEST_MAX_WAIT_SEC = 300
-
-USE_REGISTRY = get_base_config("use_registry")
 
 LLM = get_base_config("user_default_llm", {})
 LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
@@ -121,10 +109,6 @@ PARSERS = LLM.get(
     "parsers",
     "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email")
 
-# distribution
-DEPENDENT_DISTRIBUTION = get_base_config("dependent_distribution", False)
-RAG_FLOW_UPDATE_CHECK = False
-
 HOST = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("host", "127.0.0.1")
 HTTP_PORT = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("http_port")
 
@@ -136,29 +120,9 @@ SECRET_KEY = get_base_config(
 #     {}).get(
 #         "secret_key",
 #     "multirag_secret_key")
-TOKEN_EXPIRE_IN = get_base_config(
-    MULTI_RAG_SERVICE_NAME, {}).get(
-        "token_expires_in", 3600)
 
-NGINX_HOST = get_base_config(
-    MULTI_RAG_SERVICE_NAME, {}).get(
-        "nginx", {}).get("host") or HOST
-NGINX_HTTP_PORT = get_base_config(
-    MULTI_RAG_SERVICE_NAME, {}).get(
-        "nginx", {}).get("http_port") or HTTP_PORT
-
-RANDOM_INSTANCE_ID = get_base_config(
-    MULTI_RAG_SERVICE_NAME, {}).get(
-        "random_instance_id", False)
-
-PROXY = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("proxy")
-PROXY_PROTOCOL = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("protocol")
-
+DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
 DATABASE = decrypt_database_config(name="postgresql")
-
-# Switch
-# upload
-UPLOAD_DATA_FROM_CLIENT = True
 
 # authentication
 AUTHENTICATION_CONF = get_base_config("authentication", {})
@@ -166,33 +130,10 @@ AUTHENTICATION_CONF = get_base_config("authentication", {})
 # client
 CLIENT_AUTHENTICATION = AUTHENTICATION_CONF.get(
     "client", {}).get(
-        "switch", False)
+    "switch", False)
 HTTP_APP_KEY = AUTHENTICATION_CONF.get("client", {}).get("http_app_key")
 GITHUB_OAUTH = get_base_config("oauth", {}).get("github")
 FEISHU_OAUTH = get_base_config("oauth", {}).get("feishu")
-WECHAT_OAUTH = get_base_config("oauth", {}).get("wechat")
-
-# site
-SITE_AUTHENTICATION = AUTHENTICATION_CONF.get("site", {}).get("switch", False)
-
-# permission
-PERMISSION_CONF = get_base_config("permission", {})
-PERMISSION_SWITCH = PERMISSION_CONF.get("switch")
-COMPONENT_PERMISSION = PERMISSION_CONF.get("component")
-DATASET_PERMISSION = PERMISSION_CONF.get("dataset")
-
-HOOK_MODULE = get_base_config("hook_module")
-HOOK_SERVER_NAME = get_base_config("hook_server_name")
-
-ENABLE_MODEL_STORE = get_base_config('enable_model_store', False)
-# authentication
-USE_AUTHENTICATION = False
-USE_DATA_AUTHENTICATION = False
-AUTOMATIC_AUTHORIZATION_OUTPUT_DATA = True
-USE_DEFAULT_TIMEOUT = False
-AUTHENTICATION_DEFAULT_TIMEOUT = 7 * 24 * 60 * 60  # s
-PRIVILEGE_COMMAND_WHITELIST = []
-CHECK_NODES_IDENTITY = False
 
 retrievaler = search.Dealer(MILVUS_CONNECTION)
 kg_retrievaler = kg_search.KGSearch(MILVUS_CONNECTION)
