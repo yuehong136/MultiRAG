@@ -27,6 +27,7 @@ from api.db.db_models import init_database_tables as init_web_db
 from api.db.init_data import init_web_data
 from api.versions import get_multirag_version
 import uvicorn
+from api.utils import show_configs
 
 
 def update_progress():
@@ -65,6 +66,7 @@ if __name__ == '__main__':
     print(
         f'project base: {utils.file_utils.get_project_base_directory()}'
     )
+    show_configs()
 
     # 初始化数据库
     init_web_db()
