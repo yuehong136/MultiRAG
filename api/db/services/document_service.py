@@ -409,7 +409,7 @@ class DocumentService(CommonService):
     def begin2parse(cls, db: Session, doc_id: str):
         cls.update_by_id(db, doc_id, {
             "progress": random.random() * 1 / 100.,
-            "progress_msg": "Task dispatched...",
+            "progress_msg": "Task is queued...",
             "process_begin_at": get_format_time()
         })
 
