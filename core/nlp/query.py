@@ -43,7 +43,7 @@ class MilvusQueryer:
 
     def question(self, txt, tbl="qa", min_match: float=0.6):
         txt = re.sub(
-            r"[ :\r\n\t,，。？?/`!！&\^%%]+",
+            r"[ :\r\n\t,，。？?/`!！&\^%%()^]+",
             " ",
             rag_tokenizer.tradi2simp(rag_tokenizer.strQ2B(txt.lower())),
         ).strip()
@@ -65,7 +65,7 @@ class MilvusQueryer:
                 syn = ["\"{}\"^{:.4f}".format(s, w / 4.) for s in syn]
                 syns.append(" ".join(syn))
 
-            q = ["({}^{:.4f}".format(tk, w) + " %s)".format() for (tk, w), syn in zip(tks_w, syns)]
+            q = ["({}^{:.4f}".format(tk, w) + " {})".format(syn) for (tk, w), syn in zip(tks_w, syns) if tk]
             for i in range(1, len(tks_w)):
                 q.append(
                     '"%s %s"^%.4f'
