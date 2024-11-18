@@ -1,0 +1,51 @@
+from urllib.parse import urljoin
+
+import numpy as np
+import requests
+
+from core.llm.rerank_model.base import Base
+from core.utils import num_tokens_from_string, truncate
+
+
+class LocalAIRerank(Base):
+    def __init__(self, key, model_name, base_url):
+        if base_url.find("/rerank") == -1:
+            self.base_url = urljoin(base_url, "/rerank")
+        else:
+            self.base_url = base_url
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}"
+        }
+        self.model_name = model_name.replace("___LocalAI","")
+
+    def similarity(self, query: str, texts: list):
+        # noway to config Ragflow , use fix setting
+        texts = [truncate(t, 500) for t in texts]
+        data = {
+            "model": self.model_name,
+            "query": query,
+            "documents": texts,
+            "top_n": len(texts),
+        }
+        token_count = 0
+        for t in texts:
+            token_count += num_tokens_from_string(t)
+        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        rank = np.zeros(len(texts), dtype=float)
+        if 'results' not in res:
+            raise ValueError("response not contains results\n" + str(res))
+        for d in res["results"]:
+            rank[d["index"]] = d["relevance_score"]
+
+        # Normalize the rank values to the range 0 to 1
+        min_rank = np.min(rank)
+        max_rank = np.max(rank)
+
+        # Avoid division by zero if all ranks are identical
+        if max_rank - min_rank != 0:
+            rank = (rank - min_rank) / (max_rank - min_rank)
+        else:
+            rank = np.zeros_like(rank)
+
+        return rank, token_count
