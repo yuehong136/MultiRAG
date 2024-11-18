@@ -67,27 +67,18 @@ class AIForBIService:
                 break
         logging.info(f"is_local_llm: {is_local_llm}")
 
-        if is_local_llm:
-            # 本地模型使用dynamic_chart_option_function_temp_for_local_llm.txt
-            chart_data = {
-                "columns": dynamic_chart_option_function_req_body.sql_result["metadata"]["columns"],
-                "data": dynamic_chart_option_function_req_body.sql_result["data"]
-            }
-            prompt = loader.fill_template("dynamic_chart_option_function_temp_for_local_llm.txt",
-                                          user_question=dynamic_chart_option_function_req_body.user_question,
-                                          chart_type=dynamic_chart_option_function_req_body.chart_type,
-                                          columns=dynamic_chart_option_function_req_body.sql_result['metadata'][
-                                              'columns'],
-                                          chart_template=chart_template,
-                                          chart_data=chart_data)
-        else:
-            # 云端模型使用dynamic_chart_option_function_temp.txt
-            prompt = loader.fill_template("dynamic_chart_option_function_temp.txt",
-                                          user_question=dynamic_chart_option_function_req_body.user_question,
-                                          chart_type=dynamic_chart_option_function_req_body.chart_type,
-                                          columns=dynamic_chart_option_function_req_body.sql_result['metadata'][
-                                              'columns'],
-                                          chart_template=chart_template)
+        # 本地模型和在线模型都使用dynamic_chart_option_function_temp_for_local_llm.txt
+        chart_data = {
+            "columns": dynamic_chart_option_function_req_body.sql_result["metadata"]["columns"],
+            "data": dynamic_chart_option_function_req_body.sql_result["data"]
+        }
+        prompt = loader.fill_template("dynamic_chart_option_function_temp_for_local_llm.txt",
+                                      user_question=dynamic_chart_option_function_req_body.user_question,
+                                      chart_type=dynamic_chart_option_function_req_body.chart_type,
+                                      columns=dynamic_chart_option_function_req_body.sql_result['metadata'][
+                                          'columns'],
+                                      chart_template=chart_template,
+                                      chart_data=chart_data)
 
         logging.info(f"====dynamic_chart_option_function prompt: {prompt}")
 
