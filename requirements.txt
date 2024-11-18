@@ -164,3 +164,9 @@ google-generativeai >= 0.8.3
 # polars是一个高性能的DataFrame库，专为处理大规模数据和复杂查询而优化。与pandas相比，它的性能更高，尤其是在多线程和内存管理方面，适合处理大数据量的操作。
 polars >= 1.13.0
 # anthropic >= 0.39.0
+# FastText 是由 Facebook AI 研究团队开发的一个开源 Python 库，旨在高效地学习词汇表示（word representations）和进行文本分类。【windows不能编译】
+#fasttext >= 0.9.3
+# Selenium Wire 是在 selenium 基础上扩展的一个库，增加了网络流量拦截和修改的能力。它继承了 selenium 的功能，同时提供更高级的网络操作接口。
+selenium-wire >= 5.1.0
+# blinker 是一个轻量级的 Python 库，用于提供 信号和事件机制。它允许应用程序的不同部分之间通过信号（signals）进行通信，常用于事件驱动的程序设计，比如插件系统、扩展框架、异步任务处理等场景。
+blinker ==1.7.0

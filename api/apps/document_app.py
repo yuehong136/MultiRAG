@@ -6,6 +6,8 @@
 @date：2024/7/29 17:17
 @desc:
 """
+import logging
+import os.path
 import json
 import pathlib
 import re
@@ -34,7 +36,7 @@ from api.settings import RetCode
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result
 from api.utils import get_uuid
-from api.utils.file_utils import filename_type, thumbnail
+from api.utils.file_utils import filename_type, thumbnail, get_project_base_directory
 from api.utils.web_utils import html2pdf, is_valid_url
 from core.nlp import search
 from core.utils.milvus_conn import MILVUS_CONNECTION
@@ -681,34 +683,87 @@ async def get_image(
     except Exception as e:
         return construct_error_response(e)
 
+
 # todo ragflow的def upload_and_parse待补充
 
 
 @router.post("/parse", summary="解析网页或文件内容", response_description="成功解析内容")
 async def parse(
-    url: Optional[str] = Form(None, description="网页URL（可选）"),
-    files: Optional[List[UploadFile]] = File(None),
-    user=Depends(manager)
+        url: Optional[str] = Form(None, description="网页URL（可选）"),
+        files: Optional[List[UploadFile]] = File(None),
+        user=Depends(manager)
 ):
     if url:
         if not is_valid_url(url):
             return get_json_result(
                 data=False, retmsg='The URL format is invalid', retcode=RetCode.ARGUMENT_ERROR)
-        from selenium.webdriver import Chrome, ChromeOptions
+        download_path = os.path.join(get_project_base_directory(), "logs/downloads")
+        os.makedirs(download_path, exist_ok=True)
+        from seleniumwire.webdriver import Chrome, ChromeOptions
         options = ChromeOptions()
         options.add_argument('--headless')
         options.add_argument('--disable-gpu')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-
+        options.add_experimental_option('prefs', {
+            'download.default_directory': download_path,
+            'download.prompt_for_download': False,
+            'download.directory_upgrade': True,
+            'safebrowsing.enabled': True
+        })
+        # driver = Chrome(options=options)
+        # driver.get(url)
+        # res_headers = [r.response.headers for r in driver.requests]
+        # if len(res_headers) > 1:
+        #     sections = RAGFlowHtmlParser().parser_txt(driver.page_source)
+        #     driver.quit()
+        #     return get_json_result(data="\n".join(sections))
         try:
             driver = Chrome(options=options)
             driver.get(url)
-            sections = RAGFlowHtmlParser().parser_txt(driver.page_source)
-            driver.quit()
-            return get_json_result(data="\n".join(sections))
+
+            res_headers = [r.response.headers for r in driver.requests]
+            if len(res_headers) > 1:
+                sections = RAGFlowHtmlParser().parser_txt(driver.page_source)
+                driver.quit()
+                return get_json_result(data="\n".join(sections))
+
+            # 模拟 File 类逻辑
+            r = re.search(r'filename=\"([^\"]+)\"', json.dumps(res_headers))
+            if not r or not r.group(1):
+                return get_json_result(
+                    data=False, retmsg="Cannot identify downloaded file", retcode=RetCode.ARGUMENT_ERROR
+                )
+
+            class File:
+                filename: str
+                filepath: str
+
+                def __init__(self, filename, filepath):
+                    self.filename = filename
+                    self.filepath = filepath
+
+                def read(self):
+                    with open(self.filepath, "r", encoding="utf-8") as f:
+                        return f.read()
+
+            if not r or r.group(1):
+                return get_json_result(
+                    data=False, retmsg="Can't not identify downloaded file", retcode=RetCode.ARGUMENT_ERROR)
+            f = File(r.group(1), os.path.join(download_path, r.group(1)))
+            txt = FileService.parse_docs([f], user.id)
+            return get_json_result(data=txt)
         except Exception as e:
-            return get_json_result(data=False, retmsg=str(e), retcode=RetCode.SERVER_ERROR)
+            logging.exception("[ERROR] URL processing failed")
+            # traceback.print_exc()
+            return get_json_result(
+                retcode=RetCode.SERVER_ERROR,
+                retmsg=str(e),
+                data=False
+            )
+        finally:
+            if driver:
+                driver.quit()
 
     if not files:
         return get_json_result(
@@ -725,8 +780,8 @@ async def parse(
             data=txt
         )
     except Exception as e:
-        print("[ERROR] File processing failed:", str(e))
-        traceback.print_exc()
+        logging.exception("[ERROR] File processing failed")
+        # traceback.print_exc()
         return get_json_result(
             retcode=RetCode.SERVER_ERROR,
             retmsg=str(e),
