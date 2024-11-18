@@ -17,7 +17,7 @@ import copy
 import re
 import sys
 import time
-import traceback
+# import traceback
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from io import BytesIO
@@ -92,8 +92,8 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
         d["progress"] = prog
     try:
         TaskService.update_progress(db, task_id, d)
-    except Exception as e:
-        logging.error("set_progress:({}), {}".format(task_id, str(e)))
+    except Exception:
+        logging.exception(f"set_progress({task_id}) got exception")
 
     # db.close()
     if cancel:
@@ -112,8 +112,8 @@ def collect(db: Session):
         if not PAYLOAD:
             time.sleep(1)
             return pd.DataFrame()
-    except Exception as e:
-        logging.error("Get task event from queue exception:" + str(e))
+    except Exception:
+        logging.exception("Get task event from queue exception")
         return pd.DataFrame()
 
     msg = PAYLOAD.get_message()
@@ -162,15 +162,15 @@ def build(row, db: Session):
             "From minio({}) {}/{}".format(timer() - st, row["location"], row["name"]))
     except TimeoutError:
         callback(-1, "Internal server error: Fetch file from minio timeout. Could you try it again.")
-        logging.error(
-            "Minio {}/{}: Fetch file from minio timeout.".format(row["location"], row["name"]))
+        logging.exception("Minio {}/{} got timeout: Fetch file from minio timeout.".format(row["location"], row["name"]))
         return
     except Exception as e:
         if re.search("(No such file|not found)", str(e)):
             callback(-1, "Can not find file <%s> from minio. Could you try it again?" % row["name"])
         else:
             callback(-1, "Get file from minio: %s" % str(e).replace("'", ""))
-        traceback.print_exc()
+        logging.exception("Chunking {}/{} got exception".format(row["location"], row["name"]))
+        # traceback.print_exc()
         return
 
     try:
@@ -181,9 +181,8 @@ def build(row, db: Session):
             "Chunking({}) {}/{}".format(timer() - st, row["location"], row["name"]))
     except Exception as e:
         callback(-1, "Internal server error while chunking: %s" % str(e).replace("'", ""))
-        logging.error(
-            "Chunking {}/{}: {}".format(row["location"], row["name"], str(e)))
-        traceback.print_exc()
+        logging.exception("Chunking {}/{} got exception".format(row["location"], row["name"]))
+        # traceback.print_exc()
         return
 
     docs = []
@@ -245,9 +244,9 @@ def build(row, db: Session):
             st = timer()
             STORAGE_IMPL.put(row["kb_id"], d["pk"], output_buffer.getvalue())
             el += timer() - st
-        except Exception as e:
-            logging.error(str(e))
-            traceback.print_exc()
+        except Exception:
+            logging.exception("Saving image of chunk {}/{}/{} got exception".format(row["location"], row["name"], d["_id"]))
+            # traceback.print_exc()
 
         d["img_id"] = "{}-{}".format(row["kb_id"], d["pk"])
         del d["image"]
@@ -433,7 +432,7 @@ def main():
                 try:
                     return json.loads(auth_str) if isinstance(auth_str, str) else auth_str
                 except json.JSONDecodeError:
-                    logging.error(f"Failed to decode auth field: {auth_str}")
+                    logging.exception(f"Failed to decode auth field: {auth_str}")
                     return []  # 解析失败时，返回空列表
 
             rows['auth'] = rows['auth'].apply(convert_auth)
@@ -444,7 +443,7 @@ def main():
                     embd_mdl = LLMBundle(db, r["tenant_id"], LLMType.EMBEDDING, llm_name=r["embd_id"], lang=r["language"])
                 except Exception as e:
                     callback(-1, msg=str(e))
-                    logging.error(str(e))
+                    logging.exception("LLMBundle got exception")
                     continue
 
                 if r.get("task_type", "") == "raptor":
@@ -453,7 +452,7 @@ def main():
                         cks, tk_count = run_raptor(r, chat_mdl, embd_mdl, callback)
                     except Exception as e:
                         callback(-1, msg=str(e))
-                        logging.error(str(e))
+                        logging.exception("run_raptor got exception")
                         continue
                 else:
                     st = timer()
@@ -475,7 +474,7 @@ def main():
                         tk_count = embedding(cks, embd_mdl, r["parser_config"], callback)
                     except Exception as e:
                         callback(-1, "Embedding error:{}".format(str(e)))
-                        logging.error(str(e))
+                        logging.exception("run_rembedding got exception")
                         tk_count = 0
                     logging.info("Embedding elapsed({}): {:.2f}".format(r["name"], timer() - st))
                     callback(msg="Finished embedding (in {:.2f}s)! Start to build index!".format(timer() - st))
@@ -502,8 +501,8 @@ def main():
                             data=converted_record
                         )
                         logging.info("Successfully inserted record to Milvus")
-                    except Exception as e:
-                        logging.error("Insert error:", e)
+                    except Exception:
+                        logging.exception("Insert error:")
                         logging.error("Data being inserted:", converted_record)
                 logging.info("Indexing elapsed({}): {:.2f}".format(r["name"], timer() - st))
                 if milvus_r:
@@ -519,7 +518,7 @@ def main():
                             )
                     except MilvusException as e:
                         return e
-                    logging.error(str(milvus_r))
+                    logging.exception(str(milvus_r))
                 else:
                     if TaskService.do_cancel(db, r["id"]):
                         # 构建 Milvus 集合名称
@@ -542,8 +541,8 @@ def main():
                     logging.info(
                         "Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(
                             r["id"], tk_count, len(cks), timer() - st))
-        except Exception as e:
-            logging.error(f"Error in main loop: {str(e)}")
+        except Exception:
+            logging.exception(f"Error in main loop")
             db.rollback()  # 回滚事务
             raise
         else:
@@ -561,8 +560,8 @@ def report_status():
             obj[CONSUMER_NAME].append(timer())
             obj[CONSUMER_NAME] = obj[CONSUMER_NAME][-60:]
             REDIS_CONN.set_obj("TASKEXE", obj, 60*2)
-        except Exception as e:
-            print("[Exception]:", str(e))
+        except Exception:
+            logging.exception("report_status got exception")
         time.sleep(30)
 
 

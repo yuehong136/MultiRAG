@@ -183,7 +183,7 @@ class TenantLLMService(CommonService):
                 num += cls.model.update({cls.model.used_tokens: u.used_tokens + used_tokens}).where(
                     cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name
                 ).execute()
-        except Exception as e:
+        except Exception:
             pass
         return num
 

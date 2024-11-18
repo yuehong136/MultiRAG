@@ -6,6 +6,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
@@ -43,9 +44,9 @@ class File2DocumentService(CommonService):
             deleted_count = db.query(cls.model).filter(cls.model.file_id == file_id).delete(synchronize_session=False)
             db.commit()  # 确保提交事务
             return deleted_count
-        except Exception as e:
+        except Exception:
             db.rollback()  # 回滚事务
-            print(f"Error occurred: {e}")
+            logging.exception(f"[delete_by_file_id] Error occurred")
             return 0
 
     @classmethod
@@ -55,9 +56,9 @@ class File2DocumentService(CommonService):
             deleted_count = db.query(cls.model).filter(cls.model.document_id == doc_id).delete(synchronize_session=False)
             db.commit()  # 确保提交事务
             return deleted_count
-        except Exception as e:
+        except Exception:
             db.rollback()  # 回滚事务
-            print(f"Error occurred: {e}")
+            logging.exception(f"[delete_by_file_id] Error occurred")
             return 0
 
     @classmethod

@@ -45,7 +45,7 @@ def get_closest_tag_and_count():
             return closest_tag
         else:
             return f"{commit_id}({closest_tag}~{commits_count})"
-    except Exception as e:
+    except Exception:
         return 'unknown'
 
 
