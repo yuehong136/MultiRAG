@@ -1,7 +1,8 @@
 import logging
-import inspect
+import sys
 from api.utils.log_utils import initRootLogger
-initRootLogger(inspect.getfile(inspect.currentframe()))
+CONSUMER_NO = "0" if len(sys.argv) < 2 else sys.argv[1]
+initRootLogger(f"task_executor_{CONSUMER_NO}")
 for module in ["pdfminer"]:
     module_logger = logging.getLogger(module)
     module_logger.setLevel(logging.WARNING)
@@ -9,7 +10,7 @@ for module in ["sqlalchemy"]:
     module_logger = logging.getLogger(module)
     module_logger.handlers.clear()
     module_logger.propagate = True
-import datetime
+from datetime import datetime
 import json
 import os
 import hashlib
@@ -18,7 +19,7 @@ import re
 import sys
 import time
 # import traceback
-from concurrent.futures import ThreadPoolExecutor
+import threading
 from functools import partial
 from io import BytesIO
 
@@ -71,9 +72,14 @@ FACTORY = {
     ParserType.KG.value: knowledge_graph
 }
 
-CONSUMER_NAME = "task_consumer_" + ("0" if len(sys.argv) < 2 else sys.argv[1])
+CONSUMER_NAME = "task_consumer_" + CONSUMER_NO
 PAYLOAD: Payload | None = None
-
+BOOT_AT = datetime.now().isoformat()
+DONE_TASKS = 0
+RETRY_TASKS = 0
+PENDING_TASKS = 0
+HEAD_CREATED_AT = ""
+HEAD_DETAIL = ""
 
 def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing..."):
     global PAYLOAD
@@ -201,8 +207,8 @@ def build(row, db: Session):
         md5.update((ck["content_with_weight"] +
                     str(d["doc_id"])).encode("utf-8"))
         d["pk"] = md5.hexdigest()
-        d["create_time"] = str(datetime.datetime.now()).replace("T", " ")[:19]
-        d["create_timestamp_flt"] = datetime.datetime.now().timestamp()
+        d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
+        d["create_timestamp_flt"] = datetime.now().timestamp()
 
         # if row["parser_config"].get("auto_keywords", 0):
         #     chat_mdl = LLMBundle(db, row["tenant_id"], LLMType.CHAT, llm_name=row["llm_id"], lang=row["language"])
@@ -406,8 +412,8 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
         md5 = hashlib.md5()
         md5.update((content + str(d["doc_id"])).encode("utf-8"))
         d["pk"] = md5.hexdigest()
-        d["create_time"] = str(datetime.datetime.now()).replace("T", " ")[:19]
-        d["create_timestamp_flt"] = datetime.datetime.now().timestamp()
+        d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
+        d["create_timestamp_flt"] = datetime.now().timestamp()
         d["vector"] = vctr.tolist()
         d["text"] = content
         d["content_ltks"] = rag_tokenizer.tokenize(content)
@@ -506,7 +512,7 @@ def main():
                         logging.error("Data being inserted:", converted_record)
                 logging.info("Indexing elapsed({}): {:.2f}".format(r["name"], timer() - st))
                 if milvus_r:
-                    callback(-1, f"Insert chunk error, detail info please check logs/api/logging.log. Please also check Milvus status!")
+                    callback(-1, f"Insert chunk error, detail info please check log file. Please also check Milvus status!")
                     # 构建 Milvus 集合名称
                     collection_name = search.index_name_one(r["tenant_id"], kb.name)
                     # 检查集合是否存在并删除 Milvus 中的数据
@@ -550,24 +556,42 @@ def main():
 
 
 def report_status():
-    global CONSUMER_NAME
+    global CONSUMER_NAME, BOOT_AT, DONE_TASKS, RETRY_TASKS, PENDING_TASKS, HEAD_CREATED_AT, HEAD_DETAIL
     while True:
         try:
-            obj = REDIS_CONN.get("TASKEXE")
-            if not obj: obj = {}
-            else: obj = json.loads(obj)
-            if CONSUMER_NAME not in obj: obj[CONSUMER_NAME] = []
-            obj[CONSUMER_NAME].append(timer())
-            obj[CONSUMER_NAME] = obj[CONSUMER_NAME][-60:]
-            REDIS_CONN.set_obj("TASKEXE", obj, 60*2)
+            now = datetime.now()
+            PENDING_TASKS = REDIS_CONN.queue_length(SVR_QUEUE_NAME)
+            if PENDING_TASKS > 0:
+                head_info = REDIS_CONN.queue_head(SVR_QUEUE_NAME)
+                if head_info is not None:
+                    seconds = int(head_info[0].split("-")[0]) / 1000
+                    HEAD_CREATED_AT = datetime.fromtimestamp(seconds).isoformat()
+                    HEAD_DETAIL = head_info[1]
+
+            heartbeat = json.dumps({
+                "name": CONSUMER_NAME,
+                "now": now.isoformat(),
+                "boot_at": BOOT_AT,
+                "done": DONE_TASKS,
+                "retry": RETRY_TASKS,
+                "pending": PENDING_TASKS,
+                "head_created_at": HEAD_CREATED_AT,
+                "head_detail": HEAD_DETAIL,
+            })
+            REDIS_CONN.zadd(CONSUMER_NAME, heartbeat, now.timestamp())
+            logging.info(f"{CONSUMER_NAME} reported heartbeat: {heartbeat}")
+
+            expired = REDIS_CONN.zcount(CONSUMER_NAME, 0, now.timestamp() - 60 * 30)
+            if expired > 0:
+                REDIS_CONN.zpopmin(CONSUMER_NAME, expired)
         except Exception:
             logging.exception("report_status got exception")
         time.sleep(30)
 
-
 if __name__ == "__main__":
-    exe = ThreadPoolExecutor(max_workers=1)
-    exe.submit(report_status)
+    background_thread = threading.Thread(target=report_status)
+    background_thread.daemon = True
+    background_thread.start()
 
     while True:
         main()
