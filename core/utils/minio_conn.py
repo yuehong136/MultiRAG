@@ -71,26 +71,28 @@ class MultiRAGMinio(object):
         try:
             self.conn.remove_object(bucket, fnm)
         except Exception:
-            logging.exception(f"Fail put {bucket}/{fnm}:")
+            logging.exception(f"Fail remove {bucket}/{fnm}:")
 
     def get(self, bucket, fnm):
         for _ in range(1):
             try:
                 r = self.conn.get_object(bucket, fnm)
                 return r.read()
-            except Exception:
-                logging.exception(f"Fail put {bucket}/{fnm}:")
+            except Exception as e:
+                logging.exception(f"Fail to get {bucket}/{fnm}, reason: {e}")
                 self.__open__()
                 time.sleep(1)
         return
 
-    def obj_exist(self, bucket, fnm):
+    def obj_exist(self, bucket, filename):
         try:
-            if self.conn.stat_object(bucket, fnm):return True
+            if self.conn.stat_object(bucket, filename):
+                return True
+            else:
+                return False
+        except Exception as e:
+            logging.warning(f"Not found: {bucket}/{filename}, exception: {e}")
             return False
-        except Exception:
-            logging.exception(f"Fail put {bucket}/{fnm}:")
-        return False
 
 
     def get_presigned_url(self, bucket, fnm, expires):
@@ -98,7 +100,7 @@ class MultiRAGMinio(object):
             try:
                 return self.conn.get_presigned_url("GET", bucket, fnm, expires)
             except Exception:
-                logging.exception(f"Fail put {bucket}/{fnm}:")
+                logging.exception(f"Fail get {bucket}/{fnm}:")
                 self.__open__()
                 time.sleep(1)
         return
