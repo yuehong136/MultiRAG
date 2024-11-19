@@ -123,7 +123,8 @@ def message_fit_in(msg, max_length=4000):
     # 优先保留系统消息
     # 筛选出消息列表中所有角色为"system"的消息，以及最后一条消息
     msg_ = [m for m in msg[:-1] if m["role"] == "system"]
-    msg_.append(msg[-1])
+    if len(msg) > 1:
+        msg_.append(msg[-1])
     msg = msg_
 
     # 初始化计数器

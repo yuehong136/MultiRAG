@@ -722,13 +722,14 @@ async def parse(
             driver.get(url)
 
             res_headers = [r.response.headers for r in driver.requests]
+            logging.info(f"res_headers:{res_headers}")
             if len(res_headers) > 1:
                 sections = RAGFlowHtmlParser().parser_txt(driver.page_source)
                 driver.quit()
                 return get_json_result(data="\n".join(sections))
 
             # 模拟 File 类逻辑
-            r = re.search(r'filename=\"([^\"]+)\"', json.dumps(res_headers))
+            r = re.search(r'filename=\"([^\"]+)\"', str(res_headers))
             if not r or not r.group(1):
                 return get_json_result(
                     data=False, retmsg="Cannot identify downloaded file", retcode=settings.RetCode.ARGUMENT_ERROR
@@ -743,7 +744,7 @@ async def parse(
                     self.filepath = filepath
 
                 def read(self):
-                    with open(self.filepath, "r", encoding="utf-8") as f:
+                    with open(self.filepath, "rb", encoding="utf-8") as f:
                         return f.read()
 
             if not r or r.group(1):
