@@ -75,10 +75,13 @@ FACTORY = {
 CONSUMER_NAME = "task_consumer_" + CONSUMER_NO
 PAYLOAD: Payload | None = None
 BOOT_AT = datetime.now().isoformat()
-DONE_TASKS = 0
-FAILED_TASKS = 0
 PENDING_TASKS = 0
 LAG_TASKS = 0
+
+mt_lock = threading.Lock()
+DONE_TASKS = 0
+FAILED_TASKS = 0
+CURRENT_TASK = None
 
 
 def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing..."):
@@ -127,14 +130,16 @@ def collect(db: Session):
         return None
 
     if TaskService.do_cancel(db, msg["id"]):
-        DONE_TASKS += 1
+        with mt_lock:
+            DONE_TASKS += 1
         logging.info("Task {} has been canceled.".format(msg["id"]))
         return None
     task = TaskService.get_task(db, msg["id"])
 
     # assert tasks, "{} empty task!".format(msg["id"])
     if not task:
-        DONE_TASKS += 1
+        with mt_lock:
+            DONE_TASKS += 1
         logging.warning("{} empty task!".format(msg["id"]))
         return None
 
@@ -525,7 +530,7 @@ def do_handle_task(db, r):
     # 输出总的插入成功信息和统计
     if successful_inserts:
         total_insert_count = sum(item["insert_count"] for item in successful_inserts)
-        logging.info(f"Total successful inserts: {total_insert_count}")
+        logging.info(f"Total successful inserts into Milvus's {search.index_name_one(r["tenant_id"], kb.name)}: {total_insert_count} ")
         # logging.info(f"Milvus insert details: {successful_inserts}")
 
     # 输出总的 Indexing elapsed 时长
@@ -559,7 +564,7 @@ def do_handle_task(db, r):
 
 
 def handle_task():
-    global PAYLOAD, DONE_TASKS, FAILED_TASKS
+    global PAYLOAD, mt_lock, DONE_TASKS, FAILED_TASKS, CURRENT_TASK
     with SessionLocal() as db:
         task_dict = None  # 确保变量初始化
         try:
@@ -575,11 +580,17 @@ def handle_task():
                         task_dict = {key: str(value) for key, value in vars(
                             task).items()}  # 通用对象转换为字典
                     logging.info(f"handle_task begin for task {json.dumps(task_dict)}")
+                    with mt_lock:
+                        CURRENT_TASK = copy.deepcopy(task_dict)
                     do_handle_task(db, task)
-                    DONE_TASKS += 1
+                    with mt_lock:
+                        DONE_TASKS += 1
+                        CURRENT_TASK = None
                     logging.info(f"handle_task done for task {json.dumps(task_dict)}")
                 except Exception:
-                    FAILED_TASKS += 1
+                    with mt_lock:
+                        FAILED_TASKS += 1
+                        CURRENT_TASK = None
                     logging.exception(f"handle_task got exception for task {json.dumps(task_dict)}")
             if PAYLOAD:
                 PAYLOAD.ack()
@@ -593,7 +604,7 @@ def handle_task():
 
 
 def report_status():
-    global CONSUMER_NAME, BOOT_AT, DONE_TASKS, FAILED_TASKS, PENDING_TASKS, LAG_TASKS
+    global CONSUMER_NAME, BOOT_AT, PENDING_TASKS, LAG_TASKS, mt_lock, DONE_TASKS, FAILED_TASKS, CURRENT_TASK
     REDIS_CONN.sadd("TASKEXE", CONSUMER_NAME)
     while True:
         try:
@@ -603,15 +614,17 @@ def report_status():
                 PENDING_TASKS = int(group_info["pending"])
                 LAG_TASKS = int(group_info["lag"])
 
-            heartbeat = json.dumps({
-                "name": CONSUMER_NAME,
-                "now": now.isoformat(),
-                "boot_at": BOOT_AT,
-                "done": DONE_TASKS,
-                "failed": FAILED_TASKS,
-                "pending": PENDING_TASKS,
-                "lag": LAG_TASKS,
-            })
+            with mt_lock:
+                heartbeat = json.dumps({
+                    "name": CONSUMER_NAME,
+                    "now": now.isoformat(),
+                    "boot_at": BOOT_AT,
+                    "pending": PENDING_TASKS,
+                    "lag": LAG_TASKS,
+                    "done": DONE_TASKS,
+                    "failed": FAILED_TASKS,
+                    "current": CURRENT_TASK,
+                })
             REDIS_CONN.zadd(CONSUMER_NAME, heartbeat, now.timestamp())
             logging.info(f"{CONSUMER_NAME} reported heartbeat: {heartbeat}")
 
