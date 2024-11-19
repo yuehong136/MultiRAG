@@ -26,7 +26,7 @@ class TaskService(CommonService):
     model = Task
 
     @classmethod
-    def get_tasks(cls, db: Session, task_id):
+    def get_task(cls, db: Session, task_id):
         query = db.query(
             cls.model.id,
             cls.model.doc_id,
@@ -56,7 +56,7 @@ class TaskService(CommonService):
 
         docs = query.all()
         if not docs:
-            return []
+            return None
 
         # task = docs[0]
         # task.progress_msg = task.progress_msg + "\n" + "Task has been received."
@@ -84,9 +84,9 @@ class TaskService(CommonService):
         db.commit()
 
         if task["retry_count"] >= 3:
-            return []
+            return None
 
-        return docs
+        return docs[0]
 
     @classmethod
     def get_ongoing_doc_name(cls, db: Session):
@@ -113,12 +113,23 @@ class TaskService(CommonService):
 
     @classmethod
     def do_cancel(cls, db: Session, task_id):
+        # try:
+        #     task = db.query(cls.model).get(task_id)
+        #     # doc = db.query(Document).get(task.doc_id)
+        #     doc = DocumentService.get_by_id(task.doc_id)
+        #     return doc.run == TaskStatus.CANCEL.value or doc.progress < 0
+        # except Exception:
+        #     return False
         try:
-            task = db.query(cls.model).get(task_id)
-            doc = db.query(Document).get(task.doc_id)
+            # 使用 get_by_id 方法获取任务
+            task = cls.get_by_id(db, task_id)
+            # 获取与任务关联的文档
+            doc = DocumentService.get_by_id(db, task.doc_id)
+            # 判断文档是否满足取消条件
             return doc.run == TaskStatus.CANCEL.value or doc.progress < 0
         except Exception:
-            return False
+            pass
+        return False
 
     @classmethod
     def update_progress(cls, db: Session, task_id, info):

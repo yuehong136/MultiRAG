@@ -1,6 +1,7 @@
 import logging
 import sys
 from api.utils.log_utils import initRootLogger
+
 CONSUMER_NO = "0" if len(sys.argv) < 2 else sys.argv[1]
 initRootLogger(f"task_executor_{CONSUMER_NO}")
 for module in ["pdfminer"]:
@@ -27,10 +28,8 @@ from pymilvus import MilvusException, DataType
 from sqlalchemy.orm import Session
 
 import numpy as np
-import pandas as pd
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
-
 
 from api.db.database import SessionLocal
 from api.db.services.dialog_service import keyword_extraction, question_proposal
@@ -42,7 +41,8 @@ from api.db.services.task_service import TaskService
 from api.db.services.file2document_service import File2DocumentService
 from api import settings
 from api.utils.file_utils import get_project_base_directory
-from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, email, knowledge_graph
+from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, email, \
+    knowledge_graph
 from core.nlp import search, rag_tokenizer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 from core.settings import SVR_QUEUE_NAME
@@ -76,10 +76,10 @@ CONSUMER_NAME = "task_consumer_" + CONSUMER_NO
 PAYLOAD: Payload | None = None
 BOOT_AT = datetime.now().isoformat()
 DONE_TASKS = 0
-RETRY_TASKS = 0
+FAILED_TASKS = 0
 PENDING_TASKS = 0
-HEAD_CREATED_AT = ""
-HEAD_DETAIL = ""
+LAG_TASKS = 0
+
 
 def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing..."):
     global PAYLOAD
@@ -110,37 +110,37 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
 
 
 def collect(db: Session):
-    global CONSUMER_NAME, PAYLOAD
+    global CONSUMER_NAME, PAYLOAD, DONE_TASKS, FAILED_TASKS
     try:
         PAYLOAD = REDIS_CONN.get_unacked_for(CONSUMER_NAME, SVR_QUEUE_NAME, "multi_rag_svr_task_broker")
         if not PAYLOAD:
             PAYLOAD = REDIS_CONN.queue_consumer(SVR_QUEUE_NAME, "multi_rag_svr_task_broker", CONSUMER_NAME)
         if not PAYLOAD:
             time.sleep(1)
-            return pd.DataFrame()
+            return None
     except Exception:
         logging.exception("Get task event from queue exception")
-        return pd.DataFrame()
+        return None
 
     msg = PAYLOAD.get_message()
     if not msg:
-        return pd.DataFrame()
+        return None
 
     if TaskService.do_cancel(db, msg["id"]):
+        DONE_TASKS += 1
         logging.info("Task {} has been canceled.".format(msg["id"]))
-        return pd.DataFrame()
-    tasks = TaskService.get_tasks(db, msg["id"])
+        return None
+    task = TaskService.get_task(db, msg["id"])
 
     # assert tasks, "{} empty task!".format(msg["id"])
-    if not tasks:
+    if not task:
+        DONE_TASKS += 1
         logging.warning("{} empty task!".format(msg["id"]))
-        return []
-
-    tasks = pd.DataFrame(tasks)
+        return None
 
     if msg.get("type", "") == "raptor":
-        tasks["task_type"] = "raptor"
-    return tasks
+        task["task_type"] = "raptor"
+    return task
 
 
 def get_storage_binary(bucket, name):
@@ -168,8 +168,9 @@ def build(row, db: Session):
             "From minio({}) {}/{}".format(timer() - st, row["location"], row["name"]))
     except TimeoutError:
         callback(-1, "Internal server error: Fetch file from minio timeout. Could you try it again.")
-        logging.exception("Minio {}/{} got timeout: Fetch file from minio timeout.".format(row["location"], row["name"]))
-        return
+        logging.exception(
+            "Minio {}/{} got timeout: Fetch file from minio timeout.".format(row["location"], row["name"]))
+        raise
     except Exception as e:
         if re.search("(No such file|not found)", str(e)):
             callback(-1, "Can not find file <%s> from minio. Could you try it again?" % row["name"])
@@ -177,7 +178,7 @@ def build(row, db: Session):
             callback(-1, "Get file from minio: %s" % str(e).replace("'", ""))
         logging.exception("Chunking {}/{} got exception".format(row["location"], row["name"]))
         # traceback.print_exc()
-        return
+        raise
 
     try:
         cks = chunker.chunk(row["name"], binary=binary, from_page=row["from_page"],
@@ -189,7 +190,7 @@ def build(row, db: Session):
         callback(-1, "Internal server error while chunking: %s" % str(e).replace("'", ""))
         logging.exception("Chunking {}/{} got exception".format(row["location"], row["name"]))
         # traceback.print_exc()
-        return
+        raise
 
     docs = []
     doc = {
@@ -251,8 +252,10 @@ def build(row, db: Session):
             STORAGE_IMPL.put(row["kb_id"], d["pk"], output_buffer.getvalue())
             el += timer() - st
         except Exception:
-            logging.exception("Saving image of chunk {}/{}/{} got exception".format(row["location"], row["name"], d["_id"]))
+            logging.exception(
+                "Saving image of chunk {}/{}/{} got exception".format(row["location"], row["name"], d["_id"]))
             # traceback.print_exc()
+            raise
 
         d["img_id"] = "{}-{}".format(row["kb_id"], d["pk"])
         del d["image"]
@@ -267,7 +270,7 @@ def build(row, db: Session):
             d["important_kwd"] = keyword_extraction(chat_mdl, d["content_with_weight"],
                                                     row["parser_config"]["auto_keywords"]).split(",")
             d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
-        callback(msg="Keywords generation completed in {:.2f}s".format(timer()-st))
+        callback(msg="Keywords generation completed in {:.2f}s".format(timer() - st))
 
     if row["parser_config"].get("auto_questions", 0):
         st = timer()
@@ -281,7 +284,7 @@ def build(row, db: Session):
                 d["content_ltks"] += " " + qst
             if "content_sm_ltks" in d:
                 d["content_sm_ltks"] += " " + rag_tokenizer.fine_grained_tokenize(qst)
-        callback(msg="Question generation completed in {:.2f}s".format(timer()-st))
+        callback(msg="Question generation completed in {:.2f}s".format(timer() - st))
 
     return docs
 
@@ -334,6 +337,7 @@ def convert_data_types(data, schema):
                 else:
                     data[field_name] = str(data[field_name])
     return data
+
 
 def get_schema(collection_name):
     schema = MILVUS_CONNECTION.describe_collection(collection_name)
@@ -423,130 +427,163 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
     return res, tk_count
 
 
-def main():
-    # 使用 with 语句确保事务的正确结束和会话关闭
-    with SessionLocal() as db:
+def do_handle_task(db, r):
+    # 将 Row 转换为字典，确保可以修改字段
+    r = r._asdict() if hasattr(r, "_asdict") else dict(r)
+
+    # 预处理 auth 列，转换为列表，处理 None 值
+    def convert_auth(auth_str):
+        if auth_str is None:
+            return []  # 如果 auth 为 None，转换为空列表
         try:
-            db = SessionLocal()
-            rows = collect(db)
-            if len(rows) == 0:
-                return
-            # 预处理 auth 列，转换为列表，处理 None 值
-            def convert_auth(auth_str):
-                if auth_str is None:
-                    return []  # 如果 auth 为 None，转换为空列表
-                try:
-                    return json.loads(auth_str) if isinstance(auth_str, str) else auth_str
-                except json.JSONDecodeError:
-                    logging.exception(f"Failed to decode auth field: {auth_str}")
-                    return []  # 解析失败时，返回空列表
+            return json.loads(auth_str) if isinstance(auth_str, str) else auth_str
+        except json.JSONDecodeError:
+            logging.exception(f"Failed to decode auth field: {auth_str}")
+            return []  # 解析失败时，返回空列表
 
-            rows['auth'] = rows['auth'].apply(convert_auth)
+    # 处理 auth 列
+    r['auth'] = convert_auth(r.get('auth'))
 
-            for _, r in rows.iterrows():
-                callback = partial(set_progress, db, r["id"], r["from_page"], r["to_page"])
-                try:
-                    embd_mdl = LLMBundle(db, r["tenant_id"], LLMType.EMBEDDING, llm_name=r["embd_id"], lang=r["language"])
-                except Exception as e:
-                    callback(-1, msg=str(e))
-                    logging.exception("LLMBundle got exception")
-                    continue
+    callback = partial(set_progress, db, r["id"], r["from_page"], r["to_page"])
+    try:
+        embd_mdl = LLMBundle(db, r["tenant_id"], LLMType.EMBEDDING, llm_name=r["embd_id"], lang=r["language"])
+    except Exception as e:
+        callback(-1, msg=str(e))
+        raise
+    if r.get("task_type", "") == "raptor":
+        try:
+            chat_mdl = LLMBundle(db, r["tenant_id"], LLMType.CHAT, llm_name=r["llm_id"], lang=r["language"])
+            cks, tk_count = run_raptor(r, chat_mdl, embd_mdl, callback)
+        except Exception as e:
+            callback(-1, msg=str(e))
+            raise
+    else:
+        st = timer()
+        cks = build(r, db)
+        logging.info("Build chunks({}): {}".format(r["name"], timer() - st))
+        if cks is None:
+            return
+        if not cks:
+            callback(1., "No chunk! Done!")
+            return
+            # TODO: exception handler
+            ## set_progress(r["did"], -1, "ERROR: ")
+        callback(msg="Finished slicing files ({} chunks in {:.2f}s). Start to embedding the content.".format(len(cks),
+                                                                                                             timer() - st))
+        st = timer()
+        try:
+            tk_count = embedding(cks, embd_mdl, r["parser_config"], callback)
+        except Exception as e:
+            callback(-1, "Embedding error:{}".format(str(e)))
+            logging.exception("run_rembedding got exception")
+            tk_count = 0
+            raise
+        logging.info("Embedding elapsed({}): {:.2f}".format(r["name"], timer() - st))
+        callback(msg="Finished embedding (in {:.2f}s)! Start to build index!".format(timer() - st))
 
-                if r.get("task_type", "") == "raptor":
-                    try:
-                        chat_mdl = LLMBundle(db, r["tenant_id"], LLMType.CHAT, llm_name=r["llm_id"], lang=r["language"])
-                        cks, tk_count = run_raptor(r, chat_mdl, embd_mdl, callback)
-                    except Exception as e:
-                        callback(-1, msg=str(e))
-                        logging.exception("run_raptor got exception")
-                        continue
-                else:
-                    st = timer()
-                    cks = build(r, db)
-                    logging.info("Build chunks({}): {}".format(r["name"], timer() - st))
-                    if cks is None:
-                        continue
-                    if not cks:
-                        callback(1., "No chunk! Done!")
-                        continue
-                    # TODO: exception handler
-                    ## set_progress(r["did"], -1, "ERROR: ")
-                    callback(
-                        msg="Finished slicing files ({} chunks in {:.2f}s). Start to embedding the content.".format(
-                            len(cks), timer() - st)
+    kb_id = DocumentService.get_by_doc_id(db, r["doc_id"])["kb_id"]
+    kb = KnowledgebaseService.get_by_id(db, kb_id)
+    init_kb(r, kb.name)
+
+    chunk_count = len(set([c["pk"] for c in cks]))
+    st = timer()
+    milvus_r = ""
+    successful_inserts = []  # 用于记录成功插入的记录信息
+    failed_inserts = []  # 可选：记录失败的记录（便于排查问题）
+    # 获取集合的schema
+    schema = get_schema(search.index_name_one(r["tenant_id"], kb.name))
+
+    # 逐条插入数据
+    for record in cks:
+        # 转换数据类型
+        converted_record = convert_data_types(record, schema)
+
+        try:
+            # 使用 Milvus 的插入方法插入数据
+            milvus_r = MILVUS_CONNECTION.insert(
+                collection_name=search.index_name_one(r["tenant_id"], kb.name),
+                data=converted_record
+            )
+            successful_inserts.append(milvus_r)  # 记录成功的插入结果
+        except Exception:
+            failed_inserts.append(record)  # 记录失败的记录
+            callback(-1, f"Insert chunk error, detail info please check log file. Please also check Milvus status!")
+            collection_name = search.index_name_one(r["tenant_id"], kb.name)
+            try:
+                if MILVUS_CONNECTION.has_collection(collection_name):
+                    MILVUS_CONNECTION.delete(
+                        collection_name=collection_name,
+                        filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
                     )
-                    st = timer()
-                    try:
-                        tk_count = embedding(cks, embd_mdl, r["parser_config"], callback)
-                    except Exception as e:
-                        callback(-1, "Embedding error:{}".format(str(e)))
-                        logging.exception("run_rembedding got exception")
-                        tk_count = 0
-                    logging.info("Embedding elapsed({}): {:.2f}".format(r["name"], timer() - st))
-                    callback(msg="Finished embedding (in {:.2f}s)! Start to build index!".format(timer() - st))
+            except MilvusException as e:
+                return e
+            logging.exception("Insert error:")
+            logging.error("Data being inserted:", converted_record)
+    # 结束时记录总耗时
+    insertion_total_time = timer() -st
 
-                kb_id = DocumentService.get_by_doc_id(db, r["doc_id"])["kb_id"]
-                kb = KnowledgebaseService.get_by_id(db, kb_id)
-                init_kb(r, kb.name)
+    # 输出总的插入成功信息和统计
+    if successful_inserts:
+        total_insert_count = sum(item["insert_count"] for item in successful_inserts)
+        logging.info(f"Total successful inserts: {total_insert_count}")
+        # logging.info(f"Milvus insert details: {successful_inserts}")
 
-                chunk_count = len(set([c["pk"] for c in cks]))
-                st = timer()
-                milvus_r = ""
-                # 获取集合的schema
-                schema = get_schema(search.index_name_one(r["tenant_id"], kb.name))
+    # 输出总的 Indexing elapsed 时长
+    logging.info(f"Total Insertion elapsed: {insertion_total_time:.2f}")
 
-                # 逐条插入数据
-                for record in cks:
-                    # 转换数据类型
-                    converted_record = convert_data_types(record, schema)
+    if failed_inserts:
+        logging.warning(f"Failed inserts count: {len(failed_inserts)}")
+        logging.warning(f"Failed insert records: {failed_inserts}")
 
-                    try:
-                        # 使用 Milvus 的插入方法插入数据
-                        MILVUS_CONNECTION.insert(
-                            collection_name=search.index_name_one(r["tenant_id"], kb.name),
-                            data=converted_record
-                        )
-                        logging.info("Successfully inserted record to Milvus")
-                    except Exception:
-                        logging.exception("Insert error:")
-                        logging.error("Data being inserted:", converted_record)
-                logging.info("Indexing elapsed({}): {:.2f}".format(r["name"], timer() - st))
-                if milvus_r:
-                    callback(-1, f"Insert chunk error, detail info please check log file. Please also check Milvus status!")
-                    # 构建 Milvus 集合名称
-                    collection_name = search.index_name_one(r["tenant_id"], kb.name)
-                    # 检查集合是否存在并删除 Milvus 中的数据
-                    try:
-                        if MILVUS_CONNECTION.has_collection(collection_name):
-                            MILVUS_CONNECTION.delete(
-                                collection_name=collection_name,
-                                filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
-                            )
-                    except MilvusException as e:
-                        return e
-                    logging.exception(str(milvus_r))
-                else:
-                    if TaskService.do_cancel(db, r["id"]):
-                        # 构建 Milvus 集合名称
-                        collection_name = search.index_name_one(r["tenant_id"], kb.name)
-                        # 检查集合是否存在并删除 Milvus 中的数据
-                        try:
-                            if MILVUS_CONNECTION.has_collection(collection_name):
-                                MILVUS_CONNECTION.delete(
-                                    collection_name=collection_name,
-                                    filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
-                                    # filter=f"doc_id == '{doc.id}'"
-                                )
-                        except MilvusException as e:
-                            return e
-                        continue
-                    callback(msg="Indexing elapsed in {:.2f}s.".format(timer() - st))
-                    callback(1., "Done!")
-                    DocumentService.increment_chunk_num(
-                        db, r["doc_id"], r["kb_id"], tk_count, chunk_count, 0)
-                    logging.info(
-                        "Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(
-                            r["id"], tk_count, len(cks), timer() - st))
+    if TaskService.do_cancel(db, r["id"]):
+        # 构建 Milvus 集合名称
+        collection_name = search.index_name_one(r["tenant_id"], kb.name)
+        # 检查集合是否存在并删除 Milvus 中的数据
+        try:
+            if MILVUS_CONNECTION.has_collection(collection_name):
+                MILVUS_CONNECTION.delete(
+                    collection_name=collection_name,
+                    filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
+                    # filter=f"doc_id == '{doc.id}'"
+                )
+        except MilvusException as e:
+            return e
+        return
+    callback(msg="Indexing elapsed in {:.2f}s.".format(timer() - st))
+    callback(1., "Done!")
+    DocumentService.increment_chunk_num(
+        db, r["doc_id"], r["kb_id"], tk_count, chunk_count, 0)
+    logging.info(
+        "Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(
+            r["id"], tk_count, len(cks), timer() - st))
+
+
+def handle_task():
+    global PAYLOAD, DONE_TASKS, FAILED_TASKS
+    with SessionLocal() as db:
+        task_dict = None  # 确保变量初始化
+        try:
+            task = collect(db)
+            if task:
+                try:
+                    # 转换为可序列化的字典
+                    if hasattr(task, "_asdict"):  # 检查是否为 RowProxy
+                        task_dict = task._asdict()
+                    elif isinstance(task, dict):  # 如果已经是字典
+                        task_dict = task
+                    else:
+                        task_dict = {key: str(value) for key, value in vars(
+                            task).items()}  # 通用对象转换为字典
+                    logging.info(f"handle_task begin for task {json.dumps(task_dict)}")
+                    do_handle_task(db, task)
+                    DONE_TASKS += 1
+                    logging.info(f"handle_task done for task {json.dumps(task_dict)}")
+                except Exception:
+                    FAILED_TASKS += 1
+                    logging.exception(f"handle_task got exception for task {json.dumps(task_dict)}")
+            if PAYLOAD:
+                PAYLOAD.ack()
+                PAYLOAD = None
         except Exception:
             logging.exception(f"Error in main loop")
             db.rollback()  # 回滚事务
@@ -556,27 +593,24 @@ def main():
 
 
 def report_status():
-    global CONSUMER_NAME, BOOT_AT, DONE_TASKS, RETRY_TASKS, PENDING_TASKS, HEAD_CREATED_AT, HEAD_DETAIL
+    global CONSUMER_NAME, BOOT_AT, DONE_TASKS, FAILED_TASKS, PENDING_TASKS, LAG_TASKS
+    REDIS_CONN.sadd("TASKEXE", CONSUMER_NAME)
     while True:
         try:
             now = datetime.now()
-            PENDING_TASKS = REDIS_CONN.queue_length(SVR_QUEUE_NAME)
-            if PENDING_TASKS > 0:
-                head_info = REDIS_CONN.queue_head(SVR_QUEUE_NAME)
-                if head_info is not None:
-                    seconds = int(head_info[0].split("-")[0]) / 1000
-                    HEAD_CREATED_AT = datetime.fromtimestamp(seconds).isoformat()
-                    HEAD_DETAIL = head_info[1]
+            group_info = REDIS_CONN.queue_info(SVR_QUEUE_NAME, "rag_flow_svr_task_broker")
+            if group_info is not None:
+                PENDING_TASKS = int(group_info["pending"])
+                LAG_TASKS = int(group_info["lag"])
 
             heartbeat = json.dumps({
                 "name": CONSUMER_NAME,
                 "now": now.isoformat(),
                 "boot_at": BOOT_AT,
                 "done": DONE_TASKS,
-                "retry": RETRY_TASKS,
+                "failed": FAILED_TASKS,
                 "pending": PENDING_TASKS,
-                "head_created_at": HEAD_CREATED_AT,
-                "head_detail": HEAD_DETAIL,
+                "lag": LAG_TASKS,
             })
             REDIS_CONN.zadd(CONSUMER_NAME, heartbeat, now.timestamp())
             logging.info(f"{CONSUMER_NAME} reported heartbeat: {heartbeat}")
@@ -588,14 +622,16 @@ def report_status():
             logging.exception("report_status got exception")
         time.sleep(30)
 
-if __name__ == "__main__":
+
+def main():
     settings.init_settings()
     background_thread = threading.Thread(target=report_status)
     background_thread.daemon = True
     background_thread.start()
 
     while True:
-        main()
-        if PAYLOAD:
-            PAYLOAD.ack()
-            PAYLOAD = None
+        handle_task()
+
+
+if __name__ == "__main__":
+    main()

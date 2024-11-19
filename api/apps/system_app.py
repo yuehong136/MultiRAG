@@ -6,6 +6,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+import logging
 import json
 from datetime import datetime
 
@@ -18,6 +19,7 @@ from api.db.services.api_service import APITokenService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
 from api.utils import current_timestamp, datetime_format
+from api import settings
 from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
 from api.versions import get_multirag_version
 from core.utils.storage_factory import STORAGE_IMPL, STORAGE_IMPL_TYPE
@@ -88,57 +90,96 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
     res = {}
     st = timer()
     try:
-        res["es"] = MILVUS_CONNECTION.health()
-        res["es"]["elapsed"] = "{:.1f}".format((timer() - st) * 1000.)
+        res["doc_store"] = MILVUS_CONNECTION.health()
+        res["doc_store"]["elapsed"] = "{:.1f}".format((timer() - st) * 1000.0)
     except Exception as e:
-        res["es"] = {"status": "red", "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+        res["doc_store"] = {
+            "type": "unknown",
+            "status": "red",
+            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "error": str(e),
+        }
 
     st = timer()
     try:
         STORAGE_IMPL.health()
-        res["storage"] = {"storage": STORAGE_IMPL_TYPE.lower(), "status": "green",
-                          "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
+        res["storage"] = {
+            "storage": STORAGE_IMPL_TYPE.lower(),
+            "status": "green",
+            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+        }
     except Exception as e:
-        res["storage"] = {"storage": STORAGE_IMPL_TYPE.lower(), "status": "red",
-                          "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+        res["storage"] = {
+            "storage": STORAGE_IMPL_TYPE.lower(),
+            "status": "red",
+            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "error": str(e),
+        }
 
     st = timer()
     try:
         KnowledgebaseService.get_by_id(db, "x")
-        res["database"] = {"database": "postgres", "status": "green",
-                           "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
+        res["database"] = {
+            "database": settings.DATABASE_TYPE.lower(),
+            "status": "green",
+            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+        }
     except Exception as e:
-        res["database"] = {"database": "postgres", "status": "red",
-                           "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+        res["database"] = {
+            "database": settings.DATABASE_TYPE.lower(),
+            "status": "red",
+            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "error": str(e),
+        }
 
     st = timer()
     try:
         if not REDIS_CONN.health():
             raise Exception("Lost connection!")
-        res["redis"] = {"status": "green", "elapsed": "{:.1f}".format((timer() - st) * 1000.)}
+        res["redis"] = {
+            "status": "green",
+            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+        }
     except Exception as e:
-        res["redis"] = {"status": "red", "elapsed": "{:.1f}".format((timer() - st) * 1000.), "error": str(e)}
+        res["redis"] = {
+            "status": "red",
+            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "error": str(e),
+        }
 
+    task_executor_heartbeats = {}
     try:
-        v = REDIS_CONN.get("TASKEXE")
-        if not v:
-            raise Exception("No task executor running!")
-        obj = json.loads(v)
-        color = "green"
-        for id in obj.keys():
-            arr = obj[id]
-            if len(arr) == 1:
-                obj[id] = [0]
-            else:
-                obj[id] = [arr[i + 1] - arr[i] for i in range(len(arr) - 1)]
-            elapsed = max(obj[id])
-            if elapsed > 50: color = "yellow"
-            if elapsed > 120: color = "red"
-        res["task_executor"] = {"status": color, "elapsed": obj}
-    except Exception as e:
-        res["task_executor"] = {"status": "red", "error": str(e)}
+        task_executors = REDIS_CONN.smembers("TASKEXE")
+        now = datetime.now().timestamp()
+        for task_executor_id in task_executors:
+            heartbeats = REDIS_CONN.zrangebyscore(task_executor_id, now - 60*30, now)
+            heartbeats = [json.loads(heartbeat) for heartbeat in heartbeats]
+            task_executor_heartbeats[task_executor_id] = heartbeats
+    except Exception:
+        logging.exception("get task executor heartbeats failed!")
+    res["task_executor_heartbeats"] = task_executor_heartbeats
 
     return get_json_result(data=res)
+    # try:
+    #     v = REDIS_CONN.get("TASKEXE")
+    #     if not v:
+    #         raise Exception("No task executor running!")
+    #     obj = json.loads(v)
+    #     color = "green"
+    #     for id in obj.keys():
+    #         arr = obj[id]
+    #         if len(arr) == 1:
+    #             obj[id] = [0]
+    #         else:
+    #             obj[id] = [arr[i + 1] - arr[i] for i in range(len(arr) - 1)]
+    #         elapsed = max(obj[id])
+    #         if elapsed > 50: color = "yellow"
+    #         if elapsed > 120: color = "red"
+    #     res["task_executor"] = {"status": color, "elapsed": obj}
+    # except Exception as e:
+    #     res["task_executor"] = {"status": "red", "error": str(e)}
+    #
+    # return get_json_result(data=res)
 
 
 @router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌")

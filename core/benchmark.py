@@ -7,7 +7,7 @@ from copy import deepcopy
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.settings import retrievaler
+from api import settings
 from api.utils import get_uuid
 from api.utils.file_utils import get_project_base_directory
 from core.nlp import tokenize, search
@@ -28,7 +28,7 @@ class Benchmark:
 
     def _get_benchmarks(self, query, dataset_idxnm, count=16):
         req = {"question": query, "size": count, "vector": True, "similarity": self.similarity_threshold}
-        sres = retrievaler.search(req, search.index_name(dataset_idxnm), self.embd_mdl)
+        sres = settings.retrievaler.search(req, search.index_name(dataset_idxnm), self.embd_mdl)
         return sres
 
     def _get_retrieval(self, qrels, dataset_idxnm):
@@ -36,7 +36,7 @@ class Benchmark:
         query_list = list(qrels.keys())
         for query in query_list:
             sres = self._get_benchmarks(query, dataset_idxnm)
-            sim, _, _ = retrievaler.rerank(sres, query, 1 - self.vector_similarity_weight,
+            sim, _, _ = settings.retrievaler.rerank(sres, query, 1 - self.vector_similarity_weight,
                                            self.vector_similarity_weight)
             for index, id in enumerate(sres.ids):
                 run[query][id] = sim[index]
