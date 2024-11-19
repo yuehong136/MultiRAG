@@ -15,7 +15,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMFactoriesService, LLMService, TenantLLMService, LLMBundle
 from api.db.services.user_service import TenantService, UserTenantService
-from api.settings import CHAT_MDL, EMBEDDING_MDL, ASR_MDL, IMAGE2TEXT_MDL, PARSERS, LLM_FACTORY, API_KEY, LLM_BASE_URL
+from api import settings
 from api.db.database import SessionLocal
 from api.utils.file_utils import get_project_base_directory
 
@@ -37,11 +37,11 @@ def init_superuser(db: Session):
     tenant = {
         "id": user_info["id"],
         "name": user_info["nickname"] + "‘s Kingdom",
-        "llm_id": CHAT_MDL,
-        "embd_id": EMBEDDING_MDL,
-        "asr_id": ASR_MDL,
-        "parser_ids": PARSERS,
-        "img2txt_id": IMAGE2TEXT_MDL
+        "llm_id": settings.CHAT_MDL,
+        "embd_id": settings.EMBEDDING_MDL,
+        "asr_id": settings.ASR_MDL,
+        "parser_ids": settings.PARSERS,
+        "img2txt_id": settings.IMAGE2TEXT_MDL
     }
     usr_tenant = {
         "tenant_id": user_info["id"],
@@ -50,15 +50,15 @@ def init_superuser(db: Session):
         "role": UserTenantRole.OWNER
     }
     tenant_llm = []
-    for llm in LLMService.query(db, fid=LLM_FACTORY):
+    for llm in LLMService.query(db, fid=settings.LLM_FACTORY):
         tenant_llm.append(
             {
                 "tenant_id": user_info["id"],
-                "llm_factory": LLM_FACTORY,
+                "llm_factory": settings.LLM_FACTORY,
                 "llm_name": llm.llm_name,
                 "mdl_type": llm.mdl_type,
-                "api_key": API_KEY,
-                "api_base": LLM_BASE_URL
+                "api_key": settings.API_KEY,
+                "api_base": settings.LLM_BASE_URL
             }
         )
     # print(tenant_llm)
@@ -97,7 +97,7 @@ def init_superuser(db: Session):
         # print("【success！！！】" + msg)
         logging.info("【success！！！】" + msg)
     embd_mdl = LLMBundle(db, tenant["id"], LLMType.EMBEDDING, tenant["embd_id"])
-    v, c = embd_mdl.encode(db, ["Hello!"])
+    v, c = embd_mdl.encode(["Hello!"])
     if c == 0:
         # print(
         #     "\33[91m【ERROR】\33[0m:",
@@ -175,12 +175,13 @@ def init_llm_factory(db: Session):
     for kb_id in KnowledgebaseService.get_all_ids(db):
         KnowledgebaseService.update_by_id(db, kb_id, {"doc_num": DocumentService.get_kb_doc_count(db, kb_id)})
     """
-    drop table llm;
-    drop table llm_factories;
-    update tenant set parser_ids='naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio';
-    alter table knowledgebase modify avatar longtext;
-    alter table user modify avatar longtext;
-    alter table dialog modify icon longtext;
+    DROP TABLE IF EXISTS t_ai_llm CASCADE;
+    DROP TABLE IF EXISTS t_ai_llm_factories CASCADE;
+    UPDATE t_ai_tenants
+    SET parser_ids = 'naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email';
+    ALTER TABLE t_ai_knowledgebases ALTER COLUMN avatar TYPE TEXT;
+    ALTER TABLE t_ai_users ALTER COLUMN avatar TYPE TEXT;
+    ALTER TABLE t_ai_dialogs ALTER COLUMN icon TYPE TEXT;
     """
 
 

@@ -8,7 +8,7 @@
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 from api.apps import manager
@@ -16,7 +16,7 @@ from api.db.services.dialog_service import DialogService
 from api.db import StatusEnum
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.settings import RetCode
+from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
@@ -55,10 +55,10 @@ class DialogRequest(BaseModel):
     llm_id: Optional[str] = ""
     """大语言模型的ID，默认值为空字符串。"""
 
-    llm_setting: Optional[dict] = {}
+    llm_setting: Optional[dict] = Field(default_factory=dict)
     """大语言模型的配置，默认值为空字典。"""
 
-    prompt_config: Optional[dict] = {
+    prompt_config: Optional[dict] = Field(default_factory=lambda: {
         "system": """你是一个智能助手，请总结知识库的内容来回答问题，请列举知识库中的数据详细回答。当所有知识库内容都与问题无关时，你的回答必须包括“知识库中未找到您要的答案！”这句话。回答需要考虑聊天历史。
 以下是知识库：
 {knowledge}
@@ -68,10 +68,10 @@ class DialogRequest(BaseModel):
             {"key": "knowledge", "optional": False}
         ],
         "empty_response": "Sorry! 知识库中未找到相关内容！"
-    }
+    })
     """提示配置，包含系统提示、开场白、参数和空响应消息。"""
 
-    kb_ids: Optional[List[str]] = []
+    kb_ids: Optional[List[str]] = Field(default_factory=list)
     """知识库的ID列表，默认值为空列表。"""
 
 class RemoveDialogRequest(BaseModel):
@@ -258,7 +258,7 @@ async def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=D
             else:
                 return get_json_result(
                     data=False, retmsg=f'Only owner of dialog authorized for this operation.',
-                    retcode=RetCode.OPERATING_ERROR)
+                    retcode=settings.RetCode.OPERATING_ERROR)
             dialog_list.append({"id": id, "status": StatusEnum.INVALID.value})
         DialogService.update_many_by_id(db, dialog_list)
         # DialogService.delete_by_id(db, id)

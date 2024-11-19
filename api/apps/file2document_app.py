@@ -16,7 +16,7 @@ from api.utils.api_utils import server_error_response, get_data_error_result, ge
 from api.utils import get_uuid
 from api.db import FileType
 from api.db.services.document_service import DocumentService
-from api.settings import RetCode
+from api import settings
 from api.db.database import get_db
 from api.apps import manager
 
@@ -113,7 +113,7 @@ async def rm(
     """
     if not file_ids:
         return get_json_result(
-            data=False, retmsg='Lack of "Files ID"', retcode=RetCode.ARGUMENT_ERROR)
+            data=False, retmsg='Lack of "Files ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
     try:
         for file_id in file_ids:
             informs = File2DocumentService.get_by_file_id(db, file_id)

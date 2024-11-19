@@ -25,8 +25,8 @@ class DefaultRerank(Base):
         ^_-
 
         """
-        from api.settings import LIGHTEN
-        if not LIGHTEN and not DefaultRerank._model:
+        from api import settings
+        if not settings.LIGHTEN and not DefaultRerank._model:
             import torch
             from FlagEmbedding import FlagReranker
             with DefaultRerank._model_lock:

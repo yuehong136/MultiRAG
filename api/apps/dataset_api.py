@@ -7,25 +7,23 @@
 @desc:
 """
 import base64
-import json
 import os
 import pathlib
 import re
 import warnings
-from datetime import datetime
 from functools import partial
 from io import BytesIO
 from urllib.parse import quote
 
 from PIL import Image
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, UploadFile, File as Fe
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File as Fe
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from api.constants import NAME_LENGTH_LIMIT
 from api.db import FileType, ParserType, FileSource, TaskStatus
 from api.db import StatusEnum
-from api.db.database import get_db, SessionLocal
+from api.db.database import SessionLocal
 from api.db.db_models import File
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
@@ -33,20 +31,17 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService
-from api.settings import RetCode
+from api import settings
 from api.utils import get_uuid
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str
-from api.utils.api_utils import construct_result, validate_request
+from api.utils.api_utils import construct_result
 from api.utils.file_utils import filename_type, thumbnail
-from core.app import book, laws, manual, naive, one, paper, presentation, qa, resume, table, picture, email
-from core.nlp import search
-from core.utils.milvus_conn import MILVUS_CONNECTION
+from core.app import book, laws, manual, naive, one, paper, presentation, qa, resume, table, picture
 from core.utils.storage_factory import STORAGE_IMPL
 from api.db.database import get_db
 from api.apps import manager
 from pydantic import BaseModel, Field
 from typing import Optional, List
-import requests
 
 MAXIMUM_OF_UPLOADING_FILES = 256
 
@@ -138,7 +133,7 @@ async def create_dataset(
             return construct_result()
 
         return construct_json_result(
-            code=RetCode.SUCCESS,
+            code=settings.RetCode.SUCCESS,
             data={"dataset_name": dataset_name, "dataset_id": dataset_id}
         )
     except Exception as e:
@@ -181,7 +176,7 @@ async def list_datasets(
         )
         # 将 `datetime` 对象转换为字符串格式
         datasets = [convert_datetime_to_str(dataset) for dataset in datasets]
-        return construct_json_result(data=datasets, code=RetCode.SUCCESS, message="List datasets successfully!")
+        return construct_json_result(data=datasets, code=settings.RetCode.SUCCESS, message="List datasets successfully!")
     except Exception as e:
         return construct_error_response(e)
 
@@ -226,7 +221,7 @@ async def remove_dataset(
                 detail="There was an error during the dataset removal process. Please check the status of the RAGFlow server and try the removal again."
             )
 
-        return construct_json_result(code=RetCode.SUCCESS, message=f"Remove dataset: {dataset_id} successfully")
+        return construct_json_result(code=settings.RetCode.SUCCESS, message=f"Remove dataset: {dataset_id} successfully")
     except Exception as e:
         return construct_error_response(e)
 
@@ -250,7 +245,7 @@ async def get_dataset(dataset_id: str, db: Session = Depends(get_db), user=Depen
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Can't find this dataset!")
 
         dataset_dict = convert_datetime_to_str(dataset)
-        return construct_json_result(data=dataset_dict, code=RetCode.SUCCESS)
+        return construct_json_result(data=dataset_dict, code=settings.RetCode.SUCCESS)
     except Exception as e:
         return construct_error_response(e)
 
@@ -289,24 +284,24 @@ async def update_dataset(
     try:
         # 请求不能为空
         if not req:
-            return construct_json_result(code=RetCode.DATA_ERROR,
+            return construct_json_result(code=settings.RetCode.DATA_ERROR,
                                          message="Please input at least one parameter that you want to update!")
 
         # 检查是否可以找到数据集
         if not KnowledgebaseService.query(db, created_by=user.id, id=dataset_id):
             return construct_json_result(message="Only the owner of knowledgebase is authorized for this operation!",
-                                         code=RetCode.OPERATING_ERROR)
+                                         code=settings.RetCode.OPERATING_ERROR)
 
         dataset = KnowledgebaseService.get_by_id(db, dataset_id)
         if not dataset:
-            return construct_json_result(code=RetCode.DATA_ERROR, message="This dataset cannot be found!")
+            return construct_json_result(code=settings.RetCode.DATA_ERROR, message="This dataset cannot be found!")
 
         # 检查名称是否重复
         if "name" in req:
             name = req["name"].strip()
             if name.lower() != dataset.name.lower() and len(
                     KnowledgebaseService.query(db, name=name, tenant_id=user.id, status=StatusEnum.VALID.value)) > 1:
-                return construct_json_result(code=RetCode.DATA_ERROR,
+                return construct_json_result(code=settings.RetCode.DATA_ERROR,
                                              message=f"The name: {name.lower()} is already used by other datasets. Please choose a different name.")
 
         dataset_updating_data = {}
@@ -317,7 +312,7 @@ async def update_dataset(
             if chunk_num == 0:
                 dataset_updating_data["embd_id"] = req["embedding_model_id"]
             else:
-                return construct_json_result(code=RetCode.DATA_ERROR,
+                return construct_json_result(code=settings.RetCode.DATA_ERROR,
                                              message="You have already parsed the document in this dataset, so you cannot change the embedding model.")
 
         # 更新分块方法
@@ -325,9 +320,9 @@ async def update_dataset(
             type_value = req["chunk_method"]
             if is_illegal_value_for_enum(type_value, ParserType):
                 return construct_json_result(message=f"Illegal value {type_value} for 'chunk_method' field.",
-                                             code=RetCode.DATA_ERROR)
+                                             code=settings.RetCode.DATA_ERROR)
             if chunk_num != 0:
-                return construct_json_result(code=RetCode.DATA_ERROR,
+                return construct_json_result(code=settings.RetCode.DATA_ERROR,
                                              message="You have already parsed the document in this dataset, so you cannot change the chunk method.")
             dataset_updating_data["parser_id"] = req["template_type"]
 
@@ -349,19 +344,19 @@ async def update_dataset(
         # 更新数据集
         if not KnowledgebaseService.update_by_id(db, dataset.id, dataset_updating_data):
             return construct_json_result(
-                code=RetCode.OPERATING_ERROR,
+                code=settings.RetCode.OPERATING_ERROR,
                 message="Failed to update! Please check the status of RAGFlow server and try again!"
             )
 
         dataset = KnowledgebaseService.get_by_id(db, dataset.id)
         if not dataset:
-            return construct_json_result(code=RetCode.DATA_ERROR,
+            return construct_json_result(code=settings.RetCode.DATA_ERROR,
                                          message="Failed to get the dataset using the dataset ID.")
 
         dataset_dict = dataset.to_dict()
         dataset_dict = convert_datetime_to_str(dataset_dict)
 
-        return construct_json_result(data=dataset_dict, code=RetCode.SUCCESS)
+        return construct_json_result(data=dataset_dict, code=settings.RetCode.SUCCESS)
     except Exception as e:
         return construct_error_response(e)
 
@@ -482,7 +477,7 @@ async def upload_documents(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="\n".join(err))
 
     # 返回成功响应，包含上传文件的信息
-    return construct_json_result(data=uploaded_docs_json, code=RetCode.SUCCESS)
+    return construct_json_result(data=uploaded_docs_json, code=settings.RetCode.SUCCESS)
 
 
 # ----------------------------delete a file-----------------------------------------------------
@@ -540,7 +535,7 @@ async def delete_document(
     if errors:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=errors)
 
-    return construct_json_result(data=True, code=RetCode.SUCCESS)
+    return construct_json_result(data=True, code=settings.RetCode.SUCCESS)
 
 
 # ----------------------------list files-----------------------------------------------------
@@ -580,7 +575,7 @@ async def list_documents(
         # 将每个文档的 datetime 字段转换为字符串格式
         serialized_docs = [convert_datetime_to_str(doc) for doc in docs]
 
-        return construct_json_result(data={"total": total, "docs": serialized_docs}, code=RetCode.SUCCESS)
+        return construct_json_result(data={"total": total, "docs": serialized_docs}, code=settings.RetCode.SUCCESS)
     except Exception as e:
         return construct_error_response(e)
 
@@ -671,7 +666,7 @@ async def update_document(
                 FileService.update_by_id(db, file.id, {"name": req["name"]})
 
         document = DocumentService.get_by_id(db, document_id)
-        return construct_json_result(data=document.to_dict(), message="Success", code=RetCode.SUCCESS)
+        return construct_json_result(data=document.to_dict(), message="Success", code=settings.RetCode.SUCCESS)
     except Exception as e:
         return construct_error_response(e)
 
@@ -825,11 +820,11 @@ async def parse_documents(
         for id in doc_ids:
             res = await parsing_document_internal(db, id)
             res_body = res.json()
-            if res_body["code"] == RetCode.SUCCESS:
+            if res_body["code"] == settings.RetCode.SUCCESS:
                 message += res_body["message"]
             else:
                 return res
-        return construct_json_result(data=True, code=RetCode.SUCCESS, message=message)
+        return construct_json_result(data=True, code=settings.RetCode.SUCCESS, message=message)
     except Exception as e:
         return construct_error_response(e)
 
@@ -898,7 +893,7 @@ async def parsing_document_internal(db: Session, id: str):
             for item in res:
                 if 'image' in item and isinstance(item['image'], Image.Image):
                     item['image'] = image_to_base64(item['image'])
-        return construct_json_result(code=RetCode.SUCCESS, message=message, data=res)
+        return construct_json_result(code=settings.RetCode.SUCCESS, message=message, data=res)
     except Exception as e:
         return construct_error_response(e)
 
@@ -970,11 +965,11 @@ async def stop_parsing_documents(
         for id in doc_ids:
             res = await stop_parsing_document_internal(id, db)
             res_body = res.json()
-            if res_body["code"] == RetCode.SUCCESS:
+            if res_body["code"] == settings.RetCode.SUCCESS:
                 message += res_body["message"]
             else:
                 return res
-        return construct_json_result(data=True, code=RetCode.SUCCESS, message=message)
+        return construct_json_result(data=True, code=settings.RetCode.SUCCESS, message=message)
     except Exception as e:
         return construct_error_response(e)
 
@@ -1003,7 +998,7 @@ async def stop_parsing_document_internal(document_id: str, db: Session):
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                                     detail=f"Failed in parsing the document: {document_id}; ")
 
-        return construct_json_result(code=RetCode.SUCCESS, message="")
+        return construct_json_result(code=settings.RetCode.SUCCESS, message="")
     except Exception as e:
         return construct_error_response(e)
 
@@ -1044,7 +1039,7 @@ async def show_parsing_status(
         doc_attributes = document.to_dict()
         return construct_json_result(
             data={"progress": doc_attributes["progress"], "status": TaskStatus(doc_attributes["status"]).name},
-            code=RetCode.SUCCESS
+            code=settings.RetCode.SUCCESS
         )
     except Exception as e:
         return construct_error_response(e)

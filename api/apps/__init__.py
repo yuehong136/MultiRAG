@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from api.db.database import get_db, SessionLocal
 from api.db.services import UserService
-from api.settings import SECRET_KEY, API_VERSION
+from api import settings
 from errors.exceptions import AITranslateException
 
 description = """
@@ -70,9 +70,10 @@ app.add_middleware(
     allow_methods=["*"],  # 允许所有HTTP方法
     allow_headers=["*"],  # 允许所有请求头
 )
+settings.init_settings()
 
 # 初始化登录管理器，设置密钥和令牌URL
-manager = LoginManager(SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))
+manager = LoginManager(settings.SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))
 
 
 # 定义一个函数，根据电子邮件加载用户
@@ -113,9 +114,9 @@ def register_page(page_path):
 
     # 确保模块有 router 属性
     if hasattr(page, 'router'):
-        app.include_router(page.router, prefix=f'/{API_VERSION}/{page_name}', tags=[page_name])
+        app.include_router(page.router, prefix=f'/{settings.API_VERSION}/{page_name}', tags=[page_name])
     else:
-        logger.warning(f"Module {module_name} does not have 'router' attribute.")
+        logging.warning(f"Module {module_name} does not have 'router' attribute.")
 
 
 # 定义要搜索页面的目录

@@ -15,8 +15,8 @@ class YoudaoEmbed(Base):
         self.base_url = base_url
         self.kwargs = kwargs
         model_path = self.get_model_path(self.model_name.split("/")[-1] if "/" in self.model_name else self.model_name)
-        from api.settings import LIGHTEN
-        if not LIGHTEN and not YoudaoEmbed._client:
+        from api import settings
+        if not settings.LIGHTEN and not YoudaoEmbed._client:
             from BCEmbedding import EmbeddingModel as qanthing
             try:
                 logging.info(f"LOADING BCE from {model_path}...")

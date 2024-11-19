@@ -16,7 +16,7 @@ from api.apps import manager
 from api.db.database import get_db
 from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService, LLMBundle
 from api.db.services.user_service import TenantService
-from api.settings import LIGHTEN
+from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from api.db import StatusEnum, LLMType
 from api.db.db_models import TenantLLM
@@ -545,7 +545,7 @@ async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db)
     - 可选的模型类型参数用于筛选模型信息，只返回指定类型的模型。
     """
     self_deploied = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio"]
-    weighted = ["Youdao", "FastEmbed", "BAAI"] if LIGHTEN != 0 else []
+    weighted = ["Youdao", "FastEmbed", "BAAI"] if settings.LIGHTEN != 0 else []
     try:
         objs = TenantLLMService.query(db, tenant_id=user.id)
         facts = set(o.llm_factory for o in objs if o.api_key)

@@ -28,8 +28,7 @@ import requests
 
 from api.db.db_models import APIToken
 from api.db.services.api_service import APITokenService
-from api.settings import RetCode, REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC, CLIENT_AUTHENTICATION, \
-    HTTP_APP_KEY, SECRET_KEY
+from api import settings
 from api.utils import HTTP_STATUS_CODES, get_uuid
 
 
@@ -40,13 +39,13 @@ def request(**kwargs):
     kwargs['headers'] = {k.replace('_', '-').upper(): v for k, v in kwargs.get('headers', {}).items()}
     prepped = requests.Request(**kwargs).prepare()
 
-    if CLIENT_AUTHENTICATION and HTTP_APP_KEY and SECRET_KEY:
+    if settings.CLIENT_AUTHENTICATION and settings.HTTP_APP_KEY and settings.SECRET_KEY:
         timestamp = str(round(time.time() * 1000))
         nonce = str(uuid1())
-        signature = b64encode(HMAC(SECRET_KEY.encode('ascii'), b'\n'.join([
+        signature = b64encode(HMAC(settings.SECRET_KEY.encode('ascii'), b'\n'.join([
             timestamp.encode('ascii'),
             nonce.encode('ascii'),
-            HTTP_APP_KEY.encode('ascii'),
+            settings.HTTP_APP_KEY.encode('ascii'),
             prepped.path_url.encode('ascii'),
             prepped.body if kwargs.get('json') else b'',
             urlencode(
@@ -60,7 +59,7 @@ def request(**kwargs):
         prepped.headers.update({
             'TIMESTAMP': timestamp,
             'NONCE': nonce,
-            'APP-KEY': HTTP_APP_KEY,
+            'APP-KEY': settings.HTTP_APP_KEY,
             'SIGNATURE': signature,
         })
 
@@ -68,13 +67,13 @@ def request(**kwargs):
 
 
 def get_exponential_backoff_interval(retries, full_jitter=False):
-    countdown = min(REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC * (2 ** retries))
+    countdown = min(settings.REQUEST_MAX_WAIT_SEC, settings.REQUEST_WAIT_SEC * (2 ** retries))
     if full_jitter:
         countdown = random.randrange(countdown + 1)
     return max(0, countdown)
 
 
-def get_data_error_result(retcode=RetCode.DATA_ERROR, retmsg='Sorry! Data missing!'):
+def get_data_error_result(retcode=settings.RetCode.DATA_ERROR, retmsg='Sorry! Data missing!'):
     result_dict = {
         "retcode": retcode,
         "retmsg": retmsg.replace("rag", "seceum"),
@@ -91,11 +90,11 @@ def server_error_response(e):
     except Exception:
         pass
     if len(e.args) > 1:
-        return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=e.args[1])
+        return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=e.args[1])
     if repr(e).find("index_not_found_exception") >= 0:
-        return get_json_result(retcode=RetCode.EXCEPTION_ERROR,
+        return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR,
                                retmsg="No chunk found, please upload file and parse it.")
-    return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=repr(e))
+    return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e))
 
 
 def error_response(response_code, retmsg=None):
@@ -133,7 +132,7 @@ def validate_request(*args, **kwargs):
                 if error_arguments:
                     error_string += "required argument values: " + ", ".join(
                         [f"{a[0]}={a[1]}" for a in error_arguments])
-                return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg=error_string)
+                return get_json_result(retcode=settings.RetCode.ARGUMENT_ERROR, retmsg=error_string)
             return await func(request, *args, **kwargs)
 
         return decorated_function
@@ -172,7 +171,7 @@ def send_file_in_mem(data, filename):
 #     return JSONResponse(content=jsonable_encoder(response))
 
 
-def get_json_result(retcode=RetCode.SUCCESS, retmsg='success', data=None):
+def get_json_result(retcode=settings.RetCode.SUCCESS, retmsg='success', data=None):
     response = {"retcode": retcode, "retmsg": retmsg, "data": data}
     return JSONResponse(content=jsonable_encoder(response))
 
@@ -190,7 +189,7 @@ def apikey_required(func: Callable) -> Callable:
 
         if not objs:
             return build_error_result(
-                error_msg='API-KEY is invalid!', retcode=RetCode.FORBIDDEN
+                error_msg='API-KEY is invalid!', retcode=settings.RetCode.FORBIDDEN
             )
 
         kwargs['tenant_id'] = objs[0].tenant_id
@@ -199,12 +198,12 @@ def apikey_required(func: Callable) -> Callable:
     return decorated_function
 
 
-def build_error_result(retcode=RetCode.FORBIDDEN, error_msg='success'):
+def build_error_result(retcode=settings.RetCode.FORBIDDEN, error_msg='success'):
     response_content = {"error_code": retcode, "error_msg": error_msg}
     return JSONResponse(content=response_content, status_code=retcode)
 
 
-def construct_response(retcode=RetCode.SUCCESS, retmsg='success', data=None, auth=None):
+def construct_response(retcode=settings.RetCode.SUCCESS, retmsg='success', data=None, auth=None):
     result_dict = {"retcode": retcode, "retmsg": retmsg, "data": data}
     response_dict = {key: value for key, value in result_dict.items() if value is not None or key == "retcode"}
     response = JSONResponse(content=jsonable_encoder(response_dict))
@@ -217,13 +216,13 @@ def construct_response(retcode=RetCode.SUCCESS, retmsg='success', data=None, aut
     return response
 
 
-def construct_result(code=RetCode.DATA_ERROR, message='data is missing'):
+def construct_result(code=settings.RetCode.DATA_ERROR, message='data is missing'):
     result_dict = {"code": code, "message": message.replace("rag", "seceum")}
     response = {key: value for key, value in result_dict.items() if value is not None or key == "code"}
     return JSONResponse(content=jsonable_encoder(response))
 
 
-def construct_json_result(code=RetCode.SUCCESS, message='success', data=None):
+def construct_json_result(code=settings.RetCode.SUCCESS, message='success', data=None):
     if data is None:
         return JSONResponse(content={"code": code, "message": message})
     else:
@@ -234,15 +233,15 @@ def construct_error_response(e):
     logging.exception(e)
     try:
         if e.code == 401:
-            return construct_json_result(code=RetCode.UNAUTHORIZED, message=repr(e))
+            return construct_json_result(code=settings.RetCode.UNAUTHORIZED, message=repr(e))
     except Exception:
         pass
     if len(e.args) > 1:
-        return construct_json_result(code=RetCode.EXCEPTION_ERROR, message=repr(e.args[0]), data=e.args[1])
+        return construct_json_result(code=settings.RetCode.EXCEPTION_ERROR, message=repr(e.args[0]), data=e.args[1])
     if repr(e).find("index_not_found_exception") >= 0:
-        return construct_json_result(code=RetCode.EXCEPTION_ERROR,
+        return construct_json_result(code=settings.RetCode.EXCEPTION_ERROR,
                                      message="No chunk found, please upload file and parse it.")
-    return construct_json_result(code=RetCode.EXCEPTION_ERROR, message=repr(e))
+    return construct_json_result(code=settings.RetCode.EXCEPTION_ERROR, message=repr(e))
 
 
 def convert_datetime_to_str(data: dict):
@@ -268,7 +267,7 @@ def token_required(func):
 
         if not objs:
             return get_json_result(
-                data=False, retmsg='Token is not valid!', retcode=RetCode.AUTHENTICATION_ERROR
+                data=False, retmsg='Token is not valid!', retcode=settings.RetCode.AUTHENTICATION_ERROR
             )
         kwargs['tenant_id'] = objs[0].tenant_id
         return func(*args, **kwargs)
@@ -276,7 +275,7 @@ def token_required(func):
     return decorated_function
 
 
-def get_result(retcode=RetCode.SUCCESS, retmsg='error', data=None):
+def get_result(retcode=settings.RetCode.SUCCESS, retmsg='error', data=None):
     if retcode == 0:
         if data is not None:
             response = {"code": retcode, "data": data}
@@ -287,7 +286,7 @@ def get_result(retcode=RetCode.SUCCESS, retmsg='error', data=None):
     return JSONResponse(content=jsonable_encoder(response))
 
 
-def get_error_data_result(retcode=RetCode.DATA_ERROR,
+def get_error_data_result(retcode=settings.RetCode.DATA_ERROR,
                           retmsg='Sorry! Data missing!'):
     import re
     result_dict = {

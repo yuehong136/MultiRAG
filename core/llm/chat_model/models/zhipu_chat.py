@@ -13,7 +13,7 @@ class ZhipuChat(Base):
 
     def __post_init__(self):
         self.client = ZhipuAI(api_key=self.key)
-        print(f"ZhipuAI client initialized with key: {self.key}")
+        # print(f"ZhipuAI client initialized with key: {self.key}")
 
     def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]) -> Tuple[str, int]:
         if system:

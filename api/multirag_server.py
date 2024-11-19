@@ -27,9 +27,7 @@ from api.apps import app
 from api.db.database import SessionLocal
 from api.db.runtime_config import RuntimeConfig
 from api.db.services.document_service import DocumentService
-from api.settings import (
-    HOST, HTTP_PORT
-)
+from api import settings
 from api import utils, validation
 
 from api.db.db_models import init_database_tables as init_web_db
@@ -99,7 +97,7 @@ if __name__ == '__main__':
         logging.info("run on debug mode")
 
     RuntimeConfig.init_env()  # 初始化环境变量
-    RuntimeConfig.init_config(JOB_SERVER_HOST=HOST, HTTP_PORT=HTTP_PORT)  # 初始化配置
+    RuntimeConfig.init_config(JOB_SERVER_HOST=settings.HOST_IP, HTTP_PORT=settings.HOST_PORT)  # 初始化配置
 
     # 启动进度更新线程
     thread = ThreadPoolExecutor(max_workers=1)
@@ -109,7 +107,7 @@ if __name__ == '__main__':
     try:
         logging.info("MultiRAG HTTP server start...")
         uvicorn_logger = logging.getLogger("uvicorn.access")  # 获取uvicorn的访问日志记录器
-        uvicorn.run("api.multirag_server:app", host=HOST, port=HTTP_PORT, log_level="info",
+        uvicorn.run("api.multirag_server:app", host=settings.HOST_IP, port=settings.HOST_PORT, log_level="info",
                     reload=RuntimeConfig.DEBUG)  # 启动 uvicorn 服务器
     except Exception:
         traceback.print_exc()

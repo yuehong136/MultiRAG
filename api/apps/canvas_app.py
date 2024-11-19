@@ -11,7 +11,7 @@ import json
 from functools import partial
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from api.db.services.canvas_service import CanvasTemplateService, UserCanvasService
 from api.db.services.dialog_service import full_question
 from api.db.services.user_service import TenantService
-from api.settings import RetCode
+from api import settings
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from api.db.database import get_db
@@ -77,7 +77,7 @@ async def rm(request: RemoveCanvasRequest, db: Session = Depends(get_db), user=D
         if not UserCanvasService.query(db, user_id=user.id,id=canvas_id):
             return get_json_result(
                 data=False, retmsg=f'Only owner of canvas authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR)
+                retcode=settings.RetCode.OPERATING_ERROR)
         UserCanvasService.delete_by_id(db, canvas_id)
     return get_json_result(data=True)
 
@@ -101,7 +101,7 @@ async def save(request: SaveCanvasRequest, db: Session = Depends(get_db), user=D
         if not UserCanvasService.query(db, user_id=user.id, id=req_data["id"]):
             return get_json_result(
                 data=False, retmsg=f'Only owner of canvas authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR)
+                retcode=settings.RetCode.OPERATING_ERROR)
         UserCanvasService.update_by_id(db, req_data["id"], req_data)
 
     return get_json_result(data=req_data)
@@ -186,6 +186,10 @@ async def reset(request: ResetCanvasRequest, db: Session = Depends(get_db), user
         if not user_canvas:
             return get_data_error_result(retmsg="canvas not found.")
 
+        if not UserCanvasService.query(user_id=user.id, id=req_data["id"]):
+            return get_json_result(
+                data=False, retmsg='Only owner of canvas authorized for this operation.',
+                retcode=settings.RetCode.OPERATING_ERROR)
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id)
         canvas.reset()
         req_data["dsl"] = json.loads(str(canvas))

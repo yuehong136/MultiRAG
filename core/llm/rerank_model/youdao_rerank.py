@@ -16,8 +16,8 @@ class YoudaoRerank(DefaultRerank):
     def __init__(self, key: str = None, model_name="maidalun1020/bce-reranker-base_v1", **kwargs):
         self.model_name = model_name  # 修复：显式定义 model_name
         model_path = self.get_model_path(self.model_name.split("/")[-1] if "/" in self.model_name else self.model_name)
-        from api.settings import LIGHTEN
-        if not LIGHTEN and not YoudaoRerank._model:
+        from api import settings
+        if not settings.LIGHTEN and not YoudaoRerank._model:
             from BCEmbedding import RerankerModel
             with YoudaoRerank._model_lock:
                 if not YoudaoRerank._model:

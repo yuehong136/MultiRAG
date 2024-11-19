@@ -4,7 +4,7 @@ import os
 import numpy as np
 from huggingface_hub import snapshot_download
 import threading
-from api.settings import LIGHTEN
+from api import settings
 from api.utils.file_utils import get_home_cache_dir
 from core.utils import num_tokens_from_string, truncate
 from core.llm.embedding_model.base import Base
@@ -16,7 +16,7 @@ class DefaultEmbedding(Base):
     def __init__(self, key, model_name, **kwargs):
         super().__init__(key, model_name)
 
-        if not LIGHTEN and not DefaultEmbedding._model:
+        if not settings.LIGHTEN and not DefaultEmbedding._model:
             with DefaultEmbedding._model_lock:
                 from FlagEmbedding import FlagModel
                 import torch

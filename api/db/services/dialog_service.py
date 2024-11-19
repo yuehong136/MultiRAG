@@ -23,7 +23,7 @@ from api.db.db_models import Dialog, Conversation
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMService, TenantLLMService, LLMBundle
-from api.settings import retrievaler
+from api import settings
 from api.utils.file_utils import get_project_base_directory
 from core.app.resume import forbidden_select_fields4resume
 from core.nlp.search import index_name
@@ -272,7 +272,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         if prompt_config.get("keyword", False):
             questions[-1] += keyword_extraction(chat_mdl, questions[-1])
 
-        kbinfos = retrievaler.retrieval(" ".join(questions), filter_exp, embd_mdl, dialog.tenant_id, kb_names, 1,
+        kbinfos = settings.retrievaler.retrieval(" ".join(questions), filter_exp, embd_mdl, dialog.tenant_id, kb_names, 1,
                                         dialog.top_n,
                                         dialog.similarity_threshold,
                                         dialog.vector_similarity_weight,
@@ -334,7 +334,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         refs = []
         # 如果需要插入引用文献，处理回答内容
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
-            answer, idx = retrievaler.insert_citations(answer,
+            answer, idx = settings.retrievaler.insert_citations(answer,
                                                        [ck["content_ltks"] for ck in kbinfos["chunks"]],
                                                        [ck["vector"] for ck in kbinfos["chunks"]],
                                                        embd_mdl,
@@ -451,7 +451,7 @@ def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
 
         logging.debug(f"{question} get SQL(refined): {sql}")
         tried_times += 1
-        return retrievaler.sql_retrieval(sql, format="json"), sql
+        return settings.retrievaler.sql_retrieval(sql, format="json"), sql
 
     tbl, sql = get_table()
     if tbl is None:
@@ -716,7 +716,7 @@ def ask(db: Session, question, kb_ids, tenant_id):
     max_tokens = chat_mdl.max_length
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
-    kbinfos = retrievaler.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, 1, 12, 0.1, 0.3, aggs=False)
+    kbinfos = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, 1, 12, 0.1, 0.3, aggs=False)
     knowledges = [ck["text"] for ck in kbinfos["chunks"]]
 
     used_token_count = 0
@@ -746,7 +746,7 @@ def ask(db: Session, question, kb_ids, tenant_id):
 
     def decorate_answer(answer):
         nonlocal knowledges, kbinfos, prompt
-        answer, idx = retrievaler.insert_citations(answer,
+        answer, idx = settings.retrievaler.insert_citations(answer,
                                                    [ck["content_ltks"]
                                                     for ck in kbinfos["chunks"]],
                                                    [ck["vector"]

@@ -19,7 +19,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.settings import RetCode
+from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.db import StatusEnum, FileSource
@@ -27,6 +27,8 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import get_json_result
 from api.db.database import get_db
 from api.apps import manager
+from core.utils.milvus_conn import MILVUS_CONNECTION
+from core.nlp import search
 
 router = APIRouter()
 
@@ -81,12 +83,12 @@ async def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
         )
     try:
         if not KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"]):
             return get_json_result(
-                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.', retcode=RetCode.OPERATING_ERROR)
+                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.', retcode=settings.RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
         if not kb:
@@ -120,7 +122,7 @@ async def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager
         else:
             return get_json_result(
                 data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR)
+                retcode=settings.RetCode.OPERATING_ERROR)
         kb = KnowledgebaseService.get_detail(db, kb_id)
         if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
@@ -158,7 +160,7 @@ async def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db),
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
         )
     try:
         # 查询知识库，确保只有知识库的创建者有权限删除
@@ -166,7 +168,7 @@ async def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db),
         if not kbs:
             # 如果知识库不存在或用户无权限删除，返回错误信息
             return get_json_result(
-                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.', retcode=RetCode.OPERATING_ERROR)
+                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.', retcode=settings.RetCode.OPERATING_ERROR)
 
         # 遍历知识库中的所有文档，进行删除
         for doc in DocumentService.query(db, kb_id=req_data["kb_id"]):
@@ -182,6 +184,9 @@ async def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db),
         # 删除知识库本身，如果失败则返回错误信息
         if not KnowledgebaseService.delete_by_id(db, req_data["kb_id"]):
             return get_data_error_result(retmsg="Database error (Knowledgebase removal)!")
+        tenants = UserTenantService.query(db, user_id=user.id)
+        for tenant in tenants:
+            MILVUS_CONNECTION.deleteIdx(search.index_name(tenant.tenant_id, [kbs[0].name]), req_data["kb_id"])
         # 知识库删除成功，返回成功标志
         return get_json_result(data=True)
     except Exception as e:

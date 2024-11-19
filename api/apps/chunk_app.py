@@ -8,13 +8,12 @@
 """
 import datetime
 import json
-import traceback
 
 import hashlib
 import re
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -30,7 +29,8 @@ from api.db.services.llm_service import TenantLLMService, LLMBundle
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.db.services.document_service import DocumentService
-from api.settings import RetCode, retrievaler#, kg_retrievaler
+from api import settings
+# from api.settings import RetCode, retrievaler#, kg_retrievaler
 from api.utils.api_utils import get_json_result
 from api.db.database import get_db
 from api.apps import manager
@@ -67,7 +67,7 @@ class RmChunkRequest(BaseModel):
 class CreateChunkRequest(BaseModel):
     doc_id: str
     content_with_weight: str
-    important_kwd: Optional[List[str]] = []
+    important_kwd: Optional[List[str]]
 
 
 class RetrievalTestRequest(BaseModel):
@@ -75,7 +75,7 @@ class RetrievalTestRequest(BaseModel):
     question: str
     page: Optional[int] = 1
     size: Optional[int] = 30
-    doc_ids: Optional[List[str]] = []
+    doc_ids: Optional[List[str]]
     similarity_threshold: Optional[float] = 0.0
     vector_similarity_weight: Optional[float] = 0.3
     top_k: Optional[int] = 1024
@@ -115,7 +115,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
             "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords,
             "sort": True
         }
-        sres = retrievaler.search(query, search.index_name_one(tenant_id, kb.name))
+        sres = settings.retrievaler.search(query, search.index_name_one(tenant_id, kb.name))
         res = {"total": sres.total, "chunks": [], "doc": doc.to_dict()}
         for id in sres.ids:
             d = {
@@ -141,7 +141,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
     except Exception as e:
         if str(e).find("not_found") > 0:
             return get_json_result(data=False, retmsg=f'No chunk found!',
-                                   retcode=RetCode.DATA_ERROR)
+                                   retcode=settings.RetCode.DATA_ERROR)
         return server_error_response(e)
 
 
@@ -184,7 +184,7 @@ async def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager
     except Exception as e:
         if str(e).find("NotFoundError") >= 0:
             return get_json_result(data=False, retmsg=f'Chunk not found!',
-                                   retcode=RetCode.DATA_ERROR)
+                                   retcode=settings.RetCode.DATA_ERROR)
         return server_error_response(e)
 
 
@@ -414,7 +414,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             else:
                 return get_json_result(
                     data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-                    retcode=RetCode.OPERATING_ERROR)
+                    retcode=settings.RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, request.kb_id)
         if not kb:
@@ -432,7 +432,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             question += keyword_extraction(chat_mdl, question)
         filter_exp = ""
         kb = KnowledgebaseService.get_by_id(db, req["kb_id"])
-        ranks = retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, kb.name, req["page"], req["size"],
+        ranks = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, kb.name, req["page"], req["size"],
                                       req["similarity_threshold"], req["vector_similarity_weight"], req["top_k"],
                                       req["doc_ids"], rerank_mdl=rerank_mdl)
         for c in ranks["chunks"]:
@@ -443,7 +443,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     except Exception as e:
         if str(e).find("not_found") > 0:
             return get_json_result(data=False, retmsg=f'No chunk found! Check the chunk status please!',
-                                   retcode=RetCode.DATA_ERROR)
+                                   retcode=settings.RetCode.DATA_ERROR)
         return server_error_response(e)
 
 
@@ -456,7 +456,7 @@ def knowledge_graph(doc_id, db: Session = Depends(get_db), user=Depends(manager)
     tenant_id = DocumentService.get_tenant_id(db, doc_id)
     kb_names = KnowledgebaseService.get_kb_ids(db, tenant_id)
     # todo 因为search参数里缺少knowledge_graph_kwd ，所以暂时无法使用，后续需要调整milvus集合创建的schema
-    sres = retrievaler.search(req, search.index_name_one(tenant_id, kb_names))
+    sres = settings.retrievaler.search(req, search.index_name_one(tenant_id, kb_names))
     obj = {"graph": {}, "mind_map": {}}
     for id in sres.ids[:2]:
         ty = sres.field[id]["knowledge_graph_kwd"]

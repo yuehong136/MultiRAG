@@ -23,7 +23,7 @@ from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from api.settings import RetCode
+from api import settings
 from api.utils.api_utils import construct_json_result, construct_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type
@@ -84,11 +84,11 @@ async def upload(
         pf_id = root_folder["id"]
 
     if not files:
-        return construct_json_result(data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, retmsg='No file part!', retcode=settings.RetCode.ARGUMENT_ERROR)
 
     for file_obj in files:
         if file_obj.filename == '':
-            return construct_json_result(data=False, retmsg='No file selected!', retcode=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, retmsg='No file selected!', retcode=settings.RetCode.ARGUMENT_ERROR)
 
     try:
         for file_obj in files:
@@ -178,7 +178,7 @@ async def create(
     try:
         if not FileService.is_parent_folder_exist(db, pf_id):
             return construct_json_result(data=False, retmsg="Parent Folder Doesn't Exist!",
-                                         retcode=RetCode.OPERATING_ERROR)
+                                         retcode=settings.RetCode.OPERATING_ERROR)
         if FileService.query(db, name=req["name"], parent_id=pf_id):
             return get_data_error_result(retmsg="Duplicated folder name in the same folder.")
 
@@ -410,8 +410,8 @@ async def rename(
             return get_data_error_result(retmsg="File not found!")
         if file.type != FileType.FOLDER.value \
                 and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
-            return construct_json_result(data=False, retmsg="The extension of file can't be changed",
-                                         retcode=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="The extension of file can't be changed",
+                                         code=settings.RetCode.ARGUMENT_ERROR)
         for f in FileService.query(db, name=req["name"], pf_id=file.parent_id):
             if f.name == req["name"]:
                 return get_data_error_result(retmsg="Duplicated file name in the same folder.")

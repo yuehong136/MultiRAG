@@ -11,7 +11,6 @@ import os.path
 import json
 import pathlib
 import re
-import traceback
 from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form
@@ -32,7 +31,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, queue_tasks
 from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
-from api.settings import RetCode
+from api import settings
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result
 from api.utils import get_uuid
@@ -120,9 +119,9 @@ async def upload(
     6. 如果上传过程中发生错误，返回错误消息；否则返回上传成功的文件信息。
     """
     if not kb_id:
-        return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
     if not files:
-        return construct_json_result(data=False, message='No file part!', code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='No file part!', code=settings.RetCode.ARGUMENT_ERROR)
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
@@ -136,8 +135,8 @@ async def upload(
     # err, files = FileService.upload_document(db, kb, file_contents, user)
     err, files = FileService.upload_document(db, kb, file_contents, user, labels)  # 传递labels参数
     if err:
-        return construct_json_result(data=False, message="\n".join(err), code=RetCode.SERVER_ERROR)
-    return construct_json_result(data=files, code=RetCode.SUCCESS)
+        return construct_json_result(data=False, message="\n".join(err), code=settings.RetCode.SERVER_ERROR)
+    return construct_json_result(data=files, code=settings.RetCode.SUCCESS)
 
 
 @router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页")
@@ -150,7 +149,7 @@ async def web_crawl(
     name = request_body.name
     url = request_body.url
     if not is_valid_url(url):
-        return construct_json_result(data=False, message='The URL format is invalid', code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='The URL format is invalid', code=settings.RetCode.ARGUMENT_ERROR)
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
@@ -209,17 +208,17 @@ async def create_document(
     req = request_body.model_dump()
     kb_id = req["kb_id"]
     if not kb_id:
-        return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
 
     try:
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         if not kb:
             return construct_json_result(data=False, message="Can't find this knowledgebase!",
-                                         code=RetCode.ARGUMENT_ERROR)
+                                         code=settings.RetCode.ARGUMENT_ERROR)
 
         if DocumentService.query(db, name=req["name"], kb_id=kb_id):
             return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
-                                         code=RetCode.ARGUMENT_ERROR)
+                                         code=settings.RetCode.ARGUMENT_ERROR)
 
         doc = DocumentService.insert(db, {
             "id": get_uuid(),
@@ -232,7 +231,7 @@ async def create_document(
             "location": "",
             "size": 0
         })
-        return construct_json_result(data=doc.to_dict(), code=RetCode.SUCCESS)
+        return construct_json_result(data=doc.to_dict(), code=settings.RetCode.SUCCESS)
     except Exception as e:
         return construct_error_response(e)
 
@@ -249,7 +248,7 @@ async def list_docs(
         user=Depends(manager)
 ):
     if not kb_id:
-        return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
 
     tenants = UserTenantService.query(db, user_id=user.id)
     for tenant in tenants:
@@ -258,7 +257,7 @@ async def list_docs(
     else:
         return get_json_result(
             data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-            retcode=RetCode.OPERATING_ERROR)
+            retcode=settings.RetCode.OPERATING_ERROR)
 
     try:
         docs, tol = DocumentService.get_by_kb_id(db, kb_id, page, page_size, orderby, desc, keywords)
@@ -280,7 +279,7 @@ def docinfos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(man
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
+                retcode=settings.RetCode.AUTHENTICATION_ERROR
             )
     docs = DocumentService.get_by_ids(db, doc_ids)
     # 将每个文档对象转换为字典
@@ -299,7 +298,7 @@ async def thumbnails(
 ):
     doc_ids_list = doc_ids.split(",")
     if not doc_ids_list:
-        return construct_json_result(data=False, message='Lack of "Document ID"', code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='Lack of "Document ID"', code=settings.RetCode.ARGUMENT_ERROR)
 
     try:
         docs = DocumentService.get_thumbnails(db, doc_ids_list)
@@ -325,25 +324,25 @@ async def change_status(
     req = request_body.model_dump()
     if str(req["status"]) not in ["0", "1"]:
         return construct_json_result(data=False, message='"Status" must be either 0 or 1!',
-                                     code=RetCode.ARGUMENT_ERROR)
+                                     code=settings.RetCode.ARGUMENT_ERROR)
     if not DocumentService.accessible(db, req["doc_id"], user.id):
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR)
+            retcode=settings.RetCode.AUTHENTICATION_ERROR)
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
-            return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         if not kb:
             return construct_json_result(data=False, message="Can't find this knowledgebase!",
-                                         code=RetCode.ARGUMENT_ERROR)
+                                         code=settings.RetCode.ARGUMENT_ERROR)
 
         if not DocumentService.update_by_id(db, req["doc_id"], {"status": str(req["status"])}):
             return construct_json_result(data=False, message="Database error (Document update)!",
-                                         code=RetCode.ARGUMENT_ERROR)
+                                         code=settings.RetCode.ARGUMENT_ERROR)
 
         # 更新Milvus中的数据
         status_int = 0 if str(req["status"]) == "0" else 1
@@ -354,13 +353,13 @@ async def change_status(
                 data={"doc_id": req["doc_id"], "available_int": status_int}
             )
             if update_result["upsert_count"] == 0:
-                return construct_json_result(code=RetCode.ARGUMENT_ERROR, message="Milvus update failed!")
+                return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message="Milvus update failed!")
         except MilvusException as e:
-            return construct_json_result(code=RetCode.ARGUMENT_ERROR, message=str(e))
+            return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message=str(e))
 
         return construct_json_result(data=True)
     except Exception as e:
-        return construct_json_result(code=RetCode.ARGUMENT_ERROR, message=str(e))
+        return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message=str(e))
     #
     #     if str(req["status"]) == "0":
     #         ELASTICSEARCH.updateScriptByQuery(Q("term", doc_id=req["doc_id"]),
@@ -391,7 +390,7 @@ async def rm(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
+                retcode=settings.RetCode.AUTHENTICATION_ERROR
             )
 
     root_folder = FileService.get_root_folder(db, user.id)
@@ -402,16 +401,16 @@ async def rm(
         try:
             doc = DocumentService.get_by_id(db, doc_id)
             if not doc:
-                return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
             tenant_id = DocumentService.get_tenant_id(db, doc_id)
             if not tenant_id:
-                return construct_json_result(data=False, message="Tenant not found!", code=RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message="Tenant not found!", code=settings.RetCode.ARGUMENT_ERROR)
 
             b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
 
             if not DocumentService.remove_document(db, doc, tenant_id):
                 return construct_json_result(data=False, message="Database error (Document removal)!",
-                                             code=RetCode.ARGUMENT_ERROR)
+                                             code=settings.RetCode.ARGUMENT_ERROR)
 
             f2d = File2DocumentService.get_by_document_id(db, doc_id)
             FileService.filter_delete(db, [db_models.File.source_type == FileSource.KNOWLEDGEBASE,
@@ -423,7 +422,7 @@ async def rm(
             errors += str(e)
 
     if errors:
-        return construct_json_result(data=False, message=errors, code=RetCode.SERVER_ERROR)
+        return construct_json_result(data=False, message=errors, code=settings.RetCode.SERVER_ERROR)
 
     return construct_json_result(data=True)
 
@@ -441,7 +440,7 @@ async def run(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
+                retcode=settings.RetCode.AUTHENTICATION_ERROR
             )
 
     try:
@@ -457,7 +456,7 @@ async def run(
             kb = KnowledgebaseService.get_by_id(db, kb_id)
             tenant_id = kb.tenant_id
             if not tenant_id:
-                return construct_json_result(data=False, message="Tenant not found!", code=RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message="Tenant not found!", code=settings.RetCode.ARGUMENT_ERROR)
 
             # 构建 Milvus 集合名称
             collection_name = search.index_name_one(tenant_id, kb.name)
@@ -471,9 +470,9 @@ async def run(
                     )
                     if not delete_result:
                         return construct_json_result(data=False, message="Milvus delete failed!",
-                                                     code=RetCode.ARGUMENT_ERROR)
+                                                     code=settings.RetCode.ARGUMENT_ERROR)
             except MilvusException as e:
-                return construct_json_result(data=False, message=str(e), code=RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message=str(e), code=settings.RetCode.ARGUMENT_ERROR)
 
             if str(req["run"]) == TaskStatus.RUNNING.value:
                 TaskService.filter_delete(db, [Task.doc_id == id])
@@ -499,24 +498,24 @@ async def rename(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
+                retcode=settings.RetCode.AUTHENTICATION_ERROR
             )
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
-            return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
         if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(doc.name.lower()).suffix:
             return construct_json_result(data=False, message="The extension of file can't be changed",
-                                         code=RetCode.ARGUMENT_ERROR)
+                                         code=settings.RetCode.ARGUMENT_ERROR)
         for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
             if d.name == req["name"]:
                 return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
-                                             code=RetCode.ARGUMENT_ERROR)
+                                             code=settings.RetCode.ARGUMENT_ERROR)
 
         if not DocumentService.update_by_id(db, req["doc_id"], {"name": req["name"]}):
             return construct_json_result(data=False, message="Database error (Document rename)!",
-                                         code=RetCode.ARGUMENT_ERROR)
+                                         code=settings.RetCode.ARGUMENT_ERROR)
 
         informs = File2DocumentService.get_by_document_id(db, req["doc_id"])
         if informs:
@@ -537,7 +536,7 @@ async def get_document(
     try:
         doc = DocumentService.get_by_id(db, doc_id)
         if not doc:
-            return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
 
         b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
 
@@ -578,7 +577,7 @@ async def change_parser(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
+                retcode=settings.RetCode.AUTHENTICATION_ERROR
             )
 
     try:
@@ -586,7 +585,7 @@ async def change_parser(
         doc = DocumentService.get_by_id(db, req["doc_id"])
         # 如果找不到文档，返回错误信息
         if not doc:
-            return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
         # 检查是否需要更新解析器ID
         if doc.parser_id.lower() == req["parser_id"].lower():
             # 如果parser_id未变更，则根据是否包含parser_config进行处理
@@ -618,14 +617,14 @@ async def change_parser(
 
         # 检查文档类型是否支持
         if doc.type == FileType.VISUAL or re.search(r"\.(ppt|pptx|pages)$", doc.name):
-            return construct_json_result(data=False, message="Not supported yet!", code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Not supported yet!", code=settings.RetCode.ARGUMENT_ERROR)
 
         # 更新文档的parser_id和其他信息
         e = DocumentService.update_by_id(db, doc.id, {"parser_id": req["parser_id"], "progress": 0, "progress_msg": "",
                                                       "run": TaskStatus.UNSTART.value})
         # 如果更新失败，返回错误信息
         if not e:
-            return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
         # 如果请求中包含parser_config，更新parser_config
         if "parser_config" in req:
             DocumentService.update_parser_config(db, doc.id, req["parser_config"])
@@ -634,11 +633,11 @@ async def change_parser(
             e = DocumentService.increment_chunk_num(db, doc.id, doc.kb_id, doc.token_num * -1, doc.chunk_num * -1,
                                                     doc.process_duration * -1)
             if not e:
-                return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
             # 获取文档所属的租户ID
             tenant_id = DocumentService.get_tenant_id(db, req["doc_id"])
             if not tenant_id:
-                return construct_json_result(data=False, message="Tenant not found!", code=RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message="Tenant not found!", code=settings.RetCode.ARGUMENT_ERROR)
             document = DocumentService.get_by_doc_id(db, doc.id)
             kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
             # 删除Milvus中的数据
@@ -649,9 +648,9 @@ async def change_parser(
                 )
                 if not delete_result:
                     return construct_json_result(data=False, message="Milvus delete failed!",
-                                                 code=RetCode.ARGUMENT_ERROR)
+                                                 code=settings.RetCode.ARGUMENT_ERROR)
             except MilvusException as e:
-                return construct_json_result(data=False, message=str(e), code=RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message=str(e), code=settings.RetCode.ARGUMENT_ERROR)
         return construct_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)
@@ -696,7 +695,7 @@ async def parse(
     if url:
         if not is_valid_url(url):
             return get_json_result(
-                data=False, retmsg='The URL format is invalid', retcode=RetCode.ARGUMENT_ERROR)
+                data=False, retmsg='The URL format is invalid', retcode=settings.RetCode.ARGUMENT_ERROR)
         download_path = os.path.join(get_project_base_directory(), "logs/downloads")
         os.makedirs(download_path, exist_ok=True)
         from seleniumwire.webdriver import Chrome, ChromeOptions
@@ -732,7 +731,7 @@ async def parse(
             r = re.search(r'filename=\"([^\"]+)\"', json.dumps(res_headers))
             if not r or not r.group(1):
                 return get_json_result(
-                    data=False, retmsg="Cannot identify downloaded file", retcode=RetCode.ARGUMENT_ERROR
+                    data=False, retmsg="Cannot identify downloaded file", retcode=settings.RetCode.ARGUMENT_ERROR
                 )
 
             class File:
@@ -749,7 +748,7 @@ async def parse(
 
             if not r or r.group(1):
                 return get_json_result(
-                    data=False, retmsg="Can't not identify downloaded file", retcode=RetCode.ARGUMENT_ERROR)
+                    data=False, retmsg="Can't not identify downloaded file", retcode=settings.RetCode.ARGUMENT_ERROR)
             f = File(r.group(1), os.path.join(download_path, r.group(1)))
             txt = FileService.parse_docs([f], user.id)
             return get_json_result(data=txt)
@@ -757,7 +756,7 @@ async def parse(
             logging.exception("[ERROR] URL processing failed")
             # traceback.print_exc()
             return get_json_result(
-                retcode=RetCode.SERVER_ERROR,
+                retcode=settings.RetCode.SERVER_ERROR,
                 retmsg=str(e),
                 data=False
             )
@@ -767,7 +766,7 @@ async def parse(
 
     if not files:
         return get_json_result(
-            data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
+            data=False, retmsg='No file part!', retcode=settings.RetCode.ARGUMENT_ERROR)
 
     try:
         # 读取每个文件的内容为字节数据，并将文件名与内容作为元组传递给 parse_docs
@@ -783,7 +782,7 @@ async def parse(
         logging.exception("[ERROR] File processing failed")
         # traceback.print_exc()
         return get_json_result(
-            retcode=RetCode.SERVER_ERROR,
+            retcode=settings.RetCode.SERVER_ERROR,
             retmsg=str(e),
             data=False
         )

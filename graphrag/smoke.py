@@ -15,13 +15,13 @@ if __name__ == "__main__":
 
     from api.db import LLMType
     from api.db.services.llm_service import LLMBundle
-    from api.settings import retrievaler
+    from api import settings
     from api.db.database import SessionLocal
 
     db = SessionLocal()
     ex = GraphExtractor(LLMBundle(db, args.tenant_id, LLMType.CHAT))
     docs = [d["text"] for d in
-            retrievaler.chunk_list(args.doc_id, args.tenant_id, max_count=6, fields=["content_with_weight"])]
+            settings.retrievaler.chunk_list(args.doc_id, args.tenant_id, max_count=6, fields=["content_with_weight"])]
     graph = ex(docs)
 
     er = EntityResolution(LLMBundle(db, args.tenant_id, LLMType.CHAT))

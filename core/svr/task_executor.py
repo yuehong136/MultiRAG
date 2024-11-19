@@ -40,7 +40,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService
 from api.db.services.file2document_service import File2DocumentService
-from api.settings import retrievaler
+from api import settings
 from api.utils.file_utils import get_project_base_directory
 from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, email, knowledge_graph
 from core.nlp import search, rag_tokenizer
@@ -386,7 +386,7 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
     vts, _ = embd_mdl.encode(["ok"])
     vctr_nm = "vector"
     chunks = []
-    for d in retrievaler.chunk_list(row["doc_id"], row["tenant_id"], fields=["content_with_weight", vctr_nm]):
+    for d in settings.retrievaler.chunk_list(row["doc_id"], row["tenant_id"], fields=["content_with_weight", vctr_nm]):
         chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
 
     raptor = Raptor(
@@ -589,6 +589,7 @@ def report_status():
         time.sleep(30)
 
 if __name__ == "__main__":
+    settings.init_settings()
     background_thread = threading.Thread(target=report_status)
     background_thread.daemon = True
     background_thread.start()

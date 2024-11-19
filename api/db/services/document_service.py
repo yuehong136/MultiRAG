@@ -24,7 +24,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils import current_timestamp, get_format_time, get_uuid
 from api.utils.db_utils import bulk_insert_into_db
 from core.nlp import search, rag_tokenizer
-from core.settings import SVR_QUEUE_NAME
+from core import settings
 from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
@@ -494,7 +494,7 @@ def queue_raptor_tasks(db: Session, doc):
     task = new_task()
     bulk_insert_into_db(db, Task, [task], True)
     task["type"] = "raptor"
-    assert REDIS_CONN.queue_product(SVR_QUEUE_NAME, message=task), "Can't access Redis. Please check the Redis' status."
+    assert REDIS_CONN.queue_product(settings.SVR_QUEUE_NAME, message=task), "Can't access Redis. Please check the Redis' status."
 
 # def doc_upload_and_parse(conversation_id, file_objs, user_id):
 #     from core.app import presentation, picture, naive, audio, email

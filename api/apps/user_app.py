@@ -25,8 +25,7 @@ from api.db.services.user_service import UserService, TenantService, UserTenantS
 from api.db.services.file_service import FileService
 from api.db import UserTenantRole, FileType
 from api.utils import get_uuid, get_format_time, download_img, current_timestamp, datetime_format
-from api.settings import RetCode, GITHUB_OAUTH, FEISHU_OAUTH, CHAT_MDL, EMBEDDING_MDL, ASR_MDL, IMAGE2TEXT_MDL, PARSERS, \
-    API_KEY, LLM_FACTORY, LLM_BASE_URL, RERANK_MDL
+from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, construct_response, get_data_error_result
 
 router = APIRouter()
@@ -106,7 +105,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     users = UserService.query(db, email=email)
     if not users:
         return get_json_result(data=False,
-                               retcode=RetCode.AUTHENTICATION_ERROR,
+                               retcode=settings.RetCode.AUTHENTICATION_ERROR,
                                retmsg=f'Email: {email} is not registered!')
 
     password = request.password
@@ -127,7 +126,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=500, detail=f"Login error: {str(e)}")
     else:
         return get_json_result(data=False,
-                               retcode=RetCode.AUTHENTICATION_ERROR,
+                               retcode=settings.RetCode.AUTHENTICATION_ERROR,
                                retmsg='Email and password do not match!')
 
 
@@ -146,10 +145,10 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
     - 失败时返回错误信息
     """
     import requests
-    res = requests.post(GITHUB_OAUTH["url"],
+    res = requests.post(settings.GITHUB_OAUTH["url"],
                         data={
-                            "client_id": GITHUB_OAUTH["client_id"],
-                            "client_secret": GITHUB_OAUTH["secret_key"],
+                            "client_id": settings.GITHUB_OAUTH["client_id"],
+                            "client_secret": settings.GITHUB_OAUTH["secret_key"],
                             "code": code},
                         headers={"Accept": "application/json"})
     res = res.json()
@@ -200,16 +199,16 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
     - 失败时返回错误信息
     """
     import requests
-    app_access_token_res = requests.post(FEISHU_OAUTH["app_access_token_url"], json={
-        "app_id": FEISHU_OAUTH["app_id"],
-        "app_secret": FEISHU_OAUTH["app_secret"]
+    app_access_token_res = requests.post(settings.FEISHU_OAUTH["app_access_token_url"], json={
+        "app_id": settings.FEISHU_OAUTH["app_id"],
+        "app_secret": settings.FEISHU_OAUTH["app_secret"]
     }, headers={"Content-Type": "application/json; charset=utf-8"})
     app_access_token_res = app_access_token_res.json()
     if app_access_token_res['code'] != 0:
         return HTTPException(status_code=400, detail=app_access_token_res)
 
-    res = requests.post(FEISHU_OAUTH["user_access_token_url"], json={
-        "grant_type": FEISHU_OAUTH["grant_type"],
+    res = requests.post(settings.FEISHU_OAUTH["user_access_token_url"], json={
+        "grant_type": settings.FEISHU_OAUTH["grant_type"],
         "code": code
     }, headers={"Content-Type": "application/json; charset=utf-8",
                 'Authorization': f"Bearer {app_access_token_res['app_access_token']}"})
@@ -314,7 +313,7 @@ async def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db)
         new_password = request_data["new_password"]
         # if not pwd_context.verify(request_data["password"], user.password):
         if not UserService.verify_password(request_data["password"], user.password):
-            return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg='Password error!')
+            return get_json_result(data=False, retcode=settings.RetCode.AUTHENTICATION_ERROR, retmsg='Password error!')
         if new_password:
             # update_dict["password"] = pwd_context.hash(new_password)
             update_dict["password"] = UserService.hash_password(new_password)
@@ -333,7 +332,7 @@ async def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db)
         return get_json_result(data=True)
     except Exception as e:
         logging.exception(e)
-        return get_json_result(data=False, retmsg='Update failure!', retcode=RetCode.EXCEPTION_ERROR)
+        return get_json_result(data=False, retmsg='Update failure!', retcode=settings.RetCode.EXCEPTION_ERROR)
 
 
 @router.get("/info", summary="获取用户信息")
@@ -388,12 +387,12 @@ def user_register(db: Session, user_id: str, user: dict):
     tenant = {
         "id": user_id,
         "name": user["nickname"] + "‘s Kingdom",
-        "llm_id": CHAT_MDL,
-        "embd_id": EMBEDDING_MDL,
-        "asr_id": ASR_MDL,
-        "parser_ids": PARSERS,
-        "img2txt_id": IMAGE2TEXT_MDL,
-        "rerank_id": RERANK_MDL
+        "llm_id": settings.CHAT_MDL,
+        "embd_id": settings.EMBEDDING_MDL,
+        "asr_id": settings.ASR_MDL,
+        "parser_ids": settings.PARSERS,
+        "img2txt_id": settings.IMAGE2TEXT_MDL,
+        "rerank_id": settings.RERANK_MDL
     }
     usr_tenant = {
         "tenant_id": user_id,
@@ -413,14 +412,14 @@ def user_register(db: Session, user_id: str, user: dict):
         "location": "",
     }
     tenant_llm = []
-    for llm in LLMService.query(db, fid=LLM_FACTORY):
+    for llm in LLMService.query(db, fid=settings.LLM_FACTORY):
         tenant_llm.append({
             "tenant_id": user_id,
-            "llm_factory": LLM_FACTORY,
+            "llm_factory": settings.LLM_FACTORY,
             "llm_name": llm.llm_name,
             "mdl_type": llm.mdl_type,
-            "api_key": API_KEY,
-            "api_base": LLM_BASE_URL
+            "api_key": settings.API_KEY,
+            "api_base": settings.LLM_BASE_URL
         })
 
     try:
@@ -460,14 +459,14 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
     if not re.match(r"^[\w\._-]+@([\w_-]+\.)+[\w-]{2,5}$", email_address):
         return get_json_result(data=False,
                                retmsg=f'Invalid email address: {email_address}!',
-                               retcode=RetCode.OPERATING_ERROR)
+                               retcode=settings.RetCode.OPERATING_ERROR)
 
     # Check if the email address is already used
     if UserService.query(db, email=email_address):
         return get_json_result(
             data=False,
             retmsg=f'Email: {email_address} has already registered!',
-            retcode=RetCode.OPERATING_ERROR)
+            retcode=settings.RetCode.OPERATING_ERROR)
 
     # Construct user info data
     nickname = req["nickname"]
@@ -495,7 +494,7 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
         logging.exception(e)
         return get_json_result(data=False,
                                retmsg=f'User registration failure, error: {str(e)}',
-                               retcode=RetCode.EXCEPTION_ERROR)
+                               retcode=settings.RetCode.EXCEPTION_ERROR)
 
 
 @router.get("/tenant_info", summary="获取租户信息")

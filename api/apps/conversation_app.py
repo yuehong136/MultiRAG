@@ -19,7 +19,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle, TenantService, TenantLLMService
 from api.db import LLMType
 from api.db.services.user_service import UserTenantService
-from api.settings import RetCode, retrievaler
+from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
@@ -196,7 +196,7 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
         else:
             return get_json_result(
                 data=False, retmsg=f'Only owner of conversation authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR)
+                retcode=settings.RetCode.OPERATING_ERROR)
         conv = conv.to_dict()
         return get_json_result(data=conv)
     except Exception as e:
@@ -230,7 +230,7 @@ async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), 
             else:
                 return get_json_result(
                     data=False, retmsg=f'Only owner of conversation authorized for this operation.',
-                    retcode=RetCode.OPERATING_ERROR)
+                    retcode=settings.RetCode.OPERATING_ERROR)
             ConversationService.delete_by_id(db, cid)
         return get_json_result(data=True)
     except Exception as e:
@@ -255,7 +255,7 @@ async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=
         if not DialogService.query(db, tenant_id=user.id, id=dialog_id):
             return get_json_result(
                 data=False, retmsg=f'Only owner of dialog authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR)
+                retcode=settings.RetCode.OPERATING_ERROR)
         convs = ConversationService.query(
             db,
             dialog_id=dialog_id,
@@ -688,7 +688,7 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
     chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name])
-    ranks = retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3,
+    ranks = settings.retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3,
                                   aggs=False)
     mindmap = MindMapExtractor(chat_mdl)
     mind_map = mindmap([c["text"] for c in ranks["chunks"]]).output
