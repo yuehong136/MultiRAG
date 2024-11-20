@@ -30,6 +30,7 @@ from api.db.db_models import APIToken
 from api.db.services.api_service import APITokenService
 from api import settings
 from api.utils import HTTP_STATUS_CODES, get_uuid
+from api.constants import REQUEST_WAIT_SEC, REQUEST_MAX_WAIT_SEC
 
 
 def request(**kwargs):
@@ -67,7 +68,7 @@ def request(**kwargs):
 
 
 def get_exponential_backoff_interval(retries, full_jitter=False):
-    countdown = min(settings.REQUEST_MAX_WAIT_SEC, settings.REQUEST_WAIT_SEC * (2 ** retries))
+    countdown = min(REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC * (2 ** retries))
     if full_jitter:
         countdown = random.randrange(countdown + 1)
     return max(0, countdown)

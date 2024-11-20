@@ -24,6 +24,7 @@ from api.db.database import get_db, SessionLocal
 from api.db.services import UserService
 from api import settings
 from errors.exceptions import AITranslateException
+from api.constants import API_VERSION
 
 description = """
 Multi-RAG API helps you do awesome stuff. 🚀
@@ -111,10 +112,12 @@ def register_page(page_path):
     page = module_from_spec(spec)
     sys.modules[module_name] = page
     spec.loader.exec_module(page)
-
+    url_prefix = (
+        f"/api/{API_VERSION}" if "/sdk/" in path else f"/{API_VERSION}/{page_name}"
+    )
     # 确保模块有 router 属性
     if hasattr(page, 'router'):
-        app.include_router(page.router, prefix=f'/{settings.API_VERSION}/{page_name}', tags=[page_name])
+        app.include_router(page.router, prefix=url_prefix, tags=[page_name])
     else:
         logging.warning(f"Module {module_name} does not have 'router' attribute.")
 

@@ -1,19 +1,15 @@
 import os
 from datetime import date
 from enum import IntEnum, Enum
-from api.utils.file_utils import get_project_base_directory
 import core.utils
 from core.nlp import search
 from graphrag import search as kg_search
 from core.utils.milvus_conn import MILVUS_CONNECTION
 from api.utils import get_base_config, decrypt_database_config
+from api.constants import MULTI_RAG_SERVICE_NAME
 
-API_VERSION = "v1"
-MULTI_RAG_SERVICE_NAME = "multirag"
 LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
 
-REQUEST_WAIT_SEC = 2
-REQUEST_MAX_WAIT_SEC = 300
 LLM = None
 LLM_FACTORY = None
 LLM_BASE_URL = None
