@@ -11,7 +11,7 @@ import json
 from functools import partial
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Body
 from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -200,14 +200,16 @@ async def reset(request: ResetCanvasRequest, db: Session = Depends(get_db), user
 
 
 @router.post('/test_db_connect', summary="测试数据库连接", response_description="成功测试数据库连接")
-def test_db_connect(request=DBConnectionRequest, user=Depends(manager)):
-    req = request.model_dump()
+def test_db_connect(
+    request: DBConnectionRequest = Body(...),
+    user=Depends(manager)
+):
     try:
         # 根据 db_type 选择不同的数据库引擎
-        if req.db_type in ["mysql", "mariadb"]:
-            db_url = f"mysql+pymysql://{req.username}:{req.password}@{req.host}:{req.port}/{req.database}"
-        elif req.db_type == 'postgresql':
-            db_url = f"postgresql+psycopg2://{req.username}:{req.password}@{req.host}:{req.port}/{req.database}"
+        if request.db_type in ["mysql", "mariadb"]:
+            db_url = f"mysql+pymysql://{request.username}:{request.password}@{request.host}:{request.port}/{request.database}"
+        elif request.db_type == 'postgresql':
+            db_url = f"postgresql+psycopg2://{request.username}:{request.password}@{request.host}:{request.port}/{request.database}"
         else:
             raise HTTPException(status_code=400, detail="Unsupported database type")
 
