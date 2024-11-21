@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import List, Optional, Generator
+from typing import Generator
 from api.db.services.dialog_service import DialogService, ConversationService, chat, ask
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle, TenantService, TenantLLMService
@@ -29,13 +29,13 @@ from graphrag.mind_map_extractor import MindMapExtractor
 
 
 class SetConversationRequest(BaseModel):
-    conversation_id: Optional[str] = None
+    conversation_id: str | None = None
     """会话的唯一标识符，如果为空则表示创建新会话。"""
 
-    dialog_id: Optional[str] = None
+    dialog_id: str | None = None
     """对话的唯一标识符。"""
 
-    name: Optional[str] = "New conversation"
+    name: str | None = "New conversation"
     """会话的名称。"""
 
     # 其他可能的字段
@@ -45,21 +45,21 @@ class CompletionRequest(BaseModel):
     conversation_id: str
     """会话的唯一标识符。"""
 
-    messages: List[dict]
+    messages: list[dict]
     """消息列表，每个消息包含角色和内容。"""
 
-    quote: Optional[bool] = False
+    quote: bool | None = False
     """是否引用，默认值为 False。"""
 
-    stream: Optional[bool] = True
+    stream: bool | None = True
     """是否使用流式响应，默认值为 True。"""
 
-    filter_condition: Optional[str] = ""
+    filter_condition: str | None = ""
     """过滤条件，可以根据实际需求自定义结构。"""
 
 
 class RemoveConversationRequest(BaseModel):
-    conversation_ids: List[str]
+    conversation_ids: list[str]
     """要删除的会话ID列表。"""
 
 
@@ -78,7 +78,7 @@ class ThumbupRequest(BaseModel):
     message_id: str
     """消息ID"""
 
-    set: Optional[bool] = None
+    set: bool | None = None
     """点赞状态"""
 
     feedback: str
@@ -99,7 +99,7 @@ class AskAboutRequest(BaseModel):
     question: str
     """用户提出的问题"""
 
-    kb_ids: List[str]
+    kb_ids: list[str]
     """知识库ID列表"""
 
 
@@ -107,7 +107,7 @@ class MindmapRequest(BaseModel):
     question: str
     """用户提出的问题"""
 
-    kb_ids: List[str]
+    kb_ids: list[str]
     """知识库ID列表"""
 
 

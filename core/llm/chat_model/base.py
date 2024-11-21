@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import openai
 from openai import OpenAI
 from core.nlp import is_english
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any
 
 from core.utils import num_tokens_from_string
 
@@ -14,14 +14,14 @@ from core.utils import num_tokens_from_string
 class Base(ABC):
     key: str
     model_name: str
-    base_url: Optional[str] = None
+    base_url: str | None = None
     client: OpenAI = field(init=False)
 
     def __post_init__(self):
         timeout = int(os.environ.get('LM_TIMEOUT_SECONDS', 600))
         self.client = OpenAI(api_key=self.key, base_url=self.base_url, timeout=timeout)
 
-    def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]) -> Tuple[str, int]:
+    def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> tuple[str, int]:
         if system:
             history.insert(0, {"role": "system", "content": system})
         try:
@@ -37,7 +37,7 @@ class Base(ABC):
         except openai.APIError as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]):
+    def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
         ans = ""

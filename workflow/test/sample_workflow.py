@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Any
 from dataclasses import dataclass
 
 @dataclass
@@ -10,12 +10,12 @@ class OutputDefinition:
 
 class StartComponent:
     def __init__(self):
-        self.outputs: Dict[str, OutputDefinition] = {}
+        self.outputs: dict[str, OutputDefinition] = {}
 
     def add_output(self, output: OutputDefinition):
         self.outputs[output.name] = output
 
-    def execute(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, input_data: dict[str, Any]) -> dict[str, Any]:
         result = {}
         for name, output in self.outputs.items():
             if output.required and name not in input_data:
@@ -31,7 +31,7 @@ class Workflow:
         for output in outputs:
             self.start_component.add_output(output)
 
-    def execute(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, input_data: dict[str, Any]) -> dict[str, Any]:
         return self.start_component.execute(input_data)
 
 # 使用示例

@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Union, Optional
 import json
 
 from workflow.WorkflowEngine import WorkflowContext
@@ -11,7 +10,7 @@ from workflow.utils.utils import safe_format_double_braces
 class EndNodeOutputDefinition:
     parameter_name: str
     value_type: ValueTypeOfIODefinition
-    content: Union[list[str], str]
+    content: list[str] | str
 
 
 @dataclass
@@ -25,7 +24,7 @@ class EndNode(Node[EndNodeParam]):
         self.name = "EndNode"
         super().__init__(node_parameter, "900001")
 
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None, **kwargs) -> dict:
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None, **kwargs) -> dict:
         content = self.node_parameter.content
         parameter_dict = {}
         for output_definition in self.node_parameter.output_definition_list:

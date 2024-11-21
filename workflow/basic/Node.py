@@ -1,6 +1,4 @@
 from abc import ABC, abstractmethod
-from array import array
-from dataclasses import dataclass
 from enum import Enum
 from typing import Generic, TypeVar, Optional
 
@@ -12,8 +10,6 @@ from api.db.database import get_db
 from workflow.WorkflowContext import WorkflowContext
 
 from dataclasses import dataclass
-from typing import List
-import json
 
 
 @dataclass
@@ -23,7 +19,7 @@ class Batch:
     ref_name: str
 
     @staticmethod
-    def parse_batch(json_data: str) -> List['Batch']:
+    def parse_batch(json_data: str) -> list['Batch']:
         if json_data is None:
             return []
 

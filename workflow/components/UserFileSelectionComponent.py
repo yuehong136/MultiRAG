@@ -1,7 +1,5 @@
 import json
 from dataclasses import dataclass
-from typing import Optional, Union
-
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Component import Component, ComponentParameter
 
@@ -24,7 +22,7 @@ class UserFileSelectionComponent(Component[UserFileSelectionComponentParam]):
         self.component_parameter: UserFileSelectionComponentParam = component_parameter
         super().__init__(component_parameter, node_id, self.name)
 
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None,
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
                       **kwargs) -> dict:
         file = input_data.get(self.component_parameter.input_definition.variable_name)
         context.set(str(self.node_id),

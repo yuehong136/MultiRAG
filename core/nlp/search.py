@@ -1,6 +1,5 @@
 import logging
 import re
-from typing import List, Optional, Dict, Union
 from dataclasses import dataclass
 import numpy as np
 from core.utils import rmSpace
@@ -30,22 +29,22 @@ class Dealer:
     @dataclass
     class SearchResult:
         total: int
-        ids: List[str]
-        query_vector: List[float] = None
-        field: Optional[Dict] = None
-        highlight: Optional[Dict] = None
-        aggregation: Union[List, Dict, None] = None
-        keywords: Optional[List[str]] = None
-        group_docs: List[List] = None
+        ids: list[str]
+        query_vector: list[float] = None
+        field: dict | None = None
+        highlight: dict | None = None
+        aggregation: list | dict | None = None
+        keywords: list[str] | None = None
+        group_docs: list[list] | None = None
 
     @dataclass
     class QueryResult:
         total: int
-        ids: List[str]
-        field: Optional[Dict] = None
-        aggregation: Union[List, Dict, None] = None
-        keywords: Optional[List[str]] = None
-        group_docs: List[List] = None
+        ids: list[str]
+        field: dict | None = None
+        aggregation: list | dict | None = None
+        keywords: list[str] | None = None
+        group_docs: list[list] | None = None
 
     def _vector(self, txt, emb_mdl, sim=0.8, topk=10):
         qv, c = emb_mdl.encode_queries(txt)

@@ -1,6 +1,4 @@
 import json
-
-from typing import Dict, Any, Optional, List
 from workflow.WorkflowEngine import WorkflowEngine
 from workflow.basic.Edge import Edge
 from workflow.basic.EndNode import EndNode
@@ -64,7 +62,7 @@ class WorkflowParser:
         return WorkflowEngine(node_list)
 
     @staticmethod
-    def get_ordered_nodes(workflow_json: json) -> List[str]:
+    def get_ordered_nodes(workflow_json: json) -> list[str]:
         edges = [Edge(edge['source'], edge['target']) for edge in workflow_json['edges']]
 
         graph = {}

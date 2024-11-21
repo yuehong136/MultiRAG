@@ -8,10 +8,8 @@
 """
 
 import logging
-import json
 import re
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -54,25 +52,25 @@ class SetTenantInfoRequest(BaseModel):
     tenant_id: str
     """租户的唯一标识符。"""
 
-    name: Optional[str] = None
+    name: str | None = None
     """租户的名称。"""
 
-    llm_id: Optional[str] = None
+    llm_id: str | None = None
     """大语言模型的ID。"""
 
-    embd_id: Optional[str] = None
+    embd_id: str | None = None
     """嵌入模型的ID。"""
 
-    asr_id: Optional[str] = None
+    asr_id: str | None = None
     """语音识别模型的ID。"""
 
-    img2txt_id: Optional[str] = None
+    img2txt_id: str | None = None
     """图像转文本模型的ID。"""
 
-    rerank_id: Optional[str] = None
+    rerank_id: str | None = None
     """重新排序模型的ID。"""
 
-    tts_id: Optional[str] = None
+    tts_id: str | None = None
     """文本转语音模型的ID。"""
 
 

@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List
 
 @dataclass
 class Base(ABC):
@@ -8,9 +7,9 @@ class Base(ABC):
     model_name: str
 
     @abstractmethod
-    def encode(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+    def encode(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
         raise NotImplementedError("Please implement encode method!")
 
     @abstractmethod
-    def encode_queries(self, text: str) -> List[float]:
+    def encode_queries(self, text: str) -> list[float]:
         raise NotImplementedError("Please implement encode method!")

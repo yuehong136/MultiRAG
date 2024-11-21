@@ -533,7 +533,7 @@ def do_handle_task(db, r):
         logging.info(f"Total successful inserts into Milvus's {search.index_name_one(r["tenant_id"], kb.name)}: {total_insert_count} ")
         # logging.info(f"Milvus insert details: {successful_inserts}")
 
-    # 输出总的 Indexing elapsed 时长
+    # 输出总的 Insertion elapsed 时长
     logging.info(f"Total Insertion elapsed: {insertion_total_time:.2f}")
 
     if failed_inserts:

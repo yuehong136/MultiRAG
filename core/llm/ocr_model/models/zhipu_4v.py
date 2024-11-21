@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Union, Tuple, Any, List, Dict
+from typing import Any
 from core.llm.ocr_model.base import Base
 from zhipuai import ZhipuAI
 from PIL import Image
@@ -15,7 +15,7 @@ class Zhipu4V(Base):
     def __post_init__(self):
         self.client = ZhipuAI(api_key=self.key)
 
-    def describe(self, image: Union[bytes, BytesIO, Image.Image], max_tokens: int = 1024) -> Tuple[str, int]:
+    def describe(self, image: bytes | BytesIO | Image.Image, max_tokens: int = 1024) -> tuple[str, int]:
         b64 = self.image2base64(image)
         # try:
         res = self.client.chat.completions.create(
@@ -28,7 +28,7 @@ class Zhipu4V(Base):
         # except Exception as e:
         #     return f"**ERROR**: {str(e)}", 0
 
-    def prompt(self, b64: str, lang: str = "Chinese") -> List[Dict[str, Any]]:
+    def prompt(self, b64: str, lang: str = "Chinese") -> list[dict[str, Any]]:
         content = "请用中文详细描述一下图中的内容，比如时间，地点，人物，事情，人物心情等，如果有数据请提取出数据。" if lang.lower() == "chinese" else \
                   "Please describe the content of this picture, like where, when, who, what happened. If it has number data, please extract them out."
         return [

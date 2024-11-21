@@ -1,19 +1,14 @@
-from typing import List
-
 from fastapi import APIRouter, Body, Depends
 
 from api.apps import manager
 from api.db.database import get_db
 from api.service.ai_translate_service.ai_translate_service import AITranslateService
 from sqlalchemy.orm import Session
+from enum import Enum
+from pydantic import BaseModel
+from typing import Any
 
 router = APIRouter()
-
-from enum import Enum
-
-from pydantic import BaseModel
-from typing import Any, Optional
-
 
 class StatusEnum(str, Enum):
     SUCCESS = "success"
@@ -22,8 +17,8 @@ class StatusEnum(str, Enum):
 
 class ResponseSchema(BaseModel):
     status: StatusEnum = StatusEnum.SUCCESS
-    message: Optional[str] = None
-    data: Optional[Any] = None
+    message: str | None = None
+    data: Any | None = None
 
 
 class AITranslateReqBody(BaseModel):
@@ -59,7 +54,7 @@ async def ai_translate(body: AITranslateReqBody = Body(...), db: Session = Depen
 
 
 class AIBatchTranslateReqBody(BaseModel):
-    zh_text_list: List[str]
+    zh_text_list: list[str]
     llm_name: str
 
 

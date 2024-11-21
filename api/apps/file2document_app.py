@@ -8,7 +8,6 @@
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from typing import List
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -24,8 +23,8 @@ router = APIRouter()
 
 @router.post("/convert", summary="转换文件", response_description="成功转换文件")
 async def convert(
-        kb_ids: List[str],
-        file_ids: List[str],
+        kb_ids: list[str],
+        file_ids: list[str],
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -98,7 +97,7 @@ async def convert(
 
 @router.post("/rm", summary="删除文件", response_description="成功删除文件")
 async def rm(
-        file_ids: List[str],
+        file_ids: list[str],
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):

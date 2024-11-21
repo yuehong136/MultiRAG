@@ -6,11 +6,8 @@
 @date：2024/8/8 9:00
 @desc:
 """
-
-import os
 import numpy as np
 from dataclasses import dataclass, field
-from typing import List, Optional
 from zhipuai import ZhipuAI
 from core.llm.embedding_model.base import Base
 
@@ -19,7 +16,7 @@ from core.llm.embedding_model.base import Base
 class ZhipuEmbed(Base):
     key: str = None
     model_name: str = "embedding-2"
-    base_url: Optional[str] = None
+    base_url: str | None = None
     client: ZhipuAI = field(init=False)
 
     def __post_init__(self):

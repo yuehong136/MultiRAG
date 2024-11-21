@@ -8,12 +8,12 @@ from core.nlp.search import Dealer
 
 class KGSearch(Dealer):
     def search(self, req, idxnm, emb_mdl=None):
-        def merge_into_first(sres, title=""):
+        def merge_into_first(sres, title="") -> dict[str, str]:
             df, texts = [], []
             for d in sres["hits"]:
                 try:
                     df.append(json.loads(d["content_with_weight"]))
-                except Exception as e:
+                except Exception:
                     texts.append(d["content_with_weight"])
                     pass
             if not df and not texts: return False

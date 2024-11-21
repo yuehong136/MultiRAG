@@ -11,7 +11,6 @@ import json
 
 import hashlib
 import re
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -40,47 +39,47 @@ router = APIRouter()
 
 class ListChunkRequest(BaseModel):
     doc_id: str
-    page: Optional[int] = 1
-    size: Optional[int] = 30
-    keywords: Optional[str] = ""
+    page: int | None = 1
+    size: int | None = 30
+    keywords: str | None = ""
 
 
 class SetChunkRequest(BaseModel):
     doc_id: str
     chunk_id: str
     content_with_weight: str
-    important_kwd: List[str]
-    available_int: Optional[int] = None
+    important_kwd: list[str]
+    available_int: int | None = None
 
 
 class SwitchChunkRequest(BaseModel):
     doc_id: str
-    chunk_ids: List[str]
+    chunk_ids: list[str]
     available_int: int
 
 
 class RmChunkRequest(BaseModel):
     doc_id: str
-    chunk_ids: List[str]
+    chunk_ids: list[str]
 
 
 class CreateChunkRequest(BaseModel):
     doc_id: str
     content_with_weight: str
-    important_kwd: Optional[List[str]]
+    important_kwd: list[str] | None
 
 
 class RetrievalTestRequest(BaseModel):
     kb_id: str
     question: str
-    page: Optional[int] = 1
-    size: Optional[int] = 30
-    doc_ids: Optional[List[str]]
-    similarity_threshold: Optional[float] = 0.0
-    vector_similarity_weight: Optional[float] = 0.3
-    top_k: Optional[int] = 1024
-    rerank_id: Optional[str] = None
-    keyword: Optional[bool] = False
+    page: int | None = 1
+    size: int | None = 30
+    doc_ids: list[str] | None
+    similarity_threshold: float | None = 0.0
+    vector_similarity_weight: float | None = 0.3
+    top_k: int | None = 1024
+    rerank_id: str | None = None
+    keyword: bool | None = False
 
 
 @router.post('/list', summary="列出文档块")

@@ -7,7 +7,7 @@
 @desc:
 """
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any
 
 from zhipuai import ZhipuAI
 
@@ -25,7 +25,7 @@ class Zhipu4V(Base):
     def __post_init__(self):
         self.client = ZhipuAI(api_key=self.key)
 
-    def describe(self, image: bytes, max_tokens: int = 1024) -> Tuple[str, int]:
+    def describe(self, image: bytes, max_tokens: int = 1024) -> tuple[str, int]:
         b64 = self.image2base64(image)
         prompt = self.prompt(b64)
         prompt[0]["content"][1]["type"] = "text"
@@ -37,7 +37,7 @@ class Zhipu4V(Base):
         )
         return res.choices[0].message.content.strip(), res.usage.total_tokens
 
-    def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any], image: str = "") -> Tuple[str, int]:
+    def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], image: str = "") -> tuple[str, int]:
         if system:
             history[-1]["content"] = system + history[-1]["content"] + "user query: " + history[-1]["content"]
         try:
@@ -56,7 +56,7 @@ class Zhipu4V(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any], image: str = ""):
+    def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], image: str = ""):
         if system:
             history[-1]["content"] = system + history[-1]["content"] + "user query: " + history[-1]["content"]
 

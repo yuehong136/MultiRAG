@@ -43,7 +43,6 @@ from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
 
 router = APIRouter()
 
@@ -65,11 +64,11 @@ class ChangeStatusRequest(BaseModel):
 
 
 class RemoveRequest(BaseModel):
-    doc_id: List[str] = Field(..., description="文档ID列表")
+    doc_id: list[str] = Field(..., description="文档ID列表")
 
 
 class RunRequest(BaseModel):
-    doc_ids: List[str] = Field(..., description="文档ID列表")
+    doc_ids: list[str] = Field(..., description="文档ID列表")
     run: int = Field(..., description="运行状态")
 
 
@@ -81,14 +80,14 @@ class RenameRequest(BaseModel):
 class ChangeParserRequest(BaseModel):
     doc_id: str = Field(..., description="文档ID")
     parser_id: str = Field(..., description="解析器ID")
-    parser_config: Optional[dict] = Field(None, description="解析器配置")
+    parser_config: dict | None = Field(None, description="解析器配置")
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
 async def upload(
         kb_id: str,
-        files: List[UploadFile] = File(...),
-        labels: Optional[str] = Query(None),  # labels 是一个 JSON 格式的字符串
+        files: list[UploadFile] = File(...),
+        labels: str | None = Query(None),  # labels 是一个 JSON 格式的字符串
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -688,8 +687,8 @@ async def get_image(
 
 @router.post("/parse", summary="解析网页或文件内容", response_description="成功解析内容")
 async def parse(
-        url: Optional[str] = Form(None, description="网页URL（可选）"),
-        files: Optional[List[UploadFile]] = File(None),
+        url: str | None = Form(None, description="网页URL（可选）"),
+        files: list[UploadFile] | None = File(None),
         user=Depends(manager)
 ):
     if url:

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import openai
 from openai import OpenAI
 from core.nlp import is_english
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any
 import base64
 from io import BytesIO
 
@@ -21,7 +21,7 @@ class Base(ABC):
     key: str
     model_name: str
     lang: str = "English"
-    base_url: Optional[str] = None
+    base_url: str | None = None
     client: OpenAI = field(init=False)
 
     def __post_init__(self):
@@ -31,7 +31,7 @@ class Base(ABC):
     def describe(self, image: bytes, max_tokens: int = 300):
         raise NotImplementedError("Please implement describe method!")
 
-    def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any], image: str = "") -> Tuple[str, int]:
+    def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], image: str = "") -> tuple[str, int]:
         if system:
             history[-1]["content"] = system + history[-1]["content"] + "user query: " + history[-1]["content"]
         try:
@@ -50,7 +50,7 @@ class Base(ABC):
         except openai.APIError as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any], image: str = ""):
+    def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], image: str = ""):
         if system:
             history[-1]["content"] = system + history[-1]["content"] + "user query: " + history[-1]["content"]
 
@@ -96,7 +96,7 @@ class Base(ABC):
             image.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    def prompt(self, b64: str) -> List[Dict[str, Any]]:
+    def prompt(self, b64: str) -> list[dict[str, Any]]:
         print(f"Prompt called with lang={self.lang}")  # 调试信息
         return [
             {
@@ -117,7 +117,7 @@ class Base(ABC):
             }
         ]
 
-    def chat_prompt(self, text: str, b64: str) -> List[Dict[str, Any]]:
+    def chat_prompt(self, text: str, b64: str) -> list[dict[str, Any]]:
         return [
             {
                 "type": "image_url",

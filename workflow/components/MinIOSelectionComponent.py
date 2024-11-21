@@ -1,6 +1,5 @@
 import json
 from dataclasses import dataclass
-from typing import Optional
 from urllib.parse import unquote
 
 from core.utils.minio_conn import MultiRAGMinio
@@ -28,7 +27,7 @@ class MinIOSelectionComponent(Component[MinIOSelectionComponentParam]):
         self.component_parameter: MinIOSelectionComponentParam = component_parameter
         super().__init__(component_parameter, node_id, self.name)
 
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None,
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
                       **kwargs) -> dict:
         minio_path = input_data['input_data']
         print(f"minio_path = {minio_path}")

@@ -1,5 +1,5 @@
 import os
-from typing import Any, Optional
+from typing import Any
 
 
 class PromptTemplateLoader:
@@ -21,7 +21,7 @@ class PromptTemplateLoader:
         with open(template_path, 'r', encoding='utf-8') as file:
             return file.read()
 
-    def fill_template(self, template_name: str, data: Optional[Any] = None, **kwargs) -> str:
+    def fill_template(self, template_name: str, data: Any | None = None, **kwargs) -> str:
         """
         加载模板并填充值。支持Pydantic模型、字典和关键字参数。
 

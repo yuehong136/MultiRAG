@@ -1,6 +1,5 @@
-import os
 from openai import OpenAI, AsyncOpenAI
-from typing import List, Dict, Union, Generator, Optional, Any
+from typing import Generator, Any
 
 from abc import ABC, abstractmethod
 
@@ -14,7 +13,7 @@ class BaseLLMClient(ABC):
         self.api_key = AI_TRANSLATE_API_KEY
 
     @staticmethod
-    def _create_messages(system_content: Optional[str], user_content: str) -> List[Dict[str, Union[str, None]]]:
+    def _create_messages(system_content: str | None, user_content: str) -> list[dict[str, str | None]]:
         if system_content is None:
             return [{"role": "user", "content": user_content}]
         else:
@@ -24,11 +23,11 @@ class BaseLLMClient(ABC):
             ]
 
     @abstractmethod
-    def standard_request(self, system_content: Optional[str], user_content: str) -> Any:
+    def standard_request(self, system_content: str | None, user_content: str) -> Any:
         pass
 
     @abstractmethod
-    def streaming_request(self, system_content: Optional[str], user_content: str) -> Any:
+    def streaming_request(self, system_content: str | None, user_content: str) -> Any:
         pass
 
 
@@ -37,14 +36,14 @@ class SyncLLMClient(BaseLLMClient):
         super().__init__(model_id)
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
-    def standard_request(self, system_content: Optional[str] = None, user_content: str = None) -> str:
+    def standard_request(self, system_content: str | None = None, user_content: str = None) -> str:
         completion = self.client.chat.completions.create(
             model=self.model_id,
             messages=self._create_messages(system_content, user_content)
         )
         return completion.choices[0].message.content
 
-    def streaming_request(self, system_content: Optional[str], user_content: str) -> Generator[str, None, None]:
+    def streaming_request(self, system_content: str | None, user_content: str) -> Generator[str, None, None]:
         stream = self.client.chat.completions.create(
             model=self.model_id,
             messages=self._create_messages(system_content, user_content),
@@ -60,14 +59,14 @@ class AsyncLLMClient(BaseLLMClient):
         super().__init__(model_id)
         self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
-    async def standard_request(self, system_content: Optional[str] = None, user_content: str = None) -> str:
+    async def standard_request(self, system_content: str | None = None, user_content: str = None) -> str:
         completion = await self.client.chat.completions.create(
             model=self.model_id,
             messages=self._create_messages(system_content, user_content)
         )
         return completion.choices[0].message.content
 
-    async def streaming_request(self, system_content: Optional[str], user_content: str):
+    async def streaming_request(self, system_content: str | None, user_content: str):
         stream = await self.client.chat.completions.create(
             model=self.model_id,
             messages=self._create_messages(system_content, user_content),

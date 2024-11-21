@@ -1,7 +1,6 @@
 import logging
 import os
 import numpy as np
-from typing import List, Optional
 from core.llm.embedding_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
 from core.utils import num_tokens_from_string
@@ -10,7 +9,7 @@ from core.utils import num_tokens_from_string
 class YoudaoEmbed(Base):
     _client = None
 
-    def __init__(self, key: str = None, model_name: str = "maidalun1020/bce-embedding-base_v1", base_url: Optional[str] = None, **kwargs):
+    def __init__(self, key: str = None, model_name: str = "maidalun1020/bce-embedding-base_v1", base_url: str | None = None, **kwargs):
         super().__init__(key, model_name)
         self.base_url = base_url
         self.kwargs = kwargs
@@ -40,7 +39,7 @@ class YoudaoEmbed(Base):
             return models_path
         return os.path.join(get_home_cache_dir(), model_name)
 
-    def encode(self, texts: List[str], batch_size: int = 10, **kwargs):
+    def encode(self, texts: list[str], batch_size: int = 10, **kwargs):
         """
         对给定的文本列表进行编码。
 

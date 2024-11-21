@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 from workflow.WorkflowContext import WorkflowContext
 from workflow.basic.Node import Node, NodeParameter
@@ -10,8 +9,8 @@ class StartNodeInputDefinition:
     variable_name: str
     variable_type: str
     required: bool
-    description: Optional[str] = None
-    schema: Optional['StartNodeInputDefinition'] = None
+    description: str | None = None
+    schema: 'StartNodeInputDefinition' | None = None
 
 
 @dataclass
@@ -26,7 +25,7 @@ class StartNode(Node[StartNodeParam]):
         self.output_definition_list = node_parameter.input_definition_list
         super().__init__(node_parameter, "100001")
 
-    def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None, **kwargs) -> dict:
+    def process(self, input_data: dict | None = None, context: WorkflowContext | None = None, **kwargs) -> dict:
         return input_data
 
     def validate_inputs(self):

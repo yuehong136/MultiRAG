@@ -30,23 +30,22 @@ from api.utils.file_utils import filename_type
 from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 from pydantic import BaseModel, Field
-from typing import List, Optional
 
 router = APIRouter()
 
 
 class UploadRequest(BaseModel):
-    parent_id: Optional[str] = Field(None, description="父文件夹ID")
+    parent_id: str | None = Field(None, description="父文件夹ID")
 
 
 class CreateRequest(BaseModel):
     name: str = Field(..., description="文件名")
-    parent_id: Optional[str] = Field(None, description="父文件夹ID")
-    type: Optional[str] = Field(None, description="文件类型")
+    parent_id: str | None = Field(None, description="父文件夹ID")
+    type: str | None = Field(None, description="文件类型")
 
 
 class RemoveRequest(BaseModel):
-    file_ids: List[str] = Field(..., description="文件ID列表")
+    file_ids: list[str] = Field(..., description="文件ID列表")
 
 
 class RenameRequest(BaseModel):
@@ -55,14 +54,14 @@ class RenameRequest(BaseModel):
 
 
 class MoveRequest(BaseModel):
-    src_file_ids: List[str] = Field(..., description="源文件ID列表")
+    src_file_ids: list[str] = Field(..., description="源文件ID列表")
     dest_file_id: str = Field(..., description="目标文件夹ID")
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
 async def upload(
         parent_id: str,
-        files: List[UploadFile] = File(...),
+        files: list[UploadFile] = File(...),
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -216,7 +215,7 @@ async def create(
 
 @router.get("/list", summary="列出文件或文件夹", response_description="成功列出文件或文件夹")
 async def list_files(
-        parent_id: Optional[str] = None,
+        parent_id: str | None = None,
         keywords: str = "",
         page: int = 1,
         page_size: int = 15,

@@ -1,14 +1,14 @@
 # common_services.py
 import uuid
 from datetime import datetime, timezone
-from typing import Type, List, Any, Optional, Dict
+from typing import Any, Type
 
 from sqlalchemy import Row, desc, asc
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from sqlalchemy.exc import NoResultFound, IntegrityError
 
-from api.db import db_models, schemas
+from api.db import db_models
 
 
 class CommonService:
@@ -26,8 +26,8 @@ class CommonService:
         return datetime.now(timezone.utc)
 
     @classmethod
-    def query(cls, db: Session, cols: List[str] = None, reverse: Optional[bool] = None, order_by: Optional[str] = None,
-              **kwargs) -> list[Row[tuple[Type[db_models.BaseModel]]]]:
+    def query(cls, db: Session, cols: list[str] = None, reverse: bool | None = None, order_by: str | None = None,
+              **kwargs) -> list[Row[tuple[type[db_models.BaseModel]]]]:
         """
        根据条件查询数据库中的记录。
 
@@ -74,7 +74,7 @@ class CommonService:
         return query.all()
 
     @classmethod
-    def get_all(cls, db: Session, cols: List[str] = None, reverse: Optional[bool] = None, order_by: str = None) -> list[
+    def get_all(cls, db: Session, cols: list[str] = None, reverse: bool | None = None, order_by: str = None) -> list[
         Row[tuple[Type[db_models.BaseModel]]]]:
         query = db.query(cls.model)
         if cols:
@@ -97,7 +97,7 @@ class CommonService:
             raise HTTPException(status_code=404, detail="Item not found")
 
     @classmethod
-    def get_or_none(cls, db: Session, **kwargs) -> Optional[db_models.BaseModel]:
+    def get_or_none(cls, db: Session, **kwargs) -> db_models.BaseModel | None:
         return db.query(cls.model).filter_by(**kwargs).one_or_none()
 
     @classmethod
@@ -144,7 +144,7 @@ class CommonService:
     #     db.commit()
 
     @classmethod
-    def insert_many(cls, db: Session, data_list: List[Dict[str, Any]], batch_size: int = 100):
+    def insert_many(cls, db: Session, data_list: list[dict[str, Any]], batch_size: int = 100):
         now = cls.current_timestamp()
         now_datetime = cls.current_datetime()
         for data in data_list:
@@ -157,7 +157,7 @@ class CommonService:
             db.commit()
 
     @classmethod
-    def update_many_by_id(cls, db: Session, data_list: List[Dict[str, Any]]):
+    def update_many_by_id(cls, db: Session, data_list: list[dict[str, Any]]):
         now = cls.current_timestamp()
         now_datetime = cls.current_datetime()
         for data in data_list:
@@ -167,7 +167,7 @@ class CommonService:
         db.commit()
 
     @classmethod
-    def update_by_id(cls, db: Session, pid: str, data: Dict[str, Any]) -> int:
+    def update_by_id(cls, db: Session, pid: str, data: dict[str, Any]) -> int:
         try:
             now = cls.current_timestamp()
             now_datetime = cls.current_datetime()
@@ -190,7 +190,7 @@ class CommonService:
             # return None  # 返回 None 而不是抛出异常
 
     @classmethod
-    def get_by_ids(cls, db: Session, pids: List[Any], cols: List[str] = None) -> list[
+    def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] = None) -> list[
         Row[tuple[Type[db_models.BaseModel]]]]:
         query = db.query(cls.model).filter(cls.model.id.in_(pids))
         if cols:
@@ -210,7 +210,7 @@ class CommonService:
         # return db.query(cls.model).filter(cls.model.id == pid).delete(synchronize_session=False)
 
     @classmethod
-    def filter_update(cls, db: Session, filters: List[Any], update_data: Dict[str, Any]):
+    def filter_update(cls, db: Session, filters: list[Any], update_data: dict[str, Any]):
         now = cls.current_timestamp()
         now_datetime = cls.current_datetime()
         update_data["update_time"] = now
@@ -221,7 +221,7 @@ class CommonService:
         return updated_rows > 0  # Return True if any rows were updated
 
     @classmethod
-    def filter_delete(cls, db: Session, filters: List[Any]) -> int:
+    def filter_delete(cls, db: Session, filters: list[Any]) -> int:
         # with db.begin():
         #     num = db.query(cls.model).filter(*filters).delete(synchronize_session=False)
         #     db.commit()
@@ -231,12 +231,12 @@ class CommonService:
         return num
 
     @classmethod
-    def cut_list(cls, tar_list: List[Any], n: int) -> List[tuple]:
+    def cut_list(cls, tar_list: list[Any], n: int) -> list[tuple]:
         return [tuple(tar_list[i:i + n]) for i in range(0, len(tar_list), n)]
 
     @classmethod
-    def filter_scope_list(cls, db: Session, in_key: str, in_filters_list: List[Any], filters: List = None,
-                          cols: List[str] = None) -> list[Row[tuple[Type[db_models.BaseModel]]]]:
+    def filter_scope_list(cls, db: Session, in_key: str, in_filters_list: list[Any], filters: list = None,
+                          cols: list[str] = None) -> list[Row[tuple[Type[db_models.BaseModel]]]]:
         in_filters_tuple_list = cls.cut_list(in_filters_list, 20)
         if not filters:
             filters = []

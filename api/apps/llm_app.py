@@ -22,14 +22,14 @@ from api.db import StatusEnum, LLMType
 from api.db.db_models import TenantLLM
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 from pydantic import BaseModel
-from typing import Optional, Any
+from typing import Any
 import requests
 
 
 class SetAPIKeyRequest(BaseModel):
     llm_factory: str
     api_key: str
-    base_url: Optional[str] = None
+    base_url: str | None = None
 
 
 class AddLLMRequest(BaseModel):
@@ -37,12 +37,12 @@ class AddLLMRequest(BaseModel):
     llm_name: str
     mdl_type: str
     api_key: str = None
-    api_base: Optional[str] = None
-    ark_api_key: Optional[str] = None
-    endpoint_id: Optional[str] = None
-    bedrock_ak: Optional[str] = None
-    bedrock_sk: Optional[str] = None
-    bedrock_region: Optional[str] = None
+    api_base: str | None = None
+    ark_api_key: str | None = None
+    endpoint_id: str | None = None
+    bedrock_ak: str | None = None
+    bedrock_sk: str | None = None
+    bedrock_region: str | None = None
 
 
 class DeleteLLMRequest(BaseModel):
@@ -51,15 +51,15 @@ class DeleteLLMRequest(BaseModel):
 
 
 class ListLLMRequest(BaseModel):
-    mdl_type: Optional[str] = None
+    mdl_type: str | None = None
 
 
 class DeleteFactoryRequest(BaseModel):
-    llm_factory: Optional[str] = None
+    llm_factory: str | None = None
 
 
 class LLMServiceRequest(BaseModel):
-    prompt: Optional[str] = None
+    prompt: str | None = None
     messages: list[dict]
     llm_name: str
     stream: bool = False
@@ -513,7 +513,7 @@ async def my_llms(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.get('/list', summary="列出所有模型", response_description="成功列出所有模型")
-async def list_app(mdl_type: Optional[str] = None, db: Session = Depends(get_db), user=Depends(manager)):
+async def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=Depends(manager)):
     """
     列出所有模型，支持按模型类型筛选。
     摘要: 列出所有模型

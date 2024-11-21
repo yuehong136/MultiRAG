@@ -1,6 +1,6 @@
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 
-from typing import Generic, TypeVar, Optional, Dict, Any
+from typing import TypeVar, Any
 
 from workflow.WorkflowContext import WorkflowContext
 from workflow.basic.Node import NodeParameter, Node
@@ -20,8 +20,7 @@ class Component(Node[C]):
         super().__init__(component_parameter, node_id)
 
     @abstractmethod
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None, **kwargs) -> Optional[
-        dict]:
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None, **kwargs) -> dict | None:
         pass
 
     @abstractmethod
@@ -32,5 +31,5 @@ class Component(Node[C]):
     def get_output_schema(self):
         pass
 
-    def get_input_from_context(self, context: Dict[str, Any], key: str, default: Any = None) -> Any:
+    def get_input_from_context(self, context: dict[str, Any], key: str, default: Any = None) -> Any:
         return context.get(f"{self.node_id}.{key}", default)

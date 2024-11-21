@@ -3,7 +3,6 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 import json
 from functools import reduce
-from typing import List
 import networkx as nx
 from sqlalchemy.orm import Session
 
@@ -40,7 +39,7 @@ def graph_merge(g1, g2):
     return g
 
 
-def build_knowledge_graph_chunks(db: Session, tenant_id: str, chunks: List[str], callback, entity_types=DEFAULT_ENTITY_TYPES):
+def build_knowledge_graph_chunks(db: Session, tenant_id: str, chunks: list[str], callback, entity_types=DEFAULT_ENTITY_TYPES):
     tenant = TenantService.get_by_id(db, tenant_id)
     llm_bdl = LLMBundle(db, tenant_id, LLMType.CHAT, tenant.llm_id)
     ext = GraphExtractor(llm_bdl)

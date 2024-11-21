@@ -1,21 +1,21 @@
 # zhipu_chat.py
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any
 from core.llm.chat_model.base import Base
 from zhipuai import ZhipuAI
 
 @dataclass
 class ZhipuChat(Base):
     key: str
-    model_name: str = "glm-4-0520"
-    base_url: Optional[str] = None
+    model_name: str = "glm-4-plus"
+    base_url: str | None = None
     client: ZhipuAI = field(init=False)
 
     def __post_init__(self):
         self.client = ZhipuAI(api_key=self.key)
         # print(f"ZhipuAI client initialized with key: {self.key}")
 
-    def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]) -> Tuple[str, int]:
+    def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> tuple[str, int]:
         if system:
             history.insert(0, {"role": "system", "content": system})
         if "presence_penalty" in gen_conf: del gen_conf["presence_penalty"]
@@ -31,7 +31,7 @@ class ZhipuChat(Base):
         except Exception as e:
             return f"**ERROR**: {str(e)}", 0
 
-    def chat_streamly(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]):
+    def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
         if "presence_penalty" in gen_conf: del gen_conf["presence_penalty"]

@@ -1,7 +1,7 @@
 # ernie_chat.py
 import os
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any
 from core.llm.chat_model.base import Base
 import qianfan
 
@@ -9,7 +9,7 @@ import qianfan
 class ErnieChat(Base):
     key: str
     model_name: str
-    base_url: Optional[str] = None
+    base_url: str | None = None
     client: qianfan.ChatCompletion = field(init=False)
 
     def __post_init__(self):
@@ -19,7 +19,7 @@ class ErnieChat(Base):
         self.client = qianfan.ChatCompletion(ak=self.key, sk="3B2ATvam5xi2QW6UrKZpy3hWh1wUJnCy")
         print(f"Qianfan客户端已初始化，使用Key: {self.key}")
 
-    def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]) -> Tuple[str, int]:
+    def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> tuple[str, int]:
         # 如果有系统消息，添加到历史记录的开头
         if system:
             gen_conf["system"] = system
@@ -40,7 +40,7 @@ class ErnieChat(Base):
         # except Exception as e:
         #     return f"**错误**: {str(e)}", 0
 
-    def chat_streamly(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]):
+    def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         # 如果有系统消息，添加到历史记录的开头
         if system:
             gen_conf["system"] = system

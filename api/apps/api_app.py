@@ -12,7 +12,6 @@ import re
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Query
 from pydantic import BaseModel
-from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from api.db import FileType, LLMType, ParserType, FileSource
@@ -52,7 +51,7 @@ class NewConversationRequest(BaseModel):
     """用户的唯一标识符。"""
 
 class RemoveTokenRequest(BaseModel):
-    tokens: List[str]
+    tokens: list[str]
     """要删除的API令牌列表。"""
 
     tenant_id: str
@@ -62,49 +61,49 @@ class CompletionRequest(BaseModel):
     conversation_id: str
     """对话的唯一标识符。"""
 
-    messages: List[dict]
+    messages: list[dict]
     """消息列表，每个消息包含角色和内容。"""
 
-    quote: Optional[bool] = False
+    quote: bool | None = False
     """是否引用，默认值为 False。"""
 
-    stream: Optional[bool] = True
+    stream: bool | None = True
     """是否使用流式响应，默认值为 True。"""
 
 class DocumentUploadRequest(BaseModel):
     kb_name: str
     """知识库的名称。"""
 
-    parser_id: Optional[str] = None
+    parser_id: str | None = None
     """解析器的ID，默认值为 None。"""
 
-    run: Optional[int] = None
+    run: int | None = None
     """是否立即运行，默认值为 None。"""
 
 class ListKbDocsRequest(BaseModel):
     kb_name: str
     """知识库的名称。"""
 
-    page: Optional[int] = 1
+    page: int | None = 1
     """分页页码，默认值为 1。"""
 
-    page_size: Optional[int] = 15
+    page_size: int | None = 15
     """每页显示的文档数量，默认值为 15。"""
 
-    orderby: Optional[str] = "create_time"
+    orderby: str | None = "create_time"
     """排序字段，默认值为 "create_time"。"""
 
-    desc: Optional[bool] = True
+    desc: bool | None = True
     """是否按降序排序，默认值为 True。"""
 
-    keywords: Optional[str] = ""
+    keywords: str | None = ""
     """搜索关键字，默认值为空字符串。"""
 
 class DocumentRemoveRequest(BaseModel):
-    doc_names: List[str]
+    doc_names: list[str]
     """要删除的文档名称列表。"""
 
-    doc_ids: List[str]
+    doc_ids: list[str]
     """要删除的文档ID列表。"""
 
 class CompletionFAQRequest(BaseModel):
@@ -164,8 +163,8 @@ async def new_token(request: NewTokenRequest, db: Session = Depends(get_db), use
 
 @router.get('/token_list', summary="获取API令牌列表", response_description="成功获取API令牌列表")
 async def token_list(
-    dialog_id: Optional[str] = Query(None, alias="dialog_id"),
-    canvas_id: Optional[str] = Query(None, alias="canvas_id"),
+    dialog_id: str | None = Query(None, alias="dialog_id"),
+    canvas_id: str | None = Query(None, alias="canvas_id"),
     db: Session = Depends(get_db),
     user=Depends(manager)
 ):

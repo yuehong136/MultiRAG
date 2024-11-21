@@ -10,7 +10,6 @@ import logging
 import random
 import time
 from datetime import datetime
-from typing import Optional, List, Dict
 
 from pymilvus import MilvusException
 from sqlalchemy.exc import NoResultFound, OperationalError
@@ -73,7 +72,7 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,
-                     orderby: str, desc: bool, keywords: Optional[str] = None) -> (List[Dict], int):
+                     orderby: str, desc: bool, keywords: str | None = None) -> (list[dict], int):
         query = db.query(cls.model).filter_by(kb_id=kb_id)
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
@@ -89,7 +88,7 @@ class DocumentService(CommonService):
         return [doc.to_dict() for doc in docs], count
 
     @classmethod
-    def get_by_doc_id(cls, db: Session, doc_id: str) -> Optional[Dict]:
+    def get_by_doc_id(cls, db: Session, doc_id: str) -> dict | None:
         """
         通过文档ID获取文档信息。
 
@@ -105,7 +104,7 @@ class DocumentService(CommonService):
 
     @classmethod
     def list_documents_in_dataset(cls, db: Session, dataset_id: str, offset: int, count: int,
-                                  order_by: str, descend: bool, keywords: Optional[str] = None) -> (List[Dict], int):
+                                  order_by: str, descend: bool, keywords: str | None = None) -> (list[dict], int):
         query = db.query(cls.model).filter_by(kb_id=dataset_id)
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
@@ -375,7 +374,7 @@ class DocumentService(CommonService):
         return query.id if query else None
 
     @classmethod
-    def get_thumbnails(cls, db: Session, doc_ids: List[str]):
+    def get_thumbnails(cls, db: Session, doc_ids: list[str]):
         query = db.query(cls.model.id, cls.model.kb_id, cls.model.thumbnail).filter(cls.model.id.in_(doc_ids))
         return query.all()
 

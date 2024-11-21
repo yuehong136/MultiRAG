@@ -7,7 +7,6 @@
 @desc:
 """
 import logging
-from typing import Dict, List, Optional, Union
 from uuid import uuid4
 
 import polars as pl
@@ -40,7 +39,7 @@ class MilvusConnection(DocStoreConnection):
             password: str = settings.MILVUS.get("password", ""),
             db_name: str = "",
             token: str = "",
-            timeout: Optional[float] = None,
+            timeout: float | None = None,
             **kwargs,
     ) -> None:
         self._using = self._create_connection(
@@ -103,17 +102,17 @@ class MilvusConnection(DocStoreConnection):
     def getChunkIds(self, res):
         return [hit["id"] for hit in res]
 
-    def getFields(self, res, fields: List[str]) -> Dict[str, dict]:
+    def getFields(self, res, fields: list[str]) -> dict[str, dict]:
         return {d["id"]: {f: d.get(f) for f in fields} for d in res}
 
-    def getAggregation(self, res, fieldnm: str) -> List[tuple]:
+    def getAggregation(self, res, fieldnm: str) -> list[tuple]:
         """
         Milvus 不支持直接的聚合操作，因此这个方法需要自定义实现。
         """
         logging.warning("Aggregation is not natively supported in Milvus.")
         return []  # 返回空列表或您可以添加自定义聚合逻辑
 
-    def getHighlight(self, res, keywords: List[str], fieldnm: str) -> Dict[str, str]:
+    def getHighlight(self, res, keywords: list[str], fieldnm: str) -> dict[str, str]:
         """
         Milvus 不支持高亮操作，因此此方法需要自定义实现。
         """
@@ -192,15 +191,15 @@ class MilvusConnection(DocStoreConnection):
     def create_collection(
             self,
             collection_name: str,
-            dimension: Optional[int] = None,
+            dimension: int | None = None,
             primary_field_name: str = "id",
             id_type: str = "int",
             vector_field_name: str = "vector",
             metric_type: str = "COSINE",
             auto_id: bool = False,
-            timeout: Optional[float] = None,
-            schema: Optional[CollectionSchema] = None,
-            index_params: Optional[IndexParams] = None,
+            timeout: float | None = None,
+            schema: CollectionSchema | None = None,
+            index_params: IndexParams | None = None,
             **kwargs,
     ):
         if schema is None:
@@ -225,11 +224,11 @@ class MilvusConnection(DocStoreConnection):
             collection_name: str,
             dimension: int,
             primary_field_name: str = "id",
-            id_type: Union[DataType, str] = DataType.INT64,
+            id_type: DataType | str = DataType.INT64,
             vector_field_name: str = "vector",
             metric_type: str = "COSINE",
             auto_id: bool = False,
-            timeout: Optional[float] = None,
+            timeout: float | None = None,
             **kwargs,
     ):
         if dimension is None:
@@ -274,8 +273,8 @@ class MilvusConnection(DocStoreConnection):
     def create_index(
             self,
             collection_name: str,
-            index_params: Union[IndexParams, Dict],
-            timeout: Optional[float] = None,
+            index_params: IndexParams | dict,
+            timeout: float | None = None,
             **kwargs,
     ):
         # 确保 index_params 是字典形式
@@ -291,7 +290,7 @@ class MilvusConnection(DocStoreConnection):
         self._create_index(collection_name, index_params, timeout=timeout, **kwargs)
 
     def _create_index(
-            self, collection_name: str, index_param: Dict, timeout: Optional[float] = None, **kwargs
+            self, collection_name: str, index_param: dict, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         try:
@@ -316,14 +315,14 @@ class MilvusConnection(DocStoreConnection):
     #         self,
     #         collection_name: str,
     #         index_params: IndexParams,
-    #         timeout: Optional[float] = None,
+    #         timeout: float | None = None,
     #         **kwargs,
     # ):
     #     for index_param in index_params:
     #         self._create_index(collection_name, index_param, timeout=timeout, **kwargs)
     #
     # def _create_index(
-    #         self, collection_name: str, index_param: Dict, timeout: Optional[float] = None, **kwargs
+    #         self, collection_name: str, index_param: Dict, timeout: float | None = None, **kwargs
     # ):
     #     conn = self._get_connection()
     #     try:
@@ -347,18 +346,18 @@ class MilvusConnection(DocStoreConnection):
     def insert(
             self,
             collection_name: str,
-            data: Union[Dict, List[Dict]],
-            timeout: Optional[float] = None,
-            partition_name: Optional[str] = "",
+            data: dict | list[dict],
+            timeout: float | None = None,
+            partition_name: str | None = "",
             **kwargs,
-    ) -> Dict:
-        if isinstance(data, Dict):
+    ) -> dict:
+        if isinstance(data, dict):
             data = [data]
 
         msg = "wrong type of argument 'data',"
         msg += f"expected 'Dict' or list of 'Dict', got '{type(data).__name__}'"
 
-        if not isinstance(data, List):
+        if not isinstance(data, list):
             raise TypeError(msg)
 
         if len(data) == 0:
@@ -376,18 +375,18 @@ class MilvusConnection(DocStoreConnection):
     def upsert(
             self,
             collection_name: str,
-            data: Union[Dict, List[Dict]],
-            timeout: Optional[float] = None,
-            partition_name: Optional[str] = "",
+            data: dict | list[dict],
+            timeout: float | None = None,
+            partition_name: str | None = "",
             **kwargs,
-    ) -> Dict:
-        if isinstance(data, Dict):
+    ) -> dict:
+        if isinstance(data, dict):
             data = [data]
 
         msg = "wrong type of argument 'data',"
         msg += f"expected 'Dict' or list of 'Dict', got '{type(data).__name__}'"
 
-        if not isinstance(data, List):
+        if not isinstance(data, list):
             raise TypeError(msg)
 
         if len(data) == 0:
@@ -451,16 +450,16 @@ class MilvusConnection(DocStoreConnection):
     def search(
             self,
             collection_name: str,
-            data: Union[List[list], list],
+            data: list[list] | list,
             filter: str = "",
             limit: int = 10,
-            output_fields: Optional[List[str]] = None,
-            search_params: Optional[dict] = None,
-            timeout: Optional[float] = None,
-            partition_names: Optional[List[str]] = None,
-            anns_field: Optional[str] = None,
+            output_fields: list[str] | None = None,
+            search_params: dict | None = None,
+            timeout: float | None = None,
+            partition_names: list[str] | None = None,
+            anns_field: str | None = None,
             **kwargs,
-    ) -> List[List[dict]]:
+    ) -> list[list[dict]]:
         conn = self._get_connection()
         try:
             res = conn.search(
@@ -492,12 +491,12 @@ class MilvusConnection(DocStoreConnection):
             self,
             collection_name: str,
             filter: str = "",
-            output_fields: Optional[List[str]] = None,
-            timeout: Optional[float] = None,
-            ids: Optional[Union[List, str, int]] = None,
-            partition_names: Optional[List[str]] = None,
+            output_fields: list[str] | None = None,
+            timeout: float | None = None,
+            ids: list | str | int | None = None,
+            partition_names: list[str] | None = None,
             **kwargs,
-    ) -> List[dict]:
+    ) -> list[dict]:
         if filter and not isinstance(filter, str):
             raise DataTypeNotMatchException(message=ExceptionsMessage.ExprType % type(filter))
 
@@ -541,12 +540,12 @@ class MilvusConnection(DocStoreConnection):
     def get(
             self,
             collection_name: str,
-            ids: Union[list, str, int],
-            output_fields: Optional[List[str]] = None,
-            timeout: Optional[float] = None,
-            partition_names: Optional[List[str]] = None,
+            ids: list | str | int,
+            output_fields: list[str] | None = None,
+            timeout: float | None = None,
+            partition_names: list[str] | None = None,
             **kwargs,
-    ) -> List[dict]:
+    ) -> list[dict]:
         if not isinstance(ids, list):
             ids = [ids]
 
@@ -585,12 +584,12 @@ class MilvusConnection(DocStoreConnection):
     def delete(
             self,
             collection_name: str,
-            ids: Optional[Union[list, str, int]] = None,
-            timeout: Optional[float] = None,
-            filter: Optional[str] = "",
-            partition_name: Optional[str] = "",
+            ids: list | str | int | None = None,
+            timeout: float | None = None,
+            filter: str | None = "",
+            partition_name: str | None = "",
             **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         删除指定集合中的数据。
 
@@ -680,7 +679,7 @@ class MilvusConnection(DocStoreConnection):
 
         return {"delete_count": res.delete_count}
 
-    def get_collection_stats(self, collection_name: str, timeout: Optional[float] = None) -> Dict:
+    def get_collection_stats(self, collection_name: str, timeout: float | None = None) -> dict:
         conn = self._get_connection()
         stats = conn.get_collection_stats(collection_name, timeout=timeout)
         result = {stat.key: stat.value for stat in stats}
@@ -688,11 +687,11 @@ class MilvusConnection(DocStoreConnection):
             result["row_count"] = int(result["row_count"])
         return result
 
-    def describe_collection(self, collection_name: str, timeout: Optional[float] = None, **kwargs):
+    def describe_collection(self, collection_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         return conn.describe_collection(collection_name, timeout=timeout, **kwargs)
 
-    def has_collection(self, collection_name: str, timeout: Optional[float] = None, **kwargs):
+    def has_collection(self, collection_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         return conn.has_collection(collection_name, timeout=timeout, **kwargs)
 
@@ -700,7 +699,7 @@ class MilvusConnection(DocStoreConnection):
         conn = self._get_connection()
         return conn.list_collections(**kwargs)
 
-    def drop_collection(self, collection_name: str, timeout: Optional[float] = None, **kwargs):
+    def drop_collection(self, collection_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         conn.drop_collection(collection_name, timeout=timeout, **kwargs)
 
@@ -718,7 +717,7 @@ class MilvusConnection(DocStoreConnection):
             collection_name: str,
             schema: CollectionSchema,
             index_params: IndexParams,
-            timeout: Optional[float] = None,
+            timeout: float | None = None,
             **kwargs,
     ):
         schema.verify()
@@ -810,7 +809,7 @@ class MilvusConnection(DocStoreConnection):
             logging.debug("Created new connection using: %s", using)
             return using
 
-    def _extract_primary_field(self, schema_dict: Dict) -> dict:
+    def _extract_primary_field(self, schema_dict: dict) -> dict:
         fields = schema_dict.get("fields", [])
         if not fields:
             return {}
@@ -821,7 +820,7 @@ class MilvusConnection(DocStoreConnection):
 
         return {}
 
-    def _get_vector_field_name(self, schema_dict: Dict):
+    def _get_vector_field_name(self, schema_dict: dict):
         fields = schema_dict.get("fields", [])
         if not fields:
             return {}
@@ -831,7 +830,7 @@ class MilvusConnection(DocStoreConnection):
                 return field_dict.get("name", "")
         return ""
 
-    def _pack_pks_expr(self, schema_dict: Dict, pks: List) -> str:
+    def _pack_pks_expr(self, schema_dict: dict, pks: list) -> str:
         primary_field = self._extract_primary_field(schema_dict)
         pk_field_name = primary_field["name"]
         data_type = primary_field["type"]
@@ -844,7 +843,7 @@ class MilvusConnection(DocStoreConnection):
             expr = f"{pk_field_name} in [{','.join(ids)}]"
         return expr
 
-    def load_collection(self, collection_name: str, timeout: Optional[float] = None, **kwargs):
+    def load_collection(self, collection_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         try:
             conn.load_collection(collection_name, timeout=timeout, **kwargs)
@@ -852,7 +851,7 @@ class MilvusConnection(DocStoreConnection):
             logging.error("Failed to load collection: %s", collection_name)
             raise ex from ex
 
-    def release_collection(self, collection_name: str, timeout: Optional[float] = None, **kwargs):
+    def release_collection(self, collection_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         try:
             conn.release_collection(collection_name, timeout=timeout, **kwargs)
@@ -863,10 +862,10 @@ class MilvusConnection(DocStoreConnection):
     def get_load_state(
             self,
             collection_name: str,
-            partition_name: Optional[str] = "",
-            timeout: Optional[float] = None,
+            partition_name: str | None = "",
+            timeout: float | None = None,
             **kwargs,
-    ) -> Dict:
+    ) -> dict:
         conn = self._get_connection()
         partition_names = None
         if partition_name:
@@ -883,12 +882,12 @@ class MilvusConnection(DocStoreConnection):
 
         return ret
 
-    def refresh_load(self, collection_name: str, timeout: Optional[float] = None, **kwargs):
+    def refresh_load(self, collection_name: str, timeout: float | None = None, **kwargs):
         kwargs.pop("_refresh", None)
         conn = self._get_connection()
         conn.load_collection(collection_name, timeout=timeout, _refresh=True, **kwargs)
 
-    def list_indexes(self, collection_name: str, field_name: Optional[str] = "", **kwargs):
+    def list_indexes(self, collection_name: str, field_name: str | None = "", **kwargs):
         conn = self._get_connection()
         indexes = conn.list_indexes(collection_name, **kwargs)
         index_name_list = []
@@ -900,46 +899,46 @@ class MilvusConnection(DocStoreConnection):
         return index_name_list
 
     def drop_index(
-            self, collection_name: str, index_name: str, timeout: Optional[float] = None, **kwargs
+            self, collection_name: str, index_name: str, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         conn.drop_index(collection_name, "", index_name, timeout=timeout, **kwargs)
 
     def describe_index(
-            self, collection_name: str, index_name: str, timeout: Optional[float] = None, **kwargs
-    ) -> Dict:
+            self, collection_name: str, index_name: str, timeout: float | None = None, **kwargs
+    ) -> dict:
         conn = self._get_connection()
         return conn.describe_index(collection_name, index_name, timeout=timeout, **kwargs)
 
     def create_partition(
-            self, collection_name: str, partition_name: str, timeout: Optional[float] = None, **kwargs
+            self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         conn.create_partition(collection_name, partition_name, timeout=timeout, **kwargs)
 
     def drop_partition(
-            self, collection_name: str, partition_name: str, timeout: Optional[float] = None, **kwargs
+            self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         conn.drop_partition(collection_name, partition_name, timeout=timeout, **kwargs)
 
     def has_partition(
-            self, collection_name: str, partition_name: str, timeout: Optional[float] = None, **kwargs
+            self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
     ) -> bool:
         conn = self._get_connection()
         return conn.has_partition(collection_name, partition_name, timeout=timeout, **kwargs)
 
     def list_partitions(
-            self, collection_name: str, timeout: Optional[float] = None, **kwargs
-    ) -> List[str]:
+            self, collection_name: str, timeout: float | None = None, **kwargs
+    ) -> list[str]:
         conn = self._get_connection()
         return conn.list_partitions(collection_name, timeout=timeout, **kwargs)
 
     def load_partitions(
             self,
             collection_name: str,
-            partition_names: Union[str, List[str]],
-            timeout: Optional[float] = None,
+            partition_names: str | list[str],
+            timeout: float | None = None,
             **kwargs,
     ):
         if isinstance(partition_names, str):
@@ -951,8 +950,8 @@ class MilvusConnection(DocStoreConnection):
     def release_partitions(
             self,
             collection_name: str,
-            partition_names: Union[str, List[str]],
-            timeout: Optional[float] = None,
+            partition_names: str | list[str],
+            timeout: float | None = None,
             **kwargs,
     ):
         if isinstance(partition_names, str):
@@ -961,8 +960,8 @@ class MilvusConnection(DocStoreConnection):
         conn.release_partitions(collection_name, partition_names, timeout=timeout, **kwargs)
 
     def get_partition_stats(
-            self, collection_name: str, partition_name: str, timeout: Optional[float] = None, **kwargs
-    ) -> Dict:
+            self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
+    ) -> dict:
         conn = self._get_connection()
         if not isinstance(partition_name, str):
             msg = f"wrong type of argument 'partition_name', str expected, got '{type(partition_name).__name__}'"
@@ -973,11 +972,11 @@ class MilvusConnection(DocStoreConnection):
             result["row_count"] = int(result["row_count"])
         return result
 
-    def create_user(self, user_name: str, password: str, timeout: Optional[float] = None, **kwargs):
+    def create_user(self, user_name: str, password: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         return conn.create_user(user_name, password, timeout=timeout, **kwargs)
 
-    def drop_user(self, user_name: str, timeout: Optional[float] = None, **kwargs):
+    def drop_user(self, user_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         return conn.delete_user(user_name, timeout=timeout, **kwargs)
 
@@ -986,8 +985,8 @@ class MilvusConnection(DocStoreConnection):
             user_name: str,
             old_password: str,
             new_password: str,
-            reset_connection: Optional[bool] = False,
-            timeout: Optional[float] = None,
+            reset_connection: bool | None = False,
+            timeout: float | None = None,
             **kwargs,
     ):
         conn = self._get_connection()
@@ -996,11 +995,11 @@ class MilvusConnection(DocStoreConnection):
             conn._setup_authorization_interceptor(user_name, new_password, None)
             conn._setup_grpc_channel()
 
-    def list_users(self, timeout: Optional[float] = None, **kwargs):
+    def list_users(self, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         return conn.list_usernames(timeout=timeout, **kwargs)
 
-    def describe_user(self, user_name: str, timeout: Optional[float] = None, **kwargs):
+    def describe_user(self, user_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         try:
             res = conn.select_one_user(user_name, True, timeout=timeout, **kwargs)
@@ -1011,27 +1010,27 @@ class MilvusConnection(DocStoreConnection):
             return {"user_name": user_name, "roles": item.roles}
         return {}
 
-    def grant_role(self, user_name: str, role_name: str, timeout: Optional[float] = None, **kwargs):
+    def grant_role(self, user_name: str, role_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         conn.add_user_to_role(user_name, role_name, timeout=timeout, **kwargs)
 
     def revoke_role(
-            self, user_name: str, role_name: str, timeout: Optional[float] = None, **kwargs
+            self, user_name: str, role_name: str, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         conn.remove_user_from_role(user_name, role_name, timeout=timeout, **kwargs)
 
-    def create_role(self, role_name: str, timeout: Optional[float] = None, **kwargs):
+    def create_role(self, role_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         conn.create_role(role_name, timeout=timeout, **kwargs)
 
-    def drop_role(self, role_name: str, timeout: Optional[float] = None, **kwargs):
+    def drop_role(self, role_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         conn.drop_role(role_name, timeout=timeout, **kwargs)
 
     def describe_role(
-            self, role_name: str, timeout: Optional[float] = None, **kwargs
-    ) -> List[Dict]:
+            self, role_name: str, timeout: float | None = None, **kwargs
+    ) -> list[dict]:
         conn = self._get_connection()
         db_name = kwargs.pop("db_name", "")
         try:
@@ -1043,7 +1042,7 @@ class MilvusConnection(DocStoreConnection):
         ret["privileges"] = [dict(i) for i in res.groups]
         return ret
 
-    def list_roles(self, timeout: Optional[float] = None, **kwargs):
+    def list_roles(self, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         try:
             res = conn.select_all_role(False, timeout=timeout, **kwargs)
@@ -1059,8 +1058,8 @@ class MilvusConnection(DocStoreConnection):
             object_type: str,
             privilege: str,
             object_name: str,
-            db_name: Optional[str] = "",
-            timeout: Optional[float] = None,
+            db_name: str | None = "",
+            timeout: float | None = None,
             **kwargs,
     ):
         conn = self._get_connection()
@@ -1074,8 +1073,8 @@ class MilvusConnection(DocStoreConnection):
             object_type: str,
             privilege: str,
             object_name: str,
-            db_name: Optional[str] = "",
-            timeout: Optional[float] = None,
+            db_name: str | None = "",
+            timeout: float | None = None,
             **kwargs,
     ):
         conn = self._get_connection()
@@ -1084,28 +1083,28 @@ class MilvusConnection(DocStoreConnection):
         )
 
     def create_alias(
-            self, collection_name: str, alias: str, timeout: Optional[float] = None, **kwargs
+            self, collection_name: str, alias: str, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         conn.create_alias(collection_name, alias, timeout=timeout, **kwargs)
 
-    def drop_alias(self, alias: str, timeout: Optional[float] = None, **kwargs):
+    def drop_alias(self, alias: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         conn.drop_alias(alias, timeout=timeout, **kwargs)
 
     def alter_alias(
-            self, collection_name: str, alias: str, timeout: Optional[float] = None, **kwargs
+            self, collection_name: str, alias: str, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         conn.alter_alias(collection_name, alias, timeout=timeout, **kwargs)
 
-    def describe_alias(self, alias: str, timeout: Optional[float] = None, **kwargs) -> Dict:
+    def describe_alias(self, alias: str, timeout: float | None = None, **kwargs) -> dict:
         conn = self._get_connection()
         return conn.describe_alias(alias, timeout=timeout, **kwargs)
 
     def list_aliases(
-            self, collection_name: str = "", timeout: Optional[float] = None, **kwargs
-    ) -> List[str]:
+            self, collection_name: str = "", timeout: float | None = None, **kwargs
+    ) -> list[str]:
         conn = self._get_connection()
         return conn.list_aliases(collection_name, timeout=timeout, **kwargs)
 

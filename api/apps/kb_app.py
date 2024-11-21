@@ -7,8 +7,6 @@
 @desc:
 """
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -34,17 +32,17 @@ router = APIRouter()
 
 class CreateKnowledgebaseRequest(BaseModel):
     name: str
-    description: Optional[str] = None
-    permission: Optional[str] = None
-    parser_id: Optional[str] = None
-    embd_id: Optional[str] = None
+    description: str | None = None
+    permission: str | None = None
+    parser_id: str | None = None
+    embd_id: str | None = None
 
 class UpdateKnowledgebaseRequest(BaseModel):
     kb_id: str
     name: str
-    description: Optional[str] = None
-    permission: Optional[str] = None
-    parser_id: Optional[str] = None
+    description: str | None = None
+    permission: str | None = None
+    parser_id: str | None = None
 
 class RemoveKnowledgebaseRequest(BaseModel):
     kb_id: str

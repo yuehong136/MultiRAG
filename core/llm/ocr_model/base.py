@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Union, List, Dict, Any
+from typing import Any
 import base64
 from io import BytesIO
 from PIL import Image
@@ -11,10 +11,10 @@ class Base(ABC):
     model_name: str
 
     @abstractmethod
-    def describe(self, image: Union[bytes, BytesIO, Image.Image], max_tokens: int = 300) -> str:
+    def describe(self, image: bytes | BytesIO | Image.Image, max_tokens: int = 300) -> str:
         raise NotImplementedError("Please implement the describe method!")
 
-    def image2base64(self, image: Union[bytes, BytesIO, Image.Image]) -> str:
+    def image2base64(self, image: bytes | BytesIO | Image.Image) -> str:
         if isinstance(image, bytes):
             return base64.b64encode(image).decode("utf-8")
         if isinstance(image, BytesIO):
@@ -28,7 +28,7 @@ class Base(ABC):
             return base64.b64encode(buffered.getvalue()).decode("utf-8")
         raise TypeError("Unsupported image type")
 
-    def prompt(self, b64: str, lang: str = "Chinese") -> List[Dict[str, Any]]:
+    def prompt(self, b64: str, lang: str = "Chinese") -> list[dict[str, Any]]:
         content = "请用中文详细描述一下图中的内容，比如时间，地点，人物，事情，人物心情等，如果有数据请提取出数据。" if lang.lower() == "chinese" else \
                   "Please describe the content of this picture, like where, when, who, what happened. If it has number data, please extract them out."
         return [

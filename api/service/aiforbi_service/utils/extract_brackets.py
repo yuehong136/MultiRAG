@@ -1,9 +1,9 @@
 import re
 import ast
-from typing import List, Any
+from typing import Any
 
 
-def extract_brackets(text: str, merge: bool = True) -> List[Any]:
+def extract_brackets(text: str, merge: bool = True) -> list[Any]:
     """
     从文本中提取所有被中括号[]包围的内容，并将其解析为Python列表
 

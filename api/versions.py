@@ -6,21 +6,10 @@
 @date：2024/7/26 13:49
 @desc:
 """
-import os
-import dotenv
-import typing
 import subprocess
 
 
-def get_versions() -> typing.Mapping[str, typing.Any]:
-    dotenv.load_dotenv(dotenv.find_dotenv())
-    return dotenv.dotenv_values()
-
-
-def get_rag_version() -> typing.Optional[str]:
-    return get_versions().get("MULITIRAG_IMAGE", "dev")
-
-def get_multirag_version() -> typing.Optional[str]:
+def get_multirag_version() -> str:
     return MULITIRAG_VERSION_INFO
 
 
@@ -51,3 +40,14 @@ def get_closest_tag_and_count():
 
 if MULITIRAG_VERSION_INFO == 'dev':
     MULITIRAG_VERSION_INFO = get_closest_tag_and_count()
+
+# import dotenv
+# import typing
+
+# def get_versions() -> typing.Mapping[str, typing.Any]:
+#     dotenv.load_dotenv(dotenv.find_dotenv())
+#     return dotenv.dotenv_values()
+#
+#
+# def get_rag_version() -> typing.Optional[str]:
+#     return get_versions().get("MULITIRAG_IMAGE", "dev")

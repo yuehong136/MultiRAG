@@ -1,7 +1,4 @@
-from dataclasses import dataclass
-from typing import Dict, Any, Optional
-
-from fastapi import UploadFile, Depends
+from fastapi import Depends
 from requests import Session
 
 from api.apps import manager
@@ -16,11 +13,11 @@ from workflow.components.FileSelectionComponent import FileSelectionComponent, F
 from workflow.components.LLMComponent import LLMComponent, LLMComponentParam, LLMComponentInputDefinition, \
     LLMComponentOutputDefinition
 
-from typing import Dict, Any
+from typing import Any
 
 
 class WorkflowEngine:
-    def __init__(self, node_list: Optional[list[Node]] = None):
+    def __init__(self, node_list: list[Node] | None = None):
         self.nodes = {}
         self.edges = []
         self.node_list = node_list if node_list is not None else []
@@ -35,8 +32,8 @@ class WorkflowEngine:
     def add_edge(self, source_id: str, target_id: str):
         self.edges.append((source_id, target_id))
 
-    async def execute(self, input_data: Optional[dict] = None, db: Session = Depends(get_db), user=Depends(manager)) -> \
-            Dict[str, Any]:
+    async def execute(self, input_data: dict | None = None, db: Session = Depends(get_db), user=Depends(manager)) -> \
+            dict[str, Any]:
         self.context.clear()  # 清除之前可能存在的上下文数据
         for i in range(len(self.node_list)):
             node = self.node_list[i]

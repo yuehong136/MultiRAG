@@ -1,7 +1,6 @@
 # ollama_chat.py
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Tuple
-from core.llm.chat_model.base import Base
+from typing import Any
 from ollama import Client
 
 
@@ -83,7 +82,7 @@ class OllamaChat:
         # 初始化 client
         self.client = Client(host=self.base_url)
 
-    def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]):
+    def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
         try:
@@ -110,7 +109,7 @@ class OllamaChat:
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]):
+    def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
         options = {}

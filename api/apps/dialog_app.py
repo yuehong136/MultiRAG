@@ -9,7 +9,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
-from typing import List, Optional
 
 from api.apps import manager
 from api.db.services.dialog_service import DialogService
@@ -25,40 +24,40 @@ from api.db.database import get_db
 router = APIRouter()
 
 class DialogRequest(BaseModel):
-    dialog_id: Optional[str] = None
+    dialog_id: str | None = None
     """对话的唯一标识符，如果为空则表示创建新对话。"""
 
-    name: Optional[str] = "New Dialog"
+    name: str | None = "New Dialog"
     """对话的名称，默认值为 'New Dialog'。"""
 
-    description: Optional[str] = "A helpful Dialog"
+    description: str | None = "A helpful Dialog"
     """对话的描述，默认值为 'A helpful Dialog'。"""
 
-    icon: Optional[str] = ""
+    icon: str | None = ""
     """对话的图标URL，默认值为空字符串。"""
 
-    top_n: Optional[int] = 6
+    top_n: int | None = 6
     """从知识库中返回的最大条目数，默认值为 6。"""
 
-    top_k: Optional[int] = 1024
+    top_k: int | None = 1024
     """从知识库中检索的最大条目数，默认值为 1024。"""
 
-    rerank_id: Optional[str] = ""
+    rerank_id: str | None = ""
     """重新排序的ID，默认值为空字符串。"""
 
-    similarity_threshold: Optional[float] = 0.1
+    similarity_threshold: float | None = 0.1
     """相似度阈值，默认值为 0.1。"""
 
-    vector_similarity_weight: Optional[float] = 0.3
+    vector_similarity_weight: float | None = 0.3
     """向量相似度权重，默认值为 0.3。"""
 
-    llm_id: Optional[str] = ""
+    llm_id: str | None = ""
     """大语言模型的ID，默认值为空字符串。"""
 
-    llm_setting: Optional[dict] = Field(default_factory=dict)
+    llm_setting: dict | None = Field(default_factory=dict)
     """大语言模型的配置，默认值为空字典。"""
 
-    prompt_config: Optional[dict] = Field(default_factory=lambda: {
+    prompt_config: dict | None = Field(default_factory=lambda: {
         "system": """你是一个智能助手，请总结知识库的内容来回答问题，请列举知识库中的数据详细回答。当所有知识库内容都与问题无关时，你的回答必须包括“知识库中未找到您要的答案！”这句话。回答需要考虑聊天历史。
 以下是知识库：
 {knowledge}
@@ -71,11 +70,11 @@ class DialogRequest(BaseModel):
     })
     """提示配置，包含系统提示、开场白、参数和空响应消息。"""
 
-    kb_ids: Optional[List[str]] = Field(default_factory=list)
+    kb_ids: list[str] | None = Field(default_factory=list)
     """知识库的ID列表，默认值为空列表。"""
 
 class RemoveDialogRequest(BaseModel):
-    dialog_ids: List[str]
+    dialog_ids: list[str]
     """要删除的对话ID列表。"""
 
 def get_kb_names(kb_ids, db: Session):

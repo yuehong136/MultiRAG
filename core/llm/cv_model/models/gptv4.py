@@ -7,10 +7,8 @@
 @desc:
 """
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Tuple
 from openai import OpenAI
 from core.llm.cv_model.base import Base
-from core.nlp import is_english
 
 
 @dataclass
@@ -26,7 +24,7 @@ class GptV4(Base):
             self.base_url = "https://api.openai.com/v1"
         self.client = OpenAI(api_key=self.key, base_url=self.base_url)
 
-    def describe(self, image: bytes, max_tokens: int = 300) -> Tuple[str, int]:
+    def describe(self, image: bytes, max_tokens: int = 300) -> tuple[str, int]:
         b64 = self.image2base64(image)
         prompt = self.prompt(b64)
         for i in range(len(prompt)):
@@ -40,3 +38,14 @@ class GptV4(Base):
             max_tokens=max_tokens,
         )
         return res.choices[0].message.content.strip(), res.usage.total_tokens
+
+if __name__ == '__main__':
+    api_key = ""
+    image_path = "timestamp0.png"  # 替换为您想描述的图片路径
+    # 读取图片文件为字节格式
+    with open(image_path, "rb") as img_file:
+        image_data = img_file.read()
+    gpt_v4 = GptV4(key=api_key)
+    description, token_usage = gpt_v4.describe(image_data)
+    print("描述：", description)
+    print("使用的 tokens 数量：", token_usage)

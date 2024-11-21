@@ -1,6 +1,6 @@
 # doubao.py
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any
 from volcenginesdkarkruntime import Ark
 from core.llm.chat_model.base import Base
 
@@ -8,7 +8,7 @@ from core.llm.chat_model.base import Base
 class DoubaoChat(Base):
     key: str
     model_name: str
-    base_url: Optional[str] = 'https://ark.cn-beijing.volces.com/api/v3'
+    base_url: str | None = 'https://ark.cn-beijing.volces.com/api/v3'
     client: Ark = field(init=False)
 
     def __post_init__(self):
@@ -16,7 +16,7 @@ class DoubaoChat(Base):
         super().__post_init__()
         print(f"Doubao client initialized with key: {self.key}")
 
-    def chat(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]) -> Tuple[str, int]:
+    def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> tuple[str, int]:
         if system:
             history.insert(0, {"role": "system", "content": system})
         # try:
@@ -30,7 +30,7 @@ class DoubaoChat(Base):
         # except Exception as e:
         #     return f"**ERROR**: {str(e)}", 0
 
-    def chat_streamly(self, system: str, history: List[Dict[str, Any]], gen_conf: Dict[str, Any]):
+    def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
         ans = ""

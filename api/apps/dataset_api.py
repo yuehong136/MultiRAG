@@ -41,7 +41,6 @@ from core.utils.storage_factory import STORAGE_IMPL
 from api.db.database import get_db
 from api.apps import manager
 from pydantic import BaseModel, Field
-from typing import Optional, List
 
 MAXIMUM_OF_UPLOADING_FILES = 256
 
@@ -53,31 +52,31 @@ class CreateDatasetRequest(BaseModel):
 
 
 class UpdateDatasetRequest(BaseModel):
-    name: Optional[str] = Field(None, description="数据集名称")
-    embedding_model_id: Optional[str] = Field(None, description="嵌入模型ID")
-    chunk_method: Optional[str] = Field(None, description="分块方法")
-    photo: Optional[str] = Field(None, description="图片")
-    layout_recognize: Optional[bool] = Field(None, description="布局识别")
-    language: Optional[str] = Field(None, description="语言")
-    description: Optional[str] = Field(None, description="描述")
-    permission: Optional[str] = Field(None, description="权限")
-    token_num: Optional[int] = Field(None, description="令牌数量")
-    template_type: Optional[str] = Field(None, description="模板类型")
-    chunk_num: Optional[int] = Field(None, description="分块数量")
+    name: str | None = Field(None, description="数据集名称")
+    embedding_model_id: str | None = Field(None, description="嵌入模型ID")
+    chunk_method: str | None = Field(None, description="分块方法")
+    photo: str | None = Field(None, description="图片")
+    layout_recognize: bool | None = Field(None, description="布局识别")
+    language: str | None = Field(None, description="语言")
+    description: str | None = Field(None, description="描述")
+    permission: str | None = Field(None, description="权限")
+    token_num: int | None = Field(None, description="令牌数量")
+    template_type: str | None = Field(None, description="模板类型")
+    chunk_num: int | None = Field(None, description="分块数量")
 
 
 class UploadDocumentsRequest(BaseModel):
-    files: List[UploadFile] = Field(..., description="上传的文件")
+    files: list[UploadFile] = Field(..., description="上传的文件")
 
 
 class UpdateDocumentRequest(BaseModel):
-    name: Optional[str] = Field(None, description="文件名")
-    enable: Optional[str] = Field(None, description="是否启用")
-    template_type: Optional[str] = Field(None, description="模板类型")
+    name: str | None = Field(None, description="文件名")
+    enable: str | None = Field(None, description="是否启用")
+    template_type: str | None = Field(None, description="模板类型")
 
 
 class ParseDocumentsRequest(BaseModel):
-    doc_ids: Optional[List[str]] = Field(None, description="文件ID列表")
+    doc_ids: list[str] | None = Field(None, description="文件ID列表")
 
 
 # ------------------------------ create a dataset ---------------------------------------
@@ -366,7 +365,7 @@ async def update_dataset(
 @router.post("/{dataset_id}/documents/", summary="上传文件", response_description="成功上传文件")
 async def upload_documents(
         dataset_id: str,  # 数据集ID，用于指定上传的文件所属的数据集
-        files: List[UploadFile] = Fe(...),  # 上传的文件，可以是单个或多个
+        files: list[UploadFile] = Fe(...),  # 上传的文件，可以是单个或多个
         db: Session = Depends(get_db),  # 依赖注入数据库会话
         user=Depends(manager)  # 依赖注入当前用户信息
 ):
@@ -790,7 +789,7 @@ async def parse_document(
 @router.post("/{dataset_id}/documents/status", summary="开始解析多个文件", response_description="成功开始解析多个文件")
 async def parse_documents(
         dataset_id: str,
-        doc_ids: List[str],
+        doc_ids: list[str],
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -935,7 +934,7 @@ async def stop_parsing_document(
                response_description="成功停止解析多个文件")
 async def stop_parsing_documents(
         dataset_id: str,
-        doc_ids: List[str],
+        doc_ids: list[str],
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):

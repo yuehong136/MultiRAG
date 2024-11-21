@@ -9,7 +9,6 @@
 import logging
 import json
 from functools import partial
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Body
 from pydantic import BaseModel
@@ -31,19 +30,19 @@ router = APIRouter()
 
 
 class RemoveCanvasRequest(BaseModel):
-    canvas_ids: List[str]
+    canvas_ids: list[str]
 
 
 class SaveCanvasRequest(BaseModel):
-    id: Optional[str]
+    id: str | None
     dsl: str
     title: str
 
 
 class RunCanvasRequest(BaseModel):
     id: str
-    message: Optional[str] = None
-    stream: Optional[bool] = True
+    message: str | None = None
+    stream: bool | None = True
 
 
 class ResetCanvasRequest(BaseModel):

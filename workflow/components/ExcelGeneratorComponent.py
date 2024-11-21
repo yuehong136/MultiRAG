@@ -1,7 +1,5 @@
-import os
 import uuid
 from dataclasses import dataclass
-from typing import Union, Optional, List
 import json
 
 import pyexcel
@@ -10,8 +8,7 @@ from core import settings
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Component import Component, ComponentParameter
 from workflow.basic.Node import ValueTypeOfIODefinition, Batch
-from workflow.llm.VolcengineLLM import VolcengineLLM
-from jsonpath_ng import jsonpath, parse
+from jsonpath_ng import parse
 
 from workflow.utils import string_cipher
 from workflow.utils.MinioOperator import MinioOperator
@@ -21,22 +18,22 @@ from workflow.utils.MinioOperator import MinioOperator
 class ExcelGeneratorComponentInputDefinition:
     parameter_name: str
     value_type: ValueTypeOfIODefinition
-    content: Union[list[str], str]
-    schema: Optional['ExcelGeneratorComponentInputDefinition'] = None
+    content: list[str] | str
+    schema: 'ExcelGeneratorComponentInputDefinition' | None = None
 
 
 @dataclass
 class ExcelGeneratorComponentOutputDefinition:
     variable_name: str
-    variable_type: Optional[str] = None
-    description: Optional[str] = None
+    variable_type: str | None = None
+    description: str | None = None
 
 
 @dataclass
 class ExcelGeneratorComponentParam(ComponentParameter):
-    output_definition: Optional[ExcelGeneratorComponentOutputDefinition] = None
-    input_definition_list: Optional[list[ExcelGeneratorComponentInputDefinition]] = None
-    batch: Optional[List[Batch]] = None
+    output_definition: ExcelGeneratorComponentOutputDefinition | None = None
+    input_definition_list: list[ExcelGeneratorComponentInputDefinition] | None = None
+    batch: list[Batch] | None = None
 
 
 class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
@@ -46,7 +43,7 @@ class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
         self.component_parameter = component_parameter
         super().__init__(component_parameter, node_id)
 
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None,
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
                       **kwargs) -> dict:
         headers = []
         parameter_dict = {}

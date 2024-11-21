@@ -1,6 +1,5 @@
 import json
 from fastapi import APIRouter, Depends, status, UploadFile, File, Form
-from typing import Optional
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -16,8 +15,8 @@ router = APIRouter()
 @router.post("/run")
 async def run(
         workflow_json_str: str = Form(..., description="工作流请求参数"),
-        input_data_str: Optional[str] = Form(None, description="入参"),
-        file: Optional[UploadFile] = File(None, description="可选的上传文件"),
+        input_data_str: str | None = Form(None, description="入参"),
+        file: UploadFile | None = File(None, description="可选的上传文件"),
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):

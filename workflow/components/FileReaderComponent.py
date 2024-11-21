@@ -1,10 +1,6 @@
 from dataclasses import dataclass
-from typing import Optional, Union, List
 import json
 
-import httpx
-from fastapi import FastAPI, File, UploadFile, HTTPException
-import subprocess
 import requests
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Component import Component, ComponentParameter
@@ -14,7 +10,7 @@ from workflow.basic.Node import ValueTypeOfIODefinition, VariableType, Batch
 @dataclass
 class FileReaderComponentInputDefinition:
     value_type: ValueTypeOfIODefinition
-    content: Union[list[str], str]
+    content: list[str] | str
     parameter_name: str = "INPUT"
 
 
@@ -22,8 +18,8 @@ class FileReaderComponentInputDefinition:
 class FileReaderComponentOutputDefinition:
     variable_name: str = "OUTPUT"
     variable_type: VariableType = VariableType.OBJECT.value
-    description: Optional[str] = None
-    schema: Optional['FileReaderComponentOutputDefinition'] = None
+    description: str | None = None
+    schema: 'FileReaderComponentOutputDefinition' | None = None
 
 
 @dataclass
@@ -31,7 +27,7 @@ class FileReaderComponentParam(ComponentParameter):
     output_definition: FileReaderComponentOutputDefinition
     input_definition: FileReaderComponentInputDefinition
     is_batch: bool = False
-    batch: Optional[List[Batch]] = None
+    batch: list[Batch] | None = None
 
 
 class FileReaderComponent(Component[FileReaderComponentParam]):
@@ -41,7 +37,7 @@ class FileReaderComponent(Component[FileReaderComponentParam]):
         self.component_parameter: FileReaderComponentParam = component_parameter
         super().__init__(component_parameter, node_id, self.name)
 
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None,
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
                       **kwargs) -> dict:
         file_path = ""
         if context is not None:

@@ -1,10 +1,10 @@
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Any
 
 
 @dataclass
 class NodeIOData:
-    def __init__(self, input_data: Optional[dict] = None, output_data: Optional[dict] = None):
+    def __init__(self, input_data: dict | None = None, output_data: dict | None = None):
         self.input_data = input_data
         self.output_data = output_data
 
@@ -12,7 +12,7 @@ class NodeIOData:
 @dataclass
 class WorkflowContext:
     def __init__(self):
-        self.data: Dict[str, NodeIOData] = {}
+        self.data: dict[str, NodeIOData] = {}
 
     def clear(self):
         self.data.clear()

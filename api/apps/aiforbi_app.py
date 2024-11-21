@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, Body
-from typing import Dict
 
 from api.apps import manager
 from api.db.database import get_db
@@ -12,7 +11,7 @@ router = APIRouter()
 from enum import Enum
 
 from pydantic import BaseModel
-from typing import Any, Optional
+from typing import Any
 
 
 class StatusEnum(str, Enum):
@@ -22,8 +21,8 @@ class StatusEnum(str, Enum):
 
 class ResponseSchema(BaseModel):
     status: StatusEnum = StatusEnum.SUCCESS
-    message: Optional[str] = None
-    data: Optional[Any] = None
+    message: str | None = None
+    data: Any | None = None
 
 
 class NL2SQLReqBody(BaseModel):
@@ -34,13 +33,13 @@ class NL2SQLReqBody(BaseModel):
 
 class ChartTypeReqBody(BaseModel):
     user_question: str
-    sql_result: Dict[str, Any]
+    sql_result: dict[str, Any]
     llm_name: str
 
 
 class DynamicChartOptionFunctionReqBody(BaseModel):
     user_question: str
-    sql_result: Dict[str, Any]
+    sql_result: dict[str, Any]
     chart_type: str
     llm_name: str
 

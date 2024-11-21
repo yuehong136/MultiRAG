@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Union, Optional, List
 import json
 
 from api.db import LLMType
@@ -16,25 +15,25 @@ from jsonpath_ng import parse
 class LLMComponentInputDefinition:
     parameter_name: str
     value_type: ValueTypeOfIODefinition
-    content: Union[list[str], str]
+    content: list[str] | str
 
 
 @dataclass
 class LLMComponentOutputDefinition:
     variable_name: str
-    variable_type: Optional[str] = None
-    description: Optional[str] = None
-    schema: Optional['LLMComponentOutputDefinition'] = None
+    variable_type: str | None = None
+    description: str | None = None
+    schema: 'LLMComponentOutputDefinition' | None = None
 
 
 @dataclass
 class LLMComponentParam(ComponentParameter):
     model: str
     prompt: str
-    output_definition: Optional[LLMComponentOutputDefinition] = None
-    input_definition_list: Optional[list[LLMComponentInputDefinition]] = None
+    output_definition: LLMComponentOutputDefinition | None = None
+    input_definition_list: list[LLMComponentInputDefinition] | None = None
     is_batch: bool = False
-    batch: Optional[List[Batch]] = None
+    batch: list[Batch] | None = None
 
 
 class LLMComponent(Component[LLMComponentParam]):
@@ -44,7 +43,7 @@ class LLMComponent(Component[LLMComponentParam]):
         self.component_parameter = component_parameter
         super().__init__(component_parameter, node_id)
 
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None,
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
                       **kwargs) -> dict:
         user = kwargs.get('user')
         db = kwargs.get('db')

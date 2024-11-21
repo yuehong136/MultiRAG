@@ -14,7 +14,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
-from typing import List, Optional, Dict
 
 from api.db import FileType, KNOWLEDGEBASE_FOLDER_NAME, FileSource, ParserType
 from api.db.db_models import File, Document, Knowledgebase, File2Document
@@ -35,7 +34,7 @@ class FileService(CommonService):
 
     @classmethod
     def get_by_pf_id(cls, db: Session, tenant_id: str, pf_id: str, page_number: int, items_per_page: int,
-                     orderby: str, desc: bool, keywords: Optional[str] = None) -> (List[Dict], int):
+                     orderby: str, desc: bool, keywords: str | None = None) -> (list[dict], int):
         query = db.query(cls.model).filter(
             cls.model.tenant_id == tenant_id,
             cls.model.parent_id == pf_id,
@@ -73,7 +72,7 @@ class FileService(CommonService):
         return res_files, count
 
     @classmethod
-    def get_kb_id_by_file_id(cls, db: Session, file_id: str) -> List[Dict]:
+    def get_kb_id_by_file_id(cls, db: Session, file_id: str) -> list[dict]:
         # 使用 aliased 创建表别名
         KnowledgebaseAlias = aliased(Knowledgebase)
         DocumentAlias = aliased(Document)
@@ -87,14 +86,14 @@ class FileService(CommonService):
         return [{"kb_id": kb.id, "kb_name": kb.name} for kb in kbs]
 
     @classmethod
-    def get_by_pf_id_name(cls, db: Session, id: str, name: str) -> Optional[File]:
+    def get_by_pf_id_name(cls, db: Session, id: str, name: str) -> File | None:
         file = db.query(cls.model).filter_by(parent_id=id, name=name).first()
         if file:
             return file
         return None
 
     @classmethod
-    def get_id_list_by_id(cls, db: Session, id: str, name: List[str], count: int, res: List[str]) -> List[str]:
+    def get_id_list_by_id(cls, db: Session, id: str, name: list[str], count: int, res: list[str]) -> list[str]:
         if count < len(name):
             file = cls.get_by_pf_id_name(db, id, name[count])
             if file:
@@ -106,7 +105,7 @@ class FileService(CommonService):
             return res
 
     @classmethod
-    def get_all_innermost_file_ids(cls, db: Session, folder_id: str, result_ids: List[str]) -> List[str]:
+    def get_all_innermost_file_ids(cls, db: Session, folder_id: str, result_ids: list[str]) -> list[str]:
         subfolders = db.query(cls.model).filter_by(parent_id=folder_id).all()
         if subfolders:
             for subfolder in subfolders:
@@ -116,7 +115,7 @@ class FileService(CommonService):
         return result_ids
 
     @classmethod
-    def create_folder(cls, db: Session, file: File, parent_id: str, name: List[str], count: int) -> File:
+    def create_folder(cls, db: Session, file: File, parent_id: str, name: list[str], count: int) -> File:
         if count > len(name) - 2:
             return file
         else:
@@ -141,7 +140,7 @@ class FileService(CommonService):
         return False
 
     @classmethod
-    def get_root_folder(cls, db: Session, tenant_id: str) -> Dict:
+    def get_root_folder(cls, db: Session, tenant_id: str) -> dict:
         root_folder = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=cls.model.id).first()
         if root_folder:
             return root_folder.to_dict()
@@ -161,7 +160,7 @@ class FileService(CommonService):
         return root_folder.to_dict()
 
     @classmethod
-    def get_kb_folder(cls, db: Session, tenant_id: str) -> Dict:
+    def get_kb_folder(cls, db: Session, tenant_id: str) -> dict:
         root = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=cls.model.id).first()
         if root:
             folder = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=root.id,
@@ -172,7 +171,7 @@ class FileService(CommonService):
 
     @classmethod
     def new_a_file_from_kb(cls, db: Session, tenant_id: str, name: str, parent_id: str, ty=FileType.FOLDER.value,
-                           size=0, location="") -> Dict:
+                           size=0, location="") -> dict:
         existing_files = cls.query(db, tenant_id=tenant_id, parent_id=parent_id, name=name)
         if existing_files:
             # 处理查询返回的列表
@@ -216,7 +215,7 @@ class FileService(CommonService):
         raise RuntimeError("Database error (File doesn't exist)!")
 
     @classmethod
-    def get_all_parent_folders(cls, db: Session, start_id: str) -> List[File]:
+    def get_all_parent_folders(cls, db: Session, start_id: str) -> list[File]:
         parent_folders = []
         current_id = start_id
         while current_id:
@@ -230,7 +229,7 @@ class FileService(CommonService):
         return parent_folders
 
     @classmethod
-    def insert(cls, db: Session, file_data: Dict) -> File:
+    def insert(cls, db: Session, file_data: dict) -> File:
         file = cls.save(db, **file_data)
         return file
 
@@ -272,7 +271,7 @@ class FileService(CommonService):
         return size
 
     @classmethod
-    def add_file_from_kb(cls, db: Session, doc: Dict, kb_folder_id: str, tenant_id: str):
+    def add_file_from_kb(cls, db: Session, doc: dict, kb_folder_id: str, tenant_id: str):
         if File2DocumentService.get_by_document_id(db, doc["id"]):
             return
         file_data = {
@@ -290,7 +289,7 @@ class FileService(CommonService):
         File2DocumentService.save(db, **{"id": get_uuid(), "file_id": file.id, "document_id": doc["id"]})
 
     @classmethod
-    def move_file(cls, db: Session, file_ids: List[str], folder_id: str):
+    def move_file(cls, db: Session, file_ids: list[str], folder_id: str):
         try:
             cls.filter_update(db, [cls.model.id.in_(file_ids)], {'parent_id': folder_id})
         except Exception:
@@ -298,7 +297,7 @@ class FileService(CommonService):
             raise RuntimeError("Database error (File move)!")
 
     @classmethod
-    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: List, current_user, labels: Optional[List[str]] = None) -> (List[str], List[Dict]):
+    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: list, current_user, labels: list[str] | None = None) -> (list[str], list[dict]):
         # 初始化根文件夹和知识库文件夹
         root_folder = cls.get_root_folder(db, current_user.id)
         pf_id = root_folder["id"]
