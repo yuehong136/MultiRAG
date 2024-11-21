@@ -19,7 +19,7 @@ class FileReaderComponentOutputDefinition:
     variable_name: str = "OUTPUT"
     variable_type: VariableType = VariableType.OBJECT.value
     description: str | None = None
-    schema: 'FileReaderComponentOutputDefinition' | None = None
+    schema: 'FileReaderComponentOutputDefinition' = None
 
 
 @dataclass

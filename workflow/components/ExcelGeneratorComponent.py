@@ -19,7 +19,7 @@ class ExcelGeneratorComponentInputDefinition:
     parameter_name: str
     value_type: ValueTypeOfIODefinition
     content: list[str] | str
-    schema: 'ExcelGeneratorComponentInputDefinition' | None = None
+    schema: 'ExcelGeneratorComponentInputDefinition' = None
 
 
 @dataclass

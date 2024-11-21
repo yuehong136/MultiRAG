@@ -6,7 +6,6 @@ from api.db.services.llm_service import TenantLLMService, LLMBundle
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Component import Component, ComponentParameter
 from workflow.basic.Node import ValueTypeOfIODefinition, Batch
-from workflow.llm.VolcengineLLM import VolcengineLLM
 from workflow.utils.utils import safe_format_double_braces
 from jsonpath_ng import parse
 
@@ -23,7 +22,7 @@ class LLMComponentOutputDefinition:
     variable_name: str
     variable_type: str | None = None
     description: str | None = None
-    schema: 'LLMComponentOutputDefinition' | None = None
+    schema: 'LLMComponentOutputDefinition' = None
 
 
 @dataclass

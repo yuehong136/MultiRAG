@@ -4,7 +4,7 @@ from requests import Session
 from api.apps import manager
 from api.db.database import get_db
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
-from workflow.basic.Node import Node, ValueTypeOfIODefinition, RefContentOfInputDefinition
+from workflow.basic.Node import Node, ValueTypeOfIODefinition
 from workflow.basic.StartNode import StartNode, StartNodeParam, StartNodeInputDefinition
 from workflow.components.FileReaderComponent import FileReaderComponentInputDefinition, \
     FileReaderComponentOutputDefinition, FileReaderComponentParam, FileReaderComponent
