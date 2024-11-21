@@ -41,15 +41,7 @@ RUN --mount=type=cache,id=multirag_production_apt,target=/var/cache/apt,sharing=
     apt install -y --no-install-recommends redis && \
     # 清理 apt 缓存和安装包
     rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/keyrings/redis-archive-keyring.gpg && \
-    wget -q -O chrome-linux64.zip https://bit.ly/chrome-linux64-121-0-6167-85 && \
-    unzip chrome-linux64.zip && \
-    rm chrome-linux64.zip && \
-    mv chrome-linux64 /opt/chrome/ && \
-    ln -s /opt/chrome/chrome /usr/local/bin/ && \
-    wget -q -O chromedriver-linux64.zip https://bit.ly/chromedriver-linux64-121-0-6167-85 && \
-    unzip -j chromedriver-linux64.zip chromedriver-linux64/chromedriver && \
-    rm chromedriver-linux64.zip && \
-    mv chromedriver /usr/local/bin/ && rm -f /usr/bin/google-chrome
+
 
 COPY ./requirements.txt ./
 
@@ -57,7 +49,7 @@ COPY ./requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip datrie && \
     pip install --no-cache-dir --upgrade -r requirements.txt -i https://pypi.doubanio.com/simple
     pip install --no-cache-dir --upgrade transformers -i https://pypi.doubanio.com/simple && \
-    pip install --no-cache-dir  anthropic >= 0.39.0
+    pip install --no-cache-dir  anthropic >= 0.39.0 fasttext >= 0.9.3
 
 # 创建并添加 NLTK 数据
 RUN mkdir -p /root/nltk_data
@@ -65,11 +57,22 @@ COPY ./nltk_data /root/nltk_data
 
 # https://github.com/chrismattmann/tika-python
 # This is the only way to run python-tika without internet access. Without this set, the default is to check the tika version and pull latest every time from Apache.
-COPY tika-server-standard-3.0.0.jar tika-server-standard-3.0.0.jar.md5 ./
-ENV TIKA_SERVER_JAR="file:///ragflow/tika-server-standard.jar"
+COPY tika-server-standard-3.0.0.jar /multirag/tika-server-standard.jar
+COPY tika-server-standard-3.0.0.jar.md5 /multirag/tika-server-standard.jar.md5
+ENV TIKA_SERVER_JAR="file:///multirag/tika-server-standard.jar"
 
 # Copy cl100k_base
-COPY 9b5ad71b2ce5302211f9c61530b329a4922fc6a4 ./
+COPY cl100k_base.tiktoken /ragflow/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
+
+# Add dependencies of selenium
+RUN --mount=type=bind,source=chrome-linux64-121-0-6167-85,target=/chrome-linux64.zip \
+    unzip /chrome-linux64.zip && \
+    mv chrome-linux64 /opt/chrome/ && \
+    ln -s /opt/chrome/chrome /usr/local/bin/
+RUN --mount=type=bind,source=chromedriver-linux64-121-0-6167-85,target=/chromedriver-linux64.zip \
+    unzip -j /chromedriver-linux64.zip chromedriver-linux64/chromedriver && \
+    mv chromedriver /usr/local/bin/ && \
+    rm -f /usr/bin/google-chrome
 
 # 添加其他项目文件
 COPY ./api ./api

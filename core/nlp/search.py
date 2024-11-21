@@ -127,7 +127,8 @@ class Dealer:
                         filter=filter
                     )
 
-                    logging.info(f"Search results for {idxnm}: {search_results}")
+                    # logging.info(f"Search results for {idxnm}: {search_results}")
+                    logging.info(f"Search results for {idxnm} ~ 详细查询数据请解开 core/nlp/search 下的注释")
 
                     # Process search results
                     if search_results:
