@@ -538,8 +538,7 @@ async def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), 
     """
     req = request.model_dump()
     try:
-        tid = req["tenant_id"]
-        del req["tenant_id"]
+        tid = req.pop("tenant_id")
         TenantService.update_by_id(db, tid, req)
         return get_json_result(data=True)
     except Exception as e:

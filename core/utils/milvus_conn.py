@@ -57,9 +57,9 @@ class MilvusConnection(DocStoreConnection):
     def health(self) -> dict:
         try:
             version = utility.get_server_version(using=self._using)
-            return {"status": "healthy", "version": version}
+            return {"type": "milvus", "status": "green", "version": version}
         except MilvusException as e:
-            return {"status": "unhealthy", "error": str(e)}
+            return {"type": "milvus", "status": "red", "error": str(e)}
 
     def createIdx(self, indexName: str, knowledgebaseId: str, vectorSize: int):
         return self.create_collection(indexName, dimension=vectorSize)

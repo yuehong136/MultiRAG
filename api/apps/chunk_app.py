@@ -435,8 +435,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
                                       req["similarity_threshold"], req["vector_similarity_weight"], req["top_k"],
                                       req["doc_ids"], rerank_mdl=rerank_mdl)
         for c in ranks["chunks"]:
-            if "vector" in c:
-                del c["vector"]
+            c.pop("vector", None)
 
         return get_json_result(data=ranks)
     except Exception as e:

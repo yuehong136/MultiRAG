@@ -63,7 +63,7 @@ class MultiRAGMinio(object):
                                          )
                 return r
             except Exception:
-                logging.exception(f"Fail put {bucket}/{fnm}:")
+                logging.exception(f"Fail to put {bucket}/{fnm}:")
                 self.__open__()
                 time.sleep(1)
 
@@ -71,49 +71,48 @@ class MultiRAGMinio(object):
         try:
             self.conn.remove_object(bucket, fnm)
         except Exception:
-            logging.exception(f"Fail remove {bucket}/{fnm}:")
+            logging.exception(f"Fail to remove {bucket}/{fnm}:")
 
-    def get(self, bucket, fnm):
+    def get(self, bucket, filename):
         for _ in range(1):
             try:
-                r = self.conn.get_object(bucket, fnm)
+                r = self.conn.get_object(bucket, filename)
                 return r.read()
-            except Exception as e:
-                logging.exception(f"Fail to get {bucket}/{fnm}, reason: {e}")
+            except Exception:
+                logging.exception(f"Fail to get {bucket}/{filename}")
                 self.__open__()
                 time.sleep(1)
         return
 
     def obj_exist(self, bucket, filename):
         try:
+            if not self.conn.bucket_exists(bucket):
+                return False
             if self.conn.stat_object(bucket, filename):
                 return True
             else:
                 return False
-        except Exception as e:
-            logging.warning(f"Not found: {bucket}/{filename}, exception: {e}")
+        except Exception:
+            logging.exception(f"Not found: {bucket}/{filename}")
             return False
-
 
     def get_presigned_url(self, bucket, fnm, expires):
         for _ in range(10):
             try:
                 return self.conn.get_presigned_url("GET", bucket, fnm, expires)
             except Exception:
-                logging.exception(f"Fail get {bucket}/{fnm}:")
+                logging.exception(f"Fail to get_presigned {bucket}/{fnm}:")
                 self.__open__()
                 time.sleep(1)
         return
 
 MINIO = MultiRAGMinio()
 
-
 if __name__ == "__main__":
     conn = MultiRAGMinio()
     fnm = r"E:\Project\python\study\RAG\assets\multirag.jpg"
     from PIL import Image
     img = Image.open(fnm)
-
     # 将图像从RGBA转换为RGB
     if img.mode == 'RGBA':
         img = img.convert('RGB')

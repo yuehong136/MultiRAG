@@ -574,7 +574,7 @@ def queue_raptor_tasks(db: Session, doc):
 #
 #             MINIO.put(kb.id, d["_id"], output_buffer.getvalue())
 #             d["img_id"] = "{}-{}".format(kb.id, d["_id"])
-#             del d["image"]
+#             d.pop("image", None)
 #             docs.append(d)
 #
 #     parser_ids = {d["id"]: d["parser_id"] for d, _ in files}
