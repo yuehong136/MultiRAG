@@ -9,6 +9,7 @@
 import re
 
 from api.db import LLMType
+from api.db.database import SessionLocal
 from core.nlp import rag_tokenizer
 from api.db.services.llm_service import LLMBundle
 from core.nlp import tokenize
@@ -25,8 +26,14 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
     eng = lang.lower() == "english"  # is_english(sections)
     try:
         callback(0.1, "USE Sequence2Txt LLM to transcription the audio")
-        seq2txt_mdl = LLMBundle(tenant_id, LLMType.SPEECH2TEXT, lang=lang)
-        ans = seq2txt_mdl.transcription(binary)
+        db = SessionLocal()
+        seq2txt_mdl = LLMBundle(db, tenant_id, LLMType.SPEECH2TEXT, lang=lang)
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio_file:
+            temp_audio_file.write(binary)
+            audio_file_path = temp_audio_file.name
+        # ans = seq2txt_mdl.transcription(binary)
+        ans = seq2txt_mdl.transcription(audio=audio_file_path)
         callback(0.8, "Sequence2Txt LLM respond: %s ..." % ans[:32])
         tokenize(doc, ans, eng)
         return [doc]

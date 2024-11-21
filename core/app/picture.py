@@ -16,6 +16,7 @@ import numpy as np
 from PIL import Image
 
 from api.db import LLMType
+from api.db.database import SessionLocal
 from api.db.services.llm_service import LLMBundle
 from core.nlp import tokenize
 from deepdoc.vision import OCR
@@ -40,7 +41,8 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
 
     try:
         callback(0.4, "Use CV LLM to describe the picture.")
-        cv_mdl = LLMBundle(tenant_id, LLMType.IMAGE2TEXT, lang=lang)
+        db = SessionLocal()
+        cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, lang=lang)
         ans = cv_mdl.describe(binary)
         callback(0.8, "CV LLM respond: %s ..." % ans[:32])
         txt += "\n" + ans
