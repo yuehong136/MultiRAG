@@ -10,7 +10,7 @@ class StartNodeInputDefinition:
     variable_type: str
     required: bool
     description: str | None = None
-    schema: 'StartNodeInputDefinition' | None = None
+    schema: 'StartNodeInputDefinition' = None
 
 
 @dataclass
