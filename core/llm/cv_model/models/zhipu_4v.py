@@ -43,7 +43,10 @@ class Zhipu4V(Base):
         try:
             for his in history:
                 if his["role"] == "user":
-                    his["content"] = self.chat_prompt(his["content"], image)
+                    if image:
+                       his["content"] = self.chat_prompt(his["content"], image)
+                    else:
+                        his["content"] = self.chat_onlytext(his["content"])
 
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -65,8 +68,10 @@ class Zhipu4V(Base):
         try:
             for his in history:
                 if his["role"] == "user":
-                    his["content"] = self.chat_prompt(his["content"], image)
-
+                    if image:
+                       his["content"] = self.chat_prompt(his["content"], image)
+                    else:
+                        his["content"] = self.chat_onlytext(his["content"])
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=history,

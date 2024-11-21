@@ -130,3 +130,11 @@ class Base(ABC):
                 "text": text
             },
         ]
+
+    def chat_onlytext(self, text: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "text",
+                "text": text
+            },
+        ]
