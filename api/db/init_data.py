@@ -124,21 +124,13 @@ def init_llm_factory(db: Session):
     )
     for factory_llm_info in factory_llm_infos["factory_llm_infos"]:
         llm_infos = factory_llm_info.pop("llm")
-        if not llm_infos:
-            # print(f"No LLM info for factory: {factory_llm_info['name']}")
-            continue
-        # print(f"Inserting LLM factory: {factory_llm_info['name']}")
-
         try:
             LLMFactoriesService.save(db, **factory_llm_info)
-            # print(f"Saved LLM factory: {factory_llm_info['name']}")
         except Exception as e:
-            # print(f"Error saving LLM factory {factory_llm_info['name']}: {e}")
             pass
         LLMService.filter_delete(db, [LLM.fid == factory_llm_info["name"]])
         for llm_info in llm_infos:
             llm_info["fid"] = factory_llm_info["name"]
-            # print(llm_info)
             try:
                 LLMService.save(db, **llm_info)
             except Exception as e:

@@ -7,6 +7,7 @@ from core.llm.chat_model.models.huggingface_chat import HuggingFaceChat
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
 from core.llm.chat_model.models.qwen_chat import QWenChat
+from core.llm.chat_model.models.spark_chat import SparkChat
 from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
@@ -84,6 +85,7 @@ ChatModel = {
     # "Mistral": MistralChat,
     "Gemini": GeminiChat,
     "Doubao": DoubaoChat,
+    "XunFei Spark": SparkChat,
     "OpenAI-API-Compatible": OpenAI_APIChat,
     "HuggingFace": HuggingFaceChat
 }
