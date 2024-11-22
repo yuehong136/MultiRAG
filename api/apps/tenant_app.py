@@ -10,6 +10,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy import inspect
 
+from api import settings
 from api.db import UserTenantRole, StatusEnum
 from api.db.db_models import UserTenant
 from api.utils import get_uuid, delta_seconds
@@ -28,7 +29,7 @@ def object_as_dict(obj):
 
 
 @router.get("/list", summary="获取租户列表", response_model=dict)
-async def tenant_list(db: Session = Depends(get_db), user=Depends(manager)):
+def tenant_list(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取当前用户关联的租户列表。
 
@@ -47,7 +48,7 @@ async def tenant_list(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.get("/<tenant_id>/user/list", summary="获取租户下用户列表", response_model=dict)
-async def user_list(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
+def user_list(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取特定租户下的用户列表。
 
@@ -57,6 +58,11 @@ async def user_list(tenant_id, db: Session = Depends(get_db), user=Depends(manag
     返回:
         JSON 响应，其中包含租户下的用户列表，以及每个用户距离上次更新的时间差（秒）。
     """
+    if user.id != tenant_id:
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR)
     try:
         users = UserTenantService.get_by_tenant_id(db, tenant_id)
         for u in users:
@@ -80,6 +86,11 @@ def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager
     返回:
         JSON 响应，其中包含成功添加的用户信息。
     """
+    if user.id != tenant_id:
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR)
     usrs = UserService.query(db, email=email)
 
     if not usrs:
@@ -127,6 +138,11 @@ def rm(tenant_id, user_id, db: Session = Depends(get_db), user=Depends(manager))
     返回:
         JSON 响应，指示操作是否成功。
     """
+    if user.id != tenant_id and user.id != user_id:
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR)
     try:
         UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id, UserTenant.user_id == user_id])
         return get_json_result(data=True)
