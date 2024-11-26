@@ -255,6 +255,14 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         sections = doc_parsed['content'].split('\n')
         sections = [(_, "") for _ in sections if _]
         callback(0.8, "Finish parsing.")
+        if doc_parsed.get('content', None) is not None:
+            sections = doc_parsed['content'].split('\n')
+            sections = [(_, "") for _ in sections if _]
+            callback(0.8, "Finish parsing.")
+        else:
+            callback(0.8, f"tika.parser got empty content from {filename}.")
+            logging.warning(f"tika.parser got empty content from {filename}.")
+            return []
 
     else:
         raise NotImplementedError(
