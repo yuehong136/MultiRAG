@@ -17,9 +17,10 @@ class WorkflowLogger:
         self.max_bytes = max_bytes
         self.backup_count = backup_count
 
+        self.log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), log_dir)
         # 创建日志目录
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
+        if not os.path.exists(self.log_dir):
+            os.makedirs(self.log_dir)
 
         # 创建logger
         self.logger = logging.getLogger("workflow")
