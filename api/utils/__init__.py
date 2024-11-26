@@ -48,11 +48,11 @@ CONFIGS = read_config()
 
 
 def show_configs():
-    logging.info(f"Current configs, from {conf_realpath(SERVICE_CONF)}:")
-    logging.info("默认不展示service_conf.yaml,如有需要,请至 api/utils/__init__.py 解开注释")
+    msg = f"Current configs, from {conf_realpath(SERVICE_CONF)}:"
     for k, v in CONFIGS.items():
-        # logging.info(f"{k}: {v}")
-        continue
+        msg += f"\n\t{k}: {v}"
+    logging.info("默认不展示service_conf.yaml,如有需要,请至 api/utils/__init__.py 解开注释")
+    # logging.info(msg)
 
 
 def get_base_config(key, default=None):
@@ -240,7 +240,7 @@ def get_lan_ip():
             try:
                 ip = get_interface_ip(ifname)
                 break
-            except IOError as e:
+            except IOError:
                 pass
     return ip or ''
 

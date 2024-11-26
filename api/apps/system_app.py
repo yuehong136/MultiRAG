@@ -90,10 +90,10 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
     res = {}
     st = timer()
     try:
-        res["doc_store"] = MILVUS_CONNECTION.health()
-        res["doc_store"]["elapsed"] = "{:.1f}".format((timer() - st) * 1000.0)
+        res["doc_engine"] = MILVUS_CONNECTION.health()
+        res["doc_engine"]["elapsed"] = "{:.1f}".format((timer() - st) * 1000.0)
     except Exception as e:
-        res["doc_store"] = {
+        res["doc_engine"] = {
             "type": "unknown",
             "status": "red",
             "elapsed": "{:.1f}".format((timer() - st) * 1000.0),

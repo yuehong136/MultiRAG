@@ -68,6 +68,11 @@ es:
   # Elasticsearch服务的密码
   password: ''
 
+infinity:
+  uri: 'infinity:23817'
+  db_name: 'default_db'
+
+
 redis:
   # Redis数据库的编号
   db: 1

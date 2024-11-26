@@ -2,7 +2,32 @@ FROM python:3.12-slim AS base
 
 USER root
 
+SHELL ["/bin/bash", "-c"]
+
+ENV LIGHTEN=0
+
 WORKDIR /multirag
+
+COPY --from=builder /multirag/VERSION /multirag/VERSION
+
+COPY .git /multirag/.git
+
+RUN current_commit=$(git rev-parse --short HEAD); \
+    last_tag=$(git describe --tags --abbrev=0); \
+    commit_count=$(git rev-list --count "$last_tag..HEAD"); \
+    version_info=""; \
+    if [ "$commit_count" -eq 0 ]; then \
+        version_info=$last_tag; \
+    else \
+        version_info="$current_commit($last_tag~$commit_count)"; \
+    fi; \
+    if [ "$LIGHTEN" == "1" ]; then \
+        version_info="$version_info slim"; \
+    else \
+        version_info="$version_info full"; \
+    fi; \
+    echo "MultiRAG version: $version_info"; \
+    echo $version_info > /multirag/VERSION
 
 # 安装 OpenGL 依赖、Redis、vim 和 net-tools
 RUN --mount=type=cache,id=multirag_production_apt,target=/var/cache/apt,sharing=locked \
@@ -31,6 +56,7 @@ RUN --mount=type=cache,id=multirag_production_apt,target=/var/cache/apt,sharing=
         unzip  \
         libgbm-dev  \
         wget \
+        git \
         libgdiplus && \
     # 添加 Redis 的 GPG 密钥和源
     curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
@@ -62,12 +88,12 @@ COPY tika-server-standard-3.0.0.jar.md5 /multirag/tika-server-standard.jar.md5
 ENV TIKA_SERVER_JAR="file:///multirag/tika-server-standard.jar"
 
 # Copy cl100k_base
-COPY cl100k_base.tiktoken /ragflow/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
+COPY cl100k_base.tiktoken /multirag/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
 
 # Add dependencies of selenium
 RUN --mount=type=bind,source=chrome-linux64-121-0-6167-85,target=/chrome-linux64.zip \
     unzip /chrome-linux64.zip && \
-    mv chrome-linux64 /opt/chrome/ && \
+    mv chrome-linux64 /opt/chrome && \
     ln -s /opt/chrome/chrome /usr/local/bin/
 RUN --mount=type=bind,source=chromedriver-linux64-121-0-6167-85,target=/chromedriver-linux64.zip \
     unzip -j /chromedriver-linux64.zip chromedriver-linux64/chromedriver && \
