@@ -176,6 +176,7 @@ async def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db),
             # 查询与文档关联的文件，并删除这些文件
             f2d = File2DocumentService.get_by_document_id(db, doc.id)
             FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
+            FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kbs[0].name])
             # 删除文档与文件的关联
             File2DocumentService.delete_by_document_id(db, doc.id)
 
