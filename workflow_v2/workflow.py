@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, Any, List, Optional, Union
 
-from workflow_v2.workflow_component import Branch, ComponentManager
+from workflow_v2.component.component_manager import ComponentManager
+from workflow_v2.component.selector_component import Branch
 from workflow_v2.workflow_exceptions import WorkflowError, NodeTimeoutError, WorkflowValidationError
 from workflow_v2.workflow_logging_config import WorkflowLogger, WorkflowContextLogger, NodeLogger
 from workflow_v2.workflow_validator import WorkflowValidator, ValidationLevel
