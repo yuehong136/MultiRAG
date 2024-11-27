@@ -131,10 +131,12 @@ async def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager
 
 @router.get('/list', summary="列出知识库", response_description="成功列出知识库")
 async def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_time", desc: bool = True, db: Session = Depends(get_db), user=Depends(manager)):
+    page_number = int(page)
+    items_per_page = int(page_size)
     try:
         tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
         kbs = KnowledgebaseService.get_by_tenant_ids(
-            db, [m["tenant_id"] for m in tenants], user.id, page, page_size, orderby, desc)
+            db, [m["tenant_id"] for m in tenants], user.id, page_number, items_per_page, orderby, desc)
         return get_json_result(data=kbs)
     except Exception as e:
         return server_error_response(e)
