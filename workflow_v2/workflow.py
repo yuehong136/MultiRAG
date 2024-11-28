@@ -112,6 +112,8 @@ class WorkflowNode:
         self.branches: Dict[str, Branch] = {}  # port_id -> Branch
         self.is_selector = node_data['type'] == "8"
 
+        self.in_execution_path = False
+
     def add_branch_node(self, node: 'WorkflowNode', port_id: str):
         """添加分支节点"""
         if port_id not in self.branches:
@@ -171,6 +173,10 @@ class AsyncWorkflowEngine:
     async def execute(self):
         self.logger.info(f"Starting workflow execution")
         try:
+            # 重置所有节点的执行路径状态
+            for node in self.nodes.values():
+                node.in_execution_path = False
+
             # 为每个起始节点创建任务
             start_tasks = [self.execute_node(node) for node in self.start_nodes]
             # 并行执行所有起始任务
@@ -184,40 +190,35 @@ class AsyncWorkflowEngine:
         node_logger = NodeLogger(self.logger, node)
 
         try:
-            # 使用锁确保节点只被执行一次
             async with node.execution_lock:
-                # 如果节点已经在执行或已完成，直接返回
                 if node.is_executing or node.is_completed:
                     return
                 node.is_executing = True
+                node.in_execution_path = True  # 标记当前节点在执行路径上
 
-                # 创建当前节点的任务并存储到 self.tasks 中
                 task = asyncio.create_task(self._process_node(node))
                 self.tasks[node.id] = task
-
-                # 等待任务完成
                 await task
 
-                # 根据节点类型处理后续节点的执行
                 if node.is_selector:
-                    # 选择器节点：根据条件执行特定分支的节点
                     selected_port = node.output.get("selected_port")
                     next_tasks = []
 
                     if selected_port in node.branches:
-                        # 执行选中分支的所有节点
+                        # 标记选中分支上的所有节点
                         for next_node in node.branches[selected_port].nodes:
-                            # 检查所有前置节点是否完成
-                            if all(prev_node.is_completed for prev_node in next_node.previous_nodes):
+                            next_node.in_execution_path = True
+                            # 修改检查逻辑：只检查在执行路径上的前置节点是否完成
+                            if all(prev.is_completed for prev in next_node.previous_nodes if prev.in_execution_path):
                                 next_tasks.append(self.execute_node(next_node))
 
                     if next_tasks:
                         await asyncio.gather(*next_tasks)
                 else:
-                    # 普通节点：执行所有后续节点
                     next_tasks = []
                     for next_node in node.next_nodes:
-                        if all(prev_node.is_completed for prev_node in next_node.previous_nodes):
+                        # 修改检查逻辑：只检查在执行路径上的前置节点是否完成
+                        if all(prev.is_completed for prev in next_node.previous_nodes if prev.in_execution_path):
                             next_tasks.append(self.execute_node(next_node))
 
                     if next_tasks:
@@ -234,12 +235,14 @@ class AsyncWorkflowEngine:
         try:
             # 添加超时控制
             async with asyncio.timeout(node.timeout):
-                # 1. 等待所有前置节点完成
+                # 1. 等待在执行路径上的前置节点完成
                 if node.previous_nodes:
-                    for prev_node in node.previous_nodes:
+                    active_prev_nodes = [n for n in node.previous_nodes if n.in_execution_path]
+                    for prev_node in active_prev_nodes:
                         if prev_node.id not in self.tasks:
                             raise Exception(f"Previous node {prev_node.id} task not found")
-                    await asyncio.gather(*[self.tasks[n.id] for n in node.previous_nodes])
+                    if active_prev_nodes:  # 只有存在需要等待的节点时才执行 gather
+                        await asyncio.gather(*[self.tasks[n.id] for n in active_prev_nodes])
 
                 # 2. 解析节点输入
                 resolved_inputs = await self._resolve_node_inputs(node)
