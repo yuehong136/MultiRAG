@@ -48,7 +48,7 @@ class RemoveKnowledgebaseRequest(BaseModel):
     kb_id: str
 
 @router.post('/create', summary="创建知识库", response_description="成功创建知识库")
-async def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
     req_data["name"] = req_data["name"].strip()
     req_data["name"] = duplicate_name(
@@ -74,7 +74,7 @@ async def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_
 
 
 @router.post('/update', summary="更新知识库", response_description="成功更新知识库")
-async def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
     req_data["name"] = req_data["name"].strip()
     if not KnowledgebaseService.accessible4deletion(db, req_data["kb_id"], user.id):
@@ -110,7 +110,7 @@ async def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_
 
 
 @router.get('/detail', summary="获取知识库详情", response_description="成功获取知识库详情")
-async def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         tenants = UserTenantService.query(user_id=user.id)
         for tenant in tenants:
@@ -130,20 +130,20 @@ async def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager
 
 
 @router.get('/list', summary="列出知识库", response_description="成功列出知识库")
-async def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_time", desc: bool = True, db: Session = Depends(get_db), user=Depends(manager)):
+def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_time", desc: bool = True, keywords: str = "", db: Session = Depends(get_db), user=Depends(manager)):
     page_number = int(page)
     items_per_page = int(page_size)
     try:
         tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
-        kbs = KnowledgebaseService.get_by_tenant_ids(
-            db, [m["tenant_id"] for m in tenants], user.id, page_number, items_per_page, orderby, desc)
-        return get_json_result(data=kbs)
+        kbs, total = KnowledgebaseService.get_by_tenant_ids(
+            db, [m["tenant_id"] for m in tenants], user.id, page_number, items_per_page, orderby, desc, keywords)
+        return get_json_result(data={"kbs": kbs, "total": total})
     except Exception as e:
         return server_error_response(e)
 
 
 @router.post('/rm', summary="删除知识库", response_description="成功删除知识库")
-async def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除知识库
 

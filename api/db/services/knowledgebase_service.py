@@ -29,7 +29,8 @@ class KnowledgebaseService(CommonService):
         return [doc.document_id for doc in doc_ids]
 
     @classmethod
-    def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc):
+    def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc,
+                          keywords=None):
         fields = [
             cls.model.id,
             cls.model.avatar,
@@ -47,12 +48,16 @@ class KnowledgebaseService(CommonService):
             cls.model.update_time
         ]
 
-        # 根据条件构建查询表达式
+        # 构建查询表达式
         query = db.query(*fields).join(User, cls.model.tenant_id == User.id).filter(
             ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) |
              (cls.model.tenant_id == user_id)) &
             (cls.model.status == StatusEnum.VALID.value)
         )
+
+        # 如果提供了关键词，则增加模糊搜索条件
+        if keywords:
+            query = query.filter(cls.model.name.ilike(f"%{keywords}%"))
 
         # 根据desc参数确定排序方式
         if desc:
@@ -60,8 +65,12 @@ class KnowledgebaseService(CommonService):
         else:
             query = query.order_by(getattr(cls.model, orderby).asc())
 
-        # 分页查询并返回结果的字典形式
+        # 获取总记录数
+        total = query.count()
+
+        # 分页查询
         kbs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
+
         # 将结果转换为字典列表
         result = []
         for kb in kbs:
@@ -83,7 +92,8 @@ class KnowledgebaseService(CommonService):
             }
             result.append(kb_dict)
 
-        return result
+        # 返回结果和总记录数
+        return result, total
 
     @classmethod
     def get_by_tenant_ids_by_offset(cls, db: Session, joined_tenant_ids, user_id, offset, count, orderby, desc):
