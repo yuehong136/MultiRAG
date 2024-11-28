@@ -13,7 +13,7 @@ class HuggingFaceEmbed(Base):
         self.model_name = model_name
         self.base_url = base_url or "http://127.0.0.1:8080"
 
-    def encode(self, texts: list, batch_size=32):
+    def encode(self, texts: list, batch_size=16):
         embeddings = []
         for text in texts:
             response = requests.post(

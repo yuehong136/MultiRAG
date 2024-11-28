@@ -13,7 +13,7 @@ class XinferenceEmbed(Base):
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name
 
-    def encode(self, texts: list, batch_size=32):
+    def encode(self, texts: list, batch_size=16):
         res = self.client.embeddings.create(input=texts,
                                             model=self.model_name)
         return np.array([d.embedding for d in res.data]
