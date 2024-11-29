@@ -164,6 +164,12 @@ async def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager
         tenants = UserTenantService.query(db, user_id=user.id)
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
+
+        tenant_id = tenants[0].tenant_id
+        kb_ids = KnowledgebaseService.get_kb_ids(db, tenant_id)
+        chunk = settings.docStoreConn.get(chunk_id, search.index_name(db, tenant_id), kb_ids)
+        if chunk is None:
+            return server_error_response(Exception("Chunk not found"))
         res = ELASTICSEARCH.get(
             chunk_id, search.index_name(
                 tenants[0].tenant_id))
@@ -173,16 +179,16 @@ async def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager
         res = res["_source"]
         res["chunk_id"] = id
         k = []
-        for n in res.keys():
+        for n in chunk.keys():
             if re.search(r"(_vec$|_sm_|_tks|_ltks)", n):
                 k.append(n)
         for n in k:
-            del res[n]
+            del chunk[n]
 
-        return get_json_result(data=res)
+        return get_json_result(data=chunk)
     except Exception as e:
         if str(e).find("NotFoundError") >= 0:
-            return get_json_result(data=False, retmsg=f'Chunk not found!',
+            return get_json_result(data=False, retmsg='Chunk not found!',
                                    retcode=settings.RetCode.DATA_ERROR)
         return server_error_response(e)
 
