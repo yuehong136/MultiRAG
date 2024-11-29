@@ -92,7 +92,7 @@ class OllamaChat:
             if "max_tokens" in gen_conf:
                 options["num_predict"] = gen_conf["max_tokens"]
             if "top_p" in gen_conf:
-                options["top_k"] = gen_conf["top_p"]
+                options["top_p"] = gen_conf["top_p"]
             if "presence_penalty" in gen_conf:
                 options["presence_penalty"] = gen_conf["presence_penalty"]
             if "frequency_penalty" in gen_conf:
@@ -118,7 +118,7 @@ class OllamaChat:
         if "max_tokens" in gen_conf:
             options["num_predict"] = gen_conf["max_tokens"]
         if "top_p" in gen_conf:
-            options["top_k"] = gen_conf["top_p"]
+            options["top_p"] = gen_conf["top_p"]
         if "presence_penalty" in gen_conf:
             options["presence_penalty"] = gen_conf["presence_penalty"]
         if "frequency_penalty" in gen_conf:
