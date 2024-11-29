@@ -348,7 +348,7 @@ class MilvusConnection(DocStoreConnection):
             collection_name: str,
             data: dict | list[dict],
             timeout: float | None = None,
-            partition_name: str | None = "",
+            partition_name: str | None = None,
             **kwargs,
     ) -> dict:
         if isinstance(data, dict):
@@ -377,7 +377,7 @@ class MilvusConnection(DocStoreConnection):
             collection_name: str,
             data: dict | list[dict],
             timeout: float | None = None,
-            partition_name: str | None = "",
+            partition_name: str | None = None,
             **kwargs,
     ) -> dict:
         if isinstance(data, dict):
@@ -587,7 +587,7 @@ class MilvusConnection(DocStoreConnection):
             ids: list | str | int | None = None,
             timeout: float | None = None,
             filter: str | None = "",
-            partition_name: str | None = "",
+            partition_name: str | None = None,
             **kwargs,
     ) -> dict:
         """

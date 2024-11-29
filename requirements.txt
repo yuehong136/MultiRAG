@@ -22,7 +22,7 @@ psutil >= 5.9.8
 # 提供了一种增强型的枚举（Enumeration）类实现，使得枚举值具有更多的功能和安全性
 strenum >= 0.4.15
 # milvus向量数据库
-pymilvus >= 2.4.1 # windows目前不支持最新版[最新版2.4.3有milvus lite 本地数据库]
+pymilvus >= 2.4.5
 # chroma向量数据库
 #langchain_chroma >= 0.1.1
 # bs4 网页爬虫
