@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 from core.utils import rmSpace
 from core.nlp import rag_tokenizer, query, is_english
+from core.utils.doc_store_conn import MatchDenseExpr
 
 
 def index_name(uid, kb_names):
@@ -46,15 +47,17 @@ class Dealer:
         keywords: list[str] | None = None
         group_docs: list[list] | None = None
 
-    def _vector(self, txt, emb_mdl, sim=0.8, topk=10):
-        qv, c = emb_mdl.encode_queries(txt)
-        return {
-            "field": "vector",
-            "k": topk,
-            "similarity": sim,
-            "num_candidates": topk * 2,
-            "query_vector": [float(v) for v in qv]
-        }
+    def get_vector(self, txt, emb_mdl, topk=10, similarity=0.1):
+        qv, _ = emb_mdl.encode_queries(txt)
+        shape = np.array(qv).shape
+        if len(shape) > 1:
+            raise Exception(
+                f"Dealer.get_vector returned array's shape {shape} doesn't match expectation(exact one dimension).")
+        embedding_data = [float(v) for v in qv]
+        # todo 适配任意维度向量列名
+        # vector_column_name = f"q_{len(embedding_data)}_vec"
+        vector_column_name = "vector"
+        return MatchDenseExpr(vector_column_name, embedding_data, 'float', 'cosine', topk, {"similarity": similarity})
 
     def _add_filters(self, base_filter, req):
         filters = []
@@ -102,8 +105,8 @@ class Dealer:
         # Vector search parameters
         if req.get("vector"):
             assert embd_mdl, "No embedding model selected"
-            vector_search_params = self._vector(qst, embd_mdl, req.get("similarity", 0.1), req.get("topk", 1024))
-            query_vector = vector_search_params["query_vector"]
+            vector_search_params = self.get_vector(qst, embd_mdl, req.get("topk", 1024), req.get("similarity", 0.1))
+            query_vector = vector_search_params.embedding_data
 
             for idxnm in idxnms:
                 logging.info(f"正在搜索的集合: {idxnm}")
@@ -120,7 +123,7 @@ class Dealer:
                     search_results = self.milvus_conn.search(
                         collection_name=idxnm,
                         data=[query_vector],
-                        anns_field=vector_search_params["field"],
+                        anns_field=vector_search_params.vector_column_name,
                         limit=req.get("size", 10),
                         search_params={"metric_type": "COSINE", "params": {"nprobe": 10}},
                         output_fields=src,
