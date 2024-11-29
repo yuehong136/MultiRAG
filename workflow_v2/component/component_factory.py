@@ -13,7 +13,7 @@ class ComponentFactory:
     """组件工厂类"""
 
     @staticmethod
-    def create_component(node_data: Dict[str, Any], logger: WorkflowContextLogger) -> BaseComponent:
+    def create_component(node_data: Dict[str, Any], logger: WorkflowContextLogger, **kwargs) -> BaseComponent:
         """从节点数据创建对应的组件实例"""
         component_id = node_data['id']
         title = node_data['data']['nodeMeta']['title']
@@ -24,7 +24,9 @@ class ComponentFactory:
         elif node_type == "2":
             return EndComponent(component_id, title, node_data, logger)
         elif node_type == "3":
-            return LLMComponent(component_id, title, node_data, logger)
+            return LLMComponent(component_id, title, node_data, logger,
+                                db=kwargs.get('db', None),
+                                user=kwargs.get('user', None))
         elif node_type == "5":
             return CodeComponent(component_id, title, node_data, logger)
         elif node_type == "8":  # 选择器类型

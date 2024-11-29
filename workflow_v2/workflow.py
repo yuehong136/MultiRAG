@@ -128,7 +128,8 @@ class WorkflowNode:
 
 
 class AsyncWorkflowEngine:
-    def __init__(self, workflow_id: Optional[str] = None, start_input_values: Optional[Dict[str, Any]] = None):
+    def __init__(self, workflow_id: Optional[str] = None, start_input_values: Optional[Dict[str, Any]] = None,
+                 **kwargs):
         self.workflow_id = workflow_id or datetime.now().strftime("%Y%m%d%H%M%S")
         self.nodes = {}
         self.start_nodes = []
@@ -137,7 +138,7 @@ class AsyncWorkflowEngine:
 
         workflow_logger = WorkflowLogger()
         self.logger = WorkflowContextLogger(self.workflow_id, workflow_logger.logger)
-        self.component_manager = ComponentManager(self.logger)
+        self.component_manager = ComponentManager(self.logger, **kwargs)
 
     def build_graph(self, nodes_data, edges_data):
         # 创建所有节点
@@ -332,8 +333,8 @@ class AsyncWorkflowEngine:
 
 
 # 使用示例
-async def run_workflow(workflow_data, start_input_values=None):
-    engine = AsyncWorkflowEngine(workflow_id="test", start_input_values=start_input_values)
+async def run_workflow(workflow_data, start_input_values=None, **kwargs):
+    engine = AsyncWorkflowEngine(workflow_id="test", start_input_values=start_input_values, **kwargs)
 
     # 先进行验证
     validation_issues = WorkflowValidator(workflow_data['nodes'], workflow_data['edges']).validate_all()
@@ -354,7 +355,6 @@ async def run_workflow(workflow_data, start_input_values=None):
     end_node = next(node for node in engine.nodes.values()
                     if node.data['type'] == '2')
     return end_node.output
-
 
 # 执行工作流
 if __name__ == "__main__":

@@ -17,8 +17,7 @@ class EndComponent(BaseComponent):
     async def execute(self) -> Dict[str, Any]:
         return {"result": self.parse_template(self.content_template, self.inputs)}
 
-    import re
-    from typing import Dict, Any, Union
+    from typing import Dict, Any
 
     def parse_template(self, template: str, values: Dict[str, Any]) -> str:
         """
