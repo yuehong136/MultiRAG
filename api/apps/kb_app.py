@@ -6,6 +6,7 @@
 @date：2024/8/5 9:22
 @desc:
 """
+import re
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -27,8 +28,10 @@ from api.db.database import get_db
 from api.apps import manager
 from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.nlp import search
+from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
 
 router = APIRouter()
+
 
 class CreateKnowledgebaseRequest(BaseModel):
     name: str
@@ -37,6 +40,7 @@ class CreateKnowledgebaseRequest(BaseModel):
     parser_id: str | None = None
     embd_id: str | None = None
 
+
 class UpdateKnowledgebaseRequest(BaseModel):
     kb_id: str
     name: str
@@ -44,17 +48,33 @@ class UpdateKnowledgebaseRequest(BaseModel):
     permission: str | None = None
     parser_id: str | None = None
 
+
 class RemoveKnowledgebaseRequest(BaseModel):
     kb_id: str
+
 
 @router.post('/create', summary="创建知识库", response_description="成功创建知识库")
 def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
-    req_data["name"] = req_data["name"].strip()
+    dataset_name = req_data["name"]
+    if not isinstance(dataset_name, str):
+        return get_data_error_result(retmsg="Dataset name must be string.")
+    if dataset_name == "":
+        return get_data_error_result(retmsg="Dataset name can't be empty.")
+    if len(dataset_name) >= DATASET_NAME_LIMIT:
+        return get_data_error_result(
+            retmsg=f"Dataset name length is {len(dataset_name)} which is large than {DATASET_NAME_LIMIT}")
+    # 验证 Milvus 集合名逻辑
+    if not re.match(MILVUS_NAME_PATTERN, dataset_name):
+        return get_data_error_result(
+            retmsg="Dataset name must start with a letter and contain only letters, numbers, and underscores."
+        )
+
+    dataset_name = dataset_name.strip()
     req_data["name"] = duplicate_name(
         KnowledgebaseService.query,
         db=db,
-        name=req_data["name"],
+        name=dataset_name,
         tenant_id=user.id,
         status=StatusEnum.VALID.value
     )
@@ -86,14 +106,16 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
     try:
         if not KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"]):
             return get_json_result(
-                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.', retcode=settings.RetCode.OPERATING_ERROR)
+                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+                retcode=settings.RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
         if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
 
         if req_data["name"].lower() != kb.name.lower() \
-                and len(KnowledgebaseService.query(db, name=req_data["name"], tenant_id=user.id, status=StatusEnum.VALID.value)) > 1:
+                and len(KnowledgebaseService.query(db, name=req_data["name"], tenant_id=user.id,
+                                                   status=StatusEnum.VALID.value)) > 1:
             return get_data_error_result(retmsg="Duplicated knowledgebase name.")
 
         del req_data["kb_id"]
@@ -130,7 +152,8 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.get('/list', summary="列出知识库", response_description="成功列出知识库")
-def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_time", desc: bool = True, keywords: str = "", db: Session = Depends(get_db), user=Depends(manager)):
+def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_time", desc: bool = True, keywords: str = "",
+             db: Session = Depends(get_db), user=Depends(manager)):
     page_number = int(page)
     items_per_page = int(page_size)
     try:
@@ -168,7 +191,8 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
         if not kbs:
             # 如果知识库不存在或用户无权限删除，返回错误信息
             return get_json_result(
-                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.', retcode=settings.RetCode.OPERATING_ERROR)
+                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+                retcode=settings.RetCode.OPERATING_ERROR)
 
         # 遍历知识库中的所有文档，进行删除
         for doc in DocumentService.query(db, kb_id=req_data["kb_id"]):
@@ -193,4 +217,3 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
     except Exception as e:
         # 捕获异常，返回服务器错误响应
         return server_error_response(e)
-

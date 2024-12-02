@@ -75,7 +75,7 @@ class TenantLLMService(CommonService):
         else:
             raise ValueError("LLM type error")
 
-        logging.info(f"Debug: Fetching model instance for tenant_id={tenant_id}, mdlnm={mdlnm}")
+        # logging.info(f"Debug: Fetching model instance for tenant_id={tenant_id}, mdlnm={mdlnm}")
 
         model_config = cls.get_api_key(db, tenant_id, mdlnm)
         # print("model_config:", model_config)

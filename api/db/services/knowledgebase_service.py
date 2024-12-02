@@ -6,8 +6,8 @@
 @date：2024/7/9 9:00
 @desc:
 """
+from sqlalchemy import func
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import NoResultFound
 from api.db import StatusEnum, TenantPermission
 from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document
 from api.db.services.common_service import CommonService
@@ -57,7 +57,7 @@ class KnowledgebaseService(CommonService):
 
         # 如果提供了关键词，则增加模糊搜索条件
         if keywords:
-            query = query.filter(cls.model.name.ilike(f"%{keywords}%"))
+            query = query.filter(func.lower(cls.model.name).ilike(f"%{keywords}%"))
 
         # 根据desc参数确定排序方式
         if desc:
