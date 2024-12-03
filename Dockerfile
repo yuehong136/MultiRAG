@@ -8,8 +8,6 @@ ENV LIGHTEN=0
 
 WORKDIR /multirag
 
-COPY --from=builder /multirag/VERSION /multirag/VERSION
-
 COPY .git /multirag/.git
 
 RUN current_commit=$(git rev-parse --short HEAD); \
@@ -29,35 +27,46 @@ RUN current_commit=$(git rev-parse --short HEAD); \
     echo "MultiRAG version: $version_info"; \
     echo $version_info > /multirag/VERSION
 
+RUN --mount=type=bind,source=libssl1.1_1.1.1f-1ubuntu2_amd64.deb,target=/root/libssl1.1_1.1.1f-1ubuntu2_amd64.deb \
+    --mount=type=bind,source=libssl1.1_1.1.1f-1ubuntu2_arm64.deb,target=/root/libssl1.1_1.1.1f-1ubuntu2_arm64.deb \
+    if [ "$(uname -m)" = "x86_64" ]; then \
+        dpkg -i /root/libssl1.1_1.1.1f-1ubuntu2_amd64.deb; \
+    elif [ "$(uname -m)" = "aarch64" ]; then \
+        dpkg -i /root/libssl1.1_1.1.1f-1ubuntu2_arm64.deb; \
+    fi
+
+# Setup apt mirror site
+RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian bookworm main" > /etc/apt/sources.list && \
+    echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian-security bookworm-security main" >> /etc/apt/sources.list && \
+    echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian bookworm-updates main" >> /etc/apt/sources.list
+
 # 安装 OpenGL 依赖、Redis、vim 和 net-tools
 RUN --mount=type=cache,id=multirag_production_apt,target=/var/cache/apt,sharing=locked \
-    apt update && \
-    apt install -y --no-install-recommends \
-        libgl1-mesa-glx \
-        libdatrie-dev \
-        lsb-release \
-        default-jdk \
-        curl \
-        gpg \
-        vim \
-        net-tools \
-        less \
-        gcc \
-        build-essential \
-        libglib2.0-0  \
-        libglx-mesa0  \
-        pkg-config  \
-        libicu-dev  \
-        libasound2t64  \
-        libatk-bridge2.0-0  \
-        libgtk-4-1  \
-        libnss3  \
-        xdg-utils  \
-        unzip  \
-        libgbm-dev  \
-        wget \
-        git \
-        libgdiplus && \
+    apt update && apt install -y --no-install-recommends \
+    lsb-release \
+    curl \
+    gpg \
+    libgl1-mesa-glx \
+    libdatrie-dev \
+    default-jdk \
+    vim \
+    net-tools \
+    less \
+    gcc \
+    build-essential \
+    libglib2.0-0 \
+    libglx-mesa0 \
+    pkg-config \
+    libicu-dev \
+    libatk-bridge2.0-0 \
+    libgtk-4-1 \
+    libnss3 \
+    xdg-utils \
+    unzip \
+    libgbm-dev \
+    wget \
+    git \
+    libgdiplus && \
     # 添加 Redis 的 GPG 密钥和源
     curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
     chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg && \
@@ -66,16 +75,16 @@ RUN --mount=type=cache,id=multirag_production_apt,target=/var/cache/apt,sharing=
     apt update && \
     apt install -y --no-install-recommends redis && \
     # 清理 apt 缓存和安装包
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/keyrings/redis-archive-keyring.gpg && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/keyrings/redis-archive-keyring.gpg
 
 
 COPY ./requirements.txt ./
 
 # 安装 Python 依赖
-RUN pip install --no-cache-dir --upgrade pip datrie && \
-    pip install --no-cache-dir --upgrade -r requirements.txt -i https://pypi.doubanio.com/simple
+RUN pip install --no-cache-dir --upgrade pip datrie -i https://pypi.doubanio.com/simple && \
+    pip install --no-cache-dir --upgrade -r requirements.txt -i https://pypi.doubanio.com/simple && \
     pip install --no-cache-dir --upgrade transformers -i https://pypi.doubanio.com/simple && \
-    pip install --no-cache-dir  anthropic >= 0.39.0 fasttext >= 0.9.3
+    pip install --no-cache-dir "anthropic>=0.39.0" "fasttext>=0.9.3" -i https://pypi.doubanio.com/simple
 
 # 创建并添加 NLTK 数据
 RUN mkdir -p /root/nltk_data
