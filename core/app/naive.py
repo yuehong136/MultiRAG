@@ -253,9 +253,6 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         callback(0.1, "Start to parse.")
         binary = BytesIO(binary)
         doc_parsed = parser.from_buffer(binary)
-        sections = doc_parsed['content'].split('\n')
-        sections = [(_, "") for _ in sections if _]
-        callback(0.8, "Finish parsing.")
         if doc_parsed.get('content', None) is not None:
             sections = doc_parsed['content'].split('\n')
             sections = [(_, "") for _ in sections if _]
