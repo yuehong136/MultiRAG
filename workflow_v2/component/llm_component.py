@@ -1,36 +1,12 @@
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
-
-from alembic.command import history
-
+import copy
 from api.db import LLMType
-from api.db.services.llm_service import TenantLLMService, LLMBundle
+from api.db.services.llm_service import LLMBundle
 from workflow_v2.component.base_component import BaseComponent
-from workflow_v2.utils import parse_template
+from workflow_v2.utils import parse_template, match_parameters, dict_arrays_to_array_dicts
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
-
-
-@dataclass
-class BatchInputConfig:
-    """批处理输入配置"""
-    name: str
-    input_type: str
-    schema_type: str
-    source: str
-    block_id: str
-    ref_name: str
-
-    @classmethod
-    def from_input_config(cls, config: Dict[str, Any]) -> 'BatchInputConfig':
-        """从输入配置创建实例"""
-        return cls(
-            name=config.get('name'),
-            input_type=config.get('input', {}).get('type'),
-            schema_type=config.get('input', {}).get('schema', {}).get('type'),
-            source=config.get('input', {}).get('value', {}).get('content', {}).get('source'),
-            block_id=config.get('input', {}).get('value', {}).get('content', {}).get('blockID'),
-            ref_name=config.get('input', {}).get('value', {}).get('content', {}).get('name')
-        )
+from concurrent.futures import ThreadPoolExecutor
 
 
 @dataclass
@@ -39,7 +15,7 @@ class BatchConfig:
     batch_enable: bool = False
     batch_size: int = 100
     concurrent_size: int = 10
-    input_lists: List[BatchInputConfig] = None
+    input_lists: List[Dict[str, Any]] = None
 
     @classmethod
     def from_batch_config(cls, config: Dict[str, Any]) -> 'BatchConfig':
@@ -47,10 +23,9 @@ class BatchConfig:
         if not config:
             return cls()
 
-        input_lists = [
-            BatchInputConfig.from_input_config(input_config)
-            for input_config in config.get('inputLists', [])
-        ]
+        input_lists = config.get('inputLists', [])
+        if not isinstance(input_lists, list):
+            input_lists = [input_lists]
 
         return cls(
             batch_enable=config.get('batchEnable', False),
@@ -166,11 +141,46 @@ class LLMComponent(BaseComponent):
         self.logger.info(f"LLMComponent {self.title} execute")
         self.logger.info(f"LLMComponent {self.title} inputs: {self.inputs}")
         model = "ep-20241008085710-w9hk2"
-        api_key = TenantLLMService.get_api_key(self.db, self.user.id, model).api_key
 
         if self.batch_config.batch_enable:
+            input_value_dict_list = []
+
+            batch_param_list = dict_arrays_to_array_dicts(match_parameters(self.batch_config.input_lists, self.nodes))
+            for batch_param_value in batch_param_list:
+                temp_nodes = copy.deepcopy(self.nodes)
+                temp_node_output = temp_nodes.get(self.workflow_node.id).output
+                if temp_node_output:
+                    temp_nodes.get(self.workflow_node.id).output.update(batch_param_value)
+                else:
+                    temp_nodes.get(self.workflow_node.id).output = batch_param_value
+                result = match_parameters(self.workflow_node.input_schema, temp_nodes)
+                input_value_dict_list.append(result)
+
+            system_prompt_list = [parse_template(self.llm_params.system_prompt, item) for item in input_value_dict_list]
+            prompt_list = [parse_template(self.llm_params.prompt, item) for item in input_value_dict_list]
+
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                args_list = [
+                    (
+                        self.db,
+                        self.user.id,
+                        model,
+                        system_prompt_list[i],
+                        prompt_list[i],
+                        self.llm_params,
+                        input_value_dict_list[i]
+                    )
+                    for i in range(len(input_value_dict_list))
+                ]
+
+                # 使用 list 保持原始顺序
+                execute_info = list(executor.map(process_single_chat, args_list))
+
+                # 转换为目标格式，保持原始顺序
+                output_list = [{"output": item["output"]} for item in execute_info]
+
             # 批处理
-            pass
+            return {"outputList": output_list}
         else:
             actual_system_prompt = parse_template(self.llm_params.system_prompt, self.inputs)
             actual_prompt = parse_template(self.llm_params.prompt, self.inputs)
@@ -184,4 +194,20 @@ class LLMComponent(BaseComponent):
                                                "frequency_penalty": self.llm_params.frequency_penalty,
                                                })
             return {"output": response}
-        return {"output": "LLM response"}
+
+
+def process_single_chat(args):
+    db, user_id, model, system_prompt, prompt, llm_params, input_dict = args
+    chat_mdl = LLMBundle(db, user_id, LLMType.CHAT, model)
+    history = [{"role": "user", "content": prompt}]
+    response = chat_mdl.chat(
+        system=system_prompt,
+        history=history,
+        gen_conf={
+            "temperature": llm_params.temperature,
+            "top_p": llm_params.top_p,
+            "max_tokens": llm_params.max_tokens,
+            "frequency_penalty": llm_params.frequency_penalty,
+        }
+    )
+    return {"input": input_dict, "output": response}

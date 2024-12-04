@@ -1,84 +1,13 @@
 from datetime import datetime
 import asyncio
-
-from dataclasses import dataclass
-from enum import Enum
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, Optional
 
 from workflow_v2.component.component_manager import ComponentManager
 from workflow_v2.component.selector_component import Branch
+from workflow_v2.utils import match_parameters
 from workflow_v2.workflow_exceptions import WorkflowError, NodeTimeoutError, WorkflowValidationError
 from workflow_v2.workflow_logging_config import WorkflowLogger, WorkflowContextLogger, NodeLogger
 from workflow_v2.workflow_validator import WorkflowValidator, ValidationLevel
-
-
-class DataType(Enum):
-    STRING = "string"
-    INTEGER = "integer"
-    BOOLEAN = "boolean"
-    NUMBER = "number"
-    OBJECT = "object"
-    ARRAY = "list"
-
-    @classmethod
-    def from_str(cls, type_str: str) -> 'DataType':
-        """从字符串转换为DataType枚举"""
-        type_map = {t.value: t for t in cls}
-        if type_str not in type_map:
-            raise ValueError(f"Unknown data type: {type_str}")
-        return type_map[type_str]
-
-
-@dataclass
-class IOSchema:
-    """输入输出参数的schema定义"""
-    type: DataType
-    name: str
-    required: bool = True
-    description: str = ""
-    schema: Optional[Union[List[Dict], Dict]] = None  # 用于object和array类型
-
-
-class IOSchemaManager:
-    @staticmethod
-    def parse_input_schema(node_data: Dict[str, Any]) -> List[IOSchema]:
-        """从节点数据中解析输入schema"""
-        schemas = []
-        if 'data' in node_data and 'inputs' in node_data['data']:
-            input_params = node_data['data']['inputs'].get('inputParameters', [])
-            for param in input_params:
-                schema = IOSchema(
-                    type=DataType.from_str(param['input']['type']),
-                    name=param['name'],
-                    required=True,
-                    schema=param['input'].get('schema')
-                )
-                schemas.append(schema)
-        return schemas
-
-    @staticmethod
-    def parse_output_schema(node_data: Dict[str, Any]) -> List[IOSchema]:
-        """从节点数据中解析输出schema"""
-        schemas = []
-        if 'data' in node_data and 'outputs' in node_data['data']:
-            for output in node_data['data']['outputs']:
-                schema = IOSchema(
-                    type=DataType.from_str(output['type']),
-                    name=output['name'],
-                    required=output.get('required', True),
-                    description=output.get('description', ''),
-                    schema=output.get('schema')
-                )
-                schemas.append(schema)
-        return schemas
-
-    @staticmethod
-    def validate_input(input_schema: List[IOSchema], inputs: Dict[str, Any]) -> bool:
-        """验证输入参数是否符合schema定义"""
-        for schema in input_schema:
-            if schema.required and schema.name not in inputs:
-                raise ValueError(f"Required input {schema.name} not provided")
-        return True
 
 
 class WorkflowNode:
@@ -105,8 +34,8 @@ class WorkflowNode:
         self.execution_lock = asyncio.Lock()  # 新增：节点执行锁
 
         # IO Schema
-        self.input_schema = IOSchemaManager.parse_input_schema(node_data)
-        self.output_schema = IOSchemaManager.parse_output_schema(node_data)
+        self.input_schema = node_data.get('data', {}).get('inputs', {}).get('inputParameters', [])
+        self.output_schema = node_data.get('data', {}).get('outputs', [])
 
         # 分支相关属性
         self.branches: Dict[str, Branch] = {}  # port_id -> Branch
@@ -141,6 +70,9 @@ class AsyncWorkflowEngine:
         self.component_manager = ComponentManager(self.logger, **kwargs)
 
     def build_graph(self, nodes_data, edges_data):
+        self.logger.info(f"==================================")
+        self.logger.info(f"Workflow ID: {self.workflow_id}")
+        self.logger.info(f"Building workflow graph")
         # 创建所有节点
         for node_data in nodes_data:
             node = WorkflowNode(node_data['id'], node_data)
@@ -247,14 +179,12 @@ class AsyncWorkflowEngine:
 
                 # 2. 解析节点输入
                 resolved_inputs = await self._resolve_node_inputs(node)
-
                 # 3. 创建并执行组件
                 component = self.component_manager.create_component(node.data)
-                if node.is_selector:
-                    # 选择器组件是在内部获取实际值，所以需要将所有节点数据给它
-                    component.nodes = self.nodes
-                else:
-                    component.inputs = resolved_inputs
+                component.inputs = resolved_inputs
+                component.nodes = self.nodes
+                component.workflow_node = node
+
                 outputs = await component.execute()
                 node.output = outputs
 
@@ -285,34 +215,13 @@ class AsyncWorkflowEngine:
 
     async def _resolve_node_inputs(self, node: WorkflowNode) -> Dict[str, Any]:
         """解析节点的输入值"""
-        resolved_inputs = {}
-
         # 如果是开始节点，使用start_input_values
         if not node.previous_nodes:
             return self.start_input_values.copy()
 
         # 处理常规节点的输入
         input_params = node.data.get('data', {}).get('inputs', {}).get('inputParameters', [])
-        for param in input_params:
-            name = param['name']
-            value_def = param['input']['value']
-
-            if value_def['type'] == 'ref':
-                # 处理引用类型的输入
-                ref = value_def['content']
-                source_node = self.nodes[ref['blockID']]
-                if source_node.is_completed and source_node.output is not None:
-                    # 可以通过output_name来获取特定的输出字段
-                    output_name = ref.get('name')
-                    if output_name and output_name in source_node.output:
-                        resolved_inputs[name] = source_node.output[output_name]
-                    else:
-                        resolved_inputs[name] = source_node.output
-            else:
-                # 处理字面量类型的输入
-                resolved_inputs[name] = value_def['content']
-
-        return resolved_inputs
+        return match_parameters(input_params, self.nodes)
 
     async def cleanup(self):
         """清理工作流资源"""
@@ -354,7 +263,10 @@ async def run_workflow(workflow_data, start_input_values=None, **kwargs):
     # 获取结果
     end_node = next(node for node in engine.nodes.values()
                     if node.data['type'] == '2')
+
+    engine.logger.info(f"==================================")
     return end_node.output
+
 
 # 执行工作流
 if __name__ == "__main__":

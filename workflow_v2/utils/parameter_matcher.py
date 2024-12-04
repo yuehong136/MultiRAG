@@ -11,8 +11,10 @@ class ParameterMatcher:
     def _get_node_output(self, block_id: str) -> Dict:
         """获取指定节点的输出数据"""
         node = self.node_data.get(block_id)
-        if not node or not node.output:
+        if not node:
             raise KeyError(f"Cannot find output for node {block_id}")
+        if not node.output:
+            return {}
         return node.output
 
     def _resolve_ref_value(self, ref_content: Dict) -> Any:
@@ -25,6 +27,8 @@ class ParameterMatcher:
 
         # 处理嵌套属性路径
         node_output = self._get_node_output(block_id)
+        if not node_output:
+            return {}
         path_parts = name.split(".")
 
         def get_nested_value(data: Any, parts: List[str]) -> Any:
@@ -38,12 +42,11 @@ class ParameterMatcher:
                 if part in data:
                     return get_nested_value(data[part], remaining_parts)
             elif isinstance(data, list):
-                # 对于key_6这样的数组类型，我们取第一个元素的对应属性
-                if part.startswith("key_6"):
-                    if data and isinstance(data[0], dict):
-                        return get_nested_value(data[0], [part] + remaining_parts)
+                # 如果是数组类型，我们统一取第一个元素的对应属性
+                if data and isinstance(data[0], dict):
+                    return get_nested_value(data[0], [part] + remaining_parts)
 
-            raise KeyError(f"Cannot find path {name} in node {block_id}")
+            raise KeyError(f"Cannot find path {'.'.join(parts)}")
 
         return get_nested_value(node_output, path_parts)
 
@@ -102,13 +105,16 @@ class ParameterMatcher:
             except (KeyError, ValueError) as e:
                 raise ValueError(f"Error resolving value for parameter {name}: {str(e)}")
 
-            # 验证类型和模式
-            if not self._validate_type(value, input_def["type"]):
-                raise ValueError(f"Type mismatch for parameter {name}")
+            if not value:
+                continue
 
-            if "schema" in input_def:
-                if not self._validate_schema(value, input_def):
-                    raise ValueError(f"Schema validation failed for parameter {name}")
+            # # 验证类型和模式
+            # if not self._validate_type(value, input_def["type"]):
+            #     raise ValueError(f"Type mismatch for parameter {name}")
+            #
+            # if "schema" in input_def:
+            #     if not self._validate_schema(value, input_def):
+            #         raise ValueError(f"Schema validation failed for parameter {name}")
 
             self.matched_values[name] = value
 

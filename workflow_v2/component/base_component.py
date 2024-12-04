@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from workflow_v2.workflow_logging_config import WorkflowContextLogger, ComponentLogger
 
@@ -10,6 +10,8 @@ class BaseComponent(ABC):
         self.title = title
         self._inputs: Dict[str, Any] = {}
         self._outputs: Dict[str, Any] = {}
+        self._nodes: Dict[str, Any] = {}
+        self.workflow_node: 'WorkflowNode' = None
         self.logger = ComponentLogger(logger, self)
 
     @property
@@ -23,6 +25,14 @@ class BaseComponent(ABC):
     @property
     def outputs(self) -> Dict[str, Any]:
         return self._outputs
+
+    @property
+    def nodes(self) -> Dict[str, Any]:
+        return self._nodes
+
+    @nodes.setter
+    def nodes(self, values: Dict[str, Any]):
+        self._nodes = values
 
     @abstractmethod
     async def execute(self) -> Dict[str, Any]:
