@@ -4,6 +4,7 @@ from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.component.code_component import CodeComponent
 from workflow_v2.component.end_component import EndComponent
 from workflow_v2.component.llm_component import LLMComponent
+from workflow_v2.component.plugin_component import PluginComponent
 from workflow_v2.component.selector_component import SelectorComponent
 from workflow_v2.component.start_component import StartComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
@@ -27,6 +28,8 @@ class ComponentFactory:
             return LLMComponent(component_id, title, node_data, logger,
                                 db=kwargs.get('db', None),
                                 user=kwargs.get('user', None))
+        elif node_type == "4":
+            return PluginComponent(component_id, title, node_data, logger)
         elif node_type == "5":
             return CodeComponent(component_id, title, node_data, logger)
         elif node_type == "8":  # 选择器类型

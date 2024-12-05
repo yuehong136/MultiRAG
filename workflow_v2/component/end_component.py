@@ -15,4 +15,4 @@ class EndComponent(BaseComponent):
         self.content_template = node_data['data']['inputs'].get('content', {}).get('value', {}).get('content', '')
 
     async def execute(self) -> Dict[str, Any]:
-        return {"result": parse_template(self.content_template, self.inputs)}
+        return {"output": parse_template(self.content_template, self.inputs)}
