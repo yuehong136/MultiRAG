@@ -45,6 +45,8 @@ class AddLLMRequest(BaseModel):
     bedrock_ak: str | None = None
     bedrock_sk: str | None = None
     bedrock_region: str | None = None
+    fish_audio_ak: str | None = None
+    fish_audio_refid: str | None = None
 
 
 class DeleteLLMRequest(BaseModel):
