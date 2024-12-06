@@ -156,6 +156,8 @@ class LLMComponent(BaseComponent):
                 result = match_parameters(self.workflow_node.input_schema, temp_nodes)
                 input_value_dict_list.append(result)
 
+            self.workflow_node.input = input_value_dict_list
+
             system_prompt_list = [parse_template(self.llm_params.system_prompt, item) for item in input_value_dict_list]
             prompt_list = [parse_template(self.llm_params.prompt, item) for item in input_value_dict_list]
 

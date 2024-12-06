@@ -182,6 +182,7 @@ class AsyncWorkflowEngine:
                 # 3. 创建并执行组件
                 component = self.component_manager.create_component(node.data)
                 component.inputs = resolved_inputs
+                node.input = resolved_inputs
                 component.nodes = self.nodes
                 component.workflow_node = node
 
@@ -260,12 +261,14 @@ async def run_workflow(workflow_data, start_input_values=None, **kwargs):
     finally:
         await engine.cleanup()
 
+    nodes_io = {k: {'input': getattr(v, 'input'), 'output': getattr(v, 'output')} for k, v in engine.nodes.items()}
+
     # 获取结果
     end_node = next(node for node in engine.nodes.values()
                     if node.data['type'] == '2')
 
     engine.logger.info(f"==================================")
-    return end_node.output
+    return {"nodes_io": nodes_io, "end_node_output": end_node.output}
 
 
 # 执行工作流
