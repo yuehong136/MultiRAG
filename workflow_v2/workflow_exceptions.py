@@ -24,6 +24,7 @@ class WorkflowError(Exception):
                  node_id: Optional[str] = None,
                  node_title: Optional[str] = None,
                  details: Optional[Dict[str, Any]] = None):
+        self.message = message
         self.error_code = error_code
         self.node_id = node_id
         self.node_title = node_title
@@ -41,7 +42,7 @@ class NodeError(WorkflowError):
                  error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR,
                  details: Optional[Dict[str, Any]] = None):
         super().__init__(
-            message=f"Node {node_id}: {message}",
+            message=message,
             error_code=error_code,
             node_id=node_id,
             node_title=node_title,
@@ -56,7 +57,7 @@ class NodeExecutionError(NodeError):
         super().__init__(
             node_id=node_id,
             node_title=node_title,
-            message=f"execution failed: {message}",
+            message=f"node: {node_id} {node_title} execution failed: {message}",
             error_code=ErrorCode.UNKNOWN_ERROR,
             details=details
         )

@@ -9,6 +9,7 @@ from workflow_v2.workflow import run_workflow
 from sqlalchemy.orm import Session
 from api.db.database import get_db
 from api.apps import manager
+from workflow_v2.workflow_exceptions import NodeExecutionError
 
 router = APIRouter()
 
@@ -61,7 +62,7 @@ async def run(
         result = await run_workflow(
             workflow_data,
             start_input_values=input_values,
-            db=db,  # 添加下划线前缀以避免可能的命名冲突
+            db=db,
             user=user
         )
         return result
@@ -71,8 +72,10 @@ async def run(
             status_code=400,
             detail=f"Invalid JSON format: {str(e)}"
         )
+    except NodeExecutionError as e:
+        raise e
     except Exception as e:
         raise HTTPException(
-            status_code=400,
+            status_code=500,
             detail=f"Error processing request: {str(e)}"
         )

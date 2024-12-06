@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 from workflow_v2.component.component_manager import ComponentManager
 from workflow_v2.component.selector_component import Branch
 from workflow_v2.utils import match_parameters
-from workflow_v2.workflow_exceptions import WorkflowError, NodeTimeoutError, WorkflowValidationError
+from workflow_v2.workflow_exceptions import WorkflowError, NodeTimeoutError, WorkflowValidationError, NodeExecutionError
 from workflow_v2.workflow_logging_config import WorkflowLogger, WorkflowContextLogger, NodeLogger
 from workflow_v2.workflow_validator import WorkflowValidator, ValidationLevel
 
@@ -159,7 +159,7 @@ class AsyncWorkflowEngine:
 
         except Exception as e:
             node_logger.error(f"Node execution failed: {str(e)}", exc_info=True)
-            raise
+            raise NodeExecutionError(node_id=node.id, node_title=node.title, message=str(e))
 
     async def _process_node(self, node: WorkflowNode) -> None:
         node_logger = NodeLogger(self.logger, node)
