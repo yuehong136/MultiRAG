@@ -109,6 +109,13 @@ def init_settings():
                 "image2text_model": "",
                 "asr_model": "",
                 "rerank_model": "BAAI/bge-reranker-v2-m3",
+            },
+            "Youdao": {
+                "chat_model": "",
+                "embedding_model": "maidalun/bce-embedding-base_v1",
+                "image2text_model": "",
+                "asr_model": "",
+                "rerank_model": "maidalun/bce-reranker-base_v1",
             }
         }
 
@@ -116,8 +123,8 @@ def init_settings():
             CHAT_MDL = default_llm[LLM_FACTORY]["chat_model"] + f"@{LLM_FACTORY}"
             ASR_MDL = default_llm[LLM_FACTORY]["asr_model"] + f"@{LLM_FACTORY}"
             IMAGE2TEXT_MDL = default_llm[LLM_FACTORY]["image2text_model"] + f"@{LLM_FACTORY}"
-        EMBEDDING_MDL = default_llm["BAAI"]["embedding_model"] + "@BAAI"
-        RERANK_MDL = default_llm["BAAI"]["rerank_model"] + "@BAAI"
+        EMBEDDING_MDL = default_llm["Youdao"]["embedding_model"] + "@Youdao"
+        RERANK_MDL = default_llm["Youdao"]["rerank_model"] + "@Youdao"
 
     global API_KEY, PARSERS, HOST_IP, HOST_PORT, SECRET_KEY
     API_KEY = LLM.get("api_key", "")
