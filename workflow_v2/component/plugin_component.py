@@ -1,9 +1,39 @@
+import copy
 from typing import Dict, Any, List
 
 import requests
 
 from workflow_v2.component.base_component import BaseComponent
+from workflow_v2.utils import dict_arrays_to_array_dicts, match_parameters
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+
+
+@dataclass
+class BatchConfig:
+    """批处理配置类"""
+    batch_enable: bool = False
+    batch_size: int = 100
+    concurrent_size: int = 10
+    input_lists: List[Dict[str, Any]] = None
+
+    @classmethod
+    def from_batch_config(cls, config: Dict[str, Any]) -> 'BatchConfig':
+        """从批处理配置创建实例"""
+        if not config:
+            return cls()
+
+        input_lists = config.get('inputLists', [])
+        if not isinstance(input_lists, list):
+            input_lists = [input_lists]
+
+        return cls(
+            batch_enable=config.get('batchEnable', False),
+            batch_size=config.get('batchSize', 100),
+            concurrent_size=config.get('concurrentSize', 10),
+            input_lists=input_lists
+        )
 
 
 class PluginComponent(BaseComponent):
@@ -11,15 +41,65 @@ class PluginComponent(BaseComponent):
 
     def __init__(self, component_id: str, title: str, node_data: Dict[str, Any], logger: WorkflowContextLogger):
         super().__init__(component_id, title, logger)
+        self.batch_config: BatchConfig = self._extract_batch_config(node_data)
         self.plugin_info = node_data['data']['inputs'].get('pluginInfo', {})
         self.output_definition = node_data['data']['outputs']
         self.timeout = 30  # 默认超时时间
 
+    def _extract_batch_config(self, node_data: Dict[str, Any]) -> BatchConfig:
+        """从节点数据中提取批处理配置"""
+        batch_data = node_data['data']['inputs'].get('batch', {})
+        return BatchConfig.from_batch_config(batch_data)
+
     async def execute(self) -> Dict[str, Any]:
-        code_execute_resp = self.run_plugin_script(self.plugin_info.get('script', ''), self.inputs,
-                                                   self.plugin_info.get('pluginId', ''))
-        original_outputs = code_execute_resp.get("data")
-        return self.parse_output(self.output_definition, original_outputs)
+        if self.batch_config.batch_enable:
+            input_value_dict_list = []
+
+            batch_param_list = dict_arrays_to_array_dicts(match_parameters(self.batch_config.input_lists, self.nodes))
+            for batch_param_value in batch_param_list:
+                temp_nodes = copy.deepcopy(self.nodes)
+                temp_node_output = temp_nodes.get(self.workflow_node.id).output
+                if temp_node_output:
+                    temp_nodes.get(self.workflow_node.id).output.update(batch_param_value)
+                else:
+                    temp_nodes.get(self.workflow_node.id).output = batch_param_value
+                result = match_parameters(self.workflow_node.input_schema, temp_nodes)
+                input_value_dict_list.append(result)
+
+            self.workflow_node.input = input_value_dict_list
+
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                def execute_single_plugin(input_value: Dict[str, Any]) -> Dict[str, Any]:
+                    code_execute_resp = self.run_plugin_script(
+                        self.plugin_info.get('script', ''),
+                        input_value,
+                        self.plugin_info.get('pluginId', '')
+                    )
+                    if code_execute_resp.get('status') != 'success':
+                        self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                        raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+
+                    # 对于批量执行，我们需要解析单个输出的结构
+                    # 从 output_definition 中获取实际的单个输出的 schema
+                    list_schema = next((item for item in self.output_definition if item['name'] == 'outputList'), None)
+                    if list_schema and list_schema.get('type') == 'list':
+                        single_output_schema = list_schema.get('schema', {}).get('schema', [])
+                        return self.parse_output(single_output_schema, code_execute_resp.get("data"))
+                    return {}
+
+                # 使用 list 保持原始顺序
+                parsed_outputs = list(executor.map(execute_single_plugin, input_value_dict_list))
+
+            # 返回正确的输出格式
+            return {"outputList": parsed_outputs}
+        else:
+            code_execute_resp = self.run_plugin_script(self.plugin_info.get('script', ''), self.inputs,
+                                                       self.plugin_info.get('pluginId', ''))
+            if code_execute_resp.get('status') != 'success':
+                self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+            original_outputs = code_execute_resp.get("data")
+            return self.parse_output(self.output_definition, original_outputs)
 
     def run_plugin_script(self, script: str, args: Dict[str, Any], plugin_id: str,
                           base_url: str = "http://localhost:8124") -> Dict:
