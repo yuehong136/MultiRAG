@@ -369,13 +369,13 @@
             "status": "1",
             "llm": [
                 {
-                    "llm_name": "maidalun1020/bce-embedding-base_v1",
+                    "llm_name": "maidalun/bce-embedding-base_v1",
                     "tags": "TEXT EMBEDDING,",
                     "max_tokens": 512,
                     "mdl_type": "embedding"
                 },
                 {
-                    "llm_name": "maidalun1020/bce-reranker-base_v1",
+                    "llm_name": "maidalun/bce-reranker-base_v1",
                     "tags": "RE-RANK, 512",
                     "max_tokens": 512,
                     "mdl_type": "rerank"
