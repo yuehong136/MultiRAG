@@ -15,6 +15,7 @@ from core.llm.cv_model.models.azuregptv4 import AzureGptV4
 from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
+from core.llm.embedding_model.default_embedding import DefaultEmbedding
 from core.llm.embedding_model.huggingface_embed import HuggingFaceEmbed
 from core.llm.embedding_model.openai_embed import OpenAIEmbed
 from core.llm.embedding_model.qwen_embed import QWenEmbed
@@ -51,7 +52,7 @@ EmbeddingModel = {
     "Youdao": YoudaoEmbed,
     # "BaiChuan": BaiChuanEmbed,
     # "Jina": JinaEmbed,
-    # "BAAI": DefaultEmbedding,
+    "BAAI": DefaultEmbedding,
     # "Mistral": MistralEmbed,
     "VolcEngine": VolcEngineEmbed,
     "HuggingFace": HuggingFaceEmbed
