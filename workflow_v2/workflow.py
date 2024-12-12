@@ -43,6 +43,10 @@ class WorkflowNode:
 
         self.in_execution_path = False
 
+        # 添加执行时间属性
+        self.execution_start_time: Optional[float] = None
+        self.execution_end_time: Optional[float] = None
+
     def add_branch_node(self, node: 'WorkflowNode', port_id: str):
         """添加分支节点"""
         if port_id not in self.branches:
@@ -68,6 +72,9 @@ class AsyncWorkflowEngine:
         workflow_logger = WorkflowLogger()
         self.logger = WorkflowContextLogger(self.workflow_id, workflow_logger.logger)
         self.component_manager = ComponentManager(self.logger, **kwargs)
+
+        # 添加节点执行时间记录字典
+        self.node_execution_times = {}
 
     def build_graph(self, nodes_data, edges_data):
         self.logger.info(f"==================================")
@@ -166,20 +173,16 @@ class AsyncWorkflowEngine:
         node_logger.info(f"Start processing node: 【{node.title}】")
 
         try:
-            # 添加超时控制
+            # 记录开始时间
+            node.execution_start_time = datetime.now().timestamp()
+
             async with asyncio.timeout(node.timeout):
-                # 1. 等待在执行路径上的前置节点完成
                 if node.previous_nodes:
                     active_prev_nodes = [n for n in node.previous_nodes if n.in_execution_path]
-                    for prev_node in active_prev_nodes:
-                        if prev_node.id not in self.tasks:
-                            raise Exception(f"Previous node {prev_node.id} task not found")
-                    if active_prev_nodes:  # 只有存在需要等待的节点时才执行 gather
+                    if active_prev_nodes:
                         await asyncio.gather(*[self.tasks[n.id] for n in active_prev_nodes])
 
-                # 2. 解析节点输入
                 resolved_inputs = await self._resolve_node_inputs(node)
-                # 3. 创建并执行组件
                 component = self.component_manager.create_component(node.data)
                 component.inputs = resolved_inputs
                 node.input = resolved_inputs
@@ -189,7 +192,6 @@ class AsyncWorkflowEngine:
                 outputs = await component.execute()
                 node.output = outputs
 
-                # 4. 标记节点完成
                 node.is_completed = True
                 node_logger.info(f"Node 【{node.title}】 completed")
 
@@ -212,6 +214,10 @@ class AsyncWorkflowEngine:
             node_logger.error(f"Node processing failed: {str(e)}", exc_info=True)
             raise
         finally:
+            # 记录结束时间并计算执行时长
+            node.execution_end_time = datetime.now().timestamp()
+            execution_time = node.execution_end_time - node.execution_start_time
+            self.node_execution_times[node.id] = round(execution_time, 3)
             node.is_executing = False
 
     async def _resolve_node_inputs(self, node: WorkflowNode) -> Dict[str, Any]:
@@ -250,7 +256,6 @@ async def run_workflow(workflow_data, start_input_values=None, **kwargs):
     validation_issues = WorkflowValidator(workflow_data['nodes'], workflow_data['edges']).validate_all()
     if len(validation_issues) > 0:
         issue_str = "\n".join([issue.format_message() for issue in validation_issues])
-        # 打印所有验证问题
         for issue in validation_issues:
             engine.logger.error(f"{issue.format_message()}")
         raise WorkflowValidationError(message=f"工作流构建失败, 请检查验证问题: {issue_str}")
@@ -268,7 +273,13 @@ async def run_workflow(workflow_data, start_input_values=None, **kwargs):
                     if node.data['type'] == '2')
 
     engine.logger.info(f"==================================")
-    return {"nodes_io": nodes_io, "end_node_output": end_node.output}
+
+    # 返回结果时包含节点执行时间
+    return {
+        "nodes_io": nodes_io,
+        "end_node_output": end_node.output,
+        "node_execution_times": engine.node_execution_times
+    }
 
 
 # 执行工作流
