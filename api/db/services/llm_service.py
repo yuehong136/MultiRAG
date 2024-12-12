@@ -34,7 +34,6 @@ class TenantLLMService(CommonService):
         else:
             objs = cls.query(db, tenant_id=tenant_id, llm_name=arr[0], llm_factory=arr[1])
         if not objs:
-            print("Debug: No API key found")
             return None
         logging.info(f"Debug: Found API key: {objs[0].api_key}")
         return objs[0]
