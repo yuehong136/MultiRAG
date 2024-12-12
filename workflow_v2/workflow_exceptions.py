@@ -118,12 +118,9 @@ class LLMServiceError(NodeError):
 class WorkflowValidationError(WorkflowError):
     """工作流验证异常"""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(
-            message=f"Workflow validation failed: {message}",
-            error_code=ErrorCode.VALIDATION_ERROR,
-            details=details
-        )
+    def __init__(self, message: str):
+        self.status = "error"
+        self.message = message
 
 
 class CyclicDependencyError(WorkflowError):

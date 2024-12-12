@@ -25,7 +25,7 @@ from api.db.services import UserService
 from api import settings
 from errors.exceptions import AITranslateException
 from api.constants import API_VERSION
-from workflow_v2.workflow_exceptions import NodeExecutionError
+from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 
 description = """
 Multi-RAG API helps you do awesome stuff. 🚀
@@ -149,6 +149,17 @@ async def node_execution_error_handler(request: Request, exc: NodeExecutionError
         status_code=500,
         content={"status": "error",
                  "message": exc.message}
+    )
+
+
+@app.exception_handler(WorkflowValidationError)
+async def workflow_validation_error_handler(request: Request, exc: WorkflowValidationError):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "message": exc.message,
+        }
     )
 
 

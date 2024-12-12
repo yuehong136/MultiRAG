@@ -9,7 +9,7 @@ from workflow_v2.workflow import run_workflow
 from sqlalchemy.orm import Session
 from api.db.database import get_db
 from api.apps import manager
-from workflow_v2.workflow_exceptions import NodeExecutionError
+from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 
 router = APIRouter()
 
@@ -73,6 +73,8 @@ async def run(
             detail=f"Invalid JSON format: {str(e)}"
         )
     except NodeExecutionError as e:
+        raise e
+    except WorkflowValidationError as e:
         raise e
     except Exception as e:
         raise HTTPException(

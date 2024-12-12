@@ -7,7 +7,7 @@ from workflow_v2.component.selector_component import Branch
 from workflow_v2.utils import match_parameters
 from workflow_v2.workflow_exceptions import WorkflowError, NodeTimeoutError, WorkflowValidationError, NodeExecutionError
 from workflow_v2.workflow_logging_config import WorkflowLogger, WorkflowContextLogger, NodeLogger
-from workflow_v2.workflow_validator import WorkflowValidator, ValidationLevel
+from workflow_v2.workflow_validator import WorkflowValidator
 
 
 class WorkflowNode:
@@ -248,12 +248,12 @@ async def run_workflow(workflow_data, start_input_values=None, **kwargs):
 
     # 先进行验证
     validation_issues = WorkflowValidator(workflow_data['nodes'], workflow_data['edges']).validate_all()
-    if any((issue.level == ValidationLevel.ERROR) or (issue.level == ValidationLevel.WARNING) for issue in
-           validation_issues):
+    if len(validation_issues) > 0:
+        issue_str = "\n".join([issue.format_message() for issue in validation_issues])
         # 打印所有验证问题
         for issue in validation_issues:
-            engine.logger.error(f"{issue.level.value.upper()}: {issue.format_message()}")
-        raise WorkflowValidationError(message="Workflow validation failed", details={"error_list": validation_issues})
+            engine.logger.error(f"{issue.format_message()}")
+        raise WorkflowValidationError(message=f"工作流构建失败, 请检查验证问题: {issue_str}")
 
     engine.build_graph(workflow_data['nodes'], workflow_data['edges'])
     try:
