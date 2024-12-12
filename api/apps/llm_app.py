@@ -81,7 +81,7 @@ class SuggestionRequest(BaseModel):
     llm_name: str  # 模型名称
     last_response: str  # 模型的最后一轮回复
     messages: list[dict]  # 当前对话上下文
-    gen_conf: dict[str, Any] = Field({}) # 大模型的配置信息
+    gen_conf: dict[str, Any] = None # 大模型的配置信息
     num: int = Field(3)  # 返回建议的条数
 
 
