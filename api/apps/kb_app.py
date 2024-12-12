@@ -29,6 +29,7 @@ from api.apps import manager
 from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.nlp import search
 from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
+from core.utils.storage_factory import STORAGE_IMPL
 
 router = APIRouter()
 
@@ -134,10 +135,10 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
 @router.get('/detail', summary="获取知识库详情", response_description="成功获取知识库详情")
 def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
-        tenants = UserTenantService.query(user_id=user.id)
+        tenants = UserTenantService.query(db, user_id=user.id)
         for tenant in tenants:
             if KnowledgebaseService.query(
-                    tenant_id=tenant.tenant_id, id=kb_id):
+                    db, tenant_id=tenant.tenant_id, id=kb_id):
                 break
         else:
             return get_json_result(
@@ -194,24 +195,41 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
                 data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
                 retcode=settings.RetCode.OPERATING_ERROR)
 
+        # 提前保存知识库名称，避免访问被删除对象
+        kb_name = kbs[0].name
+        kb_id = kbs[0].id
+
         # 遍历知识库中的所有文档，进行删除
         for doc in DocumentService.query(db, kb_id=req_data["kb_id"]):
+            doc_id = doc.id  # 提前保存文档 ID，避免后续访问被删除的对象
+
+            b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
+
             # 删除文档，如果失败则返回错误信息
             if not DocumentService.remove_document(db, doc, kbs[0].tenant_id):
                 return get_data_error_result(retmsg="Database error (Document removal)!")
+
             # 查询与文档关联的文件，并删除这些文件
-            f2d = File2DocumentService.get_by_document_id(db, doc.id)
-            FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
-            # 删除文档与文件的关联
-            File2DocumentService.delete_by_document_id(db, doc.id)
+            f2d = File2DocumentService.get_by_document_id(db, doc_id)
+            FileService.filter_delete(
+                db,
+                [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id]
+            )
+            # 删除文档与文件的关联记录
+            File2DocumentService.delete_by_document_id(db, doc_id)
+            STORAGE_IMPL.rm(b, n)
         FileService.filter_delete(
-            db, [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kbs[0].name])
+            db, [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kb_name])
+
+        # 删除 MinIO 存储桶
+        STORAGE_IMPL.delete_bucket(kb_id)
+
         # 删除知识库本身，如果失败则返回错误信息
         if not KnowledgebaseService.delete_by_id(db, req_data["kb_id"]):
             return get_data_error_result(retmsg="Database error (Knowledgebase removal)!")
         tenants = UserTenantService.query(db, user_id=user.id)
         for tenant in tenants:
-            MILVUS_CONNECTION.deleteIdx(search.index_name(tenant.tenant_id, [kbs[0].name]), req_data["kb_id"])
+            MILVUS_CONNECTION.deleteIdx(search.index_name_one(tenant.tenant_id, kb_name), req_data["kb_id"])
         # 知识库删除成功，返回成功标志
         return get_json_result(data=True)
     except Exception as e:

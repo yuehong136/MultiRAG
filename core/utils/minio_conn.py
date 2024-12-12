@@ -109,6 +109,24 @@ class MultiRAGMinio(object):
                 time.sleep(1)
         return
 
+    def delete_bucket(self, bucket):
+        """
+        Deletes a bucket from MinIO.
+
+        :param bucket: Name of the bucket to delete.
+        """
+        try:
+            if self.conn.bucket_exists(bucket):
+                # Ensure the bucket is empty before deleting
+                objects = self.conn.list_objects(bucket, recursive=True)
+                for obj in objects:
+                    self.conn.remove_object(bucket, obj.object_name)
+                self.conn.remove_bucket(bucket)
+                logging.info(f"Bucket {bucket} successfully deleted.")
+            else:
+                logging.warning(f"Bucket {bucket} does not exist.")
+        except Exception:
+            logging.exception(f"Failed to delete bucket {bucket}.")
 
 MINIO = MultiRAGMinio()
 
