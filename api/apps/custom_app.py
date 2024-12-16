@@ -79,7 +79,7 @@ async def process_docx(file: UploadFile = File(...)):
 2. **读取文档内容**: 使用 `python-docx` 读取上传文档中的表格内容。
 3. **占位符处理**:
     - 判断和包装符合 `{{key}}` 格式的占位符。
-    - 标准化占位符键名（仅保留中文字符和下划线）。
+    - 标准化占位符键名（仅保留中文字符、数字和下划线）。
     - 填充表格内容：根据规则右填充和下填充缺失内容。
     - 为下填充的占位符添加序号后缀。
 4. **文档内容更新**: 将处理后的占位符填充回文档的对应表格。
@@ -115,7 +115,8 @@ async def process_docx(file: UploadFile = File(...)):
 
     # 工具方法：标准化占位符键名
     def normalize_placeholder_key(key: str) -> str:
-        return re.sub(r'[^\u4e00-\u9fa5_]', '', key)
+        # 保留中文字符、数字和下划线
+        return re.sub(r'[^\u4e00-\u9fa5_\d]', '', key)
 
     # 工具方法：标准化所有占位符
     def normalize_all_placeholders(matrix):
@@ -135,8 +136,22 @@ async def process_docx(file: UploadFile = File(...)):
                     matrix[r][c] = f"{{{{{new_key}}}}}"
         return matrix, key_map
 
-    # 工具方法：填充表格（右填充 + 下填充）
-    def fill_table(matrix):
+    # 工具方法：判断单元格是否为合并单元格
+    def is_merged_cell(cell):
+        tc = cell._element
+        vmerge = tc.xpath(".//w:vMerge")
+        return vmerge and vmerge[0].get(
+            "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") != "restart"
+
+    # 工具方法：判断单元格是否为下合并单元格的开始
+    def is_start_of_down_merge(cell):
+        tc = cell._element
+        vmerge = tc.xpath(".//w:vMerge")
+        return vmerge and vmerge[0].get(
+            "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") == "restart"
+
+    # 工具方法：填充表格（右填充 + 下填充，检测合并单元格）
+    def fill_table(matrix, table):
         rows = len(matrix)
         if rows == 0:
             return matrix, set()
@@ -148,17 +163,28 @@ async def process_docx(file: UploadFile = File(...)):
         # 第一阶段：右填充
         for r in range(rows):
             for c in range(1, cols):
-                if not matrix[r][c].strip() and matrix[r][c - 1].strip():
-                    left_value = wrap_placeholder(matrix[r][c - 1])
-                    matrix[r][c] = left_value
-                    right_filled_cells.add((r, c))
+                if not matrix[r][c].strip():
+                    left_cell = table.rows[r].cells[c - 1]
+                    current_cell = table.rows[r].cells[c]
 
-        # 第二阶段：下填充
-        for r in range(1, rows):
-            for c in range(cols):
-                if (r, c) not in right_filled_cells and not matrix[r][c].strip() and matrix[r - 1][c].strip():
-                    top_value = wrap_placeholder(matrix[r - 1][c])
-                    matrix[r][c] = top_value
+                    # 如果左侧单元格为下合并的起始单元格，则跳过当前单元格的右填充
+                    if is_start_of_down_merge(left_cell) or is_merged_cell(current_cell):
+                        continue
+
+                    if matrix[r][c - 1].strip():
+                        left_value = wrap_placeholder(matrix[r][c - 1])
+                        matrix[r][c] = left_value
+                        right_filled_cells.add((r, c))
+
+        # 第二阶段：下填充（连续传播填充逻辑）
+        for c in range(cols):  # 遍历每一列
+            for r in range(1, rows):  # 从第二行开始
+                current_cell = table.rows[r].cells[c]
+                top_cell = table.rows[r - 1].cells[c]
+
+                # 如果当前单元格为空，且不是合并单元格，并且上方单元格有内容
+                if not matrix[r][c].strip() and not is_merged_cell(current_cell) and matrix[r - 1][c].strip():
+                    matrix[r][c] = wrap_placeholder(matrix[r - 1][c])
                     down_filled_cells.add((r, c))
 
         return matrix, down_filled_cells
@@ -196,22 +222,52 @@ async def process_docx(file: UploadFile = File(...)):
     all_tables_result = []
     all_down_filled_cells = []
 
+    # 遍历输入文档中的所有表格，提取其内容到一个三维列表中
     for table in input_doc.tables:
+        # 使用列表推导式，将表格的每个单元格的文本内容去空格后，按行存储到二维列表中
+        original_matrix = [[cell.text.strip() for cell in row.cells] for row in table.rows]
+        # 将提取的表格内容添加到所有表格的原始内容列表中
+        all_tables_original.append(original_matrix)
+
+    # 遍历所有原始表格内容，进行处理
+    for idx, table in enumerate(input_doc.tables):
+        # 提取当前表格的原始矩阵
+        original_matrix = all_tables_original[idx]
+
+        # 深拷贝原始矩阵以避免修改原始数据
+        result_matrix = [row[:] for row in original_matrix]
+
+        # 调用 fill_table，传入 result_matrix 和当前的表格对象 table
+        filled_matrix, down_filled_cells = fill_table(result_matrix, table)
+
+        # 将填充后的矩阵添加到所有表格的处理结果列表中
+        all_tables_result.append(filled_matrix)
+
+        # 将向下填充的单元格列表添加到所有向下填充单元格的列表中
+        all_down_filled_cells.append(down_filled_cells)
+
+    # 遍历所有原始表格内容，进行处理
+    for idx, table in enumerate(input_doc.tables):
+        # 提取表格内容为矩阵
         original_matrix = [[cell.text.strip() for cell in row.cells] for row in table.rows]
         all_tables_original.append(original_matrix)
 
-    for original_matrix in all_tables_original:
-        result_matrix = [row[:] for row in original_matrix]
-        filled_matrix, down_filled_cells = fill_table(result_matrix)
-        all_tables_result.append(filled_matrix)
+        # 调用 fill_table 并传入当前表格对象
+        result_matrix, down_filled_cells = fill_table(original_matrix, table)
+        all_tables_result.append(result_matrix)
         all_down_filled_cells.append(down_filled_cells)
 
-    for idx, table_matrix in enumerate(all_tables_result):
-        new_matrix, key_map = normalize_all_placeholders(table_matrix)
-        all_tables_result[idx] = new_matrix
-
+    # 遍历所有表格结果和向下填充的单元格，按列添加序列后缀
     for idx, (table_matrix, down_filled_cells) in enumerate(zip(all_tables_result, all_down_filled_cells)):
+        # 使用add_sequential_suffixes_by_column函数按列添加序列后缀，更新表格结果
         all_tables_result[idx] = add_sequential_suffixes_by_column(table_matrix, down_filled_cells)
+
+    # 遍历所有处理后的表格结果，进行占位符规范化处理
+    for idx, table_matrix in enumerate(all_tables_result):
+        # 使用 normalize_all_placeholders 函数规范化占位符，获取新矩阵和占位符映射
+        new_matrix, key_map = normalize_all_placeholders(table_matrix)
+        # 更新规范化后的矩阵
+        all_tables_result[idx] = new_matrix
 
     # Step 3: 填充文档内容
     for t_idx, table in enumerate(input_doc.tables):
