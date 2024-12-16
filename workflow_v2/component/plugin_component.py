@@ -1,10 +1,10 @@
 import copy
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import requests
 
 from workflow_v2.component.base_component import BaseComponent
-from workflow_v2.utils import dict_arrays_to_array_dicts, match_parameters
+from workflow_v2.utils import dict_arrays_to_array_dicts, match_parameters, map_schema_with_values
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
@@ -95,6 +95,61 @@ class PluginComponent(BaseComponent):
         else:
             code_execute_resp = self.run_plugin_script(self.plugin_info.get('script', ''), self.inputs,
                                                        self.plugin_info.get('pluginId', ''))
+            if code_execute_resp.get('status') != 'success':
+                self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+            original_outputs = code_execute_resp.get("data")
+            return self.parse_output(self.output_definition, original_outputs)
+
+    async def execute_alone(self, input_value: dict, batch_value: Optional[dict] = None) -> dict:
+        """Execute plugin component in standalone mode
+
+        Args:
+            input_value: Input parameters for single execution
+            batch_value: Batch parameters for batch execution
+
+        Returns:
+            Dict containing execution results
+        """
+        self.logger.info(f"PluginComponent {self.title} execute")
+        self.logger.info(f"PluginComponent {self.title} inputs: {input_value}")
+
+        if self.batch_config.batch_enable:
+            # 使用辅助函数生成批量输入参数列表
+            input_value_dict_list = map_schema_with_values(self.workflow_node.input_schema, input_value, batch_value)
+            self.inputs = input_value_dict_list
+
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                def execute_single_plugin(input_value: Dict[str, Any]) -> Dict[str, Any]:
+                    code_execute_resp = self.run_plugin_script(
+                        self.plugin_info.get('script', ''),
+                        input_value,
+                        self.plugin_info.get('pluginId', '')
+                    )
+                    if code_execute_resp.get('status') != 'success':
+                        self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                        raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+
+                    # 对于批量执行，我们需要解析单个输出的结构
+                    list_schema = next((item for item in self.output_definition if item['name'] == 'outputList'), None)
+                    if list_schema and list_schema.get('type') == 'list':
+                        single_output_schema = list_schema.get('schema', {}).get('schema', [])
+                        return self.parse_output(single_output_schema, code_execute_resp.get("data"))
+                    return {}
+
+                # 使用 list 保持原始顺序
+                parsed_outputs = list(executor.map(execute_single_plugin, input_value_dict_list))
+
+            # 返回正确的输出格式
+            return {"outputList": parsed_outputs}
+        else:
+            # 单次执行模式
+            self.inputs = input_value
+            code_execute_resp = self.run_plugin_script(
+                self.plugin_info.get('script', ''),
+                self.inputs,
+                self.plugin_info.get('pluginId', '')
+            )
             if code_execute_resp.get('status') != 'success':
                 self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
                 raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
