@@ -181,7 +181,7 @@ class Dealer:
         kwds = set([])
         for k in keywords:
             kwds.add(k)
-            for kk in rag_tokenizer.fine_grained_tokenize(k).split(" "):
+            for kk in rag_tokenizer.fine_grained_tokenize(k).split():
                 if len(kk) < 2:
                     continue
                 if kk in kwds:
@@ -227,7 +227,7 @@ class Dealer:
             txt = "...".join([a for a in list(hlts.items())[0][1]])
 
             # 判断文本是否为英文
-            if not is_english(txt.split(" ")):
+            if not is_english(txt.split()):
                 ans[entity.get("doc_id", "")] = txt
                 continue
 
@@ -299,7 +299,7 @@ class Dealer:
         assert len(ans_v[0]) == len(chunk_v[0]), "The dimension of query and chunk do not match: {} vs. {}".format(
             len(ans_v[0]), len(chunk_v[0]))
 
-        chunks_tks = [rag_tokenizer.tokenize(self.qryr.rmWWW(ck)).split(" ")
+        chunks_tks = [rag_tokenizer.tokenize(self.qryr.rmWWW(ck)).split()
                       for ck in chunks]
         cites = {}
         thr = 0.63
@@ -308,7 +308,7 @@ class Dealer:
                 sim, tksim, vtsim = self.qryr.hybrid_similarity(ans_v[i],
                                                                 chunk_v,
                                                                 rag_tokenizer.tokenize(
-                                                                    self.qryr.rmWWW(pieces_[i])).split(" "),
+                                                                    self.qryr.rmWWW(pieces_[i])).split(),
                                                                 chunks_tks,
                                                                 tkweight, vtweight)
                 mx = np.max(sim) * 0.99
@@ -352,8 +352,8 @@ class Dealer:
     #             sres.field[i]["important_kwd"] = [sres.field[i]["important_kwd"]]
     #     ins_tw = []
     #     for i in sres.ids:
-    #         content_ltks = sres.field[i][cfield].split(" ")
-    #         title_tks = [t for t in sres.field[i].get("title_tks", "").split(" ") if t]
+    #         content_ltks = sres.field[i][cfield].split()
+    #         title_tks = [t for t in sres.field[i].get("title_tks", "").split() if t]
     #         important_kwd = sres.field[i].get("important_kwd", [])
     #         tks = content_ltks + title_tks + important_kwd
     #         ins_tw.append(tks)
@@ -372,11 +372,11 @@ class Dealer:
 
         ins_tw = []
         # for i in sres.ids:
-        #     tks = sres.field[i].split(" ")
+        #     tks = sres.field[i].split()
         #     ins_tw.append(tks)
         for i in sres.ids:
-            content_ltks = sres.field[i][cfield].split(" ")
-            title_tks = [t for t in sres.field[i].get("title_tks", "").split(" ") if t]
+            content_ltks = sres.field[i][cfield].split()
+            title_tks = [t for t in sres.field[i].get("title_tks", "").split() if t]
             important_kwd = sres.field[i].get("important_kwd", [])
             tks = content_ltks + title_tks + important_kwd
             ins_tw.append(tks)
@@ -396,8 +396,8 @@ class Dealer:
                 sres.field[i]["important_kwd"] = [sres.field[i]["important_kwd"]]
         ins_tw = []
         for i in sres.ids:
-            content_ltks = sres.field[i][cfield].split(" ")
-            title_tks = [t for t in sres.field[i].get("title_tks", "").split(" ") if t]
+            content_ltks = sres.field[i][cfield].split()
+            title_tks = [t for t in sres.field[i].get("title_tks", "").split() if t]
             important_kwd = sres.field[i].get("important_kwd", [])
             tks = content_ltks + title_tks + important_kwd
             ins_tw.append(tks)
@@ -410,8 +410,8 @@ class Dealer:
     def hybrid_similarity(self, ans_embd, ins_embd, ans, inst):
         return self.qryr.hybrid_similarity(ans_embd,
                                            ins_embd,
-                                           rag_tokenizer.tokenize(ans).split(" "),
-                                           rag_tokenizer.tokenize(inst).split(" "))
+                                           rag_tokenizer.tokenize(ans).split(),
+                                           rag_tokenizer.tokenize(inst).split())
 
     def retrieval(self, question, filter_exp, embd_mdl, tenant_id, kb_names, page, page_size, similarity_threshold=0.2,
                   vector_similarity_weight=0.3, top=1024, doc_ids=None, aggs=True, rerank_mdl=None):

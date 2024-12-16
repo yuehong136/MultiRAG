@@ -8,6 +8,7 @@
 """
 import logging
 from uuid import uuid4
+from datetime import datetime
 
 import polars as pl
 from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
@@ -151,7 +152,8 @@ class MilvusConnection(DocStoreConnection):
 
     def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: str) -> bool:
         """
-        使用“删除 + 重新插入”来模拟更新操作。
+        使用“查询原始数据 + 删除 + 重新插入”来模拟更新操作。
+        自动更新时间字段 create_time 和 create_timestamp_flt。
 
         :param condition: 查询条件，指定要更新的记录
         :param newValue: 更新后的新数据
@@ -159,26 +161,52 @@ class MilvusConnection(DocStoreConnection):
         :param knowledgebaseId: 知识库ID
         :return: 操作是否成功
         """
-        if "id" not in condition:
-            raise ValueError("Update operation requires 'id' in condition")
+        if "pk" not in condition:
+            raise ValueError("Update operation requires 'pk' in condition")
 
-        collection_name = indexName
-        collection = self.get_collection(collection_name)
-        expr = f"id == {condition['id']}" if isinstance(condition["id"], int) else f"id in {condition['id']}"
-
-        # Step 1: Delete existing records
+        # Step 1: 获取集合连接
+        conn = self._get_connection()
         try:
-            delete_res = collection.delete(expr)
+            collection_info = conn.describe_collection(indexName)
+        except Exception as e:
+            logging.error(f"Failed to get collection: {indexName}. Error: {e}")
+            return False
+
+        # Step 2: 查询原始记录
+        try:
+            expr = f"pk == '{condition['pk']}'"
+            results = conn.query(indexName, expr=expr, output_fields=["*"])
+            if not results:
+                logging.error(f"No record found with pk: {condition['pk']}")
+                return False
+            original_data = results[0]  # 获取查到的第一条记录
+            logging.info(f"Original data fetched for update: {original_data}")
+        except Exception as e:
+            logging.error(f"Failed to fetch original record for update: {e}")
+            return False
+
+        # Step 3: 合并用户提供的数据与原始数据
+        merged_data = {**original_data, **newValue}  # 用新数据覆盖原始数据
+
+        # Step 4: 自动更新时间字段
+        current_time = datetime.now()
+        merged_data["create_time"] = current_time.strftime("%Y-%m-%d %H:%M:%S")
+        merged_data["create_timestamp_flt"] = current_time.timestamp()
+        logging.info(
+            f"Updated time fields: create_time={merged_data['create_time']}, create_timestamp_flt={merged_data['create_timestamp_flt']}")
+
+        # Step 5: 删除原始记录
+        try:
+            delete_res = conn.delete(indexName, expression=expr)
             logging.info(f"Deleted record with condition: {expr}")
-            collection.load()  # Ensure delete operation takes effect
         except Exception as e:
             logging.error(f"Failed to delete record(s) for update: {e}")
             return False
 
-        # Step 2: Insert updated records
+        # Step 6: 插入更新后的记录
         try:
-            insert_res = self.insert(collection_name, data=[newValue])
-            logging.info(f"Inserted updated record: {newValue}")
+            insert_res = self.insert(indexName, data=[merged_data])
+            logging.info(f"Inserted updated record: {merged_data}")
             return True
         except Exception as e:
             logging.error(f"Failed to insert updated record(s): {e}")

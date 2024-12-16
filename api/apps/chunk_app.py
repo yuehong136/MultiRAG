@@ -48,7 +48,8 @@ class SetChunkRequest(BaseModel):
     doc_id: str
     chunk_id: str
     content_with_weight: str
-    important_kwd: list[str]
+    important_kwd: list[str] = None
+    question_kwd: list[str] = None
     available_int: int | None = None
 
 
@@ -214,6 +215,23 @@ async def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depe
     - 成功时返回包含操作结果的JSON结果
     - 失败时返回错误信息
     """
+    d = {
+        "pk": request.chunk_id,
+        "content_with_weight": request.content_with_weight,
+        "content_ltks": rag_tokenizer.tokenize(request.content_with_weight),
+        "content_sm_ltks": rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(request.content_with_weight)),
+    }
+    important_kwd = request.important_kwd if request.important_kwd is not None else []
+    d["important_kwd"] = important_kwd
+    d["important_tks"] = rag_tokenizer.tokenize(" ".join(important_kwd)) if important_kwd else []
+
+    question_kwd = request.question_kwd if request.question_kwd is not None else []
+    d["question_kwd"] = question_kwd
+    d["question_tks"] = rag_tokenizer.tokenize("\n".join(question_kwd)) if question_kwd else []
+
+    if request.available_int is not None:
+        d["available_int"] = request.available_int
+
     try:
         tenant_id = DocumentService.get_tenant_id(db, request.doc_id)
         if not tenant_id:
@@ -225,17 +243,6 @@ async def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depe
         doc = DocumentService.get_by_id(db, request.doc_id)
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
-
-        d = {
-            "id": request.chunk_id,
-            "content_with_weight": request.content_with_weight,
-            "content_ltks": rag_tokenizer.tokenize(request.content_with_weight),
-            "content_sm_ltks": rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(request.content_with_weight)),
-            "important_kwd": request.important_kwd,
-            "important_tks": rag_tokenizer.tokenize(" ".join(request.important_kwd))
-        }
-        if request.available_int is not None:
-            d["available_int"] = request.available_int
 
         if doc.parser_id == ParserType.QA:
             arr = [
@@ -249,10 +256,16 @@ async def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depe
             d = beAdoc(d, arr[0], arr[1], not any(
                 [rag_tokenizer.is_chinese(t) for t in q + a]))
 
-        v, c = embd_mdl.encode([doc.name, request.content_with_weight])
+        # 计算向量
+        v, c = embd_mdl.encode([doc.name, request.content_with_weight if not d["question_kwd"] else "\n".join(d["question_kwd"])])
         v = 0.1 * v[0] + 0.9 * v[1] if doc.parser_id != ParserType.QA else v[1]
-        d["q_%d_vec" % len(v)] = v.tolist()
-        ELASTICSEARCH.upsert([d], search.index_name(tenant_id))
+        # todo 需要支持任意维度向量字段，目前写死vector
+        d["vector"] = v.tolist()
+
+        # 更新数据库
+        update_condition = {"pk": request.chunk_id}  # 主键查询条件
+        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        settings.docStoreConn.update(update_condition, d, search.index_name_one(tenant_id, kb.name), doc.kb_id)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)

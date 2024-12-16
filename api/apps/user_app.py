@@ -214,7 +214,7 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
     if res['code'] != 0:
         return HTTPException(status_code=400, detail=res["message"])
 
-    if "contact:user.email:readonly" not in res["data"]["scope"].split(" "):
+    if "contact:user.email:readonly" not in res["data"]["scope"].split():
         return HTTPException(status_code=400, detail="contact:user.email:readonly not in scope")
 
     userinfo = user_info_from_feishu(res["data"]["access_token"])

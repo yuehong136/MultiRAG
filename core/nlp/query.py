@@ -51,7 +51,7 @@ class MilvusQueryer:
 
         if not self.isChinese(txt):
             txt = MilvusQueryer.rmWWW(txt)
-            tks = rag_tokenizer.tokenize(txt).split(" ")
+            tks = rag_tokenizer.tokenize(txt).split()
             keywords = [t for t in tks if t]
             tks_w = self.tw.weights(tks, preprocess=False)
             tks_w = [(re.sub(r"[ \\\"'^]", "", tk), w) for tk, w in tks_w]
@@ -60,7 +60,7 @@ class MilvusQueryer:
             syns = []
             for tk, w in tks_w:
                 syn = self.syn.lookup(tk)
-                syn = rag_tokenizer.tokenize(" ".join(syn)).split(" ")
+                syn = rag_tokenizer.tokenize(" ".join(syn)).split()
                 keywords.extend(syn)
                 syn = ["\"{}\"^{:.4f}".format(s, w / 4.) for s in syn]
                 syns.append(" ".join(syn))
@@ -98,7 +98,7 @@ class MilvusQueryer:
 
         txt = MilvusQueryer.rmWWW(txt)
         qs, keywords = [], []
-        for tt in self.tw.split(txt)[:256]:  # .split(" "):
+        for tt in self.tw.split(txt)[:256]:  # .split():
             if not tt:
                 continue
             twts = self.tw.weights([tt])
@@ -107,7 +107,7 @@ class MilvusQueryer:
             logging.debug(json.dumps(twts, ensure_ascii=False))
             tms = []
             for tk, w in sorted(twts, key=lambda x: x[1] * -1):
-                sm = rag_tokenizer.fine_grained_tokenize(tk).split(" ") if need_fine_grained_tokenize(tk) else []
+                sm = rag_tokenizer.fine_grained_tokenize(tk).split() if need_fine_grained_tokenize(tk) else []
                 sm = [
                     re.sub(
                         r"[ ,\./;'\[\]\\`~!@#$%\^&\*\(\)=\+_<>\?:\"\{\}\|，。；‘’【】、！￥……（）——《》？：“”-]+",
@@ -179,7 +179,7 @@ class MilvusQueryer:
         def toDict(tks):
             d = {}
             if isinstance(tks, str):
-                tks = tks.split(" ")
+                tks = tks.split()
             for t, c in self.tw.weights(tks, preprocess=False):
                 if t not in d:
                     d[t] = 0
