@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import requests
 
@@ -24,6 +24,18 @@ class CodeComponent(BaseComponent):
             return self.parse_output(self.output_definition, original_outputs)
         else:
             raise ValueError(f"Unsupported language: {self.language}")
+
+
+    async def execute_alone(self, input_value: dict, batch_value: Optional[dict] = None) -> Dict[str, Any]:
+        self.inputs = input_value
+        if self.language == 3:  # Python
+            # 调用脚本调度服务
+            code_execute_resp = self.run_temporary_script(self.code, self.inputs)
+            original_outputs = code_execute_resp.get("data")
+            return self.parse_output(self.output_definition, original_outputs)
+        else:
+            raise ValueError(f"Unsupported language: {self.language}")
+
 
     def run_temporary_script(self, script: str, args: Dict[str, Any], base_url: str = "http://localhost:8124") -> Dict:
         """
