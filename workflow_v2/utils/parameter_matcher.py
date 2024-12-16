@@ -42,7 +42,6 @@ class ParameterMatcher:
                 if part in data:
                     return get_nested_value(data[part], remaining_parts)
             elif isinstance(data, list):
-                # 如果是数组类型，我们统一取第一个元素的对应属性
                 if data and isinstance(data[0], dict):
                     return get_nested_value(data[0], [part] + remaining_parts)
 
@@ -50,56 +49,12 @@ class ParameterMatcher:
 
         return get_nested_value(node_output, path_parts)
 
-    def _validate_type(self, value: Any, type_def: str) -> bool:
-        """验证值类型是否匹配"""
-        type_mapping = {
-            "string": str,
-            "integer": int,
-            "boolean": bool,
-            "float": float,
-            "object": dict,
-            "list": list
-        }
-
-        expected_type = type_mapping.get(type_def)
-        if not expected_type:
-            raise ValueError(f"Unsupported type definition: {type_def}")
-
-        return isinstance(value, expected_type)
-
-    def _validate_schema(self, value: Any, schema_def: Dict) -> bool:
-        """验证值是否符合模式定义"""
-        if "type" not in schema_def:
-            return False
-
-        # 基本类型验证
-        if not self._validate_type(value, schema_def["type"]):
-            return False
-
-        # 对象类型的详细验证
-        if schema_def["type"] == "object" and "schema" in schema_def:
-            for field in schema_def["schema"]:
-                field_name = field["name"]
-                if field_name not in value:
-                    return False
-                if not self._validate_schema(value[field_name], field):
-                    return False
-
-        # 列表类型的详细验证
-        elif schema_def["type"] == "list" and "schema" in schema_def:
-            for item in value:
-                if not self._validate_schema(item, schema_def["schema"]):
-                    return False
-
-        return True
-
     def match_parameters(self) -> Dict[str, Any]:
         """匹配并验证所有参数"""
         for param in self.input_parameters:
             name = param["name"]
             input_def = param["input"]
 
-            # 获取值
             try:
                 value = self._resolve_value(input_def["value"])
             except (KeyError, ValueError) as e:

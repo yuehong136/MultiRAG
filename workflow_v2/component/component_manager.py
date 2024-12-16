@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.component.component_factory import ComponentFactory
@@ -6,7 +6,7 @@ from workflow_v2.workflow_logging_config import WorkflowContextLogger
 
 
 class ComponentManager:
-    def __init__(self, logger: WorkflowContextLogger, **kwargs):
+    def __init__(self, logger: Optional[WorkflowContextLogger] = None, **kwargs):
         self.logger = logger
         self.components: Dict[str, BaseComponent] = {}
 

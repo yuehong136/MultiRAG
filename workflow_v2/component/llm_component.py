@@ -4,7 +4,7 @@ import copy
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
 from workflow_v2.component.base_component import BaseComponent
-from workflow_v2.utils import parse_template, match_parameters, dict_arrays_to_array_dicts
+from workflow_v2.utils import parse_template, match_parameters, dict_arrays_to_array_dicts, map_schema_with_values
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 from concurrent.futures import ThreadPoolExecutor
 
@@ -184,6 +184,54 @@ class LLMComponent(BaseComponent):
             # 批处理
             return {"outputList": output_list}
         else:
+            actual_system_prompt = parse_template(self.llm_params.system_prompt, self.inputs)
+            actual_prompt = parse_template(self.llm_params.prompt, self.inputs)
+            chat_mdl = LLMBundle(self.db, self.user.id, LLMType.CHAT, model)
+            history = [{"role": "user", "content": actual_prompt}]
+            response = chat_mdl.chat(system=actual_system_prompt,
+                                     history=history,
+                                     gen_conf={"temperature": self.llm_params.temperature,
+                                               "top_p": self.llm_params.top_p,
+                                               "max_tokens": self.llm_params.max_tokens,
+                                               "frequency_penalty": self.llm_params.frequency_penalty,
+                                               })
+            return {"output": response}
+
+    async def execute_alone(self, input_value: dict, batch_value: Optional[dict] = None) -> dict:
+        self.logger.info(f"LLMComponent {self.title} execute")
+        self.logger.info(f"LLMComponent {self.title} inputs: {self.inputs}")
+        model = "ep-20241008085710-w9hk2"
+
+        if self.batch_config.batch_enable:
+            input_value_dict_list = map_schema_with_values(self.workflow_node.input_schema, input_value, batch_value)
+            self.inputs = input_value_dict_list
+            system_prompt_list = [parse_template(self.llm_params.system_prompt, item) for item in input_value_dict_list]
+            prompt_list = [parse_template(self.llm_params.prompt, item) for item in input_value_dict_list]
+
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                args_list = [
+                    (
+                        self.db,
+                        self.user.id,
+                        model,
+                        system_prompt_list[i],
+                        prompt_list[i],
+                        self.llm_params,
+                        input_value_dict_list[i]
+                    )
+                    for i in range(len(input_value_dict_list))
+                ]
+
+                # 使用 list 保持原始顺序
+                execute_info = list(executor.map(process_single_chat, args_list))
+
+                # 转换为目标格式，保持原始顺序
+                output_list = [{"output": item["output"]} for item in execute_info]
+
+            # 批处理
+            return {"outputList": output_list}
+        else:
+            self.inputs = input_value
             actual_system_prompt = parse_template(self.llm_params.system_prompt, self.inputs)
             actual_prompt = parse_template(self.llm_params.prompt, self.inputs)
             chat_mdl = LLMBundle(self.db, self.user.id, LLMType.CHAT, model)
