@@ -17,6 +17,7 @@ from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.default_embedding import DefaultEmbedding
 from core.llm.embedding_model.huggingface_embed import HuggingFaceEmbed
+from core.llm.embedding_model.jina_embed import JinaEmbed
 from core.llm.embedding_model.openai_embed import OpenAIEmbed
 from core.llm.embedding_model.qwen_embed import QWenEmbed
 from core.llm.embedding_model.volcengine_embed import VolcEngineEmbed
@@ -24,6 +25,7 @@ from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
 from core.llm.rerank_model.default_rerank import DefaultRerank
+from core.llm.rerank_model.jina_rerank import JinaRerank
 from core.llm.rerank_model.localai_rerank import LocalAIRerank
 from core.llm.rerank_model.openai_api_rerank import OpenAI_APIRerank
 from core.llm.rerank_model.qwen_rerank import QWenRerank
@@ -51,7 +53,7 @@ EmbeddingModel = {
     # "FastEmbed": FastEmbed,
     "Youdao": YoudaoEmbed,
     # "BaiChuan": BaiChuanEmbed,
-    # "Jina": JinaEmbed,
+    "Jina": JinaEmbed,
     "BAAI": DefaultEmbedding,
     # "Mistral": MistralEmbed,
     "VolcEngine": VolcEngineEmbed,
@@ -95,7 +97,7 @@ ChatModel = {
 
 RerankModel = {
     "BAAI": DefaultRerank,
-    # "Jina": JinaRerank,
+    "Jina": JinaRerank,
     "LocalAI": LocalAIRerank,
     "OpenAI-API-Compatible": OpenAI_APIRerank,
     "Youdao": YoudaoRerank,
