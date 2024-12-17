@@ -155,59 +155,51 @@ def get_storage_binary(bucket, name):
     return STORAGE_IMPL.get(bucket, name)
 
 
-def build(row, db: Session):
-    if row["size"] > DOC_MAXIMUM_SIZE:
-        set_progress(db, row["id"], prog=-1, msg="File size exceeds( <= %dMb )" %
+def build_chunks(task, progress_callback, db: Session):
+    if task["size"] > DOC_MAXIMUM_SIZE:
+        set_progress(db, task["id"], prog=-1, msg="File size exceeds( <= %dMb )" %
                                                  (int(DOC_MAXIMUM_SIZE / 1024 / 1024)))
         return []
 
-    callback = partial(
-        set_progress,
-        db,
-        row["id"],
-        row["from_page"],
-        row["to_page"])
-    chunker = FACTORY[row["parser_id"].lower()]
+    chunker = FACTORY[task["parser_id"].lower()]
     try:
         st = timer()
-        bucket, name = File2DocumentService.get_storage_address(db, doc_id=row["doc_id"])
+        bucket, name = File2DocumentService.get_storage_address(db, doc_id=task["doc_id"])
         binary = get_storage_binary(bucket, name)
-        logging.info(
-            "From minio({}) {}/{}".format(timer() - st, row["location"], row["name"]))
+        logging.info("From minio({}) {}/{}".format(timer() - st, task["location"], task["name"]))
     except TimeoutError:
-        callback(-1, "Internal server error: Fetch file from minio timeout. Could you try it again.")
-        logging.exception(
-            "Minio {}/{} got timeout: Fetch file from minio timeout.".format(row["location"], row["name"]))
+        progress_callback(-1, "Internal server error: Fetch file from minio timeout. Could you try it again.")
+        logging.exception("Minio {}/{} got timeout: Fetch file from minio timeout.".format(task["location"], task["name"]))
         raise
     except Exception as e:
         if re.search("(No such file|not found)", str(e)):
-            callback(-1, "Can not find file <%s> from minio. Could you try it again?" % row["name"])
+            progress_callback(-1, "Can not find file <%s> from minio. Could you try it again?" % task["name"])
         else:
-            callback(-1, "Get file from minio: %s" % str(e).replace("'", ""))
-        logging.exception("Chunking {}/{} got exception".format(row["location"], row["name"]))
+            progress_callback(-1, "Get file from minio: %s" % str(e).replace("'", ""))
+        logging.exception("Chunking {}/{} got exception".format(task["location"], task["name"]))
         # traceback.print_exc()
         raise
 
     try:
-        cks = chunker.chunk(row["name"], binary=binary, from_page=row["from_page"],
-                            to_page=row["to_page"], lang=row["language"], callback=callback,
-                            kb_id=row["kb_id"], parser_config=row["parser_config"], tenant_id=row["tenant_id"])
+        cks = chunker.chunk(task["name"], binary=binary, from_page=task["from_page"],
+                            to_page=task["to_page"], lang=task["language"], callback=progress_callback,
+                            kb_id=task["kb_id"], parser_config=task["parser_config"], tenant_id=task["tenant_id"])
         logging.info(
-            "Chunking({}) {}/{}".format(timer() - st, row["location"], row["name"]))
+            "Chunking({}) {}/{}".format(timer() - st, task["location"], task["name"]))
     except Exception as e:
-        callback(-1, "Internal server error while chunking: %s" % str(e).replace("'", ""))
-        logging.exception("Chunking {}/{} got exception".format(row["location"], row["name"]))
+        progress_callback(-1, "Internal server error while chunking: %s" % str(e).replace("'", ""))
+        logging.exception("Chunking {}/{} got exception".format(task["location"], task["name"]))
         # traceback.print_exc()
         raise
 
     docs = []
     doc = {
-        "doc_id": row["doc_id"],
-        "kb_id": [str(row["kb_id"])]
+        "doc_id": task["doc_id"],
+        "kb_id": [str(task["kb_id"])]
     }
     # 如果 row["auth"] 有值，则将其添加到 doc 字典中
-    if "auth" in row and row["auth"]:
-        doc["auth"] = row["auth"]
+    if "auth" in task and task["auth"]:
+        doc["auth"] = task["auth"]
     el = 0
     for ck in cks:
         d = copy.deepcopy(doc)
@@ -257,42 +249,40 @@ def build(row, db: Session):
                 d["image"].save(output_buffer, format='JPEG')
 
             st = timer()
-            STORAGE_IMPL.put(row["kb_id"], d["pk"], output_buffer.getvalue())
+            STORAGE_IMPL.put(task["kb_id"], d["pk"], output_buffer.getvalue())
             el += timer() - st
         except Exception:
-            logging.exception(
-                "Saving image of chunk {}/{}/{} got exception".format(row["location"], row["name"], d["_id"]))
-            # traceback.print_exc()
+            logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["_id"]))
             raise
 
-        d["img_id"] = "{}-{}".format(row["kb_id"], d["pk"])
+        d["img_id"] = "{}-{}".format(task["kb_id"], d["pk"])
         del d["image"]
         docs.append(d)
-    logging.info("MINIO PUT({}):{}".format(row["name"], el))
+    logging.info("MINIO PUT({}):{}".format(task["name"], el))
 
-    if row["parser_config"].get("auto_keywords", 0):
+    if task["parser_config"].get("auto_keywords", 0):
         st = timer()
-        callback(msg="Start to generate keywords for every chunk ...")
-        chat_mdl = LLMBundle(db, row["tenant_id"], LLMType.CHAT, llm_name=row["llm_id"], lang=row["language"])
+        progress_callback(msg="Start to generate keywords for every chunk ...")
+        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
         for d in docs:
             d["important_kwd"] = keyword_extraction(chat_mdl, d["content_with_weight"],
-                                                    row["parser_config"]["auto_keywords"]).split(",")
+                                                    task["parser_config"]["auto_keywords"]).split(",")
             d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
-        callback(msg="Keywords generation completed in {:.2f}s".format(timer() - st))
+        progress_callback(msg="Keywords generation completed in {:.2f}s".format(timer() - st))
 
-    if row["parser_config"].get("auto_questions", 0):
+    if task["parser_config"].get("auto_questions", 0):
         st = timer()
-        callback(msg="Start to generate questions for every chunk ...")
-        chat_mdl = LLMBundle(db, row["tenant_id"], LLMType.CHAT, llm_name=row["llm_id"], lang=row["language"])
+        progress_callback(msg="Start to generate questions for every chunk ...")
+        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
         for d in docs:
-            qst = question_proposal(chat_mdl, d["content_with_weight"], row["parser_config"]["auto_questions"])
+            qst = question_proposal(chat_mdl, d["content_with_weight"], task["parser_config"]["auto_questions"])
             d["content_with_weight"] = f"Question: \n{qst}\n\nAnswer:\n" + d["content_with_weight"]
             qst = rag_tokenizer.tokenize(qst)
             if "content_ltks" in d:
                 d["content_ltks"] += " " + qst
             if "content_sm_ltks" in d:
                 d["content_sm_ltks"] += " " + rag_tokenizer.fine_grained_tokenize(qst)
-        callback(msg="Question generation completed in {:.2f}s".format(timer() - st))
+        progress_callback(msg="Question generation completed in {:.2f}s".format(timer() - st))
 
     return docs
 
@@ -471,7 +461,9 @@ def do_handle_task(db, task):
         # bind embedding model
         embedding_model = LLMBundle(db, task_tenant_id, LLMType.EMBEDDING, llm_name=task_embedding_id, lang=task_language)
     except Exception as e:
-        progress_callback(-1, msg=f'Fail to bind embedding model: {str(e)}')
+        error_message = f'Fail to bind embedding model: {str(e)}'
+        progress_callback(-1, msg=error_message)
+        logging.exception(error_message)
         raise
 
 
@@ -482,14 +474,14 @@ def do_handle_task(db, task):
             chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
 
             # run RAPTOR
-            chunks, tk_count = run_raptor(task, chat_model, embedding_model, progress_callback)
+            chunks, token_count = run_raptor(task, chat_model, embedding_model, progress_callback)
         except Exception as e:
             progress_callback(-1, msg=f'Fail to bind LLM used by RAPTOR: {str(e)}')
             raise
     else:
         # Standard chunking methods
         start_ts = timer()
-        chunks = build(task, db)
+        chunks = build_chunks(task, progress_callback, db)
         logging.info("Build document {}: {:.2f}s".format(task_document_name, timer() - start_ts))
         if chunks is None:
             return
@@ -501,14 +493,16 @@ def do_handle_task(db, task):
         progress_callback(msg="Generate {} chunks".format(len(chunks)))
         start_ts = timer()
         try:
-            tk_count = embedding(chunks, embedding_model, task_parser_config, progress_callback)
+            token_count = embedding(chunks, embedding_model, task_parser_config, progress_callback)
         except Exception as e:
-            progress_callback(-1, "Generate embedding error:{}".format(str(e)))
-            logging.exception("run_embedding got exception")
-            tk_count = 0
+            error_message = "Generate embedding error:{}".format(str(e))
+            progress_callback(-1, error_message)
+            logging.exception(error_message)
+            token_count = 0
             raise
-        logging.info("Embedding {} elapsed: {:.2f}".format(task_document_name, timer() - start_ts))
-        progress_callback(msg="Embedding chunks ({:.2f}s)".format(timer() - start_ts))
+        progress_message = "Embedding chunks ({:.2f}s)".format(timer() - start_ts)
+        logging.info(progress_message)
+        progress_callback(msg=progress_message)
 
     kb_id = DocumentService.get_by_doc_id(db, task_doc_id)["kb_id"]
     kb = KnowledgebaseService.get_by_id(db, kb_id)
@@ -516,7 +510,7 @@ def do_handle_task(db, task):
 
     chunk_count = len(set([chunk["pk"] for chunk in chunks]))
     start_ts = timer()
-    milvus_r = ""
+    doc_store_result = ""
     successful_inserts = []  # 用于记录成功插入的记录信息
     failed_inserts = []  # 可选：记录失败的记录（便于排查问题）
     # 获取集合的schema
@@ -529,11 +523,11 @@ def do_handle_task(db, task):
 
         try:
             # 使用 Milvus 的插入方法插入数据
-            milvus_r = MILVUS_CONNECTION.insert(
+            doc_store_result = MILVUS_CONNECTION.insert(
                 collection_name=search.index_name_one(task_tenant_id, kb.name),
                 data=converted_chunk
             )
-            successful_inserts.append(milvus_r)  # 记录成功的插入结果
+            successful_inserts.append(doc_store_result)  # 记录成功的插入结果
         except Exception:
             failed_inserts.append(chunk)  # 记录失败的记录
             progress_callback(-1, f"Insert chunk error, detail info please check log file. Please also check Milvus status!")
@@ -573,15 +567,16 @@ def do_handle_task(db, task):
                 MILVUS_CONNECTION.delete(
                     collection_name=collection_name,
                     filter=f"doc_id == '{{doc_id}}'".format(doc_id=task_doc_id)
-                    # filter=f"doc_id == '{doc.id}'"
                 )
         except MilvusException as e:
             return e
         return
 
-    progress_callback(1., msg="Finish Index ({:.2f}s)".format(timer() - start_ts))
-    DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, tk_count, chunk_count, 0)
-    logging.info("Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(task_id, tk_count, len(chunks), timer() - start_ts))
+    DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
+
+    time_cost = timer() - start_ts
+    progress_callback(prog=1.0, msg="Done ({:.2f}s)".format(time_cost))
+    logging.info("Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(task_id, token_count, len(chunks), time_cost))
 
 
 def handle_task():
