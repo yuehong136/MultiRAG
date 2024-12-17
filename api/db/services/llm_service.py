@@ -202,9 +202,10 @@ class TenantLLMService(CommonService):
                 num = result.rowcount  # 受影响的行数
             else:
                 # 如果不存在，创建新记录
-                llm_factory = llm_name.split("/")[0] if "/" in llm_name else llm_name
+                llm_factory = mdlnm.split("@")[1] if "@" in mdlnm else mdlnm
                 new_tenant_llm = cls.model(
                     tenant_id=tenant_id,
+                    mdl_type=llm_type,
                     llm_factory=llm_factory,
                     llm_name=llm_name,
                     used_tokens=used_tokens
