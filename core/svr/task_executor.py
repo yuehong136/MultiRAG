@@ -435,9 +435,9 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
     return res, tk_count
 
 
-def do_handle_task(db, r):
+def do_handle_task(db, task):
     # 将 Row 转换为字典，确保可以修改字段
-    r = r._asdict() if hasattr(r, "_asdict") else dict(r)
+    task = task._asdict() if hasattr(task, "_asdict") else dict(task)
 
     # 预处理 auth 列，转换为列表，处理 None 值
     def convert_auth(auth_str):
@@ -450,89 +450,111 @@ def do_handle_task(db, r):
             return []  # 解析失败时，返回空列表
 
     # 处理 auth 列
-    r['auth'] = convert_auth(r.get('auth'))
+    task['auth'] = convert_auth(task.get('auth'))
 
-    callback = partial(set_progress, db, r["id"], r["from_page"], r["to_page"])
+    task_id = task["id"]
+    task_from_page = task["from_page"]
+    task_to_page = task["to_page"]
+    task_tenant_id = task["tenant_id"]
+    task_embedding_id = task["embd_id"]
+    task_language = task["language"]
+    task_llm_id = task["llm_id"]
+    task_dataset_id = task["kb_id"]
+    task_doc_id = task["doc_id"]
+    task_document_name = task["name"]
+    task_parser_config = task["parser_config"]
+
+    # prepare the progress callback function
+    progress_callback = partial(set_progress, db, task_id, task_from_page, task_to_page)
+
     try:
-        embd_mdl = LLMBundle(db, r["tenant_id"], LLMType.EMBEDDING, llm_name=r["embd_id"], lang=r["language"])
+        # bind embedding model
+        embedding_model = LLMBundle(db, task_tenant_id, LLMType.EMBEDDING, llm_name=task_embedding_id, lang=task_language)
     except Exception as e:
-        callback(-1, msg=str(e))
+        progress_callback(-1, msg=f'Fail to bind embedding model: {str(e)}')
         raise
-    if r.get("task_type", "") == "raptor":
+
+
+    # Either using RAPTOR or Standard chunking methods
+    if task.get("task_type", "") == "raptor":
         try:
-            chat_mdl = LLMBundle(db, r["tenant_id"], LLMType.CHAT, llm_name=r["llm_id"], lang=r["language"])
-            cks, tk_count = run_raptor(r, chat_mdl, embd_mdl, callback)
+            # bind LLM for raptor
+            chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
+
+            # run RAPTOR
+            chunks, tk_count = run_raptor(task, chat_model, embedding_model, progress_callback)
         except Exception as e:
-            callback(-1, msg=str(e))
+            progress_callback(-1, msg=f'Fail to bind LLM used by RAPTOR: {str(e)}')
             raise
     else:
-        st = timer()
-        cks = build(r, db)
-        logging.info("Build chunks({}): {}".format(r["name"], timer() - st))
-        if cks is None:
+        # Standard chunking methods
+        start_ts = timer()
+        chunks = build(task, db)
+        logging.info("Build document {}: {:.2f}s".format(task_document_name, timer() - start_ts))
+        if chunks is None:
             return
-        if not cks:
-            callback(1., "No chunk! Done!")
+        if not chunks:
+            progress_callback(1., msg=f"No chunk built from {task_document_name}")
             return
-            # TODO: exception handler
-            ## set_progress(r["did"], -1, "ERROR: ")
-        callback(msg="Generate {} chunks ({:.2f}s). Embedding chunks.".format(len(cks), timer() - st))
-        st = timer()
+        # TODO: exception handler
+        ## set_progress(task["did"], -1, "ERROR: ")
+        progress_callback(msg="Generate {} chunks".format(len(chunks)))
+        start_ts = timer()
         try:
-            tk_count = embedding(cks, embd_mdl, r["parser_config"], callback)
+            tk_count = embedding(chunks, embedding_model, task_parser_config, progress_callback)
         except Exception as e:
-            callback(-1, "Embedding error:{}".format(str(e)))
-            logging.exception("run_rembedding got exception")
+            progress_callback(-1, "Generate embedding error:{}".format(str(e)))
+            logging.exception("run_embedding got exception")
             tk_count = 0
             raise
-        logging.info("Embedding elapsed({}): {:.2f}".format(r["name"], timer() - st))
-        callback(msg="Finished embedding ({:.2f}s)!".format(timer() - st))
+        logging.info("Embedding {} elapsed: {:.2f}".format(task_document_name, timer() - start_ts))
+        progress_callback(msg="Embedding chunks ({:.2f}s)".format(timer() - start_ts))
 
-    kb_id = DocumentService.get_by_doc_id(db, r["doc_id"])["kb_id"]
+    kb_id = DocumentService.get_by_doc_id(db, task_doc_id)["kb_id"]
     kb = KnowledgebaseService.get_by_id(db, kb_id)
-    init_kb(r, kb.name)
+    init_kb(task, kb.name)
 
-    chunk_count = len(set([c["pk"] for c in cks]))
-    st = timer()
+    chunk_count = len(set([chunk["pk"] for chunk in chunks]))
+    start_ts = timer()
     milvus_r = ""
     successful_inserts = []  # 用于记录成功插入的记录信息
     failed_inserts = []  # 可选：记录失败的记录（便于排查问题）
     # 获取集合的schema
-    schema = get_schema(search.index_name_one(r["tenant_id"], kb.name))
+    schema = get_schema(search.index_name_one(task_tenant_id, kb.name))
 
     # 逐条插入数据
-    for record in cks:
+    for chunk in chunks:
         # 转换数据类型
-        converted_record = convert_data_types(record, schema)
+        converted_chunk = convert_data_types(chunk, schema)
 
         try:
             # 使用 Milvus 的插入方法插入数据
             milvus_r = MILVUS_CONNECTION.insert(
-                collection_name=search.index_name_one(r["tenant_id"], kb.name),
-                data=converted_record
+                collection_name=search.index_name_one(task_tenant_id, kb.name),
+                data=converted_chunk
             )
             successful_inserts.append(milvus_r)  # 记录成功的插入结果
         except Exception:
-            failed_inserts.append(record)  # 记录失败的记录
-            callback(-1, f"Insert chunk error, detail info please check log file. Please also check Milvus status!")
-            collection_name = search.index_name_one(r["tenant_id"], kb.name)
+            failed_inserts.append(chunk)  # 记录失败的记录
+            progress_callback(-1, f"Insert chunk error, detail info please check log file. Please also check Milvus status!")
+            collection_name = search.index_name_one(task_tenant_id, kb.name)
             try:
                 if MILVUS_CONNECTION.has_collection(collection_name):
                     MILVUS_CONNECTION.delete(
                         collection_name=collection_name,
-                        filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
+                        filter=f"doc_id == '{{doc_id}}'".format(doc_id=task["doc_id"])
                     )
             except MilvusException as e:
                 return e
             logging.exception("Insert error:")
-            logging.error("Data being inserted:", converted_record)
+            logging.error("Data being inserted:", converted_chunk)
     # 结束时记录总耗时
-    insertion_total_time = timer() -st
+    insertion_total_time = timer() - start_ts
 
     # 输出总的插入成功信息和统计
     if successful_inserts:
         total_insert_count = sum(item["insert_count"] for item in successful_inserts)
-        logging.info(f"Total successful inserts into Milvus's {search.index_name_one(r["tenant_id"], kb.name)}: {total_insert_count} ")
+        logging.info(f"Total successful inserts into Milvus's {search.index_name_one(task_tenant_id, kb.name)}: {total_insert_count} ")
         # logging.info(f"Milvus insert details: {successful_inserts}")
 
     # 输出总的 Insertion elapsed 时长
@@ -542,26 +564,24 @@ def do_handle_task(db, r):
         logging.warning(f"Failed inserts count: {len(failed_inserts)}")
         logging.warning(f"Failed insert records: {failed_inserts}")
 
-    if TaskService.do_cancel(db, r["id"]):
+    if TaskService.do_cancel(db, task_id):
         # 构建 Milvus 集合名称
-        collection_name = search.index_name_one(r["tenant_id"], kb.name)
+        collection_name = search.index_name_one(task_tenant_id, kb.name)
         # 检查集合是否存在并删除 Milvus 中的数据
         try:
             if MILVUS_CONNECTION.has_collection(collection_name):
                 MILVUS_CONNECTION.delete(
                     collection_name=collection_name,
-                    filter=f"doc_id == '{{doc_id}}'".format(doc_id=r["doc_id"])
+                    filter=f"doc_id == '{{doc_id}}'".format(doc_id=task_doc_id)
                     # filter=f"doc_id == '{doc.id}'"
                 )
         except MilvusException as e:
             return e
         return
-    callback(1., msg="Index cost {:.2f}s.".format(timer() - st))
-    DocumentService.increment_chunk_num(
-        db, r["doc_id"], r["kb_id"], tk_count, chunk_count, 0)
-    logging.info(
-        "Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(
-            r["id"], tk_count, len(cks), timer() - st))
+
+    progress_callback(1., msg="Finish Index ({:.2f}s)".format(timer() - start_ts))
+    DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, tk_count, chunk_count, 0)
+    logging.info("Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(task_id, tk_count, len(chunks), timer() - start_ts))
 
 
 def handle_task():
@@ -657,13 +677,16 @@ def analyze_heap(snapshot1: tracemalloc.Snapshot, snapshot2: tracemalloc.Snapsho
 
 def main():
     logging.info(r"""
-      ______           __      ______                     __            
-     /_  __/___ ______/ /__   / ____/  _____  _______  __/ /_____  _____
-      / / / __ `/ ___/ //_/  / __/ | |/_/ _ \/ ___/ / / / __/ __ \/ ___/
-     / / / /_/ (__  ) ,<    / /____>  </  __/ /__/ /_/ / /_/ /_/ / /    
-    /_/  \__,_/____/_/|_|  /_____/_/|_|\___/\___/\__,_/\__/\____/_/                               
+┌─────────────────────────── Task Starting ────────────────────────────┐
+│   ______           __      ______                     __             │
+│  /_  __/___ ______/ /__   / ____/  _____  _______  __/ /_____  _____ │
+│   / / / __ `/ ___/ //_/  / __/ | |/_/ _ \/ ___/ / / / __/ __ \/ ___/ │
+│  / / / /_/ (__  ) ,<    / /____>  </  __/ /__/ /_/ / /_/ /_/ / /     │
+│ /_/  \__,_/____/_/|_|  /_____/_/|_|\___/\___/\__,_/\__/\____/_/      │
+│                                                                      │
+└──────────────────────────── LOG Showing ─────────────────────────────┘
         """)
-    logging.info(f'TaskExecutor: RAGFlow version: {get_multirag_version()}')
+    logging.info(f'TaskExecutor - MultiRAG version: {get_multirag_version()}')
     settings.init_settings()
     print_multirag_settings()
     background_thread = threading.Thread(target=report_status)
