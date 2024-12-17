@@ -144,7 +144,7 @@ async def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user
 
         kbs = KnowledgebaseService.get_by_ids(db, request.kb_ids)
         embd_count = len(set([kb.embd_id for kb in kbs]))
-        if embd_count != 1:
+        if embd_count != 1 and kbs:
             return get_data_error_result(
                 retmsg=f'Datasets use different embedding models: {[kb.embd_id for kb in kbs]}"')
 
