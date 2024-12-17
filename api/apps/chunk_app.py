@@ -86,22 +86,188 @@ class RetrievalTestRequest(BaseModel):
 @router.post('/list', summary="列出文档块")
 async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    列出文档块
+    ### POST `/list` 列出文档块接口
 
-    该接口用于列出指定文档的所有块。
+**功能描述**:
+此接口用于根据文档 ID 列出文档块，支持分页查询、关键词搜索和高亮显示内容，返回匹配的文档块信息。
 
-    参数:
-    - request: ListChunkRequest对象，包含文档ID、分页参数和关键字
-        - doc_id: 文档的唯一标识符
-        - page: 页码，默认值为1
-        - size: 每页的块数，默认值为30
-        - keywords: 搜索关键字，默认值为空字符串
-    - db: 数据库会话对象
-    - user: 当前用户对象
+---
 
-    返回:
-    - 成功时返回包含文档块信息的JSON结果
-    - 失败时返回错误信息
+### 请求体 (Request Body)
+
+| 字段          | 类型          | 必填 | 描述                                                                                 |
+|---------------|---------------|------|--------------------------------------------------------------------------------------|
+| `doc_id`      | `string`      | 是   | 文档的唯一标识符。                                                                   |
+| `page`        | `int`         | 是   | 当前页码，用于分页查询。                                                             |
+| `size`        | `int`         | 是   | 每页返回的文档块数量。                                                               |
+| `keywords`    | `string`      | 否   | 搜索关键词，用于高亮匹配文档块的内容。                                               |
+
+---
+
+### 响应 (Response)
+
+#### 成功响应 (200)
+
+- **`Content-Type: application/json`**
+- **示例**:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "total": 2,
+            "chunks": [
+                {
+                    "chunk_id": "chunk_001",
+                    "content_with_weight": "问题：人工智能是什么？ 答案：人工智能是计算机科学的一个分支。",
+                    "doc_id": "67890",
+                    "docnm_kwd": ["人工智能"],
+                    "important_kwd": ["计算机科学"],
+                    "img_id": "img_123",
+                    "available_int": 1,
+                    "positions": [
+                        [0.1, 0.2, 0.3, 0.4, 0.5]
+                    ]
+                },
+                {
+                    "chunk_id": "chunk_002",
+                    "content_with_weight": "人工智能涉及机器学习和深度学习。",
+                    "doc_id": "67890",
+                    "docnm_kwd": ["机器学习"],
+                    "important_kwd": ["深度学习"],
+                    "img_id": "img_124",
+                    "available_int": 1,
+                    "positions": []
+                }
+            ],
+            "doc": {
+                "doc_id": "67890",
+                "name": "人工智能概述",
+                "kb_id": "kb_001"
+            }
+        }
+    }
+    ```
+
+#### 错误响应
+
+- **404: Tenant not found**
+    - **描述**: 当根据 `doc_id` 查询租户信息失败时，返回此错误。
+    - **示例**:
+        ```json
+        {
+            "detail": "Tenant not found!"
+        }
+        ```
+
+- **404: Document not found**
+    - **描述**: 当根据 `doc_id` 查询文档信息失败时，返回此错误。
+    - **示例**:
+        ```json
+        {
+            "detail": "Document not found!"
+        }
+        ```
+
+- **404: No chunk found**
+    - **描述**: 当没有找到匹配的文档块时，返回此错误。
+    - **示例**:
+        ```json
+        {
+            "retcode": 404,
+            "retmsg": "No chunk found!",
+            "data": false
+        }
+        ```
+
+- **500: 内部错误**
+    - **描述**: 当发生意外错误时，返回此错误。
+    - **示例**:
+        ```json
+        {
+            "retcode": 500,
+            "retmsg": "Internal server error",
+            "detail": "具体错误信息"
+        }
+        ```
+
+---
+
+### 主要流程
+
+1. 从请求体提取 `doc_id`、`page`、`size` 和 `keywords`。
+2. 验证文档块所属的租户 (`tenant_id`) 和文档是否存在。
+3. 根据分页参数和关键词搜索查询文档块数据。
+4. 处理搜索结果：
+    - 如果 `keywords` 存在，则高亮显示匹配的内容。
+    - 将位置信息按每 5 个数值分组，解析为数组结构。
+5. 返回文档块列表和文档基本信息。
+
+---
+
+### 注意事项
+
+- **关键词搜索**:
+    - 如果传入 `keywords`，将匹配的内容高亮显示。
+- **位置信息解析**:
+    - 位置信息字段 `positions` 的值按 5 个一组解析为数组结构，用于表示块的坐标或其他标记。
+- **分页查询**:
+    - `page` 和 `size` 字段控制分页查询，每次返回指定页码的文档块集合。
+- **高亮内容**:
+    - 若存在匹配的关键词，高亮显示结果会替换原始 `content_with_weight`。
+
+---
+
+### 示例请求
+
+#### 请求体:
+```json
+{
+    "doc_id": "67890",
+    "page": 1,
+    "size": 10,
+    "keywords": "人工智能"
+}
+```
+
+- **成功响应**:
+```json
+{
+    "retcode": 0,
+    "retmsg": "success",
+    "data": {
+        "total": 2,
+        "chunks": [
+            {
+                "chunk_id": "chunk_001",
+                "content_with_weight": "问题：人工智能是什么？ 答案：人工智能是计算机科学的一个分支。",
+                "doc_id": "67890",
+                "docnm_kwd": ["人工智能"],
+                "important_kwd": ["计算机科学"],
+                "img_id": "img_123",
+                "available_int": 1,
+                "positions": [
+                    [0.1, 0.2, 0.3, 0.4, 0.5]
+                ]
+            }
+        ],
+        "doc": {
+            "doc_id": "67890",
+            "name": "人工智能概述",
+            "kb_id": "kb_001"
+        }
+    }
+}
+```
+
+- **错误响应 (无匹配文档块)**:
+```json
+{
+    "retcode": 404,
+    "retmsg": "No chunk found!",
+    "data": false
+}
+```
     """
     try:
         tenant_id = DocumentService.get_tenant_id(db, request.doc_id)
@@ -197,23 +363,144 @@ async def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager
 @router.post('/set', summary="设置文档块")
 async def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    设置文档块
+    ### POST `/set` 设置文档块接口
 
-    该接口用于创建或更新文档块信息。
+**功能描述**:
+此接口用于设置和更新文档块，支持处理内容的分词、关键词提取、问答模式验证以及向量计算，并将结果存储到数据库中。
 
-    参数:
-    - request: SetChunkRequest对象，包含文档块的配置信息
-        - doc_id: 文档的唯一标识符
-        - chunk_id: 文档块的唯一标识符
-        - content_with_weight: 文档块的内容和权重
-        - important_kwd: 重要关键字列表
-        - available_int: 可用状态，默认值为None
-    - db: 数据库会话对象
-    - user: 当前用户对象
+---
 
-    返回:
-    - 成功时返回包含操作结果的JSON结果
-    - 失败时返回错误信息
+### 请求体 (Request Body)
+
+| 字段                  | 类型          | 必填 | 描述                                                                                 |
+|-----------------------|---------------|------|--------------------------------------------------------------------------------------|
+| `chunk_id`            | `string`     | 是   | 文档块的唯一标识符。                                                                 |
+| `doc_id`              | `string`     | 是   | 所属文档的唯一标识符。                                                               |
+| `content_with_weight` | `string`     | 是   | 带权重的内容字符串，用于分词和向量计算。                                             |
+| `important_kwd`       | `list[str]`  | 否   | 重要关键词列表，用于额外的分词和向量计算。                                            |
+| `question_kwd`        | `list[str]`  | 否   | 问题关键词列表，用于问答模式或补充向量计算。                                          |
+| `available_int`       | `int`        | 否   | 可用性标记，用于记录当前文档块的可用状态。                                            |
+
+---
+
+### 响应 (Response)
+
+#### 成功响应 (200)
+
+- **`Content-Type: application/json`**
+- **示例**:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": true
+    }
+    ```
+
+#### 错误响应
+
+- **404: Tenant not found**
+    - **描述**: 当根据 `doc_id` 查询租户信息失败时，返回此错误。
+    - **示例**:
+        ```json
+        {
+            "detail": "Tenant not found!"
+        }
+        ```
+
+- **404: Document not found**
+    - **描述**: 当根据 `doc_id` 查询文档信息失败时，返回此错误。
+    - **示例**:
+        ```json
+        {
+            "detail": "Document not found!"
+        }
+        ```
+
+- **400: Q&A 格式错误**
+    - **描述**: 当文档块的内容不符合问答模式的要求时返回此错误。
+    - **示例**:
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Q&A must be separated by TAB/ENTER key."
+        }
+        ```
+
+- **500: 内部错误**
+    - **描述**: 当发生意外错误时，返回此错误。
+    - **示例**:
+        ```json
+        {
+            "retcode": 500,
+            "retmsg": "Internal server error",
+            "detail": "具体错误信息"
+        }
+        ```
+
+---
+
+### 主要流程
+
+1. 从请求体提取内容并解析关键词。
+    - 对 `content_with_weight` 执行分词。
+    - 分析重要关键词 (`important_kwd`) 和问题关键词 (`question_kwd`)。
+2. 验证文档块所属的租户 (`tenant_id`) 和文档是否存在。
+3. 判断文档解析类型 (`parser_id`)，处理问答模式的特殊逻辑：
+    - 验证问答内容是否由 TAB 或 ENTER 分隔。
+    - 检测问答内容的语言特性（是否包含中文）。
+4. 通过向量模型生成文档块的语义向量。
+5. 更新数据库：
+    - 根据主键 (`chunk_id`) 更新或插入文档块数据。
+    - 将内容、关键词及向量信息存储到对应的知识库中。
+
+---
+
+### 注意事项
+
+- **问答模式验证**:
+    - 文档解析类型为 `QA` 时，`content_with_weight` 必须包含两个部分（问题和答案），通过 TAB 或 ENTER 分隔。
+    - 自动判断问答内容的语言，决定是否使用特定的分词逻辑。
+- **向量计算**:
+    - 文档块的向量由内容和关键词生成。
+    - 支持加权计算：如果 `question_kwd` 存在，则使用其内容替代默认的内容生成逻辑。
+    - 当前向量字段名为 `vector`，未来可能支持动态字段名。
+- **数据库更新**:
+    - 更新操作基于主键 `chunk_id`。
+    - 确保知识库名称 (`kb.name`) 与租户信息一致。
+
+---
+
+### 示例请求
+
+#### 请求体:
+```json
+{
+    "chunk_id": "12345",
+    "doc_id": "67890",
+    "content_with_weight": "问题：人工智能是什么？\n答案：人工智能是计算机科学的一个分支。",
+    "important_kwd": ["人工智能", "计算机科学"],
+    "question_kwd": ["人工智能是什么", "计算机科学"],
+    "available_int": 1
+}
+```
+
+- **成功响应**:
+```json
+{
+    "retcode": 0,
+    "retmsg": "success",
+    "data": true
+}
+```
+
+- **错误响应 (问答格式错误)**:
+```json
+{
+    "retcode": 400,
+    "retmsg": "Q&A must be separated by TAB/ENTER key."
+}
+```
     """
     d = {
         "pk": request.chunk_id,
