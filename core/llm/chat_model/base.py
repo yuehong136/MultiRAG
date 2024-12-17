@@ -9,6 +9,8 @@ from typing import Any
 
 from core.utils import num_tokens_from_string
 
+LENGTH_NOTIFICATION_CN = "······\n由于长度的原因，回答被截断了，要继续吗？"
+LENGTH_NOTIFICATION_EN = "...\nFor the content length reason, it stopped, continue?"
 
 @dataclass
 class Base(ABC):

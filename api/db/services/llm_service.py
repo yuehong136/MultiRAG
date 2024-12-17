@@ -1,4 +1,7 @@
 import logging
+
+from sqlalchemy import update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
 
@@ -178,12 +181,41 @@ class TenantLLMService(CommonService):
 
         num = 0
         try:
-            for u in cls.query(db, tenant_id=tenant_id, llm_name=llm_name):
-                num += cls.model.update({cls.model.used_tokens: u.used_tokens + used_tokens}).where(
-                    cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name
-                ).execute()
-        except Exception:
-            pass
+            # 查询是否存在对应记录
+            tenant_llm = db.query(cls.model)\
+                .filter(cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name)\
+                .first()
+
+            if tenant_llm:
+                # 如果存在，执行更新
+                stmt = (
+                    update(cls.model)
+                    .where(
+                        cls.model.tenant_id == tenant_id,
+                        cls.model.llm_factory == tenant_llm.llm_factory,
+                        cls.model.llm_name == llm_name
+                    )
+                    .values(used_tokens=tenant_llm.used_tokens + used_tokens)
+                )
+                result = db.execute(stmt)
+                db.commit()
+                num = result.rowcount  # 受影响的行数
+            else:
+                # 如果不存在，创建新记录
+                llm_factory = llm_name.split("/")[0] if "/" in llm_name else llm_name
+                new_tenant_llm = cls.model(
+                    tenant_id=tenant_id,
+                    llm_factory=llm_factory,
+                    llm_name=llm_name,
+                    used_tokens=used_tokens
+                )
+                db.add(new_tenant_llm)
+                db.commit()
+                num = 1
+
+        except SQLAlchemyError:
+            db.rollback()  # 回滚事务
+            logging.exception("TenantLLMService.increase_usage got exception")
         return num
 
 
