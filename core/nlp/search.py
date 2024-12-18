@@ -476,7 +476,8 @@ class Dealer:
                 "vector_similarity": vsim[i],
                 "term_similarity": tsim[i],
                 "vector": self.trans2floats("\t".join(map(str, sres.query_vector))),
-                "positions": sres.field[id].get("position_int", "").split("\t")
+                # "positions": sres.field[id].get("position_int", "").split("\t")
+                "positions": sres.field[id].get("position_int", [])
             }
             # if highlight:
             #     if id in sres.highlight:

@@ -171,7 +171,8 @@ class KnowledgebaseService(CommonService):
             cls.model.token_num,
             cls.model.chunk_num,
             cls.model.parser_id,
-            cls.model.parser_config
+            cls.model.parser_config#,
+            # cls.model.pagerank
         ]
         # 根据ID和状态查询知识库信息，并关联租户信息
         query = db.query(*fields).join(Tenant, (Tenant.id == cls.model.tenant_id)).filter(

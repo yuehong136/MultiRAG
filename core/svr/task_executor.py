@@ -200,6 +200,8 @@ def build_chunks(task, progress_callback, db: Session):
     # 如果 row["auth"] 有值，则将其添加到 doc 字典中
     if "auth" in task and task["auth"]:
         doc["auth"] = task["auth"]
+    if task.get("pagerank"):
+        doc["pagerank_fea"] = int(task["pagerank"])
     el = 0
     for ck in cks:
         d = copy.deepcopy(doc)
@@ -227,10 +229,13 @@ def build_chunks(task, progress_callback, db: Session):
         #     if "content_sm_ltks" in ck:
         #         ck["content_sm_ltks"] += " " + rag_tokenizer.fine_grained_tokenize(qst)
 
-        # 将数组字段转换为 JSON 字符串
-        d["page_num_int"] = json.dumps(d.get("page_num_int", []))
-        d["position_int"] = json.dumps(d.get("position_int", []))
-        d["top_int"] = json.dumps(d.get("top_int", []))
+        # # 将数组字段转换为 JSON 字符串
+        # d["page_num_int"] = json.dumps(d.get("page_num_int", []))
+        # d["position_int"] = json.dumps(d.get("position_int", []))
+        # d["top_int"] = json.dumps(d.get("top_int", []))
+        d["page_num_int"] = d.get("page_num_int", [])
+        d["position_int"] = d.get("position_int", [])
+        d["top_int"] = d.get("top_int", [])
         # if not d.get("image"):
         #     docs.append(d)
         #     continue
@@ -407,6 +412,8 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
         "docnm_kwd": row["name"],
         "title_tks": rag_tokenizer.tokenize(row["name"])
     }
+    if row.get("pagerank"):
+        doc["pagerank_fea"] = int(row["pagerank"])
     res = []
     tk_count = 0
     for content, vctr in chunks[original_length:]:

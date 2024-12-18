@@ -67,7 +67,7 @@ class RmChunkRequest(BaseModel):
 class CreateChunkRequest(BaseModel):
     doc_id: str
     content_with_weight: str
-    important_kwd: list[str] | None
+    important_kwd: list[str] | None = None
 
 
 class RetrievalTestRequest(BaseModel):
@@ -84,7 +84,7 @@ class RetrievalTestRequest(BaseModel):
 
 
 @router.post('/list', summary="列出文档块")
-async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/list` 列出文档块接口
 
@@ -312,7 +312,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
 
 
 @router.get('/get', summary="获取文档块")
-async def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取文档块
 
@@ -361,7 +361,7 @@ async def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager
 
 
 @router.post('/set', summary="设置文档块")
-async def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/set` 设置文档块接口
 
@@ -559,7 +559,7 @@ async def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depe
 
 
 @router.post('/switch', summary="切换文档块状态")
-async def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     切换文档块状态
 
@@ -590,7 +590,7 @@ async def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), use
 
 
 @router.post('/rm', summary="删除文档块")
-async def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除文档块
 
@@ -623,57 +623,191 @@ async def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depend
 
 
 @router.post('/create', summary="创建文档块")
-async def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    创建文档块
+    ### POST `/create` 创建文档块接口
 
-    该接口用于创建新的文档块。
+    **功能描述**:
+    此接口用于创建文档块，支持内容分词、关键词提取、向量计算，并将生成的数据存储到数据库和知识库中。
 
-    参数:
-    - request: CreateChunkRequest对象，包含文档块的内容和相关信息
-        - doc_id: 文档的唯一标识符
-        - content_with_weight: 文档块的内容和权重
-        - important_kwd: 重要关键字列表，默认值为空列表
-    - db: 数据库会话对象
-    - user: 当前用户对象
+    ---
 
-    返回:
-    - 成功时返回包含新创建文档块ID的JSON结果
-    - 失败时返回错误信息
-    """
-    try:
-        md5 = hashlib.md5()
-        md5.update((request.content_with_weight + request.doc_id).encode("utf-8"))
-        chunk_id = md5.hexdigest()
-        d = {
-            "id": chunk_id,
-            "content_with_weight": request.content_with_weight,
-            "content_ltks": rag_tokenizer.tokenize(request.content_with_weight),
-            "content_sm_ltks": rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(request.content_with_weight)),
-            "important_kwd": request.important_kwd,
-            "important_tks": rag_tokenizer.tokenize(" ".join(request.important_kwd)),
-            "create_time": str(datetime.datetime.now()).replace("T", " ")[:19],
-            "create_timestamp_flt": datetime.datetime.now().timestamp()
+    ### 请求体 (Request Body)
+
+    | 字段                  | 类型          | 必填 | 描述                                                                                 |
+    |-----------------------|---------------|------|--------------------------------------------------------------------------------------|
+    | `doc_id`              | `string`     | 是   | 所属文档的唯一标识符。                                                               |
+    | `content_with_weight` | `string`     | 是   | 带权重的内容字符串，用于分词和向量计算。                                             |
+    | `important_kwd`       | `list[str]`  | 否   | 重要关键词列表，用于额外的分词和向量计算。                                            |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+
+    - **`Content-Type: application/json`**
+    - **示例**:
+        ```json
+        {
+            "retcode": 0,
+            "retmsg": "success",
+            "data": {
+                "chunk_id": "a1b2c3d4e5"
+            }
         }
+        ```
 
-        doc = DocumentService.get_by_id(db, request.doc_id)
+    #### 错误响应
+
+    - **404: Document not found**
+        - **描述**: 当根据 `doc_id` 查询文档信息失败时，返回此错误。
+        - **示例**:
+            ```json
+            {
+                "detail": "Document not found!"
+            }
+            ```
+
+    - **404: Tenant not found**
+        - **描述**: 当根据 `doc_id` 查询租户信息失败时，返回此错误。
+        - **示例**:
+            ```json
+            {
+                "detail": "Tenant not found!"
+            }
+            ```
+
+    - **404: Knowledgebase not found**
+        - **描述**: 当根据 `kb_id` 查询知识库信息失败时，返回此错误。
+        - **示例**:
+            ```json
+            {
+                "detail": "Knowledgebase not found!"
+            }
+            ```
+
+    - **500: 内部错误**
+        - **描述**: 当发生意外错误时，返回此错误。
+        - **示例**:
+            ```json
+            {
+                "retcode": 500,
+                "retmsg": "Internal server error",
+                "detail": "具体错误信息"
+            }
+            ```
+
+    ---
+
+    ### 主要流程
+
+    1. 解析请求体内容并生成唯一标识符 (`chunk_id`)。
+        - 基于 `content_with_weight` 和 `doc_id` 计算 MD5 哈希值作为 `chunk_id`。
+    2. 分词与关键词提取:
+        - 对 `content_with_weight` 进行分词 (`content_ltks`) 和细粒度分词 (`content_sm_ltks`)。
+        - 对 `important_kwd` 提取关键词并分词 (`important_tks`)。
+    3. 检查文档 (`doc_id`) 所属租户和知识库信息:
+        - 如果文档或知识库不存在，返回相应的错误响应。
+    4. 向量计算:
+        - 使用嵌入模型 (`LLMBundle`) 对文档标题和内容生成语义向量 (`vector`)。
+        - 支持权重配置 (`0.1` 标题向量 + `0.9` 内容向量)。
+    5. 数据存储:
+        - 将分词结果、关键词、向量等数据存入知识库。
+    6. 更新文档块计数:
+        - 调用 `DocumentService.increment_chunk_num` 更新文档块的相关计数。
+
+    ---
+
+    ### 注意事项
+
+    - **关键词提取**:
+        - `important_kwd` 提供额外的分词和向量计算输入。
+        - 如果关键词为空，系统会自动跳过对应处理。
+    - **向量计算**:
+        - 使用权重对标题和内容向量进行加权合成。
+        - 当前支持固定字段名 `vector`，未来可能支持动态配置。
+    - **错误处理**:
+        - 针对文档、租户和知识库的不存在分别返回特定错误响应。
+        - 捕获所有异常并返回服务器错误响应。
+
+    ---
+
+    ### 示例请求
+
+    #### 请求体:
+    ```json
+    {
+        "doc_id": "doc123",
+        "content_with_weight": "文本内容带权重的示例",
+        "important_kwd": ["关键词1", "关键词2"]
+    }
+    ```
+
+    - **成功响应**:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "chunk_id": "a1b2c3d4e5"
+        }
+    }
+    ```
+
+    - **错误响应 (文档不存在):**:
+    ```json
+    {
+        "detail": "Document not found!"
+    }
+    ```
+    """
+    req = request.model_dump()
+    md5 = hashlib.md5()
+    md5.update((request.content_with_weight + request.doc_id).encode("utf-8"))
+    chunk_id = md5.hexdigest()
+    d = {"pk": chunk_id, "content_ltks": rag_tokenizer.tokenize(req["content_with_weight"]),
+         "content_with_weight": req["content_with_weight"]}
+    d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
+    d["important_kwd"] = req.get("important_kwd", [])
+    d["important_tks"] = rag_tokenizer.tokenize(" ".join(req.get("important_kwd", [])))
+    d["create_time"] = str(datetime.datetime.now()).replace("T", " ")[:19]
+    d["create_timestamp_flt"] = datetime.datetime.now().timestamp()
+
+    try:
+        doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
-        d["kb_id"] = [doc.kb_id]
+        d["kb_id"] = doc.kb_id
         d["docnm_kwd"] = doc.name
+        d["title_tks"] = rag_tokenizer.tokenize(doc.name.split(".")[0])
+        d["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(d["title_tks"])
         d["doc_id"] = doc.id
+        d["page_num_int"] = []
+        d["position_int"] = []
+        d["top_int"] = []
+        d["img_id"] = ""
+        d["auth"] = []
 
-        tenant_id = DocumentService.get_tenant_id(db, request.doc_id)
+        tenant_id = DocumentService.get_tenant_id(db, req["doc_id"])
         if not tenant_id:
             return get_data_error_result(retmsg="Tenant not found!")
 
-        embd_id = DocumentService.get_embd_id(db, request.doc_id)
-        embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embd_id)
+        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        if not kb:
+            return get_data_error_result(retmsg="Knowledgebase not found!")
+        # todo 待新增kb.pagerank 字段，这边需要解开注释
+        # if kb.pagerank:
+        #     d["pagerank_fea"] = kb.pagerank
 
-        v, c = embd_mdl.encode([doc.name, request.content_with_weight])
+        embd_id = DocumentService.get_embd_id(db, req["doc_id"])
+        embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, embd_id)
+
+        v, c = embd_mdl.encode([doc.name, req["content_with_weight"]])
         v = 0.1 * v[0] + 0.9 * v[1]
-        d["q_%d_vec" % len(v)] = v.tolist()
-        ELASTICSEARCH.upsert([d], search.index_name(tenant_id))
+        # todo 需要支持任意维度向量字段，目前写死vector
+        d["vector"] = v.tolist()
+        settings.docStoreConn.insert(search.index_name_one(tenant_id, kb.name), [d])
 
         DocumentService.increment_chunk_num(
             db, doc.id, doc.kb_id, c, 1, 0)

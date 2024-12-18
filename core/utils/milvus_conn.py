@@ -779,23 +779,20 @@ class MilvusConnection(DocStoreConnection):
                     fields.append(FieldSchema(name=match_pattern, dtype=DataType.FLOAT_VECTOR, dim=dims))
                 elif mapping_type == "VarChar" and match_pattern != "pk":
                     max_length = value.get("mapping", {}).get("max_length", 256)  # 默认设置 max_length 为 256
-                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.VARCHAR, max_length=max_length))
+                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.VARCHAR, max_length=max_length, is_nullable=True))
                 elif match_pattern == "pk":
                     max_length = value.get("mapping", {}).get("max_length", 256)  # 默认设置 max_length 为 256
                     fields.append(FieldSchema(name=match_pattern, dtype=DataType.VARCHAR, max_length=max_length,
                                               is_primary=True))
                 elif mapping_type == "FLOAT":
-                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.FLOAT))
+                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.FLOAT, is_nullable=True))
                 elif mapping_type == "JSON":
-                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.JSON))
+                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.JSON, is_nullable=True))
                 elif mapping_type == "Array":
                     fields.append(FieldSchema(name=match_pattern, dtype=DataType.ARRAY, element_type=DataType.VARCHAR,
-                                              max_length=256, max_capacity=4096))
-        # todo 测试一下能否在下面使用动态字段
+                                              max_length=256, max_capacity=4096, is_nullable=True))
         schema = CollectionSchema(fields=fields, description="Created from mapping file", enable_dynamic_field=True)
-
         self.create_collection(collection_name, schema=schema)
-
         # 处理索引相关的逻辑
         for template in dynamic_templates:
             for key, value in template.items():

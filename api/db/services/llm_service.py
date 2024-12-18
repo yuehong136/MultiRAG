@@ -201,11 +201,14 @@ class TenantLLMService(CommonService):
 
         num = 0
         try:
-            # 查询是否存在对应记录
-            tenant_llm = db.query(cls.model)\
-                .filter(cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name)\
-                .first()
-
+            if llm_factory:
+                tenant_llm = db.query(cls.model)\
+                    .filter(cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name, cls.model.llm_factory == llm_factory)\
+                    .first()
+            else:
+                tenant_llm = db.query(cls.model) \
+                    .filter(cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name) \
+                    .first()
             if tenant_llm:
                 # 如果存在，执行更新
                 stmt = (
@@ -314,8 +317,9 @@ class LLMBundle(object):
 
     def chat(self, system, history, gen_conf, **kwargs):
         txt, used_tokens = self.mdl.chat(system, history, gen_conf, **kwargs)
-        if isinstance(txt, int) and  not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
-            logging.error(f"Can't update token usage for {self.tenant_id}/CHAT used_tokens: {used_tokens}")
+        if not isinstance(txt, int):
+            if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+                logging.error(f"Can't update token usage for {self.tenant_id}/CHAT used_tokens: {used_tokens}")
         return txt
 
     def chat_streamly(self, system, history, gen_conf, **kwargs):

@@ -123,6 +123,14 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         if not KnowledgebaseService.update_by_id(db, kb.id, req_data):
             return get_data_error_result()
 
+        # if kb.pagerank != req_data.get("pagerank", 0):
+        #     if req_data.get("pagerank", 0) > 0:
+        #         settings.docStoreConn.update({"kb_id": kb.id}, {"pagerank_fea": req_data["pagerank"]},
+        #                                  search.index_name_one(kb.tenant_id, kb.name), kb.id)
+        #     else:
+        #         settings.docStoreConn.update({"exist": "pagerank_fea"}, {"remove": "pagerank_fea"},
+        #                                  search.index_name_one(kb.tenant_id, kb.name), kb.id)
+
         kb = KnowledgebaseService.get_by_id(db, kb.id)
         if not kb:
             return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
