@@ -4,7 +4,7 @@ from abc import ABC
 from dataclasses import dataclass, field
 import openai
 from openai import OpenAI
-from core.nlp import is_chinese
+from core.nlp import is_chinese, is_english
 from typing import Any
 
 from core.utils import num_tokens_from_string

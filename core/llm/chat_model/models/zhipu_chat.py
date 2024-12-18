@@ -4,7 +4,7 @@ from typing import Any
 from core.llm.chat_model.base import Base, LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN
 from zhipuai import ZhipuAI
 
-from core.nlp import is_chinese
+from core.nlp import is_chinese, is_english
 
 
 @dataclass

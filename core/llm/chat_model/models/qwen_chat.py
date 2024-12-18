@@ -11,7 +11,7 @@ import re
 
 from dashscope import Generation
 
-from core.nlp import is_chinese
+from core.nlp import is_chinese, is_english
 from core.llm.chat_model.base import Base, LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN
 
 
