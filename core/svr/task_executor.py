@@ -351,9 +351,16 @@ def get_schema(collection_name):
 def embedding(docs, mdl, parser_config=None, callback=None):
     if parser_config is None:
         parser_config = {}
-    batch_size = 32
-    tts, cnts = [rmSpace(d["title_tks"]) for d in docs if d.get("title_tks")], [
-        re.sub(r"</?(table|td|caption|tr|th)( [^<>]{0,12})?>", " ", d["content_with_weight"]) for d in docs]
+    batch_size = 16
+    tts, cnts = [], []
+    for d in docs:
+        tts.append(rmSpace(d["title_tks"]))
+        c = "\n".join(d.get("question_kwd", []))
+        if not c:
+            c = d["content_with_weight"]
+        c = re.sub(r"</?(table|td|caption|tr|th)( [^<>]{0,12})?>", " ", c)
+        cnts.append(c)
+
     tk_count = 0
     if len(tts) == len(cnts):
         tts_ = np.array([])

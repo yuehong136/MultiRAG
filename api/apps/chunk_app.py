@@ -48,8 +48,8 @@ class SetChunkRequest(BaseModel):
     doc_id: str
     chunk_id: str
     content_with_weight: str
-    important_kwd: list[str] = None
-    question_kwd: list[str] = None
+    important_kwd: list[str] | None = None
+    question_kwd: list[str] | None = None
     available_int: int | None = None
 
 
@@ -67,6 +67,7 @@ class RmChunkRequest(BaseModel):
 class CreateChunkRequest(BaseModel):
     doc_id: str
     content_with_weight: str
+    question_kwd: list[str] | None = None
     important_kwd: list[str] | None = None
 
 
@@ -292,6 +293,7 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
                 "doc_id": sres.field[id]["doc_id"],
                 "docnm_kwd": sres.field[id]["docnm_kwd"],
                 "important_kwd": sres.field[id].get("important_kwd", []),
+                "question_kwd": sres.field[id].get("question_kwd", []),
                 "img_id": sres.field[id].get("img_id", ""),
                 "available_int": sres.field[id].get("available_int", 1),
                 "positions": sres.field[id].get("position_int", "").split("\t")
@@ -634,11 +636,12 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
 
     ### 请求体 (Request Body)
 
-    | 字段                  | 类型          | 必填 | 描述                                                                                 |
-    |-----------------------|---------------|------|--------------------------------------------------------------------------------------|
-    | `doc_id`              | `string`     | 是   | 所属文档的唯一标识符。                                                               |
-    | `content_with_weight` | `string`     | 是   | 带权重的内容字符串，用于分词和向量计算。                                             |
-    | `important_kwd`       | `list[str]`  | 否   | 重要关键词列表，用于额外的分词和向量计算。                                            |
+    | 字段                  | 类型           | 必填 | 描述                                              |
+    |-----------------------|----------------|------|---------------------------------------------------|
+    | `doc_id`             | `string`      | 是   | 文档的唯一标识符。                                |
+    | `content_with_weight`| `string`      | 是   | 包含权重的内容字符串，用于分词和向量计算。        |
+    | `question_kwd`       | `list[string]`| 否   | 问题关键词列表，用于问答模式或补充向量计算。      |
+    | `important_kwd`      | `list[string]`| 否   | 重要关键词列表，用于额外的分词和向量计算。        |
 
     ---
 
@@ -740,7 +743,8 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
     {
         "doc_id": "doc123",
         "content_with_weight": "文本内容带权重的示例",
-        "important_kwd": ["关键词1", "关键词2"]
+        "important_kwd": ["关键词1", "关键词2"],
+        "question_kwd": ["问题关键词1", "问题关键词2"]
     }
     ```
 
@@ -771,6 +775,8 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
     d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
     d["important_kwd"] = req.get("important_kwd", [])
     d["important_tks"] = rag_tokenizer.tokenize(" ".join(req.get("important_kwd", [])))
+    d["question_kwd"] = req.get("question_kwd", [])
+    d["question_tks"] = rag_tokenizer.tokenize("\n".join(req.get("question_kwd", [])))
     d["create_time"] = str(datetime.datetime.now()).replace("T", " ")[:19]
     d["create_timestamp_flt"] = datetime.datetime.now().timestamp()
 
@@ -803,7 +809,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         embd_id = DocumentService.get_embd_id(db, req["doc_id"])
         embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, embd_id)
 
-        v, c = embd_mdl.encode([doc.name, req["content_with_weight"]])
+        v, c = embd_mdl.encode([doc.name, req["content_with_weight"] if not d["question_kwd"] else "\n".join(d["question_kwd"])])
         v = 0.1 * v[0] + 0.9 * v[1]
         # todo 需要支持任意维度向量字段，目前写死vector
         d["vector"] = v.tolist()
