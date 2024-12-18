@@ -4,7 +4,8 @@ USER root
 
 SHELL ["/bin/bash", "-c"]
 
-ENV LIGHTEN=0
+ARG LIGHTEN=0
+ENV LIGHTEN=${LIGHTEN}
 
 WORKDIR /multirag
 

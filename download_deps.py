@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+#
+# Install this script's dependencies with pip3:
+# pip3 install huggingface-hub nltk
+
+
 from os import rename
 
 from huggingface_hub import snapshot_download
