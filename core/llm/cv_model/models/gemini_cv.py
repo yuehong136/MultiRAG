@@ -1,8 +1,5 @@
 import base64
 from io import BytesIO
-
-from transformers import GenerationConfig
-
 from core.llm.cv_model.base import Base
 
 
@@ -31,6 +28,7 @@ class GeminiCV(Base):
         return res.text,res.usage_metadata.total_token_count
 
     def chat(self, system, history, gen_conf, image=""):
+        from transformers import GenerationConfig
         if system:
             history[-1]["content"] = system + history[-1]["content"] + "user query: " + history[-1]["content"]
         try:
@@ -54,6 +52,7 @@ class GeminiCV(Base):
             return "**ERROR**: " + str(e), 0
 
     def chat_streamly(self, system, history, gen_conf, image=""):
+        from transformers import GenerationConfig
         if system:
             history[-1]["content"] = system + history[-1]["content"] + "user query: " + history[-1]["content"]
 
