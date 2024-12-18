@@ -82,7 +82,8 @@ class API4ConversationService(CommonService):
         :param to_date: 结束日期
         :return: 包含每日统计信息的列表，每个元素是一个字典
         """
-        if len(to_date) == 10: to_date += " 23:59:59"
+        if len(to_date) == 10:
+            to_date += " 23:59:59"
         try:
             # 构建查询语句，统计每天的对话数量（pv）、独立用户数量（uv）、代币总数（tokens）、总时长（duration）、平均轮次（round）、总点赞数（thumb_up）
             result = db.query(

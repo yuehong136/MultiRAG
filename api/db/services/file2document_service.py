@@ -12,10 +12,10 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException
 
 from api.db import FileSource
-from api.db.db_models import File2Document, File, Document
+from api.db.db_models import File2Document, File
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
-from api.utils import current_timestamp, datetime_format, get_uuid
+from api.utils import current_timestamp, datetime_format
 
 
 class File2DocumentService(CommonService):
@@ -39,7 +39,6 @@ class File2DocumentService(CommonService):
 
     @classmethod
     def delete_by_file_id(cls, db: Session, file_id: str):
-        # return db.query(cls.model).filter_by(file_id=file_id).delete(synchronize_session=False)
         try:
             deleted_count = db.query(cls.model).filter(cls.model.file_id == file_id).delete(synchronize_session=False)
             db.commit()  # 确保提交事务
@@ -51,7 +50,6 @@ class File2DocumentService(CommonService):
 
     @classmethod
     def delete_by_document_id(cls, db: Session, doc_id: str):
-        # return db.query(cls.model).filter_by(document_id=doc_id).delete(synchronize_session=False)
         try:
             deleted_count = db.query(cls.model).filter(cls.model.document_id == doc_id).delete(synchronize_session=False)
             db.commit()  # 确保提交事务

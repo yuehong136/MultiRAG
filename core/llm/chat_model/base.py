@@ -55,7 +55,8 @@ class Base(ABC):
                 **gen_conf
             )
             for resp in response:
-                if not resp.choices: continue
+                if not resp.choices:
+                    continue
                 if not resp.choices[0].delta.content:
                     resp.choices[0].delta.content = ""
                 ans += resp.choices[0].delta.content

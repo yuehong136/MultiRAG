@@ -1,62 +1,78 @@
-# ollama_chat.py
-from dataclasses import dataclass, field
-from typing import Any
 from ollama import Client
 
+from core.llm.cv_model.base import Base
 
-@dataclass
-class OllamaChat:
-    key: str
-    model_name: str
-    base_url: str = field(default="http://127.0.0.1:11434")  # 可以为 base_url 设置默认值
-    client: Client = field(init=False)  # client 会在 __post_init__ 中初始化
 
-    def __post_init__(self):
-        # 初始化 client
-        self.client = Client(host=self.base_url)
+class OllamaCV(Base):
+    def __init__(self, key, model_name, lang="Chinese", **kwargs):
+        self.client = Client(host=kwargs["base_url"])
+        self.model_name = model_name
+        self.lang = lang
 
-    def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
-        if system:
-            history.insert(0, {"role": "system", "content": system})
+    def describe(self, image, max_tokens=1024):
+        prompt = self.prompt("")
         try:
+            options = {"num_predict": max_tokens}
+            response = self.client.generate(
+                model=self.model_name,
+                prompt=prompt[0]["content"][1]["text"],
+                images=[image],
+                options=options
+            )
+            ans = response["response"].strip()
+            return ans, 128
+        except Exception as e:
+            return "**ERROR**: " + str(e), 0
+
+    def chat(self, system, history, gen_conf, image=""):
+        if system:
+            history[-1]["content"] = system + history[-1]["content"] + "user query: " + history[-1]["content"]
+
+        try:
+            for his in history:
+                if his["role"] == "user":
+                    his["images"] = [image]
             options = {}
             if "temperature" in gen_conf:
                 options["temperature"] = gen_conf["temperature"]
             if "max_tokens" in gen_conf:
                 options["num_predict"] = gen_conf["max_tokens"]
             if "top_p" in gen_conf:
-                options["top_p"] = gen_conf["top_p"]
+                options["top_k"] = gen_conf["top_p"]
             if "presence_penalty" in gen_conf:
                 options["presence_penalty"] = gen_conf["presence_penalty"]
             if "frequency_penalty" in gen_conf:
                 options["frequency_penalty"] = gen_conf["frequency_penalty"]
-
             response = self.client.chat(
                 model=self.model_name,
                 messages=history,
                 options=options,
                 keep_alive=-1
             )
+
             ans = response["message"]["content"].strip()
-            return ans, response.get("eval_count", 0) + response.get("prompt_eval_count", 0)
+            return ans, response["eval_count"] + response.get("prompt_eval_count", 0)
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
+    def chat_streamly(self, system, history, gen_conf, image=""):
         if system:
-            history.insert(0, {"role": "system", "content": system})
+            history[-1]["content"] = system + history[-1]["content"] + "user query: " + history[-1]["content"]
+
+        for his in history:
+            if his["role"] == "user":
+                his["images"] = [image]
         options = {}
         if "temperature" in gen_conf:
             options["temperature"] = gen_conf["temperature"]
         if "max_tokens" in gen_conf:
             options["num_predict"] = gen_conf["max_tokens"]
         if "top_p" in gen_conf:
-            options["top_p"] = gen_conf["top_p"]
+            options["top_k"] = gen_conf["top_p"]
         if "presence_penalty" in gen_conf:
             options["presence_penalty"] = gen_conf["presence_penalty"]
         if "frequency_penalty" in gen_conf:
             options["frequency_penalty"] = gen_conf["frequency_penalty"]
-
         ans = ""
         try:
             response = self.client.chat(

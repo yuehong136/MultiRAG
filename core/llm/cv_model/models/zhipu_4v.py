@@ -15,15 +15,12 @@ from core.llm.cv_model.base import Base
 from core.nlp import is_english
 
 
-@dataclass
 class Zhipu4V(Base):
-    key: str
-    model_name: str = "glm-4v-plus"
-    lang: str = "Chinese"
-    client: ZhipuAI = field(init=False)
+    def __init__(self, key, model_name="glm-4v-plus", lang="Chinese", **kwargs):
+        self.client = ZhipuAI(api_key=key)
+        self.model_name = model_name
+        self.lang = lang
 
-    def __post_init__(self):
-        self.client = ZhipuAI(api_key=self.key)
 
     def describe(self, image: bytes, max_tokens: int = 1024) -> tuple[str, int]:
         b64 = self.image2base64(image)

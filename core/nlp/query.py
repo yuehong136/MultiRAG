@@ -124,7 +124,8 @@ class MilvusQueryer:
 
                 tk_syns = self.syn.lookup(tk)
                 tk_syns = [MilvusQueryer.subSpecialChar(s) for s in tk_syns]
-                if len(keywords) < 32: keywords.extend([s for s in tk_syns if s])
+                if len(keywords) < 32:
+                    keywords.extend([s for s in tk_syns if s])
                 tk_syns = [rag_tokenizer.fine_grained_tokenize(s) for s in tk_syns if s]
                 tk_syns = [f"\"{s}\"" if s.find(" ") > 0 else s for s in tk_syns]
 

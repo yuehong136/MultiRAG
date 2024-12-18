@@ -12,7 +12,11 @@ from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.cv_model.models.azuregptv4 import AzureGptV4
+from core.llm.cv_model.models.gemini_cv import GeminiCV
 from core.llm.cv_model.models.gptv4 import GptV4
+from core.llm.cv_model.models.ollama_cv import OllamaCV
+from core.llm.cv_model.models.openai_api_cv import OpenAI_APICV
+from core.llm.cv_model.models.qwen_cv import QWenCV
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.default_embedding import DefaultEmbedding
@@ -65,12 +69,13 @@ EmbeddingModel = {
 CvModel = {
     "OpenAI": GptV4,
     "Azure-OpenAI": AzureGptV4,
-    # "Ollama": OllamaCV,
+    "Ollama": OllamaCV,
     "Xinference": XinferenceCV,
-    # "Tongyi-Qianwen": QWenCV,
+    "Tongyi-Qianwen": QWenCV,
     "ZHIPU-AI": Zhipu4V,
     # "Moonshot": LocalCV,
-    # 'Gemini':GeminiCV,
+    'Gemini':GeminiCV,
+    "OpenAI-API-Compatible": OpenAI_APICV,
     # 'OpenRouter':OpenRouterCV,
     # "LocalAI":LocalAICV
 }

@@ -13,14 +13,17 @@
 
 import logging
 import os
+import math
+import numpy as np
+import cv2
 from copy import deepcopy
+
 
 import onnxruntime as ort
 from huggingface_hub import snapshot_download
 
 from api.utils.file_utils import get_project_base_directory
 from .operators import *
-
 
 class Recognizer(object):
     def __init__(self, label_list, task_name, model_dir=None):
@@ -38,11 +41,11 @@ class Recognizer(object):
         if not model_dir:
             model_dir = os.path.join(
                         get_project_base_directory(),
-                        "core/res/deepdoc")
+                        "rag/res/deepdoc")
             model_file_path = os.path.join(model_dir, task_name + ".onnx")
             if not os.path.exists(model_file_path):
                 model_dir = snapshot_download(repo_id="InfiniFlow/deepdoc",
-                                              local_dir=os.path.join(get_project_base_directory(), "core/res/deepdoc"),
+                                              local_dir=os.path.join(get_project_base_directory(), "rag/res/deepdoc"),
                                               local_dir_use_symlinks=False)
                 model_file_path = os.path.join(model_dir, task_name + ".onnx")
         else:
@@ -277,7 +280,8 @@ class Recognizer(object):
             return
         min_dis, min_i = 1000000, None
         for i,b in enumerate(boxes):
-            if box.get("layoutno", "0") != b.get("layoutno", "0"): continue
+            if box.get("layoutno", "0") != b.get("layoutno", "0"):
+                continue
             dis = min(abs(box["x0"] - b["x0"]), abs(box["x1"] - b["x1"]), abs(box["x0"]+box["x1"] - b["x1"] - b["x0"])/2)
             if dis < min_dis:
                 min_i = i
@@ -402,7 +406,8 @@ class Recognizer(object):
         scores = np.max(boxes[:, 4:], axis=1)
         boxes = boxes[scores > thr, :]
         scores = scores[scores > thr]
-        if len(boxes) == 0: return []
+        if len(boxes) == 0:
+            return []
 
         # Get the class with the highest confidence
         class_ids = np.argmax(boxes[:, 4:], axis=1)
@@ -432,7 +437,8 @@ class Recognizer(object):
         for i in range(len(image_list)):
             if not isinstance(image_list[i], np.ndarray):
                 imgs.append(np.array(image_list[i]))
-            else: imgs.append(image_list[i])
+            else:
+                imgs.append(image_list[i])
 
         batch_loop_cnt = math.ceil(float(len(imgs)) / batch_size)
         for i in range(batch_loop_cnt):

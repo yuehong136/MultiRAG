@@ -558,11 +558,19 @@ def user_info_from_github(access_token: str):
     - 用户信息字典
     """
     import requests
-    headers = {"Accept": "application/json", 'Authorization': f"token {access_token}"}
-    res = requests.get(f"https://api.github.com/user", headers=headers)
+
+    headers = {"Accept": "application/json", "Authorization": f"token {access_token}"}
+    res = requests.get(
+        f"https://api.github.com/user?access_token={access_token}", headers=headers
+    )
     user_info = res.json()
-    email_info = requests.get(f"https://api.github.com/user/emails", headers=headers).json()
-    user_info["email"] = next((email for email in email_info if email['primary']), None)["email"]
+    email_info = requests.get(
+        f"https://api.github.com/user/emails?access_token={access_token}",
+        headers=headers,
+    ).json()
+    user_info["email"] = next(
+        (email for email in email_info if email["primary"] == True), None
+    )["email"]
     return user_info
 
 

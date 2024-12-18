@@ -12,3 +12,18 @@ class AzureGptV4(Base):
         self.client = AzureOpenAI(api_key=api_key, azure_endpoint=kwargs["base_url"], api_version=api_version)
         self.model_name = model_name
         self.lang = lang
+
+    def describe(self, image, max_tokens=300):
+        b64 = self.image2base64(image)
+        prompt = self.prompt(b64)
+        for i in range(len(prompt)):
+            for c in prompt[i]["content"]:
+                if "text" in c:
+                    c["type"] = "text"
+
+        res = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=prompt,
+            max_tokens=max_tokens,
+        )
+        return res.choices[0].message.content.strip(), res.usage.total_tokens

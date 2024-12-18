@@ -46,10 +46,10 @@ class Dealer:
             res = {}
             f = open(fnm, "r", encoding="utf-8")
             while True:
-                l = f.readline()
-                if not l:
+                line = f.readline()
+                if not line:
                     break
-                arr = l.replace("\n", "").split("\t")
+                arr = line.replace("\n", "").split("\t")
                 if len(arr) < 2:
                     res[arr[0]] = 0
                 else:

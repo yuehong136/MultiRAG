@@ -16,18 +16,10 @@ import base64
 from io import BytesIO
 
 
-@dataclass
 class Base(ABC):
-    key: str
-    model_name: str
-    lang: str = "English"
-    base_url: str | None = None
-    client: OpenAI = field(init=False)
+    def __init__(self, key, model_name):
+        pass
 
-    def __post_init__(self):
-        self.client = OpenAI(api_key=self.key, base_url=self.base_url)
-
-    @abstractmethod
     def describe(self, image: bytes, max_tokens: int = 300):
         raise NotImplementedError("Please implement describe method!")
 
@@ -92,7 +84,7 @@ class Base(ABC):
         buffered = BytesIO()
         try:
             image.save(buffered, format="JPEG")
-        except Exception as e:
+        except Exception:
             image.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
 

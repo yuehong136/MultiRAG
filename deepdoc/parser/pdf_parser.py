@@ -753,7 +753,7 @@ class RAGFlowPdfParser:
                     "x1": np.max([b["x1"] for b in bxs]),
                     "bottom": np.max([b["bottom"] for b in bxs]) - ht
                 }
-                louts = [l for l in self.page_layout[pn] if l["type"] == ltype]
+                louts = [layout for layout in self.page_layout[pn] if layout["type"] == ltype]
                 ii = Recognizer.find_overlapped(b, louts, naive=True)
                 if ii is not None:
                     b = louts[ii]
@@ -764,7 +764,8 @@ class RAGFlowPdfParser:
                             "layoutno", "")))
 
                 left, top, right, bott = b["x0"], b["top"], b["x1"], b["bottom"]
-                if right < left: right = left + 1
+                if right < left:
+                    right = left + 1
                 poss.append((pn + self.page_from, left, right, top, bott))
                 return self.page_images[pn] \
                     .crop((left * ZM, top * ZM,
@@ -846,7 +847,8 @@ class RAGFlowPdfParser:
         top = bx["top"] - self.page_cum_height[pn[0] - 1]
         bott = bx["bottom"] - self.page_cum_height[pn[0] - 1]
         page_images_cnt = len(self.page_images)
-        if pn[-1] - 1 >= page_images_cnt: return ""
+        if pn[-1] - 1 >= page_images_cnt:
+            return ""
         while bott * ZM > self.page_images[pn[-1] - 1].size[1]:
             bott -= self.page_images[pn[-1] - 1].size[1] / ZM
             pn.append(pn[-1] + 1)
@@ -890,7 +892,6 @@ class RAGFlowPdfParser:
                 nonlocal mh, pw, lines, widths
                 lines.append(line)
                 widths.append(width(line))
-                width_mean = np.mean(widths)
                 mmj = self.proj_match(
                     line["text"]) or line.get(
                     "layout_type",
@@ -917,7 +918,7 @@ class RAGFlowPdfParser:
                     dfs(boxes[0], 0)
                 else:
                     logging.debug("WASTE: " + boxes[0]["text"])
-            except Exception as e:
+            except Exception:
                 pass
             boxes.pop(0)
             mw = np.mean(widths)
@@ -997,7 +998,7 @@ class RAGFlowPdfParser:
         else:
             self.is_english = False
 
-        st = timer()
+        # st = timer()
         for i, img in enumerate(self.page_images_x2):
             chars = self.page_chars[i] if not self.is_english else []
             self.mean_height.append(
@@ -1031,8 +1032,8 @@ class RAGFlowPdfParser:
 
         self.page_cum_height = np.cumsum(self.page_cum_height)
         assert len(self.page_cum_height) == len(self.page_images) + 1
-        if len(self.boxes) == 0 and zoomin < 9: self.__images__(fnm, zoomin * 3, page_from,
-                                                                page_to, callback)
+        if len(self.boxes) == 0 and zoomin < 9:
+            self.__images__(fnm, zoomin * 3, page_from, page_to, callback)
 
     def __call__(self, fnm, need_image=True, zoomin=3, return_html=False):
         self.__images__(fnm, zoomin)
@@ -1171,7 +1172,7 @@ class PlainParser(object):
         if not self.outlines:
             logging.warning("Miss outlines")
 
-        return [(l, "") for l in lines], []
+        return [(line, "") for line in lines], []
 
     def crop(self, ck, need_position):
         raise NotImplementedError
