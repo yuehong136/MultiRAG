@@ -348,7 +348,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
 
         # 如果回答中包含无效API key的提示，添加设置API key的提示
         if answer.lower().find("invalid key") >= 0 or answer.lower().find("invalid api") >= 0:
-            answer += " Please set LLM API-Key in 'User Setting -> Model Providers -> API-Key'"
+            answer += " Please set LLM API-Key in 'User Setting -> Model providers -> API-Key'"
         # return {"answer": answer, "reference": refs, "prompt": prompt}
         done_tm = timer()
         prompt += "\n\n### Elapsed\n  - Retrieval: %.1f ms\n  - LLM: %.1f ms" % (
@@ -760,7 +760,7 @@ def ask(db: Session, question, kb_ids, tenant_id):
                 del c["vector"]
 
         if answer.lower().find("invalid key") >= 0 or answer.lower().find("invalid api") >= 0:
-            answer += " Please set LLM API-Key in 'User Setting -> Model Providers -> API-Key'"
+            answer += " Please set LLM API-Key in 'User Setting -> Model providers -> API-Key'"
         return {"answer": answer, "reference": refs}
 
     answer = ""

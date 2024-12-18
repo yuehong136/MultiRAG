@@ -11,15 +11,7 @@ WORKDIR /multirag
 
 COPY .git /multirag/.git
 
-RUN current_commit=$(git rev-parse --short HEAD); \
-    last_tag=$(git describe --tags --abbrev=0); \
-    commit_count=$(git rev-list --count "$last_tag..HEAD"); \
-    version_info=""; \
-    if [ "$commit_count" -eq 0 ]; then \
-        version_info=$last_tag; \
-    else \
-        version_info="$current_commit($last_tag~$commit_count)"; \
-    fi; \
+RUN version_info=$(git describe --tags --match=v* --first-parent --always); \
     if [ "$LIGHTEN" == "1" ]; then \
         version_info="$version_info slim"; \
     else \

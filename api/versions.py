@@ -34,7 +34,7 @@ def get_closest_tag_and_count():
     try:
         # Get the current commit hash
         version_info = (
-            subprocess.check_output(["git", "describe", "--tags", "--match=v*", "--dirty"])
+            subprocess.check_output(["git", "describe", "--tags", "--match=v*", "--first-parent", "--always"])
             .strip()
             .decode("utf-8")
         )
