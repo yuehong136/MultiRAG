@@ -30,6 +30,11 @@ class ZhipuChat(Base):
                 **gen_conf
             )
             ans = response.choices[0].message.content.strip()
+            if response.choices[0].finish_reason == "length":
+                if is_chinese(ans):
+                    ans += LENGTH_NOTIFICATION_CN
+                else:
+                    ans += LENGTH_NOTIFICATION_EN
             return ans, response.usage.total_tokens
         except Exception as e:
             return f"**ERROR**: {str(e)}", 0
