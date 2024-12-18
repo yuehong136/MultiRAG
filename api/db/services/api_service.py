@@ -7,7 +7,7 @@
 @desc:
 """
 from datetime import datetime
-from sqlalchemy import func
+from sqlalchemy import func, desc, asc
 from sqlalchemy.orm import Session
 from api.db.db_models import APIToken, API4Conversation, Dialog
 from api.db.services.common_service import CommonService
@@ -32,6 +32,32 @@ class APITokenService(CommonService):
 
 class API4ConversationService(CommonService):
     model = API4Conversation
+
+    @classmethod
+    def get_list(cls, db: Session, dialog_id, tenant_id,
+                 page_number, items_per_page, orderby, desc_flag, id):
+        # 初始查询
+        query = db.query(cls.model).filter(cls.model.dialog_id == dialog_id)
+
+        # 可选条件：根据 ID 筛选
+        if id:
+            query = query.filter(cls.model.id == id)
+
+        # 排序
+        if desc_flag:
+            query = query.order_by(desc(getattr(cls.model, orderby)))
+        else:
+            query = query.order_by(asc(getattr(cls.model, orderby)))
+
+        # 根据租户 ID 筛选
+        query = query.filter(cls.model.user_id == tenant_id)
+
+        # 分页
+        offset = (page_number - 1) * items_per_page
+        query = query.offset(offset).limit(items_per_page)
+
+        # 执行查询并返回结果
+        return query.all()
 
     @classmethod
     def append_message(cls, db: Session, id: str, conversation: str):
