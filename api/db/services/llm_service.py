@@ -268,11 +268,11 @@ class LLMBundle(object):
             self.max_length = lm.max_tokens
             break
 
-    def encode(self, texts: list, batch_size: int = 32):
-        emd, used_tokens = self.mdl.encode(texts, batch_size)
+    def encode(self, texts: list):
+        embeddings, used_tokens = self.mdl.encode(texts)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
             logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
-        return emd, used_tokens
+        return embeddings, used_tokens
 
     def encode_queries(self, query: str):
         emd, used_tokens = self.mdl.encode_queries(query)

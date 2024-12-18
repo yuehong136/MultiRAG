@@ -23,7 +23,7 @@ class ZhipuEmbed(Base):
         self.client = ZhipuAI(api_key=self.key)
         print(f"ZhipuAI client initialized with key: {self.key}")
 
-    def encode(self, texts: list, batch_size=16):
+    def encode(self, texts: list):
         arr = []
         tks_num = 0
         for txt in texts:

@@ -13,11 +13,15 @@ class XinferenceEmbed(Base):
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name
 
-    def encode(self, texts: list, batch_size=16):
-        res = self.client.embeddings.create(input=texts,
-                                            model=self.model_name)
-        return np.array([d.embedding for d in res.data]
-                        ), res.usage.total_tokens
+    def encode(self, texts: list):
+        batch_size = 16
+        ress = []
+        total_tokens = 0
+        for i in range(0, len(texts), batch_size):
+            res = self.client.embeddings.create(input=texts[i:i + batch_size], model=self.model_name)
+            ress.extend([d.embedding for d in res.data])
+            total_tokens += res.usage.total_tokens
+        return np.array(ress), total_tokens
 
     def encode_queries(self, text):
         res = self.client.embeddings.create(input=[text],

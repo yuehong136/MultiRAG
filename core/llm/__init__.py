@@ -18,6 +18,8 @@ from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.default_embedding import DefaultEmbedding
 from core.llm.embedding_model.huggingface_embed import HuggingFaceEmbed
 from core.llm.embedding_model.jina_embed import JinaEmbed
+from core.llm.embedding_model.ollama_embed import OllamaEmbed
+from core.llm.embedding_model.openai_api_embed import OpenAI_APIEmbed
 from core.llm.embedding_model.openai_embed import OpenAIEmbed
 from core.llm.embedding_model.qwen_embed import QWenEmbed
 from core.llm.embedding_model.volcengine_embed import VolcEngineEmbed
@@ -45,7 +47,7 @@ from core.llm.tts_model.models.xinferencetts import XinferenceTTS
 
 
 EmbeddingModel = {
-    # "Ollama": OllamaEmbed,
+    "Ollama": OllamaEmbed,
     "OpenAI": OpenAIEmbed,
     "Xinference": XinferenceEmbed,
     "Tongyi-Qianwen": QWenEmbed,
@@ -55,7 +57,7 @@ EmbeddingModel = {
     # "BaiChuan": BaiChuanEmbed,
     "Jina": JinaEmbed,
     "BAAI": DefaultEmbedding,
-    # "Mistral": MistralEmbed,
+    "OpenAI-API-Compatible": OpenAI_APIEmbed,
     "VolcEngine": VolcEngineEmbed,
     "HuggingFace": HuggingFaceEmbed
 }

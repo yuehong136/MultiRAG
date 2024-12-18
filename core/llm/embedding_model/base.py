@@ -7,7 +7,7 @@ class Base(ABC):
     model_name: str
 
     @abstractmethod
-    def encode(self, texts: list[str], batch_size: int = 16) -> list[list[float]]:
+    def encode(self, texts: list[str]) -> list[list[float]]:
         raise NotImplementedError("Please implement encode method!")
 
     @abstractmethod

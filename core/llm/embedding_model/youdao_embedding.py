@@ -39,7 +39,7 @@ class YoudaoEmbed(Base):
             return models_path
         return os.path.join(get_home_cache_dir(), model_name)
 
-    def encode(self, texts: list[str], batch_size: int = 10, **kwargs):
+    def encode(self, texts: list[str], **kwargs):
         """
         对给定的文本列表进行编码。
 
@@ -48,6 +48,7 @@ class YoudaoEmbed(Base):
         :param kwargs: 其他可选参数传递给 encode 方法。
         :return: 编码后的向量数组。
         """
+        batch_size = 10
         res = []
         token_count = 0
         for t in texts:
