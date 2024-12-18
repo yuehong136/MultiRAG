@@ -1,8 +1,12 @@
+import json
 import logging
+import os
 
 from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+
+from api.utils.file_utils import get_project_base_directory
 from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
 
 from api.db.services.user_service import TenantService
@@ -31,11 +35,11 @@ class TenantLLMService(CommonService):
     @classmethod
     def get_api_key(cls, db: Session, tenant_id: str, model_name: str):
         logging.info(f"Debug: Fetching API key for tenant_id={tenant_id}, model_name={model_name}")
-        arr = model_name.split("@")
-        if len(arr) < 2:
-            objs = cls.query(db, tenant_id=tenant_id, llm_name=model_name)
+        mdlnm, fid = TenantLLMService.split_model_name_and_factory(model_name)
+        if not fid:
+            objs = cls.query(db, tenant_id=tenant_id, llm_name=mdlnm)
         else:
-            objs = cls.query(db, tenant_id=tenant_id, llm_name=arr[0], llm_factory=arr[1])
+            objs = cls.query(db, tenant_id=tenant_id, llm_name=mdlnm, llm_factory=fid)
         if not objs:
             return None
         logging.info(f"Debug: Found API key: {objs[0].api_key}")
@@ -55,6 +59,24 @@ class TenantLLMService(CommonService):
             TenantLLM.tenant_id == tenant_id, TenantLLM.api_key.isnot(None)
         ).all()
         return list(objs)
+
+    @staticmethod
+    def split_model_name_and_factory(model_name):
+        arr = model_name.split("@")
+        if len(arr) < 2:
+            return model_name, None
+        if len(arr) > 2:
+            return "@".join(arr[0:-1]), arr[-1]
+        try:
+            fact = json.load(open(os.path.join(get_project_base_directory(), "configs/llm_factories.json"), "r"))["factory_llm_infos"]
+            fact = set([f["name"] for f in fact])
+            if arr[-1] not in fact:
+                return model_name, None
+            return arr[0], arr[-1]
+        except Exception as e:
+            logging.exception(f"TenantLLMService.split_model_name_and_factory got exception: {e}")
+        return model_name, None
+
 
     @classmethod
     def model_instance(cls, db: Session, tenant_id: str, llm_type: str, llm_name: str = None, lang: str = "Chinese"):
@@ -82,9 +104,7 @@ class TenantLLMService(CommonService):
         model_config = cls.get_api_key(db, tenant_id, mdlnm)
         # print("model_config:", model_config)
 
-        tmp = mdlnm.split("@")
-        fid = None if len(tmp) < 2 else tmp[1]
-        mdlnm = tmp[0]
+        mdlnm, fid = TenantLLMService.split_model_name_and_factory(mdlnm)
 
         if model_config:
             model_config = model_config.to_dict()
@@ -177,7 +197,7 @@ class TenantLLMService(CommonService):
         else:
             raise ValueError("LLM type error")
 
-        llm_name = mdlnm.split("@")[0] if "@" in mdlnm else mdlnm
+        llm_name, llm_factory = TenantLLMService.split_model_name_and_factory(mdlnm)
 
         num = 0
         try:
@@ -202,7 +222,8 @@ class TenantLLMService(CommonService):
                 num = result.rowcount  # 受影响的行数
             else:
                 # 如果不存在，创建新记录
-                llm_factory = mdlnm.split("@")[1] if "@" in mdlnm else mdlnm
+                if not llm_factory:
+                    llm_factory = mdlnm
                 new_tenant_llm = cls.model(
                     tenant_id=tenant_id,
                     mdl_type=llm_type,
