@@ -158,9 +158,10 @@ def init_settings():
 
     global DOC_ENGINE, docStoreConn, retrievaler, kg_retrievaler
     DOC_ENGINE = os.environ.get('DOC_ENGINE', "milvus")
-    if DOC_ENGINE == "milvus":
+    lower_case_doc_engine = DOC_ENGINE.lower()
+    if lower_case_doc_engine == "milvus":
         docStoreConn = core.utils.milvus_conn.MILVUS_CONNECTION
-    elif DOC_ENGINE == "infinity":
+    elif lower_case_doc_engine == "infinity":
         docStoreConn = core.utils.infinity_conn.InfinityConnection()
     else:
         raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
