@@ -11,6 +11,7 @@ import binascii
 import json
 import os
 import re
+from collections import defaultdict
 from copy import deepcopy
 from timeit import default_timer as timer
 import datetime
@@ -58,36 +59,6 @@ class DialogService(CommonService):
 
         # Fetch results and convert to dictionary format
         results = query.all()
-        return [item.__dict__ for item in results]
-
-
-class ConversationService(CommonService):
-    model = Conversation
-
-    @classmethod
-    def get_list(cls, db: Session, dialog_id, page_number, items_per_page, orderby, desc, id=None, name=None):
-        # 使用 SQLAlchemy 的 query 方法开始查询
-        query = db.query(cls.model).filter(cls.model.dialog_id == dialog_id)
-
-        # 添加条件过滤器
-        if id:
-            query = query.filter(cls.model.id == id)
-        if name:
-            query = query.filter(cls.model.name == name)
-
-        # 根据 desc 参数确定排序方式
-        order_clause = getattr(cls.model, orderby)
-        if desc:
-            query = query.order_by(desc(order_clause))
-        else:
-            query = query.order_by(asc(order_clause))
-
-        # 应用分页
-        query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
-
-        # 执行查询并返回结果
-        results = query.all()
-        # 将结果转换为字典形式返回
         return [item.__dict__ for item in results]
 
 
@@ -157,6 +128,32 @@ def llm_id2llm_type(llm_id):
         for llm in llm_factory["llm"]:
             if llm_id == llm["llm_name"]:
                 return llm["mdl_type"].strip(",")[-1]
+
+
+def kb_prompt(kbinfos, max_tokens):
+    knowledges = [ck["text"] for ck in kbinfos["chunks"]]
+    used_token_count = 0
+    chunks_num = 0
+    for i, c in enumerate(knowledges):
+        used_token_count += num_tokens_from_string(c)
+        chunks_num += 1
+        if max_tokens * 0.97 < used_token_count:
+            knowledges = knowledges[:i]
+            break
+
+    doc2chunks = defaultdict(list)
+    for i, ck in enumerate(kbinfos["chunks"]):
+        if i >= chunks_num:
+            break
+        doc2chunks[ck["docnm_kwd"]].append(ck["text"])
+
+    knowledges = []
+    for nm, chunks in doc2chunks.items():
+        txt = f"Document: {nm} \nContains the following relevant fragments:\n"
+        for i, chunk in enumerate(chunks, 1):
+            txt += f"{i}. {chunk}\n"
+        knowledges.append(txt)
+    return knowledges
 
 
 def chat(dialog, messages, db: Session, stream=True, **kwargs):
@@ -274,8 +271,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
                                         doc_ids=attachments,
                                         top=1024, aggs=False, rerank_mdl=rerank_mdl)
 
-    # 从kbinfos中提取出知识内容及其权重，存储在一个列表中
-    knowledges = [ck["text"] for ck in kbinfos["chunks"]]
+    knowledges = kb_prompt(kbinfos, max_tokens)
+
     # # 如果需要自我检索并且内容不相关，尝试重写问题
     # if dialog.prompt_config.get("self_rag") and not relevant(dialog.tenant_id, dialog.llm_id, questions[-1],
     #                                                          knowledges, db):
@@ -355,28 +352,6 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         prompt += "\n\n### Elapsed\n  - Retrieval: %.1f ms\n  - LLM: %.1f ms" % (
             (retrieval_tm - st) * 1000, (done_tm - st) * 1000)
         return {"answer": answer, "reference": refs, "prompt": prompt}
-
-    # # 根据是否启用流式输出生成回答
-    # if stream:
-    #     # 初始化答案变量，用于存储模型生成的解答
-    #     answer = ""
-    #     # 使用chat_streamly方法以流式处理方式获取答案
-    #     for ans in chat_mdl.chat_streamly(msg[0]["content"], msg[1:], gen_conf):
-    #         # 更新答案变量为最新的解答
-    #         answer = ans
-    #         # 生成并yield一个包含当前答案和空引用的字典
-    #         yield {"answer": answer, "reference": {}}
-    #     # 处理完成后，对最终答案进行装饰并yield
-    #     yield decorate_answer(answer)
-    # else:
-    #     # 使用chat方法直接获取答案
-    #     # answer = chat_mdl.chat(msg[0]["content"], msg[1:], gen_conf)
-    #     answer = chat_mdl.chat(prompt, msg[1:], gen_conf)
-    #     # 记录对话日志，包含用户消息和助手的回答
-    #     logging.info("User: {}|Assistant: {}".format(
-    #         msg[-1]["content"], answer))
-    #     # 对答案进行装饰并yield
-    #     yield decorate_answer(answer)
 
     if stream:
         last_ans = ""
@@ -714,17 +689,12 @@ def ask(db: Session, question, kb_ids, tenant_id):
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embd_nms[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT)
     max_tokens = chat_mdl.max_length
+    tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
     kbinfos = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, 1, 12, 0.1, 0.3, aggs=False)
-    knowledges = [ck["text"] for ck in kbinfos["chunks"]]
-
-    used_token_count = 0
-    for i, c in enumerate(knowledges):
-        used_token_count += num_tokens_from_string(c)
-        if max_tokens * 0.97 < used_token_count:
-            knowledges = knowledges[:i]
-            break
+    knowledges = kb_prompt(kbinfos, max_tokens)
 
     prompt = """
     Role: You're a smart assistant. Your name is Miss R.

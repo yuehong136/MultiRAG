@@ -1,10 +1,10 @@
-import logging
 import sys
 from api.utils.log_utils import initRootLogger
 
 CONSUMER_NO = "0" if len(sys.argv) < 2 else sys.argv[1]
 CONSUMER_NAME = "task_executor_" + CONSUMER_NO
 initRootLogger(CONSUMER_NAME)
+import logging
 for module in ["pdfminer"]:
     module_logger = logging.getLogger(module)
     module_logger.setLevel(logging.WARNING)
@@ -18,7 +18,6 @@ import os
 import hashlib
 import copy
 import re
-import sys
 import time
 # import traceback
 import threading
@@ -685,16 +684,25 @@ def analyze_heap(snapshot1: tracemalloc.Snapshot, snapshot2: tracemalloc.Snapsho
 
 
 def main():
+#     logging.info(r"""
+# ┌─────────────────────────── Task Starting ────────────────────────────┐
+# │   ______           __      ______                     __             │
+# │  /_  __/___ ______/ /__   / ____/  _____  _______  __/ /_____  _____ │
+# │   / / / __ `/ ___/ //_/  / __/ | |/_/ _ \/ ___/ / / / __/ __ \/ ___/ │
+# │  / / / /_/ (__  ) ,<    / /____>  </  __/ /__/ /_/ / /_/ /_/ / /     │
+# │ /_/  \__,_/____/_/|_|  /_____/_/|_|\___/\___/\__,_/\__/\____/_/      │
+# │                                                                      │
+# └──────────────────────────── LOG Showing ─────────────────────────────┘
+#         """)
     logging.info(r"""
-┌─────────────────────────── Task Starting ────────────────────────────┐
-│   ______           __      ______                     __             │
-│  /_  __/___ ______/ /__   / ____/  _____  _______  __/ /_____  _____ │
-│   / / / __ `/ ___/ //_/  / __/ | |/_/ _ \/ ___/ / / / __/ __ \/ ___/ │
-│  / / / /_/ (__  ) ,<    / /____>  </  __/ /__/ /_/ / /_/ /_/ / /     │
-│ /_/  \__,_/____/_/|_|  /_____/_/|_|\___/\___/\__,_/\__/\____/_/      │
-│                                                                      │
-└──────────────────────────── LOG Showing ─────────────────────────────┘
-        """)
+======================================================================
+   ______           __      ______                     __             
+  /_  __/___ ______/ /__   / ____/  _____  _______  __/ /_____  _____ 
+   / / / __ `/ ___/ //_/  / __/ | |/_/ _ \/ ___/ / / / __/ __ \/ ___/ 
+  / / / /_/ (__  ) ,<    / /____>  </  __/ /__/ /_/ / /_/ /_/ / /     
+ /_/  \__,_/____/_/|_|  /_____/_/|_|\___/\___/\__,_/\__/\____/_/      
+======================================================================
+    """)
     logging.info(f'TaskExecutor - MultiRAG version: {get_multirag_version()}')
     settings.init_settings()
     print_multirag_settings()

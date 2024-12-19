@@ -296,7 +296,7 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
                 "question_kwd": sres.field[id].get("question_kwd", []),
                 "img_id": sres.field[id].get("img_id", ""),
                 "available_int": int(sres.field[id].get("available_int", 1)),
-                "positions": sres.field[id].get("position_int", "").split("\t")
+                "positions": sres.field[id].get("position_int", [])
             }
             if len(d["positions"]) % 5 == 0:
                 poss = []

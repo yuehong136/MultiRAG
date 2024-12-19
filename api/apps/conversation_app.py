@@ -14,7 +14,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Generator
-from api.db.services.dialog_service import DialogService, ConversationService, chat, ask
+from api.db.services.conversation_service import ConversationService, structure_answer
+from api.db.services.dialog_service import DialogService, chat, ask
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle, TenantService, TenantLLMService
 from api.db import LLMType
@@ -197,6 +198,21 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
             return get_json_result(
                 data=False, retmsg=f'Only owner of conversation authorized for this operation.',
                 retcode=settings.RetCode.OPERATING_ERROR)
+
+        def get_value(d, k1, k2):
+            return d.get(k1, d.get(k2))
+
+        for ref in conv.reference:
+            ref["chunks"] = [{
+                "id": get_value(ck, "chunk_id", "id"),
+                "content": get_value(ck, "content", "text"),
+                "document_id": get_value(ck, "doc_id", "document_id"),
+                "document_name": get_value(ck, "docnm_kwd", "document_name"),
+                "dataset_id": get_value(ck, "kb_id", "dataset_id"),
+                "image_id": get_value(ck, "image_id", "img_id"),
+                "positions": get_value(ck, "positions", "position_int"),
+            } for ck in ref.get("chunks", [])]
+
         conv = conv.to_dict()
         return get_json_result(data=conv)
     except Exception as e:
@@ -321,24 +337,32 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
 
         if not conv.reference:
             conv.reference = []
-        conv.message.append({"role": "assistant", "content": "", "id": message_id})
-        conv.reference.append({"chunks": [], "doc_aggs": []})
+        else:
+            def get_value(d, k1, k2):
+                return d.get(k1, d.get(k2))
 
-        def fillin_conv(ans):
-            nonlocal conv, message_id
-            if not conv.reference:
-                conv.reference.append(ans["reference"])
-            else:
-                conv.reference[-1] = ans["reference"]
-            conv.message[-1] = {"role": "assistant", "content": ans["answer"],
-                                "id": message_id, "prompt": ans.get("prompt", "")}
-            ans["id"] = message_id
+            for ref in conv.reference:
+                if isinstance(ref, list):
+                    continue
+                ref["chunks"] = [{
+                    "id": get_value(ck, "chunk_id", "id"),
+                    "content": get_value(ck, "content", "text"),
+                    "document_id": get_value(ck, "doc_id", "document_id"),
+                    "document_name": get_value(ck, "docnm_kwd", "document_name"),
+                    "dataset_id": get_value(ck, "kb_id", "dataset_id"),
+                    "image_id": get_value(ck, "image_id", "img_id"),
+                    "positions": get_value(ck, "positions", "position_int"),
+                } for ck in ref.get("chunks", [])]
+
+        if not conv.reference:
+            conv.reference = []
+        conv.reference.append({"chunks": [], "doc_aggs": []})
 
         def stream_response():
             nonlocal dia, msg, db, req, conv
             try:
                 for ans in chat(dia, msg, db, **req):
-                    fillin_conv(ans)
+                    ans = structure_answer(conv, ans, message_id, conv.id)
                     yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
                 ConversationService.update_by_id(db, conv.id, conv.to_dict())
             except Exception as e:
@@ -351,9 +375,9 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
             return StreamingResponse(stream_response(), media_type="text/event-stream")
         else:
             answer = None
+            conv = deepcopy(conv)  # 深拷贝 conv，否则会导致后续更新数据时，无法更新引用
             for ans in chat(dia, msg, db, **req):
-                answer = ans
-                fillin_conv(ans)
+                answer = structure_answer(conv, ans, message_id, conv.id)
                 ConversationService.update_by_id(db, conv.id, conv.to_dict())
                 break
             return get_json_result(data=answer)
