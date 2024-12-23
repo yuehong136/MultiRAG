@@ -195,9 +195,11 @@ class Benchmark:
                 scores = sorted(scores, key=lambda kk: kk[1])
                 for score in scores[:10]:
                     f.write('- text: ' + str(texts[score[0]]) + '\t qrel: ' + str(score[1]) + '\n')
+        json.dump(qrels, open(os.path.join(file_path, dataset + '.qrels.json'), "w+", encoding='utf-8'), indent=2)
+        json.dump(run, open(os.path.join(file_path, dataset + '.run.json'), "w+", encoding='utf-8'), indent=2)
         print(os.path.join(file_path, dataset + '_result.md'), 'Saved!')
 
-    def __call__(self, dataset, file_path, miracl_corpus=''):
+def __call__(self, dataset, file_path, miracl_corpus=''):
         if dataset == "ms_marco_v1.1":
             qrels, texts = self.ms_marco_index(file_path, "benchmark_ms_marco_v1.1")
             run = self._get_retrieval(qrels, "benchmark_ms_marco_v1.1")

@@ -23,7 +23,7 @@ class RAGFlowJsonParser:
         txt = binary.decode(encoding, errors="ignore")
         json_data = json.loads(txt)
         chunks = self.split_json(json_data, True)   
-        sections = [json.dumps(l, ensure_ascii=False) for l in chunks if l]
+        sections = [json.dumps(line, ensure_ascii=False) for line in chunks if line]
         return sections
 
     @staticmethod
@@ -93,9 +93,9 @@ class RAGFlowJsonParser:
         """Splits JSON into a list of JSON chunks"""
 
         if convert_lists:
-            chunks = self._json_split(self._list_to_dict_preprocessing(json_data))
+            chunks = self._json_split(self._list_to_dict_preprocessing(json_data), None, None)
         else:
-            chunks = self._json_split(json_data)
+            chunks = self._json_split(json_data, None, None)
 
         # Remove the last chunk if it's empty
         if not chunks[-1]:

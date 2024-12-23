@@ -111,7 +111,8 @@ class Pdf(PdfParser):
     def __call__(self, filename, binary=None, from_page=0,
                  to_page=100000, zoomin=3, callback=None):
         start = timer()
-        callback(msg="OCR is running...")
+        first_start = start
+        callback(msg="OCR started")
         self.__images__(
             filename if not binary else binary,
             zoomin,
@@ -119,22 +120,26 @@ class Pdf(PdfParser):
             to_page,
             callback
         )
-        callback(msg="OCR finished")
-        logging.info("OCR({}~{}): {}".format(from_page, to_page, timer() - start))
+        callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
+        logging.info("OCR({}~{}): {:.2f}s".format(from_page, to_page, timer() - start))
 
         start = timer()
         self._layouts_rec(zoomin)
-        callback(0.63, "Layout analysis finished.")
+        callback(0.63, "Layout analysis ({:.2f}s)".format(timer() - start))
+
+        start = timer()
         self._table_transformer_job(zoomin)
-        callback(0.65, "Table analysis finished.")
+        callback(0.65, "Table analysis ({:.2f}s)".format(timer() - start))
+
+        start = timer()
         self._text_merge()
-        callback(0.67, "Text merging finished")
+        callback(0.67, "Text merged ({:.2f}s)".format(timer() - start))
         tbls = self._extract_table_figure(True, zoomin, True, True)
         # self._naive_vertical_merge()
         self._concat_downward()
         # self._filter_forpages()
 
-        logging.info("layouts cost: {}s".format(timer() - start))
+        logging.info("layouts cost: {}s".format(timer() - first_start))
         return [(b["text"], self._line_tag(b, zoomin))
                 for b in self.boxes], tbls
 
@@ -244,7 +249,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
     elif re.search(r"\.json$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
-        sections = JsonParser(int(parser_config.get("chunk_token_num", 128)))(binary)
+        chunk_token_num = int(parser_config.get("chunk_token_num", 128))
+        sections = JsonParser(chunk_token_num)(binary)
         sections = [(_, "") for _ in sections if _]
         callback(0.8, "Finish parsing.")
 
@@ -252,9 +258,14 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         callback(0.1, "Start to parse.")
         binary = BytesIO(binary)
         doc_parsed = parser.from_buffer(binary)
-        sections = doc_parsed['content'].split('\n')
-        sections = [(_, "") for _ in sections if _]
-        callback(0.8, "Finish parsing.")
+        if doc_parsed.get('content', None) is not None:
+            sections = doc_parsed['content'].split('\n')
+            sections = [(_, "") for _ in sections if _]
+            callback(0.8, "Finish parsing.")
+        else:
+            callback(0.8, f"tika.parser got empty content from {filename}.")
+            logging.warning(f"tika.parser got empty content from {filename}.")
+            return []
 
     else:
         raise NotImplementedError(

@@ -5,6 +5,7 @@ import os
 import time
 import uuid
 
+import bcrypt
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from api.db import LLMType, UserTenantRole
@@ -20,14 +21,11 @@ from api.db.database import SessionLocal
 from api.utils.file_utils import get_project_base_directory
 
 
-def encode_to_base64(input_string):
-    base64_encoded = base64.b64encode(input_string.encode('utf-8'))
-    return base64_encoded.decode('utf-8')
 
 def init_superuser(db: Session):
     user_info = {
         "id": uuid.uuid1().hex,
-        "password": encode_to_base64("admin"),
+        "password": 'admin',
         "nickname": "admin",
         "is_superuser": True,
         "email": "admin@datav.com",
@@ -72,7 +70,7 @@ def init_superuser(db: Session):
     # print(
     #     "【INFO】Super user initialized. \033[93memail: admin@datav.com, password: admin\033[0m. Changing the password after logging in is strongly recommended.")
     logging.info(
-        "Super user initialized. email: admin@ragflow.io, password: admin. Changing the password after login is strongly recommended.")
+        "Super user initialized. email: admin@datav.com, password: admin. Changing the password after login is strongly recommended.")
 
     try:
         chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])

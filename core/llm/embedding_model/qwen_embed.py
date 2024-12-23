@@ -7,12 +7,12 @@ from core.utils import truncate
 
 class QWenEmbed(Base):
     def __init__(self, key, model_name="text_embedding_v2", **kwargs):
-        dashscope.api_key = key
+        self.key = key
         self.model_name = model_name
 
-    def encode(self, texts: list, batch_size=10):
+    def encode(self, texts: list):
         import dashscope
-        batch_size = min(batch_size, 4)
+        batch_size = 4
         try:
             res = []
             token_count = 0
@@ -21,6 +21,7 @@ class QWenEmbed(Base):
                 resp = dashscope.TextEmbedding.call(
                     model=self.model_name,
                     input=texts[i:i + batch_size],
+                    api_key=self.key,
                     text_type="document"
                 )
                 embds = [[] for _ in range(len(resp["output"]["embeddings"]))]
@@ -38,6 +39,7 @@ class QWenEmbed(Base):
             resp = dashscope.TextEmbedding.call(
                 model=self.model_name,
                 input=text[:2048],
+                api_key=self.key,
                 text_type="query"
             )
             return np.array(resp["output"]["embeddings"][0]

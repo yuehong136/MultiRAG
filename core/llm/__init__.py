@@ -12,16 +12,26 @@ from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.cv_model.models.azuregptv4 import AzureGptV4
+from core.llm.cv_model.models.gemini_cv import GeminiCV
 from core.llm.cv_model.models.gptv4 import GptV4
+from core.llm.cv_model.models.ollama_cv import OllamaCV
+from core.llm.cv_model.models.openai_api_cv import OpenAI_APICV
+from core.llm.cv_model.models.qwen_cv import QWenCV
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
+from core.llm.embedding_model.default_embedding import DefaultEmbedding
 from core.llm.embedding_model.huggingface_embed import HuggingFaceEmbed
+from core.llm.embedding_model.jina_embed import JinaEmbed
+from core.llm.embedding_model.ollama_embed import OllamaEmbed
+from core.llm.embedding_model.openai_api_embed import OpenAI_APIEmbed
 from core.llm.embedding_model.openai_embed import OpenAIEmbed
 from core.llm.embedding_model.qwen_embed import QWenEmbed
+from core.llm.embedding_model.volcengine_embed import VolcEngineEmbed
 from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
 from core.llm.rerank_model.default_rerank import DefaultRerank
+from core.llm.rerank_model.jina_rerank import JinaRerank
 from core.llm.rerank_model.localai_rerank import LocalAIRerank
 from core.llm.rerank_model.openai_api_rerank import OpenAI_APIRerank
 from core.llm.rerank_model.qwen_rerank import QWenRerank
@@ -41,7 +51,7 @@ from core.llm.tts_model.models.xinferencetts import XinferenceTTS
 
 
 EmbeddingModel = {
-    # "Ollama": OllamaEmbed,
+    "Ollama": OllamaEmbed,
     "OpenAI": OpenAIEmbed,
     "Xinference": XinferenceEmbed,
     "Tongyi-Qianwen": QWenEmbed,
@@ -49,21 +59,23 @@ EmbeddingModel = {
     # "FastEmbed": FastEmbed,
     "Youdao": YoudaoEmbed,
     # "BaiChuan": BaiChuanEmbed,
-    # "Jina": JinaEmbed,
-    # "BAAI": DefaultEmbedding,
-    # "Mistral": MistralEmbed,
+    "Jina": JinaEmbed,
+    "BAAI": DefaultEmbedding,
+    "OpenAI-API-Compatible": OpenAI_APIEmbed,
+    "VolcEngine": VolcEngineEmbed,
     "HuggingFace": HuggingFaceEmbed
 }
 
 CvModel = {
     "OpenAI": GptV4,
     "Azure-OpenAI": AzureGptV4,
-    # "Ollama": OllamaCV,
+    "Ollama": OllamaCV,
     "Xinference": XinferenceCV,
-    # "Tongyi-Qianwen": QWenCV,
+    "Tongyi-Qianwen": QWenCV,
     "ZHIPU-AI": Zhipu4V,
     # "Moonshot": LocalCV,
-    # 'Gemini':GeminiCV,
+    'Gemini':GeminiCV,
+    "OpenAI-API-Compatible": OpenAI_APICV,
     # 'OpenRouter':OpenRouterCV,
     # "LocalAI":LocalAICV
 }
@@ -92,7 +104,7 @@ ChatModel = {
 
 RerankModel = {
     "BAAI": DefaultRerank,
-    # "Jina": JinaRerank,
+    "Jina": JinaRerank,
     "LocalAI": LocalAIRerank,
     "OpenAI-API-Compatible": OpenAI_APIRerank,
     "Youdao": YoudaoRerank,

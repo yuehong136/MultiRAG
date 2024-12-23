@@ -77,12 +77,14 @@ class FileService(CommonService):
         KnowledgebaseAlias = aliased(Knowledgebase)
         DocumentAlias = aliased(Document)
         FileAlias = aliased(cls.model)
-        kbs = db.query(Knowledgebase.id, Knowledgebase.name) \
-            .select_from(FileAlias) \
-            .join(File2Document, File2Document.file_id == FileAlias.id) \
-            .join(DocumentAlias, File2Document.document_id == DocumentAlias.id) \
-            .join(KnowledgebaseAlias, KnowledgebaseAlias.id == DocumentAlias.kb_id) \
-            .filter(FileAlias.id == file_id).all()
+        kbs = (db.query(Knowledgebase.id, Knowledgebase.name)
+            .select_from(FileAlias)
+            .join(File2Document, File2Document.file_id == FileAlias.id)
+            .join(DocumentAlias, File2Document.document_id == DocumentAlias.id)
+            .join(KnowledgebaseAlias, KnowledgebaseAlias.id == DocumentAlias.kb_id)
+            .filter(FileAlias.id == file_id)).all()
+        if not kbs:
+            return []
         return [{"kb_id": kb.id, "kb_name": kb.name} for kb in kbs]
 
     @classmethod

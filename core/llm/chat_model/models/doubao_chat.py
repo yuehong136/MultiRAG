@@ -49,4 +49,4 @@ class DoubaoChat(Base):
                     yield ans
         except Exception as e:
             yield ans + f"\n**ERROR**: {str(e)}"
-        # yield total_tokens
+        yield total_tokens

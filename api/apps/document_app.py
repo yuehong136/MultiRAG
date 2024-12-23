@@ -33,7 +33,7 @@ from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
 from api import settings
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
-    get_json_result
+    get_json_result, get_data_error_result
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type, thumbnail, get_project_base_directory
 from api.utils.web_utils import html2pdf, is_valid_url
@@ -656,12 +656,15 @@ async def change_parser(
 
 
 @router.get("/image/{image_id}", summary="获取图片", response_description="成功获取图片")
-async def get_image(
+def get_image(
         image_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
     try:
+        arr = image_id.split("-")
+        if len(arr) != 2:
+            return get_data_error_result(retmsg="Image not found.")
         # 分离 bucket 和 name
         bkt, nm = image_id.split("-")
 

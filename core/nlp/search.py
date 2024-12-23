@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 from core.utils import rmSpace
 from core.nlp import rag_tokenizer, query, is_english
+from core.utils.doc_store_conn import MatchDenseExpr
 
 
 def index_name(uid, kb_names):
@@ -22,6 +23,7 @@ class Dealer:
             "title_sm_tks^5",
             "important_kwd^30",
             "important_tks^20",
+            "question_tks^20",
             "content_ltks^2",
             "content_sm_ltks"]
         self.milvus_conn = milvus_conn
@@ -46,15 +48,17 @@ class Dealer:
         keywords: list[str] | None = None
         group_docs: list[list] | None = None
 
-    def _vector(self, txt, emb_mdl, sim=0.8, topk=10):
-        qv, c = emb_mdl.encode_queries(txt)
-        return {
-            "field": "vector",
-            "k": topk,
-            "similarity": sim,
-            "num_candidates": topk * 2,
-            "query_vector": [float(v) for v in qv]
-        }
+    def get_vector(self, txt, emb_mdl, topk=10, similarity=0.1):
+        qv, _ = emb_mdl.encode_queries(txt)
+        shape = np.array(qv).shape
+        if len(shape) > 1:
+            raise Exception(
+                f"Dealer.get_vector returned array's shape {shape} doesn't match expectation(exact one dimension).")
+        embedding_data = [float(v) for v in qv]
+        # todo 适配任意维度向量列名
+        # vector_column_name = f"q_{len(embedding_data)}_vec"
+        vector_column_name = "vector"
+        return MatchDenseExpr(vector_column_name, embedding_data, 'float', 'cosine', topk, {"similarity": similarity})
 
     def _add_filters(self, base_filter, req):
         filters = []
@@ -102,8 +106,8 @@ class Dealer:
         # Vector search parameters
         if req.get("vector"):
             assert embd_mdl, "No embedding model selected"
-            vector_search_params = self._vector(qst, embd_mdl, req.get("similarity", 0.1), req.get("topk", 1024))
-            query_vector = vector_search_params["query_vector"]
+            vector_search_params = self.get_vector(qst, embd_mdl, req.get("topk", 1024), req.get("similarity", 0.1))
+            query_vector = vector_search_params.embedding_data
 
             for idxnm in idxnms:
                 logging.info(f"正在搜索的集合: {idxnm}")
@@ -120,7 +124,7 @@ class Dealer:
                     search_results = self.milvus_conn.search(
                         collection_name=idxnm,
                         data=[query_vector],
-                        anns_field=vector_search_params["field"],
+                        anns_field=vector_search_params.vector_column_name,
                         limit=req.get("size", 10),
                         search_params={"metric_type": "COSINE", "params": {"nprobe": 10}},
                         output_fields=src,
@@ -178,7 +182,7 @@ class Dealer:
         kwds = set([])
         for k in keywords:
             kwds.add(k)
-            for kk in rag_tokenizer.fine_grained_tokenize(k).split(" "):
+            for kk in rag_tokenizer.fine_grained_tokenize(k).split():
                 if len(kk) < 2:
                     continue
                 if kk in kwds:
@@ -224,7 +228,7 @@ class Dealer:
             txt = "...".join([a for a in list(hlts.items())[0][1]])
 
             # 判断文本是否为英文
-            if not is_english(txt.split(" ")):
+            if not is_english(txt.split()):
                 ans[entity.get("doc_id", "")] = txt
                 continue
 
@@ -296,7 +300,7 @@ class Dealer:
         assert len(ans_v[0]) == len(chunk_v[0]), "The dimension of query and chunk do not match: {} vs. {}".format(
             len(ans_v[0]), len(chunk_v[0]))
 
-        chunks_tks = [rag_tokenizer.tokenize(self.qryr.rmWWW(ck)).split(" ")
+        chunks_tks = [rag_tokenizer.tokenize(self.qryr.rmWWW(ck)).split()
                       for ck in chunks]
         cites = {}
         thr = 0.63
@@ -305,7 +309,7 @@ class Dealer:
                 sim, tksim, vtsim = self.qryr.hybrid_similarity(ans_v[i],
                                                                 chunk_v,
                                                                 rag_tokenizer.tokenize(
-                                                                    self.qryr.rmWWW(pieces_[i])).split(" "),
+                                                                    self.qryr.rmWWW(pieces_[i])).split(),
                                                                 chunks_tks,
                                                                 tkweight, vtweight)
                 mx = np.max(sim) * 0.99
@@ -349,8 +353,8 @@ class Dealer:
     #             sres.field[i]["important_kwd"] = [sres.field[i]["important_kwd"]]
     #     ins_tw = []
     #     for i in sres.ids:
-    #         content_ltks = sres.field[i][cfield].split(" ")
-    #         title_tks = [t for t in sres.field[i].get("title_tks", "").split(" ") if t]
+    #         content_ltks = sres.field[i][cfield].split()
+    #         title_tks = [t for t in sres.field[i].get("title_tks", "").split() if t]
     #         important_kwd = sres.field[i].get("important_kwd", [])
     #         tks = content_ltks + title_tks + important_kwd
     #         ins_tw.append(tks)
@@ -369,13 +373,14 @@ class Dealer:
 
         ins_tw = []
         # for i in sres.ids:
-        #     tks = sres.field[i].split(" ")
+        #     tks = sres.field[i].split()
         #     ins_tw.append(tks)
         for i in sres.ids:
-            content_ltks = sres.field[i][cfield].split(" ")
-            title_tks = [t for t in sres.field[i].get("title_tks", "").split(" ") if t]
+            content_ltks = sres.field[i][cfield].split()
+            title_tks = [t for t in sres.field[i].get("title_tks", "").split() if t]
+            question_tks = [t for t in sres.field[i].get("question_tks", "").split() if t]
             important_kwd = sres.field[i].get("important_kwd", [])
-            tks = content_ltks + title_tks + important_kwd
+            tks = content_ltks + title_tks * 2 + important_kwd * 5 + question_tks*6
             ins_tw.append(tks)
 
         sim, tksim, vtsim = self.qryr.hybrid_similarity(sres.query_vector,
@@ -393,8 +398,8 @@ class Dealer:
                 sres.field[i]["important_kwd"] = [sres.field[i]["important_kwd"]]
         ins_tw = []
         for i in sres.ids:
-            content_ltks = sres.field[i][cfield].split(" ")
-            title_tks = [t for t in sres.field[i].get("title_tks", "").split(" ") if t]
+            content_ltks = sres.field[i][cfield].split()
+            title_tks = [t for t in sres.field[i].get("title_tks", "").split() if t]
             important_kwd = sres.field[i].get("important_kwd", [])
             tks = content_ltks + title_tks + important_kwd
             ins_tw.append(tks)
@@ -407,8 +412,8 @@ class Dealer:
     def hybrid_similarity(self, ans_embd, ins_embd, ans, inst):
         return self.qryr.hybrid_similarity(ans_embd,
                                            ins_embd,
-                                           rag_tokenizer.tokenize(ans).split(" "),
-                                           rag_tokenizer.tokenize(inst).split(" "))
+                                           rag_tokenizer.tokenize(ans).split(),
+                                           rag_tokenizer.tokenize(inst).split())
 
     def retrieval(self, question, filter_exp, embd_mdl, tenant_id, kb_names, page, page_size, similarity_threshold=0.2,
                   vector_similarity_weight=0.3, top=1024, doc_ids=None, aggs=True, rerank_mdl=None):
@@ -443,10 +448,13 @@ class Dealer:
             sim = tsim = vsim = [1] * len(sres.ids)
             idx = list(range(len(sres.ids)))
 
+        def floor_sim(score):
+            return (int(score * 100.) % 100) / 100.
+
         dim = len(sres.query_vector)
         # start_idx = (page - 1) * page_size
         for i in idx:
-            if sim[i] < similarity_threshold:
+            if floor_sim(sim[i]) < similarity_threshold:
                 break
             # ranks["total"] += 1
             # start_idx -= 1
@@ -473,7 +481,8 @@ class Dealer:
                 "vector_similarity": vsim[i],
                 "term_similarity": tsim[i],
                 "vector": self.trans2floats("\t".join(map(str, sres.query_vector))),
-                "positions": sres.field[id].get("position_int", "").split("\t")
+                # "positions": sres.field[id].get("position_int", "").split("\t")
+                "positions": sres.field[id].get("position_int", [])
             }
             # if highlight:
             #     if id in sres.highlight:

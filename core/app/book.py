@@ -25,30 +25,33 @@ from deepdoc.parser import PdfParser, DocxParser, PlainParser, HtmlParser
 class Pdf(PdfParser):
     def __call__(self, filename, binary=None, from_page=0,
                  to_page=100000, zoomin=3, callback=None):
-        callback(msg="OCR is running...")
+        from timeit import default_timer as timer
+        start = timer()
+        callback(msg="OCR started")
         self.__images__(
             filename if not binary else binary,
             zoomin,
             from_page,
             to_page,
             callback)
-        callback(msg="OCR finished")
+        callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
 
-        from timeit import default_timer as timer
         start = timer()
         self._layouts_rec(zoomin)
-        callback(0.67, "Layout analysis finished")
+        callback(0.67, "Layout analysis ({:.2f}s)".format(timer() - start))
         logging.debug("layouts: {}".format(timer() - start))
+
+        start = timer()
         self._table_transformer_job(zoomin)
-        callback(0.68, "Table analysis finished")
+        callback(0.68, "Table analysis ({:.2f}s)".format(timer() - start))
+
+        start = timer()
         self._text_merge()
         tbls = self._extract_table_figure(True, zoomin, True, True)
         self._naive_vertical_merge()
         self._filter_forpages()
         self._merge_with_same_bullet()
-        callback(0.75, "Text merging finished.")
-
-        callback(0.8, "Text extraction finished")
+        callback(0.8, "Text extraction ({:.2f}s)".format(timer() - start))
 
         return [(b["text"] + self._line_tag(b, zoomin), b.get("layoutno", ""))
                 for b in self.boxes], tbls
@@ -90,7 +93,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         callback(0.1, "Start to parse.")
         txt = get_text(filename, binary)
         sections = txt.split("\n")
-        sections = [(l, "") for l in sections if l]
+        sections = [(line, "") for line in sections if line]
         remove_contents_table(sections, eng=is_english(
             random_choices([t for t, _ in sections], k=200)))
         callback(0.8, "Finish parsing.")
@@ -98,7 +101,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     elif re.search(r"\.(htm|html)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
         sections = HtmlParser()(filename, binary)
-        sections = [(l, "") for l in sections if l]
+        sections = [(line, "") for line in sections if line]
         remove_contents_table(sections, eng=is_english(
             random_choices([t for t, _ in sections], k=200)))
         callback(0.8, "Finish parsing.")
@@ -108,7 +111,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         binary = BytesIO(binary)
         doc_parsed = parser.from_buffer(binary)
         sections = doc_parsed['content'].split('\n')
-        sections = [(l, "") for l in sections if l]
+        sections = [(line, "") for line in sections if line]
         remove_contents_table(sections, eng=is_english(
             random_choices([t for t, _ in sections], k=200)))
         callback(0.8, "Finish parsing.")

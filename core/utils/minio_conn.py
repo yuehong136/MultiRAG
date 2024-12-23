@@ -8,7 +8,7 @@
 """
 import logging
 import time
-from minio import Minio
+from minio import Minio, S3Error
 from io import BytesIO
 from core import settings
 from core.utils import singleton
@@ -92,8 +92,11 @@ class MultiRAGMinio(object):
                 return True
             else:
                 return False
+        except S3Error as e:
+            if e.code in ["NoSuchKey", "NoSuchBucket", "ResourceNotFound"]:
+                return False
         except Exception:
-            logging.exception(f"Not found: {bucket}/{filename}")
+            logging.exception(f"obj_exist {bucket}/{filename} got exception")
             return False
 
     def get_presigned_url(self, bucket, fnm, expires):
@@ -106,12 +109,32 @@ class MultiRAGMinio(object):
                 time.sleep(1)
         return
 
+    def delete_bucket(self, bucket):
+        """
+        Deletes a bucket from MinIO.
+
+        :param bucket: Name of the bucket to delete.
+        """
+        try:
+            if self.conn.bucket_exists(bucket):
+                # Ensure the bucket is empty before deleting
+                objects = self.conn.list_objects(bucket, recursive=True)
+                for obj in objects:
+                    self.conn.remove_object(bucket, obj.object_name)
+                self.conn.remove_bucket(bucket)
+                logging.info(f"Bucket {bucket} successfully deleted.")
+            else:
+                logging.warning(f"Bucket {bucket} does not exist.")
+        except Exception:
+            logging.exception(f"Failed to delete bucket {bucket}.")
+
 MINIO = MultiRAGMinio()
 
 if __name__ == "__main__":
     conn = MultiRAGMinio()
     fnm = r"E:\Project\python\study\RAG\assets\multirag.jpg"
     from PIL import Image
+
     img = Image.open(fnm)
     # 将图像从RGBA转换为RGB
     if img.mode == 'RGBA':

@@ -16,7 +16,7 @@ from io import BytesIO
 import re
 
 from deepdoc.parser.utils import get_text
-from core.app import laws
+from core.app import naive
 from core.nlp import rag_tokenizer, tokenize
 from deepdoc.parser import PdfParser, ExcelParser, PlainParser, HtmlParser
 
@@ -24,7 +24,9 @@ from deepdoc.parser import PdfParser, ExcelParser, PlainParser, HtmlParser
 class Pdf(PdfParser):
     def __call__(self, filename, binary=None, from_page=0,
                  to_page=100000, zoomin=3, callback=None):
-        callback(msg="OCR is running...")
+        from timeit import default_timer as timer
+        start = timer()
+        callback(msg="OCR started")
         self.__images__(
             filename if not binary else binary,
             zoomin,
@@ -32,24 +34,28 @@ class Pdf(PdfParser):
             to_page,
             callback
         )
-        callback(msg="OCR finished")
+        callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
 
-        from timeit import default_timer as timer
         start = timer()
         self._layouts_rec(zoomin, drop=False)
-        callback(0.63, "Layout analysis finished.")
+        callback(0.63, "Layout analysis ({:.2f}s)".format(timer() - start))
         logging.debug("layouts cost: {}s".format(timer() - start))
+
+        start = timer()
         self._table_transformer_job(zoomin)
-        callback(0.65, "Table analysis finished.")
+        callback(0.65, "Table analysis ({:.2f}s)".format(timer() - start))
+
+        start = timer()
         self._text_merge()
-        callback(0.67, "Text merging finished")
+        callback(0.67, "Text merged ({:.2f}s)".format(timer() - start))
         tbls = self._extract_table_figure(True, zoomin, True, True)
         self._concat_downward()
 
         sections = [(b["text"], self.get_position(b, zoomin))
                     for i, b in enumerate(self.boxes)]
         for (img, rows), poss in tbls:
-            if not rows:continue
+            if not rows:
+                continue
             sections.append((rows if isinstance(rows, str) else rows[0],
                              [(p[0] + 1 - from_page, p[1], p[2], p[3], p[4]) for p in poss]))
         return [(txt, "") for txt, _ in sorted(sections, key=lambda x: (
@@ -67,7 +73,10 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
     if re.search(r"\.docx$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
-        sections = [txt for txt in laws.Docx()(filename, binary) if txt]
+        sections, tbls = naive.Docx()(filename, binary)
+        sections = [s for s, _ in sections if s]
+        for (_, html), _ in tbls:
+            sections.append(html)
         callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
@@ -101,7 +110,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         binary = BytesIO(binary)
         doc_parsed = parser.from_buffer(binary)
         sections = doc_parsed['content'].split('\n')
-        sections = [l for l in sections if l]
+        sections = [s for s in sections if s]
         callback(0.8, "Finish parsing.")
 
     else:

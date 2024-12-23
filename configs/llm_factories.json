@@ -369,13 +369,13 @@
             "status": "1",
             "llm": [
                 {
-                    "llm_name": "maidalun1020/bce-embedding-base_v1",
+                    "llm_name": "maidalun/bce-embedding-base_v1",
                     "tags": "TEXT EMBEDDING,",
                     "max_tokens": 512,
                     "mdl_type": "embedding"
                 },
                 {
-                    "llm_name": "maidalun1020/bce-reranker-base_v1",
+                    "llm_name": "maidalun/bce-reranker-base_v1",
                     "tags": "RE-RANK, 512",
                     "max_tokens": 512,
                     "mdl_type": "rerank"
@@ -531,6 +531,18 @@
                     "tags": "TEXT EMBEDDING",
                     "max_tokens": 8196,
                     "mdl_type": "embedding"
+                },
+                {
+                    "llm_name": "jina-reranker-v2-base-multilingual",
+                    "tags": "RE-RANK,8k",
+                    "max_tokens": 8196,
+                    "mdl_type": "rerank"
+                },
+                {
+                    "llm_name": "jina-embeddings-v3",
+                    "tags": "TEXT EMBEDDING",
+                    "max_tokens": 8196,
+                    "mdl_type": "embedding"
                 }
             ]
         },
@@ -592,7 +604,7 @@
                 }
             ]
         },
-        {
+                {
             "name": "Mistral",
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING",
@@ -612,26 +624,32 @@
                 },
                 {
                     "llm_name": "open-mistral-7b",
-                    "tags": "LLM,CHAT,32k",
-                    "max_tokens": 32000,
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "ministral-8b-latest",
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "ministral-3b-latest",
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
                     "mdl_type": "chat"
                 },
                 {
                     "llm_name": "mistral-large-latest",
-                    "tags": "LLM,CHAT,32k",
-                    "max_tokens": 32000,
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
                     "mdl_type": "chat"
                 },
                 {
                     "llm_name": "mistral-small-latest",
-                    "tags": "LLM,CHAT,32k",
-                    "max_tokens": 32000,
-                    "mdl_type": "chat"
-                },
-                {
-                    "llm_name": "mistral-medium-latest",
-                    "tags": "LLM,CHAT,32k",
-                    "max_tokens": 32000,
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
                     "mdl_type": "chat"
                 },
                 {
@@ -641,10 +659,28 @@
                     "mdl_type": "chat"
                 },
                 {
+                    "llm_name": "mistral-nemo",
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
+                    "mdl_type": "chat"
+                },
+                {
                     "llm_name": "mistral-embed",
                     "tags": "LLM,CHAT,8k",
                     "max_tokens": 8192,
                     "mdl_type": "embedding"
+                },
+                {
+                    "llm_name": "pixtral-large-latest",
+                    "tags": "LLM,CHAT,32k",
+                    "max_tokens": 32000,
+                    "mdl_type": "image2text"
+                },
+                {
+                    "llm_name": "pixtral-12b",
+                    "tags": "LLM,CHAT,32k",
+                    "max_tokens": 32000,
+                    "mdl_type": "image2text"
                 }
             ]
         },

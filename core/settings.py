@@ -6,6 +6,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+import logging
 import os
 from api.utils import get_base_config, decrypt_database_config
 from api.utils.file_utils import get_project_base_directory
@@ -31,6 +32,12 @@ SVR_QUEUE_RETENTION = 60*60
 SVR_QUEUE_MAX_LEN = 1024
 SVR_CONSUMER_NAME = "multi_rag_svr_consumer"
 SVR_CONSUMER_GROUP_NAME = "multi_rag_svr_consumer_group"
+
+def print_multirag_settings():
+    logging.info(f"MAX_CONTENT_LENGTH: {DOC_MAXIMUM_SIZE}")
+    logging.info(f"SERVER_QUEUE_MAX_LEN: {SVR_QUEUE_MAX_LEN}")
+    logging.info(f"SERVER_QUEUE_RETENTION: {SVR_QUEUE_RETENTION}")
+    logging.info(f"MAX_FILE_COUNT_PER_USER: {int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))}")
 
 # import logging
 # from api.utils.log_utils import LoggerFactory, getLogger

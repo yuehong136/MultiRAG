@@ -22,7 +22,7 @@ psutil >= 5.9.8
 # 提供了一种增强型的枚举（Enumeration）类实现，使得枚举值具有更多的功能和安全性
 strenum >= 0.4.15
 # milvus向量数据库
-pymilvus >= 2.4.1 # windows目前不支持最新版[最新版2.4.3有milvus lite 本地数据库]
+pymilvus >= 2.4.5
 # chroma向量数据库
 #langchain_chroma >= 0.1.1
 # bs4 网页爬虫
@@ -169,4 +169,6 @@ polars >= 1.13.0
 # Selenium Wire 是在 selenium 基础上扩展的一个库，增加了网络流量拦截和修改的能力。它继承了 selenium 的功能，同时提供更高级的网络操作接口。
 selenium-wire >= 5.1.0
 # blinker 是一个轻量级的 Python 库，用于提供 信号和事件机制。它允许应用程序的不同部分之间通过信号（signals）进行通信，常用于事件驱动的程序设计，比如插件系统、扩展框架、异步任务处理等场景。
-blinker ==1.7.0
+blinker == 1.7.0
+# docxtpl 是一个基于 Python 的库，结合了 python-docx 和 Jinja2 模板引擎，旨在通过预定义的 Word 模板高效生成个性化的 .docx 文档。
+docxtpl >= 0.19.0

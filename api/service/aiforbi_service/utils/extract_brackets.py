@@ -24,7 +24,11 @@ def extract_brackets(text: str, merge: bool = True) -> list[Any]:
             if isinstance(item, list):
                 yield from flatten(item)
             else:
-                yield item
+                # 如果是字符串且包含逗号，进行分割
+                if isinstance(item, str) and ',' in item:
+                    yield from [x.strip() for x in item.split(',')]
+                else:
+                    yield item
 
     def try_parse(s):
         """尝试解析字符串为Python对象"""
@@ -38,11 +42,11 @@ def extract_brackets(text: str, merge: bool = True) -> list[Any]:
     parsed = try_parse(text)
     if parsed is not None:
         if merge:
+            # 使用flatten函数处理所有元素，包括逗号分隔的字符串
             return list(dict.fromkeys(flatten(parsed)))
         return [parsed]
 
     # 如果直接解析失败，使用正则表达式查找所有可能的列表
-    # 使用非贪婪匹配并处理嵌套的括号
     results = []
     pattern = r'\[((?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*)\]'
     matches = re.finditer(pattern, text)
@@ -52,6 +56,7 @@ def extract_brackets(text: str, merge: bool = True) -> list[Any]:
         parsed = try_parse(found_text)
         if parsed is not None:
             if merge:
+                # 使用flatten函数处理所有元素，包括逗号分隔的字符串
                 results.extend(flatten(parsed))
             else:
                 results.append(parsed)
@@ -91,3 +96,12 @@ if __name__ == "__main__":
     print("原始文本:", text4)
     print("合并去重结果:", extract_brackets(text4))
     print("不合并结果:", extract_brackets(text4, merge=False))
+
+    # 测试用例5
+    text5 = '''
+    ['折线图,柱状图']
+    '''
+    print("\n测试用例5 - 逗号分隔字符串:")
+    print("原始文本:", text5)
+    print("合并去重结果:", extract_brackets(text5))
+    print("不合并结果:", extract_brackets(text5, merge=False))

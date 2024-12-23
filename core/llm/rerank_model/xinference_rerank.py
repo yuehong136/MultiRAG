@@ -10,6 +10,8 @@ class XInferenceRerank(Base):
     def __init__(self, key="xxxxxxx", model_name="", base_url=""):
         if base_url.find("/v1") == -1:
             base_url = urljoin(base_url, "/v1/rerank")
+        if base_url.find("/rerank") == -1:
+            base_url = urljoin(base_url, "/v1/rerank")
         self.model_name = model_name
         self.base_url = base_url
         self.headers = {

@@ -34,7 +34,7 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
     txt = "\n".join([t[0] for _, t in bxs if t[0]])
     eng = lang.lower() == "english"
     callback(0.4, "Finish OCR: (%s ...)" % txt[:12])
-    if (eng and len(txt.split(" ")) > 32) or len(txt) > 32:
+    if (eng and len(txt.split()) > 32) or len(txt) > 32:
         tokenize(doc, txt, eng)
         callback(0.8, "OCR results is too long to use CV LLM.")
         return [doc]
@@ -43,6 +43,9 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
         callback(0.4, "Use CV LLM to describe the picture.")
         db = SessionLocal()
         cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, lang=lang)
+        img_binary = io.BytesIO()
+        img.save(img_binary, format='JPEG')
+        img_binary.seek(0)
         ans = cv_mdl.describe(binary)
         callback(0.8, "CV LLM respond: %s ..." % ans[:32])
         txt += "\n" + ans

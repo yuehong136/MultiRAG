@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 import httpx
 import ormsgpack
-from pydantic import BaseModel, conint
+from pydantic import BaseModel, conint, Field
 
 from core.llm.tts_model.base import Base
 from core.utils import num_tokens_from_string
@@ -20,7 +20,7 @@ class ServeTTSRequest(BaseModel):
     format: Literal["wav", "pcm", "mp3"] = "mp3"
     mp3_bitrate: Literal[64, 128, 192] = 128
     # References audios for in-context learning
-    references: list[ServeReferenceAudio] = []
+    references: list[ServeReferenceAudio] = Field([])
     # Reference id
     # For example, if you want use https://fish.audio/m/7f92f8afb8ec43bf81429cc1c9199cb1/
     # Just pass 7f92f8afb8ec43bf81429cc1c9199cb1

@@ -35,7 +35,7 @@ class Pdf(PdfParser):
                  to_page=100000, zoomin=3, callback=None):
         from timeit import default_timer as timer
         start = timer()
-        callback(msg="OCR is running...")
+        callback(msg="OCR started")
         self.__images__(
             filename if not binary else binary,
             zoomin,
@@ -43,22 +43,27 @@ class Pdf(PdfParser):
             to_page,
             callback
         )
-        callback(msg="OCR finished.")
+        callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
         # for bb in self.boxes:
         #    for b in bb:
         #        print(b)
         logging.debug("OCR: {}".format(timer() - start))
 
+        start = timer()
         self._layouts_rec(zoomin)
-        callback(0.65, "Layout analysis finished.")
+        callback(0.65, "Layout analysis ({:.2f}s)".format(timer() - start))
         logging.debug("layouts: {}".format(timer() - start))
+
+        start = timer()
         self._table_transformer_job(zoomin)
-        callback(0.67, "Table analysis finished.")
+        callback(0.67, "Table analysis ({:.2f}s)".format(timer() - start))
+
+        start = timer()
         self._text_merge()
         tbls = self._extract_table_figure(True, zoomin, True, True)
         self._concat_downward()
         self._filter_forpages()
-        callback(0.68, "Text merging finished")
+        callback(0.68, "Text merged ({:.2f}s)".format(timer() - start))
 
         # clean mess
         for b in self.boxes:
@@ -180,7 +185,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         sections, tbls = pdf_parser(filename if not binary else binary,
                                     from_page=from_page, to_page=to_page, callback=callback)
         if sections and len(sections[0]) < 3:
-            sections = [(t, l, [[0] * 5]) for t, l in sections]
+            sections = [(t, lvl, [[0] * 5]) for t, lvl in sections]
         # set pivot using the most frequent type of title,
         # then merge between 2 pivot
         if len(sections) > 0 and len(pdf_parser.outlines) / len(sections) > 0.1:
@@ -201,7 +206,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         else:
             bull = bullets_category([txt for txt, _, _ in sections])
             most_level, levels = title_frequency(
-                bull, [(txt, l) for txt, l, poss in sections])
+                bull, [(txt, lvl) for txt, lvl, _ in sections])
 
         assert len(sections) == len(levels)
         sec_ids = []
@@ -215,7 +220,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         sections = [(txt, sec_ids[i], poss)
                     for i, (txt, _, poss) in enumerate(sections)]
         for (img, rows), poss in tbls:
-            if not rows: continue
+            if not rows:
+                continue
             sections.append((rows if isinstance(rows, str) else rows[0], -1,
                             [(p[0] + 1 - from_page, p[1], p[2], p[3], p[4]) for p in poss]))
 
@@ -244,6 +250,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         res = tokenize_table(tbls, doc, eng)
         res.extend(tokenize_chunks(chunks, doc, eng, pdf_parser))
         return res
+
     if re.search(r"\.docx$", filename, re.IGNORECASE):
         docx_parser = Docx()
         ti_list, tbls = docx_parser(filename, binary,

@@ -30,8 +30,8 @@ class DialogRequest(BaseModel):
     name: str | None = "New Dialog"
     """对话的名称，默认值为 'New Dialog'。"""
 
-    description: str | None = "A helpful Dialog"
-    """对话的描述，默认值为 'A helpful Dialog'。"""
+    description: str | None = "A helpful dialog"
+    """对话的描述，默认值为 'A helpful dialog'。"""
 
     icon: str | None = ""
     """对话的图标URL，默认值为空字符串。"""
@@ -98,7 +98,7 @@ async def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user
     - request: DialogRequest对象，包含对话的配置信息
         - dialog_id: 对话的唯一标识符，如果为空则表示创建新对话
         - name: 对话的名称，默认值为 'New Dialog'
-        - description: 对话的描述，默认值为 'A helpful Dialog'
+        - description: 对话的描述，默认值为 'A helpful dialog'
         - icon: 对话的图标URL，默认值为空字符串
         - top_n: 从知识库中返回的最大条目数，默认值为 6
         - top_k: 从知识库中检索的最大条目数，默认值为 1024
@@ -141,6 +141,12 @@ async def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user
         tenant = TenantService.get_by_id(db, user.id)
         if not tenant:
             return get_data_error_result(retmsg="Tenant not found!")
+
+        kbs = KnowledgebaseService.get_by_ids(db, request.kb_ids)
+        embd_count = len(set([kb.embd_id for kb in kbs]))
+        if embd_count != 1 and kbs:
+            return get_data_error_result(
+                retmsg=f'Datasets use different embedding models: {[kb.embd_id for kb in kbs]}"')
 
         llm_id = request.llm_id or tenant.llm_id
         if not request.dialog_id:

@@ -7,7 +7,7 @@
 @desc:
 """
 from datetime import datetime
-from sqlalchemy import func
+from sqlalchemy import func, desc, asc
 from sqlalchemy.orm import Session
 from api.db.db_models import APIToken, API4Conversation, Dialog
 from api.db.services.common_service import CommonService
@@ -34,6 +34,32 @@ class API4ConversationService(CommonService):
     model = API4Conversation
 
     @classmethod
+    def get_list(cls, db: Session, dialog_id, tenant_id,
+                 page_number, items_per_page, orderby, desc_flag, id):
+        # 初始查询
+        query = db.query(cls.model).filter(cls.model.dialog_id == dialog_id)
+
+        # 可选条件：根据 ID 筛选
+        if id:
+            query = query.filter(cls.model.id == id)
+
+        # 排序
+        if desc_flag:
+            query = query.order_by(desc(getattr(cls.model, orderby)))
+        else:
+            query = query.order_by(asc(getattr(cls.model, orderby)))
+
+        # 根据租户 ID 筛选
+        query = query.filter(cls.model.user_id == tenant_id)
+
+        # 分页
+        offset = (page_number - 1) * items_per_page
+        query = query.offset(offset).limit(items_per_page)
+
+        # 执行查询并返回结果
+        return query.all()
+
+    @classmethod
     def append_message(cls, db: Session, id: str, conversation: str):
         cls.update_by_id(db, id, {"conversation": conversation})
         try:
@@ -56,7 +82,8 @@ class API4ConversationService(CommonService):
         :param to_date: 结束日期
         :return: 包含每日统计信息的列表，每个元素是一个字典
         """
-        if len(to_date) == 10: to_date += " 23:59:59"
+        if len(to_date) == 10:
+            to_date += " 23:59:59"
         try:
             # 构建查询语句，统计每天的对话数量（pv）、独立用户数量（uv）、代币总数（tokens）、总时长（duration）、平均轮次（round）、总点赞数（thumb_up）
             result = db.query(

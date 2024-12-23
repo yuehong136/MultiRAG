@@ -16,8 +16,10 @@ class AnthropicChat(Base):
             self.system = system
         if "max_tokens" not in gen_conf:
             gen_conf["max_tokens"] = 4096
-        if "presence_penalty" in gen_conf: del gen_conf["presence_penalty"]
-        if "frequency_penalty" in gen_conf: del gen_conf["frequency_penalty"]
+        if "presence_penalty" in gen_conf:
+            del gen_conf["presence_penalty"]
+        if "frequency_penalty" in gen_conf:
+            del gen_conf["frequency_penalty"]
 
         ans = ""
         try:
@@ -47,8 +49,10 @@ class AnthropicChat(Base):
             self.system = system
         if "max_tokens" not in gen_conf:
             gen_conf["max_tokens"] = 4096
-        if "presence_penalty" in gen_conf: del gen_conf["presence_penalty"]
-        if "frequency_penalty" in gen_conf: del gen_conf["frequency_penalty"]
+        if "presence_penalty" in gen_conf:
+            del gen_conf["presence_penalty"]
+        if "frequency_penalty" in gen_conf:
+            del gen_conf["frequency_penalty"]
 
         ans = ""
         total_tokens = 0

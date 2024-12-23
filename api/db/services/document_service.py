@@ -361,8 +361,9 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_embd_id(cls, db: Session, doc_id: str):
-        query = db.query(Knowledgebase.embd_id).join(Knowledgebase, cls.model.kb_id == Knowledgebase.id
-                                                     ).filter(
+        query = db.query(cls.model, Knowledgebase.embd_id).join(
+            Knowledgebase, cls.model.kb_id == Knowledgebase.id
+        ).filter(
             cls.model.id == doc_id,
             Knowledgebase.status == StatusEnum.VALID.value
         ).first()

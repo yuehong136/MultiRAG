@@ -23,7 +23,7 @@ from api.utils.api_utils import get_json_result, server_error_response, get_data
 from api.db import StatusEnum, LLMType
 from api.db.db_models import TenantLLM
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any
 import requests
 
@@ -45,6 +45,8 @@ class AddLLMRequest(BaseModel):
     bedrock_ak: str | None = None
     bedrock_sk: str | None = None
     bedrock_region: str | None = None
+    fish_audio_ak: str | None = None
+    fish_audio_refid: str | None = None
 
 
 class DeleteLLMRequest(BaseModel):
@@ -73,6 +75,14 @@ class FinePromptRequest(BaseModel):
     prompt: str
     llm_name: str
     gen_conf: dict[str, Any]
+
+
+class SuggestionRequest(BaseModel):
+    llm_name: str  # 模型名称
+    last_response: str  # 模型的最后一轮回复
+    messages: list[dict]  # 当前对话上下文
+    gen_conf: dict[str, Any] = None # 大模型的配置信息
+    num: int = Field(3)  # 返回建议的条数
 
 
 router = APIRouter()
@@ -183,7 +193,6 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
                     raise Exception(m)
             except Exception as e:
                 msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
-            # todo 是否有必要每一个模型都测试呢？目前都是我内置的型号，都是可靠的，如果除本项目维护人员，进行自由添加可能出现问题
             chat_passed = True
         elif not rerank_passed and llm.mdl_type == LLMType.RERANK:
             mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
@@ -745,13 +754,12 @@ def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user
                 yield f"data: {sse_data}\n\n"  # SSE 格式：data: 数据\n\n
         except Exception as e:
             error_message = json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": f"**ERROR**: {str(e)}"}},
-                                        ensure_ascii=False)
+                                       ensure_ascii=False)
             yield f"data: {error_message}\n\n"
         finally:
             # 流结束标记
             end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
             yield f"data: {end_message}\n\n"
-
 
     # 根据是否流式调用选择合适的方法
     if req["stream"]:
@@ -848,6 +856,201 @@ def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=
     """.strip()
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
 
-    data = chat_mdl.chat(META_PROMPT, [{"role": "user", "content": "Task, Goal, or Current Prompt:\n" + req["prompt"]}], req["gen_conf"])
+    data = chat_mdl.chat(META_PROMPT, [{"role": "user", "content": "Task, Goal, or Current Prompt:\n" + req["prompt"]}],
+                         req["gen_conf"])
 
     return get_json_result(data=data)
+
+
+@router.post('/generate_suggestions', summary="生成用户输入建议", response_description="成功调用大模型生成建议")
+def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    ### POST `/v1/suggestions/generate_suggestions` 生成用户输入建议
+
+**功能描述**
+此接口用于调用大模型根据当前对话上下文及智能体的配置信息，生成用户下一轮输入建议。生成的建议应紧密相关、多样性高、避免重复，并与用户的角色匹配。
+
+---
+
+## 请求体 (Request Body)
+
+| 字段            | 类型            | 必填 | 描述                                                                                     |
+|-----------------|-----------------|------|------------------------------------------------------------------------------------------|
+| `llm_name`      | `string`       | 是   | 模型名称，指定用于生成建议的大模型。                                                    |
+| `last_response` | `string`       | 是   | 模型在对话中的最后一轮回复内容。                                                        |
+| `messages`      | `list[dict]`   | 是   | 对话消息列表，包括用户与模型之间的上下文历史，格式为 `{ "role": "user/assistant", "content": "..." }`。 |
+| `gen_conf`      | `object`       | 否   | 大模型的生成配置，用于控制生成行为，例如温度值、生成长度等。                              |
+| `num`           | `integer`      | 否   | 返回的建议条数，默认为3。                                                               |
+
+---
+
+## 响应 (Response)
+
+### 成功响应 (200)
+
+- **`Content-Type: application/json`**
+- **示例**:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": [
+            "建议 1",
+            "建议 2",
+            "建议 3"
+        ]
+    }
+    ```
+
+---
+
+## 错误响应
+
+### 404: Tenant not found
+- **描述**
+  当根据用户ID查找租户信息失败时，返回此错误。
+- **示例**
+    ```json
+    {
+        "detail": "Tenant not found!"
+    }
+    ```
+
+### 500: JSON 解析错误
+- **描述**
+  模型返回数据无法解析为有效的JSON格式。
+- **示例**
+    ```json
+    {
+        "detail": "模型返回数据无法解析为 JSON: Expecting value: line 1 column 1 (char 0)"
+    }
+    ```
+
+### 500: 无效的建议列表
+- **描述**
+  模型返回的建议列表为空或格式不正确。
+- **示例**
+    ```json
+    {
+        "detail": "模型未返回有效的建议列表"
+    }
+    ```
+
+### 500: 解析模型返回数据时发生未知错误
+- **描述**
+  发生未知错误导致无法解析模型返回的数据。
+- **示例**
+    ```json
+    {
+        "detail": "解析模型返回数据时发生未知错误: list index out of range"
+    }
+    ```
+
+---
+
+## 主要流程
+
+1. 从请求中提取 `llm_name`、`last_response`、`messages`、`gen_conf` 和 `num` 等字段。
+2. 获取用户对应的租户信息；如果未找到，返回404错误。
+3. 构造 `system_prompt`，用于明确生成建议的任务及格式。
+4. 调用大模型生成建议，并解析模型返回的 JSON 数据。
+5. 校验建议列表的有效性，确保返回符合要求的结果。
+6. 返回生成的建议列表。
+
+---
+
+## 注意事项
+
+- **紧密相关性**
+  建议内容必须与最后一轮模型回复和对话上下文相关，避免偏离主题。
+
+- **多样性**
+  确保生成的建议从不同方向或角度切入，不重复也不雷同。
+
+- **角色适配性**
+  根据用户的身份和对话场景定制建议内容，确保更具针对性。
+
+- **JSON 格式输出**
+  大模型返回数据必须是纯 JSON 格式，不应包含多余标记或格式化代码块。
+
+- **异常处理**
+  当模型返回数据无法解析或格式不符合预期时，记录日志并返回错误响应。
+
+    """
+    req = request.model_dump()
+
+    system_prompt = f"""
+    你是一个智能对话助手，当前任务是根据用户对话上下文和智能体的配置信息，为用户生成 {req["num"]} 条下一轮输入建议。生成的建议需满足以下要求：
+
+    1. **紧密相关**：建议内容应与最后一轮的模型回复紧密相关。
+    2. **避免重复**：建议的输入内容不能与上下文中用户已提问或模型已回答的内容重复。
+    3. **角色匹配**：建议内容应与用户当前的角色及对话类型匹配。例如，如果用户是技术开发人员，建议可以是具体的技术问题；如果是普通用户，则建议应更加简洁和实用。
+    4. **多样性**：生成的 {req["num"]} 条建议应具有一定的多样性，涵盖不同的方向或角度。
+
+    ### 输入格式
+
+    以下是输入数据的格式：
+    - 最后一轮模型回复（`last_response`）：{json.dumps(req["last_response"], ensure_ascii=False)}
+    - 对话上下文（`messages`）：{json.dumps(req["messages"], ensure_ascii=False)}
+
+    ### 输出格式
+
+    请仅输出以下格式的纯 JSON 数据，不要添加任何其他标记：
+    ```json
+    {{
+        "suggestions": [
+            "建议 1",
+            "建议 2",
+            "建议 3"
+        ]
+    }}
+    """
+    tenants = TenantService.get_info_by(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
+
+    # 调用大模型
+    response = chat_mdl.chat(
+        system=system_prompt,
+        history=[{"role": "user", "content": "请按照要求输出"}],
+        gen_conf=req["gen_conf"].get("gen_conf", {})
+    )
+
+    try:
+        # 检查模型返回数据
+        logging.info("模型返回原始数据: %s", response)
+
+        if response.startswith("```json"):
+            logging.warning("检测到带格式的代码块标记，正在移除")
+            response = response.replace("```json", "").replace("```", "").strip()
+        elif response.startswith("```"):
+            logging.warning("检测到代码块标记，正在移除")
+            response = response.strip("```").strip()
+
+        # 解析 JSON
+        response_data = json.loads(response)
+        suggestions = response_data.get("suggestions", [])
+    except json.JSONDecodeError as e:
+        logging.error("JSON 解析错误: %s", str(e))
+        logging.debug("模型返回数据: %s", response)
+        raise HTTPException(
+            status_code=500,
+            detail=f"模型返回数据无法解析为 JSON: {str(e)}"
+        )
+    except Exception as e:
+        logging.error("解析模型返回数据时发生未知错误: %s", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"解析模型返回数据时发生未知错误: {str(e)}"
+        )
+
+    # 确保 suggestions 是一个非空列表
+    if not suggestions or not isinstance(suggestions, list):
+        logging.error("模型返回无效建议列表: %s", response_data)
+        raise HTTPException(status_code=500, detail="模型未返回有效的建议列表")
+
+    logging.info("生成的用户输入建议: %s", suggestions)
+
+    return get_json_result(data=suggestions)

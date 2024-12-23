@@ -31,7 +31,7 @@ class MilvusQueryer:
     def rmWWW(txt):
         patts = [
             (
-                r"是*(什么样的|哪家|一下|那家|请问|啥样|咋样了|什么时候|何时|何地|何人|是否|是不是|多少|哪里|怎么|哪儿|怎么样|如何|哪些|是啥|啥是|啊|吗|呢|吧|咋|什么|有没有|呀)是*",
+                r"是*(什么样的|哪家|一下|那家|请问|啥样|咋样了|什么时候|何时|何地|何人|是否|是不是|多少|哪里|怎么|哪儿|怎么样|如何|哪些|是啥|啥是|啊|吗|呢|吧|咋|什么|有没有|呀|谁|哪位|哪个)是*",
                 "",
             ),
             (r"(^| )(what|who|how|which|where|why)('re|'s)? ", " "),
@@ -51,7 +51,7 @@ class MilvusQueryer:
 
         if not self.isChinese(txt):
             txt = MilvusQueryer.rmWWW(txt)
-            tks = rag_tokenizer.tokenize(txt).split(" ")
+            tks = rag_tokenizer.tokenize(txt).split()
             keywords = [t for t in tks if t]
             tks_w = self.tw.weights(tks, preprocess=False)
             tks_w = [(re.sub(r"[ \\\"'^]", "", tk), w) for tk, w in tks_w]
@@ -60,12 +60,12 @@ class MilvusQueryer:
             syns = []
             for tk, w in tks_w:
                 syn = self.syn.lookup(tk)
-                syn = rag_tokenizer.tokenize(" ".join(syn)).split(" ")
+                syn = rag_tokenizer.tokenize(" ".join(syn)).split()
                 keywords.extend(syn)
-                syn = ["\"{}\"^{:.4f}".format(s, w / 4.) for s in syn]
+                syn = ["\"{}\"^{:.4f}".format(s, w / 4.) for s in syn if s]
                 syns.append(" ".join(syn))
 
-            q = ["({}^{:.4f}".format(tk, w) + " {})".format(syn) for (tk, w), syn in zip(tks_w, syns) if tk]
+            q = ["({}^{:.4f}".format(tk, w) + " {})".format(syn) for (tk, w), syn in zip(tks_w, syns) if tk and not re.match(r"[.^+\(\)-]", tk)]
             for i in range(1, len(tks_w)):
                 q.append(
                     '"%s %s"^%.4f'
@@ -98,16 +98,17 @@ class MilvusQueryer:
 
         txt = MilvusQueryer.rmWWW(txt)
         qs, keywords = [], []
-        for tt in self.tw.split(txt)[:256]:  # .split(" "):
+        for tt in self.tw.split(txt)[:256]:  # .split():
             if not tt:
                 continue
             twts = self.tw.weights([tt])
             syns = self.syn.lookup(tt)
-            if syns: keywords.extend(syns)
+            if syns and len(keywords) < 32:
+                keywords.extend(syns)
             logging.debug(json.dumps(twts, ensure_ascii=False))
             tms = []
             for tk, w in sorted(twts, key=lambda x: x[1] * -1):
-                sm = rag_tokenizer.fine_grained_tokenize(tk).split(" ") if need_fine_grained_tokenize(tk) else []
+                sm = rag_tokenizer.fine_grained_tokenize(tk).split() if need_fine_grained_tokenize(tk) else []
                 sm = [
                     re.sub(
                         r"[ ,\./;'\[\]\\`~!@#$%\^&\*\(\)=\+_<>\?:\"\{\}\|，。；‘’【】、！￥……（）——《》？：“”-]+",
@@ -117,16 +118,25 @@ class MilvusQueryer:
                 sm = [m for m in sm if len(m) > 1]
 
 
-                keywords.append(re.sub(r"[ \\\"']+", "", tk))
-                keywords.extend(sm)
-                if len(keywords) >= 12: break
+                if len(keywords) < 32:
+                    keywords.append(re.sub(r"[ \\\"']+", "", tk))
+                    keywords.extend(sm)
 
                 tk_syns = self.syn.lookup(tk)
+                tk_syns = [MilvusQueryer.subSpecialChar(s) for s in tk_syns]
+                if len(keywords) < 32:
+                    keywords.extend([s for s in tk_syns if s])
+                tk_syns = [rag_tokenizer.fine_grained_tokenize(s) for s in tk_syns if s]
+                tk_syns = [f"\"{s}\"" if s.find(" ") > 0 else s for s in tk_syns]
+
+                if len(keywords) >= 32:
+                    break
+
                 tk = MilvusQueryer.subSpecialChar(tk)
                 if tk.find(" ") > 0:
-                    tk = "\"%s\"" % tk
+                    tk = '"%s"' % tk
                 if tk_syns:
-                    tk = f"({tk} %s)" % " ".join(tk_syns)
+                    tk = f"({tk} OR (%s)^0.2)" % " ".join(tk_syns)
                 if sm:
                     tk = f"{tk} OR \"%s\" OR (\"%s\"~2)^0.5" % (
                         " ".join(sm), " ".join(sm))
@@ -136,12 +146,17 @@ class MilvusQueryer:
             tms = " ".join([f"({t})^{w}" for t, w in tms])
 
             if len(twts) > 1:
-                tms += f" (\"%s\"~4)^1.5" % (" ".join([t for t, _ in twts]))
+                tms += ' ("%s"~2)^1.5' % rag_tokenizer.tokenize(tt)
             if re.match(r"[0-9a-z ]+$", tt):
                 tms = f"(\"{tt}\" OR \"%s\")" % rag_tokenizer.tokenize(tt)
 
             syns = " OR ".join(
-                ["\"%s\"^0.7" % MilvusQueryer.subSpecialChar(rag_tokenizer.tokenize(s)) for s in syns])
+                [
+                    '"%s"'
+                    % rag_tokenizer.tokenize(MilvusQueryer.subSpecialChar(s))
+                    for s in syns
+                ]
+            )
             if syns:
                 tms = f"({tms})^5 OR ({syns})^0.7"
 
@@ -179,7 +194,7 @@ class MilvusQueryer:
         def toDict(tks):
             d = {}
             if isinstance(tks, str):
-                tks = tks.split(" ")
+                tks = tks.split()
             for t, c in self.tw.weights(tks, preprocess=False):
                 if t not in d:
                     d[t] = 0

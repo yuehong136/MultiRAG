@@ -1,14 +1,16 @@
 # base.py
 import os
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass, field
 import openai
 from openai import OpenAI
-from core.nlp import is_english
+from core.nlp import is_chinese, is_english
 from typing import Any
 
 from core.utils import num_tokens_from_string
 
+LENGTH_NOTIFICATION_CN = "······\n由于长度的原因，回答被截断了，要继续吗？"
+LENGTH_NOTIFICATION_EN = "...\nFor the content length reason, it stopped, continue?"
 
 @dataclass
 class Base(ABC):
@@ -32,7 +34,10 @@ class Base(ABC):
             )
             ans = response.choices[0].message.content.strip()
             if response.choices[0].finish_reason == "length":
-                ans += "...\nFor the content length reason, it stopped, continue?" if is_english([ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
+                if is_chinese(ans):
+                    ans += LENGTH_NOTIFICATION_CN
+                else:
+                    ans += LENGTH_NOTIFICATION_EN
             return ans, response.usage.total_tokens
         except openai.APIError as e:
             return "**ERROR**: " + str(e), 0
@@ -42,40 +47,38 @@ class Base(ABC):
             history.insert(0, {"role": "system", "content": system})
         ans = ""
         total_tokens = 0
-        # try:
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=history,
-            stream=True,
-            **gen_conf
-        )
-        for resp in response:
-            if not resp.choices: continue
-            if not resp.choices[0].delta.content:
-                resp.choices[0].delta.content = ""
-            ans += resp.choices[0].delta.content
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=history,
+                stream=True,
+                **gen_conf
+            )
+            for resp in response:
+                if not resp.choices:
+                    continue
+                if not resp.choices[0].delta.content:
+                    resp.choices[0].delta.content = ""
+                ans += resp.choices[0].delta.content
 
-            if not hasattr(resp, "usage") or not resp.usage:
-                total_tokens = (
-                        total_tokens
-                        + num_tokens_from_string(resp.choices[0].delta.content)
-                )
-            elif isinstance(resp.usage, dict):
-                total_tokens = resp.usage.get("total_tokens", total_tokens)
-            else:
-                total_tokens = resp.usage.total_tokens
-            # total_tokens = (
-            #     (
-            #         total_tokens
-            #         + num_tokens_from_string(resp.choices[0].delta.content)
-            #     )
-            #     if not hasattr(resp, "usage") or not resp.usage
-            #     else resp.usage.get("total_tokens", total_tokens)
-            # )
-            if resp.choices[0].finish_reason == "length":
-                ans += "...\nFor the content length reason, it stopped, continue?" if is_english(
-                    [ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
-            yield ans
-        # except openai.APIError as e:
-        #     yield ans + "\n**ERROR**: " + str(e)
-        # yield total_tokens
+                if not hasattr(resp, "usage") or not resp.usage:
+                    total_tokens = (
+                            total_tokens
+                            + num_tokens_from_string(resp.choices[0].delta.content)
+                    )
+                elif isinstance(resp.usage, dict):
+                    total_tokens = resp.usage.get("total_tokens", total_tokens)
+                else:
+                    total_tokens = resp.usage.total_tokens
+
+                if resp.choices[0].finish_reason == "length":
+                    if is_chinese(ans):
+                        ans += LENGTH_NOTIFICATION_CN
+                    else:
+                        ans += LENGTH_NOTIFICATION_EN
+                yield ans
+
+        except openai.APIError as e:
+            yield ans + "\n**ERROR**: " + str(e)
+
+        yield total_tokens

@@ -11,6 +11,7 @@ import binascii
 import json
 import os
 import re
+from collections import defaultdict
 from copy import deepcopy
 from timeit import default_timer as timer
 import datetime
@@ -61,36 +62,6 @@ class DialogService(CommonService):
         return [item.__dict__ for item in results]
 
 
-class ConversationService(CommonService):
-    model = Conversation
-
-    @classmethod
-    def get_list(cls, db: Session, dialog_id, page_number, items_per_page, orderby, desc, id=None, name=None):
-        # 使用 SQLAlchemy 的 query 方法开始查询
-        query = db.query(cls.model).filter(cls.model.dialog_id == dialog_id)
-
-        # 添加条件过滤器
-        if id:
-            query = query.filter(cls.model.id == id)
-        if name:
-            query = query.filter(cls.model.name == name)
-
-        # 根据 desc 参数确定排序方式
-        order_clause = getattr(cls.model, orderby)
-        if desc:
-            query = query.order_by(desc(order_clause))
-        else:
-            query = query.order_by(asc(order_clause))
-
-        # 应用分页
-        query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
-
-        # 执行查询并返回结果
-        results = query.all()
-        # 将结果转换为字典形式返回
-        return [item.__dict__ for item in results]
-
-
 def message_fit_in(msg, max_length=4000):
     """
     检查消息是否能在给定的最大长度内适配，如果超出，则尝试调整消息内容以适应。
@@ -136,21 +107,21 @@ def message_fit_in(msg, max_length=4000):
 
     # 如果系统消息仍超出长度，尝试截断长消息
     ll = num_tokens_from_string(msg_[0]["content"])
-    l = num_tokens_from_string(msg_[-1]["content"])
-    if ll / (ll + l) > 0.8:
+    ll2 = num_tokens_from_string(msg_[-1]["content"])
+    if ll / (ll + ll2) > 0.8:
         m = msg_[0]["content"]
-        m = encoder.decode(encoder.encode(m)[:max_length - l])
+        m = encoder.decode(encoder.encode(m)[:max_length - ll2])
         msg[0]["content"] = m
         return max_length, msg
 
     m = msg_[1]["content"]
-    m = encoder.decode(encoder.encode(m)[:max_length - l])
+    m = encoder.decode(encoder.encode(m)[:max_length - ll2])
     msg[1]["content"] = m
     return max_length, msg
 
 
 def llm_id2llm_type(llm_id):
-    llm_id = llm_id.split("@")[0]
+    llm_id, _ = TenantLLMService.split_model_name_and_factory(llm_id)
     fnm = os.path.join(get_project_base_directory(), "configs")
     llm_factories = json.load(open(os.path.join(fnm, "llm_factories.json"), "r", encoding="utf-8"))
     for llm_factory in llm_factories["factory_llm_infos"]:
@@ -159,19 +130,39 @@ def llm_id2llm_type(llm_id):
                 return llm["mdl_type"].strip(",")[-1]
 
 
+def kb_prompt(kbinfos, max_tokens):
+    knowledges = [ck["text"] for ck in kbinfos["chunks"]]
+    used_token_count = 0
+    chunks_num = 0
+    for i, c in enumerate(knowledges):
+        used_token_count += num_tokens_from_string(c)
+        chunks_num += 1
+        if max_tokens * 0.97 < used_token_count:
+            knowledges = knowledges[:i]
+            break
+
+    doc2chunks = defaultdict(list)
+    for i, ck in enumerate(kbinfos["chunks"]):
+        if i >= chunks_num:
+            break
+        doc2chunks[ck["docnm_kwd"]].append(ck["text"])
+
+    knowledges = []
+    for nm, chunks in doc2chunks.items():
+        txt = f"Document: {nm} \nContains the following relevant fragments:\n"
+        for i, chunk in enumerate(chunks, 1):
+            txt += f"{i}. {chunk}\n"
+        knowledges.append(txt)
+    return knowledges
+
+
 def chat(dialog, messages, db: Session, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
     st = timer()
-    tmp = dialog.llm_id.split("@")
-    fid = None
-    llm_id = tmp[0]
-    if len(tmp) > 1:
-        fid = tmp[1]
-
+    llm_id, fid = TenantLLMService.split_model_name_and_factory(dialog.llm_id)
     # 从数据库中查询LLM模型
     llm = LLMService.query(db, llm_name=llm_id) if not fid else LLMService.query(db, llm_name=llm_id, fid=fid)
-    # print("LLMService.query result:", llm)
     if not llm:
         # 如果查询不到，则根据租户ID查询LLM模型
         llm = TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id) if not fid else \
@@ -280,8 +271,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
                                         doc_ids=attachments,
                                         top=1024, aggs=False, rerank_mdl=rerank_mdl)
 
-    # 从kbinfos中提取出知识内容及其权重，存储在一个列表中
-    knowledges = [ck["text"] for ck in kbinfos["chunks"]]
+    knowledges = kb_prompt(kbinfos, max_tokens)
+
     # # 如果需要自我检索并且内容不相关，尝试重写问题
     # if dialog.prompt_config.get("self_rag") and not relevant(dialog.tenant_id, dialog.llm_id, questions[-1],
     #                                                          knowledges, db):
@@ -343,7 +334,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
                                                        vtweight=dialog.vector_similarity_weight)
             idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
             recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
-            if not recall_docs: recall_docs = kbinfos["doc_aggs"]
+            if not recall_docs:
+                recall_docs = kbinfos["doc_aggs"]
             kbinfos["doc_aggs"] = recall_docs
 
             # 删除引用文献中的向量信息
@@ -354,34 +346,12 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
 
         # 如果回答中包含无效API key的提示，添加设置API key的提示
         if answer.lower().find("invalid key") >= 0 or answer.lower().find("invalid api") >= 0:
-            answer += " Please set LLM API-Key in 'User Setting -> Model Providers -> API-Key'"
+            answer += " Please set LLM API-Key in 'User Setting -> Model providers -> API-Key'"
         # return {"answer": answer, "reference": refs, "prompt": prompt}
         done_tm = timer()
         prompt += "\n\n### Elapsed\n  - Retrieval: %.1f ms\n  - LLM: %.1f ms" % (
             (retrieval_tm - st) * 1000, (done_tm - st) * 1000)
         return {"answer": answer, "reference": refs, "prompt": prompt}
-
-    # # 根据是否启用流式输出生成回答
-    # if stream:
-    #     # 初始化答案变量，用于存储模型生成的解答
-    #     answer = ""
-    #     # 使用chat_streamly方法以流式处理方式获取答案
-    #     for ans in chat_mdl.chat_streamly(msg[0]["content"], msg[1:], gen_conf):
-    #         # 更新答案变量为最新的解答
-    #         answer = ans
-    #         # 生成并yield一个包含当前答案和空引用的字典
-    #         yield {"answer": answer, "reference": {}}
-    #     # 处理完成后，对最终答案进行装饰并yield
-    #     yield decorate_answer(answer)
-    # else:
-    #     # 使用chat方法直接获取答案
-    #     # answer = chat_mdl.chat(msg[0]["content"], msg[1:], gen_conf)
-    #     answer = chat_mdl.chat(prompt, msg[1:], gen_conf)
-    #     # 记录对话日志，包含用户消息和助手的回答
-    #     logging.info("User: {}|Assistant: {}".format(
-    #         msg[-1]["content"], answer))
-    #     # 对答案进行装饰并yield
-    #     yield decorate_answer(answer)
 
     if stream:
         last_ans = ""
@@ -546,13 +516,15 @@ def relevant(tenant_id, llm_id, question, contents: list, db: Session):
         Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question.
         No other words needed except 'yes' or 'no'.
     """
-    if not contents: return False
+    if not contents:
+        return False
     contents = "Documents: \n" + "   - ".join(contents)
     contents = f"Question: {question}\n" + contents
     if num_tokens_from_string(contents) >= chat_mdl.max_length - 4:
         contents = encoder.decode(encoder.encode(contents)[:chat_mdl.max_length - 4])
     ans = chat_mdl.chat(prompt, [{"role": "user", "content": contents}], {"temperature": 0.01})
-    if ans.lower().find("yes") >= 0: return True
+    if ans.lower().find("yes") >= 0:
+        return True
     return False
 
 
@@ -594,7 +566,8 @@ Requirements:
     ]
     _, msg = message_fit_in(msg, chat_mdl.max_length)
     kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.2})
-    if isinstance(kwd, tuple): kwd = kwd[0]
+    if isinstance(kwd, tuple):
+        kwd = kwd[0]
     if kwd.find("**ERROR**") >= 0:
         return ""
     return kwd
@@ -622,7 +595,8 @@ Requirements:
     ]
     _, msg = message_fit_in(msg, chat_mdl.max_length)
     kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.2})
-    if isinstance(kwd, tuple): kwd = kwd[0]
+    if isinstance(kwd, tuple):
+        kwd = kwd[0]
     if kwd.find("**ERROR**") >= 0:
         return ""
     return kwd
@@ -715,17 +689,12 @@ def ask(db: Session, question, kb_ids, tenant_id):
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embd_nms[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT)
     max_tokens = chat_mdl.max_length
+    tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
     kbinfos = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, 1, 12, 0.1, 0.3, aggs=False)
-    knowledges = [ck["text"] for ck in kbinfos["chunks"]]
-
-    used_token_count = 0
-    for i, c in enumerate(knowledges):
-        used_token_count += num_tokens_from_string(c)
-        if max_tokens * 0.97 < used_token_count:
-            knowledges = knowledges[:i]
-            break
+    knowledges = kb_prompt(kbinfos, max_tokens)
 
     prompt = """
     Role: You're a smart assistant. Your name is Miss R.
@@ -758,7 +727,8 @@ def ask(db: Session, question, kb_ids, tenant_id):
         idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
         recall_docs = [
             d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
-        if not recall_docs: recall_docs = kbinfos["doc_aggs"]
+        if not recall_docs:
+            recall_docs = kbinfos["doc_aggs"]
         kbinfos["doc_aggs"] = recall_docs
         refs = deepcopy(kbinfos)
         for c in refs["chunks"]:
@@ -766,7 +736,7 @@ def ask(db: Session, question, kb_ids, tenant_id):
                 del c["vector"]
 
         if answer.lower().find("invalid key") >= 0 or answer.lower().find("invalid api") >= 0:
-            answer += " Please set LLM API-Key in 'User Setting -> Model Providers -> API-Key'"
+            answer += " Please set LLM API-Key in 'User Setting -> Model providers -> API-Key'"
         return {"answer": answer, "reference": refs}
 
     answer = ""

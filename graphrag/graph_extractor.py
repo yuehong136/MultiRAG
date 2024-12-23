@@ -129,9 +129,11 @@ class GraphExtractor:
                 source_doc_map[doc_index] = text
                 all_records[doc_index] = result
                 total_token_count += token_count
-                if callback: callback(msg=f"{doc_index+1}/{total}, elapsed: {timer() - st}s, used tokens: {total_token_count}")
+                if callback:
+                    callback(msg=f"{doc_index+1}/{total}, elapsed: {timer() - st}s, used tokens: {total_token_count}")
             except Exception as e:
-                if callback: callback(msg="Knowledge graph extraction error:{}".format(str(e)))
+                if callback:
+                    callback(msg="Knowledge graph extraction error:{}".format(str(e)))
                 logging.exception("error extracting graph")
                 self._on_error(
                     e,
@@ -176,7 +178,8 @@ class GraphExtractor:
             text = perform_variable_replacements(CONTINUE_PROMPT, history=history, variables=variables)
             history.append({"role": "user", "content": text})
             response = self._llm.chat("", history, gen_conf)
-            if response.find("**ERROR**") >=0: raise Exception(response)
+            if response.find("**ERROR**") >= 0:
+                raise Exception(response)
             results += response or ""
 
             # if this is the final glean, don't bother updating the continuation flag

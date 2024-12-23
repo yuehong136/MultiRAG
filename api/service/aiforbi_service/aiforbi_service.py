@@ -118,26 +118,11 @@ class AIForBIService:
 
         chart_type_res = chat_model.chat(system="", history=[{"role": "user", "content": prompt4ChartType}],
                                          gen_conf={})
-        # 使用正则表达式匹配整个 JSON 数组格式的图表类型
-        chart_type_pattern = r'\[(.*?)\]'
-        match = re.search(chart_type_pattern, chart_type_res)
-        chart_type = []
-        if match:
-            chart_type = match.group(1).replace('"', '').split(', ')
-            print(f"推荐的图表类型: {chart_type}")
-        else:
-            print("未找到推荐的图表类型")
-        # 仅保留 chart_type 列表中的第一个元素
-        if chart_type:
-            chart_type = [chart_type[0]]
-        # 将图表类型记录到日志中
-        logging.info(f"chart_type resp: {chart_type}")
-        chart_type_str = ', '.join(chart_type)  # 将列表转换为字符串
-        logging.info(f"chart_type resp: {chart_type_str}")
-
-        chart_template = load_chart_template(chart_type_str)
+        logging.info(f"大模型返回的图表类型：{chart_type_res}")
+        chart_type_list = extract_brackets(chart_type_res)
+        chart_template = load_chart_template(chart_type_list[0])
         prompt4Option = loader.fill_template("static_chart_option.txt",
-                                             chart_type=chart_type,
+                                             chart_type=chart_type_list[0],
                                              columns=columns,
                                              tab=tab,
                                              chart_template=chart_template)

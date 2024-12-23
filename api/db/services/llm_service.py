@@ -1,5 +1,12 @@
+import json
 import logging
+import os
+
+from sqlalchemy import update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+
+from api.utils.file_utils import get_project_base_directory
 from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
 
 from api.db.services.user_service import TenantService
@@ -28,13 +35,12 @@ class TenantLLMService(CommonService):
     @classmethod
     def get_api_key(cls, db: Session, tenant_id: str, model_name: str):
         logging.info(f"Debug: Fetching API key for tenant_id={tenant_id}, model_name={model_name}")
-        arr = model_name.split("@")
-        if len(arr) < 2:
-            objs = cls.query(db, tenant_id=tenant_id, llm_name=model_name)
+        mdlnm, fid = TenantLLMService.split_model_name_and_factory(model_name)
+        if not fid:
+            objs = cls.query(db, tenant_id=tenant_id, llm_name=mdlnm)
         else:
-            objs = cls.query(db, tenant_id=tenant_id, llm_name=arr[0], llm_factory=arr[1])
+            objs = cls.query(db, tenant_id=tenant_id, llm_name=mdlnm, llm_factory=fid)
         if not objs:
-            print("Debug: No API key found")
             return None
         logging.info(f"Debug: Found API key: {objs[0].api_key}")
         return objs[0]
@@ -53,6 +59,24 @@ class TenantLLMService(CommonService):
             TenantLLM.tenant_id == tenant_id, TenantLLM.api_key.isnot(None)
         ).all()
         return list(objs)
+
+    @staticmethod
+    def split_model_name_and_factory(model_name):
+        arr = model_name.split("@")
+        if len(arr) < 2:
+            return model_name, None
+        if len(arr) > 2:
+            return "@".join(arr[0:-1]), arr[-1]
+        try:
+            fact = json.load(open(os.path.join(get_project_base_directory(), "configs/llm_factories.json"), "r"))["factory_llm_infos"]
+            fact = set([f["name"] for f in fact])
+            if arr[-1] not in fact:
+                return model_name, None
+            return arr[0], arr[-1]
+        except Exception as e:
+            logging.exception(f"TenantLLMService.split_model_name_and_factory got exception: {e}")
+        return model_name, None
+
 
     @classmethod
     def model_instance(cls, db: Session, tenant_id: str, llm_type: str, llm_name: str = None, lang: str = "Chinese"):
@@ -75,14 +99,12 @@ class TenantLLMService(CommonService):
         else:
             raise ValueError("LLM type error")
 
-        logging.info(f"Debug: Fetching model instance for tenant_id={tenant_id}, mdlnm={mdlnm}")
+        # logging.info(f"Debug: Fetching model instance for tenant_id={tenant_id}, mdlnm={mdlnm}")
 
         model_config = cls.get_api_key(db, tenant_id, mdlnm)
         # print("model_config:", model_config)
 
-        tmp = mdlnm.split("@")
-        fid = None if len(tmp) < 2 else tmp[1]
-        mdlnm = tmp[0]
+        mdlnm, fid = TenantLLMService.split_model_name_and_factory(mdlnm)
 
         if model_config:
             model_config = model_config.to_dict()
@@ -175,16 +197,50 @@ class TenantLLMService(CommonService):
         else:
             raise ValueError("LLM type error")
 
-        llm_name = mdlnm.split("@")[0] if "@" in mdlnm else mdlnm
+        llm_name, llm_factory = TenantLLMService.split_model_name_and_factory(mdlnm)
 
         num = 0
         try:
-            for u in cls.query(db, tenant_id=tenant_id, llm_name=llm_name):
-                num += cls.model.update({cls.model.used_tokens: u.used_tokens + used_tokens}).where(
-                    cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name
-                ).execute()
-        except Exception:
-            pass
+            if llm_factory:
+                tenant_llm = db.query(cls.model)\
+                    .filter(cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name, cls.model.llm_factory == llm_factory)\
+                    .first()
+            else:
+                tenant_llm = db.query(cls.model) \
+                    .filter(cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name) \
+                    .first()
+            if tenant_llm:
+                # 如果存在，执行更新
+                stmt = (
+                    update(cls.model)
+                    .where(
+                        cls.model.tenant_id == tenant_id,
+                        cls.model.llm_factory == tenant_llm.llm_factory,
+                        cls.model.llm_name == llm_name
+                    )
+                    .values(used_tokens=tenant_llm.used_tokens + used_tokens)
+                )
+                result = db.execute(stmt)
+                db.commit()
+                num = result.rowcount  # 受影响的行数
+            else:
+                # 如果不存在，创建新记录
+                if not llm_factory:
+                    llm_factory = mdlnm
+                new_tenant_llm = cls.model(
+                    tenant_id=tenant_id,
+                    mdl_type=llm_type,
+                    llm_factory=llm_factory,
+                    llm_name=llm_name,
+                    used_tokens=used_tokens
+                )
+                db.add(new_tenant_llm)
+                db.commit()
+                num = 1
+
+        except SQLAlchemyError:
+            db.rollback()  # 回滚事务
+            logging.exception("TenantLLMService.increase_usage got exception")
         return num
 
 
@@ -212,11 +268,11 @@ class LLMBundle(object):
             self.max_length = lm.max_tokens
             break
 
-    def encode(self, texts: list, batch_size: int = 32):
-        emd, used_tokens = self.mdl.encode(texts, batch_size)
+    def encode(self, texts: list):
+        embeddings, used_tokens = self.mdl.encode(texts)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
             logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
-        return emd, used_tokens
+        return embeddings, used_tokens
 
     def encode_queries(self, query: str):
         emd, used_tokens = self.mdl.encode_queries(query)
@@ -261,8 +317,9 @@ class LLMBundle(object):
 
     def chat(self, system, history, gen_conf, **kwargs):
         txt, used_tokens = self.mdl.chat(system, history, gen_conf, **kwargs)
-        if isinstance(txt, int) and  not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
-            logging.error(f"Can't update token usage for {self.tenant_id}/CHAT used_tokens: {used_tokens}")
+        if not isinstance(txt, int):
+            if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+                logging.error(f"Can't update token usage for {self.tenant_id}/CHAT used_tokens: {used_tokens}")
         return txt
 
     def chat_streamly(self, system, history, gen_conf, **kwargs):

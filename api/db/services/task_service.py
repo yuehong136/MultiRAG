@@ -44,6 +44,7 @@ class TaskService(CommonService):
             Knowledgebase.tenant_id,
             Knowledgebase.language,
             Knowledgebase.embd_id,
+            # Knowledgebase.pagerank,
             Tenant.img2txt_id,
             Tenant.asr_id,
             Tenant.llm_id,
@@ -66,7 +67,7 @@ class TaskService(CommonService):
         task = docs[0]._asdict()  # 转换为字典
 
         msg = "\nTask has been received."
-        prog = random.random() / 10.
+        prog = random.random() / 10.0
         if task["retry_count"] >= 3:
             msg = "\nERROR: Task is abandoned after 3 times attempts."
             prog = -1
@@ -103,13 +104,23 @@ class TaskService(CommonService):
                 Document.run == TaskStatus.RUNNING.value,
                 Document.type != FileType.VIRTUAL.value,
                 cls.model.progress < 1,
-                cls.model.create_time >= current_timestamp() - 1000 * 600
+                cls.model.create_time >= current_timestamp() - 1000 * 600,
             ).all()
 
             if not docs:
                 return []
 
-            return list(set([(d.parent_id if d.parent_id else d.kb_id, d.location) for d in docs]))
+            return list(
+                set(
+                    [
+                        (
+                            d.parent_id if d.parent_id else d.kb_id,
+                            d.location,
+                        )
+                        for d in docs
+                    ]
+                )
+            )
 
     @classmethod
     def do_cancel(cls, db: Session, task_id):
@@ -160,8 +171,8 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str):
         if doc["parser_id"] == "paper":
             page_size = doc["parser_config"].get("task_page_size", 22)
         if doc["parser_id"] in ["one", "knowledge_graph"] or not do_layout:
-            page_size = 10 ** 9
-        page_ranges = doc["parser_config"].get("pages") or [(1, 10 ** 5)]
+            page_size = 10**9
+        page_ranges = doc["parser_config"].get("pages") or [(1, 10**5)]
         for s, e in page_ranges:
             s -= 1
             s = max(0, s)
@@ -187,5 +198,6 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str):
     DocumentService.begin2parse(db, doc["id"])
 
     for t in tsks:
-        assert REDIS_CONN.queue_product(SVR_QUEUE_NAME,
-                                        message=t), "Can't access Redis. Please check the Redis' status."
+        assert REDIS_CONN.queue_product(
+            SVR_QUEUE_NAME, message=t
+        ), "Can't access Redis. Please check the Redis' status."

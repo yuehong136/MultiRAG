@@ -11,8 +11,8 @@ import re
 
 from dashscope import Generation
 
-from core.nlp import is_english
-from core.llm.chat_model.base import Base
+from core.nlp import is_chinese, is_english
+from core.llm.chat_model.base import Base, LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN
 
 
 class QWenChat(Base):
@@ -40,8 +40,10 @@ class QWenChat(Base):
                 ans += response.output.choices[0]['message']['content']
                 tk_count += response.usage.total_tokens
                 if response.output.choices[0].get("finish_reason", "") == "length":
-                    ans += "...\nFor the content length reason, it stopped, continue?" if is_english(
-                        [ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
+                    if is_chinese([ans]):
+                        ans += LENGTH_NOTIFICATION_CN
+                    else:
+                        ans += LENGTH_NOTIFICATION_EN
                 return ans, tk_count
 
             return "**ERROR**: " + response.message, tk_count
@@ -74,8 +76,10 @@ class QWenChat(Base):
                     ans = resp.output.choices[0]['message']['content']
                     tk_count = resp.usage.total_tokens
                     if resp.output.choices[0].get("finish_reason", "") == "length":
-                        ans += "...\nFor the content length reason, it stopped, continue?" if is_english(
-                            [ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
+                        if is_chinese([ans]):
+                            ans += LENGTH_NOTIFICATION_CN
+                        else:
+                            ans += LENGTH_NOTIFICATION_EN
                     yield ans
                 else:
                     yield ans + "\n**ERROR**: " + resp.message if not re.search(r" (key|quota)", str(resp.message).lower()) else "Out of credit. Please set the API key in **settings > Model providers.**"
