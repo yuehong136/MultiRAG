@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional
 
 import requests
 
+from api.settings import SCRIPT_SCHEDULER_PORT
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 
@@ -37,7 +38,7 @@ class CodeComponent(BaseComponent):
             raise ValueError(f"Unsupported language: {self.language}")
 
 
-    def run_temporary_script(self, script: str, args: Dict[str, Any], base_url: str = "http://localhost:8124") -> Dict:
+    def run_temporary_script(self, script: str, args: Dict[str, Any], base_url: str = f"http://localhost:{SCRIPT_SCHEDULER_PORT}") -> Dict:
         """
         Send a request to run a temporary script with given arguments.
 

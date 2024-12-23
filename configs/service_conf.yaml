@@ -129,4 +129,6 @@ permission:
   # 是否启用数据集权限检查
   dataset: false
 
+script_scheduler:
+  port: 8124
 
