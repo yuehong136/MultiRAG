@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, List
+from typing import Any, List
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
@@ -17,11 +17,6 @@ from workflow_v2.workflow_logging_config import WorkflowContextLogger, WorkflowL
 router = APIRouter()
 
 
-class DataInput(BaseModel):
-    schema: Dict[str, Any]
-    start_input_values: Dict[str, Any]
-
-
 class StatusEnum(str, Enum):
     SUCCESS = "success"
     ERROR = "error"
@@ -35,7 +30,7 @@ class ResponseSchema(BaseModel):
 
 @router.post("/run")
 async def run(
-        schema: str = Form(...),  # JSON string
+        schema_data: str = Form(..., alias="schema"),  # JSON string
         start_input_values: str = Form(...),  # JSON string
         files: List[UploadFile] = File(None),  # Optional files
         db: Session = Depends(get_db),
@@ -43,7 +38,7 @@ async def run(
 ):
     try:
         # Parse JSON strings back to dictionaries
-        workflow_data = json.loads(schema)
+        workflow_data = json.loads(schema_data)
         input_values = json.loads(start_input_values)
 
         # 处理上传的文件
