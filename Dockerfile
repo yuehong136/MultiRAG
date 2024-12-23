@@ -110,6 +110,7 @@ COPY ./core ./core
 COPY ./agent ./agent
 COPY ./graphrag ./graphrag
 COPY ./workflow ./workflow
+COPY ./workflow_v2 ./workflow_v2
 COPY ./errors ./errors
 ADD ./docker ./docker
 
