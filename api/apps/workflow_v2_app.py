@@ -98,7 +98,8 @@ async def component_run(
     try:
         node_data = json.loads(node_data_str)
         input_values = json.loads(input_str)
-        batch_values = json.loads(batch_str) if batch_str else None
+        batch_input_type = extract_batch_input_types(node_data)
+        batch_values = convert_input_values(batch_str, batch_input_type) if batch_str else None
 
         component = (ComponentManager(logger=WorkflowContextLogger("", WorkflowLogger().logger))
                      .create_component(node_data))
@@ -142,3 +143,95 @@ async def component_run(
             status_code=500,
             detail=f"Error processing request: {str(e)}"
         )
+
+
+def convert_string_to_typed_value(value_str, type_info):
+    """
+    将字符串值根据类型信息转换为正确的类型
+    """
+    # 去除Array<>外的包装
+    base_type = type_info.replace('Array<', '').replace('>', '')
+
+    try:
+        # 先解析字符串为Python列表
+        value_list = json.loads(value_str)
+
+        # 根据基本类型进行转换
+        if base_type == 'Number':
+            return [float(x) if isinstance(x, str) else x for x in value_list]
+        elif base_type == 'String':
+            return [str(x) for x in value_list]
+        elif base_type == 'Boolean':
+            return [bool(x) if isinstance(x, str) else x for x in value_list]
+        else:
+            return value_list  # 对于其他类型（如Object），保持原样
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON: {e}")
+        return None
+    except Exception as e:
+        print(f"Error converting type: {e}")
+        return None
+
+
+def convert_input_values(input_str, type_dict):
+    """
+    转换输入字符串中的所有值为对应的类型
+    """
+    try:
+        # 解析输入字符串为字典
+        input_dict = json.loads(input_str)
+        result = {}
+
+        # 遍历每个键值对进行转换
+        for key, value in input_dict.items():
+            if key in type_dict:
+                result[key] = convert_string_to_typed_value(value, type_dict[key])
+            else:
+                result[key] = value  # 如果没有对应的类型信息，保持原样
+
+        return result
+    except json.JSONDecodeError as e:
+        print(f"Error parsing input string: {e}")
+        return None
+    except Exception as e:
+        print(f"Error processing input: {e}")
+        return None
+
+
+def extract_batch_input_types(json_data):
+    # 用于转换类型的映射字典
+    type_mapping = {
+        'integer': 'Number',
+        'string': 'String',
+        'boolean': 'Boolean',
+        'float': 'Number'
+    }
+
+    def parse_schema_type(schema):
+        # 对于对象类型，获取其第一个字段的类型
+        if schema.get('type') == 'object':
+            first_field = schema.get('schema', [])[0]
+            if first_field.get('type') == 'list':
+                return parse_schema_type(first_field.get('schema', {}))
+        # 返回基本类型
+        return type_mapping.get(schema.get('type'), schema.get('type').capitalize())
+
+    result = {}
+
+    try:
+        input_lists = json_data['data']['inputs']['batch']['inputLists']
+
+        for item in input_lists:
+            variable_name = item['name']
+            input_data = item['input']
+
+            # 直接获取schema中的类型，然后包装成Array
+            schema_type = parse_schema_type(input_data.get('schema', {}))
+            result[variable_name] = f'Array<{schema_type}>'
+
+    except KeyError as e:
+        print(f"Error: Could not find key {e} in JSON data")
+    except Exception as e:
+        print(f"Error: {str(e)}")
+
+    return result
