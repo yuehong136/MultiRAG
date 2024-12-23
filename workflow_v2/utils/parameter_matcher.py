@@ -1,14 +1,14 @@
-from typing import Dict, Any, List
+from typing import Any
 import json
 
 
 class ParameterMatcher:
-    def __init__(self, input_parameters: List[Dict], node_data: Dict[str, 'WorkflowNode']):
+    def __init__(self, input_parameters: list[dict], node_data: dict[str, 'WorkflowNode']):
         self.input_parameters = input_parameters
         self.node_data = node_data
         self.matched_values = {}
 
-    def _get_node_output(self, block_id: str) -> Dict:
+    def _get_node_output(self, block_id: str) -> dict:
         """获取指定节点的输出数据"""
         node = self.node_data.get(block_id)
         if not node:
@@ -17,7 +17,7 @@ class ParameterMatcher:
             return {}
         return node.output
 
-    def _resolve_ref_value(self, ref_content: Dict) -> Any:
+    def _resolve_ref_value(self, ref_content: dict) -> Any:
         """解析引用类型的值"""
         if ref_content["source"] != "block-output":
             raise ValueError(f"Unsupported reference source: {ref_content['source']}")
@@ -31,7 +31,7 @@ class ParameterMatcher:
             return {}
         path_parts = name.split(".")
 
-        def get_nested_value(data: Any, parts: List[str]) -> Any:
+        def get_nested_value(data: Any, parts: list[str]) -> Any:
             if not parts:
                 return data
 
@@ -49,7 +49,7 @@ class ParameterMatcher:
 
         return get_nested_value(node_output, path_parts)
 
-    def match_parameters(self) -> Dict[str, Any]:
+    def match_parameters(self) -> dict[str, Any]:
         """匹配并验证所有参数"""
         for param in self.input_parameters:
             name = param["name"]
@@ -75,7 +75,7 @@ class ParameterMatcher:
 
         return self.matched_values
 
-    def _resolve_value(self, value_def: Dict) -> Any:
+    def _resolve_value(self, value_def: dict) -> Any:
         """解析值定义"""
         if value_def["type"] == "ref":
             return self._resolve_ref_value(value_def["content"])
@@ -85,7 +85,7 @@ class ParameterMatcher:
             raise ValueError(f"Unsupported value type: {value_def['type']}")
 
 
-def match_parameters(input_parameters: List[Dict], node_data: Dict[str, 'WorkflowNode']) -> Dict[str, Any]:
+def match_parameters(input_parameters: list[dict], node_data: dict[str, 'WorkflowNode']) -> dict[str, Any]:
     """
     主函数：匹配参数定义和节点数据
 
@@ -94,7 +94,7 @@ def match_parameters(input_parameters: List[Dict], node_data: Dict[str, 'Workflo
         node_data: 节点数据字典，key为node_id，value为WorkflowNode实例
 
     Returns:
-        Dict[str, Any]: 匹配后的参数值字典
+        dict[str, Any]: 匹配后的参数值字典
     """
     matcher = ParameterMatcher(input_parameters, node_data)
     return matcher.match_parameters()

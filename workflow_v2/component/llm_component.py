@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional, List
+from typing import Any
 from dataclasses import dataclass
 import copy
 from api.db import LLMType
@@ -15,10 +15,10 @@ class BatchConfig:
     batch_enable: bool = False
     batch_size: int = 100
     concurrent_size: int = 10
-    input_lists: List[Dict[str, Any]] = None
+    input_lists: list[dict[str, Any]] = None
 
     @classmethod
-    def from_batch_config(cls, config: Dict[str, Any]) -> 'BatchConfig':
+    def from_batch_config(cls, config: dict[str, Any]) -> 'BatchConfig':
         """从批处理配置创建实例"""
         if not config:
             return cls()
@@ -41,17 +41,17 @@ class LLMParams:
     model_name: str
     temperature: float = 0.7
     top_p: float = 1.0
-    max_tokens: Optional[int] = None
+    max_tokens: int | None = None
     frequency_penalty: float = 0.0
     response_format: int = 2
-    prompt: Optional[str] = None
-    system_prompt: Optional[str] = None
-    model_type: Optional[int] = None
-    generation_diversity: Optional[str] = None
-    enable_chat_history: Optional[bool] = None
+    prompt: str | None = None
+    system_prompt: str | None = None
+    model_type: int | None = None
+    generation_diversity: str | None = None
+    enable_chat_history: bool | None = None
 
     @classmethod
-    def _extract_param_value(cls, param: Dict[str, Any]) -> Any:
+    def _extract_param_value(cls, param: dict[str, Any]) -> Any:
         """从参数对象中提取实际值"""
         return param.get('input', {}).get('value', {}).get('content')
 
@@ -70,7 +70,7 @@ class LLMParams:
         return value
 
     @classmethod
-    def from_params_list(cls, params_list: List[Dict[str, Any]]) -> 'LLMParams':
+    def from_params_list(cls, params_list: list[dict[str, Any]]) -> 'LLMParams':
         """从参数列表创建LLMParams实例"""
         # 创建参数映射
         param_map = {param['name']: {
@@ -118,7 +118,7 @@ class LLMParams:
 class LLMComponent(BaseComponent):
     """LLM组件"""
 
-    def __init__(self, component_id: str, title: str, node_data: Dict[str, Any],
+    def __init__(self, component_id: str, title: str, node_data: dict[str, Any],
                  logger: WorkflowContextLogger, **kwargs):
         super().__init__(component_id, title, logger)
         self.llm_params: LLMParams = self._extract_llm_params(node_data)
@@ -127,17 +127,17 @@ class LLMComponent(BaseComponent):
         self.db = kwargs.get('db', None)
         self.user = kwargs.get('user', None)
 
-    def _extract_llm_params(self, node_data: Dict[str, Any]) -> LLMParams:
+    def _extract_llm_params(self, node_data: dict[str, Any]) -> LLMParams:
         """从节点数据中提取LLM参数"""
         params_data = node_data['data']['inputs'].get('llmParam', [])
         return LLMParams.from_params_list(params_data)
 
-    def _extract_batch_config(self, node_data: Dict[str, Any]) -> BatchConfig:
+    def _extract_batch_config(self, node_data: dict[str, Any]) -> BatchConfig:
         """从节点数据中提取批处理配置"""
         batch_data = node_data['data']['inputs'].get('batch', {})
         return BatchConfig.from_batch_config(batch_data)
 
-    async def execute(self) -> Dict[str, Any]:
+    async def execute(self) -> dict[str, Any]:
         self.logger.info(f"LLMComponent {self.title} execute")
         self.logger.info(f"LLMComponent {self.title} inputs: {self.inputs}")
         model = "ep-20241008085710-w9hk2"
@@ -197,7 +197,7 @@ class LLMComponent(BaseComponent):
                                                })
             return {"output": response}
 
-    async def execute_alone(self, input_value: dict, batch_value: Optional[dict] = None) -> dict:
+    async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict:
         self.logger.info(f"LLMComponent {self.title} execute")
         self.logger.info(f"LLMComponent {self.title} inputs: {self.inputs}")
         model = "ep-20241008085710-w9hk2"

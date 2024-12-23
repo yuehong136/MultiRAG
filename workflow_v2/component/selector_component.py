@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, Any, List, Optional
+from typing import Any
 from dataclasses import dataclass
 
 from workflow_v2.component.base_component import BaseComponent
@@ -31,26 +31,26 @@ class LogicType(Enum):
 class Branch:
     """分支信息"""
     port_id: str  # 'true', 'true_1', 'false' 等
-    nodes: List['WorkflowNode']
-    conditions: Optional[Dict]  # 分支的条件配置
+    nodes: list['WorkflowNode']
+    conditions: dict | None  # 分支的条件配置
 
 
 class SelectorComponent(BaseComponent):
     """选择器组件"""
 
-    def __init__(self, component_id: str, title: str, node_data: Dict[str, Any], logger: WorkflowContextLogger):
+    def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger):
         super().__init__(component_id, title, logger)
         self.logger = logger
         self.branches_config = self._parse_branches(node_data)
-        self.nodes: List['WorkflowNode'] = []
+        self.nodes: list['WorkflowNode'] = []
 
-    def _parse_branches(self, node_data: Dict[str, Any]) -> List[Dict]:
+    def _parse_branches(self, node_data: dict[str, Any]) -> list[dict]:
         """解析分支配置"""
         branches = node_data.get('data', {}).get('inputs', {}).get('branches', [])
         self.logger.debug(f"Parsed {len(branches)} branches for selector {self.id}")
         return branches
 
-    def _get_value(self, input_def: Dict) -> Any:
+    def _get_value(self, input_def: dict) -> Any:
         """从输入定义中获取实际值"""
         if not input_def or 'value' not in input_def:
             return None
@@ -70,7 +70,7 @@ class SelectorComponent(BaseComponent):
                     return source_node.output
         return None
 
-    def _evaluate_condition(self, condition: Dict) -> bool:
+    def _evaluate_condition(self, condition: dict) -> bool:
         """评估单个条件"""
         try:
             operator = OperatorType(condition['operator'])
@@ -124,7 +124,7 @@ class SelectorComponent(BaseComponent):
             self.logger.error(f"Error evaluating condition: {str(e)}")
             return False
 
-    def _evaluate_branch(self, branch: Dict) -> bool:
+    def _evaluate_branch(self, branch: dict) -> bool:
         """评估分支条件"""
         try:
             if 'condition' not in branch:
@@ -153,7 +153,7 @@ class SelectorComponent(BaseComponent):
             self.logger.error(f"Error evaluating branch: {str(e)}")
             return False
 
-    async def execute(self) -> Dict[str, Any]:
+    async def execute(self) -> dict[str, Any]:
         """执行选择器逻辑"""
         self.logger.info(f"Evaluating conditions in Selector {self.title}")
 

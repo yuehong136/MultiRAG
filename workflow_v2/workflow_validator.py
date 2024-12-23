@@ -1,13 +1,13 @@
-from typing import Dict, List, Set, Optional, Any
+from typing import Set, Any
 from dataclasses import dataclass
 
 
 @dataclass
 class ValidationIssue:
     message: str
-    nodes: Optional[List[Dict[str, Any]]] = None
+    nodes: list[dict[str, Any]] | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "message": self.message,
             "nodes": self.nodes
@@ -29,14 +29,14 @@ class ValidationIssue:
 
 
 class WorkflowValidator:
-    def __init__(self, nodes: List[Dict], edges: List[Dict]):
+    def __init__(self, nodes: list[dict], edges: list[dict]):
         self.nodes = nodes
         self.edges = edges
         self.node_map = {node['id']: node for node in nodes}
         self.adjacency_list = self._build_adjacency_list()
-        self.issues: List[ValidationIssue] = []
+        self.issues: list[ValidationIssue] = []
 
-    def _build_adjacency_list(self) -> Dict[str, List[str]]:
+    def _build_adjacency_list(self) -> dict[str, list[str]]:
         """构建邻接表表示的图"""
         adj_list = {node['id']: [] for node in self.nodes}
         for edge in self.edges:
@@ -45,7 +45,7 @@ class WorkflowValidator:
             adj_list[source].append(target)
         return adj_list
 
-    def _is_selector_edge(self, edge: Dict) -> bool:
+    def _is_selector_edge(self, edge: dict) -> bool:
         """判断一条边是否是选择器节点的边"""
         return 'sourcePortID' in edge
 
@@ -129,10 +129,10 @@ class WorkflowValidator:
                         [node]
                     ))
 
-    def detect_cycles(self) -> List[List[Dict]]:
+    def detect_cycles(self) -> list[list[dict]]:
         """使用DFS检测图中的环，返回完整的节点对象列表"""
 
-        def dfs(node_id: str, visited: Set[str], path: Set[str], current_path: List[Dict]) -> Optional[List[Dict]]:
+        def dfs(node_id: str, visited: Set[str], path: Set[str], current_path: list[dict]) -> list[dict] | None:
             visited.add(node_id)
             path.add(node_id)
             current_path.append(self.node_map[node_id])
@@ -232,7 +232,7 @@ class WorkflowValidator:
                     [node]
                 ))
 
-    def validate_all(self) -> List[ValidationIssue]:
+    def validate_all(self) -> list[ValidationIssue]:
         """执行所有验证检查"""
         # 检查环
         cycles = self.detect_cycles()

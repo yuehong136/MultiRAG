@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 import requests
 
@@ -10,14 +10,14 @@ from workflow_v2.workflow_logging_config import WorkflowContextLogger
 class CodeComponent(BaseComponent):
     """代码组件"""
 
-    def __init__(self, component_id: str, title: str, node_data: Dict[str, Any], logger: WorkflowContextLogger):
+    def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger):
         super().__init__(component_id, title, logger)
         self.code = node_data['data']['inputs'].get('code', '')
         self.language = node_data['data']['inputs'].get('language', 3)
         self.output_definition = node_data['data']['outputs']
         self.timeout = 30  # 默认超时时间
 
-    async def execute(self) -> Dict[str, Any]:
+    async def execute(self) -> dict[str, Any]:
         if self.language == 3:  # Python
             # 调用脚本调度服务
             code_execute_resp = self.run_temporary_script(self.code, self.inputs)
@@ -27,7 +27,7 @@ class CodeComponent(BaseComponent):
             raise ValueError(f"Unsupported language: {self.language}")
 
 
-    async def execute_alone(self, input_value: dict, batch_value: Optional[dict] = None) -> Dict[str, Any]:
+    async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict[str, Any]:
         self.inputs = input_value
         if self.language == 3:  # Python
             # 调用脚本调度服务
@@ -38,17 +38,17 @@ class CodeComponent(BaseComponent):
             raise ValueError(f"Unsupported language: {self.language}")
 
 
-    def run_temporary_script(self, script: str, args: Dict[str, Any], base_url: str = f"http://localhost:{SCRIPT_SCHEDULER_PORT}") -> Dict:
+    def run_temporary_script(self, script: str, args: dict[str, Any], base_url: str = f"http://localhost:{SCRIPT_SCHEDULER_PORT}") -> dict:
         """
         Send a request to run a temporary script with given arguments.
 
         Args:
             script (str): The Python script to execute
-            args (Dict[str, Any]): Arguments to pass to the script
+            args (dict[str, Any]): Arguments to pass to the script
             base_url (str): Base URL of the API endpoint (default: http://localhost:8124)
 
         Returns:
-            Dict: The response from the server
+            dict: The response from the server
 
         Raises:
             requests.exceptions.RequestException: If the request fails
@@ -85,19 +85,19 @@ class CodeComponent(BaseComponent):
             print(f"Error making request: {str(e)}")
             raise
 
-    def parse_output(self, output_structure: List[Dict], actual_output: Dict) -> Dict:
+    def parse_output(self, output_structure: list[dict], actual_output: dict) -> dict:
         """
         Parse the actual output according to the defined output structure.
 
         Args:
-            output_structure (List[Dict]): The structure definition of the expected output
-            actual_output (Dict): The actual output from the script execution
+            output_structure (list[dict]): The structure definition of the expected output
+            actual_output (dict): The actual output from the script execution
 
         Returns:
-            Dict: The parsed output conforming to the defined structure
+            dict: The parsed output conforming to the defined structure
         """
 
-        def convert_value(value: Any, type_def: Dict) -> Any:
+        def convert_value(value: Any, type_def: dict) -> Any:
             """
             Convert value according to the specified type definition.
 
@@ -147,16 +147,16 @@ class CodeComponent(BaseComponent):
 
             return value
 
-        def parse_schema_recursively(schema: List[Dict], data: Dict) -> Dict:
+        def parse_schema_recursively(schema: list[dict], data: dict) -> dict:
             """
             Recursively parse the schema and data.
 
             Args:
-                schema (List[Dict]): Schema definition
-                data (Dict): Actual data to parse
+                schema (list[dict]): Schema definition
+                data (dict): Actual data to parse
 
             Returns:
-                Dict: Parsed data according to schema
+                dict: Parsed data according to schema
             """
             result = {}
             schema_map = {item['name']: item for item in schema}

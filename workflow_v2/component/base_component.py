@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
+from typing import Any
 
 from workflow_v2.workflow_logging_config import WorkflowContextLogger, ComponentLogger
 
@@ -8,33 +8,33 @@ class BaseComponent(ABC):
     def __init__(self, component_id: str, title: str, logger: WorkflowContextLogger):
         self.id = component_id
         self.title = title
-        self._inputs: Dict[str, Any] = {}
-        self._outputs: Dict[str, Any] = {}
-        self._nodes: Dict[str, Any] = {}
+        self._inputs: dict[str, Any] = {}
+        self._outputs: dict[str, Any] = {}
+        self._nodes: dict[str, Any] = {}
         self.workflow_node: 'WorkflowNode' = None
         self.logger = ComponentLogger(logger, self)
 
     @property
-    def inputs(self) -> Dict[str, Any]:
+    def inputs(self) -> dict[str, Any]:
         return self._inputs
 
     @inputs.setter
-    def inputs(self, values: Dict[str, Any]):
+    def inputs(self, values: dict[str, Any]):
         self._inputs = values
 
     @property
-    def outputs(self) -> Dict[str, Any]:
+    def outputs(self) -> dict[str, Any]:
         return self._outputs
 
     @property
-    def nodes(self) -> Dict[str, Any]:
+    def nodes(self) -> dict[str, Any]:
         return self._nodes
 
     @nodes.setter
-    def nodes(self, values: Dict[str, Any]):
+    def nodes(self, values: dict[str, Any]):
         self._nodes = values
 
     @abstractmethod
-    async def execute(self) -> Dict[str, Any]:
+    async def execute(self) -> dict[str, Any]:
         """执行组件逻辑"""
         pass

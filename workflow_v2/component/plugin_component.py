@@ -1,5 +1,5 @@
 import copy
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 import requests
 
@@ -17,10 +17,10 @@ class BatchConfig:
     batch_enable: bool = False
     batch_size: int = 100
     concurrent_size: int = 10
-    input_lists: List[Dict[str, Any]] = None
+    input_lists: list[dict[str, Any]] = None
 
     @classmethod
-    def from_batch_config(cls, config: Dict[str, Any]) -> 'BatchConfig':
+    def from_batch_config(cls, config: dict[str, Any]) -> 'BatchConfig':
         """从批处理配置创建实例"""
         if not config:
             return cls()
@@ -40,19 +40,19 @@ class BatchConfig:
 class PluginComponent(BaseComponent):
     """代码组件"""
 
-    def __init__(self, component_id: str, title: str, node_data: Dict[str, Any], logger: WorkflowContextLogger):
+    def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger):
         super().__init__(component_id, title, logger)
         self.batch_config: BatchConfig = self._extract_batch_config(node_data)
         self.plugin_info = node_data['data']['inputs'].get('pluginInfo', {})
         self.output_definition = node_data['data']['outputs']
         self.timeout = 30  # 默认超时时间
 
-    def _extract_batch_config(self, node_data: Dict[str, Any]) -> BatchConfig:
+    def _extract_batch_config(self, node_data: dict[str, Any]) -> BatchConfig:
         """从节点数据中提取批处理配置"""
         batch_data = node_data['data']['inputs'].get('batch', {})
         return BatchConfig.from_batch_config(batch_data)
 
-    async def execute(self) -> Dict[str, Any]:
+    async def execute(self) -> dict[str, Any]:
         if self.batch_config.batch_enable:
             input_value_dict_list = []
 
@@ -70,7 +70,7 @@ class PluginComponent(BaseComponent):
             self.workflow_node.input = input_value_dict_list
 
             with ThreadPoolExecutor(max_workers=10) as executor:
-                def execute_single_plugin(input_value: Dict[str, Any]) -> Dict[str, Any]:
+                def execute_single_plugin(input_value: dict[str, Any]) -> dict[str, Any]:
                     code_execute_resp = self.run_plugin_script(
                         self.plugin_info.get('script', ''),
                         input_value,
@@ -102,7 +102,7 @@ class PluginComponent(BaseComponent):
             original_outputs = code_execute_resp.get("data")
             return self.parse_output(self.output_definition, original_outputs)
 
-    async def execute_alone(self, input_value: dict, batch_value: Optional[dict] = None) -> dict:
+    async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict:
         """Execute plugin component in standalone mode
 
         Args:
@@ -110,7 +110,7 @@ class PluginComponent(BaseComponent):
             batch_value: Batch parameters for batch execution
 
         Returns:
-            Dict containing execution results
+            dict containing execution results
         """
         self.logger.info(f"PluginComponent {self.title} execute")
         self.logger.info(f"PluginComponent {self.title} inputs: {input_value}")
@@ -121,7 +121,7 @@ class PluginComponent(BaseComponent):
             self.inputs = input_value_dict_list
 
             with ThreadPoolExecutor(max_workers=10) as executor:
-                def execute_single_plugin(input_value: Dict[str, Any]) -> Dict[str, Any]:
+                def execute_single_plugin(input_value: dict[str, Any]) -> dict[str, Any]:
                     code_execute_resp = self.run_plugin_script(
                         self.plugin_info.get('script', ''),
                         input_value,
@@ -157,18 +157,18 @@ class PluginComponent(BaseComponent):
             original_outputs = code_execute_resp.get("data")
             return self.parse_output(self.output_definition, original_outputs)
 
-    def run_plugin_script(self, script: str, args: Dict[str, Any], plugin_id: str,
-                          base_url: str = f"http://localhost:{SCRIPT_SCHEDULER_PORT}") -> Dict:
+    def run_plugin_script(self, script: str, args: dict[str, Any], plugin_id: str,
+                          base_url: str = f"http://localhost:{SCRIPT_SCHEDULER_PORT}") -> dict:
         """
         Send a request to run a temporary script with given arguments.
 
         Args:
             script (str): The Python script to execute
-            args (Dict[str, Any]): Arguments to pass to the script
+            args (dict[str, Any]): Arguments to pass to the script
             base_url (str): Base URL of the API endpoint (default: http://localhost:8124)
 
         Returns:
-            Dict: The response from the server
+            dict: The response from the server
 
         Raises:
             requests.exceptions.RequestException: If the request fails
@@ -206,19 +206,19 @@ class PluginComponent(BaseComponent):
             print(f"Error making request: {str(e)}")
             raise
 
-    def parse_output(self, output_structure: List[Dict], actual_output: Dict) -> Dict:
+    def parse_output(self, output_structure: list[dict], actual_output: dict) -> dict:
         """
         Parse the actual output according to the defined output structure.
 
         Args:
-            output_structure (List[Dict]): The structure definition of the expected output
-            actual_output (Dict): The actual output from the script execution
+            output_structure (list[dict]): The structure definition of the expected output
+            actual_output (dict): The actual output from the script execution
 
         Returns:
-            Dict: The parsed output conforming to the defined structure
+            dict: The parsed output conforming to the defined structure
         """
 
-        def convert_value(value: Any, type_def: Dict) -> Any:
+        def convert_value(value: Any, type_def: dict) -> Any:
             """
             Convert value according to the specified type definition.
 
@@ -268,16 +268,16 @@ class PluginComponent(BaseComponent):
 
             return value
 
-        def parse_schema_recursively(schema: List[Dict], data: Dict) -> Dict:
+        def parse_schema_recursively(schema: list[dict], data: dict) -> dict:
             """
             Recursively parse the schema and data.
 
             Args:
-                schema (List[Dict]): Schema definition
-                data (Dict): Actual data to parse
+                schema (list[dict]): Schema definition
+                data (dict): Actual data to parse
 
             Returns:
-                Dict: Parsed data according to schema
+                dict: Parsed data according to schema
             """
             result = {}
             schema_map = {item['name']: item for item in schema}

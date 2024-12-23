@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, List
+from typing import Any
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
@@ -32,7 +32,7 @@ class ResponseSchema(BaseModel):
 async def run(
         schema_data: str = Form(..., alias="schema"),  # JSON string
         start_input_values: str = Form(...),  # JSON string
-        files: List[UploadFile] = File(None),  # Optional files
+        files: list[UploadFile] = File(None),  # Optional files
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -86,7 +86,7 @@ async def component_run(
         node_data_str: str = Form(...),  # JSON string
         input_str: str = Form(...),  # JSON string
         batch_str: str = Form(None),  # JSON string
-        files: List[UploadFile] = File(None),  # Optional files
+        files: list[UploadFile] = File(None),  # Optional files
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
