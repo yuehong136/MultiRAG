@@ -20,19 +20,19 @@ class ComponentFactory:
         title = node_data['data']['nodeMeta']['title']
         node_type = node_data['type']
 
-        if node_type == "1":
+        if node_type == "1" or node_type == 1:
             return StartComponent(component_id, title, logger)
-        elif node_type == "2":
+        elif node_type == "2" or node_type == 2:
             return EndComponent(component_id, title, node_data, logger)
-        elif node_type == "3":
+        elif node_type == "3" or node_type == 3:
             return LLMComponent(component_id, title, node_data, logger,
                                 db=kwargs.get('db', None),
                                 user=kwargs.get('user', None))
-        elif node_type == "4":
+        elif node_type == "4" or node_type == 4:
             return PluginComponent(component_id, title, node_data, logger)
-        elif node_type == "5":
+        elif node_type == "5" or node_type == 5:
             return CodeComponent(component_id, title, node_data, logger)
-        elif node_type == "8":  # 选择器类型
+        elif node_type == "8" or node_type == 8:
             return SelectorComponent(component_id, title, node_data, logger)
         else:
             raise ValueError(f"Unknown component type: {node_type}")
