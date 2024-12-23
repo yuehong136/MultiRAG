@@ -8,6 +8,11 @@ class CustomException(Exception):
         self.message = message
 
 
+class ScriptRunningError(Exception):
+    def __init__(self, message: str):
+        self.message = message
+
+
 class ItemNotFoundError(Exception):
     pass
 

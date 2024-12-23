@@ -1,0 +1,45 @@
+import aiohttp
+from typing import Dict, Any
+
+from api.settings import SCRIPT_SCHEDULER_PORT
+from errors.exceptions import ScriptRunningError
+
+
+class ScriptSchedulerService:
+
+    @staticmethod
+    async def run_temporary_script(script: str, args: Dict[str, Any], user_id: int):
+        """运行临时脚本"""
+        async with aiohttp.ClientSession() as session:
+            url = f"http://localhost:{SCRIPT_SCHEDULER_PORT}/api/v1/script-scheduler/run-temporary-script"
+            payload = {
+                "script": script,
+                "args": args
+            }
+
+            async with session.post(url, json=payload) as response:
+                response_data = await response.json()
+                if response.status != 200:
+                    raise Exception(f"Failed to run plugin script: {response_data.get('message', 'Unknown error')}")
+                if response_data.get('status') != 'success':
+                    raise ScriptRunningError(message=response_data.get('message'))
+                return response_data.get('data')
+
+    @staticmethod
+    async def run_plugin_script(plugin_id: str, script: str, args: Dict[str, Any], user_id: int):
+        """运行插件脚本"""
+        async with aiohttp.ClientSession() as session:
+            url = f"http://localhost:{SCRIPT_SCHEDULER_PORT}/api/v1/script-scheduler/run-plugin-script"
+            payload = {
+                "plugin_id": plugin_id,
+                "script": script,
+                "args": args
+            }
+
+            async with session.post(url, json=payload) as response:
+                response_data = await response.json()
+                if response.status != 200:
+                    raise Exception(f"Failed to run plugin script: {response_data.get('message', 'Unknown error')}")
+                if response_data.get('status') != 'success':
+                    raise ScriptRunningError(message=response_data.get('message'))
+                return response_data.get('data')
