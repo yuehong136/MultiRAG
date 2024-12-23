@@ -1,4 +1,5 @@
 import base64
+import copy
 import datetime
 import io
 import json
@@ -50,9 +51,16 @@ CONFIGS = read_config()
 def show_configs():
     msg = f"Current configs, from {conf_realpath(SERVICE_CONF)}:"
     for k, v in CONFIGS.items():
+        if isinstance(v, dict):
+            if "password" in v:
+                v = copy.deepcopy(v)
+                v["password"] = "*" * 8
+            if "api_key" in v:
+                v = copy.deepcopy(v)
+                v["api_key"] = "*" * 8
         msg += f"\n\t{k}: {v}"
-    logging.info("默认不展示service_conf.yaml,如有需要,请至 api/utils/__init__.py 解开注释")
-    # logging.info(msg)
+    # logging.info("默认不展示service_conf.yaml,如有需要,请至 api/utils/__init__.py 解开注释")
+    logging.info(msg)
 
 
 def get_base_config(key, default=None):
