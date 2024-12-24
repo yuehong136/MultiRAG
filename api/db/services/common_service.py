@@ -1,7 +1,7 @@
 # common_services.py
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Type
+from typing import Any, Type, Generic, TypeVar
 
 from sqlalchemy import Row, desc, asc
 from sqlalchemy.orm import Session
@@ -11,10 +11,13 @@ from sqlalchemy.exc import NoResultFound, IntegrityError
 from api.db import db_models
 
 
-class CommonService:
-    model: Type[db_models.BaseModel]
+# Define a TypeVar bound to db_models.BaseModel for better type hinting
+ModelType = TypeVar("ModelType", bound=db_models.BaseModel)
 
-    def __init__(self, model: Type[db_models.BaseModel]):
+class CommonService(Generic[ModelType]):
+    model: Type[ModelType]
+
+    def __init__(self, model: Type[ModelType]):
         self.model = model
 
     @staticmethod
@@ -27,7 +30,7 @@ class CommonService:
 
     @classmethod
     def query(cls, db: Session, cols: list[str] = None, reverse: bool | None = None, order_by: str | None = None,
-              **kwargs) -> list[Row[tuple[type[db_models.BaseModel]]]]:
+              **kwargs) -> list[ModelType] | list[Row]:
         """
        根据条件查询数据库中的记录。
 
@@ -74,8 +77,7 @@ class CommonService:
         return query.all()
 
     @classmethod
-    def get_all(cls, db: Session, cols: list[str] = None, reverse: bool | None = None, order_by: str = None) -> list[
-        Row[tuple[Type[db_models.BaseModel]]]]:
+    def get_all(cls, db: Session, cols: list[str] = None, reverse: bool | None = None, order_by: str = None) ->  list[ModelType] | list[Row]:
         query = db.query(cls.model)
         if cols:
             query = query.with_entities(*[getattr(cls.model, col) for col in cols])
@@ -90,18 +92,18 @@ class CommonService:
         return query.all()
 
     @classmethod
-    def get(cls, db: Session, **kwargs) -> Type[db_models.BaseModel]:
+    def get(cls, db: Session, **kwargs) -> ModelType:
         try:
             return db.query(cls.model).filter_by(**kwargs).one()
         except NoResultFound:
             raise HTTPException(status_code=404, detail="Item not found")
 
     @classmethod
-    def get_or_none(cls, db: Session, **kwargs) -> db_models.BaseModel | None:
+    def get_or_none(cls, db: Session, **kwargs) -> ModelType | None:
         return db.query(cls.model).filter_by(**kwargs).one_or_none()
 
     @classmethod
-    def save(cls, db: Session, **kwargs) -> db_models.BaseModel:
+    def save(cls, db: Session, **kwargs) -> ModelType:
         # db_item = cls.model(**kwargs)
         # db.add(db_item)
         # db.commit()
@@ -119,7 +121,7 @@ class CommonService:
         return db_item
 
     @classmethod
-    def insert(cls, db: Session, **kwargs) -> db_models.BaseModel:
+    def insert(cls, db: Session, **kwargs) -> ModelType:
         if "id" not in kwargs:
             kwargs["id"] = str(uuid.uuid4())
         now = cls.current_timestamp()
@@ -182,7 +184,7 @@ class CommonService:
 
 
     @classmethod
-    def get_by_id(cls, db: Session, pid: Any) -> Type[db_models.BaseModel]:
+    def get_by_id(cls, db: Session, pid: Any) -> ModelType:
         try:
             return db.query(cls.model).filter(cls.model.id == pid).one()
         except NoResultFound:
@@ -191,7 +193,7 @@ class CommonService:
 
     @classmethod
     def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] = None) -> list[
-        Row[tuple[Type[db_models.BaseModel]]]]:
+        Row[tuple[ModelType]]]:
         query = db.query(cls.model).filter(cls.model.id.in_(pids))
         if cols:
             query = query.with_entities(*[getattr(cls.model, col) for col in cols])

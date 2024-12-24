@@ -72,7 +72,7 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,
-                     orderby: str, desc: bool, keywords: str | None = None) -> (list[dict], int):
+                     orderby: str, desc: bool, keywords: str | None = None) -> tuple[list[dict], int]:
         query = db.query(cls.model).filter_by(kb_id=kb_id)
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
