@@ -43,16 +43,6 @@ class CommonService(Generic[ModelType]):
        """
         # 根据过滤条件构造查询表达式
         query = db.query(cls.model).filter_by(**kwargs)
-        # if cols:
-        #     query = query.with_entities(*[getattr(cls.model, col) for col in cols])
-        # if reverse is not None:
-        #     if not order_by or not hasattr(cls.model, order_by):
-        #         order_by = "create_time"
-        #     order_column = getattr(cls.model, order_by)
-        #     if reverse:
-        #         query = query.order_by(order_column.desc())
-        #     else:
-        #         query = query.order_by(order_column.asc())
 
         if order_by:
             if not isinstance(order_by, str):
@@ -104,12 +94,6 @@ class CommonService(Generic[ModelType]):
 
     @classmethod
     def save(cls, db: Session, **kwargs) -> ModelType:
-        # db_item = cls.model(**kwargs)
-        # db.add(db_item)
-        # db.commit()
-        # db.refresh(db_item)
-        # return db_item
-
         db_item = cls.model(**kwargs)
         db.add(db_item)
         try:
@@ -189,7 +173,6 @@ class CommonService(Generic[ModelType]):
             return db.query(cls.model).filter(cls.model.id == pid).one()
         except NoResultFound:
             raise HTTPException(status_code=404, detail="Item not found")
-            # return None  # 返回 None 而不是抛出异常
 
     @classmethod
     def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] = None) -> list[
@@ -209,7 +192,6 @@ class CommonService(Generic[ModelType]):
             db.rollback()  # 回滚事务
             print(f"Error occurred: {e}")
             return 0
-        # return db.query(cls.model).filter(cls.model.id == pid).delete(synchronize_session=False)
 
     @classmethod
     def filter_update(cls, db: Session, filters: list[Any], update_data: dict[str, Any]):
@@ -224,10 +206,6 @@ class CommonService(Generic[ModelType]):
 
     @classmethod
     def filter_delete(cls, db: Session, filters: list[Any]) -> int:
-        # with db.begin():
-        #     num = db.query(cls.model).filter(*filters).delete(synchronize_session=False)
-        #     db.commit()
-        #     return num
         num = db.query(cls.model).filter(*filters).delete(synchronize_session=False)
         db.commit()
         return num

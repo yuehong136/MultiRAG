@@ -9,7 +9,7 @@ from core.utils import num_tokens_from_string
 class YoudaoEmbed(Base):
     _client = None
 
-    def __init__(self, key: str = None, model_name: str = "maidalun1020/bce-embedding-base_v1", base_url: str | None = None, **kwargs):
+    def __init__(self, key: str | None = None, model_name: str = "maidalun1020/bce-embedding-base_v1", base_url: str | None = None, **kwargs):
         super().__init__(key, model_name)
         self.base_url = base_url
         self.kwargs = kwargs

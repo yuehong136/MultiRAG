@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Base(ABC):
-    key: str
+    key: str | None
     model_name: str
 
     @abstractmethod
