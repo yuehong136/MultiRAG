@@ -108,6 +108,8 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
     if to_page > 0:
         if msg:
             msg = f"Page({from_page + 1}~{to_page + 1}): " + msg
+    if msg:
+        msg = datetime.now().strftime("%H:%M:%S") + " " + msg
     d = {"progress_msg": msg}
     if prog is not None:
         d["progress"] = prog

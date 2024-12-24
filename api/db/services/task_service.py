@@ -9,6 +9,7 @@
 import bisect
 import os
 import random
+from datetime import datetime
 
 import xxhash
 from sqlalchemy import asc, desc, select, update, text
@@ -77,7 +78,7 @@ class TaskService(CommonService):
         # 将结果转换为字典
         task = {col["name"]: value for col, value in zip(query.column_descriptions, docs[0])}
 
-        msg = "\nTask has been received."
+        msg = f"\n{datetime.now().strftime('%H:%M:%S')} Task has been received."
         prog = random.random() / 10.0
         if task["retry_count"] >= 3:
             msg = "\nERROR: Task is abandoned after 3 times attempts."
