@@ -370,6 +370,50 @@ class DocumentService(CommonService):
         return query.embd_id if query else None
 
     @classmethod
+    def get_chunking_config(cls, db: Session, doc_id: str) -> dict | None:
+        """
+        获取文档的分块配置信息。
+        """
+        # 检查 model 是否为有效的 SQLAlchemy 模型
+        if not hasattr(cls, "model") or not hasattr(cls.model, "id"):
+            raise AttributeError("cls.model 必须是一个 SQLAlchemy 模型类，并且定义了 'id' 字段。")
+
+        # 定义别名
+        TenantAlias = aliased(Tenant)
+        KnowledgebaseAlias = aliased(Knowledgebase)
+
+        # 构建查询
+        query = (
+            db.query(
+                cls.model.id.label("id"),
+                cls.model.kb_id.label("kb_id"),
+                cls.model.parser_id.label("parser_id"),
+                cls.model.parser_config.label("parser_config"),
+                KnowledgebaseAlias.language.label("language"),
+                KnowledgebaseAlias.embd_id.label("embd_id"),
+                KnowledgebaseAlias.name.label("name"),
+                TenantAlias.id.label("tenant_id"),
+                TenantAlias.img2txt_id.label("img2txt_id"),
+                TenantAlias.asr_id.label("asr_id"),
+                TenantAlias.llm_id.label("llm_id"),
+            )
+            .join(KnowledgebaseAlias, cls.model.kb_id == KnowledgebaseAlias.id)
+            .join(TenantAlias, KnowledgebaseAlias.tenant_id == TenantAlias.id)
+            .filter(cls.model.id == doc_id)
+        )
+
+        # 执行查询
+        configs = query.all()
+
+        # 如果无结果，返回 None
+        if not configs:
+            return None
+
+        # 将结果转换为字典
+        result = [dict(row._mapping) for row in configs]
+        return result[0]
+
+    @classmethod
     def get_doc_id_by_doc_name(cls, db: Session, doc_name: str):
         query = db.query(cls.model.id).filter_by(name=doc_name).first()
         return query.id if query else None

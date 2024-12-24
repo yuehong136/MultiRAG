@@ -70,6 +70,7 @@ class RemoveRequest(BaseModel):
 class RunRequest(BaseModel):
     doc_ids: list[str] = Field(..., description="文档ID列表")
     run: int = Field(..., description="运行状态")
+    delete: bool = Field(default=False, description="是否删除历史doc记录")
 
 
 class RenameRequest(BaseModel):
@@ -407,6 +408,8 @@ async def rm(
 
             b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
 
+            TaskService.filter_delete(db, [Task.doc_id == doc_id])
+
             if not DocumentService.remove_document(db, doc, tenant_id):
                 return construct_json_result(data=False, message="Database error (Document removal)!",
                                              code=settings.RetCode.ARGUMENT_ERROR)
@@ -460,21 +463,20 @@ async def run(
             # 构建 Milvus 集合名称
             collection_name = search.index_name_one(tenant_id, kb.name)
             # 检查集合是否存在并删除 Milvus 中的数据
-            try:
-                if MILVUS_CONNECTION.has_collection(collection_name):
-                    delete_result = MILVUS_CONNECTION.delete(
-                        collection_name=collection_name,
-                        filter=f"doc_id == '{{doc_id}}'".format(doc_id=d["id"])
-                        # filter=f"doc_id == '{d["id"]}'"
-                    )
-                    if not delete_result:
-                        return construct_json_result(data=False, message="Milvus delete failed!",
-                                                     code=settings.RetCode.ARGUMENT_ERROR)
-            except MilvusException as e:
-                return construct_json_result(data=False, message=str(e), code=settings.RetCode.ARGUMENT_ERROR)
+            if req.get("delete", False):
+                TaskService.filter_delete(db, [Task.doc_id == id])
+                try:
+                    if MILVUS_CONNECTION.has_collection(collection_name):
+                        delete_result = MILVUS_CONNECTION.delete(
+                            collection_name=collection_name,
+                            filter=f"doc_id == '{{doc_id}}'".format(doc_id=d["id"])
+                        )
+                        if not delete_result:
+                            return construct_json_result(data=False, message="Milvus delete failed!", code=settings.RetCode.ARGUMENT_ERROR)
+                except MilvusException as e:
+                    return construct_json_result(data=False, message=str(e), code=settings.RetCode.ARGUMENT_ERROR)
 
             if str(req["run"]) == TaskStatus.RUNNING.value:
-                TaskService.filter_delete(db, [Task.doc_id == id])
                 doc = DocumentService.get_by_id(db, id).to_dict()
                 doc["tenant_id"] = tenant_id
                 bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])

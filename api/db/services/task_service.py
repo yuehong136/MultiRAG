@@ -6,7 +6,12 @@
 @date：2024/7/22 15:10
 @desc:
 """
+import bisect
+import os
 import random
+
+import xxhash
+from sqlalchemy import asc, desc, select, update, text
 from sqlalchemy.orm import Session
 
 from api.utils.db_utils import bulk_insert_into_db
@@ -20,7 +25,21 @@ from deepdoc.parser.excel_parser import RAGFlowExcelParser
 from core.settings import SVR_QUEUE_NAME
 from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
+from api import settings
+from core.nlp import search
 
+def trim_header_by_lines(text: str, max_length) -> str:
+    if len(text) <= max_length:
+        return text
+    lines = text.split("\n")
+    total = 0
+    idx = len(lines) - 1
+    for i in range(len(lines)-1, -1, -1):
+        if total + len(lines[i]) > max_length:
+            break
+        idx = i
+    text2 = "\n".join(lines[idx:])
+    return text2
 
 class TaskService(CommonService):
     model = Task
@@ -59,12 +78,8 @@ class TaskService(CommonService):
         if not docs:
             return None
 
-        # task = docs[0]
-        # task.progress_msg = task.progress_msg + "\n" + "Task has been received."
-        # task.progress = random.random() / 10.
-
-        # 将查询结果转换为字典
-        task = docs[0]._asdict()  # 转换为字典
+        # 将结果转换为字典
+        task = {col["name"]: value for col, value in zip(query.column_descriptions, docs[0])}
 
         msg = "\nTask has been received."
         prog = random.random() / 10.0
@@ -87,7 +102,36 @@ class TaskService(CommonService):
         if task["retry_count"] >= 3:
             return None
 
-        return docs[0]
+        return task
+
+    @classmethod
+    def get_tasks(cls, db: Session, doc_id: str):
+        fields = [
+            cls.model.id,
+            cls.model.from_page,
+            cls.model.progress,
+            cls.model.digest,
+            cls.model.chunk_ids,
+        ]
+        stmt = (
+            select(*fields)
+            .where(cls.model.doc_id == doc_id)
+            .order_by(asc(cls.model.from_page), desc(cls.model.create_time))
+        )
+        tasks = db.execute(stmt).mappings().all()
+        if not tasks:
+            return None
+        return [dict(task) for task in tasks]
+
+    @classmethod
+    def update_chunk_ids(cls, db: Session, id: str, chunk_ids: str):
+        stmt = (
+            update(cls.model)
+            .where(cls.model.id == id)
+            .values(chunk_ids=chunk_ids)
+        )
+        db.execute(stmt)
+        db.commit()
 
     @classmethod
     def get_ongoing_doc_name(cls, db: Session):
@@ -124,42 +168,90 @@ class TaskService(CommonService):
 
     @classmethod
     def do_cancel(cls, db: Session, task_id):
-        # try:
-        #     task = db.query(cls.model).get(task_id)
-        #     # doc = db.query(Document).get(task.doc_id)
-        #     doc = DocumentService.get_by_id(task.doc_id)
-        #     return doc.run == TaskStatus.CANCEL.value or doc.progress < 0
-        # except Exception:
-        #     return False
-        try:
-            # 使用 get_by_id 方法获取任务
-            task = cls.get_by_id(db, task_id)
-            # 获取与任务关联的文档
-            doc = DocumentService.get_by_id(db, task.doc_id)
-            # 判断文档是否满足取消条件
-            return doc.run == TaskStatus.CANCEL.value or doc.progress < 0
-        except Exception:
-            pass
-        return False
+        # 使用 get_by_id 方法获取任务
+        task = cls.get_by_id(db, task_id)
+        # 获取与任务关联的文档
+        doc = DocumentService.get_by_id(db, task.doc_id)
+        # 判断文档是否满足取消条件
+        return doc.run == TaskStatus.CANCEL.value or doc.progress < 0
 
+    # @classmethod
+    # def update_progress(cls, db: Session, task_id, info):
+    #     task = db.query(cls.model).get(task_id)
+    #     if not task:
+    #         return
+    #     if "progress_msg" in info:
+    #         task.progress_msg += "\n" + info["progress_msg"]
+    #     if "progress" in info:
+    #         task.progress = info["progress"]
+    #     db.commit()
     @classmethod
-    def update_progress(cls, db: Session, task_id, info):
-        task = db.query(cls.model).get(task_id)
-        if not task:
-            return
-        if "progress_msg" in info:
-            task.progress_msg += "\n" + info["progress_msg"]
-        if "progress" in info:
-            task.progress = info["progress"]
-        db.commit()
+    def update_progress(cls, db: Session, id: str, info: dict):
+        """
+        更新任务的 progress 和 progress_msg，并使用数据库锁。
+        """
+        if os.environ.get("MACOS"):
+            # 直接更新逻辑
+            if "progress_msg" in info and info["progress_msg"]:
+                task = db.query(cls.model).get(id)
+                if task:
+                    progress_msg = trim_header_by_lines(
+                        (task.progress_msg or "") + "\n" + info["progress_msg"], 10000
+                    )
+                    db.execute(
+                        update(cls.model)
+                        .where(cls.model.id == id)
+                        .values(progress_msg=progress_msg)
+                    )
 
+            if "progress" in info:
+                db.execute(
+                    update(cls.model)
+                    .where(cls.model.id == id)
+                    .values(progress=info["progress"])
+                )
+            db.commit()
+            return
+        # 动态生成锁名
+        lock_name = f"update_progress_{id}"
+        lock_query = text(f"SELECT pg_advisory_lock(hashtext('{lock_name}'))")
+        unlock_query = text(f"SELECT pg_advisory_unlock(hashtext('{lock_name}'))")
+
+        try:
+            # 获取锁
+            db.execute(lock_query)
+            db.commit()
+
+            # 更新逻辑
+            if "progress_msg" in info and info["progress_msg"]:
+                task = db.query(cls.model).get(id)
+                if task:
+                    progress_msg = trim_header_by_lines(
+                        (task.progress_msg or "") + "\n" + info["progress_msg"], 10000
+                    )
+                    db.execute(
+                        update(cls.model)
+                        .where(cls.model.id == id)
+                        .values(progress_msg=progress_msg)
+                    )
+
+            if "progress" in info:
+                db.execute(
+                    update(cls.model)
+                    .where(cls.model.id == id)
+                    .values(progress=info["progress"])
+                )
+
+            db.commit()
+
+        finally:
+            # 释放锁
+            db.execute(unlock_query)
+            db.commit()
 
 def queue_tasks(db: Session, doc: dict, bucket: str, name: str):
     def new_task():
-        return {
-            "id": get_uuid(),
-            "doc_id": doc["id"]
-        }
+        return {"id": get_uuid(), "doc_id": doc["id"], "progress": 0.0}
 
     tsks = []
 
@@ -194,10 +286,55 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str):
     else:
         tsks.append(new_task())
 
+    chunking_config = DocumentService.get_chunking_config(db, doc["id"])
+    for task in tsks:
+        hasher = xxhash.xxh64()
+        for field in sorted(chunking_config.keys()):
+            hasher.update(str(chunking_config[field]).encode("utf-8"))
+        for field in ["doc_id", "from_page", "to_page"]:
+            hasher.update(str(task.get(field, "")).encode("utf-8"))
+        task_digest = hasher.hexdigest()
+        task["digest"] = task_digest
+        task["progress"] = 0.0
+
+    prev_tasks = TaskService.get_tasks(db, doc["id"])
+    if prev_tasks:
+        for task in tsks:
+            reuse_prev_task_chunks(task, prev_tasks, chunking_config)
+        TaskService.filter_delete(db, [Task.doc_id == doc["id"]])
+        chunk_ids = []
+        for task in prev_tasks:
+            if task["chunk_ids"]:
+                chunk_ids.extend(task["chunk_ids"].split())
+        if chunk_ids:
+            settings.docStoreConn.delete({"id": chunk_ids}, search.index_name_one(chunking_config["tenant_id"], chunking_config["name"]),
+                                         chunking_config["kb_id"])
+
     bulk_insert_into_db(db, Task, tsks, True)
     DocumentService.begin2parse(db, doc["id"])
+
+    tsks = [task for task in tsks if task["progress"] < 1.0]
 
     for t in tsks:
         assert REDIS_CONN.queue_product(
             SVR_QUEUE_NAME, message=t
         ), "Can't access Redis. Please check the Redis' status."
+
+def reuse_prev_task_chunks(task: dict, prev_tasks: list[dict], chunking_config: dict):
+    idx = bisect.bisect_left(prev_tasks, (task.get("from_page", 0), task.get("digest", "")),
+                             key=lambda x: (x.get("from_page", 0), x.get("digest", "")))
+    if idx >= len(prev_tasks):
+        return 0
+    prev_task = prev_tasks[idx]
+    if prev_task["progress"] < 1.0 or prev_task["digest"] != task["digest"] or not prev_task["chunk_ids"]:
+        return 0
+    task["chunk_ids"] = prev_task["chunk_ids"]
+    task["progress"] = 1.0
+    if "from_page" in task and "to_page" in task:
+        task["progress_msg"] = f"Page({task['from_page']}~{task['to_page']}): "
+    else:
+        task["progress_msg"] = ""
+    task["progress_msg"] += "reused previous task's chunks."
+    prev_task["chunk_ids"] = ""
+
+    return len(task["chunk_ids"].split())
