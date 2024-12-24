@@ -60,6 +60,17 @@ class Dealer:
         vector_column_name = "vector"
         return MatchDenseExpr(vector_column_name, embedding_data, 'float', 'cosine', topk, {"similarity": similarity})
 
+    def get_filters(self, req):
+        condition = dict()
+        for key, field in {"kb_ids": "kb_id", "doc_ids": "doc_id"}.items():
+            if key in req and req[key] is not None:
+                condition[field] = req[key]
+        # TODO(yzc): `available_int` is nullable however infinity doesn't support nullable columns.
+        for key in ["knowledge_graph_kwd"]:
+            if key in req and req[key] is not None:
+                condition[key] = req[key]
+        return condition
+
     def _add_filters(self, base_filter, req):
         filters = []
 
@@ -95,7 +106,7 @@ class Dealer:
 
     def search(self, req, idxnms, embd_mdl=None):
         qst = req.get("question", "")
-        bqry, keywords = self.qryr.question(qst, min_match="30%")
+        bqry, keywords = self.qryr.question(qst, min_match=0.3)
         total, ids, fields = 0, [], {}
         if bqry is None:
             raise ValueError("Failed to generate query for the given question.")

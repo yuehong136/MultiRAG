@@ -10,7 +10,14 @@ class MilvusQueryer:
         self.tw = term_weight.Dealer()
         self.milvus = milvus
         self.syn = synonym.Dealer()
-        self.flds = ["ask_tks^10", "ask_small_tks"]
+        self.query_fields = [
+            "title_tks^10",
+            "title_sm_tks^5",
+            "important_kwd^30",
+            "important_tks^20",
+            "content_ltks^2",
+            "content_sm_ltks",
+        ]
 
     @staticmethod
     def subSpecialChar(line):
@@ -25,7 +32,7 @@ class MilvusQueryer:
         for t in arr:
             if not re.match(r"[a-zA-Z]+$", t):
                 e += 1
-        return e * 1. / len(arr) >= 0.7
+        return e * 1.0 / len(arr) >= 0.7
 
     @staticmethod
     def rmWWW(txt):
@@ -41,9 +48,9 @@ class MilvusQueryer:
             txt = re.sub(r, p, txt, flags=re.IGNORECASE)
         return txt
 
-    def question(self, txt, tbl="qa", min_match: float=0.6):
+    def question(self, txt, tbl="qa", min_match: float = 0.6):
         txt = re.sub(
-            r"[ :\r\n\t,，。？?/`!！&\^%%()^]+",
+            r"[ :\r\n\t,，。？?/`!！&\^%%()^\[\]]+",
             " ",
             rag_tokenizer.tradi2simp(rag_tokenizer.strQ2B(txt.lower())),
         ).strip()
@@ -81,7 +88,7 @@ class MilvusQueryer:
                 "bool": {
                     "must": {
                         "query_string": {
-                            "fields": self.flds,
+                            "fields": self.query_fields,
                             "query": " ".join(q),
                             "boost": 1
                         }
@@ -108,15 +115,21 @@ class MilvusQueryer:
             logging.debug(json.dumps(twts, ensure_ascii=False))
             tms = []
             for tk, w in sorted(twts, key=lambda x: x[1] * -1):
-                sm = rag_tokenizer.fine_grained_tokenize(tk).split() if need_fine_grained_tokenize(tk) else []
+                sm = (
+                    rag_tokenizer.fine_grained_tokenize(tk).split(" ")
+                    if need_fine_grained_tokenize(tk)
+                    else []
+                )
                 sm = [
                     re.sub(
                         r"[ ,\./;'\[\]\\`~!@#$%\^&\*\(\)=\+_<>\?:\"\{\}\|，。；‘’【】、！￥……（）——《》？：“”-]+",
                         "",
-                        m) for m in sm]
+                        m,
+                    )
+                    for m in sm
+                ]
                 sm = [MilvusQueryer.subSpecialChar(m) for m in sm if len(m) > 1]
                 sm = [m for m in sm if len(m) > 1]
-
 
                 if len(keywords) < 32:
                     keywords.append(re.sub(r"[ \\\"']+", "", tk))
@@ -138,8 +151,7 @@ class MilvusQueryer:
                 if tk_syns:
                     tk = f"({tk} OR (%s)^0.2)" % " ".join(tk_syns)
                 if sm:
-                    tk = f"{tk} OR \"%s\" OR (\"%s\"~2)^0.5" % (
-                        " ".join(sm), " ".join(sm))
+                    tk = f'{tk} OR "%s" OR ("%s"~2)^0.5' % (" ".join(sm), " ".join(sm))
                 if tk.strip():
                     tms.append((tk, w))
 
@@ -148,7 +160,7 @@ class MilvusQueryer:
             if len(twts) > 1:
                 tms += ' ("%s"~2)^1.5' % rag_tokenizer.tokenize(tt)
             if re.match(r"[0-9a-z ]+$", tt):
-                tms = f"(\"{tt}\" OR \"%s\")" % rag_tokenizer.tokenize(tt)
+                tms = f'("{tt}" OR "%s")' % rag_tokenizer.tokenize(tt)
 
             syns = " OR ".join(
                 [
@@ -162,7 +174,7 @@ class MilvusQueryer:
 
             qs.append(tms)
 
-        flds = copy.deepcopy(self.flds)
+        flds = copy.deepcopy(self.query_fields)
         mst = []
         if qs:
             mst.append(
@@ -181,14 +193,13 @@ class MilvusQueryer:
                 "must": mst
             }
         }, keywords
-    def hybrid_similarity(self, avec, bvecs, atks, btkss, tkweight=0.3,
-                          vtweight=0.7):
+    def hybrid_similarity(self, avec, bvecs, atks, btkss, tkweight=0.3, vtweight=0.7):
         from sklearn.metrics.pairwise import cosine_similarity as CosineSimilarity
         import numpy as np
+
         sims = CosineSimilarity([avec], bvecs)
         tksim = self.token_similarity(atks, btkss)
-        return np.array(sims[0]) * vtweight + \
-            np.array(tksim) * tkweight, tksim, sims[0]
+        return np.array(sims[0]) * vtweight + np.array(tksim) * tkweight, tksim, sims[0]
 
     def token_similarity(self, atks, btkss):
         def toDict(tks):

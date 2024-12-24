@@ -32,7 +32,7 @@ class KGSearch(Dealer):
                                  ])
 
         qst = req.get("question", "")
-        binary_query, keywords = self.qryr.question(qst, min_match="5%")
+        binary_query, keywords = self.qryr.question(qst, min_match=0.05)
         binary_query = self._add_filters(binary_query, req)
 
         ## Entity retrieval
