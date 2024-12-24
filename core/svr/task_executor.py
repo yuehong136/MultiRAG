@@ -780,27 +780,27 @@ def handle_task():
                         task_dict = {key: str(value) for key, value in vars(
                             task).items()}  # 通用对象转换为字典
                     logging.info(f"handle_task begin for task {json.dumps(task_dict)}")
-                    with mt_lock:
-                        CURRENT_TASK = copy.deepcopy(task_dict)
-                    do_handle_task(db, task)
+                except TaskCanceledException:
                     with mt_lock:
                         DONE_TASKS += 1
                         CURRENT_TASK = None
-                    logging.info(f"handle_task done for task {json.dumps(task_dict)}")
+                    try:
+                        set_progress(db, task["id"], prog=-1, msg="handle_task got TaskCanceledException")
+                    except Exception:
+                        pass
+                    logging.debug("handle_task got TaskCanceledException", exc_info=True)
                 except Exception:
                     with mt_lock:
                         FAILED_TASKS += 1
                         CURRENT_TASK = None
-                    logging.exception(f"handle_task got exception for task {json.dumps(task_dict)}")
+                    try:
+                        set_progress(db, task["id"], prog=-1, msg="handle_task got exception, please check log")
+                    except Exception:
+                        pass
+                    logging.exception(f"handle_task got exception for task {json.dumps(task)}")
             if PAYLOAD:
                 PAYLOAD.ack()
                 PAYLOAD = None
-        except TaskCanceledException:
-            with mt_lock:
-                DONE_TASKS += 1
-                CURRENT_TASK = None
-            logging.info(f"handle_task got TaskCanceledException for task {json.dumps(task)}")
-            logging.debug("handle_task got TaskCanceledException", exc_info=True)
         except Exception:
             logging.exception(f"Error in main loop")
             db.rollback()  # 回滚事务
