@@ -29,17 +29,13 @@ from api import settings
 from core.nlp import search
 
 def trim_header_by_lines(text: str, max_length) -> str:
-    if len(text) <= max_length:
+    len_text = len(text)
+    if len_text <= max_length:
         return text
-    lines = text.split("\n")
-    total = 0
-    idx = len(lines) - 1
-    for i in range(len(lines)-1, -1, -1):
-        if total + len(lines[i]) > max_length:
-            break
-        idx = i
-    text2 = "\n".join(lines[idx:])
-    return text2
+    for i in range(len_text):
+        if text[i] == '\n' and len_text - i <= max_length:
+            return text[i+1:]
+    return text
 
 class TaskService(CommonService):
     model = Task
@@ -196,7 +192,7 @@ class TaskService(CommonService):
                 task = db.query(cls.model).get(id)
                 if task:
                     progress_msg = trim_header_by_lines(
-                        (task.progress_msg or "") + "\n" + info["progress_msg"], 10000
+                        (task.progress_msg or "") + "\n" + info["progress_msg"], 1000
                     )
                     db.execute(
                         update(cls.model)
@@ -227,7 +223,7 @@ class TaskService(CommonService):
                 task = db.query(cls.model).get(id)
                 if task:
                     progress_msg = trim_header_by_lines(
-                        (task.progress_msg or "") + "\n" + info["progress_msg"], 10000
+                        (task.progress_msg or "") + "\n" + info["progress_msg"], 1000
                     )
                     db.execute(
                         update(cls.model)

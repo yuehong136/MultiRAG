@@ -15,7 +15,7 @@ for module in ["sqlalchemy"]:
 from datetime import datetime
 import json
 import os
-import hashlib
+import xxhash
 import copy
 import re
 import time
@@ -224,10 +224,7 @@ def build_chunks(task, progress_callback, db: Session):
     for ck in cks:
         d = copy.deepcopy(doc)
         d.update(ck)
-        md5 = hashlib.md5()
-        md5.update((ck["content_with_weight"] +
-                    str(d["doc_id"])).encode("utf-8"))
-        d["pk"] = md5.hexdigest()
+        d["pk"] = xxhash.xxh64((ck["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
         d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
         d["create_timestamp_flt"] = datetime.now().timestamp()
 
@@ -443,9 +440,7 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
     tk_count = 0
     for content, vctr in chunks[original_length:]:
         d = copy.deepcopy(doc)
-        md5 = hashlib.md5()
-        md5.update((content + str(d["doc_id"])).encode("utf-8"))
-        d["pk"] = md5.hexdigest()
+        d["pk"] = xxhash.xxh64((content + str(d["doc_id"])).encode("utf-8")).hexdigest()
         d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
         d["create_timestamp_flt"] = datetime.now().timestamp()
         d["vector"] = vctr.tolist()

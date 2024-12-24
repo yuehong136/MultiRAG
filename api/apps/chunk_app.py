@@ -9,7 +9,7 @@
 import datetime
 import json
 
-import hashlib
+import xxhash
 import re
 
 from fastapi import APIRouter, Depends
@@ -19,8 +19,6 @@ from sqlalchemy.orm import Session
 from api.db.services.dialog_service import keyword_extraction
 from core.app.qa import rmPrefix, beAdoc
 from core.nlp import search, rag_tokenizer
-# from core.utils.es_conn import ELASTICSEARCH
-from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -767,9 +765,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
     ```
     """
     req = request.model_dump()
-    md5 = hashlib.md5()
-    md5.update((request.content_with_weight + request.doc_id).encode("utf-8"))
-    chunk_id = md5.hexdigest()
+    chunk_id = xxhash.xxh64((request.content_with_weight + request.doc_id).encode("utf-8")).hexdigest()
     d = {"pk": chunk_id, "content_ltks": rag_tokenizer.tokenize(req["content_with_weight"]),
          "content_with_weight": req["content_with_weight"]}
     d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
