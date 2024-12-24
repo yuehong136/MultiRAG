@@ -22,6 +22,8 @@ import logging
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+
+from graphrag.extractor import Extractor
 from typing import Any
 
 from graphrag.mind_map_prompt import MIND_MAP_EXTRACTION_PROMPT
@@ -38,9 +40,7 @@ class MindMapResult:
     output: dict
 
 
-class MindMapExtractor:
-
-    _llm: CompletionLLM
+class MindMapExtractor(Extractor):
     _input_text_key: str
     _mind_map_prompt: str
     _on_error: ErrorHandlerFn

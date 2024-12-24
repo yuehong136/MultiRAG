@@ -18,10 +18,9 @@ class YoudaoEmbed(Base):
         if not settings.LIGHTEN and not YoudaoEmbed._client:
             from BCEmbedding import EmbeddingModel as qanthing
             try:
-                logging.info(f"LOADING BCE from {model_path}...")
                 YoudaoEmbed._client = qanthing(model_name_or_path=model_path, **self.kwargs)
             except Exception as e:
-                logging.info(f"Failed to load BCE from {model_path}: {e}")
+                logging.error(f"Failed to load BCE from {model_path}: {e}")
                 default_path = os.path.join(get_home_cache_dir(), self.model_name)
                 YoudaoEmbed._client = qanthing(model_name_or_path=default_path, **self.kwargs)
 

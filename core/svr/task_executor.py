@@ -13,6 +13,7 @@ for module in ["sqlalchemy"]:
     module_logger.handlers.clear()
     module_logger.propagate = True
 from datetime import datetime
+from graphrag.utils import get_llm_cache, set_llm_cache
 import json
 import os
 import xxhash
@@ -229,27 +230,6 @@ def build_chunks(task, progress_callback, db: Session):
         d["pk"] = xxhash.xxh64((ck["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
         d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
         d["create_timestamp_flt"] = datetime.now().timestamp()
-
-        # if row["parser_config"].get("auto_keywords", 0):
-        #     chat_mdl = LLMBundle(db, row["tenant_id"], LLMType.CHAT, llm_name=row["llm_id"], lang=row["language"])
-        #     d["important_kwd"] = keyword_extraction(chat_mdl, ck["content_with_weight"],
-        #                                             row["parser_config"]["auto_keywords"]).split(",")
-        #     d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
-        #
-        # if row["parser_config"].get("auto_questions", 0):
-        #     chat_mdl = LLMBundle(db, row["tenant_id"], LLMType.CHAT, llm_name=row["llm_id"], lang=row["language"])
-        #     qst = question_proposal(chat_mdl, ck["content_with_weight"], row["parser_config"]["auto_keywords"])
-        #     ck["content_with_weight"] = f"Question: \n{qst}\n\nAnswer:\n" + ck["content_with_weight"]
-        #     qst = rag_tokenizer.tokenize(qst)
-        #     if "content_ltks" in ck:
-        #         ck["content_ltks"] += " " + qst
-        #     if "content_sm_ltks" in ck:
-        #         ck["content_sm_ltks"] += " " + rag_tokenizer.fine_grained_tokenize(qst)
-
-        # # 将数组字段转换为 JSON 字符串
-        # d["page_num_int"] = json.dumps(d.get("page_num_int", []))
-        # d["position_int"] = json.dumps(d.get("position_int", []))
-        # d["top_int"] = json.dumps(d.get("top_int", []))
         d["page_num_int"] = d.get("page_num_int", [])
         d["position_int"] = d.get("position_int", [])
         d["top_int"] = d.get("top_int", [])
@@ -287,8 +267,16 @@ def build_chunks(task, progress_callback, db: Session):
         progress_callback(msg="Start to generate keywords for every chunk ...")
         chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
         for d in docs:
-            d["important_kwd"] = keyword_extraction(chat_mdl, d["content_with_weight"],
-                                                    task["parser_config"]["auto_keywords"]).split(",")
+            cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "keywords",
+                                   {"topn": task["parser_config"]["auto_keywords"]})
+            if not cached:
+                cached = keyword_extraction(chat_mdl, d["content_with_weight"],
+                                            task["parser_config"]["auto_keywords"])
+                if cached:
+                    set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "keywords",
+                                  {"topn": task["parser_config"]["auto_keywords"]})
+
+            d["important_kwd"] = cached.split(",")
             d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
         progress_callback(msg="Keywords generation completed in {:.2f}s".format(timer() - st))
 
@@ -297,13 +285,16 @@ def build_chunks(task, progress_callback, db: Session):
         progress_callback(msg="Start to generate questions for every chunk ...")
         chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
         for d in docs:
-            qst = question_proposal(chat_mdl, d["content_with_weight"], task["parser_config"]["auto_questions"])
-            d["content_with_weight"] = f"Question: \n{qst}\n\nAnswer:\n" + d["content_with_weight"]
-            qst = rag_tokenizer.tokenize(qst)
-            if "content_ltks" in d:
-                d["content_ltks"] += " " + qst
-            if "content_sm_ltks" in d:
-                d["content_sm_ltks"] += " " + rag_tokenizer.fine_grained_tokenize(qst)
+            cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "question",
+                                   {"topn": task["parser_config"]["auto_questions"]})
+            if not cached:
+                cached = question_proposal(chat_mdl, d["content_with_weight"], task["parser_config"]["auto_questions"])
+                if cached:
+                    set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "question",
+                                  {"topn": task["parser_config"]["auto_questions"]})
+
+            d["question_kwd"] = cached.split("\n")
+            d["question_tks"] = rag_tokenizer.tokenize("\n".join(d["question_kwd"]))
         progress_callback(msg="Question generation completed in {:.2f}s".format(timer() - st))
 
     return docs
@@ -777,9 +768,15 @@ def handle_task():
                     elif isinstance(task, dict):  # 如果已经是字典
                         task_dict = task
                     else:
-                        task_dict = {key: str(value) for key, value in vars(
-                            task).items()}  # 通用对象转换为字典
+                        task_dict = {key: str(value) for key, value in vars(task).items()}  # 通用对象转换为字典
                     logging.info(f"handle_task begin for task {json.dumps(task_dict)}")
+                    with mt_lock:
+                        CURRENT_TASK = copy.deepcopy(task)
+                    do_handle_task(db, task)
+                    with mt_lock:
+                        DONE_TASKS += 1
+                        CURRENT_TASK = None
+                    logging.info(f"handle_task done for task {json.dumps(task)}")
                 except TaskCanceledException:
                     with mt_lock:
                         DONE_TASKS += 1
