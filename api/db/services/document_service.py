@@ -11,6 +11,7 @@ import random
 import time
 from datetime import datetime
 
+import xxhash
 from pymilvus import MilvusException
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
@@ -441,6 +442,8 @@ class DocumentService(CommonService):
                     old[k] = v
 
         dfs_update(doc.parser_config, config)
+        if not config.get("raptor") and doc.parser_config.get("raptor"):
+            del doc.parser_config["raptor"]
         cls.update_by_id(db, id, {"parser_config": doc.parser_config})
 
     @classmethod
@@ -526,6 +529,11 @@ class DocumentService(CommonService):
 
 
 def queue_raptor_tasks(db: Session, doc):
+    chunking_config = DocumentService.get_chunking_config(db, doc["id"])
+    hasher = xxhash.xxh64()
+    for field in sorted(chunking_config.keys()):
+        hasher.update(str(chunking_config[field]).encode("utf-8"))
+
     def new_task():
         return {
             "id": get_uuid(),
@@ -536,6 +544,9 @@ def queue_raptor_tasks(db: Session, doc):
         }
 
     task = new_task()
+    for field in ["doc_id", "from_page", "to_page"]:
+        hasher.update(str(task.get(field, "")).encode("utf-8"))
+    task["digest"] = hasher.hexdigest()
     bulk_insert_into_db(db, Task, [task], True)
     task["type"] = "raptor"
     assert REDIS_CONN.queue_product(settings.SVR_QUEUE_NAME, message=task), "Can't access Redis. Please check the Redis' status."
