@@ -99,8 +99,10 @@ def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager
     user_id = usrs[0].id
     user_tenants = UserTenantService.query(db, user_id=user_id, tenant_id=tenant_id)
     if user_tenants:
-        if user_tenants[0].status == UserTenantRole.NORMAL.value:
+        if user_tenants[0].role == UserTenantRole.NORMAL:
             return get_data_error_result(retmsg="This user is in the team already.")
+        if user_tenants[0].role == UserTenantRole.OWNER:
+            return get_data_error_result(retmsg="This user is the owner of the team.")
         return get_data_error_result(retmsg="Invitation notification is sent.")
 
     UserTenantService.save(
