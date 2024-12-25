@@ -77,7 +77,7 @@ FACTORY = {
 
 CONSUMER_NAME = "task_consumer_" + CONSUMER_NO
 PAYLOAD: Payload | None = None
-BOOT_AT = datetime.now().isoformat()
+BOOT_AT = datetime.now().astimezone().isoformat(timespec="milliseconds")
 PENDING_TASKS = 0
 LAG_TASKS = 0
 
@@ -820,7 +820,7 @@ def report_status():
             with mt_lock:
                 heartbeat = json.dumps({
                     "name": CONSUMER_NAME,
-                    "now": now.isoformat(),
+                    "now": now.astimezone().isoformat(timespec="milliseconds"),
                     "boot_at": BOOT_AT,
                     "pending": PENDING_TASKS,
                     "lag": LAG_TASKS,
