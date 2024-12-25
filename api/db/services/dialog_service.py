@@ -19,7 +19,7 @@ from datetime import timedelta
 from sqlalchemy import asc
 from sqlalchemy.orm import Session
 
-from api.db import LLMType, StatusEnum
+from api.db import LLMType, StatusEnum, ParserType
 from api.db.db_models import Dialog, Conversation
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -159,14 +159,19 @@ def kb_prompt(kbinfos, max_tokens):
 def chat(dialog, messages, db: Session, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
-    st = timer()
-    llm_id, fid = TenantLLMService.split_model_name_and_factory(dialog.llm_id)
-    # 从数据库中查询LLM模型
-    llm = LLMService.query(db, llm_name=llm_id) if not fid else LLMService.query(db, llm_name=llm_id, fid=fid)
+
+    chat_start_ts = timer()
+
+    # Get llm model name and model provider name
+    llm_id, model_provider = TenantLLMService.split_model_name_and_factory(dialog.llm_id)
+
+    # Get llm model instance by model and provide name
+    llm = LLMService.query(db, llm_name=llm_id) if not model_provider else LLMService.query(db, llm_name=llm_id, fid=model_provider)
+
     if not llm:
-        # 如果查询不到，则根据租户ID查询LLM模型
-        llm = TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id) if not fid else \
-            TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id, llm_factory=fid)
+        # Model name is provided by tenant, but not system built-in
+        llm = TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id) if not model_provider else \
+            TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id, llm_factory=model_provider)
         print("TenantLLMService.query result:", llm)
         if not llm:
             # 如果仍然查询不到，则抛出异常
@@ -175,22 +180,25 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     else:
         max_tokens = llm[0].max_tokens
 
-    # 获取知识库并检查是否使用相同的嵌入模型
-    # 通过知识库ID检索知识库信息
+    check_llm_ts = timer()
+
     kbs = KnowledgebaseService.get_by_ids(db, dialog.kb_ids)
 
     # 提取并去重知识库的嵌入ID
-    embd_nms = list(set([kb.embd_id for kb in kbs]))
+    embedding_list = list(set([kb.embd_id for kb in kbs]))
 
     kb_names = list([kb.name for kb in kbs])
-    # print("embd_nms:", embd_nms)
-    print("kb_names:", kb_names)
-    # 检查所有知识库是否使用相同的嵌入模型
-    # todo 没做向量模型内容，后续需要改
-    if len(embd_nms) > 1:
+    print("正在检索的知识库 --> ", kb_names)
+    if len(embedding_list) > 1:
         # 如果没有，则返回一条错误消息，指示知识库使用不同的嵌入模型
         yield {"answer": "**ERROR**: Knowledge bases use different embedding models.", "reference": []}
         return {"answer": "**ERROR**: Knowledge bases use different embedding models.", "reference": []}
+
+    embedding_model_name = embedding_list[0]
+
+    is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
+    retriever = settings.retrievaler if not is_knowledge_graph else settings.kg_retrievaler
+
 
     # 提取用户提出的问题
     questions = [m["content"] for m in messages if m["role"] == "user"]
@@ -201,12 +209,22 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         for m in messages[:-1]:
             if "doc_ids" in m:
                 attachments.extend(m["doc_ids"])
-    if len(embd_nms) != 0:
-        embd_mdl = LLMBundle(db, dialog.tenant_id, LLMType.EMBEDDING, embd_nms[0])
-        if not embd_mdl:
-            raise LookupError("Embedding model(%s) not found" % embd_nms[0])
 
-    chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+    create_retriever_ts = timer()
+
+    if len(embedding_list) != 0:
+        embd_mdl = LLMBundle(db, dialog.tenant_id, LLMType.EMBEDDING, embedding_list[0])
+        if not embd_mdl:
+            raise LookupError("Embedding model(%s) not found" % embedding_list[0])
+
+    bind_embedding_ts = timer()
+
+    if llm_id2llm_type(dialog.llm_id) == "image2text":
+        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
+    else:
+        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+
+    bind_llm_ts = timer()
 
     # 获取提示配置和字段映射
     prompt_config = dialog.prompt_config
@@ -220,7 +238,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         # 使用日志记录器记录使用SQL进行检索的信息
         logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
         # 调用use_sql函数尝试使用SQL查询获取答案
-        ans = use_sql(questions[-1], field_map, dialog.tenant_id, chat_mdl, prompt_config.get("quote", True))
+        ans = use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True))
         # 如果查询到答案，则通过yield返回，并结束函数执行
         if ans:
             yield ans
@@ -245,6 +263,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     else:
         questions = questions[-1:]
 
+    refine_question_ts = timer()
+
     # 如果存在重新排序模型，初始化重新排序模型
     rerank_mdl = None
     if dialog.rerank_id:
@@ -252,8 +272,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
 
     # 添加问题以确保长度足够
     # 根据问题列表的长度，复制最后一个问题，目的是为了后续的知识抽取和问答融合
-    for _ in range(len(questions) // 2):
-        questions.append(questions[-1])
+    bind_reranker_ts = timer()
+    generate_keyword_ts = bind_reranker_ts
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
     if "knowledge" not in [p["key"] for p in prompt_config["parameters"]]:
@@ -263,13 +283,16 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         # 如果包含"knowledge"参数，且设置了关键字提取，那么对最后一个问题进行关键字提取
         if prompt_config.get("keyword", False):
             questions[-1] += keyword_extraction(chat_mdl, questions[-1])
+            generate_keyword_ts = timer()
 
-        kbinfos = settings.retrievaler.retrieval(" ".join(questions), filter_exp, embd_mdl, dialog.tenant_id, kb_names, 1,
+        kbinfos = retriever.retrieval(" ".join(questions), filter_exp, embd_mdl, dialog.tenant_id, kb_names, 1,
                                         dialog.top_n,
                                         dialog.similarity_threshold,
                                         dialog.vector_similarity_weight,
                                         doc_ids=attachments,
                                         top=1024, aggs=False, rerank_mdl=rerank_mdl)
+
+    retrieval_ts = timer()
 
     knowledges = kb_prompt(kbinfos, max_tokens)
 
@@ -285,7 +308,6 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     #     knowledges = [ck["text"] for ck in kbinfos["chunks"]]
     logging.debug(
         "{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
-    retrieval_tm = timer()
 
     # 如果没有知识并且配置了空响应，返回空响应
     if not knowledges and prompt_config.get("empty_response"):
@@ -295,7 +317,6 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
 
     kwargs["knowledge"] = "\n\n------\n\n".join(knowledges)
     gen_conf = dialog.llm_setting
-    # print(gen_conf)
 
     # 拼接系统提示和消息内容
     # 初始化消息列表，包含系统消息
@@ -322,11 +343,14 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
             max_tokens - used_token_count)
 
     def decorate_answer(answer):
-        nonlocal prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_tm
+        nonlocal prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts
+
+        finish_chat_ts = timer()
+
         refs = []
         # 如果需要插入引用文献，处理回答内容
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
-            answer, idx = settings.retrievaler.insert_citations(answer,
+            answer, idx = retriever.insert_citations(answer,
                                                        [ck["content_ltks"] for ck in kbinfos["chunks"]],
                                                        [ck["vector"] for ck in kbinfos["chunks"]],
                                                        embd_mdl,
@@ -347,10 +371,20 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         # 如果回答中包含无效API key的提示，添加设置API key的提示
         if answer.lower().find("invalid key") >= 0 or answer.lower().find("invalid api") >= 0:
             answer += " Please set LLM API-Key in 'User Setting -> Model providers -> API-Key'"
-        # return {"answer": answer, "reference": refs, "prompt": prompt}
-        done_tm = timer()
-        prompt += "\n\n### Elapsed\n  - Retrieval: %.1f ms\n  - LLM: %.1f ms" % (
-            (retrieval_tm - st) * 1000, (done_tm - st) * 1000)
+        finish_chat_ts = timer()
+
+        total_time_cost = (finish_chat_ts - chat_start_ts) * 1000
+        check_llm_time_cost = (check_llm_ts - chat_start_ts) * 1000
+        create_retriever_time_cost = (create_retriever_ts - check_llm_ts) * 1000
+        bind_embedding_time_cost = (bind_embedding_ts - create_retriever_ts) * 1000
+        bind_llm_time_cost = (bind_llm_ts - bind_embedding_ts) * 1000
+        refine_question_time_cost = (refine_question_ts - bind_llm_ts) * 1000
+        bind_reranker_time_cost = (bind_reranker_ts - refine_question_ts) * 1000
+        generate_keyword_time_cost = (generate_keyword_ts - bind_reranker_ts) * 1000
+        retrieval_time_cost = (retrieval_ts - generate_keyword_ts) * 1000
+        generate_result_time_cost = (finish_chat_ts - retrieval_ts) * 1000
+
+        prompt = f"{prompt} ### Elapsed\n  - Total: {total_time_cost:.1f}ms\n  - Check LLM: {check_llm_time_cost:.1f}ms\n  - Create retriever: {create_retriever_time_cost:.1f}ms\n  - Bind embedding: {bind_embedding_time_cost:.1f}ms\n  - Bind LLM: {bind_llm_time_cost:.1f}ms\n  - Tune question: {refine_question_time_cost:.1f}ms\n  - Bind reranker: {bind_reranker_time_cost:.1f}ms\n  - Generate keyword: {generate_keyword_time_cost:.1f}ms\n  - Retrieval: {retrieval_time_cost:.1f}ms\n  - Generate answer: {generate_result_time_cost:.1f}ms"
         return {"answer": answer, "reference": refs, "prompt": prompt}
 
     if stream:
@@ -376,29 +410,27 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         yield res
 
 
-def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
-    sys_prompt = "你是一个DBA。你需要这对以下表的字段结构，根据用户的问题列表，写出最后一个问题对应的SQL。"
-    user_promt = """
-        表名：{}；
-        数据库表字段说明如下：
-        {}
-        
-        问题如下：
-        {}
-        请写出SQL, 且只要SQL，不要有其他说明及文字。
+def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True):
+    sys_prompt = "You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question."
+    user_prompt = """
+    Table name: {};
+    Table of database fields are as follows:
+    {}
+
+    Question are as follows:
+    {}
+    Please write the SQL, only SQL, without any other explanations or text.
     """.format(
-        index_name(tenant_id),
+        index_name(tenant_id, kb_names),
         "\n".join([f"{k}: {v}" for k, v in field_map.items()]),
         question
     )
     tried_times = 0
 
     def get_table():
-        nonlocal sys_prompt, user_promt, question, tried_times
-        sql = chat_mdl.chat(sys_prompt, [{"role": "user", "content": user_promt}], {
-            "temperature": 0.06})
-        print(user_promt, sql)
-        logging.debug(f"{question} ==> {user_promt} get SQL: {sql}")
+        nonlocal sys_prompt, user_prompt, question, tried_times
+        sql = chat_mdl.chat(sys_prompt, [{"role": "user", "content": user_prompt}], {"temperature": 0.06})
+        logging.debug(f"{question} ==> {user_prompt} get SQL: {sql}")
         sql = re.sub(r"[\r\n]+", " ", sql.lower())
         sql = re.sub(r".*select ", "select ", sql.lower())
         sql = re.sub(r" +", " ", sql)
@@ -428,23 +460,25 @@ def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
     if tbl is None:
         return None
     if tbl.get("error") and tried_times <= 2:
-        user_promt = """
-        表名：{}；
-        数据库表字段说明如下：
+        user_prompt = """
+        Table name: {};
+        Table of database fields are as follows:
         {}
 
-        问题如下：
+        Question are as follows:
+        {}
+        Please write the SQL, only SQL, without any other explanations or text.
+
+
+        The SQL error you provided last time is as follows:
         {}
 
-        你上一次给出的错误SQL如下：
+        Error issued by database as follows:
         {}
 
-        后台报错如下：
-        {}
-
-        请纠正SQL中的错误再写一遍，且只要SQL，不要有其他说明及文字。
+        Please correct the error and write SQL again, only SQL, without any other explanations or text.
         """.format(
-            index_name(tenant_id),
+            index_name(tenant_id, kb_names),
             "\n".join([f"{k}: {v}" for k, v in field_map.items()]),
             question, sql, tbl["error"]
         )
@@ -458,50 +492,52 @@ def use_sql(question, field_map, tenant_id, chat_mdl, quota=True):
 
     docid_idx = set([ii for ii, c in enumerate(
         tbl["columns"]) if c["name"] == "doc_id"])
-    docnm_idx = set([ii for ii, c in enumerate(
+    doc_name_idx = set([ii for ii, c in enumerate(
         tbl["columns"]) if c["name"] == "docnm_kwd"])
-    clmn_idx = [ii for ii in range(
-        len(tbl["columns"])) if ii not in (docid_idx | docnm_idx)]
+    column_idx = [ii for ii in range(
+        len(tbl["columns"])) if ii not in (docid_idx | doc_name_idx)]
 
-    # compose markdown table
-    clmns = "|" + "|".join([re.sub(r"(/.*|（[^（）]+）)", "", field_map.get(tbl["columns"][i]["name"],
-                                                                        tbl["columns"][i]["name"])) for i in
-                            clmn_idx]) + ("|Source|" if docid_idx and docid_idx else "|")
+    # compose Markdown table
+    columns = "|" + "|".join([re.sub(r"(/.*|（[^（）]+）)", "", field_map.get(tbl["columns"][i]["name"],
+                                                                          tbl["columns"][i]["name"])) for i in
+                              column_idx]) + ("|Source|" if docid_idx and docid_idx else "|")
 
-    line = "|" + "|".join(["------" for _ in range(len(clmn_idx))]) + \
+    line = "|" + "|".join(["------" for _ in range(len(column_idx))]) + \
            ("|------|" if docid_idx and docid_idx else "")
 
     rows = ["|" +
-            "|".join([rmSpace(str(r[i])) for i in clmn_idx]).replace("None", " ") +
+            "|".join([rmSpace(str(r[i])) for i in column_idx]).replace("None", " ") +
             "|" for r in tbl["rows"]]
+    rows = [r for r in rows if re.sub(r"[ |]+", "", r)]
     if quota:
         rows = "\n".join([r + f" ##{ii}$$ |" for ii, r in enumerate(rows)])
     else:
         rows = "\n".join([r + f" ##{ii}$$ |" for ii, r in enumerate(rows)])
     rows = re.sub(r"T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+Z)?\|", "|", rows)
 
-    if not docid_idx or not docnm_idx:
+    if not docid_idx or not doc_name_idx:
         logging.warning("SQL missing field: " + sql)
         return {
-            "answer": "\n".join([clmns, line, rows]),
+            "answer": "\n".join([columns, line, rows]),
             "reference": {"chunks": [], "doc_aggs": []},
             "prompt": sys_prompt
         }
 
     docid_idx = list(docid_idx)[0]
-    docnm_idx = list(docnm_idx)[0]
+    doc_name_idx = list(doc_name_idx)[0]
     doc_aggs = {}
     for r in tbl["rows"]:
         if r[docid_idx] not in doc_aggs:
-            doc_aggs[r[docid_idx]] = {"doc_name": r[docnm_idx], "count": 0}
+            doc_aggs[r[docid_idx]] = {"doc_name": r[doc_name_idx], "count": 0}
         doc_aggs[r[docid_idx]]["count"] += 1
     return {
-        "answer": "\n".join([clmns, line, rows]),
-        "reference": {"chunks": [{"doc_id": r[docid_idx], "docnm_kwd": r[docnm_idx]} for r in tbl["rows"]],
+        "answer": "\n".join([columns, line, rows]),
+        "reference": {"chunks": [{"doc_id": r[docid_idx], "docnm_kwd": r[doc_name_idx]} for r in tbl["rows"]],
                       "doc_aggs": [{"doc_id": did, "doc_name": d["doc_name"], "count": d["count"]} for did, d in
                                    doc_aggs.items()]},
         "prompt": sys_prompt
     }
+
 
 
 def relevant(tenant_id, llm_id, question, contents: list, db: Session):
@@ -681,19 +717,19 @@ def tts(tts_mdl, text):
 
 def ask(db: Session, question, kb_ids, tenant_id):
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
-    embd_nms = list(set([kb.embd_id for kb in kbs]))
-    # todo 测试kg，并开放下面写法
-    # is_kg = all([kb.parser_id == ParserType.KG for kb in kbs])
-    # retr = retrievaler if not is_kg else kg_retrievaler
+    embedding_list = list(set([kb.embd_id for kb in kbs]))
 
-    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embd_nms[0])
+    is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
+    retriever = settings.retrievaler if not is_knowledge_graph else settings.kg_retrievaler
+
+    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT)
     max_tokens = chat_mdl.max_length
     tenant_ids = list(set([kb.tenant_id for kb in kbs]))
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
-    kbinfos = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, 1, 12, 0.1, 0.3, aggs=False)
+    kbinfos = retriever.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, 1, 12, 0.1, 0.3, aggs=False)
     knowledges = kb_prompt(kbinfos, max_tokens)
 
     prompt = """
@@ -716,7 +752,7 @@ def ask(db: Session, question, kb_ids, tenant_id):
 
     def decorate_answer(answer):
         nonlocal knowledges, kbinfos, prompt
-        answer, idx = settings.retrievaler.insert_citations(answer,
+        answer, idx = retriever.insert_citations(answer,
                                                    [ck["content_ltks"]
                                                     for ck in kbinfos["chunks"]],
                                                    [ck["vector"]
