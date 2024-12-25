@@ -1,15 +1,12 @@
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from abc import ABC
 
-@dataclass
+
 class Base(ABC):
-    key: str | None
-    model_name: str
+    def __init__(self, key, model_name):
+        pass
 
-    @abstractmethod
-    def encode(self, texts: list[str]) -> list[list[float]]:
+    def encode(self, texts: list):
         raise NotImplementedError("Please implement encode method!")
 
-    @abstractmethod
-    def encode_queries(self, text: str) -> list[float]:
+    def encode_queries(self, text: str):
         raise NotImplementedError("Please implement encode method!")
