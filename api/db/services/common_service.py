@@ -175,8 +175,7 @@ class CommonService(Generic[ModelType]):
             raise HTTPException(status_code=404, detail="Item not found")
 
     @classmethod
-    def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] = None) -> list[
-        Row[tuple[ModelType]]]:
+    def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] = None) -> list[ModelType]:
         query = db.query(cls.model).filter(cls.model.id.in_(pids))
         if cols:
             query = query.with_entities(*[getattr(cls.model, col) for col in cols])
