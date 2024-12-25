@@ -19,7 +19,7 @@ class FastEmbed(DefaultEmbedding):
             threads: int | None = None,
             **kwargs,
     ):
-        if not settings.LIGHTEN and not FastEmbed._model:
+        if not settings.LIGHTEN:
             with FastEmbed._model_lock:
                 from fastembed import TextEmbedding
                 if not DefaultEmbedding._model or model_name != DefaultEmbedding._model_name:

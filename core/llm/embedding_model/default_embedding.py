@@ -17,11 +17,11 @@ class DefaultEmbedding(Base):
     def __init__(self, key, model_name, **kwargs):
         super().__init__(key, model_name)
 
-        if not settings.LIGHTEN and not DefaultEmbedding._model:
+        if not settings.LIGHTEN:
             with DefaultEmbedding._model_lock:
                 from FlagEmbedding import FlagModel
                 import torch
-                if not DefaultEmbedding._model:
+                if not DefaultEmbedding._model or model_name != DefaultEmbedding._model_name:
                     try:
                         DefaultEmbedding._model = FlagModel(
                             os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)),
