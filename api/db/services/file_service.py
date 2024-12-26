@@ -313,8 +313,9 @@ class FileService(CommonService):
                 max_file_num_per_user = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
                 if max_file_num_per_user > 0 and DocumentService.get_doc_count(db,
                                                                                kb.tenant_id) >= max_file_num_per_user:
-                    raise RuntimeError("超出了用户的最大文件数量限制！")
-
+                    raise RuntimeError("Exceed the maximum file number of a free user!")
+                if len(filename) >= 128:
+                    raise RuntimeError("Exceed the maximum length of file name!")
                 filename = duplicate_name(
                     lambda *args, **kwargs: DocumentService.query(db, *args, **kwargs),
                     name=filename,
@@ -322,7 +323,7 @@ class FileService(CommonService):
 
                 filetype = filename_type(filename)
                 if filetype == FileType.OTHER.value:
-                    raise RuntimeError("暂不支持此文件类型！")
+                    raise RuntimeError("This type of file has not been supported yet!")
 
                 location = filename
                 while STORAGE_IMPL.obj_exist(kb.id, location):

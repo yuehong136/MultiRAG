@@ -54,10 +54,10 @@ class DialogRequest(BaseModel):
     llm_id: str | None = ""
     """大语言模型的ID，默认值为空字符串。"""
 
-    llm_setting: dict | None = Field(default_factory=dict)
+    llm_setting: dict | None = Field(default=dict)
     """大语言模型的配置，默认值为空字典。"""
 
-    prompt_config: dict | None = Field(default_factory=lambda: {
+    prompt_config: dict | None = Field(default=lambda: {
         "system": """你是一个智能助手，请总结知识库的内容来回答问题，请列举知识库中的数据详细回答。当所有知识库内容都与问题无关时，你的回答必须包括“知识库中未找到您要的答案！”这句话。回答需要考虑聊天历史。
 以下是知识库：
 {knowledge}
@@ -70,7 +70,7 @@ class DialogRequest(BaseModel):
     })
     """提示配置，包含系统提示、开场白、参数和空响应消息。"""
 
-    kb_ids: list[str] | None = Field(default_factory=list)
+    kb_ids: list[str] | None = Field(list)
     """知识库的ID列表，默认值为空列表。"""
 
 class RemoveDialogRequest(BaseModel):

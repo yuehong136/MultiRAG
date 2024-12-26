@@ -300,13 +300,16 @@ def tokenize_table(tbls, doc, eng, batch_size=10):
 def add_positions(d, poss):
     if not poss:
         return
-    d["page_num_int"] = []
-    d["position_int"] = []
-    d["top_int"] = []
+    page_num_int = []
+    position_int = []
+    top_int = []
     for pn, left, right, top, bottom in poss:
-        d["page_num_int"].append(int(pn + 1))
-        d["top_int"].append(int(top))
-        d["position_int"].append((int(pn + 1), int(left), int(right), int(top), int(bottom)))
+        page_num_int.append(int(pn + 1))
+        top_int.append(int(top))
+        position_int.append((int(pn + 1), int(left), int(right), int(top), int(bottom)))
+    d["page_num_int"] = page_num_int
+    d["position_int"] = position_int
+    d["top_int"] = top_int
 
 
 def remove_contents_table(sections, eng=False):
@@ -452,7 +455,7 @@ def hierarchical_merge(bull, sections, depth):
                 jj = binary_search(levels[ii], j)
                 if jj < 0:
                     continue
-                if jj > cks[-1][-1]:
+                if levels[ii][jj] > cks[-1][-1]:
                     cks[-1].pop(-1)
                 cks[-1].append(levels[ii][jj])
             for ii in cks[-1]:

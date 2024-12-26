@@ -11,22 +11,24 @@ from core.llm.embedding_model.base import Base
 
 class DefaultEmbedding(Base):
     _model = None
+    _model_name = ""
     _model_lock = threading.Lock()
 
     def __init__(self, key, model_name, **kwargs):
         super().__init__(key, model_name)
 
-        if not settings.LIGHTEN and not DefaultEmbedding._model:
+        if not settings.LIGHTEN:
             with DefaultEmbedding._model_lock:
                 from FlagEmbedding import FlagModel
                 import torch
-                if not DefaultEmbedding._model:
+                if not DefaultEmbedding._model or model_name != DefaultEmbedding._model_name:
                     try:
                         DefaultEmbedding._model = FlagModel(
                             os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)),
                             query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：",
                             use_fp16=torch.cuda.is_available())
-                    except Exception as e:
+                        DefaultEmbedding._model_name = model_name
+                    except Exception:
                         model_dir = snapshot_download(repo_id="BAAI/bge-large-zh-v1.5",
                                                       local_dir=os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)),
                                                       local_dir_use_symlinks=False)
@@ -34,6 +36,7 @@ class DefaultEmbedding(Base):
                                                             query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：",
                                                             use_fp16=torch.cuda.is_available())
         self._model = DefaultEmbedding._model
+        self._model_name = DefaultEmbedding._model_name
 
     def encode(self, texts: list):
         batch_size = 16

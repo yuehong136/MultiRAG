@@ -91,22 +91,26 @@ def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager
             data=False,
             retmsg='No authorization.',
             retcode=settings.RetCode.AUTHENTICATION_ERROR)
-    usrs = UserService.query(db, email=email)
-
-    if not usrs:
+    invite_user_email = email
+    invite_users = UserService.query(db, email=invite_user_email)
+    if not invite_users:
         return get_data_error_result(retmsg="User not found.")
 
-    user_id = usrs[0].id
-    user_tenants = UserTenantService.query(db, user_id=user_id, tenant_id=tenant_id)
+    user_id_to_invite = invite_users[0].id
+    user_tenants = UserTenantService.query(db, user_id=user_id_to_invite, tenant_id=tenant_id)
     if user_tenants:
-        if user_tenants[0].status == UserTenantRole.NORMAL.value:
-            return get_data_error_result(retmsg="This user is in the team already.")
-        return get_data_error_result(retmsg="Invitation notification is sent.")
+        user_tenant_role = user_tenants[0].role
+        if user_tenant_role == UserTenantRole.NORMAL:
+            return get_data_error_result(retmsg=f"{invite_user_email} is already in the team.")
+        if user_tenant_role == UserTenantRole.OWNER:
+            return get_data_error_result(retmsg=f"{invite_user_email} is the owner of the team.")
+        return get_data_error_result(
+            retmsg=f"{invite_user_email} is in the team, but the role: {user_tenant_role} is invalid.")
 
     UserTenantService.save(
         db=db,
         id=get_uuid(),
-        user_id=user_id,
+        user_id=user_id_to_invite,
         tenant_id=tenant_id,
         role=UserTenantRole.INVITE,
         invited_by=user.id,  # 默认当前操作的用户是邀请人
@@ -115,10 +119,10 @@ def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager
     # usr = list(usrs.dicts())[0]
     # usr = {k: v for k, v in usr.items() if k in ["id", "avatar", "email", "nickname"]}
     usr = {
-        "id": usrs[0].id,
-        "avatar": usrs[0].avatar,
-        "email": usrs[0].email,
-        "nickname": usrs[0].nickname,
+        "id": invite_users[0].id,
+        "avatar": invite_users[0].avatar,
+        "email": invite_users[0].email,
+        "nickname": invite_users[0].nickname,
     }
 
     return get_json_result(data=usr)

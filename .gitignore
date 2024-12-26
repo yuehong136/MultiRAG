@@ -27,7 +27,6 @@ Cargo.lock
 # Exclude the log folder
 docker/multirag-logs/
 /logs
-core/res/deepdoc
 
 # Exclude sdk generated files
 sdk/python/multirag.egg-info/

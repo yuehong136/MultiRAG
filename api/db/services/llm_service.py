@@ -67,10 +67,12 @@ class TenantLLMService(CommonService):
             return model_name, None
         if len(arr) > 2:
             return "@".join(arr[0:-1]), arr[-1]
+
+        # model name must be xxx@yyy
         try:
-            fact = json.load(open(os.path.join(get_project_base_directory(), "configs/llm_factories.json"), "r"))["factory_llm_infos"]
-            fact = set([f["name"] for f in fact])
-            if arr[-1] not in fact:
+            model_factories = json.load(open(os.path.join(get_project_base_directory(), "configs/llm_factories.json"), "r"))["factory_llm_infos"]
+            model_factories = set([f["name"] for f in model_factories])
+            if arr[-1] not in model_factories:
                 return model_name, None
             return arr[0], arr[-1]
         except Exception as e:

@@ -13,21 +13,23 @@ for module in ["sqlalchemy"]:
     module_logger.handlers.clear()
     module_logger.propagate = True
 from datetime import datetime
+from graphrag.utils import get_llm_cache, set_llm_cache
 import json
 import os
-import hashlib
+import xxhash
 import copy
 import re
 import time
-# import traceback
 import threading
 from functools import partial
 from io import BytesIO
 
 from pymilvus import MilvusException, DataType
-from sqlalchemy.orm import Session
 
 import numpy as np
+from sqlalchemy.orm.exc import NoResultFound
+from sqlalchemy.orm import Session
+
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
 import tracemalloc
@@ -35,7 +37,7 @@ import tracemalloc
 from api.db.database import SessionLocal
 from api.db.services.dialog_service import keyword_extraction, question_proposal
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db import LLMType, ParserType
+from api.db import LLMType, ParserType, TaskStatus
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService
@@ -75,7 +77,7 @@ FACTORY = {
 
 CONSUMER_NAME = "task_consumer_" + CONSUMER_NO
 PAYLOAD: Payload | None = None
-BOOT_AT = datetime.now().isoformat()
+BOOT_AT = datetime.now().astimezone().isoformat(timespec="milliseconds")
 PENDING_TASKS = 0
 LAG_TASKS = 0
 
@@ -84,12 +86,22 @@ DONE_TASKS = 0
 FAILED_TASKS = 0
 CURRENT_TASK = None
 
+class TaskCanceledException(Exception):
+    def __init__(self, msg):
+        self.msg = msg
 
 def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing..."):
     global PAYLOAD
     if prog is not None and prog < 0:
         msg = "[ERROR]" + msg
-    cancel = TaskService.do_cancel(db, task_id)
+    try:
+        cancel = TaskService.do_cancel(db, task_id)
+    except NoResultFound:
+        logging.warning(f"set_progress task {task_id} is unknown")
+        if PAYLOAD:
+            PAYLOAD.ack()
+            PAYLOAD = None
+        return
     if cancel:
         msg += " [Canceled]"
         prog = -1
@@ -97,21 +109,26 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
     if to_page > 0:
         if msg:
             msg = f"Page({from_page + 1}~{to_page + 1}): " + msg
+    if msg:
+        msg = datetime.now().strftime("%H:%M:%S") + " " + msg
     d = {"progress_msg": msg}
     if prog is not None:
         d["progress"] = prog
+    logging.info(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}")
     try:
-        logging.info(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}")
         TaskService.update_progress(db, task_id, d)
-    except Exception:
-        logging.exception(f"set_progress({task_id}) got exception")
-
-    # db.close()
-    if cancel:
+    except NoResultFound:
+        logging.warning(f"set_progress task {task_id} is unknown")
         if PAYLOAD:
             PAYLOAD.ack()
             PAYLOAD = None
-        os._exit(0)
+        return
+
+    db.close()
+    if cancel and PAYLOAD:
+        PAYLOAD.ack()
+        PAYLOAD = None
+        raise TaskCanceledException(msg)
 
 
 def collect(db: Session):
@@ -131,18 +148,22 @@ def collect(db: Session):
     if not msg:
         return None
 
-    if TaskService.do_cancel(db, msg["id"]):
+    task = None
+    canceled = False
+    try:
+        task = TaskService.get_task(db, msg["id"])
+        if task:
+            doc = DocumentService.get_by_id(db, task["doc_id"])
+            canceled = doc.run == TaskStatus.CANCEL.value or doc.progress < 0
+    except NoResultFound:
+        pass
+    except Exception:
+        logging.exception("collect get_task exception")
+    if not task or canceled:
+        state = "is unknown" if not task else "has been cancelled"
         with mt_lock:
             DONE_TASKS += 1
-        logging.info("Task {} has been canceled.".format(msg["id"]))
-        return None
-    task = TaskService.get_task(db, msg["id"])
-
-    # assert tasks, "{} empty task!".format(msg["id"])
-    if not task:
-        with mt_lock:
-            DONE_TASKS += 1
-        logging.warning("{} empty task!".format(msg["id"]))
+        logging.info(f"collect task {msg['id']} {state}")
         return None
 
     if msg.get("type", "") == "raptor":
@@ -185,10 +206,11 @@ def build_chunks(task, progress_callback, db: Session):
                             kb_id=task["kb_id"], parser_config=task["parser_config"], tenant_id=task["tenant_id"])
         logging.info(
             "Chunking({}) {}/{}".format(timer() - st, task["location"], task["name"]))
+    except TaskCanceledException:
+        raise
     except Exception as e:
         progress_callback(-1, "Internal server error while chunking: %s" % str(e).replace("'", ""))
         logging.exception("Chunking {}/{} got exception".format(task["location"], task["name"]))
-        # traceback.print_exc()
         raise
 
     docs = []
@@ -205,33 +227,9 @@ def build_chunks(task, progress_callback, db: Session):
     for ck in cks:
         d = copy.deepcopy(doc)
         d.update(ck)
-        md5 = hashlib.md5()
-        md5.update((ck["content_with_weight"] +
-                    str(d["doc_id"])).encode("utf-8"))
-        d["pk"] = md5.hexdigest()
+        d["pk"] = xxhash.xxh64((ck["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
         d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
         d["create_timestamp_flt"] = datetime.now().timestamp()
-
-        # if row["parser_config"].get("auto_keywords", 0):
-        #     chat_mdl = LLMBundle(db, row["tenant_id"], LLMType.CHAT, llm_name=row["llm_id"], lang=row["language"])
-        #     d["important_kwd"] = keyword_extraction(chat_mdl, ck["content_with_weight"],
-        #                                             row["parser_config"]["auto_keywords"]).split(",")
-        #     d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
-        #
-        # if row["parser_config"].get("auto_questions", 0):
-        #     chat_mdl = LLMBundle(db, row["tenant_id"], LLMType.CHAT, llm_name=row["llm_id"], lang=row["language"])
-        #     qst = question_proposal(chat_mdl, ck["content_with_weight"], row["parser_config"]["auto_keywords"])
-        #     ck["content_with_weight"] = f"Question: \n{qst}\n\nAnswer:\n" + ck["content_with_weight"]
-        #     qst = rag_tokenizer.tokenize(qst)
-        #     if "content_ltks" in ck:
-        #         ck["content_ltks"] += " " + qst
-        #     if "content_sm_ltks" in ck:
-        #         ck["content_sm_ltks"] += " " + rag_tokenizer.fine_grained_tokenize(qst)
-
-        # # 将数组字段转换为 JSON 字符串
-        # d["page_num_int"] = json.dumps(d.get("page_num_int", []))
-        # d["position_int"] = json.dumps(d.get("position_int", []))
-        # d["top_int"] = json.dumps(d.get("top_int", []))
         d["page_num_int"] = d.get("page_num_int", [])
         d["position_int"] = d.get("position_int", [])
         d["top_int"] = d.get("top_int", [])
@@ -269,8 +267,16 @@ def build_chunks(task, progress_callback, db: Session):
         progress_callback(msg="Start to generate keywords for every chunk ...")
         chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
         for d in docs:
-            d["important_kwd"] = keyword_extraction(chat_mdl, d["content_with_weight"],
-                                                    task["parser_config"]["auto_keywords"]).split(",")
+            cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "keywords",
+                                   {"topn": task["parser_config"]["auto_keywords"]})
+            if not cached:
+                cached = keyword_extraction(chat_mdl, d["content_with_weight"],
+                                            task["parser_config"]["auto_keywords"])
+                if cached:
+                    set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "keywords",
+                                  {"topn": task["parser_config"]["auto_keywords"]})
+
+            d["important_kwd"] = cached.split(",")
             d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
         progress_callback(msg="Keywords generation completed in {:.2f}s".format(timer() - st))
 
@@ -279,13 +285,16 @@ def build_chunks(task, progress_callback, db: Session):
         progress_callback(msg="Start to generate questions for every chunk ...")
         chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
         for d in docs:
-            qst = question_proposal(chat_mdl, d["content_with_weight"], task["parser_config"]["auto_questions"])
-            d["content_with_weight"] = f"Question: \n{qst}\n\nAnswer:\n" + d["content_with_weight"]
-            qst = rag_tokenizer.tokenize(qst)
-            if "content_ltks" in d:
-                d["content_ltks"] += " " + qst
-            if "content_sm_ltks" in d:
-                d["content_sm_ltks"] += " " + rag_tokenizer.fine_grained_tokenize(qst)
+            cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "question",
+                                   {"topn": task["parser_config"]["auto_questions"]})
+            if not cached:
+                cached = question_proposal(chat_mdl, d["content_with_weight"], task["parser_config"]["auto_questions"])
+                if cached:
+                    set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "question",
+                                  {"topn": task["parser_config"]["auto_questions"]})
+
+            d["question_kwd"] = cached.split("\n")
+            d["question_tks"] = rag_tokenizer.tokenize("\n".join(d["question_kwd"]))
         progress_callback(msg="Question generation completed in {:.2f}s".format(timer() - st))
 
     return docs
@@ -424,9 +433,7 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
     tk_count = 0
     for content, vctr in chunks[original_length:]:
         d = copy.deepcopy(doc)
-        md5 = hashlib.md5()
-        md5.update((content + str(d["doc_id"])).encode("utf-8"))
-        d["pk"] = md5.hexdigest()
+        d["pk"] = xxhash.xxh64((content + str(d["doc_id"])).encode("utf-8")).hexdigest()
         d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
         d["create_timestamp_flt"] = datetime.now().timestamp()
         d["vector"] = vctr.tolist()
@@ -471,6 +478,15 @@ def do_handle_task(db, task):
     progress_callback = partial(set_progress, db, task_id, task_from_page, task_to_page)
 
     try:
+        task_canceled = TaskService.do_cancel(db, task_id)
+    except NoResultFound:
+        logging.warning(f"task {task_id} is unknown")
+        return
+    if task_canceled:
+        progress_callback(-1, msg="Task has been canceled.")
+        return
+
+    try:
         # bind embedding model
         embedding_model = LLMBundle(db, task_tenant_id, LLMType.EMBEDDING, llm_name=task_embedding_id, lang=task_language)
     except Exception as e:
@@ -488,6 +504,8 @@ def do_handle_task(db, task):
 
             # run RAPTOR
             chunks, token_count = run_raptor(task, chat_model, embedding_model, progress_callback)
+        except TaskCanceledException:
+            raise
         except Exception as e:
             progress_callback(-1, msg=f'Fail to bind LLM used by RAPTOR: {str(e)}')
             raise
@@ -522,74 +540,218 @@ def do_handle_task(db, task):
     init_kb(task, kb.name)
 
     chunk_count = len(set([chunk["pk"] for chunk in chunks]))
+    # 记录开始时间
     start_ts = timer()
-    doc_store_result = ""
-    successful_inserts = []  # 用于记录成功插入的记录信息
-    failed_inserts = []  # 可选：记录失败的记录（便于排查问题）
-    # 获取集合的schema
+
+    # 分批大小，可根据需要自行调整
+    milvus_bulk_size = 4
+
+    # 用于记录成功和失败的插入信息
+    successful_inserts = []
+    failed_inserts = []
+
+    # 获取集合 schema，用于做数据类型转换
     schema = get_schema(search.index_name_one(task_tenant_id, kb.name))
+    collection_name = search.index_name_one(task_tenant_id, kb.name)
+    # 循环分批插入
+    for b in range(0, chunk_count, milvus_bulk_size):
+        # 取出本批次要插入的 chunks
+        chunk_batch = chunks[b: b + milvus_bulk_size]
 
-    # 逐条插入数据
-    for chunk in chunks:
-        # 转换数据类型
-        converted_chunk = convert_data_types(chunk, schema)
+        # 将本批次内的数据先做类型转换
+        converted_batch = []
+        for chunk in chunk_batch:
+            converted_chunk = convert_data_types(chunk, schema)
+            converted_batch.append(converted_chunk)
 
+        doc_store_result = {}
         try:
-            # 使用 Milvus 的插入方法插入数据
+            # 调用你自定义的 MILVUS_CONNECTION.insert 方法
             doc_store_result = MILVUS_CONNECTION.insert(
-                collection_name=search.index_name_one(task_tenant_id, kb.name),
-                data=converted_chunk
+                collection_name=collection_name,
+                data=converted_batch
             )
-            successful_inserts.append(doc_store_result)  # 记录成功的插入结果
+            # 由于异常会在内部抛出，这里若能执行到此处，说明插入已成功
+            # doc_store_result 形如：{"insert_count": x, "ids": [...]}
+
+            # 可选：检查 insert_count 是否与本批次长度一致
+            # 如果你的需求是一定要完全插入成功才算成功，可以加如下校验：
+            if doc_store_result.get("insert_count", 0) != len(converted_batch):
+                error_message = (
+                    f"Insert count mismatch: expected {len(converted_batch)}, "
+                    f"got {doc_store_result.get('insert_count', 0)}."
+                )
+                progress_callback(-1, msg=error_message)
+                raise Exception(error_message)
+
         except Exception:
-            failed_inserts.append(chunk)  # 记录失败的记录
-            progress_callback(-1, f"Insert chunk error, detail info please check log file. Please also check Milvus status!")
-            collection_name = search.index_name_one(task_tenant_id, kb.name)
+            # 如果出现异常，记录失败并进行删除回滚
+            failed_inserts.extend(chunk_batch)
+            progress_callback(
+                -1,
+                "Insert chunk error, detail info please check log file. Please also check Milvus status!"
+            )
             try:
                 if MILVUS_CONNECTION.has_collection(collection_name):
-                    MILVUS_CONNECTION.delete(
-                        collection_name=collection_name,
-                        filter=f"doc_id == '{{doc_id}}'".format(doc_id=task["doc_id"])
-                    )
+                    # 删除本批次已经尝试插入的记录（这里按 doc_id 删除，可根据业务实际情况调整 filter 条件）
+                    for chunk in chunk_batch:
+                        if "doc_id" in chunk:
+                            MILVUS_CONNECTION.delete(
+                                collection_name=collection_name,
+                                filter=f"doc_id == '{chunk['doc_id']}'"
+                            )
+            except MilvusException as e:
+                return e  # 可根据需要改成 raise 或其它处理
+            logging.exception("Insert error:")
+            logging.error("Data being inserted: %s", converted_batch)
+            return  # 出错后直接退出
+
+        # 若执行到此，说明插入成功，记录插入结果
+        successful_inserts.append(doc_store_result)
+
+        # 每插入 128 批，做一次进度回调（可自定义触发频率）
+        if b % 128 == 0:
+            progress = 0.8 + 0.1 * (b + 1) / chunk_count
+            progress_callback(prog=progress, msg="")
+
+        # 拼接本批次 chunk_ids 并更新到 TaskService
+        # （需要你确保 chunk 内有 "id" 这个字段）
+        chunk_ids = [chunk["id"] for chunk in chunk_batch if "id" in chunk]
+        chunk_ids_str = " ".join(chunk_ids)
+        try:
+            TaskService.update_chunk_ids(db, task["id"], chunk_ids_str)
+        except NoResultFound:
+            logging.warning(
+                f"do_handle_task update_chunk_ids failed since task {task['id']} is unknown."
+            )
+            # 如果 TaskService 中没有这个 task，则删除已插入数据并退出
+            try:
+                if MILVUS_CONNECTION.has_collection(collection_name):
+                    for chunk in chunk_batch:
+                        if "doc_id" in chunk:
+                            MILVUS_CONNECTION.delete(
+                                collection_name=collection_name,
+                                filter=f"doc_id == '{chunk['doc_id']}'"
+                            )
             except MilvusException as e:
                 return e
-            logging.exception("Insert error:")
-            logging.error("Data being inserted:", converted_chunk)
-    # 结束时记录总耗时
+            return
+
+    # 分批插入循环结束后，统计总耗时
     insertion_total_time = timer() - start_ts
 
-    # 输出总的插入成功信息和统计
+    # 统计成功插入数量
     if successful_inserts:
-        total_insert_count = sum(item["insert_count"] for item in successful_inserts)
-        logging.info(f"Total successful inserts into Milvus's {search.index_name_one(task_tenant_id, kb.name)}: {total_insert_count} ")
-        # logging.info(f"Milvus insert details: {successful_inserts}")
+        # 根据返回的 insert_count 求和
+        total_insert_count = sum(item.get("insert_count", 0) for item in successful_inserts)
+        logging.info(
+            f"Total successful inserts into Milvus's {collection_name}: {total_insert_count}"
+        )
 
-    # 输出总的 Insertion elapsed 时长
     logging.info(f"Total Insertion elapsed: {insertion_total_time:.2f}")
 
+    # 如果有失败的插入，打印警告（可根据实际需求做进一步处理）
     if failed_inserts:
         logging.warning(f"Failed inserts count: {len(failed_inserts)}")
         logging.warning(f"Failed insert records: {failed_inserts}")
 
+    # 如果任务被取消，则清理已插入的数据并返回
     if TaskService.do_cancel(db, task_id):
-        # 构建 Milvus 集合名称
-        collection_name = search.index_name_one(task_tenant_id, kb.name)
-        # 检查集合是否存在并删除 Milvus 中的数据
         try:
             if MILVUS_CONNECTION.has_collection(collection_name):
                 MILVUS_CONNECTION.delete(
                     collection_name=collection_name,
-                    filter=f"doc_id == '{{doc_id}}'".format(doc_id=task_doc_id)
+                    filter=f"doc_id == '{task_doc_id}'"
                 )
         except MilvusException as e:
             return e
         return
 
-    DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
+    # 最后更新统计信息
+    DocumentService.increment_chunk_num(
+        db,
+        task_doc_id,
+        task_dataset_id,
+        token_count,
+        chunk_count,
+        0
+    )
 
+    # 做一次进度回调
     time_cost = timer() - start_ts
-    progress_callback(prog=1.0, msg="Done ({:.2f}s)".format(time_cost))
-    logging.info("Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(task_id, token_count, len(chunks), time_cost))
+    progress_callback(prog=1.0, msg=f"Done ({time_cost:.2f}s)")
+    logging.info(
+        "Chunk doc(%s), token(%s), chunks(%s), elapsed:%.2f",
+        task_id, token_count, len(chunks), time_cost
+    )
+    # start_ts = timer()
+    # doc_store_result = ""
+    # successful_inserts = []  # 用于记录成功插入的记录信息
+    # failed_inserts = []  # 可选：记录失败的记录（便于排查问题）
+    # # 获取集合的schema
+    # schema = get_schema(search.index_name_one(task_tenant_id, kb.name))
+    #
+    # # 逐条插入数据
+    # for chunk in chunks:
+    #     # 转换数据类型
+    #     converted_chunk = convert_data_types(chunk, schema)
+    #
+    #     try:
+    #         # 使用 Milvus 的插入方法插入数据
+    #         doc_store_result = MILVUS_CONNECTION.insert(
+    #             collection_name=search.index_name_one(task_tenant_id, kb.name),
+    #             data=converted_chunk
+    #         )
+    #         successful_inserts.append(doc_store_result)  # 记录成功的插入结果
+    #     except Exception:
+    #         failed_inserts.append(chunk)  # 记录失败的记录
+    #         progress_callback(-1, f"Insert chunk error, detail info please check log file. Please also check Milvus status!")
+    #         collection_name = search.index_name_one(task_tenant_id, kb.name)
+    #         try:
+    #             if MILVUS_CONNECTION.has_collection(collection_name):
+    #                 MILVUS_CONNECTION.delete(
+    #                     collection_name=collection_name,
+    #                     filter=f"doc_id == '{{doc_id}}'".format(doc_id=task["doc_id"])
+    #                 )
+    #         except MilvusException as e:
+    #             return e
+    #         logging.exception("Insert error:")
+    #         logging.error("Data being inserted:", converted_chunk)
+    # # 结束时记录总耗时
+    # insertion_total_time = timer() - start_ts
+    #
+    # # 输出总的插入成功信息和统计
+    # if successful_inserts:
+    #     total_insert_count = sum(item["insert_count"] for item in successful_inserts)
+    #     logging.info(f"Total successful inserts into Milvus's {search.index_name_one(task_tenant_id, kb.name)}: {total_insert_count} ")
+    #     # logging.info(f"Milvus insert details: {successful_inserts}")
+    #
+    # # 输出总的 Insertion elapsed 时长
+    # logging.info(f"Total Insertion elapsed: {insertion_total_time:.2f}")
+    #
+    # if failed_inserts:
+    #     logging.warning(f"Failed inserts count: {len(failed_inserts)}")
+    #     logging.warning(f"Failed insert records: {failed_inserts}")
+    #
+    # if TaskService.do_cancel(db, task_id):
+    #     # 构建 Milvus 集合名称
+    #     collection_name = search.index_name_one(task_tenant_id, kb.name)
+    #     # 检查集合是否存在并删除 Milvus 中的数据
+    #     try:
+    #         if MILVUS_CONNECTION.has_collection(collection_name):
+    #             MILVUS_CONNECTION.delete(
+    #                 collection_name=collection_name,
+    #                 filter=f"doc_id == '{{doc_id}}'".format(doc_id=task_doc_id)
+    #             )
+    #     except MilvusException as e:
+    #         return e
+    #     return
+    #
+    # DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
+    #
+    # time_cost = timer() - start_ts
+    # progress_callback(prog=1.0, msg="Done ({:.2f}s)".format(time_cost))
+    # logging.info("Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(task_id, token_count, len(chunks), time_cost))
 
 
 def handle_task():
@@ -606,21 +768,33 @@ def handle_task():
                     elif isinstance(task, dict):  # 如果已经是字典
                         task_dict = task
                     else:
-                        task_dict = {key: str(value) for key, value in vars(
-                            task).items()}  # 通用对象转换为字典
+                        task_dict = {key: str(value) for key, value in vars(task).items()}  # 通用对象转换为字典
                     logging.info(f"handle_task begin for task {json.dumps(task_dict)}")
                     with mt_lock:
-                        CURRENT_TASK = copy.deepcopy(task_dict)
+                        CURRENT_TASK = copy.deepcopy(task)
                     do_handle_task(db, task)
                     with mt_lock:
                         DONE_TASKS += 1
                         CURRENT_TASK = None
-                    logging.info(f"handle_task done for task {json.dumps(task_dict)}")
+                    logging.info(f"handle_task done for task {json.dumps(task)}")
+                except TaskCanceledException:
+                    with mt_lock:
+                        DONE_TASKS += 1
+                        CURRENT_TASK = None
+                    try:
+                        set_progress(db, task["id"], prog=-1, msg="handle_task got TaskCanceledException")
+                    except Exception:
+                        pass
+                    logging.debug("handle_task got TaskCanceledException", exc_info=True)
                 except Exception:
                     with mt_lock:
                         FAILED_TASKS += 1
                         CURRENT_TASK = None
-                    logging.exception(f"handle_task got exception for task {json.dumps(task_dict)}")
+                    try:
+                        set_progress(db, task["id"], prog=-1, msg="handle_task got exception, please check log")
+                    except Exception:
+                        pass
+                    logging.exception(f"handle_task got exception for task {json.dumps(task)}")
             if PAYLOAD:
                 PAYLOAD.ack()
                 PAYLOAD = None
@@ -640,13 +814,13 @@ def report_status():
             now = datetime.now()
             group_info = REDIS_CONN.queue_info(SVR_QUEUE_NAME, "rag_flow_svr_task_broker")
             if group_info is not None:
-                PENDING_TASKS = int(group_info["pending"])
-                LAG_TASKS = int(group_info["lag"])
+                PENDING_TASKS = int(group_info.get("pending", 0))
+                LAG_TASKS = int(group_info.get("lag", 0))
 
             with mt_lock:
                 heartbeat = json.dumps({
                     "name": CONSUMER_NAME,
-                    "now": now.isoformat(),
+                    "now": now.astimezone().isoformat(timespec="milliseconds"),
                     "boot_at": BOOT_AT,
                     "pending": PENDING_TASKS,
                     "lag": LAG_TASKS,

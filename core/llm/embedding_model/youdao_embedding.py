@@ -9,21 +9,18 @@ from core.utils import num_tokens_from_string
 class YoudaoEmbed(Base):
     _client = None
 
-    def __init__(self, key: str = None, model_name: str = "maidalun1020/bce-embedding-base_v1", base_url: str | None = None, **kwargs):
-        super().__init__(key, model_name)
-        self.base_url = base_url
-        self.kwargs = kwargs
-        model_path = self.get_model_path(self.model_name.split("/")[-1] if "/" in self.model_name else self.model_name)
+    def __init__(self, key: str | None = None, model_name: str = "maidalun1020/bce-embedding-base_v1", base_url: str | None = None, **kwargs):
+        # super().__init__(key, model_name)
+        model_path = self.get_model_path(model_name.split("/")[-1] if "/" in model_name else model_name)
         from api import settings
         if not settings.LIGHTEN and not YoudaoEmbed._client:
             from BCEmbedding import EmbeddingModel as qanthing
             try:
-                logging.info(f"LOADING BCE from {model_path}...")
-                YoudaoEmbed._client = qanthing(model_name_or_path=model_path, **self.kwargs)
+                YoudaoEmbed._client = qanthing(model_name_or_path=model_path, **kwargs)
             except Exception as e:
-                logging.info(f"Failed to load BCE from {model_path}: {e}")
-                default_path = os.path.join(get_home_cache_dir(), self.model_name)
-                YoudaoEmbed._client = qanthing(model_name_or_path=default_path, **self.kwargs)
+                logging.error(f"Failed to load BCE from {model_path}: {e}")
+                default_path = os.path.join(get_home_cache_dir(), model_name)
+                YoudaoEmbed._client = qanthing(model_name_or_path=default_path, **kwargs)
 
     def get_model_path(self, model_name: str) -> str:
         """
@@ -54,7 +51,7 @@ class YoudaoEmbed(Base):
         for t in texts:
             token_count += num_tokens_from_string(t)
         for i in range(0, len(texts), batch_size):
-            embds = YoudaoEmbed._client.encode(texts[i:i + batch_size], **{**self.kwargs, **kwargs})
+            embds = YoudaoEmbed._client.encode(texts[i:i + batch_size], **{**kwargs, **kwargs})
             res.extend(embds)
         return np.array(res), token_count
 
@@ -66,7 +63,7 @@ class YoudaoEmbed(Base):
         :param kwargs: 其他可选参数传递给 encode 方法。
         :return: 编码后的向量数组。
         """
-        embds = YoudaoEmbed._client.encode([text], **{**self.kwargs, **kwargs})
+        embds = YoudaoEmbed._client.encode([text], **{**kwargs, **kwargs})
         return np.array(embds[0]), num_tokens_from_string(text)
 
 if __name__ == '__main__':

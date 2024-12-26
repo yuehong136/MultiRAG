@@ -22,7 +22,6 @@ class YoudaoRerank(DefaultRerank):
             with YoudaoRerank._model_lock:
                 if not YoudaoRerank._model:
                     try:
-                        logging.info("LOADING BCE from {model_path}...")
                         # YoudaoRerank._model = RerankerModel(model_name_or_path=os.path.join(
                         #     get_home_cache_dir(),
                         #     re.sub(r"^[a-zA-Z]+/", "", model_name)))

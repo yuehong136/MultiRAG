@@ -150,7 +150,6 @@ class Knowledgebase(BaseModel):
     __tablename__ = "t_ai_knowledgebases"
     __table_args__ = {"schema": "usr_ai"}  
 
-
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
     tenant_id = Column(String(32), index=True, nullable=False)
@@ -176,7 +175,6 @@ class Document(BaseModel):
 
     __tablename__ = "t_ai_documents"
     __table_args__ = {"schema": "usr_ai"}  
-
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     thumbnail = Column(Text, index=False, nullable=True, doc="thumbnail base64 string")
@@ -204,7 +202,6 @@ class Document(BaseModel):
 class File(BaseModel):
     __tablename__ = "t_ai_files"
     __table_args__ = {"schema": "usr_ai"}  
-
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     parent_id = Column(String(32), index=True, nullable=False, doc="parent folder id")
@@ -234,7 +231,6 @@ class File2Document(BaseModel):
     __tablename__ = "t_ai_file2documents"
     __table_args__ = {"schema": "usr_ai"}  
 
-
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     file_id = Column(String(32), index=True, nullable=True, doc="file id")
     document_id = Column(String(32), index=True, nullable=True, doc="document id")
@@ -243,7 +239,6 @@ class File2Document(BaseModel):
 class Task(BaseModel):
     __tablename__ = "t_ai_tasks"
     __table_args__ = {"schema": "usr_ai"}  
-
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     doc_id = Column(String(32), index=True, nullable=False)
@@ -254,7 +249,8 @@ class Task(BaseModel):
     progress = Column(Float, index=True, nullable=False, default=0)
     progress_msg = Column(Text, index=False, nullable=True, default="", doc="process message")
     retry_count = Column(Integer, index=False, nullable=True, default=0)
-
+    digest = Column(Text, index=False, nullable=True, default="", doc="task digest")
+    chunk_ids = Column(Text, index=False, nullable=True, default="", doc="chunk ids")
 
 class Dialog(BaseModel):
     __tablename__ = "t_ai_dialogs"

@@ -9,7 +9,7 @@
 import datetime
 import json
 
-import hashlib
+import xxhash
 import re
 
 from fastapi import APIRouter, Depends
@@ -19,8 +19,6 @@ from sqlalchemy.orm import Session
 from api.db.services.dialog_service import keyword_extraction
 from core.app.qa import rmPrefix, beAdoc
 from core.nlp import search, rag_tokenizer
-# from core.utils.es_conn import ELASTICSEARCH
-from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -538,10 +536,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
                 t for t in re.split(
                     r"[\n\t]",
                     request.content_with_weight) if len(t) > 1]
-            if len(arr) != 2:
-                return get_data_error_result(
-                    retmsg="Q&A must be separated by TAB/ENTER key.")
-            q, a = rmPrefix(arr[0]), rmPrefix(arr[1])
+            q, a = rmPrefix(arr[0]), rmPrefix("\n".join(arr[1:]))
             d = beAdoc(d, arr[0], arr[1], not any(
                 [rag_tokenizer.is_chinese(t) for t in q + a]))
 
@@ -767,9 +762,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
     ```
     """
     req = request.model_dump()
-    md5 = hashlib.md5()
-    md5.update((request.content_with_weight + request.doc_id).encode("utf-8"))
-    chunk_id = md5.hexdigest()
+    chunk_id = xxhash.xxh64((request.content_with_weight + request.doc_id).encode("utf-8")).hexdigest()
     d = {"pk": chunk_id, "content_ltks": rag_tokenizer.tokenize(req["content_with_weight"]),
          "content_with_weight": req["content_with_weight"]}
     d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])

@@ -17,6 +17,7 @@ import tiktoken
 
 from api.db.database import SessionLocal
 from graphrag.claim_prompt import CLAIM_EXTRACTION_PROMPT, CONTINUE_PROMPT, LOOP_PROMPT
+from graphrag.extractor import Extractor
 from core.llm.chat_model.base import Base as CompletionLLM
 from graphrag.utils import ErrorHandlerFn, perform_variable_replacements
 
@@ -34,10 +35,9 @@ class ClaimExtractorResult:
     source_docs: dict[str, Any]
 
 
-class ClaimExtractor:
+class ClaimExtractor(Extractor):
     """Claim extractor class definition."""
 
-    _llm: CompletionLLM
     _extraction_prompt: str
     _summary_prompt: str
     _output_formatter_prompt: str
@@ -170,7 +170,7 @@ class ClaimExtractor:
                     }
         text = perform_variable_replacements(self._extraction_prompt, variables=variables)
         gen_conf = {"temperature": 0.5}
-        results = self._llm.chat(text, [{"role": "user", "content": "Output:"}], gen_conf)
+        results = self._chat(text, [{"role": "user", "content": "Output:"}], gen_conf)
         claims = results.strip().removesuffix(completion_delimiter)
         history = [{"role": "system", "content": text}, {"role": "assistant", "content": results}]
 
@@ -178,7 +178,7 @@ class ClaimExtractor:
         for i in range(self._max_gleanings):
             text = perform_variable_replacements(CONTINUE_PROMPT, history=history, variables=variables)
             history.append({"role": "user", "content": text})
-            extension = self._llm.chat("", history, gen_conf)
+            extension = self._chat("", history, gen_conf)
             claims += record_delimiter + extension.strip().removesuffix(
                 completion_delimiter
             )
@@ -189,7 +189,7 @@ class ClaimExtractor:
 
             history.append({"role": "assistant", "content": extension})
             history.append({"role": "user", "content": LOOP_PROMPT})
-            continuation = self._llm.chat("", history, self._loop_args)
+            continuation = self._chat("", history, self._loop_args)
             if continuation != "YES":
                 break
 

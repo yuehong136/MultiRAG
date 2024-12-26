@@ -172,3 +172,5 @@ selenium-wire >= 5.1.0
 blinker == 1.7.0
 # docxtpl 是一个基于 Python 的库，结合了 python-docx 和 Jinja2 模板引擎，旨在通过预定义的 Word 模板高效生成个性化的 .docx 文档。
 docxtpl >= 0.19.0
+# FastEmbed 是一个轻量级、快速的 Python 库，专为生成嵌入而构建。支持流行的文本模型。
+fastembed >= 0.5.0

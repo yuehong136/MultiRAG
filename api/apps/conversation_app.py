@@ -9,11 +9,13 @@
 import json
 import re
 from copy import deepcopy
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Generator
+
+from api.db.db_models import APIToken
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, chat, ask
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -187,12 +189,16 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
     - 失败时返回错误信息
     """
     try:
+
         conv = ConversationService.get_by_id(db, conversation_id)
         if not conv:
             return get_data_error_result(retmsg="Conversation not found!")
         tenants = UserTenantService.query(db, user_id=user.id)
+        avatar = None
         for tenant in tenants:
-            if DialogService.query(db, tenant_id=tenant.tenant_id, id=conv.dialog_id):
+            dialog = DialogService.query(db, tenant_id=tenant.tenant_id, id=conv.dialog_id)
+            if dialog and len(dialog) > 0:
+                avatar = dialog[0].icon
                 break
         else:
             return get_json_result(
@@ -214,10 +220,51 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
             } for ck in ref.get("chunks", [])]
 
         conv = conv.to_dict()
+        conv["avatar"] = avatar
         return get_json_result(data=conv)
     except Exception as e:
         return server_error_response(e)
 
+
+@router.get('/getsse/{dialog_id}', summary="获取对话信息（支持SSE）", response_description="成功获取对话信息")
+async def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = None):
+    """
+    获取对话信息（支持SSE）
+
+    该接口用于根据对话ID获取对话信息，并校验Authorization Token。
+
+    参数:
+    - dialog_id: str 对话的唯一标识符
+    - request: Request 请求对象，用于获取Authorization头部信息
+
+    返回:
+    - 成功时返回包含对话信息的JSON结果
+    - 失败时返回错误信息
+    """
+    token_header = request.headers.get('Authorization')
+    if not token_header:
+        return get_data_error_result(retmsg="Authorization header is missing!")
+
+    token_parts = token_header.split()
+    if len(token_parts) != 2 or token_parts[0].lower() != "bearer":
+        return get_data_error_result(retmsg="Authorization is not valid!")
+
+    token = token_parts[1]
+    objs = APIToken.query(beta=token)
+    if not objs:
+        return get_data_error_result(retmsg="Token is not valid!")
+
+    try:
+        dialog = DialogService.get_by_id(db, dialog_id)
+        if not dialog:
+            return get_data_error_result(retmsg="Dialog not found!")
+
+        dialog_dict = dialog.to_dict()
+        dialog_dict["avatar"] = dialog_dict.pop("icon", None)
+
+        return get_json_result(data=dialog_dict)
+    except Exception as e:
+        return server_error_response(e)
 
 @router.post('/rm', summary="删除会话", response_description="成功删除会话")
 async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
