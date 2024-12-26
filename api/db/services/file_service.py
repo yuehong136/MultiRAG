@@ -299,7 +299,7 @@ class FileService(CommonService):
             raise RuntimeError("Database error (File move)!")
 
     @classmethod
-    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: list, current_user, labels: list[str] | None = None) -> (list[str], list[dict]):
+    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: list, current_user, labels: list[str] | None = None) -> tuple[list[str], list[dict]]:
         # 初始化根文件夹和知识库文件夹
         root_folder = cls.get_root_folder(db, current_user.id)
         pf_id = root_folder["id"]
