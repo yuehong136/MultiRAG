@@ -186,7 +186,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
         elif not chat_passed and llm.mdl_type == LLMType.CHAT.value:
             mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
             try:
-                m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}],
+                m, tc = mdl.chat("", [{"role": "user", "content": "Hello! How are you doing!"}],
                                  {"temperature": 0.9, 'max_tokens': 50})
                 print(m)
                 if m.find("**ERROR**") >= 0:
@@ -367,7 +367,7 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
             base_url=llm["api_base"]
         )
         try:
-            m, tc = mdl.chat(None, [{"role": "user", "content": "Hello! How are you doing!"}],
+            m, tc = mdl.chat("", [{"role": "user", "content": "Hello! How are you doing!"}],
                              {"temperature": 0.9, 'max_tokens': 50})
             if m.find("**ERROR**") >= 0:
                 raise Exception(m)
