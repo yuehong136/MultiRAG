@@ -588,6 +588,88 @@ async def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), u
 @router.post('/chat_service', summary="模型对话服务", response_description="成功调用对话模型")
 def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
+    **功能描述**:
+    此接口用于调用对话模型，基于用户提供的输入生成对应的响应内容。支持文本生成、图像到文本转换、消息处理等多种模型类型。接口根据请求体中的配置，选择适当的模型及生成方式，提供流式和非流式响应模式。
+
+    ### 请求体 (Request Body):
+    - **model_dump (dict)**: 包含以下字段：
+        - `prompt` (str, 可选): 用户提供的提示内容，用于引导对话模型生成响应。
+        - `messages` (list[dict]): 对话消息列表，包含用户与模型之间的对话历史。
+        - `llm_name` (str): 模型名称，用于指定所调用的语言模型。
+        - `stream` (bool): 指定是否使用流式响应。
+        - `gen_conf` (dict, 可选): 生成配置，控制对话生成行为。
+        - `image` (str, 可选): Base64编码的图像数据，适用于图像到文本的转换模型。
+
+    ### 响应 (Response):
+    - **成功响应 (200)**:
+        - `data` (dict): 返回包含模型生成的响应内容，格式可能包括文本、结构化数据或基于图像的文本输出，具体取决于模型类型和请求内容。
+
+    ### 错误响应:
+    - **404: Tenant not found**:
+        - 当根据用户ID查找租户信息失败时，返回此错误，表示该用户无对应的租户记录。
+    - **404: Model not found**:
+        - 当指定的模型名称在用户租户可用模型列表中未找到时，返回此错误。
+
+    ### 主要流程:
+    1. 从请求中提取用户输入的内容、模型名称和配置信息。
+    2. 通过用户信息获取租户信息，确保用户的租户身份；如果未找到租户信息，返回404错误。
+    3. 获取用户租户关联的模型列表，确定模型类型 (`llm_type`)。
+    4. 根据 `llm_type` 判断是否需要传入 `image` 参数，构建生成请求。
+    5. 根据 `stream` 参数选择流式或非流式的生成方法，调用模型获取对话响应内容。
+    6. 返回生成的对话结果。
+
+    ### 注意事项:
+    - **模型选择**:
+        - 仅当 `llm_type` 为 `image2text` 时传递 `image` 参数，以确保在需要图像到文本转换时能处理Base64编码的图像数据。
+        - 支持多种模型类型 (如文本生成、图像到文本、消息对话)，请根据需求选择适当的 `llm_name` 和 `llm_type`。
+    - **流式调用**:
+        - 若 `stream` 参数为 `True`，将返回流式响应，用于实时数据生成；若为 `False`，返回完整的响应数据。
+    - **数据格式**:
+        - 返回数据格式可能因模型及请求内容不同而有所变化；默认返回JSON格式的结构化数据或文本响应。
+    """
+    req = request.model_dump()
+    tenants = TenantService.get_info_by(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+
+    my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
+
+    def get_llm_type(model_name, my_llms):
+        for row in my_llms:
+            if row[4] == model_name:  # 这里的第5个元素是 model_name
+                return row[-3]  # 倒数第三个元素是 llm_type
+        return None  # 如果找不到，返回 None
+
+    llm_type = get_llm_type(req["llm_name"], my_llms)
+    if llm_type:
+        logging.debug(f"The llm_type for model {req['llm_name']} is: {llm_type}")
+    else:
+        raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
+
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+    # 构建调用参数
+    call_params = {
+        "system": req["prompt"],
+        "history": req["messages"],
+        "gen_conf": req["gen_conf"]
+    }
+
+    # 如果llm_type为image2text，添加image参数
+    if llm_type == 'image2text':
+        call_params["image"] = req["image"]
+
+    # 根据是否流式调用选择合适的方法
+    if req["stream"]:
+        data = chat_mdl.chat_streamly(**call_params)
+    else:
+        data = chat_mdl.chat(**call_params)
+
+    return get_json_result(data=data)
+
+
+@router.post('/chat_service_sse', summary="模型对话服务", response_description="成功调用对话模型")
+def chat_service_sse(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
     ### POST `/v1/llm/chat_service` 模型对话服务
 
 **功能描述**:
