@@ -161,25 +161,23 @@ class LLMComponent(BaseComponent):
             system_prompt_list = [parse_template(self.llm_params.system_prompt, item) for item in input_value_dict_list]
             prompt_list = [parse_template(self.llm_params.prompt, item) for item in input_value_dict_list]
 
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                args_list = [
-                    (
-                        self.db,
-                        self.user.id,
-                        model,
-                        system_prompt_list[i],
-                        prompt_list[i],
-                        self.llm_params,
-                        input_value_dict_list[i]
-                    )
-                    for i in range(len(input_value_dict_list))
-                ]
+            # 并发调用存在限制，目前先使用普通 for 循环替代并发处理
+            execute_info = []
+            for i in range(len(input_value_dict_list)):
+                args = (
+                    self.db,
+                    self.user.id,
+                    model,
+                    system_prompt_list[i],
+                    prompt_list[i],
+                    self.llm_params,
+                    input_value_dict_list[i]
+                )
+                result = process_single_chat(args)
+                execute_info.append(result)
 
-                # 使用 list 保持原始顺序
-                execute_info = list(executor.map(process_single_chat, args_list))
-
-                # 转换为目标格式，保持原始顺序
-                output_list = [{"output": item["output"]} for item in execute_info]
+            # 转换为目标格式，保持原始顺序
+            output_list = [{"output": item["output"]} for item in execute_info]
 
             # 批处理
             return {"outputList": output_list}
