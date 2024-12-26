@@ -140,7 +140,7 @@ class LLMComponent(BaseComponent):
     async def execute(self) -> dict[str, Any]:
         self.logger.info(f"LLMComponent {self.title} execute")
         self.logger.info(f"LLMComponent {self.title} inputs: {self.inputs}")
-        model = "ep-20241008085710-w9hk2"
+        model = self.llm_params.model_name
 
         if self.batch_config.batch_enable:
             input_value_dict_list = []
@@ -200,7 +200,7 @@ class LLMComponent(BaseComponent):
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict:
         self.logger.info(f"LLMComponent {self.title} execute")
         self.logger.info(f"LLMComponent {self.title} inputs: {self.inputs}")
-        model = "ep-20241008085710-w9hk2"
+        model = self.llm_params.model_name
 
         if self.batch_config.batch_enable:
             input_value_dict_list = map_schema_with_values(self.workflow_node.input_schema, input_value, batch_value)
