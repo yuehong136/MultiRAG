@@ -589,35 +589,160 @@ def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depe
 @router.post('/rm', summary="删除文档块")
 def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    删除文档块
+    ### POST `/rm` 删除文档块接口
 
-    该接口用于删除指定的文档块。
+**功能描述**:
+此接口用于删除指定文档的块数据，同时更新相关的索引和文档统计信息。
 
-    参数:
-    - request: RmChunkRequest对象，包含要删除的文档块ID
-        - doc_id: 文档的唯一标识符
-        - chunk_ids: 要删除的文档块ID列表
-    - db: 数据库会话对象
-    - user: 当前用户对象
+---
 
-    返回:
-    - 成功时返回包含操作结果的JSON结果
-    - 失败时返回错误信息
+### 请求体 (Request Body)
+
+| 字段       | 类型          | 必填 | 描述                     |
+|------------|---------------|------|--------------------------|
+| `doc_id`   | `string`      | 是   | 需要操作的文档唯一标识符 |
+| `chunk_ids`| `list[string]`| 是   | 要删除的文档块 ID 列表   |
+
+---
+
+### 响应 (Response)
+
+#### 成功响应 (200)
+
+- **`Content-Type: application/json`**
+- **示例**:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": true
+    }
+    ```
+
+#### 错误响应
+
+- **404: Document not found**
+    - **描述**: 当根据 `doc_id` 查询不到对应文档时返回此错误。
+    - **示例**:
+        ```json
+        {
+            "retcode": 404,
+            "retmsg": "Document not found!"
+        }
+        ```
+
+- **404: KnowledgeBase not found**
+    - **描述**: 当文档对应的知识库不存在时返回此错误。
+    - **示例**:
+        ```json
+        {
+            "retcode": 404,
+            "retmsg": "KnowledgeBase not found!"
+        }
+        ```
+
+- **400: Index updating failure**
+    - **描述**: 当删除索引中的文档块失败时返回此错误。
+    - **示例**:
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Index updating failure"
+        }
+        ```
+
+- **500: 内部错误**
+    - **描述**: 当发生意外错误时返回此错误。
+    - **示例**:
+        ```json
+        {
+            "retcode": 500,
+            "retmsg": "Internal server error",
+            "detail": "具体错误信息"
+        }
+        ```
+
+---
+
+### 主要流程
+
+1. 验证文档和知识库的存在性：
+    - 根据 `doc_id` 获取文档信息。
+    - 根据文档的 `kb_id` 获取知识库信息。
+2. 删除索引中的指定文档块：
+    - 调用 `delete` 方法从索引中删除文档块。
+3. 更新文档的块统计信息：
+    - 调用 `DocumentService.decrement_chunk_num` 减少文档的块数量统计。
+4. 返回操作结果。
+
+---
+
+### 注意事项
+
+- **索引删除**:
+  文档块的删除操作会同步影响索引中的数据，确保 `chunk_ids` 的完整性和正确性。
+- **统计更新**:
+  删除操作会调整文档的块数量统计，若删除操作失败，将不更新统计信息。
+
+---
+
+### 示例请求
+
+#### 请求体:
+```json
+{
+    "doc_id": "12345",
+    "chunk_ids": ["67890", "98765"]
+}
+```
+
+- **成功响应**:
+```json
+{
+    "retcode": 0,
+    "retmsg": "success",
+    "data": true
+}
+```
+
+- **错误响应 (文档不存在)**:
+```json
+{
+    "retcode": 404,
+    "retmsg": "Document not found!"
+}
+```
+```json
+{
+    "retcode": 400,
+    "retmsg": "Index updating failure"
+}
+```
+```json
+{
+    "retcode": 500,
+    "retmsg": "Internal server error",
+    "detail": "详细的错误信息"
+}
+```
     """
+    req = request.model_dump()
     try:
-        if not ELASTICSEARCH.deleteByQuery(
-                Q("ids", values=request.chunk_ids), search.index_name(user.id)):
-            return get_data_error_result(retmsg="Index updating failure")
-        e, doc = DocumentService.get_by_id(db, request.doc_id)
-        if not e:
+        doc = DocumentService.get_by_id(db, req["doc_id"])
+        if not doc:
             return get_data_error_result(retmsg="Document not found!")
-        deleted_chunk_ids = request.chunk_ids
+        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        if not kb:
+            return get_data_error_result(retmsg="KnowledgeBase not found!")
+
+        if not settings.docStoreConn.delete(collection_name=search.index_name_one(kb.tenant_id, kb.name), ids=req["chunk_ids"]):
+            return get_data_error_result(retmsg="Index updating failure")
+        deleted_chunk_ids = req["chunk_ids"]
         chunk_number = len(deleted_chunk_ids)
         DocumentService.decrement_chunk_num(db, doc.id, doc.kb_id, 1, chunk_number, 0)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
-
 
 @router.post('/create', summary="创建文档块")
 def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
@@ -899,7 +1024,7 @@ def knowledge_graph(doc_id, db: Session = Depends(get_db), user=Depends(manager)
         ty = sres.field[id]["knowledge_graph_kwd"]
         try:
             content_json = json.loads(sres.field[id]["content_with_weight"])
-        except Exception as e:
+        except Exception:
             continue
 
         if ty == 'mind_map':

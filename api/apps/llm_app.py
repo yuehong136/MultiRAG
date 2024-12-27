@@ -63,7 +63,7 @@ class DeleteFactoryRequest(BaseModel):
 
 
 class LLMServiceRequest(BaseModel):
-    prompt: str | None = None
+    prompt: str = ""
     messages: list[dict]
     llm_name: str
     stream: bool = False
