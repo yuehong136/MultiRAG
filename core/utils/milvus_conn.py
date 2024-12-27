@@ -744,7 +744,7 @@ class MilvusConnection(DocStoreConnection):
             self,
             collection_name: str,
             schema: CollectionSchema,
-            index_params: IndexParams,
+            index_params: IndexParams | None = None,
             timeout: float | None = None,
             **kwargs,
     ):
