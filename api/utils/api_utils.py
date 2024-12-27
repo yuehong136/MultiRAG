@@ -77,7 +77,7 @@ def get_exponential_backoff_interval(retries, full_jitter=False):
 def get_data_error_result(retcode=settings.RetCode.DATA_ERROR, retmsg='Sorry! Data missing!'):
     result_dict = {
         "retcode": retcode,
-        "retmsg": retmsg.replace("rag", "seceum"),
+        "retmsg": retmsg
     }
     response = {key: value for key, value in result_dict.items() if value is not None or key == "retcode"}
     return JSONResponse(content=jsonable_encoder(response))
@@ -218,7 +218,7 @@ def construct_response(retcode=settings.RetCode.SUCCESS, retmsg='success', data=
 
 
 def construct_result(code=settings.RetCode.DATA_ERROR, message='data is missing'):
-    result_dict = {"code": code, "message": message.replace("rag", "seceum")}
+    result_dict = {"code": code, "message": message}
     response = {key: value for key, value in result_dict.items() if value is not None or key == "code"}
     return JSONResponse(content=jsonable_encoder(response))
 

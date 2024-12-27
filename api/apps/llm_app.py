@@ -8,6 +8,7 @@
 """
 import logging
 import json
+import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -22,10 +23,10 @@ from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from api.db import StatusEnum, LLMType
 from api.db.db_models import TenantLLM
+from api.utils.file_utils import get_project_base_directory
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 from pydantic import BaseModel, Field
 from typing import Any
-import requests
 
 
 class SetAPIKeyRequest(BaseModel):
@@ -393,16 +394,10 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
             base_url=llm["api_base"]
         )
         try:
-            img_url = (
-                "https://www.8848seo.cn/zb_users/upload/2022/07/20220705101240_99378.jpg"
-            )
-            res = requests.get(img_url)
-            if res.status_code == 200:
-                m, tc = mdl.describe(res.content)
+            with open(os.path.join(get_project_base_directory(), "assets/imgs/logo.png"), "rb") as f:
+                m, tc = mdl.describe(f.read())
                 if not tc:
                     raise Exception(m)
-            else:
-                pass
         except Exception as e:
             msg += f"\nFail to access model({llm['llm_name']})." + str(e)
     elif llm["mdl_type"] == LLMType.TTS:
