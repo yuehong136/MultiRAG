@@ -10,6 +10,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import csv
 import logging
 import re
 from copy import deepcopy
@@ -24,6 +25,7 @@ from deepdoc.parser import PdfParser, ExcelParser, DocxParser
 from docx import Document
 from PIL import Image
 from markdown import markdown
+
 class Excel(ExcelParser):
     def __call__(self, fnm, binary=None, callback=None):
         if not binary:
@@ -313,7 +315,7 @@ def chunk(filename, binary=None, lang="Chinese", callback=None, **kwargs):
             res.append(beAdoc(deepcopy(doc), q, a, eng))
         return res
 
-    elif re.search(r"\.(txt|csv)$", filename, re.IGNORECASE):
+    elif re.search(r"\.(txt)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
         txt = get_text(filename, binary)
         lines = txt.split("\n")
@@ -350,6 +352,38 @@ def chunk(filename, binary=None, lang="Chinese", callback=None, **kwargs):
         callback(0.6, ("Extract Q&A: {}".format(len(res)) + (
             f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
 
+        return res
+
+    elif re.search(r"\.(csv)$", filename, re.IGNORECASE):
+        callback(0.1, "Start to parse.")
+        txt = get_text(filename, binary)
+        lines = txt.split("\n")
+        delimiter = "\t" if any("\t" in line for line in lines) else ","
+
+        fails = []
+        question, answer = "", ""
+        res = []
+        reader = csv.reader(lines, delimiter=delimiter)
+
+        for i, row in enumerate(reader):
+            if len(row) != 2:
+                if question:
+                    answer += "\n" + lines[i]
+                else:
+                    fails.append(str(i + 1))
+            elif len(row) == 2:
+                if question and answer:
+                    res.append(beAdoc(deepcopy(doc), question, answer, eng))
+                question, answer = row
+            if len(res) % 999 == 0:
+                callback(len(res) * 0.6 / len(lines), ("Extract Q&A: {}".format(len(res)) + (
+                    f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
+
+        if question:
+            res.append(beAdoc(deepcopy(doc), question, answer, eng))
+
+        callback(0.6, ("Extract Q&A: {}".format(len(res)) + (
+            f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
         return res
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
