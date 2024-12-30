@@ -43,7 +43,7 @@ async def run(
         input_values = json.loads(start_input_values)
 
         # 将文件与输入值关联
-        if files:
+        if len(files) > 0 and files[0].size > 0:
             nodes = workflow_data.get("nodes")
             for node in nodes:
                 if node.get("id") == "100001":
@@ -55,7 +55,7 @@ async def run(
                             break
                 else:
                     continue
-        else:
+        if bucket_name and len(bucket_name) > 0:
             nodes = workflow_data.get("nodes")
             for node in nodes:
                 if node.get("id") == "100001":
