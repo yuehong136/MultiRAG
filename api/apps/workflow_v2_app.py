@@ -33,6 +33,7 @@ async def run(
         schema_data: str = Form(..., alias="schema"),  # JSON string
         start_input_values: str = Form(...),  # JSON string
         files: list[UploadFile] = File(None),  # Optional files
+        bucket_name: str = Form(None),
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -41,20 +42,31 @@ async def run(
         workflow_data = json.loads(schema_data)
         input_values = json.loads(start_input_values)
 
-        # 处理上传的文件
-        file_data = {}
+        # 将文件与输入值关联
         if files:
-            for file in files:
-                # 读取文件内容
-                content = await file.read()
-                # 将文件内容存储在字典中，以文件名为键
-                file_data[file.filename] = content
-                # 确保文件指针回到开始位置，以便后续可能的读取
-                await file.seek(0)
-
-        # 将文件数据添加到输入值中
-        if file_data:
-            input_values["uploaded_files"] = file_data
+            nodes = workflow_data.get("nodes")
+            for node in nodes:
+                if node.get("id") == "100001":
+                    node_data = node.get("data")
+                    node_outputs = node_data.get("outputs")
+                    for output in node_outputs:
+                        if output.get("assistType", "") == 1:
+                            input_values[output.get("name")] = files[0]
+                            break
+                else:
+                    continue
+        else:
+            nodes = workflow_data.get("nodes")
+            for node in nodes:
+                if node.get("id") == "100001":
+                    node_data = node.get("data")
+                    node_outputs = node_data.get("outputs")
+                    for output in node_outputs:
+                        if output.get("type") == "minio":
+                            input_values[output.get("name")] = bucket_name + "+" + input_values[output.get("name")]
+                            break
+                else:
+                    continue
 
         # 运行工作流，传递额外的参数
         result = await run_workflow(

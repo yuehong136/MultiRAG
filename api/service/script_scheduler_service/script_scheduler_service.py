@@ -8,7 +8,7 @@ from errors.exceptions import ScriptRunningError
 class ScriptSchedulerService:
 
     @staticmethod
-    async def run_temporary_script(script: str, args: Dict[str, Any], user_id: int):
+    async def run_temporary_script(script: str, args: Dict[str, Any], user_id: str):
         """运行临时脚本"""
         async with aiohttp.ClientSession() as session:
             url = f"http://localhost:{SCRIPT_SCHEDULER_PORT}/api/v1/script-scheduler/run-temporary-script"
@@ -26,7 +26,7 @@ class ScriptSchedulerService:
                 return response_data.get('data')
 
     @staticmethod
-    async def run_plugin_script(plugin_id: str, script: str, args: Dict[str, Any], user_id: int):
+    async def run_plugin_script(plugin_id: str, script: str, args: Dict[str, Any], user_id: str):
         """运行插件脚本"""
         async with aiohttp.ClientSession() as session:
             url = f"http://localhost:{SCRIPT_SCHEDULER_PORT}/api/v1/script-scheduler/run-plugin-script"

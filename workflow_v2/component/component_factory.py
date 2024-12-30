@@ -3,6 +3,7 @@ from typing import Dict, Any
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.component.code_component import CodeComponent
 from workflow_v2.component.end_component import EndComponent
+from workflow_v2.component.file_reader_component import FileReaderComponent
 from workflow_v2.component.llm_component import LLMComponent
 from workflow_v2.component.plugin_component import PluginComponent
 from workflow_v2.component.selector_component import SelectorComponent
@@ -34,5 +35,7 @@ class ComponentFactory:
             return CodeComponent(component_id, title, node_data, logger)
         elif node_type == "8" or node_type == 8:
             return SelectorComponent(component_id, title, node_data, logger)
+        elif node_type == "9" or node_type == 9:
+            return FileReaderComponent(component_id, title, node_data, logger)
         else:
             raise ValueError(f"Unknown component type: {node_type}")
