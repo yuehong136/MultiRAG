@@ -57,17 +57,7 @@ class DialogRequest(BaseModel):
     llm_setting: dict | None
     """大语言模型的配置，默认值为空字典。"""
 
-    prompt_config: dict | None = Field(default=lambda: {
-        "system": """你是一个智能助手，请总结知识库的内容来回答问题，请列举知识库中的数据详细回答。当所有知识库内容都与问题无关时，你的回答必须包括“知识库中未找到您要的答案！”这句话。回答需要考虑聊天历史。
-以下是知识库：
-{knowledge}
-以上是知识库。""",
-        "prologue": "您好，我是您的助手小樱，长得可爱又善良，can I help you?",
-        "parameters": [
-            {"key": "knowledge", "optional": False}
-        ],
-        "empty_response": "Sorry! 知识库中未找到相关内容！"
-    })
+    prompt_config: dict | None
     """提示配置，包含系统提示、开场白、参数和空响应消息。"""
 
     kb_ids: list[str] | None

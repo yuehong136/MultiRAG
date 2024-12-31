@@ -219,10 +219,8 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
 
             # 查询与文档关联的文件，并删除这些文件
             f2d = File2DocumentService.get_by_document_id(db, doc_id)
-            FileService.filter_delete(
-                db,
-                [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id]
-            )
+            if f2d:
+                FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
             # 删除文档与文件的关联记录
             File2DocumentService.delete_by_document_id(db, doc_id)
             STORAGE_IMPL.rm(b, n)
