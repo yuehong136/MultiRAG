@@ -33,7 +33,7 @@ async def run(
         schema_data: str = Form(..., alias="schema"),  # JSON string
         start_input_values: str = Form(...),  # JSON string
         files: list[UploadFile] = File(None),  # Optional files
-        bucket_name: str = Form(None),
+        bucket_name: str = Form(None),  # bucket_name在任何情况下都会传入，所以下面处理文件时，先判断files是否为空，如果为空，处理bucket_name
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -43,7 +43,7 @@ async def run(
         input_values = json.loads(start_input_values)
 
         # 将文件与输入值关联
-        if len(files) > 0 and files[0].size > 0:
+        if files and len(files) > 0 and files[0].size > 0:
             nodes = workflow_data.get("nodes")
             for node in nodes:
                 if node.get("id") == "100001":
@@ -55,7 +55,7 @@ async def run(
                             break
                 else:
                     continue
-        if bucket_name and len(bucket_name) > 0:
+        else:
             nodes = workflow_data.get("nodes")
             for node in nodes:
                 if node.get("id") == "100001":
@@ -99,6 +99,7 @@ async def component_run(
         input_str: str = Form(...),  # JSON string
         batch_str: str = Form(None),  # JSON string
         files: list[UploadFile] = File(None),  # Optional files
+        bucket_name: str = Form(None),  # bucket_name在任何情况下都会传入，所以下面处理文件时，先判断files是否为空，如果为空，处理bucket_name
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -107,6 +108,15 @@ async def component_run(
         input_values = json.loads(input_str)
         batch_input_type = extract_batch_input_types(node_data)
         batch_values = convert_input_values(batch_str, batch_input_type) if batch_str else None
+
+        # 将文件与输入值关联
+        if files and len(files) > 0 and files[0].size > 0:
+            input_values[list(input_values)[0]] = files[0]
+        else:
+            for node_input in node_data['data']['inputs']['inputParameters']:
+                if node_input['input']['type'] == 'minio':
+                    batch_values[node_input['name']] = bucket_name + "+" + batch_values[node_input['name']]
+                    break
 
         component = (ComponentManager(logger=WorkflowContextLogger("", WorkflowLogger().logger))
                      .create_component(node_data))

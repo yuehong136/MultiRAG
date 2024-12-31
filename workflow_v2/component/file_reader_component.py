@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from workflow.utils.MinioOperator import MinioOperator
 from workflow_v2.component.base_component import BaseComponent
-from workflow_v2.utils import match_parameters
+from workflow_v2.utils import match_parameters, map_schema_with_values
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 from fastapi import UploadFile
 from docx import Document
@@ -86,7 +86,21 @@ class FileReaderComponent(BaseComponent):
         self.logger.info(f"LLMComponent {self.title} inputs: {self.inputs}")
 
         if self.batch_config.batch_enable:
-            pass
+            output_list = []
+            minio_file_info = list(batch_value.values())[0]
+            bucket_name = minio_file_info.split("+")[0]
+            dir_name = minio_file_info.split("+")[1]
+            minio_operator = MinioOperator()
+            file_list = minio_operator.list_objects(bucket_name=bucket_name, prefix=dir_name, recursive=False)
+            for file in file_list:
+                file_name = file['name']
+                if file_name.endswith(".docx") or file_name.endswith(".txt"):
+                    file_data = minio_operator.download_to_memory(bucket_name=bucket_name,
+                                                                  object_name=file_name)
+                    file_content = detect_and_read_content(file_data)
+                    output_list.append({"fileName": file_name.split("/")[-1], "fileContent": file_content})
+
+            return {"outputList": output_list}
         else:
             file_info = await parse_uploaded_file(list(input_value.values())[0])
             file_name = file_info['file_name']
