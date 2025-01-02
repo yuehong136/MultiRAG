@@ -44,6 +44,7 @@ from core.llm.sequence2txt_model.qwenseq2txt import QWenSeq2txt
 from core.llm.sequence2txt_model.tencentcloudseq2txt import TencentCloudSeq2txt
 from core.llm.sequence2txt_model.xinferenceseq2txt import XinferenceSeq2txt
 from core.llm.tts_model.models.fish_audiotts import FishAudioTTS
+from core.llm.tts_model.models.ollamatts import OllamaTTS
 from core.llm.tts_model.models.openaitts import OpenAITTS
 from core.llm.tts_model.models.qwentts import QwenTTS
 from core.llm.tts_model.models.sparktts import SparkTTS
@@ -128,5 +129,6 @@ TTSModel = {
     "Tongyi-Qianwen": QwenTTS,
     "OpenAI":OpenAITTS,
     "XunFei Spark": SparkTTS,
-    "Xinference": XinferenceTTS
+    "Xinference": XinferenceTTS,
+    "Ollama": OllamaTTS
 }
