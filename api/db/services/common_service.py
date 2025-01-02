@@ -168,12 +168,12 @@ class CommonService(Generic[ModelType]):
 
 
     @classmethod
-    def get_by_id(cls, db: Session, pid: Any) -> ModelType:
+    def get_by_id(cls, db: Session, pid: Any) -> ModelType | None:
         try:
             return db.query(cls.model).filter(cls.model.id == pid).one()
-        except NoResultFound:
-            raise HTTPException(status_code=404, detail="Item not found")
-
+        except Exception:
+            # raise HTTPException(status_code=404, detail="Item not found")
+            return None
     @classmethod
     def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] = None) -> list[ModelType]:
         query = db.query(cls.model).filter(cls.model.id.in_(pids))

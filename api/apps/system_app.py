@@ -160,26 +160,6 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
     res["task_executor_heartbeats"] = task_executor_heartbeats
 
     return get_json_result(data=res)
-    # try:
-    #     v = REDIS_CONN.get("TASKEXE")
-    #     if not v:
-    #         raise Exception("No task executor running!")
-    #     obj = json.loads(v)
-    #     color = "green"
-    #     for id in obj.keys():
-    #         arr = obj[id]
-    #         if len(arr) == 1:
-    #             obj[id] = [0]
-    #         else:
-    #             obj[id] = [arr[i + 1] - arr[i] for i in range(len(arr) - 1)]
-    #         elapsed = max(obj[id])
-    #         if elapsed > 50: color = "yellow"
-    #         if elapsed > 120: color = "red"
-    #     res["task_executor"] = {"status": color, "elapsed": obj}
-    # except Exception as e:
-    #     res["task_executor"] = {"status": "red", "error": str(e)}
-    #
-    # return get_json_result(data=res)
 
 
 @router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌")
