@@ -159,10 +159,10 @@ async def web_crawl(
         return construct_error_response(ValueError("Download failure."))
 
     root_folder = FileService.get_root_folder(db, user.id)
-    pf_id = root_folder.id
+    pf_id = root_folder["id"]
     FileService.init_knowledgebase_docs(db, pf_id, user.id)
     kb_root_folder = FileService.get_kb_folder(db, user.id)
-    kb_folder = FileService.new_a_file_from_kb(db, kb.tenant_id, kb.name, kb_root_folder.id)
+    kb_folder = FileService.new_a_file_from_kb(db, kb.tenant_id, kb.name, kb_root_folder["id"])
 
     try:
         filename = duplicate_name(DocumentService.query, db=db, name=name + ".pdf", kb_id=kb.id)
@@ -193,10 +193,10 @@ async def web_crawl(
         if re.search(r"\.(eml)$", filename):
             doc["parser_id"] = ParserType.EMAIL.value
         DocumentService.insert(db, doc)
-        FileService.add_file_from_kb(db, doc, kb_folder.id, kb.tenant_id)
+        FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
     except Exception as e:
         return construct_error_response(e)
-    return construct_json_result(data=True)
+    return construct_json_result(data=doc)
 
 
 @router.post("/create", summary="创建文件或文件夹", response_description="成功创建文件或文件夹")

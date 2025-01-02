@@ -16,23 +16,46 @@ def html2pdf(
         source: str,
         timeout: int = 2,
         install_driver: bool = True,
-        print_options: dict = {},
+        print_options=None,
 ):
+    if print_options is None:
+        print_options = {}
     result = __get_pdf_from_html(source, timeout, install_driver, print_options)
     return result
 
 
-def __send_devtools(driver, cmd, params={}):
-    resource = "/session/%s/chromium/send_command_and_get_result" % driver.session_id
-    url = driver.command_executor._url + resource
-    body = json.dumps({"cmd": cmd, "params": params})
-    response = driver.command_executor._request("POST", url, body)
+def __send_devtools(driver, cmd, params=None):
+    # if params is None:
+    #     params = {}
+    # resource = "/session/%s/chromium/send_command_and_get_result" % driver.session_id
+    # url = driver.command_executor._url + resource
+    # body = json.dumps({"cmd": cmd, "params": params})
+    # response = driver.command_executor._request("POST", url, body)
+    #
+    # if not response:
+    #     raise Exception(response.get("value"))
+    #
+    # return response.get("value")
 
-    if not response:
-        raise Exception(response.get("value"))
+    """
+    Sends a Chrome DevTools Protocol command to the browser.
 
-    return response.get("value")
+    Args:
+        driver: The WebDriver instance.
+        command: The CDP command to execute (e.g., "Page.printToPDF").
+        params: The parameters for the CDP command.
 
+    Returns:
+        The result of the command execution.
+    """
+    try:
+        # 使用 Selenium 提供的 execute_cdp_cmd 方法执行命令
+        return driver.execute_cdp_cmd(cmd, params)
+    except AttributeError:
+        raise RuntimeError(
+            "This Selenium WebDriver does not support execute_cdp_cmd. "
+            "Ensure you are using a compatible driver and browser."
+        )
 
 def __get_pdf_from_html(
         path: str,
@@ -70,8 +93,9 @@ def __get_pdf_from_html(
             "preferCSSPageSize": True,
         }
         calculated_print_options.update(print_options)
-        result = __send_devtools(
-            driver, "Page.printToPDF", calculated_print_options)
+        # result = __send_devtools(
+        #     driver, "Page.printToPDF", calculated_print_options)
+        result = driver.execute_cdp_cmd("Page.printToPDF", calculated_print_options)
         driver.quit()
         return base64.b64decode(result["data"])
 
