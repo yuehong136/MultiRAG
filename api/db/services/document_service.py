@@ -129,10 +129,17 @@ class DocumentService(CommonService):
 
     @classmethod
     def insert(cls, db: Session, doc: dict):
-        new_doc = cls.save(db, **doc)
+        # new_doc = cls.save(db, **doc)
+        # kb = KnowledgebaseService.get_by_id(db, doc["kb_id"])
+        # KnowledgebaseService.update_by_id(db, kb.id, {"doc_num": kb.doc_num + 1})
+        # return new_doc
+        if not cls.save(db, **doc):
+            raise RuntimeError("Database error (Document)!")
         kb = KnowledgebaseService.get_by_id(db, doc["kb_id"])
-        KnowledgebaseService.update_by_id(db, kb.id, {"doc_num": kb.doc_num + 1})
-        return new_doc
+        if not KnowledgebaseService.update_by_id(
+                db, kb.id, {"doc_num": kb.doc_num + 1}):
+            raise RuntimeError("Database error (Knowledgebase)!")
+        return Document(**doc)
 
     @classmethod
     def remove_document(cls, db: Session, doc: Document, tenant_id: str):

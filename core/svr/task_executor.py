@@ -86,9 +86,11 @@ DONE_TASKS = 0
 FAILED_TASKS = 0
 CURRENT_TASK = None
 
+
 class TaskCanceledException(Exception):
     def __init__(self, msg):
         self.msg = msg
+
 
 def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing..."):
     global PAYLOAD
@@ -254,7 +256,7 @@ def build_chunks(task, progress_callback, db: Session):
             STORAGE_IMPL.put(task["kb_id"], d["pk"], output_buffer.getvalue())
             el += timer() - st
         except Exception:
-            logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["_id"]))
+            logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
             raise
 
         d["img_id"] = "{}-{}".format(task["kb_id"], d["pk"])
@@ -367,6 +369,8 @@ def embedding(docs, mdl, parser_config=None, callback=None):
         if not c:
             c = d["content_with_weight"]
         c = re.sub(r"</?(table|td|caption|tr|th)( [^<>]{0,12})?>", " ", c)
+        if not c:
+            c = "None"
         cnts.append(c)
 
     tk_count = 0

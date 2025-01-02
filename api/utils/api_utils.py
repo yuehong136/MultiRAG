@@ -75,6 +75,7 @@ def get_exponential_backoff_interval(retries, full_jitter=False):
 
 
 def get_data_error_result(retcode=settings.RetCode.DATA_ERROR, retmsg='Sorry! Data missing!'):
+    logging.exception(Exception(retmsg))
     result_dict = {
         "retcode": retcode,
         "retmsg": retmsg
