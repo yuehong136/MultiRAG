@@ -60,14 +60,14 @@ class DocumentService(CommonService):
         else:
             query = query.order_by(asc(order_clause))
 
+        # 获取记录总数
+        count = query.count()
+
         # 添加分页
         query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
 
         # 执行查询并返回结果
         results = query.all()
-
-        # 获取记录总数
-        count = query.count()
 
         return [item.__dict__ for item in results], count
 
