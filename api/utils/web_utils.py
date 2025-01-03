@@ -1,6 +1,9 @@
+import ipaddress
 import re
 import json
 import base64
+import socket
+from urllib.parse import urlparse
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -100,5 +103,25 @@ def __get_pdf_from_html(
         return base64.b64decode(result["data"])
 
 
+def is_private_ip(ip: str) -> bool:
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        return ip_obj.is_private
+    except ValueError:
+        return False
+
 def is_valid_url(url: str) -> bool:
-    return bool(re.match(r"(https?)://[-A-Za-z0-9+&@#/%?=~_|!:,.;]+[-A-Za-z0-9+&@#/%=~_|]", url))
+    if not re.match(r"(https?)://[-A-Za-z0-9+&@#/%?=~_|!:,.;]+[-A-Za-z0-9+&@#/%=~_|]", url):
+        return False
+    parsed_url = urlparse(url)
+    hostname = parsed_url.hostname
+
+    if not hostname:
+        return False
+    try:
+        ip = socket.gethostbyname(hostname)
+        if is_private_ip(ip):
+            return False
+    except socket.gaierror:
+        return False
+    return True
