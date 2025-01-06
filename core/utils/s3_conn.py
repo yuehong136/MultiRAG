@@ -1,7 +1,6 @@
 import logging
 import boto3
 from botocore.exceptions import ClientError
-from botocore.client import Config
 import time
 from io import BytesIO
 
@@ -13,7 +12,6 @@ class MultiRAGS3(object):
     def __init__(self):
         self.conn = None
         self.s3_config = settings.S3
-        self.endpoint = self.s3_config.get('endpoint', None)
         self.access_key = self.s3_config.get('access_key', None)
         self.secret_key = self.s3_config.get('secret_key', None)
         self.region = self.s3_config.get('region', None)
@@ -27,24 +25,14 @@ class MultiRAGS3(object):
             pass
 
         try:
-
-            config = Config(
-                s3={
-                    'addressing_style': 'virtual'
-                }
-            )
-
             self.conn = boto3.client(
                 's3',
-                endpoint_url=self.endpoint,
                 region_name=self.region,
                 aws_access_key_id=self.access_key,
-                aws_secret_access_key=self.secret_key,
-                config=config
+                aws_secret_access_key=self.secret_key
             )
         except Exception:
-            logging.exception(
-                "Fail to connect %s" % self.endpoint)
+            logging.exception(f"Fail to connect at region {self.region}")
 
     def __close__(self):
         del self.conn

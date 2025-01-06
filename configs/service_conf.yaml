@@ -47,7 +47,6 @@ azure:
 #  tenant_id: 'tenant_id'
 #  container_name: 'container_name'
 s3:
-  endpoint: 'endpoint'
   access_key: 'access_key'
   secret_key: 'secret_key'
   region: 'region'

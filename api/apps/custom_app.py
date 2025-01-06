@@ -104,6 +104,43 @@ async def process_docx(file: UploadFile = File(...)):
     if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="Invalid file format. Only .docx files are supported.")
 
+    # 工具方法：判断是否为独立单元格
+    def is_isolated_cell(matrix, row_idx, col_idx):
+        rows = len(matrix)
+        cols = len(matrix[0]) if rows > 0 else 0
+
+        # 检查上、下、左、右单元格是否有内容
+        if row_idx > 0 and matrix[row_idx - 1][col_idx].strip():  # 上
+            return False
+        if row_idx < rows - 1 and matrix[row_idx + 1][col_idx].strip():  # 下
+            return False
+        if col_idx > 0 and matrix[row_idx][col_idx - 1].strip():  # 左
+            return False
+        if col_idx < cols - 1 and matrix[row_idx][col_idx + 1].strip():  # 右
+            return False
+
+        # 如果四个方向都没有内容，则为独立单元格
+        return True
+
+    # 工具方法：获取表格上方段落的描述
+    def get_table_above_paragraphs(input_doc, table_idx):
+        paragraphs = input_doc.paragraphs
+        tables = input_doc.tables
+        target_table = tables[table_idx]
+        table_pos = None
+        for idx, paragraph in enumerate(paragraphs):
+            if target_table._element in paragraph._element.iter():
+                table_pos = idx
+                break
+        if table_pos is not None:
+            above_paragraphs = []
+            for p_idx in range(table_pos - 1, -1, -1):
+                paragraph_text = paragraphs[p_idx].text.strip()
+                if paragraph_text:
+                    above_paragraphs.append(paragraph_text)
+            return above_paragraphs[::-1]
+        return []
+
     # 工具方法：判断是否是占位符格式
     def is_placeholder_format(value: str) -> bool:
         return value.strip().startswith('{{') and value.strip().endswith('}}')
@@ -150,15 +187,17 @@ async def process_docx(file: UploadFile = File(...)):
         return vmerge and vmerge[0].get(
             "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") == "restart"
 
-    # 工具方法：填充表格（右填充 + 下填充，检测合并单元格）
-    def fill_table(matrix, table):
+    # 工具方法：填充表格（右填充 + 下填充，检测合并单元格，独立单元格）
+    def fill_table(matrix, table, above_paragraphs):
         rows = len(matrix)
         if rows == 0:
+            print("Matrix is empty!")  # 调试日志
             return matrix, set()
 
         cols = len(matrix[0])
         right_filled_cells = set()
         down_filled_cells = set()
+        print("Initial table matrix:")  # 打印整个表格矩阵
 
         # 第一阶段：右填充
         for r in range(rows):
@@ -186,6 +225,17 @@ async def process_docx(file: UploadFile = File(...)):
                 if not matrix[r][c].strip() and not is_merged_cell(current_cell) and matrix[r - 1][c].strip():
                     matrix[r][c] = wrap_placeholder(matrix[r - 1][c])
                     down_filled_cells.add((r, c))
+
+        # 第三阶段：处理独立单元格
+        for r in range(rows):
+            for c in range(cols):
+                if not matrix[r][c].strip() and is_isolated_cell(matrix, r, c):
+                    if above_paragraphs:
+                        description = above_paragraphs[-1]
+                        placeholder_key = normalize_placeholder_key(description)
+                        placeholder_value = wrap_placeholder(placeholder_key)
+                        matrix[r][c] = placeholder_value
+                        down_filled_cells.add((r, c))
 
         return matrix, down_filled_cells
 
@@ -237,8 +287,10 @@ async def process_docx(file: UploadFile = File(...)):
         # 深拷贝原始矩阵以避免修改原始数据
         result_matrix = [row[:] for row in original_matrix]
 
+        above_paragraphs = get_table_above_paragraphs(input_doc, idx)
+
         # 调用 fill_table，传入 result_matrix 和当前的表格对象 table
-        filled_matrix, down_filled_cells = fill_table(result_matrix, table)
+        filled_matrix, down_filled_cells = fill_table(result_matrix, table, above_paragraphs)
 
         # 将填充后的矩阵添加到所有表格的处理结果列表中
         all_tables_result.append(filled_matrix)
@@ -252,8 +304,10 @@ async def process_docx(file: UploadFile = File(...)):
         original_matrix = [[cell.text.strip() for cell in row.cells] for row in table.rows]
         all_tables_original.append(original_matrix)
 
+        above_paragraphs = get_table_above_paragraphs(input_doc, idx)
+
         # 调用 fill_table 并传入当前表格对象
-        result_matrix, down_filled_cells = fill_table(original_matrix, table)
+        result_matrix, down_filled_cells = fill_table(original_matrix, table, above_paragraphs)
         all_tables_result.append(result_matrix)
         all_down_filled_cells.append(down_filled_cells)
 
