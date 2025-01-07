@@ -2,6 +2,10 @@ from typing import Any
 
 import requests
 
+from api import settings
+from api.db import LLMType
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.llm_service import LLMBundle
 from api.settings import SCRIPT_SCHEDULER_PORT
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
@@ -30,14 +34,65 @@ class KnowledgeBaseSearchComponent(BaseComponent):
 
     async def execute(self) -> dict[str, Any]:
         query = self.inputs.get("Query", "")
-        output_list = [{"output": "xxx1"}, {"output": "xxx2"}, {"output": "xxx3"}]
-        # TODO 实现知识库搜索
+        output_list = []
+        kbs = KnowledgebaseService.get_by_ids(self.db, self.kb_ids)
+        if not kbs:
+            output_list.append({"output": "未找到相关知识库"})
+            return {"outputList": output_list}
+
+        embd_nms = list(set([kb.embd_id for kb in kbs]))
+        assert len(embd_nms) == 1, "Knowledge bases use different embedding models."
+
+        embd_mdl = LLMBundle(self.db, self.user, LLMType.EMBEDDING, embd_nms[0])
+
+        rerank_mdl = None
+        if self.rerank_id:
+            rerank_mdl = LLMBundle(kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
+
+        kbinfos = settings.retrievaler.retrieval(query, embd_mdl, kbs[0].tenant_id, self.kb_ids,
+                                                 1, self.top_n,
+                                                 self.similarity_threshold,
+                                                 1 - self.keywords_similarity_weight,
+                                                 aggs=False, rerank_mdl=rerank_mdl)
+
+        if not kbinfos["chunks"]:
+            if self.empty_response and self.empty_response.strip():
+                output_list.append({"output": self.empty_response})
+            return {"outputList": output_list}
+
+        output_list = [{"output": chunk["text"]} for chunk in kbinfos["chunks"]]
 
         return {"outputList": output_list}
 
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict[str, Any]:
-        query = input_value.get("Query", "")
-        output_list = [{"output": "xxx1"}, {"output": "xxx2"}, {"output": "xxx3"}]
-
+        query = self.inputs.get("Query", "")
+        output_list = []
         # TODO 实现知识库搜索
+        kbs = KnowledgebaseService.get_by_ids(self.db, self.kb_ids)
+        if not kbs:
+            output_list.append({"output": "未找到相关知识库"})
+            return {"outputList": output_list}
+
+        embd_nms = list(set([kb.embd_id for kb in kbs]))
+        assert len(embd_nms) == 1, "Knowledge bases use different embedding models."
+
+        embd_mdl = LLMBundle(self.db, self.user, LLMType.EMBEDDING, embd_nms[0])
+
+        rerank_mdl = None
+        if self.rerank_id:
+            rerank_mdl = LLMBundle(kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
+
+        kbinfos = settings.retrievaler.retrieval(query, embd_mdl, kbs[0].tenant_id, self.kb_ids,
+                                                 1, self.top_n,
+                                                 self.similarity_threshold,
+                                                 1 - self.keywords_similarity_weight,
+                                                 aggs=False, rerank_mdl=rerank_mdl)
+
+        if not kbinfos["chunks"]:
+            if self.empty_response and self.empty_response.strip():
+                output_list.append({"output": self.empty_response})
+            return {"outputList": output_list}
+
+        output_list = [{"output": chunk["text"]} for chunk in kbinfos["chunks"]]
+
         return {"outputList": output_list}
