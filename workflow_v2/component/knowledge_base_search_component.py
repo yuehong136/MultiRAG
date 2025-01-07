@@ -60,6 +60,8 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         if not kbinfos["chunks"]:
             if self.empty_response and self.empty_response.strip():
                 output_list.append({"output": self.empty_response})
+            else:
+                output_list.append({"output": "未找到符合结果"})
             return {"outputList": output_list}
 
         output_list = [{"output": chunk["text"]} for chunk in kbinfos["chunks"]]
