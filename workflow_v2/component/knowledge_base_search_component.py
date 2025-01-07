@@ -43,11 +43,11 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         embd_nms = list(set([kb.embd_id for kb in kbs]))
         assert len(embd_nms) == 1, "Knowledge bases use different embedding models."
 
-        embd_mdl = LLMBundle(self.db, self.user, LLMType.EMBEDDING, embd_nms[0])
+        embd_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.EMBEDDING, embd_nms[0])
 
         rerank_mdl = None
         if self.rerank_id:
-            rerank_mdl = LLMBundle(kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
+            rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
 
         kbinfos = settings.retrievaler.retrieval(query, embd_mdl, kbs[0].tenant_id, self.kb_ids,
                                                  1, self.top_n,
@@ -76,11 +76,11 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         embd_nms = list(set([kb.embd_id for kb in kbs]))
         assert len(embd_nms) == 1, "Knowledge bases use different embedding models."
 
-        embd_mdl = LLMBundle(self.db, self.user, LLMType.EMBEDDING, embd_nms[0])
+        embd_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.EMBEDDING, embd_nms[0])
 
         rerank_mdl = None
         if self.rerank_id:
-            rerank_mdl = LLMBundle(kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
+            rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
 
         kbinfos = settings.retrievaler.retrieval(query, embd_mdl, kbs[0].tenant_id, self.kb_ids,
                                                  1, self.top_n,
