@@ -10,7 +10,8 @@ from workflow_v2.workflow_logging_config import WorkflowContextLogger
 class KnowledgeBaseSearchComponent(BaseComponent):
     """知识库搜索组件"""
 
-    def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger):
+    def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger,
+                 **kwargs):
         super().__init__(component_id, title, logger)
         self.kb_ids = node_data['data']['inputs'].get('datasetParam', '').get("kb_ids", [])
         self.similarity_threshold = node_data['data']['inputs'].get('datasetParam', '').get("similarity_threshold", 0.2)
@@ -23,6 +24,9 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         self.empty_response = node_data['data']['inputs'].get('datasetParam', '').get("empty_response",
                                                                                       "未找到相似结果")
         self.timeout = 30
+
+        self.db = kwargs.get('db', None)
+        self.user = kwargs.get('user', None)
 
     async def execute(self) -> dict[str, Any]:
         query = self.inputs.get("Query", "")

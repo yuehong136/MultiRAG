@@ -35,7 +35,9 @@ class ComponentFactory:
         elif node_type == "5" or node_type == 5:
             return CodeComponent(component_id, title, node_data, logger)
         elif node_type == "6" or node_type == 6:
-            return KnowledgeBaseSearchComponent(component_id, title, node_data, logger)
+            return KnowledgeBaseSearchComponent(component_id, title, node_data, logger,
+                                                db=kwargs.get('db', None),
+                                                user=kwargs.get('user', None))
         elif node_type == "8" or node_type == 8:
             return SelectorComponent(component_id, title, node_data, logger)
         elif node_type == "9" or node_type == 9:
