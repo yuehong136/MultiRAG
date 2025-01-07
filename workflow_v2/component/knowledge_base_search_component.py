@@ -48,12 +48,14 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         rerank_mdl = None
         if self.rerank_id:
             rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
-
-        kbinfos = settings.retrievaler.retrieval(query, embd_mdl, kbs[0].tenant_id, self.kb_ids,
-                                                 1, self.top_n,
+        kb_names = list([kb.name for kb in kbs])
+        kbinfos = settings.retrievaler.retrieval(query, embd_mdl, kbs[0].tenant_id, kb_names, 1,
+                                                 self.top_n,
                                                  self.similarity_threshold,
                                                  1 - self.keywords_similarity_weight,
-                                                 aggs=False, rerank_mdl=rerank_mdl)
+                                                 top=1024,
+                                                 aggs=False,
+                                                 rerank_mdl=rerank_mdl)
 
         if not kbinfos["chunks"]:
             if self.empty_response and self.empty_response.strip():
@@ -81,12 +83,14 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         rerank_mdl = None
         if self.rerank_id:
             rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
-
-        kbinfos = settings.retrievaler.retrieval(query, embd_mdl, kbs[0].tenant_id, self.kb_ids,
-                                                 1, self.top_n,
+        kb_names = list([kb.name for kb in kbs])
+        kbinfos = settings.retrievaler.retrieval(query, embd_mdl, kbs[0].tenant_id, kb_names, 1,
+                                                 self.top_n,
                                                  self.similarity_threshold,
                                                  1 - self.keywords_similarity_weight,
-                                                 aggs=False, rerank_mdl=rerank_mdl)
+                                                 top=1024,
+                                                 aggs=False,
+                                                 rerank_mdl=rerank_mdl)
 
         if not kbinfos["chunks"]:
             if self.empty_response and self.empty_response.strip():
