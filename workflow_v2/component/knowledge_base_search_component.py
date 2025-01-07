@@ -49,11 +49,11 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         if self.rerank_id:
             rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
         kb_names = list([kb.name for kb in kbs])
-        kbinfos = settings.retrievaler.retrieval(query, embd_mdl, kbs[0].tenant_id, kb_names, 1,
+        kbinfos = settings.retrievaler.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
                                                  self.top_n,
                                                  self.similarity_threshold,
                                                  1 - self.keywords_similarity_weight,
-                                                 top=1024,
+                                                 top=self.top_k,
                                                  aggs=False,
                                                  rerank_mdl=rerank_mdl)
 
@@ -69,7 +69,6 @@ class KnowledgeBaseSearchComponent(BaseComponent):
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict[str, Any]:
         query = self.inputs.get("Query", "")
         output_list = []
-        # TODO 实现知识库搜索
         kbs = KnowledgebaseService.get_by_ids(self.db, self.kb_ids)
         if not kbs:
             output_list.append({"output": "未找到相关知识库"})
@@ -84,11 +83,11 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         if self.rerank_id:
             rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
         kb_names = list([kb.name for kb in kbs])
-        kbinfos = settings.retrievaler.retrieval(query, embd_mdl, kbs[0].tenant_id, kb_names, 1,
+        kbinfos = settings.retrievaler.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
                                                  self.top_n,
                                                  self.similarity_threshold,
                                                  1 - self.keywords_similarity_weight,
-                                                 top=1024,
+                                                 top=self.top_k,
                                                  aggs=False,
                                                  rerank_mdl=rerank_mdl)
 
