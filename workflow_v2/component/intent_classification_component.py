@@ -25,6 +25,7 @@ class IntentClassificationComponent(BaseComponent):
 
         self.db = kwargs.get('db', None)
         self.user = kwargs.get('user', None)
+        self.prompt: str = self._get_prompt()
 
     def _extract_llm_params(self, node_data: dict[str, Any]) -> LLMParams:
         """从节点数据中提取LLM参数"""
@@ -37,19 +38,74 @@ class IntentClassificationComponent(BaseComponent):
         return [Intent(name=intent['name'], description=intent['desc'], example=intent['example']) for intent
                 in intents_data]
 
+    def _get_prompt(self) -> str:
+        """生成用于意图分类的提示词"""
+        cate_lines = []
+        descriptions = []
+
+        # 遍历 Intent 列表，生成示例和描述
+        for intent in self.intents:
+            # 添加示例
+            for example in intent.example.split("\n"):
+                if example.strip():  # 跳过空行
+                    cate_lines.append(f"Question: {example.strip()}\tCategory: {intent.name}")
+
+            # 添加描述
+            if intent.description.strip():
+                descriptions.append(
+                    f"--------------------\nCategory: {intent.name}\nDescription: {intent.description.strip()}\n"
+                )
+
+        # 构建提示词
+        return f"""
+        You're a text classifier. You need to categorize the user’s questions into {len(self.intents)} categories, 
+        namely: {', '.join(intent.name for intent in self.intents)}.
+        Here's the description of each category:
+        {''.join(descriptions)}
+
+        You could learn from the following examples:
+        {'- '.join(cate_lines)}
+        You could learn from the above examples.
+        Just mention the category names, no need for any additional words.
+        """
+
+    def _match_intent(self, result: str) -> dict | None:
+        """匹配分类结果到意图"""
+        for idx, intent in enumerate(self.intents, start=1):
+            if intent.name.lower() in result.lower():
+                return {"id": idx, "name": intent.name}
+        return None
+
     async def execute(self) -> dict[str, Any]:
         query = self.inputs.get("query", "")
-        # TODO: 大模型根据query结合意图进行分类
-        self.intents[0].name = "产品咨询"
-        self.intents[0].description = "产品咨询"
-        self.intents[0].example = "这个东西好用吗\n这个东西有什么用\n这个东西有什么好处"
+        if not query.strip():
+            return {"classificationId": 0, "reason": "Empty query"}
+        input = "Question: " + query + "\tCategory: "
+        # 调用 LLM 进行意图分类
+        llm = LLMBundle(self.db, self.user.id, LLMType.CHAT, self.llm_params.model_name)
+        result = llm.chat(self.prompt, [{"role": "user", "content": input}], {})
 
-        # classificationId: 0 代表没有对应的intent
-        return {"classificationId": 0, "reason": "xxx"}
+        # 匹配分类结果
+        classification = self._match_intent(result)
+        if classification is None:
+            return {"classificationId": 0, "reason": "No matching intent"}
+
+        return {"classificationId": classification["id"], "reason": classification["name"]}
 
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict:
         query = input_value.get("query", "")
-        # TODO: 大模型根据query结合意图进行分类
+        if not query.strip():
+            return {"classificationId": 0, "reason": "Empty query"}
 
-        # classificationId: 0 代表没有对应的intent
-        return {"classificationId": 1, "reason": "xxx"}
+        # 调用 LLM 进行意图分类
+        input = "Question: " + query + "\tCategory: "
+        # 调用 LLM 进行意图分类
+        llm = LLMBundle(self.db, self.user.id, LLMType.CHAT, self.llm_params.model_name)
+        result = llm.chat(self.prompt, [{"role": "user", "content": input}], {})
+
+        # 匹配分类结果
+        classification = self._match_intent(result)
+        if classification is None:
+            return {"classificationId": 0, "reason": "No matching intent"}
+
+        return {"classificationId": classification["id"], "reason": classification["name"]}
