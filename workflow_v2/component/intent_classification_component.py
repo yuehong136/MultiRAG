@@ -93,6 +93,8 @@ Just mention the category names, no need for any additional words.
         classification = self._match_intent(result)
         if classification is None:
             return {"classificationId": 0, "reason": "No matching intent"}
+        if classification["name"] == "其他意图":
+            return {"classificationId": 0, "reason": "其他意图"}
 
         return {"classificationId": classification["id"], "reason": classification["name"]}
 
@@ -111,5 +113,7 @@ Just mention the category names, no need for any additional words.
         classification = self._match_intent(result)
         if classification is None:
             return {"classificationId": 0, "reason": "No matching intent"}
+        if classification["name"] == "其他意图":
+            return {"classificationId": 0, "reason": "其他意图"}
 
         return {"classificationId": classification["id"], "reason": classification["name"]}
