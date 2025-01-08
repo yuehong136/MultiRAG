@@ -11,7 +11,7 @@ from workflow_v2.workflow_logging_config import WorkflowContextLogger
 class Intent:
     name: str
     description: str
-    examples: str
+    example: str
 
 
 class IntentClassificationComponent(BaseComponent):
@@ -34,7 +34,7 @@ class IntentClassificationComponent(BaseComponent):
     def _extract_intents(self, node_data: dict[str, Any]) -> list[Intent]:
         """从节点数据中提取intents"""
         intents_data = node_data['data']['inputs'].get('intents', [])
-        return [Intent(name=intent['name'], description=intent['desc'], examples=intent['examples']) for intent
+        return [Intent(name=intent['name'], description=intent['desc'], example=intent['example']) for intent
                 in intents_data]
 
     async def execute(self) -> dict[str, Any]:
@@ -42,14 +42,14 @@ class IntentClassificationComponent(BaseComponent):
         # TODO: 大模型根据query结合意图进行分类
         self.intents[0].name = "产品咨询"
         self.intents[0].description = "产品咨询"
-        self.intents[0].examples = "这个东西好用吗\n这个东西有什么用\n这个东西有什么好处"
+        self.intents[0].example = "这个东西好用吗\n这个东西有什么用\n这个东西有什么好处"
 
         # classificationId: 0 代表没有对应的intent
-        return {"output": {"classificationId": 1, "reason": "xxx"}}
+        return {"classificationId": 0, "reason": "xxx"}
 
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict:
         query = input_value.get("query", "")
         # TODO: 大模型根据query结合意图进行分类
 
         # classificationId: 0 代表没有对应的intent
-        return {"output": {"classificationId": 1, "reason": "xxx"}}
+        return {"classificationId": 1, "reason": "xxx"}

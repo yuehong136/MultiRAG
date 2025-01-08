@@ -39,7 +39,8 @@ class WorkflowNode:
 
         # 分支相关属性
         self.branches: Dict[str, Branch] = {}  # port_id -> Branch
-        self.is_selector = node_data['type'] == "8"
+        self.is_selector = (node_data['type'] == "8" or node_data['type'] == 8)
+        self.is_intent_classification = (node_data['type'] == "22" or node_data['type'] == 22)
 
         self.in_execution_path = False
 
@@ -90,16 +91,26 @@ class AsyncWorkflowEngine:
             source = self.nodes[edge['sourceNodeID']]
             target = self.nodes[edge['targetNodeID']]
 
-            if source.is_selector:
-                # 处理选择器节点的分支连接
-                port_id = edge.get('sourcePortID', 'true').lower()  # 默认为 true
+            if source.is_selector or source.is_intent_classification:
+                if source.is_selector:
+                    port_id = edge.get('sourcePortID', 'true').lower()  # 默认为 true
+                else:
+                    port_id = edge.get('sourcePortID', 'branch_0')  # 默认为第一个分支
+
                 source.add_branch_node(target, port_id)
 
-                # 如果这是选择器节点，设置分支的条件配置
-                if port_id != 'false':  # 对于非else分支
+                # 对于选择器节点，设置分支的条件配置
+                if source.is_selector and port_id != 'false':
                     branch_index = 0 if port_id == 'true' else int(port_id.split('_')[1])
                     if branch_index < len(source.data['data']['inputs']['branches']):
                         source.branches[port_id].conditions = source.data['data']['inputs']['branches'][branch_index]
+
+                # 对于意图识别节点，设置分支的意图配置
+                elif source.is_intent_classification and port_id != 'default':
+                    branch_index = int(port_id.split('_')[1])
+                    intents = source.data['data']['inputs'].get('intents', [])
+                    if branch_index < len(intents):
+                        source.branches[port_id].conditions = intents[branch_index]
             else:
                 # 普通节点的连接
                 source.next_nodes.append(target)
@@ -140,8 +151,19 @@ class AsyncWorkflowEngine:
                 self.tasks[node.id] = task
                 await task
 
-                if node.is_selector:
-                    selected_port = node.output.get("selected_port")
+                if node.is_selector or node.is_intent_classification:  # 添加意图识别判断
+                    # 对于选择器，获取选中的端口
+                    if node.is_selector:
+                        selected_port = node.output.get("selected_port")
+                    # 对于意图识别，根据分类ID获取对应的分支
+                    else:
+                        # 从节点输出中获取 classificationId，如果不存在则默认为 0
+                        classification_id = node.output.get("classificationId", 0)
+
+                        # 如果 classification_id = 0，表示默认分支
+                        # 如果 classification_id > 0，则使用 branch_{classification_id-1} 作为分支
+                        selected_port = "default" if classification_id == 0 else f"branch_{classification_id - 1}"
+
                     next_tasks = []
 
                     if selected_port in node.branches:
