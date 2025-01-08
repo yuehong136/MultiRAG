@@ -58,15 +58,19 @@ class IntentClassificationComponent(BaseComponent):
 
         # 构建提示词
         return f"""
-        You're a text classifier. You need to categorize the user’s questions into {len(self.intents)} categories, 
-        namely: {', '.join(intent.name for intent in self.intents)}.
-        Here's the description of each category:
-        {''.join(descriptions)}
+You're a text classifier. You need to categorize the user’s questions into {len(self.intents) + 1} categories, 
+namely: {', '.join(intent.name for intent in self.intents)}, 其他意图.
+Here's the description of each category:
+{''.join(descriptions)}
+--------------------
+Category: 其他意图
+Description: 用户意图与上述意图都不符合
 
-        You could learn from the following examples:
-        {'- '.join(cate_lines)}
-        You could learn from the above examples.
-        Just mention the category names, no need for any additional words.
+You could learn from the following examples:
+{'- '.join(cate_lines)}- Question: 你好，今天星期几  Category: 其他意图
+
+You could learn from the above examples.
+Just mention the category names, no need for any additional words.
         """
 
     def _match_intent(self, result: str) -> dict | None:
