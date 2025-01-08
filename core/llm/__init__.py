@@ -3,6 +3,7 @@ from core.llm.chat_model.models.azure_chat import AzureChat
 from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gemini_chat import GeminiChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
+from core.llm.chat_model.models.grop_chat import GroqChat
 from core.llm.chat_model.models.huggingface_chat import HuggingFaceChat
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
@@ -92,6 +93,7 @@ ChatModel = {
     # "Moonshot": MoonshotChat,
     # "DeepSeek": DeepSeekChat,
     "Anthropic": AnthropicChat,
+    "Groq": GroqChat,
     "VolcEngine": VolcEngineChat,
     # "BaiChuan": BaiChuanChat,
     # "MiniMax": MiniMaxChat,
