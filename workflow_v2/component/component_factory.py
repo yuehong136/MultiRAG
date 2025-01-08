@@ -4,6 +4,7 @@ from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.component.code_component import CodeComponent
 from workflow_v2.component.end_component import EndComponent
 from workflow_v2.component.file_reader_component import FileReaderComponent
+from workflow_v2.component.intent_classification_component import IntentClassificationComponent
 from workflow_v2.component.knowledge_base_search_component import KnowledgeBaseSearchComponent
 from workflow_v2.component.llm_component import LLMComponent
 from workflow_v2.component.plugin_component import PluginComponent
@@ -42,5 +43,9 @@ class ComponentFactory:
             return SelectorComponent(component_id, title, node_data, logger)
         elif node_type == "9" or node_type == 9:
             return FileReaderComponent(component_id, title, node_data, logger)
+        elif node_type == "22" or node_type == 22:
+            return IntentClassificationComponent(component_id, title, node_data, logger,
+                                                 db=kwargs.get('db', None),
+                                                 user=kwargs.get('user', None))
         else:
             raise ValueError(f"Unknown component type: {node_type}")
