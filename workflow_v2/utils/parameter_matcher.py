@@ -60,7 +60,7 @@ class ParameterMatcher:
             except (KeyError, ValueError) as e:
                 raise ValueError(f"Error resolving value for parameter {name}: {str(e)}")
 
-            if not value:
+            if value is None:
                 continue
 
             # # 验证类型和模式
