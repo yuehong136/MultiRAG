@@ -73,7 +73,7 @@ class SelectorComponent(BaseComponent):
     def _evaluate_condition(self, condition: dict) -> bool:
         """评估单个条件"""
         try:
-            operator = OperatorType(condition['operator'])
+            operator = OperatorType(int(condition['operator']))
 
             # 获取左值
             left_value = self._get_value(condition['left']['input'])
