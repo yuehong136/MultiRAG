@@ -8,12 +8,14 @@ class ParameterMatcher:
         self.node_data = node_data
         self.matched_values = {}
 
-    def _get_node_output(self, block_id: str) -> dict:
+    def _get_node_output(self, block_id: str) -> None | dict[Any, Any] | dict[str, Any]:
         """获取指定节点的输出数据"""
         node = self.node_data.get(block_id)
+        if node is None:
+            return None
         if not node:
             raise KeyError(f"Cannot find output for node {block_id}")
-        if not node.output:
+        if node.output is None:
             return {}
         return node.output
 
@@ -27,6 +29,8 @@ class ParameterMatcher:
 
         # 处理嵌套属性路径
         node_output = self._get_node_output(block_id)
+        if node_output is None:
+            return None
         if not node_output:
             return {}
         path_parts = name.split(".")
