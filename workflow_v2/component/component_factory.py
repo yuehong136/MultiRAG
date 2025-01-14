@@ -10,6 +10,7 @@ from workflow_v2.component.llm_component import LLMComponent
 from workflow_v2.component.plugin_component import PluginComponent
 from workflow_v2.component.selector_component import SelectorComponent
 from workflow_v2.component.start_component import StartComponent
+from workflow_v2.component.variable_aggregation_component import VariableAggregationComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 
 
@@ -47,5 +48,7 @@ class ComponentFactory:
             return IntentClassificationComponent(component_id, title, node_data, logger,
                                                  db=kwargs.get('db', None),
                                                  user=kwargs.get('user', None))
+        elif node_type == "32" or node_type == 32:
+            return VariableAggregationComponent(component_id, title, node_data, logger)
         else:
             raise ValueError(f"Unknown component type: {node_type}")
