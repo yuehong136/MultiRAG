@@ -1,5 +1,6 @@
 from core.llm.chat_model.models.anthropic_chat import AnthropicChat
 from core.llm.chat_model.models.azure_chat import AzureChat
+from core.llm.chat_model.models.deepseek_chat import DeepSeekChat
 from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gemini_chat import GeminiChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
@@ -94,6 +95,7 @@ ChatModel = {
     # "DeepSeek": DeepSeekChat,
     "Anthropic": AnthropicChat,
     "Groq": GroqChat,
+    "DeepSeek": DeepSeekChat,
     "VolcEngine": VolcEngineChat,
     # "BaiChuan": BaiChuanChat,
     # "MiniMax": MiniMaxChat,
