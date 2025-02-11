@@ -369,7 +369,7 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
         )
         try:
             m, tc = mdl.chat("", [{"role": "user", "content": "Hello! How are you doing!"}],
-                             {"temperature": 0.9, 'max_tokens': 50})
+                             {"temperature": 0.9, 'max_tokens': 500})
             if m.find("**ERROR**") >= 0:
                 raise Exception(m)
         except Exception as e:

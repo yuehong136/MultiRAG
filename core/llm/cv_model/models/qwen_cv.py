@@ -21,7 +21,15 @@ class QWenCV(Base):
         if not os.path.exists(tmp_dir):
             os.mkdir(tmp_dir)
         path = os.path.join(tmp_dir, "%s.jpg" % get_uuid())
-        Image.open(io.BytesIO(binary)).save(path)
+        # Image.open(io.BytesIO(binary)).save(path)
+
+        img = Image.open(io.BytesIO(binary))
+        # Convert RGBA to RGB before saving as JPEG
+        if img.mode == 'RGBA':
+            img = img.convert('RGB')
+
+        img.save(path)
+
         return [
             {
                 "role": "user",
@@ -39,7 +47,7 @@ class QWenCV(Base):
 
     def chat_prompt(self, text, b64):
         return [
-            {"image": f"{b64}"},
+            {"image": f"data:image/jpeg;base64,{b64}"},
             {"text": text},
         ]
 
@@ -69,7 +77,7 @@ class QWenCV(Base):
         ans = ""
         tk_count = 0
         if response.status_code == HTTPStatus.OK:
-            ans += response.output.choices[0]['message']['content']
+            ans += response.output.choices[0]['message']['content'][0]["text"]
             tk_count += response.usage.total_tokens
             if response.output.choices[0].get("finish_reason", "") == "length":
                 ans += "...\nFor the content length reason, it stopped, continue?" if is_english(
