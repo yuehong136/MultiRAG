@@ -8,6 +8,7 @@ from core.llm.chat_model.models.grop_chat import GroqChat
 from core.llm.chat_model.models.huggingface_chat import HuggingFaceChat
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
+from core.llm.chat_model.models.openrouter_chat import OpenRouterChat
 from core.llm.chat_model.models.qwen_chat import QWenChat
 from core.llm.chat_model.models.spark_chat import SparkChat
 from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
@@ -97,6 +98,7 @@ ChatModel = {
     "Groq": GroqChat,
     "DeepSeek": DeepSeekChat,
     "VolcEngine": VolcEngineChat,
+    "OpenRouter": OpenRouterChat,
     # "BaiChuan": BaiChuanChat,
     # "MiniMax": MiniMaxChat,
     # "Mistral": MistralChat,
