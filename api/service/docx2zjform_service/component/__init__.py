@@ -1,7 +1,7 @@
 from .base import Component
-from .factory import ComponentFactory
 from .input import InputComponent
-from .table import TableComponent
 from .description import DescriptionComponent
+from .subform import SubFormComponent
+from .factory import ComponentFactory
 
-__all__ = ['Component', 'ComponentFactory', 'InputComponent', 'TableComponent', 'DescriptionComponent']
+__all__ = ['Component', 'ComponentFactory', 'InputComponent', 'DescriptionComponent', 'SubFormComponent']

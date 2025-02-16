@@ -1,19 +1,11 @@
-import json
-from typing import Dict, Any
-
 from .base import Component
 from ..constants import ComponentType
 
 
 class InputComponent(Component):
     """描述文本组件"""
-
-    def __init__(self):
-        super().__init__(ComponentType.INPUT)
-
-    def _get_original_json(self) -> Dict[str, Any]:
-        json_str = """
-        {
+    _json_str = """
+    {
   "val": "单行文本",
   "component": "input",
   "added": true,
@@ -56,9 +48,10 @@ class InputComponent(Component):
     "checkRule": ""
   }
 }
-        """
-        data = json.loads(json_str)
-        return data
+    """
+
+    def __init__(self):
+        super().__init__(ComponentType.INPUT)
 
     def set_title(self, content: str):
-        self.json_data["title"] = content
+        self.json_data["edit"]["title"] = content

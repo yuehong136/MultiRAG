@@ -21,7 +21,7 @@ from alembic.config import Config
 
 class User(BaseModel):
     __tablename__ = "t_ai_users"
-    __table_args__ = {"schema": "usr_ai"}  
+    __table_args__ = {"schema": "test_dve"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     access_token = Column(String(255), index=True, nullable=True)
@@ -53,7 +53,7 @@ class User(BaseModel):
 
 class Tenant(BaseModel):
     __tablename__ = "t_ai_tenants"
-    __table_args__ = {"schema": "usr_ai"}  
+    __table_args__ = {"schema": "test_dve"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     name = Column(String(100), index=True, nullable=True, doc="Tenant name")
@@ -80,9 +80,10 @@ class Tenant(BaseModel):
             "parser_ids": self.parser_ids
         }
 
+
 class UserTenant(BaseModel):
     __tablename__ = "t_ai_user_tenants"
-    __table_args__ = {"schema": "usr_ai"}  
+    __table_args__ = {"schema": "test_dve"}
 
     id = Column(String(128), primary_key=True, index=False, nullable=False)
     user_id = Column(String(128), index=True, nullable=False)
@@ -112,7 +113,7 @@ class UserTenant(BaseModel):
 
 class LLMFactories(BaseModel):
     __tablename__ = "t_ai_llm_factories"
-    __table_args__ = {"schema": "usr_ai"}  
+    __table_args__ = {"schema": "test_dve"}
 
     name = Column(String(128), primary_key=True, index=False, nullable=False, doc="LLM factory name")
     logo = Column(Text, index=False, nullable=True)
@@ -122,7 +123,7 @@ class LLMFactories(BaseModel):
 
 class LLM(BaseModel):
     __tablename__ = "t_ai_llms"
-    __table_args__ = {"schema": "usr_ai"}
+    __table_args__ = {"schema": "test_dve"}
 
     llm_name = Column(String(128), primary_key=True, index=True, nullable=False)
     mdl_type = Column(String(128), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, ASR")
@@ -134,7 +135,7 @@ class LLM(BaseModel):
 
 class TenantLLM(BaseModel):
     __tablename__ = "t_ai_tenant_llms"
-    __table_args__ = {"schema": "usr_ai"}  
+    __table_args__ = {"schema": "test_dve"}
 
     tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
     llm_factory = Column(String(128), primary_key=True, index=True, nullable=False, doc="LLM factory name")
@@ -146,10 +147,8 @@ class TenantLLM(BaseModel):
 
 
 class Knowledgebase(BaseModel):
-
     __tablename__ = "t_ai_knowledgebases"
-    __table_args__ = {"schema": "usr_ai"}  
-
+    __table_args__ = {"schema": "test_dve"}
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
     tenant_id = Column(String(32), index=True, nullable=False)
@@ -164,24 +163,22 @@ class Knowledgebase(BaseModel):
     chunk_num = Column(Integer, index=True, nullable=False, default=0)
     similarity_threshold = Column(Float, index=True, nullable=False, default=0.2)
     vector_similarity_weight = Column(Float, index=True, nullable=False, default=0.3)
-    parser_id = Column(String(32), index=True, nullable=False,doc="default parser ID")
+    parser_id = Column(String(32), index=True, nullable=False, doc="default parser ID")
     parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]]})
     # pagerank = Column(Integer, index=False, nullable=False, default=0)
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
-
 class Document(BaseModel):
-
     __tablename__ = "t_ai_documents"
-    __table_args__ = {"schema": "usr_ai"}  
-
+    __table_args__ = {"schema": "test_dve"}
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     thumbnail = Column(Text, index=False, nullable=True, doc="thumbnail base64 string")
     kb_id = Column(String(256), index=True, nullable=False)
     parser_id = Column(String(32), index=True, nullable=False, doc="default parser ID")
     parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]]})
-    source_type = Column(String(128), index=True, nullable=False, default="local", doc="where dose this document come from")
+    source_type = Column(String(128), index=True, nullable=False, default="local",
+                         doc="where dose this document come from")
     type = Column(String(32), index=True, nullable=False, doc="file extension")
     created_by = Column(String, index=True, nullable=False, doc="who created it")
     name = Column(String(255), index=True, nullable=True, doc="file name")
@@ -194,15 +191,14 @@ class Document(BaseModel):
     progress_msg = Column(Text, index=False, nullable=True, default="", doc="process message")
     process_begin_at = Column(DateTime, index=True, nullable=True)
     process_duration = Column(Float, index=False, nullable=False, default=0)
-    run = Column(String(1), index=True, nullable=True, default="0", doc="start to run processing or cancel.(1: run it; 2: cancel)")
+    run = Column(String(1), index=True, nullable=True, default="0",
+                 doc="start to run processing or cancel.(1: run it; 2: cancel)")
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
-
 
 
 class File(BaseModel):
     __tablename__ = "t_ai_files"
-    __table_args__ = {"schema": "usr_ai"}  
-
+    __table_args__ = {"schema": "test_dve"}
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     parent_id = Column(String(32), index=True, nullable=False, doc="parent folder id")
     tenant_id = Column(String(32), index=True, nullable=False, doc="tenant id")
@@ -229,8 +225,7 @@ class File(BaseModel):
 
 class File2Document(BaseModel):
     __tablename__ = "t_ai_file2documents"
-    __table_args__ = {"schema": "usr_ai"}  
-
+    __table_args__ = {"schema": "test_dve"}
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     file_id = Column(String(32), index=True, nullable=True, doc="file id")
     document_id = Column(String(32), index=True, nullable=True, doc="document id")
@@ -238,8 +233,7 @@ class File2Document(BaseModel):
 
 class Task(BaseModel):
     __tablename__ = "t_ai_tasks"
-    __table_args__ = {"schema": "usr_ai"}  
-
+    __table_args__ = {"schema": "test_dve"}
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     doc_id = Column(String(32), index=True, nullable=False)
     from_page = Column(Integer, index=False, nullable=False, default=0)
@@ -254,7 +248,7 @@ class Task(BaseModel):
 
 class Dialog(BaseModel):
     __tablename__ = "t_ai_dialogs"
-    __table_args__ = {"schema": "usr_ai"}  
+    __table_args__ = {"schema": "test_dve"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     tenant_id = Column(String(32), index=True, nullable=False)
@@ -269,12 +263,14 @@ class Dialog(BaseModel):
     prompt_type = Column(String(16), index=True, nullable=False, default="simple", doc="simple|advanced")
     prompt_config = Column(JSONB, index=False, nullable=False,
                            default={"system": "", "prologue": "Hi! I'm your assistant, what can I do for you?",
-                                    "parameters": [], "empty_response": "Sorry! No relevant content was found in the knowledge base!"})
+                                    "parameters": [],
+                                    "empty_response": "Sorry! No relevant content was found in the knowledge base!"})
     similarity_threshold = Column(Float, index=False, nullable=False, default=0.2)
     vector_similarity_weight = Column(Float, index=False, nullable=False, default=0.3)
     top_n = Column(Integer, index=False, nullable=False, default=6)
     top_k = Column(Integer, index=False, nullable=False, default=1024)
-    do_refer = Column(String(1), index=False, nullable=False, default="1", doc="it needs to insert reference index into answer or not")
+    do_refer = Column(String(1), index=False, nullable=False, default="1",
+                      doc="it needs to insert reference index into answer or not")
     rerank_id = Column(String(128), index=False, nullable=True, doc="default rerank model ID")
     kb_ids = Column(JSONB, index=False, nullable=False, default=[])
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
@@ -282,7 +278,7 @@ class Dialog(BaseModel):
 
 class Conversation(BaseModel):
     __tablename__ = "t_ai_conversations"
-    __table_args__ = {"schema": "usr_ai"}  
+    __table_args__ = {"schema": "test_dve"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     dialog_id = Column(String(32), index=True, nullable=False)
@@ -293,7 +289,7 @@ class Conversation(BaseModel):
 
 class APIToken(BaseModel):
     __tablename__ = "t_ai_api_tokens"
-    __table_args__ = {"schema": "usr_ai"}  
+    __table_args__ = {"schema": "test_dve"}
 
     tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
     token = Column(String(255), primary_key=True, index=True, nullable=False)
@@ -303,7 +299,7 @@ class APIToken(BaseModel):
 
 class API4Conversation(BaseModel):
     __tablename__ = "t_ai_api4conversations"
-    __table_args__ = {"schema": "usr_ai"}
+    __table_args__ = {"schema": "test_dve"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     dialog_id = Column(String(32), index=True, nullable=False)
@@ -319,7 +315,7 @@ class API4Conversation(BaseModel):
 
 class UserCanvas(BaseModel):
     __tablename__ = "t_ai_user_canvases"
-    __table_args__ = {"schema": "usr_ai"}
+    __table_args__ = {"schema": "test_dve"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
@@ -332,7 +328,7 @@ class UserCanvas(BaseModel):
 
 class CanvasTemplate(BaseModel):
     __tablename__ = "t_ai_canvas_templates"
-    __table_args__ = {"schema": "usr_ai"}
+    __table_args__ = {"schema": "test_dve"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
@@ -341,12 +337,13 @@ class CanvasTemplate(BaseModel):
     canvas_type = Column(String(32), index=True, nullable=True, doc="Canvas type")
     dsl = Column(JSONB, index=False, nullable=True, default={})
 
+
 '''
 拥有权限，采用这种方式
 '''
 # def init_database_tables():
 #     # 需要创建的 schema 名称
-#     schema_name = 'usr_ai'
+#     schema_name = 'test_dve'
 #
 #     # # 检查并创建 schema
 #     # with engine.connect() as connection:
@@ -426,9 +423,11 @@ class CanvasTemplate(BaseModel):
 '''
 没有权限，采用这种方式
 '''
+
+
 def init_database_tables():
     # 需要检查的 schema 名称
-    schema_name = 'usr_ai'
+    schema_name = 'test_dve'
 
     # 检查 schema 是否存在
     schema_exists = False

@@ -1,9 +1,13 @@
-from typing import List, Dict
+from typing import List
 from .base import ElementAnalyzer
-from ..component.factory import ComponentFactory
-from ..constants import ComponentType
+from .table_analyzer_util import detect_multiple_tables, MultiTableWithNameExtractor, \
+    identify_single_table_or_inputs_pattern
+from ..component import ComponentFactory, DescriptionComponent, InputComponent
 from ..component.base import Component
-from ..element import Element, ElementType
+from ..component.subform import SubFormComponent
+from ..constants import ComponentType
+from ..element import Element, ElementType, TableElement
+import logging
 
 
 class TableElementAnalyzer(ElementAnalyzer):
@@ -12,32 +16,50 @@ class TableElementAnalyzer(ElementAnalyzer):
     def can_handle(self, element: Element) -> bool:
         return element.type == ElementType.TABLE
 
-    def analyze(self, element: Element) -> List[Component]:
+    def analyze(self, element: TableElement) -> List[Component]:
+        logging.info(f"处理表格元素：{element.content}")
         components = []
 
-        table_content = element["content"]
-        if not table_content:
-            return components
+        # 检测HTML表格中是否存在多个表格
+        if detect_multiple_tables(element.html):
+            # 抽取多表信息
+            extractor = MultiTableWithNameExtractor(element.html)
+            tables = extractor.extract_tables()
+            for table in tables:
+                table_name = table['table_name']
+                # 表名作为描述组件
+                component: DescriptionComponent = ComponentFactory.create(ComponentType.DESCRIPTION)
+                component.set_content(table_name)
+                components.append(component)
 
-        table_sections = self._split_table(table_content)
-
-        for section in table_sections:
-            table = ComponentFactory.create(ComponentType.TABLE)
-            table.set_name(f"table_{len(components)}")
-            table.set_columns(self._extract_columns(section))
-            table.set_data(self._extract_data(section))
-            components.append(table)
+                # 创建子表单组件
+                subform_component: SubFormComponent = ComponentFactory.create(ComponentType.SUBFORM)
+                fields = table['fields']
+                for field in fields:
+                    # 创建输入组件
+                    input_component: InputComponent = ComponentFactory.create(ComponentType.INPUT)
+                    input_component.set_title(field)
+                    subform_component.add_input_component(input_component)
+                components.append(subform_component)
+        else:
+            # 判断是多输入还是单表
+            result = identify_single_table_or_inputs_pattern(element.html)
+            fields = result['fields']
+            if result['pattern'] == 'table':
+                # 创建子表单组件
+                subform_component: SubFormComponent = ComponentFactory.create(ComponentType.SUBFORM)
+                for field in fields:
+                    # 创建输入组件
+                    input_component: InputComponent = ComponentFactory.create(ComponentType.INPUT)
+                    input_component.set_title(field)
+                    subform_component.add_input_component(input_component=input_component)
+                components.append(subform_component)
+            elif result['pattern'] == 'inputs':
+                # 输入组件
+                for field in fields:
+                    # 创建输入组件
+                    input_component: InputComponent = ComponentFactory.create(ComponentType.INPUT)
+                    input_component.set_title(field)
+                    components.append(input_component)
 
         return components
-
-    def _split_table(self, table_content: List[List[str]]) -> List[List[List[str]]]:
-        # 实现表格拆分逻辑
-        return [table_content]
-
-    def _extract_columns(self, section: List[List[str]]) -> List[Dict]:
-        # 提取表格列信息
-        return []
-
-    def _extract_data(self, section: List[List[str]]) -> List[Dict]:
-        # 提取表格数据
-        return []

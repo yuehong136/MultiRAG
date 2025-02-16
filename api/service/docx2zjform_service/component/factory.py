@@ -1,8 +1,8 @@
 from typing import Type, Dict, overload
 from .base import Component
 from .input import InputComponent
+from .subform import SubFormComponent
 from ..constants import ComponentType
-from .table import TableComponent
 from .description import DescriptionComponent
 
 
@@ -10,8 +10,8 @@ class ComponentFactory:
     """组件工厂，负责创建各种类型的组件"""
     _component_types: Dict[ComponentType, Type[Component]] = {
         ComponentType.INPUT: InputComponent,
-        ComponentType.TABLE: TableComponent,
-        ComponentType.DESCRIPTION: DescriptionComponent
+        ComponentType.DESCRIPTION: DescriptionComponent,
+        ComponentType.SUBFORM: SubFormComponent
     }
 
     @classmethod

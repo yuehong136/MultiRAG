@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Dict, List
+
+from api.service.docx2zjform_service.component import Component
 
 
 class ElementType(Enum):
@@ -21,6 +23,7 @@ class Element(ABC):
 
     def __init__(self, element_type: ElementType):
         self.type = element_type
+        self.form_components: List[Component] = []
 
     @abstractmethod
     def to_dict(self) -> Dict[str, Any]:
