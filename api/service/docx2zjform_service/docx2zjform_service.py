@@ -1,7 +1,7 @@
 from docx.document import Document as DocumentType
 from api.service.docx2zjform_service.document_processor import DocumentProcessor
 from api.service.docx2zjform_service.element import DocumentParser
-from api.service.docx2zjform_service.component import Component  # 确保导入 Component 类
+from api.service.docx2zjform_service.component import Component
 
 
 class Docx2ZJFormService:

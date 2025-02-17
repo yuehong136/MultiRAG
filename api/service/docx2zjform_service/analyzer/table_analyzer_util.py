@@ -1,7 +1,7 @@
 import re
 
 from bs4 import BeautifulSoup
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
 def detect_multiple_tables(html_content: str) -> bool:
@@ -109,6 +109,185 @@ def identify_single_table_or_inputs_pattern(html_content):
         result['fields'] = fields
 
     return result
+
+
+def is_single_table(html_content):
+    """
+    检查HTML表格是否符合特定特征：
+    1. 第一行所有td单元格都有内容
+    2. 其他行的td单元格都为空
+
+    Parameters:
+    html_content (str): 包含表格的HTML字符串
+
+    Returns:
+    bool: 如果表格符合特征返回True，否则返回False
+    """
+    try:
+        # 解析HTML
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # 找到表格
+        table = soup.find('table')
+        if not table:
+            return False
+
+        # 获取所有行
+        rows = table.find_all('tr')
+        if not rows:
+            return False
+
+        # 检查第一行：所有td都应该有内容
+        first_row = rows[0]
+        first_row_cells = first_row.find_all('td')
+        if not first_row_cells:
+            return False
+
+        # 检查第一行的所有单元格是否都有内容
+        if any(not cell.get_text().strip() for cell in first_row_cells):
+            return False
+
+        # 检查其他行：所有td都应该为空
+        for row in rows[1:]:
+            cells = row.find_all('td')
+            if not cells:
+                continue
+
+            # 如果任何单元格含有非空内容，返回False
+            if any(cell.get_text().strip() for cell in cells):
+                return False
+
+        return True
+
+    except Exception as e:
+        print(f"解析出错: {str(e)}")
+        return False
+
+
+def is_inputs_table(html_content):
+    """
+    检查HTML表格是否为表单类型（包含待填写项）
+
+    参数:
+    html_content (str): HTML表格内容
+
+    返回:
+    bool: 如果是表单类型表格返回True，否则返回False
+    """
+    try:
+        # 解析HTML
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # 获取所有表格行
+        rows = soup.find_all('tr')
+
+        # 检查是否至少有一行符合特征
+        for row in rows:
+            # 获取行内所有单元格
+            cells = row.find_all('td')
+
+            # 跳过空行
+            if not cells:
+                continue
+
+            # 遍历单元格，检查是否存在"有内容td后接空td"的模式
+            for i in range(len(cells) - 1):
+                current_cell = cells[i]
+                next_cell = cells[i + 1]
+
+                # 检查当前单元格是否有内容（排除空白字符）
+                current_content = re.sub(r'\s+', '', current_cell.get_text())
+                if current_content:
+                    # 检查下一个单元格是否为空（排除空白字符）
+                    next_content = re.sub(r'\s+', '', next_cell.get_text())
+                    if not next_content:
+                        return True
+
+        return False
+
+    except Exception as e:
+        print(f"解析出错: {str(e)}")
+        return False
+
+
+def extract_form_inputs_table(html_content: str) -> List[str]:
+    """
+    提取表格中的所有待填项标签名称
+
+    参数:
+    html_content (str): HTML表格内容
+
+    返回:
+    List[str]: 待填项标签名称列表
+    """
+    try:
+        # 解析HTML
+        soup = BeautifulSoup(html_content, 'html.parser')
+        form_fields = []
+
+        # 获取所有表格行
+        rows = soup.find_all('tr')
+
+        for row in rows:
+            cells = row.find_all('td')
+            current_label = None
+
+            for cell in cells:
+                content = cell.get_text().strip()
+
+                # 如果单元格有内容，可能是标签名
+                if content:
+                    current_label = content
+                    continue
+
+                # 如果是空单元格且有前导标签，说明是待填项
+                if not content and current_label:
+                    # 检查该标签是否已经添加（处理合并单元格的情况）
+                    if current_label not in form_fields:
+                        form_fields.append(current_label)
+
+        return form_fields
+
+    except Exception as e:
+        print(f"解析出错: {str(e)}")
+        return []
+
+
+def extract_table_headers(html_content: str) -> Optional[List[str]]:
+    """
+    从HTML表格中提取第一行的字段值
+
+    Parameters:
+    html_content (str): 包含表格的HTML字符串
+
+    Returns:
+    Optional[List[str]]: 包含表格字段的列表，如果解析失败则返回None
+    """
+    try:
+        # 解析HTML
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # 找到表格
+        table = soup.find('table')
+        if not table:
+            return None
+
+        # 获取第一行
+        first_row = table.find('tr')
+        if not first_row:
+            return None
+
+        # 提取所有单元格的文本
+        headers = [cell.get_text().strip() for cell in first_row.find_all('td')]
+
+        # 确保所有单元格都有内容
+        if all(headers) and len(headers) > 0:
+            return headers
+        return None
+
+    except Exception as e:
+        print(f"解析出错: {str(e)}")
+        return None
 
 
 class MultiTableWithNameExtractor:

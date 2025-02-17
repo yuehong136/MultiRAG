@@ -1,7 +1,7 @@
 from typing import List
 from .base import ElementAnalyzer
-from .table_analyzer_util import detect_multiple_tables, MultiTableWithNameExtractor, \
-    identify_single_table_or_inputs_pattern
+from .table_analyzer_util import detect_multiple_tables, MultiTableWithNameExtractor, is_single_table, \
+    extract_table_headers, is_inputs_table, extract_form_inputs_table
 from ..component import ComponentFactory, DescriptionComponent, InputComponent
 from ..component.base import Component
 from ..component.subform import SubFormComponent
@@ -43,23 +43,18 @@ class TableElementAnalyzer(ElementAnalyzer):
                 components.append(subform_component)
         else:
             # 判断是多输入还是单表
-            result = identify_single_table_or_inputs_pattern(element.html)
-            fields = result['fields']
-            if result['pattern'] == 'table':
-                # 创建子表单组件
+            if is_single_table(element.html):
+                fields = extract_table_headers(element.html)
                 subform_component: SubFormComponent = ComponentFactory.create(ComponentType.SUBFORM)
                 for field in fields:
-                    # 创建输入组件
                     input_component: InputComponent = ComponentFactory.create(ComponentType.INPUT)
                     input_component.set_title(field)
                     subform_component.add_input_component(input_component=input_component)
                 components.append(subform_component)
-            elif result['pattern'] == 'inputs':
-                # 输入组件
+            elif is_inputs_table(element.html):
+                fields = extract_form_inputs_table(element.html)
                 for field in fields:
-                    # 创建输入组件
                     input_component: InputComponent = ComponentFactory.create(ComponentType.INPUT)
                     input_component.set_title(field)
                     components.append(input_component)
-
         return components
