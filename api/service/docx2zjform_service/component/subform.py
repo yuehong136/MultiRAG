@@ -12,7 +12,7 @@ class SubFormComponent(Component):
   "component": "subForm",
   "added": true,
   "value": "",
-  "id": "SUBFORM_M74GXARQ",
+  "id": "SUBFORM_M78O24VN",
   "edit": {
     "autoFillSwicth": false,
     "autoFill": "",
@@ -46,34 +46,34 @@ class SubFormComponent(Component):
     "isDelete": false,
     "columns": [
       {
-        "dataIndex": "option1",
-        "key": 1,
+        "title": "单行文本A",
         "index": 1,
-        "title": "单行文本1",
+        "key": 1,
         "requiredCol": false,
         "requiredType": "sign",
+        "dataIndex": "option1",
         "width": 200
       },
       {
         "dataIndex": "option2",
         "key": 2,
         "index": 2,
-        "title": "单行文本2",
+        "title": "单行文本B",
         "requiredCol": false,
         "requiredType": "sign"
       }
     ],
     "dataSource": [
       {
-        "index": "50cu1kqu5qw00000000",
-        "wid": "tmp50cu1kqu5qw00000000",
-        "key": "50cu1kqu5qw00000000",
+        "index": "9nsfjciq6sw00000000",
+        "wid": "tmp9nsfjciq6sw00000000",
+        "key": "9nsfjciq6sw00000000",
         "option1": {
-          "val": "单行文本",
+          "val": "单行文本A",
           "component": "input",
           "added": true,
           "value": "",
-          "id": "INPUT_M74GXART",
+          "id": "INPUT_M78O24VO",
           "edit": {
             "autoFillSwicth": false,
             "autoFill": "",
@@ -87,7 +87,7 @@ class SubFormComponent(Component):
             "isOptions": true,
             "isExceed": false,
             "exceedInfo": "该选项超出最多勾选数量",
-            "title": "单行文本",
+            "title": "单行文本A",
             "groupId": "",
             "associateForm": "",
             "associateField": "",
@@ -112,11 +112,11 @@ class SubFormComponent(Component):
           }
         },
         "option2": {
-          "val": "单行文本",
+          "val": "单行文本B",
           "component": "input",
           "added": true,
           "value": "",
-          "id": "INPUT_M74GXARV",
+          "id": "INPUT_M78O24VS",
           "edit": {
             "autoFillSwicth": false,
             "autoFill": "",
@@ -130,7 +130,7 @@ class SubFormComponent(Component):
             "isOptions": true,
             "isExceed": false,
             "exceedInfo": "该选项超出最多勾选数量",
-            "title": "单行文本",
+            "title": "单行文本B",
             "groupId": "",
             "associateForm": "",
             "associateField": "",
@@ -156,16 +156,26 @@ class SubFormComponent(Component):
         }
       }
     ],
+    "displayStyle": {
+      "pc": {
+        "isFreeze": false,
+        "location": "before",
+        "column": 1
+      },
+      "mobile": {
+        "tilingSystem": "lengthways"
+      }
+    },
     "dataTemplate": {
-      "index": "50cu1kqu5qw00000000",
-      "wid": "tmp50cu1kqu5qw00000000",
-      "key": "50cu1kqu5qw00000000",
+      "index": "9nsfjciq6sw00000000",
+      "wid": "tmp9nsfjciq6sw00000000",
+      "key": "9nsfjciq6sw00000000",
       "option1": {
-        "val": "单行文本",
+        "val": "单行文本A",
         "component": "input",
         "added": true,
         "value": "",
-        "id": "INPUT_M74GXART",
+        "id": "INPUT_M78O24VO",
         "edit": {
           "autoFillSwicth": false,
           "autoFill": "",
@@ -179,7 +189,7 @@ class SubFormComponent(Component):
           "isOptions": true,
           "isExceed": false,
           "exceedInfo": "该选项超出最多勾选数量",
-          "title": "单行文本",
+          "title": "单行文本A",
           "groupId": "",
           "associateForm": "",
           "associateField": "",
@@ -204,11 +214,11 @@ class SubFormComponent(Component):
         }
       },
       "option2": {
-        "val": "单行文本",
+        "val": "单行文本B",
         "component": "input",
         "added": true,
         "value": "",
-        "id": "INPUT_M74GXARV",
+        "id": "INPUT_M78O24VS",
         "edit": {
           "autoFillSwicth": false,
           "autoFill": "",
@@ -222,7 +232,7 @@ class SubFormComponent(Component):
           "isOptions": true,
           "isExceed": false,
           "exceedInfo": "该选项超出最多勾选数量",
-          "title": "单行文本",
+          "title": "单行文本B",
           "groupId": "",
           "associateForm": "",
           "associateField": "",
