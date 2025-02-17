@@ -1,7 +1,7 @@
 from typing import List
 
 from core import logger
-from .analyzer import ElementAnalyzer, TableElementAnalyzer, ParagraphElementAnalyzer
+from .analyzer import ElementAnalyzer, TableElementAnalyzer, ParagraphElementAnalyzer, AnalysisContext
 from .component.base import Component
 from .element import Element
 import logging
@@ -19,15 +19,21 @@ class DocumentProcessor:
     def process(self, elements: List[Element]) -> List[Component]:
         """处理文档元素并返回表单组件"""
         logging.info(f"处理文档元素并返回表单组件")
-        components = []
+
+        # 创建分析上下文
+        context = AnalysisContext(elements)
 
         for i, element in enumerate(elements):
             logger.info(f"处理文档元素：{i + 1}/{len(elements)}")
+            context.set_current_element_index(i)
             analyzer = self._find_analyzer(element)
             if analyzer:
-                element_components = analyzer.analyze(element)
+                element_components = analyzer.analyze(element, context)
                 element.form_components = element_components
-                components.extend(element_components)
+
+        components = []
+        for element in elements:
+            components.extend(element.form_components)
 
         return components
 

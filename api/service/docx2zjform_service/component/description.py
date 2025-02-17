@@ -34,3 +34,7 @@ class DescriptionComponent(Component):
     def set_content(self, content: str):
         """设置描述内容"""
         self.json_data["edit"]["editorState"] = content
+
+    def get_content(self) -> str:
+        """获取描述内容"""
+        return self.json_data["edit"]["editorState"]

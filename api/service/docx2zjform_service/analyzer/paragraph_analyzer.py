@@ -1,5 +1,7 @@
 import logging
-from typing import List, Dict
+from typing import List
+
+from .analysis_context import AnalysisContext
 from .base import ElementAnalyzer
 from ..component import InputComponent, DescriptionComponent
 from ..component.factory import ComponentFactory
@@ -14,7 +16,7 @@ class ParagraphElementAnalyzer(ElementAnalyzer):
     def can_handle(self, element: Element) -> bool:
         return element.type == ElementType.PARAGRAPH
 
-    def analyze(self, element: ParagraphElement) -> List[Component]:
+    def analyze(self, element: ParagraphElement, context: AnalysisContext) -> List[Component]:
         logging.info(f"处理段落元素：{element.content}")
         components = []
 

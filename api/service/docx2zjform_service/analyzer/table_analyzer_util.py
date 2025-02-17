@@ -210,6 +210,25 @@ def is_inputs_table(html_content):
         return False
 
 
+def is_empty_single_cell_table(html):
+    # 移除所有引号和转义字符，规范化HTML
+    html = html.strip().strip("'\"").replace('\\n', '').replace('\\t', '')
+    print("Cleaned HTML:", repr(html))
+
+    # 使用更简单的模式来匹配td内容
+    td_pattern = r'<td[^>]*>(.*?)</td>'
+    td_match = re.search(td_pattern, html, re.DOTALL)
+
+    if td_match:
+        content = td_match.group(1)
+        # 移除所有<br/>标签和空白字符
+        content_clean = re.sub(r'<br\s*/?\s*>', '', content)
+        content_clean = re.sub(r'\s', '', content_clean)
+        return content_clean == ''
+
+    return False
+
+
 def extract_form_inputs_table(html_content: str) -> List[str]:
     """
     提取表格中的所有待填项标签名称

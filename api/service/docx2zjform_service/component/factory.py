@@ -2,6 +2,7 @@ from typing import Type, Dict, overload
 from .base import Component
 from .input import InputComponent
 from .subform import SubFormComponent
+from .textarea import TextareaComponent
 from ..constants import ComponentType
 from .description import DescriptionComponent
 
@@ -11,7 +12,8 @@ class ComponentFactory:
     _component_types: Dict[ComponentType, Type[Component]] = {
         ComponentType.INPUT: InputComponent,
         ComponentType.DESCRIPTION: DescriptionComponent,
-        ComponentType.SUBFORM: SubFormComponent
+        ComponentType.SUBFORM: SubFormComponent,
+        ComponentType.TEXTAREA: TextareaComponent
     }
 
     @classmethod
