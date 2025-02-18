@@ -4,9 +4,9 @@ from bs4 import BeautifulSoup
 from typing import List, Dict, Optional
 
 
-def detect_multiple_tables(html_content: str) -> bool:
+def is_multiple_tables_with_name(html_content: str) -> bool:
     """
-    检测HTML表格中是否存在多个表格
+    是否为含有名称的多表格
 
     Args:
         html_content: HTML表格内容字符串
@@ -50,68 +50,7 @@ def detect_multiple_tables(html_content: str) -> bool:
     return has_multiple_tables
 
 
-def identify_single_table_or_inputs_pattern(html_content):
-    # 清理HTML中的空白字符，便于处理
-    html_content = re.sub(r'\s+', ' ', html_content).strip()
-
-    result = {
-        'pattern': None,
-        'fields': []
-    }
-
-    # 检查是否是表格
-    table_pattern = r'<table[^>]*>.*?</table>'
-    if not re.search(table_pattern, html_content, re.DOTALL):
-        return result
-
-    # 提取所有行
-    rows = re.findall(r'<tr>(.*?)</tr>', html_content, re.DOTALL)
-    if not rows:
-        return result
-
-    # 检查是否是第一种模式（普通表格模式）
-    first_row = rows[0]
-    header_fields = re.findall(r'<td>(.*?)</td>', first_row)
-
-    # 检查其他行是否都是空td
-    other_rows_empty = True
-    for row in rows[1:]:
-        td_contents = re.findall(r'<td>(.*?)</td>', row)
-        if any(content.strip() for content in td_contents):
-            other_rows_empty = False
-            break
-
-    # 如果满足第一种模式特征
-    if header_fields and other_rows_empty:
-        result['pattern'] = 'table'
-        result['fields'] = header_fields
-        return result
-
-    # 检查是否是第二种模式（输入字段模式）
-    fields = []
-    for row in rows:
-        # 提取这一行中的所有单元格内容
-        td_contents = re.findall(r'<td>(.*?)</td>', row)
-
-        # 处理这一行的字段
-        i = 0
-        while i < len(td_contents):
-            content = td_contents[i].strip()
-            if content:  # 如果不是空单元格
-                fields.append(content)
-            i += 1
-
-    # 检查是否符合输入字段模式的特征
-    # 1. 有非空字段
-    # 2. 字段间通常有空单元格
-    if fields:
-        result['pattern'] = 'inputs'
-        result['fields'] = fields
-
-    return result
-
-
-def is_single_table(html_content):
+def is_single_normal_table(html_content):
     """
     检查HTML表格是否符合特定特征：
     1. 第一行所有td单元格都有内容
@@ -210,7 +149,7 @@ def is_inputs_table(html_content):
         return False
 
 
-def is_empty_single_cell_table(html):
+def is_single_empty_table_with_multiple_br(html):
     # 移除所有引号和转义字符，规范化HTML
     html = html.strip().strip("'\"").replace('\\n', '').replace('\\t', '')
 
@@ -226,6 +165,60 @@ def is_empty_single_cell_table(html):
         return content_clean == ''
 
     return False
+
+
+def is_one_column_multiple_rows_table(html_content: str) -> bool:
+    """
+    验证HTML表格是否满足以下条件：
+    1. 只有一列
+    2. 有多行
+    3. 每行都包含非空内容
+
+    参数：
+        html_content (str): 包含表格的HTML字符串
+
+    返回：
+        bool: 如果表格符合条件返回True，否则返回False
+    """
+    try:
+        # 解析HTML内容
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # 查找表格
+        table = soup.find('table')
+        if not table:
+            return False
+
+        # 获取所有行
+        rows = table.find_all('tr')
+        if len(rows) <= 1:  # 必须有多行
+            return False
+
+        # 检查每一行
+        for row in rows:
+            # 获取行中的所有单元格
+            cells = row.find_all('td')
+
+            # 检查行是否只有一个单元格
+            if len(cells) != 1:
+                return False
+
+            # 检查单元格内容是否非空
+            # 移除空白字符和换行符后检查
+            cell_content = cells[0].get_text().strip()
+            if not cell_content:
+                return False
+
+            # 额外检查：每个单元格应该包含中文字符
+            # 这是针对提供的示例的特定要求
+            if not re.search('[\u4e00-\u9fff]', cell_content):
+                return False
+
+    except Exception as e:
+        print(f"处理HTML时发生错误：{str(e)}")
+        return False
+
+    return True
 
 
 def extract_form_inputs_table(html_content: str) -> List[str]:
