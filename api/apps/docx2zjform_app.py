@@ -5,11 +5,16 @@ from enum import Enum
 from sqlalchemy.orm import Session
 from docx import Document
 import io
+import logging
+import traceback
 
 from api.db.database import get_db
 from api.apps import manager
 
 from api.service.docx2zjform_service.docx2zjform_service import Docx2ZJFormService
+
+# 设置日志记录器
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -53,6 +58,7 @@ async def convert(
     try:
         # 验证文件类型
         if not file.filename.endswith('.docx'):
+            logger.warning(f"上传了不支持的文件类型: {file.filename}")
             return ResponseSchema(
                 status=StatusEnum.ERROR,
                 message="仅支持.docx格式文件"
@@ -65,6 +71,7 @@ async def convert(
         # 解析文档内容
         await Docx2ZJFormService.convert(doc, db, user.id)
 
+        logger.info(f"成功解析文档: {file.filename}")
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
             message="文档解析成功",
@@ -72,6 +79,10 @@ async def convert(
         )
 
     except Exception as e:
+        # 使用logger.error记录完整的异常信息和堆栈跟踪
+        logger.error(f"文档处理失败: {str(e)}")
+        logger.error(traceback.format_exc())
+
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"文档处理失败: {str(e)}"

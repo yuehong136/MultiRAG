@@ -213,7 +213,6 @@ def is_inputs_table(html_content):
 def is_empty_single_cell_table(html):
     # 移除所有引号和转义字符，规范化HTML
     html = html.strip().strip("'\"").replace('\\n', '').replace('\\t', '')
-    print("Cleaned HTML:", repr(html))
 
     # 使用更简单的模式来匹配td内容
     td_pattern = r'<td[^>]*>(.*?)</td>'
