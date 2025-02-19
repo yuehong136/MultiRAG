@@ -1,6 +1,7 @@
 角色: 你是一位精通JavaScript和ECharts的前端专家。
 
-背景: 我们需要创建一个展示$user_question的ECharts $chart_type。
+用户需求/问题: $user_question
+生成图表类型：ECharts中的$chart_type。
 
 输入数据结构:
 ```javascript
@@ -37,7 +38,6 @@ function generateChartOption(chartData) {
 - 从 chartData.columns 获取列名
 - 从 chartData.data 数组获取数据记录
 - 使用直接对象访问方式（例如：record['xxx']）
-- 必须进行空值检查
 
 3. 数据转换要求:
 - 数值类型必须使用 parseInt 或 parseFloat 转换
@@ -59,26 +59,20 @@ function generateChartOption(chartData) {
 - 不要使用 forEach，优先使用 map 和 filter
 - 使用解构赋值简化代码
 - 添加基本的错误处理
-- 提供输入验证
 
 示例代码结构:
 ```javascript
 function generateChartOption(chartData) {
-    // 1. 输入验证
-    if (!chartData?.columns || !chartData?.data) {
-        throw new Error('Invalid chart data format');
-    }
-
-    // 2. 数据提取
+    // 1. 数据提取
     const { columns } = chartData;
     const { data } = chartData;
 
-    // 3. 数据转换
-    const processedData = data.map(record => ({
+    // 2. 数据转换
+    const processedData = data.map(record => (
         // 在这里进行数据转换
-    }));
+    ));
 
-    // 4. 返回配置
+    // 3. 返回配置
     return {
         // 在这里组装完整的 option 配置
     };

@@ -2,45 +2,21 @@ option = {
   title: {
     text: '//需要根据主题修改',
   },
-  tooltip: {
-    trigger: 'axis',
-    formatter: function(params) {
-      return `//需要根据主题动态生成`;
-    }
-  },
   xAxis: {
     type: 'value',
-    name: '//需要根据主题修改',
-    nameLocation: 'middle',
-    nameGap: 30,
-    min: //需要根据动态填充的数据计算,
-    max: //需要根据动态填充的数据计算,
+    name: '//需要根据主题修改'
   },
   yAxis: {
     type: 'value',
-    name: '//需要根据主题修改',
-    nameLocation: 'middle',
-    nameGap: 30,
-    min: //需要根据动态填充的数据计算,
-    max: //需要根据动态填充的数据计算
+    name: '//需要根据主题修改'
   },
   series: [{
     type: 'scatter',
-    symbolSize: 8,
     data: [
       //需要动态填充数据
-    ],
-    itemStyle: {
-      color: '#4169E1',
-      opacity: 0.7
-    },
+      //示例：[x, y], [x, y], ...
+    ]
   }],
-  grid: {
-    left: '10%',
-    right: '10%',
-    top: '15%',
-    bottom: '15%'
-  },
   toolbox: {
     feature: {
     }
