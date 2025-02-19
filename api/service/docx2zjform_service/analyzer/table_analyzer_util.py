@@ -6,21 +6,31 @@ from typing import List, Dict, Optional
 
 def is_multiple_tables_with_name(html_content: str) -> bool:
     """
-    是否为含有名称的多表格
+    是否为含有名称的多表格，排除单列多行的表格形式
 
     Args:
         html_content: HTML表格内容字符串
 
     Returns:
-        Tuple[bool, List[int]]:
-            - bool: 是否存在多个表格
-            - List[int]: 可能的表头行索引列表
+        bool: 是否存在多个实际的表格（排除单列多行的情况）
     """
-    # 使用BeautifulSoup解析HTML
     soup = BeautifulSoup(html_content, 'html.parser')
-
-    # 获取所有tr行
     rows = soup.find_all('tr')
+
+    if not rows:
+        return False
+
+    # 计算表格的总列数
+    def get_row_columns(row):
+        cells = row.find_all(['td', 'th'])
+        return sum(int(cell.get('colspan', 1)) for cell in cells)
+
+    # 获取第一行的列数作为参考
+    first_row_columns = get_row_columns(rows[0])
+
+    # 如果只有一列，直接返回False
+    if first_row_columns <= 1:
+        return False
 
     # 存储可能的表头行索引
     header_indices = []
@@ -28,6 +38,13 @@ def is_multiple_tables_with_name(html_content: str) -> bool:
     # 遍历每一行，检查是否为可能的表头
     for i, row in enumerate(rows):
         cells = row.find_all('td')
+
+        # 检查这一行的列数
+        current_row_columns = get_row_columns(row)
+
+        # 如果列数不同于第一行，跳过这一行
+        if current_row_columns != first_row_columns:
+            continue
 
         # 检查这一行的所有单元格是否都有内容
         has_content = all(cell.get_text().strip() != '' for cell in cells)
@@ -105,47 +122,40 @@ def is_single_normal_table(html_content):
 
 def is_inputs_table(html_content):
     """
-    检查HTML表格是否为表单类型（包含待填写项）
+    检查表格是否符合特定模式：第一行中有内容的td和空td成对出现，且有内容的td在左侧
 
-    参数:
-    html_content (str): HTML表格内容
+    Args:
+        html_content (str): 包含表格的HTML内容
 
-    返回:
-    bool: 如果是表单类型表格返回True，否则返回False
+    Returns:
+        bool: 如果表格符合模式返回True，否则返回False
     """
     try:
-        # 解析HTML
         soup = BeautifulSoup(html_content, 'html.parser')
+        first_row = soup.find('tr')
+        if not first_row:
+            return False
 
-        # 获取所有表格行
-        rows = soup.find_all('tr')
+        cells = first_row.find_all('td')
+        if len(cells) <= 1:
+            return False
 
-        # 检查是否至少有一行符合特征
-        for row in rows:
-            # 获取行内所有单元格
-            cells = row.find_all('td')
+        has_alternating_pattern = False
+        i = 0
+        while i < len(cells) - 1:
+            current = cells[i].get_text().strip()
+            next_cell = cells[i + 1].get_text().strip()
 
-            # 跳过空行
-            if not cells:
-                continue
+            if current and not next_cell:
+                has_alternating_pattern = True
+            elif has_alternating_pattern and (not current or next_cell):
+                return False
 
-            # 遍历单元格，检查是否存在"有内容td后接空td"的模式
-            for i in range(len(cells) - 1):
-                current_cell = cells[i]
-                next_cell = cells[i + 1]
+            i += 2
 
-                # 检查当前单元格是否有内容（排除空白字符）
-                current_content = re.sub(r'\s+', '', current_cell.get_text())
-                if current_content:
-                    # 检查下一个单元格是否为空（排除空白字符）
-                    next_content = re.sub(r'\s+', '', next_cell.get_text())
-                    if not next_content:
-                        return True
+        return has_alternating_pattern
 
-        return False
-
-    except Exception as e:
-        print(f"解析出错: {str(e)}")
+    except Exception:
         return False
 
 
@@ -221,7 +231,61 @@ def is_one_column_multiple_rows_table(html_content: str) -> bool:
     return True
 
 
-def extract_form_inputs_table(html_content: str) -> List[str]:
+def extract_content_from_one_column_multiple_rows_table(html_content: str) -> Optional[List[str]]:
+    """
+    从HTML表格中提取每行的内容
+
+    参数：
+        html_content (str): 包含表格的HTML字符串
+
+    返回：
+        List[str]: 包含每行内容的列表，如果解析失败则返回None
+    """
+    try:
+        # 解析HTML内容
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # 查找表格
+        table = soup.find('table')
+        if not table:
+            print("未找到表格")
+            return None
+
+        # 获取所有行
+        rows = table.find_all('tr')
+        if not rows:
+            print("表格中没有行")
+            return None
+
+        # 存储提取的内容
+        contents = []
+
+        # 处理每一行
+        for row in rows:
+            # 获取单元格
+            cell = row.find('td')
+            if cell:
+                # 获取文本内容
+                content = cell.get_text(strip=True)
+
+                # 处理换行符，统一替换为单个换行
+                content = re.sub(r'\s*\n\s*', '\n', content)
+
+                # 移除多余的空格
+                content = re.sub(r'\s+', ' ', content)
+
+                # 如果内容非空则添加到列表
+                if content:
+                    contents.append(content)
+
+        return contents if contents else None
+
+    except Exception as e:
+        print(f"提取内容时发生错误：{str(e)}")
+        return None
+
+
+def extract_inputs_from_inputs_table(html_content: str) -> List[str]:
     """
     提取表格中的所有待填项标签名称
 
@@ -264,7 +328,7 @@ def extract_form_inputs_table(html_content: str) -> List[str]:
         return []
 
 
-def extract_table_headers(html_content: str) -> Optional[List[str]]:
+def extract_headers_from_single_normal_table(html_content: str) -> Optional[List[str]]:
     """
     从HTML表格中提取第一行的字段值
 
