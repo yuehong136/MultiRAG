@@ -3,6 +3,7 @@ from typing import List
 
 from .analysis_context import AnalysisContext
 from .base import ElementAnalyzer
+from .paragraph_analyzer_util import identify_input, extract_br_separated_content, split_lines
 from ..component import InputComponent, DescriptionComponent
 from ..component.factory import ComponentFactory
 from ..constants import ComponentType
@@ -20,40 +21,35 @@ class ParagraphElementAnalyzer(ElementAnalyzer):
         logging.info(f"处理段落元素：{element.content}")
         components = []
 
+        # 尝试按照br分割内容
+        split_content_by_splitlines = split_lines(element.content)
+        if len(split_content_by_splitlines) > 0:
+            logging.info("尝试按照换行符分割内容")
+            for line in split_content_by_splitlines:
+                if len(identify_input(line)) > 0:
+                    logging.info("尝试识别待填项字段")
+                    for input in identify_input(line):
+                        component: InputComponent = ComponentFactory.create(ComponentType.INPUT)
+                        component.set_title(input)
+                        components.append(component)
+                else:
+                    logging.info("尝试识别描述内容")
+                    component: DescriptionComponent = ComponentFactory.create(ComponentType.DESCRIPTION)
+                    component.set_content(line)
+                    components.append(component)
         # INPUT
-        if len(self._identify_input(element.content)) > 0:
-            for input in self._identify_input(element.content):
+        elif len(identify_input(element.content)) > 0:
+            logging.info("尝试识别待填项字段")
+            for input in identify_input(element.content):
                 # 使用 overload 的类型提示
                 component: InputComponent = ComponentFactory.create(ComponentType.INPUT)
                 component.set_title(input)
                 components.append(component)
         # DESCRIPTION
         else:
+            logging.info("尝试识别描述内容")
             component: DescriptionComponent = ComponentFactory.create(ComponentType.DESCRIPTION)
             component.set_content(element.content)
             components.append(component)
 
         return components
-
-    def _identify_input(self, text: str) -> list:
-        """
-        提取字符串中的待填项字段（以冒号结尾的部分）
-
-        Args:
-            text (str): 输入的字符串
-
-        Returns:
-            list: 待填项字段列表
-        """
-        import re
-
-        # 修改正则表达式模式：
-        # ([^：:]+) 匹配除冒号外的任何字符（一个或多个）
-        # (?:：|:) 匹配中文或英文冒号（非捕获组）
-        pattern = r'([^：:]+)(?:：|:)'
-
-        # 查找所有匹配项
-        matches = re.findall(pattern, text)
-
-        # 处理匹配结果：去除首尾空格
-        return [match.strip() for match in matches]

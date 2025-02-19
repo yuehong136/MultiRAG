@@ -1,8 +1,10 @@
 import pytest
 from bs4 import BeautifulSoup
 
+from api.service.docx2zjform_service.analyzer.paragraph_analyzer_util import split_lines
 from api.service.docx2zjform_service.analyzer.table_analyzer_util import is_multiple_tables_with_name, \
-    is_single_normal_table, is_single_empty_table_with_multiple_br, is_one_column_multiple_rows_table, is_inputs_table
+    is_single_normal_table, is_single_empty_table_with_multiple_br, is_one_column_multiple_rows_table, is_inputs_table, \
+    extract_content_from_one_column_multiple_rows_table
 
 # 测试数据
 INPUTS_TABLE_HTML = """<table border="1">
@@ -311,6 +313,14 @@ class TestTableDetection:
     def test_is_one_column_multiple_rows_table(self, html_content, expected):
         result = is_one_column_multiple_rows_table(html_content)
         assert result == expected
+
+
+    def test_extract_content_from_one_column_multiple_rows_table(self):
+        result = extract_content_from_one_column_multiple_rows_table(ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML)
+        for content in result:
+            for line in split_lines(content):
+                print(line)
+            print()
 
 
 if __name__ == '__main__':

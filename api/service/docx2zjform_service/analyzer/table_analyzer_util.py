@@ -233,7 +233,7 @@ def is_one_column_multiple_rows_table(html_content: str) -> bool:
 
 def extract_content_from_one_column_multiple_rows_table(html_content: str) -> Optional[List[str]]:
     """
-    从HTML表格中提取每行的内容
+    从HTML表格中提取每行的内容，保留<br/>标签的换行效果
 
     参数：
         html_content (str): 包含表格的HTML字符串
@@ -265,14 +265,24 @@ def extract_content_from_one_column_multiple_rows_table(html_content: str) -> Op
             # 获取单元格
             cell = row.find('td')
             if cell:
+                # 创建单元格的副本，避免修改原始数据
+                cell_copy = BeautifulSoup(str(cell), 'html.parser').td
+
+                # 将<br/>标签替换为换行符
+                for br in cell_copy.find_all('br'):
+                    br.replace_with('\n')
+
                 # 获取文本内容
-                content = cell.get_text(strip=True)
+                content = cell_copy.get_text()
 
-                # 处理换行符，统一替换为单个换行
-                content = re.sub(r'\s*\n\s*', '\n', content)
+                # 清理多余空白，但保留换行
+                content = re.sub(r'[ \t]+', ' ', content)
+                content = re.sub(r'\n[ \t]+', '\n', content)
+                content = re.sub(r'[ \t]+\n', '\n', content)
+                content = re.sub(r'\n{2,}', '\n', content)
 
-                # 移除多余的空格
-                content = re.sub(r'\s+', ' ', content)
+                # 移除开头和结尾的空白
+                content = content.strip()
 
                 # 如果内容非空则添加到列表
                 if content:
