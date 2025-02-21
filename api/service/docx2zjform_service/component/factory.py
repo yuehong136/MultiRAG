@@ -1,6 +1,8 @@
 from typing import Type, Dict, overload
 from .base import Component
 from .input import InputComponent
+from .radio import RadioComponent
+from .sign import SignComponent
 from .subform import SubFormComponent
 from .textarea import TextareaComponent
 from ..constants import ComponentType
@@ -13,7 +15,9 @@ class ComponentFactory:
         ComponentType.INPUT: InputComponent,
         ComponentType.DESCRIPTION: DescriptionComponent,
         ComponentType.SUBFORM: SubFormComponent,
-        ComponentType.TEXTAREA: TextareaComponent
+        ComponentType.TEXTAREA: TextareaComponent,
+        ComponentType.SIGN: SignComponent,
+        ComponentType.RADIO: RadioComponent,
     }
 
     @classmethod

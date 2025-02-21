@@ -4,6 +4,8 @@ from enum import Enum
 class ComponentType(Enum):
     """组件类型枚举"""
     INPUT = "input"
+    SIGN = "sign"
+    RADIO = "radio"
     TEXTAREA = "textarea"
     SUBFORM = "subform"
     DESCRIPTION = "description"

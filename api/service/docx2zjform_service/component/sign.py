@@ -1,0 +1,53 @@
+from .base import Component
+from ..constants import ComponentType
+
+
+class SignComponent(Component):
+    """描述文本组件"""
+    _json_str = """
+    {
+  "val": "手写签名",
+  "component": "sign",
+  "added": true,
+  "value": "",
+  "id": "SIGN_M7CNKLFK",
+  "edit": {
+    "autoFillSwicth": false,
+    "autoFill": "",
+    "autoFillName": "",
+    "historyFill": false,
+    "color": "#3E3E3E",
+    "required": true,
+    "mindInfo": "",
+    "isSusPrompt": false,
+    "show": true,
+    "isOptions": true,
+    "isExceed": false,
+    "exceedInfo": "该选项超出最多勾选数量",
+    "title": "负责人签字",
+    "groupId": "",
+    "associateForm": "",
+    "associateField": "",
+    "associateFields": [],
+    "associateUserId": false,
+    "ctnDftValue": "",
+    "multiFormNotEdit": false,
+    "tips": "",
+    "sceneFill": false,
+    "isComHide": false,
+    "isBold": false,
+    "requiredType": "sign",
+    "comWidth": "width100",
+    "isEdit": false,
+    "signHeight": 150,
+    "signWidth": 100,
+    "nameColor": "#3E3E3E"
+  }
+}
+    """
+
+    def __init__(self):
+        super().__init__(ComponentType.INPUT)
+
+    def set_title(self, content: str):
+        self.json_data["edit"]["title"] = content
