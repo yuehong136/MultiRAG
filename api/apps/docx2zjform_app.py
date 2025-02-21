@@ -69,13 +69,13 @@ async def convert(
         doc = Document(io.BytesIO(content))
 
         # 解析文档内容
-        await Docx2ZJFormService.convert(doc, db, user.id)
+        zj_json_str = await Docx2ZJFormService.convert(doc, db, user.id)
 
         logger.info(f"成功解析文档: {file.filename}")
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
             message="文档解析成功",
-            data=""
+            data=zj_json_str
         )
 
     except Exception as e:
