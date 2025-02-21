@@ -220,6 +220,8 @@ def is_english(texts):
 
 
 def is_chinese(text):
+    if not text:
+        return False
     chinese = 0
     for ch in text:
         if '\u4e00' <= ch <= '\u9fff':

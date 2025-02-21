@@ -10,6 +10,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from zhipuai import ZhipuAI
 from core.llm.embedding_model.base import Base
+from core.utils import truncate
 
 
 @dataclass
@@ -26,6 +27,14 @@ class ZhipuEmbed(Base):
     def encode(self, texts: list):
         arr = []
         tks_num = 0
+        MAX_LEN = -1
+        if self.model_name.lower() == "embedding-2":
+            MAX_LEN = 512
+        if self.model_name.lower() == "embedding-3":
+            MAX_LEN = 3072
+        if MAX_LEN > 0:
+            texts = [truncate(t, MAX_LEN) for t in texts]
+
         for txt in texts:
             res = self.client.embeddings.create(input=txt,
                                                 model=self.model_name, dimensions=768)
