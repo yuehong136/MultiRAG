@@ -29,7 +29,7 @@ class PluginService:
 
             async with session.post(url, json=payload) as response:
                 response_data = await response.json()
-                if response.status != 200:
+                if response.status != 200 or response_data.get('status') != 'success':
                     raise Exception(f"Failed to install dependency: {response_data.get('message', 'Unknown error')}")
                 return response_data.get('data')
 
@@ -54,6 +54,6 @@ class PluginService:
 
             async with session.post(url, json=payload) as response:
                 response_data = await response.json()
-                if response.status != 200:
+                if response.status != 200 or response_data.get('status') != 'success':
                     raise Exception(f"Failed to uninstall dependency: {response_data.get('message', 'Unknown error')}")
                 return response_data.get('data')

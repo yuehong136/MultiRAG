@@ -19,7 +19,7 @@ class ScriptSchedulerService:
 
             async with session.post(url, json=payload) as response:
                 response_data = await response.json()
-                if response.status != 200:
+                if response.status != 200 or response_data.get('status') != 'success':
                     raise Exception(f"Failed to run plugin script: {response_data.get('message', 'Unknown error')}")
                 if response_data.get('status') != 'success':
                     raise ScriptRunningError(message=response_data.get('message'))
@@ -38,7 +38,7 @@ class ScriptSchedulerService:
 
             async with session.post(url, json=payload) as response:
                 response_data = await response.json()
-                if response.status != 200:
+                if response.status != 200 or response_data.get('status') != 'success':
                     raise Exception(f"Failed to run plugin script: {response_data.get('message', 'Unknown error')}")
                 if response_data.get('status') != 'success':
                     raise ScriptRunningError(message=response_data.get('message'))
