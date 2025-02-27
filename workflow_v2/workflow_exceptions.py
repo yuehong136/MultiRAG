@@ -53,7 +53,8 @@ class NodeError(WorkflowError):
 class NodeExecutionError(NodeError):
     """节点执行异常"""
 
-    def __init__(self, node_id: str, node_title: str, message: str, details: Optional[Dict[str, Any]] = None):
+    def __init__(self, node_id: str, node_title: str, message: str, details: Optional[Dict[str, Any]] = None,
+                 workflow_exe_data: Optional[Dict[str, Any]] = None):
         super().__init__(
             node_id=node_id,
             node_title=node_title,
@@ -61,6 +62,7 @@ class NodeExecutionError(NodeError):
             error_code=ErrorCode.UNKNOWN_ERROR,
             details=details
         )
+        self.workflow_exe_data = workflow_exe_data
 
 
 class NodeTimeoutError(NodeError):
