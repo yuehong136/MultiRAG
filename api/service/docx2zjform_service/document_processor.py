@@ -1,6 +1,5 @@
 from typing import List
 
-from core import logger
 from .analyzer import ElementAnalyzer, TableElementAnalyzer, ParagraphElementAnalyzer, AnalysisContext
 from .component.base import Component
 from .element import Element
@@ -24,7 +23,7 @@ class DocumentProcessor:
         context = AnalysisContext(elements)
 
         for i, element in enumerate(elements):
-            logger.info(f"处理文档元素：{i + 1}/{len(elements)}")
+            logging.info(f"处理文档元素：{i + 1}/{len(elements)}")
             context.set_current_element_index(i)
             analyzer = self._find_analyzer(element)
             if analyzer:
