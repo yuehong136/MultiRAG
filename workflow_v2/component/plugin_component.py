@@ -206,13 +206,13 @@ class PluginComponent(BaseComponent):
             print(f"Error making request: {str(e)}")
             raise
 
-    def parse_output(self, output_structure: list[dict], actual_output: dict) -> dict:
+    def parse_output(self, output_structure: list[dict], actual_output: Any) -> dict:
         """
         Parse the actual output according to the defined output structure.
 
         Args:
             output_structure (list[dict]): The structure definition of the expected output
-            actual_output (dict): The actual output from the script execution
+            actual_output (Any): The actual output from the script execution
 
         Returns:
             dict: The parsed output conforming to the defined structure
@@ -259,12 +259,25 @@ class PluginComponent(BaseComponent):
                 # Convert each element in the list
                 try:
                     if element_schema.get('type') == 'object':
-                        return [parse_schema_recursively(element_schema.get('schema', []), item)
+                        nested_schema = element_schema.get('schema', [])
+                        # If the schema is empty, preserve the original elements
+                        if not nested_schema:
+                            return value
+                        return [parse_schema_recursively(nested_schema, item)
                                 for item in value]
                     else:
                         return [convert_value(item, element_schema) for item in value]
                 except (ValueError, TypeError):
                     return None
+            elif type_name == "object":
+                if not isinstance(value, dict):
+                    return None
+
+                nested_schema = type_def.get('schema', [])
+                # If the schema is empty, preserve the original object
+                if not nested_schema:
+                    return value
+                return parse_schema_recursively(nested_schema, value)
 
             return value
 
@@ -283,22 +296,18 @@ class PluginComponent(BaseComponent):
             schema_map = {item['name']: item for item in schema}
 
             for name, schema_item in schema_map.items():
-                value = data.get(name)
-                type_name = schema_item.get('type', '').lower()
-
-                try:
-                    if type_name == "object":
-                        if value is None:
-                            result[name] = None
-                        else:
-                            nested_schema = schema_item.get('schema', [])
-                            result[name] = parse_schema_recursively(nested_schema, value)
-                    else:
-                        result[name] = convert_value(value, schema_item)
-
-                except (ValueError, TypeError):
-                    result[name] = None
+                value = data.get(name) if isinstance(data, dict) else None
+                result[name] = convert_value(value, schema_item)
 
             return result
+
+        # Special case for list outputs:
+        # When the output definition has a single field of type list
+        # and the actual output is already a list
+        if (len(output_structure) == 1 and
+                output_structure[0].get('type') == 'list' and
+                isinstance(actual_output, list)):
+            field_name = output_structure[0].get('name')
+            return {field_name: convert_value(actual_output, output_structure[0])}
 
         return parse_schema_recursively(output_structure, actual_output)
