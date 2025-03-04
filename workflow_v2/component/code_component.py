@@ -18,23 +18,20 @@ class CodeComponent(BaseComponent):
         self.timeout = 30  # 默认超时时间
 
     async def execute(self) -> dict[str, Any]:
-        if self.language == 3:  # Python
-            # 调用脚本调度服务
-            code_execute_resp = self.run_temporary_script(self.code, self.inputs)
-            original_outputs = code_execute_resp.get("data")
-            return self.parse_output(self.output_definition, original_outputs)
-        else:
-            raise ValueError(f"Unsupported language: {self.language}")
-
-    async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict[str, Any]:
-        self.inputs = input_value
-        if self.language == 3:  # Python
-            # 调用脚本调度服务
-            code_execute_resp = self.run_temporary_script(self.code, self.inputs)
-            original_outputs = code_execute_resp.get("data")
-            return self.parse_output(self.output_definition, original_outputs)
-        else:
-            raise ValueError(f"Unsupported language: {self.language}")
+        try:
+            if self.language == 3:  # Python
+                # 调用脚本调度服务
+                code_execute_resp = self.run_temporary_script(self.code, self.inputs)
+                if code_execute_resp.get('status') != 'success':
+                    self.logger.error(f"Code component execution failed: {code_execute_resp.get('message')}")
+                    raise Exception(f"Code component execution failed: {code_execute_resp.get('message')}")
+                original_outputs = code_execute_resp.get("data")
+                return self.parse_output(self.output_definition, original_outputs)
+            else:
+                raise ValueError(f"Unsupported language: {self.language}")
+        except Exception as e:
+            self.logger.error(f"Error occurred while executing code component: {e}")
+            raise e
 
     def run_temporary_script(self, script: str, args: dict[str, Any],
                              base_url: str = f"http://localhost:{SCRIPT_SCHEDULER_PORT}") -> dict:
