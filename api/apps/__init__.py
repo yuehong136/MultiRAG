@@ -146,9 +146,10 @@ async def ai_translate_exception_handler(request: Request, exc: AITranslateExcep
 @app.exception_handler(NodeExecutionError)
 async def node_execution_error_handler(request: Request, exc: NodeExecutionError):
     return JSONResponse(
-        status_code=500,
+        status_code=200,
         content={"status": "error",
-                 "message": exc.message}
+                 "message": exc.message,
+                 "workflow_exe_data": exc.workflow_exe_data}
     )
 
 
