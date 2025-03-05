@@ -21,7 +21,7 @@ from alembic.config import Config
 
 class User(BaseModel):
     __tablename__ = "t_ai_users"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     access_token = Column(String(255), index=True, nullable=True)
@@ -53,7 +53,7 @@ class User(BaseModel):
 
 class Tenant(BaseModel):
     __tablename__ = "t_ai_tenants"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     name = Column(String(100), index=True, nullable=True, doc="Tenant name")
@@ -83,7 +83,7 @@ class Tenant(BaseModel):
 
 class UserTenant(BaseModel):
     __tablename__ = "t_ai_user_tenants"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(128), primary_key=True, index=False, nullable=False)
     user_id = Column(String(128), index=True, nullable=False)
@@ -113,7 +113,7 @@ class UserTenant(BaseModel):
 
 class LLMFactories(BaseModel):
     __tablename__ = "t_ai_llm_factories"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     name = Column(String(128), primary_key=True, index=False, nullable=False, doc="LLM factory name")
     logo = Column(Text, index=False, nullable=True)
@@ -123,7 +123,7 @@ class LLMFactories(BaseModel):
 
 class LLM(BaseModel):
     __tablename__ = "t_ai_llms"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     llm_name = Column(String(128), primary_key=True, index=True, nullable=False)
     mdl_type = Column(String(128), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, ASR")
@@ -135,7 +135,7 @@ class LLM(BaseModel):
 
 class TenantLLM(BaseModel):
     __tablename__ = "t_ai_tenant_llms"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
     llm_factory = Column(String(128), primary_key=True, index=True, nullable=False, doc="LLM factory name")
@@ -148,7 +148,7 @@ class TenantLLM(BaseModel):
 
 class Knowledgebase(BaseModel):
     __tablename__ = "t_ai_knowledgebases"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
     tenant_id = Column(String(32), index=True, nullable=False)
@@ -171,7 +171,7 @@ class Knowledgebase(BaseModel):
 
 class Document(BaseModel):
     __tablename__ = "t_ai_documents"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     thumbnail = Column(Text, index=False, nullable=True, doc="thumbnail base64 string")
     kb_id = Column(String(256), index=True, nullable=False)
@@ -198,7 +198,7 @@ class Document(BaseModel):
 
 class File(BaseModel):
     __tablename__ = "t_ai_files"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     parent_id = Column(String(32), index=True, nullable=False, doc="parent folder id")
     tenant_id = Column(String(32), index=True, nullable=False, doc="tenant id")
@@ -225,7 +225,7 @@ class File(BaseModel):
 
 class File2Document(BaseModel):
     __tablename__ = "t_ai_file2documents"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     file_id = Column(String(32), index=True, nullable=True, doc="file id")
     document_id = Column(String(32), index=True, nullable=True, doc="document id")
@@ -233,7 +233,7 @@ class File2Document(BaseModel):
 
 class Task(BaseModel):
     __tablename__ = "t_ai_tasks"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     doc_id = Column(String(32), index=True, nullable=False)
     from_page = Column(Integer, index=False, nullable=False, default=0)
@@ -248,7 +248,7 @@ class Task(BaseModel):
 
 class Dialog(BaseModel):
     __tablename__ = "t_ai_dialogs"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     tenant_id = Column(String(32), index=True, nullable=False)
@@ -278,7 +278,7 @@ class Dialog(BaseModel):
 
 class Conversation(BaseModel):
     __tablename__ = "t_ai_conversations"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     dialog_id = Column(String(32), index=True, nullable=False)
@@ -289,7 +289,7 @@ class Conversation(BaseModel):
 
 class APIToken(BaseModel):
     __tablename__ = "t_ai_api_tokens"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
     token = Column(String(255), primary_key=True, index=True, nullable=False)
@@ -299,7 +299,7 @@ class APIToken(BaseModel):
 
 class API4Conversation(BaseModel):
     __tablename__ = "t_ai_api4conversations"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     dialog_id = Column(String(32), index=True, nullable=False)
@@ -315,7 +315,7 @@ class API4Conversation(BaseModel):
 
 class UserCanvas(BaseModel):
     __tablename__ = "t_ai_user_canvases"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
@@ -328,7 +328,7 @@ class UserCanvas(BaseModel):
 
 class CanvasTemplate(BaseModel):
     __tablename__ = "t_ai_canvas_templates"
-    __table_args__ = {"schema": "test_dve"}
+    __table_args__ = {"schema": "usr_ai"}
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
@@ -338,12 +338,108 @@ class CanvasTemplate(BaseModel):
     dsl = Column(JSONB, index=False, nullable=True, default={})
 
 
+class WritingProject(BaseModel):
+    __tablename__ = "t_ai_writing_projects"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    user_input = Column(Text, index=False, nullable=False, doc="用户输入的需求")
+    content_type = Column(String(255), index=True, nullable=False, doc="文案类型")
+    language_style = Column(String(255), index=True, nullable=False, doc="语言风格")
+    word_count = Column(Integer, index=False, nullable=False, doc="文章篇幅/预期字数")
+    reference = Column(Text, index=False, nullable=True, doc="用户提供的参考信息")
+    model = Column(String(128), index=True, nullable=False, default="gpt-4o", doc="使用的模型")
+    title = Column(String(255), index=True, nullable=True, doc="文章标题")
+    user_id = Column(String(32), index=True, nullable=False, doc="所属用户ID")
+    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_input": self.user_input,
+            "content_type": self.content_type,
+            "language_style": self.language_style,
+            "word_count": self.word_count,
+            "model": self.model,
+            "title": self.title,
+            "reference": self.reference,
+            "user_id": self.user_id
+        }
+
+
+class WritingChapter(BaseModel):
+    __tablename__ = "t_ai_writing_chapters"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    project_id = Column(String(32), index=True, nullable=False, doc="所属项目ID")
+    title = Column(String(255), index=True, nullable=False, doc="章节标题")
+    summary = Column(Text, index=False, nullable=True, doc="章节摘要")
+    level = Column(Integer, index=False, nullable=False, default=1, doc="章节层级(1:主章节,2:子章节)")
+    parent_id = Column(String(32), index=True, nullable=True, doc="父章节ID")
+    order_index = Column(Integer, index=False, nullable=False, default=0, doc="排序索引")
+    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "title": self.title,
+            "summary": self.summary,
+            "level": self.level,
+            "parent_id": self.parent_id,
+            "order_index": self.order_index
+        }
+
+
+class WritingReferenceMaterial(BaseModel):
+    __tablename__ = "t_ai_writing_references"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    chapter_id = Column(String(32), index=True, nullable=False, doc="所属章节ID")
+    title = Column(String(255), index=True, nullable=False, doc="参考资料标题")
+    content = Column(Text, index=False, nullable=False, doc="参考资料内容")
+    source = Column(String(255), index=True, nullable=True, doc="来源(URL或文件名)")
+    type = Column(String(32), index=True, nullable=False, default="text", doc="类型(text,url,file)")
+    order_index = Column(Integer, index=False, nullable=False, default=0, doc="排序索引")
+    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "chapter_id": self.chapter_id,
+            "title": self.title,
+            "content": self.content,
+            "source": self.source,
+            "type": self.type,
+            "order_index": self.order_index
+        }
+
+
+class WritingChapterContent(BaseModel):
+    __tablename__ = "t_ai_writing_contents"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    chapter_id = Column(String(32), index=True, nullable=False, doc="所属章节ID", unique=True)
+    content = Column(Text, index=False, nullable=True, doc="章节内容")
+    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "chapter_id": self.chapter_id,
+            "content": self.content
+        }
+
+
 '''
 拥有权限，采用这种方式
 '''
 # def init_database_tables():
 #     # 需要创建的 schema 名称
-#     schema_name = 'test_dve'
+#     schema_name = 'usr_ai'
 #
 #     # # 检查并创建 schema
 #     # with engine.connect() as connection:
@@ -427,7 +523,7 @@ class CanvasTemplate(BaseModel):
 
 def init_database_tables():
     # 需要检查的 schema 名称
-    schema_name = 'test_dve'
+    schema_name = 'usr_ai'
 
     # 检查 schema 是否存在
     schema_exists = False
