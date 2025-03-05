@@ -20,6 +20,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.user_service import TenantService
 from api.db.services.llm_service import LLMBundle
 from api.utils import get_uuid
+from api.utils.api_utils import get_json_result
 
 
 class WritingService(CommonService):
@@ -784,7 +785,7 @@ class WritingService(CommonService):
         return article_text, word_count
 
     @classmethod
-    def write_section_improved(cls, db: Session, chapter_id: str) -> str:
+    def write_section_improved(cls, db: Session, chapter_id: str) -> dict:
         """
         改进的章节写作方法（自动处理参考资料和子章节）
 
@@ -793,7 +794,7 @@ class WritingService(CommonService):
             chapter_id: 章节ID
 
         返回:
-            str: 生成的章节内容
+            dict: 生成的章节内容及相关信息
         """
         # 获取章节信息
         chapter = db.query(WritingChapter).filter(
@@ -802,18 +803,30 @@ class WritingService(CommonService):
         ).first()
 
         if not chapter:
-            raise ValueError(f"未找到章节 ID: {chapter_id}")
+            return {
+                "retcode": 404,
+                "retmsg": f"未找到章节 ID: {chapter_id}",
+                "data": None
+            }
 
         # 获取项目信息
         project = db.query(WritingProject).filter_by(id=chapter.project_id).first()
         if not project:
-            raise ValueError(f"未找到项目 ID: {chapter.project_id}")
+            return {
+                "retcode": 404,
+                "retmsg": f"未找到项目 ID: {chapter.project_id}",
+                "data": None
+            }
 
         try:
             # 获取用户所属租户
             tenants = TenantService.get_info_by(db, project.user_id)
             if not tenants:
-                raise ValueError("找不到用户所属租户信息")
+                return {
+                    "retcode": 500,
+                    "retmsg": "找不到用户所属租户信息",
+                    "data": None
+                }
 
             tenant_id = tenants[0]["tenant_id"]
 
@@ -838,30 +851,44 @@ class WritingService(CommonService):
             if content_obj:
                 # 更新现有内容
                 content_obj.content = content
-                content_obj.update_time = cls.current_timestamp()  # 使用时间戳而非datetime对象
-                content_obj.update_date = cls.current_datetime()  # 这个字段接受datetime对象
+                content_obj.update_time = cls.current_timestamp()
+                content_obj.update_date = cls.current_datetime()
             else:
                 # 创建新内容
                 content_obj = WritingChapterContent(
                     id=get_uuid(),
                     chapter_id=chapter_id,
                     content=content,
-                    update_time=cls.current_timestamp(),  # 使用时间戳
-                    update_date=cls.current_datetime()  # 使用datetime
+                    update_time=cls.current_timestamp(),
+                    update_date=cls.current_datetime()
                 )
                 db.add(content_obj)
 
             # 更新章节的更新时间
-            chapter.update_time = cls.current_timestamp()  # 使用时间戳
-            chapter.update_date = cls.current_datetime()  # 使用datetime
+            chapter.update_time = cls.current_timestamp()
+            chapter.update_date = cls.current_datetime()
 
             db.commit()
 
-            return content
+            # 返回结果（直接返回字典而不是JSONResponse）
+            return {
+                "retcode": 0,
+                "retmsg": "success",
+                "data": {
+                    "type": "complete",
+                    "section_id": chapter_id,
+                    "section_title": chapter.title,
+                    "content": content
+                }
+            }
         except Exception as e:
             db.rollback()
             logging.error(f"写作章节内容失败: {str(e)}", exc_info=True)
-            raise e
+            return {
+                "retcode": 500,
+                "retmsg": f"章节写作失败: {str(e)}",
+                "data": {"type": "error"}
+            }
 
     @classmethod
     async def write_section_stream_improved(cls, db: Session, chapter_id: str):
@@ -882,20 +909,20 @@ class WritingService(CommonService):
         ).first()
 
         if not chapter:
-            yield f"data: {json.dumps({'error': f'找不到指定的章节: {chapter_id}'})}\n\n"
+            yield f"data: {json.dumps({'retcode': 404, 'retmsg': f'找不到指定的章节: {chapter_id}', 'data': {'type': 'error'}})}\n\n"
             return
 
         # 获取项目信息
         project = db.query(WritingProject).filter_by(id=chapter.project_id).first()
         if not project:
-            yield f"data: {json.dumps({'error': f'找不到项目: {chapter.project_id}'})}\n\n"
+            yield f"data: {json.dumps({'retcode': 404, 'retmsg': f'找不到项目: {chapter.project_id}', 'data': {'type': 'error'}})}\n\n"
             return
 
         try:
             # 获取用户所属租户
             tenants = TenantService.get_info_by(db, project.user_id)
             if not tenants:
-                yield f"data: {json.dumps({'error': '找不到用户所属租户信息'})}\n\n"
+                yield f"data: {json.dumps({'retcode': 500, 'retmsg': '找不到用户所属租户信息', 'data': {'type': 'error'}})}\n\n"
                 return
 
             tenant_id = tenants[0]["tenant_id"]
@@ -911,71 +938,92 @@ class WritingService(CommonService):
 
             # 发送初始元数据
             metadata = {
-                "type": "metadata",
-                "section_id": chapter_id,
-                "section_title": chapter.title
+                "retcode": 0,
+                "retmsg": "success",
+                "data": {
+                    "type": "metadata",
+                    "section_id": chapter_id,
+                    "section_title": chapter.title
+                }
             }
             yield f"data: {json.dumps(metadata, ensure_ascii=False)}\n\n"
 
-            # 调用LLM API流式接口
-            content_buffer = ""
+            # 存储最后得到的完整内容
+            final_content = ""
 
-            # 调用流式接口
-            response_generator = llm_bundle.chat_streamly("", [{"role": "user", "content": prompt}], {})
-            for chunk in response_generator:
-                if chunk:
-                    content_buffer += chunk
-                    # 发送内容块
-                    data = {
+            # 发送流式内容到前端
+            for content in llm_bundle.chat_streamly("", [{"role": "user", "content": prompt}], {}):
+                # 检查返回的是否是token数（最后一个返回值）
+                if isinstance(content, int):
+                    # 跳过token数输出
+                    continue
+
+                # 保存最新的完整内容
+                final_content = content
+
+                # 发送内容块到前端
+                data = {
+                    "retcode": 0,
+                    "retmsg": "success",
+                    "data": {
                         "type": "content",
-                        "content": chunk
+                        "content": content
                     }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-                    await asyncio.sleep(0.01)  # 小延迟以保证流畅传输
+                }
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.01)  # 小延迟以保证流畅传输
 
-            # 保存生成的内容到数据库
-            content_obj = db.query(WritingChapterContent).filter(
-                WritingChapterContent.chapter_id == chapter_id,
-                WritingChapterContent.status == StatusEnum.VALID.value
-            ).first()
+            # 流式生成完成后，将最后一次的完整内容保存到数据库
+            if final_content:
+                # 保存生成的内容到数据库
+                content_obj = db.query(WritingChapterContent).filter(
+                    WritingChapterContent.chapter_id == chapter_id,
+                    WritingChapterContent.status == StatusEnum.VALID.value
+                ).first()
 
-            if content_obj:
-                # 更新现有内容
-                content_obj.content = content_buffer
-                content_obj.update_time = cls.current_timestamp()  # 使用时间戳
-                content_obj.update_date = cls.current_datetime()  # 使用datetime
-            else:
-                # 创建新内容
-                content_obj = WritingChapterContent(
-                    id=get_uuid(),
-                    chapter_id=chapter_id,
-                    content=content_buffer,
-                    update_time=cls.current_timestamp(),  # 使用时间戳
-                    update_date=cls.current_datetime()  # 使用datetime
-                )
-                db.add(content_obj)
+                if content_obj:
+                    # 更新现有内容
+                    content_obj.content = final_content
+                    content_obj.update_time = cls.current_timestamp()
+                    content_obj.update_date = cls.current_datetime()
+                else:
+                    # 创建新内容
+                    content_obj = WritingChapterContent(
+                        id=get_uuid(),
+                        chapter_id=chapter_id,
+                        content=final_content,
+                        update_time=cls.current_timestamp(),
+                        update_date=cls.current_datetime()
+                    )
+                    db.add(content_obj)
 
-            # 更新章节的更新时间
-            chapter.update_time = cls.current_timestamp()  # 使用时间戳
-            chapter.update_date = cls.current_datetime()  # 使用datetime
+                # 更新章节的更新时间
+                chapter.update_time = cls.current_timestamp()
+                chapter.update_date = cls.current_datetime()
 
-            db.commit()
+                db.commit()
 
             # 发送完成信号
             complete_data = {
-                "type": "complete",
-                "section_id": chapter_id,
-                "section_title": chapter.title,
-                "content": content_buffer
+                "retcode": 0,
+                "retmsg": "success",
+                "data": {
+                    "type": "complete",
+                    "section_id": chapter_id,
+                    "section_title": chapter.title
+                }
             }
             yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
 
         except Exception as e:
-            db.rollback()
+            db.rollback()  # 发生异常时回滚事务
             logging.error(f"流式写作章节内容失败: {str(e)}", exc_info=True)
             error_data = {
-                "type": "error",
-                "message": f"章节写作失败: {str(e)}"
+                "retcode": 500,
+                "retmsg": f"章节写作失败: {str(e)}",
+                "data": {
+                    "type": "error"
+                }
             }
             yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
 

@@ -24,7 +24,7 @@ DATABASE_URL = (
 engine = create_engine(
     DATABASE_URL,
     client_encoding='utf8',
-    pool_size=database_config.get('pool_size', 10),
+    pool_size=database_config.get('pool_size', 20),
     max_overflow=database_config.get('max_overflow', 20),
     pool_timeout=database_config.get('pool_timeout', 30),
     pool_recycle=database_config.get('pool_recycle', 1800),

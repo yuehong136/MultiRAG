@@ -177,7 +177,7 @@ async def update_project(
         raise HTTPException(status_code=500, detail=f"更新项目失败: {str(e)}")
 
 
-@router.put("/api/projects/{project_id}/outline")
+@router.api_route("/api/projects/{project_id}/outline", methods=["PUT", "POST"])
 async def update_project_outline(
         project_id: str,
         outline_data: dict,
@@ -595,7 +595,7 @@ async def delete_reference(
 
 # ========== 内容生成相关路由 ==========#
 
-@router.post("/write-section", response_model=SectionWriteResponse)
+@router.post("/write-section")
 async def write_section(
         chapter_id: str,  # 简化为只需要章节ID参数
         db: Session = Depends(get_db),
@@ -604,7 +604,11 @@ async def write_section(
     """写作特定章节（非流式）"""
     try:
         if not chapter_id:
-            raise ValueError("必须提供有效的章节ID")
+            return get_json_result(
+                retcode=400,
+                retmsg="必须提供有效的章节ID",
+                data=None
+            )
 
         # 获取章节信息
         chapter = db.query(WritingChapter).filter(
@@ -613,7 +617,11 @@ async def write_section(
         ).first()
 
         if not chapter:
-            raise HTTPException(status_code=404, detail=f"未找到章节 ID: {chapter_id}")
+            return get_json_result(
+                retcode=404,
+                retmsg=f"未找到章节 ID: {chapter_id}",
+                data=None
+            )
 
         # 验证项目所有权
         project = db.query(WritingProject).filter(
@@ -622,22 +630,31 @@ async def write_section(
         ).first()
 
         if not project or project.user_id != user.id:
-            raise HTTPException(status_code=403, detail="无权访问此章节")
+            return get_json_result(
+                retcode=403,
+                retmsg="无权访问此章节",
+                data=None
+            )
 
-        # 调用改进的写作服务方法
-        content = WritingService.write_section_improved(
+        # 调用改进的写作服务方法（得到字典结果）
+        result = WritingService.write_section_improved(
             db=db,
             chapter_id=chapter_id
         )
 
-        return {
-            "section_id": chapter_id,
-            "section_title": chapter.title,
-            "content": content
-        }
+        # 将字典结果转换为JSONResponse
+        return get_json_result(
+            retcode=result["retcode"],
+            retmsg=result["retmsg"],
+            data=result["data"]
+        )
     except Exception as e:
         logging.error(f"章节写作出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"章节写作失败: {str(e)}")
+        return get_json_result(
+            retcode=500,
+            retmsg=f"章节写作失败: {str(e)}",
+            data={"type": "error"}
+        )
 
 
 @router.post("/write-section/stream")
