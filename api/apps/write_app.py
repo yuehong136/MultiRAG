@@ -29,7 +29,7 @@ class OutlineRequest(BaseModel):
     content_type: str = Field(..., description="文案类型")
     language_style: str = Field(..., description="语言风格")
     word_count: int = Field(..., description="文章篇幅/预期字数")
-    model: str = Field(default="gpt-4o", description="使用的模型")
+    model: str = Field(..., description="使用的模型")
     reference: str | None = Field(default=None, description="用户提供的参考信息")
 
 
@@ -395,6 +395,7 @@ async def parse_reference_material(
         title: str = Form(None, description="参考资料标题（可选）"),
         file: UploadFile = File(None, description="上传文件（可选）"),
         url: str = Form(None, description="网页URL（可选）"),
+        reference: str = Form(None, description="文本内容（可选）"),
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -456,10 +457,20 @@ async def parse_reference_material(
 
             source = url
             ref_type = "url"
+        elif reference:
+            # 直接使用用户提供的文本内容
+            content = reference
+
+            # 如果未提供标题，使用默认标题
+            if not title:
+                title = "用户提供的参考文本"
+
+            source = "用户输入"
+            ref_type = "text"
         else:
             return get_json_result(
                 data=False,
-                retmsg="请提供文件或URL",
+                retmsg="请提供文件、URL或文本内容",
                 retcode=400
             )
 
