@@ -129,9 +129,16 @@ async def upload(
     file_contents = []
     for file in files:
         file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
-    # 将 JSON 字符串转换为列表
-    if labels:
-        labels = json.loads(labels)
+    # 确保 labels 是 list 或 None
+    if isinstance(labels, str):
+        try:
+            labels = json.loads(labels)
+            if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
+                raise ValueError('Labels must be a list of strings.')
+        except json.JSONDecodeError:
+            raise ValueError('Invalid JSON format for "labels".')
+    elif labels is not None:
+        raise ValueError('Labels must be a JSON-encoded list of strings or None.')
     # err, files = FileService.upload_document(db, kb, file_contents, user)
     err, files = FileService.upload_document(db, kb, file_contents, user, labels)  # 传递labels参数
     if err:
@@ -774,7 +781,7 @@ async def parse(
             driver = Chrome(options=options)
             driver.get(url)
 
-            res_headers = [r.response.headers for r in driver.requests]
+            res_headers = [r.response.headers for r in driver.requests if r.response]
             logging.info(f"res_headers:{res_headers}")
             if len(res_headers) > 1:
                 sections = RAGFlowHtmlParser().parser_txt(driver.page_source)
@@ -797,7 +804,7 @@ async def parse(
                     self.filepath = filepath
 
                 def read(self):
-                    with open(self.filepath, "rb", encoding="utf-8") as f:
+                    with open(self.filepath, "rb") as f:
                         return f.read()
 
             if not r or r.group(1):
