@@ -129,5 +129,8 @@ permission:
   dataset: false
 
 script_scheduler:
+  # 如果源码部署，则使用localhost，如果docker部署，则使用宿主机的ip
+  host: localhost
+#  host: xxx.xxx.xxx.xxx
   port: 8124
 

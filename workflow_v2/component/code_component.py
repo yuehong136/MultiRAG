@@ -2,7 +2,7 @@ from typing import Any
 
 import requests
 
-from api.settings import SCRIPT_SCHEDULER_PORT
+from api.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 
@@ -34,7 +34,7 @@ class CodeComponent(BaseComponent):
             raise e
 
     def run_temporary_script(self, script: str, args: dict[str, Any],
-                             base_url: str = f"http://localhost:{SCRIPT_SCHEDULER_PORT}") -> dict:
+                             base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
         """
         Send a request to run a temporary script with given arguments.
 

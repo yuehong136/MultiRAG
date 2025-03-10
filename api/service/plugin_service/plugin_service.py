@@ -1,7 +1,7 @@
 import aiohttp
 from typing import Optional
 
-from api.settings import SCRIPT_SCHEDULER_PORT
+from api.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
 
 
 class PluginService:
@@ -20,7 +20,7 @@ class PluginService:
             安装结果
         """
         async with aiohttp.ClientSession() as session:
-            url = f"http://localhost:{SCRIPT_SCHEDULER_PORT}/api/v1/plugin/install-dep"
+            url = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}/api/v1/plugin/install-dep"
             payload = {
                 "plugin_id": plugin_id,
                 "package_name": package_name,
@@ -46,7 +46,7 @@ class PluginService:
             卸载结果
         """
         async with aiohttp.ClientSession() as session:
-            url = f"http://localhost:{SCRIPT_SCHEDULER_PORT}/api/v1/plugin/uninstall-dep"
+            url = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}/api/v1/plugin/uninstall-dep"
             payload = {
                 "plugin_id": plugin_id,
                 "package_name": package_name

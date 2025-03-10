@@ -3,7 +3,7 @@ from typing import Any
 
 import requests
 
-from api.settings import SCRIPT_SCHEDULER_PORT
+from api.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.utils import dict_arrays_to_array_dicts, match_parameters, map_schema_with_values
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
@@ -158,7 +158,7 @@ class PluginComponent(BaseComponent):
             return self.parse_output(self.output_definition, original_outputs)
 
     def run_plugin_script(self, script: str, args: dict[str, Any], plugin_id: str,
-                          base_url: str = f"http://localhost:{SCRIPT_SCHEDULER_PORT}") -> dict:
+                          base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
         """
         Send a request to run a temporary script with given arguments.
 
