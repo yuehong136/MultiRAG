@@ -31,6 +31,7 @@ class OutlineRequest(BaseModel):
     word_count: int = Field(..., description="文章篇幅/预期字数")
     model: str = Field(..., description="使用的模型")
     reference: str | None = Field(default=None, description="用户提供的参考信息")
+    custom_outline_md: str | None = Field(default=None, description="用户提供的自定义Markdown大纲模板")
 
 
 class OutlineResponse(BaseModel):
@@ -88,7 +89,8 @@ async def generate_outline(
             word_count=request.word_count,
             model=request.model,
             user_id=user.id,
-            reference=request.reference  # 传递参考信息
+            reference=request.reference,
+            custom_outline_md=request.custom_outline_md  # 传递自定义大纲参数
         )
 
         return {

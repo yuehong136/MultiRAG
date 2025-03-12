@@ -28,7 +28,8 @@ class WritingService(CommonService):
 
     @classmethod
     def generate_outline(cls, db: Session, user_input: str, content_type: str, language_style: str,
-                         word_count: int, model: str, user_id: str, reference: Optional[str] = None) -> Dict[str, Any]:
+                         word_count: int, model: str, user_id: str, reference: Optional[str] = None,
+                         custom_outline_md: Optional[str] = None) -> Dict[str, Any]:
         """
         生成文章大纲
 
@@ -41,6 +42,7 @@ class WritingService(CommonService):
             model: 使用的模型
             user_id: 用户ID
             reference: 用户提供的参考信息（可选）
+            custom_outline_md: 用户提供的自定义Markdown大纲（可选）
 
         返回:
             Dict: 包含大纲结构的字典
@@ -53,139 +55,183 @@ class WritingService(CommonService):
 
             tenant_id = tenants[0]["tenant_id"]
 
-            # 创建LLM实例
-            llm_bundle = LLMBundle(db, tenant_id, LLMType.CHAT, model)
-
-            # 构建提示词
-            # 添加参考信息到提示词中
-            reference_text = ""
-            if reference:
-                reference_text = f"""
-                参考信息：
-                {reference}
-
-                请在生成大纲时考虑上述参考信息。
-                """
-
-            prompt = f"""
-            请根据以下要求生成一篇文章大纲：
-
-            用户需求：{user_input}
-            文案类型：{content_type}
-            语言风格：{language_style}
-            文章篇幅：约{word_count}字
-
-            {reference_text}
-
-            请注意：
-            1. 不是每个主章节都需要有子章节，可以根据内容需要灵活决定
-            2. 每个章节（包括主章节和子章节）都应该有简短的内容摘要，用于指导写作方向
-            3. 生成一个具有吸引力的文章标题，该标题应体现文章的主题和风格
-            4. 只返回JSON格式的大纲内容，不要有额外的解释
-
-            格式要求：
-            ```json
-            {{
-              "title": "文章标题",
-              "sections": [
-                {{
-                  "title": "第一章标题",
-                  "summary": "本章将探讨...(简短摘要)",
-                  "children": [
-                    {{
-                      "title": "子章节标题",
-                      "summary": "本节将分析...(简短摘要)"
-                    }},
-                    {{
-                      "title": "子章节标题",
-                      "summary": "本节将总结...(简短摘要)"
-                    }}
-                  ]
-                }},
-                {{
-                  "title": "第二章标题",
-                  "summary": "本章将介绍...(简短摘要)",
-                  "children": []
-                }}
-              ]
-            }}
-            ```
-            """
-
-            # 调用LLM API
-            content = llm_bundle.chat("", [{"role": "user", "content": prompt}], {})
-
-            # 提取JSON部分
-            json_match = re.search(r'```json\s*(\{.*?\})\s*```', content, re.DOTALL)
-            if json_match:
-                content = json_match.group(1)
-            else:
-                # 如果没有代码块标记，尝试直接解析整个内容
-                # 寻找第一个{和最后一个}之间的内容
-                start_idx = content.find('{')
-                end_idx = content.rfind('}')
-                if start_idx != -1 and end_idx != -1:
-                    content = content[start_idx:end_idx + 1]
-
-            # 解析为JSON
-            outline_data = json.loads(content)
-
-            # 从大模型输出中获取标题，如果没有则使用默认生成方式
-            article_title = outline_data.get("title", f"{content_type}（{language_style}风格）")
-
             # 创建项目
             project_id = get_uuid()
-            project = WritingProject(
-                id=project_id,
-                user_input=user_input,
-                content_type=content_type,
-                language_style=language_style,
-                word_count=word_count,
-                model=model,
-                user_id=user_id,
-                title=article_title,
-                reference=reference  # 存储参考信息
-            )
-            db.add(project)
 
-            # 章节创建逻辑保持不变...
-            for main_idx, section in enumerate(outline_data.get("sections", [])):
-                main_chapter_id = get_uuid()
-                main_chapter = WritingChapter(
-                    id=main_chapter_id,
-                    project_id=project_id,
-                    title=section.get("title", "未命名章节"),
-                    summary=section.get("summary", ""),
-                    level=1,
-                    parent_id=None,
-                    order_index=main_idx
+            # 如果用户提供了自定义大纲，则使用它，否则调用大模型生成大纲
+            if custom_outline_md:
+                # 使用用户提供的自定义大纲
+                logging.info(f"使用用户提供的自定义大纲模板")
+
+                # 从Markdown大纲中提取标题
+                # 尝试从大纲的第一行提取标题（通常是# 开头的一级标题）
+                lines = custom_outline_md.strip().split('\n')
+                article_title = content_type
+
+                if lines and lines[0].startswith('# '):
+                    article_title = lines[0].replace('# ', '').strip()
+                else:
+                    article_title = f"{content_type}（{language_style}风格）"
+
+                # 创建项目
+                project = WritingProject(
+                    id=project_id,
+                    user_input=user_input,
+                    content_type=content_type,
+                    language_style=language_style,
+                    word_count=word_count,
+                    model=model,
+                    user_id=user_id,
+                    title=article_title,
+                    reference=reference
                 )
-                db.add(main_chapter)
+                db.add(project)
 
-                # 创建子章节
-                for sub_idx, subsection in enumerate(section.get("children", [])):
-                    sub_chapter = WritingChapter(
-                        id=get_uuid(),
+                # 解析自定义大纲并创建章节结构
+                outline_structure = cls._parse_custom_outline(db, project_id, custom_outline_md)
+
+                db.commit()
+                db.refresh(project)
+
+                return {
+                    "outline_md": custom_outline_md,
+                    "outline_structure": outline_structure,
+                    "article_id": project_id
+                }
+            else:
+                # 原有逻辑：使用大模型生成大纲
+                # 创建LLM实例
+                llm_bundle = LLMBundle(db, tenant_id, LLMType.CHAT, model)
+
+                # 构建提示词
+                # 添加参考信息到提示词中
+                reference_text = ""
+                if reference:
+                    reference_text = f"""
+                    参考信息：
+                    {reference}
+
+                    请在生成大纲时考虑上述参考信息。
+                    """
+
+                prompt = f"""
+                请根据以下要求生成一篇文章大纲：
+
+                用户需求：{user_input}
+                文案类型：{content_type}
+                语言风格：{language_style}
+                文章篇幅：约{word_count}字
+
+                {reference_text}
+
+                请注意：
+                1. 不是每个主章节都需要有子章节，可以根据内容需要灵活决定
+                2. 每个章节（包括主章节和子章节）都应该有简短的内容摘要，用于指导写作方向
+                3. 生成一个具有吸引力的文章标题，该标题应体现文章的主题和风格
+                4. 只返回JSON格式的大纲内容，不要有额外的解释
+
+                格式要求：
+                ```json
+                {{
+                  "title": "文章标题",
+                  "sections": [
+                    {{
+                      "title": "第一章标题",
+                      "summary": "本章将探讨...(简短摘要)",
+                      "children": [
+                        {{
+                          "title": "子章节标题",
+                          "summary": "本节将分析...(简短摘要)"
+                        }},
+                        {{
+                          "title": "子章节标题",
+                          "summary": "本节将总结...(简短摘要)"
+                        }}
+                      ]
+                    }},
+                    {{
+                      "title": "第二章标题",
+                      "summary": "本章将介绍...(简短摘要)",
+                      "children": []
+                    }}
+                  ]
+                }}
+                ```
+                """
+
+                # 调用LLM API
+                content = llm_bundle.chat("", [{"role": "user", "content": prompt}], {})
+
+                # 提取JSON部分
+                json_match = re.search(r'```json\s*(\{.*?\})\s*```', content, re.DOTALL)
+                if json_match:
+                    content = json_match.group(1)
+                else:
+                    # 如果没有代码块标记，尝试直接解析整个内容
+                    # 寻找第一个{和最后一个}之间的内容
+                    start_idx = content.find('{')
+                    end_idx = content.rfind('}')
+                    if start_idx != -1 and end_idx != -1:
+                        content = content[start_idx:end_idx + 1]
+
+                # 解析为JSON
+                outline_data = json.loads(content)
+
+                # 从大模型输出中获取标题，如果没有则使用默认生成方式
+                article_title = outline_data.get("title", f"{content_type}（{language_style}风格）")
+
+                # 创建项目
+                project = WritingProject(
+                    id=project_id,
+                    user_input=user_input,
+                    content_type=content_type,
+                    language_style=language_style,
+                    word_count=word_count,
+                    model=model,
+                    user_id=user_id,
+                    title=article_title,
+                    reference=reference  # 存储参考信息
+                )
+                db.add(project)
+
+                # 章节创建逻辑保持不变...
+                for main_idx, section in enumerate(outline_data.get("sections", [])):
+                    main_chapter_id = get_uuid()
+                    main_chapter = WritingChapter(
+                        id=main_chapter_id,
                         project_id=project_id,
-                        title=subsection.get("title", "未命名子章节"),
-                        summary=subsection.get("summary", ""),
-                        level=2,
-                        parent_id=main_chapter_id,
-                        order_index=sub_idx
+                        title=section.get("title", "未命名章节"),
+                        summary=section.get("summary", ""),
+                        level=1,
+                        parent_id=None,
+                        order_index=main_idx
                     )
-                    db.add(sub_chapter)
+                    db.add(main_chapter)
 
-            db.commit()
-            db.refresh(project)
+                    # 创建子章节
+                    for sub_idx, subsection in enumerate(section.get("children", [])):
+                        sub_chapter = WritingChapter(
+                            id=get_uuid(),
+                            project_id=project_id,
+                            title=subsection.get("title", "未命名子章节"),
+                            summary=subsection.get("summary", ""),
+                            level=2,
+                            parent_id=main_chapter_id,
+                            order_index=sub_idx
+                        )
+                        db.add(sub_chapter)
 
-            # 返回创建的大纲结构
-            outline_structure = ChapterService.get_project_outline(db, project_id)
+                db.commit()
+                db.refresh(project)
 
-            return {
-                "outline_md": ChapterService.get_markdown_outline(db, project_id),
-                "outline_structure": outline_structure,
-                "article_id": project_id
-            }
+                # 返回创建的大纲结构
+                outline_structure = ChapterService.get_project_outline(db, project_id)
+
+                return {
+                    "outline_md": ChapterService.get_markdown_outline(db, project_id),
+                    "outline_structure": outline_structure,
+                    "article_id": project_id
+                }
 
         except Exception as e:
             db.rollback()
@@ -305,6 +351,109 @@ class WritingService(CommonService):
                 })
 
         return context
+
+    @classmethod
+    def _parse_custom_outline(cls, db: Session, project_id: str, markdown_outline: str) -> Dict[str, Any]:
+        """
+        解析用户提供的自定义Markdown大纲，创建相应的章节结构
+
+        参数:
+            db: 数据库会话
+            project_id: 项目ID
+            markdown_outline: Markdown格式的大纲内容
+
+        返回:
+            Dict: 创建的大纲结构
+        """
+        lines = markdown_outline.strip().split('\n')
+
+        # 跟踪当前的主章节ID和索引
+        current_main_chapter_id = None
+        main_idx = 0
+        sub_idx = 0
+
+        # 逐行解析Markdown
+        for line in lines:
+            line = line.strip()
+
+            # 忽略空行和一级标题（通常是文章标题）
+            if not line or line.startswith('# '):
+                continue
+
+            # 解析二级标题（主章节）
+            if line.startswith('## '):
+                title = line.replace('## ', '').strip()
+                # 提取可能的编号前缀，如 "1. 章节标题"
+                if '.' in title and title.split('.')[0].strip().isdigit():
+                    title = title.split('.', 1)[1].strip()
+
+                main_chapter_id = get_uuid()
+                summary = ""
+
+                # 查找下一行是否为摘要
+                next_line_idx = lines.index(line) + 1
+                if next_line_idx < len(lines) and not lines[next_line_idx].startswith('#') and not lines[
+                    next_line_idx].startswith('-'):
+                    summary = lines[next_line_idx].strip()
+                    if summary.startswith('摘要：'):
+                        summary = summary[3:].strip()
+
+                main_chapter = WritingChapter(
+                    id=main_chapter_id,
+                    project_id=project_id,
+                    title=title,
+                    summary=summary,
+                    level=1,
+                    parent_id=None,
+                    order_index=main_idx
+                )
+                db.add(main_chapter)
+
+                current_main_chapter_id = main_chapter_id
+                main_idx += 1
+                sub_idx = 0
+
+            # 解析三级标题或列表项（子章节）
+            elif (line.startswith('### ') or line.startswith('- ')) and current_main_chapter_id:
+                if line.startswith('### '):
+                    title = line.replace('### ', '').strip()
+                else:
+                    title = line.replace('- ', '').strip()
+
+                # 提取可能的编号和摘要
+                summary = ""
+
+                # 处理可能的格式："1.1 子章节标题 (摘要：...)"
+                if ' (摘要：' in title:
+                    title_parts = title.split(' (摘要：', 1)
+                    title = title_parts[0].strip()
+                    summary = title_parts[1].rstrip(')').strip()
+
+                # 处理可能的数字编号
+                if '.' in title and title.split('.')[0].strip().isdigit():
+                    # 可能是 "1.1 子章节标题" 格式
+                    title = title.split('.', 1)[1].strip()
+                    if '.' in title and title.split('.')[0].strip().isdigit():
+                        title = title.split('.', 1)[1].strip()
+
+                sub_chapter = WritingChapter(
+                    id=get_uuid(),
+                    project_id=project_id,
+                    title=title,
+                    summary=summary,
+                    level=2,
+                    parent_id=current_main_chapter_id,
+                    order_index=sub_idx
+                )
+                db.add(sub_chapter)
+
+                sub_idx += 1
+
+        # 提交更改
+        db.commit()
+
+        # 返回创建的大纲结构
+        return ChapterService.get_project_outline(db, project_id)
 
     @classmethod
     def _build_writing_prompt(cls, db: Session, chapter_id: str,
