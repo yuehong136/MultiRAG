@@ -106,6 +106,9 @@ async def component_run(
     try:
         node_data = json.loads(node_data_str)
         input_values = json.loads(input_str)
+        # 因为是单次执行，所以值是用户直接写在参数里面的，所以要将这些字面量提取出来
+        literal_params = extract_literal_parameters(node_data)
+        merged_input_values = merge_with_input_values(literal_params, input_values)
         batch_input_type = extract_batch_input_types(node_data)
         batch_values = convert_input_values(batch_str, batch_input_type) if batch_str else None
 
@@ -128,7 +131,7 @@ async def component_run(
 
         start_time = datetime.now().timestamp()
 
-        execute_result = await component.execute_alone(input_values, batch_values)
+        execute_result = await component.execute_alone(merged_input_values, batch_values)
 
         end_time = datetime.now().timestamp()
 
@@ -160,6 +163,55 @@ async def component_run(
             status_code=500,
             detail=f"Error processing request: {str(e)}"
         )
+
+
+def extract_literal_parameters(node_data):
+    """
+    Extract key-value pairs from inputParameters where the value type is 'literal'
+
+    Args:
+        node_data (dict): The node data containing inputParameters
+
+    Returns:
+        dict: A dictionary of parameter name to literal content
+    """
+    literal_params = {}
+
+    if 'data' in node_data and 'inputs' in node_data['data'] and 'inputParameters' in node_data['data']['inputs']:
+        input_parameters = node_data['data']['inputs']['inputParameters']
+
+        for param in input_parameters:
+            if (param.get('input') and
+                    param.get('input').get('value') and
+                    param.get('input').get('value').get('type') == 'literal'):
+
+                name = param.get('name')
+                content = param.get('input').get('value').get('content')
+
+                if name and content is not None:
+                    literal_params[name] = content
+
+    return literal_params
+
+
+def merge_with_input_values(literal_params, input_values):
+    """
+    Merge literal parameters with input values, with input_values taking precedence
+
+    Args:
+        literal_params (dict): The extracted literal parameters
+        input_values (dict): The input values
+
+    Returns:
+        dict: Merged dictionary with input_values taking precedence
+    """
+    merged = literal_params.copy()
+
+    # Update with input_values (input_values takes precedence)
+    if input_values:
+        merged.update(input_values)
+
+    return merged
 
 
 def convert_string_to_typed_value(value_str, type_info):
