@@ -142,20 +142,23 @@ class Dealer:
                         filter=filter
                     )
 
-                    # logging.info(f"Search results for {idxnm}: {search_results}")
+                    #logging.info(f"Search results for {idxnm}: {search_results}")
                     logging.info(f"Search results for {idxnm} ~ 详细查询数据请解开 core/nlp/search 下的注释")
 
                     # Process search results
                     if search_results:
                         total += len(search_results[0])
-                        ids.extend([str(hit['id']) for hit in search_results[0]])
                         for hit in search_results[0]:
+                            # 根据Milvus版本选择pk或id，2.5.2及以下版本hit中是id
+                            hit_id = str(hit.get('pk', hit.get('id')))
+                            ids.append(hit_id)
+
                             hit_fields = {}
                             for field in src:
-                                hit_fields[field] = hit['entity'].get(field, "")  # Extract each field's data
-                            # 将字典存储在以id为键的字段字典中
-                            fields[str(hit['id'])] = hit_fields
-                            # fields[str(hit['id'])] = hit['entity'].get("content_with_weight", "")  # Extract the 'text' field
+                                hit_fields[field] = hit['entity'].get(field, "")  # 提取每个字段的数据
+
+                            # 存储到fields字典中
+                            fields[hit_id] = hit_fields
                 except Exception as e:
                     logging.error(f"Error searching in collection {idxnm}: {str(e)}")
 
@@ -391,7 +394,7 @@ class Dealer:
             title_tks = [t for t in sres.field[i].get("title_tks", "").split() if t]
             question_tks = [t for t in sres.field[i].get("question_tks", "").split() if t]
             important_kwd = sres.field[i].get("important_kwd", [])
-            tks = content_ltks + title_tks * 2 + important_kwd * 5 + question_tks*6
+            tks = content_ltks + title_tks * 2 + important_kwd * 5 + question_tks * 6
             ins_tw.append(tks)
 
         sim, tksim, vtsim = self.qryr.hybrid_similarity(sres.query_vector,
