@@ -296,12 +296,19 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
                 "available_int": int(sres.field[id].get("available_int", 1)),
                 "positions": sres.field[id].get("position_int", [])
             }
-            if len(d["positions"]) % 5 == 0:
-                poss = []
-                for i in range(0, len(d["positions"]), 5):
-                    poss.append([float(d["positions"][i]), float(d["positions"][i + 1]), float(d["positions"][i + 2]),
-                                 float(d["positions"][i + 3]), float(d["positions"][i + 4])])
-                d["positions"] = poss
+            # if len(d["positions"]) % 5 == 0:
+            #     poss = []
+            #     for i in range(0, len(d["positions"]), 5):
+            #         poss.append([float(d["positions"][i]), float(d["positions"][i + 1]), float(d["positions"][i + 2]),
+            #                      float(d["positions"][i + 3]), float(d["positions"][i + 4])])
+            #     d["positions"] = poss
+
+            # assert isinstance(d["positions"], list)
+            # assert len(d["positions"]) == 0 or (isinstance(d["positions"][0], list) and len(d["positions"][0]) == 5)
+            if isinstance(d["positions"], str):
+                d["positions"] = json.loads(d["positions"])
+            assert isinstance(d["positions"], list)
+            assert len(d["positions"]) == 0 or (isinstance(d["positions"][0], list) and len(d["positions"][0]) == 5)
             res["chunks"].append(d)
         return get_json_result(data=res)
     except Exception as e:
