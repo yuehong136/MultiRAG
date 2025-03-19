@@ -223,6 +223,7 @@ class DocumentService(CommonService):
             Knowledgebase.token_num: Knowledgebase.token_num + token_num,
             Knowledgebase.chunk_num: Knowledgebase.chunk_num + chunk_num
         })
+        db.commit()
         return kb_update
 
     @classmethod
@@ -260,6 +261,7 @@ class DocumentService(CommonService):
             Knowledgebase.token_num: Knowledgebase.token_num - token_num,
             Knowledgebase.chunk_num: Knowledgebase.chunk_num - chunk_num
         })
+        db.commit()
         return kb_update
 
     @classmethod

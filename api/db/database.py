@@ -30,7 +30,7 @@ engine = create_engine(
     pool_recycle=database_config.get('pool_recycle', 1800),
     echo=False
 )
-SessionLocal = sessionmaker(autocommit=true, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
