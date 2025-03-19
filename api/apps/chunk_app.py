@@ -280,8 +280,14 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
             "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords,
             "sort": True
         }
+        # 先计算出所有问题块的总数
+        query_count = {
+            "doc_ids": [request.doc_id], "question": request.keywords,
+            "sort": True
+        }
+        total = settings.retrievaler.search(query_count, search.index_name_one(tenant_id, kb.name)).total
         sres = settings.retrievaler.search(query, search.index_name_one(tenant_id, kb.name))
-        res = {"total": sres.total, "chunks": [], "doc": doc.to_dict()}
+        res = {"total": total, "chunks": [], "doc": doc.to_dict()}
         for id in sres.ids:
             d = {
                 "chunk_id": id,
