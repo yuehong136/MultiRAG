@@ -48,16 +48,34 @@ class Dealer:
         keywords: list[str] | None = None
         group_docs: list[list] | None = None
 
-    def get_vector(self, txt, emb_mdl, topk=10, similarity=0.1):
+    def get_vector(self, collection_name, txt, emb_mdl, topk=10, similarity=0.1):
         qv, _ = emb_mdl.encode_queries(txt)
         shape = np.array(qv).shape
         if len(shape) > 1:
             raise Exception(
                 f"Dealer.get_vector returned array's shape {shape} doesn't match expectation(exact one dimension).")
+
         embedding_data = [float(v) for v in qv]
-        # todo 适配任意维度向量列名
-        # vector_column_name = f"q_{len(embedding_data)}_vec"
-        vector_column_name = "vector"
+        vector_dim = len(embedding_data)
+
+        # 根据向量维度选择字段名
+        vector_column_name = f"q_{vector_dim}_vec"
+
+        # 检查集合是否有该维度的字段，如果没有则回退到标准vector字段
+        try:
+            schema = self.milvus_conn.describe_collection(collection_name)
+            has_dim_field = False
+            for field in schema['fields']:
+                if field['name'] == vector_column_name:
+                    has_dim_field = True
+                    break
+            if not has_dim_field:
+                vector_column_name = "vector"
+        except Exception:
+            # 出错时默认使用标准vector字段
+            vector_column_name = "vector"
+
+        logging.info(f"使用向量字段: {vector_column_name} 进行查询，维度: {vector_dim}")
         return MatchDenseExpr(vector_column_name, embedding_data, 'float', 'cosine', topk, {"similarity": similarity})
 
     def get_filters(self, req):
@@ -114,14 +132,29 @@ class Dealer:
         src = req.get("fields", ["docnm_kwd", "content_ltks", "kb_id", "img_id", "title_tks",
                                  "doc_id", "vector", "position_int", "content_with_weight"])
         filter = req.get("filter_exp", "")
+
+        # 检查是否需要添加维度特定向量字段
+        vector_dim = None
+        if req.get("vector") and embd_mdl:
+            # 获取向量维度
+            sample_vec, _ = embd_mdl.encode_queries("测试")
+            if len(sample_vec) > 0:
+                vector_dim = len(sample_vec)
+                dim_field = f"q_{vector_dim}_vec"
+                if dim_field not in src:
+                    src.append(dim_field)
+                    logging.info(f"添加维度特定向量字段 {dim_field} 到查询字段")
+
         # Vector search parameters
         if req.get("vector"):
             assert embd_mdl, "No embedding model selected"
-            vector_search_params = self.get_vector(qst, embd_mdl, req.get("topk", 1024), req.get("similarity", 0.1))
-            query_vector = vector_search_params.embedding_data
 
             for idxnm in idxnms:
                 logging.info(f"正在搜索的集合: {idxnm}")
+                vector_search_params = self.get_vector(idxnm, qst, embd_mdl, req.get("topk", 1024), req.get("similarity", 0.1))
+                query_vector = vector_search_params.embedding_data
+                vector_column_name = vector_search_params.vector_column_name
+                src.append(vector_column_name)
                 # todo 后续考虑不同维度字段检索情况，目前统一叫vector，eg.用户512维的输入无法比对718存储的vector，动态名字就可以了
                 try:
                     # 在Milvus中执行搜索
@@ -355,22 +388,20 @@ class Dealer:
     # def rerank(self, sres, query, tkweight=0.3,
     #            vtweight=0.7, cfield="content_ltks"):
     #     _, keywords = self.qryr.question(query)
-    #     ins_embd = [
-    #         Dealer.trans2floats(
-    #             sres.field[i].get("q_%d_vec" % len(sres.query_vector), "\t".join(["0"] * len(sres.query_vector)))) for i
-    #         in sres.ids]
+    #     ins_embd = [sres.query_vector for i in sres.ids]
     #     if not ins_embd:
     #         return [], [], []
     #
-    #     for i in sres.ids:
-    #         if isinstance(sres.field[i].get("important_kwd", []), str):
-    #             sres.field[i]["important_kwd"] = [sres.field[i]["important_kwd"]]
     #     ins_tw = []
+    #     # for i in sres.ids:
+    #     #     tks = sres.field[i].split()
+    #     #     ins_tw.append(tks)
     #     for i in sres.ids:
     #         content_ltks = sres.field[i][cfield].split()
     #         title_tks = [t for t in sres.field[i].get("title_tks", "").split() if t]
+    #         question_tks = [t for t in sres.field[i].get("question_tks", "").split() if t]
     #         important_kwd = sres.field[i].get("important_kwd", [])
-    #         tks = content_ltks + title_tks + important_kwd
+    #         tks = content_ltks + title_tks * 2 + important_kwd * 5 + question_tks * 6
     #         ins_tw.append(tks)
     #
     #     sim, tksim, vtsim = self.qryr.hybrid_similarity(sres.query_vector,
@@ -378,29 +409,78 @@ class Dealer:
     #                                                     keywords,
     #                                                     ins_tw, tkweight, vtweight)
     #     return sim, tksim, vtsim
-    def rerank(self, sres, query, tkweight=0.3,
-               vtweight=0.7, cfield="content_ltks"):
+    def rerank(self, sres, query, tkweight=0.3, vtweight=0.7, cfield="content_ltks"):
+        """
+        对搜索结果进行重排序
+
+        Args:
+            sres: 搜索结果
+            query: 查询文本
+            tkweight: 词项相似度权重
+            vtweight: 向量相似度权重
+            cfield: 内容字段名
+
+        Returns:
+            重排序后的相似度分数
+        """
         _, keywords = self.qryr.question(query)
-        ins_embd = [sres.query_vector for i in sres.ids]
-        if not ins_embd:
+
+        # 检查结果是否为空
+        if not sres.ids:
             return [], [], []
 
-        ins_tw = []
-        # for i in sres.ids:
-        #     tks = sres.field[i].split()
-        #     ins_tw.append(tks)
+        # 获取结果中的嵌入向量
+        vector_dim = len(sres.query_vector)
+        dim_field = f"q_{vector_dim}_vec"
+
+        ins_embd = []
         for i in sres.ids:
-            content_ltks = sres.field[i][cfield].split()
+            # 优先使用维度特定字段，如果没有则使用标准vector字段
+            if dim_field in sres.field[i] and sres.field[i][dim_field]:
+                vector = sres.field[i][dim_field]
+            else:
+                vector = sres.field[i].get("vector", [0.0] * vector_dim)
+
+            # 确保向量是列表格式
+            if isinstance(vector, str):
+                # 如果是字符串格式，尝试解析
+                try:
+                    vector = [float(v) for v in vector.split()]
+                except:
+                    vector = [0.0] * vector_dim
+
+            ins_embd.append(vector)
+
+        # 处理文本相似度比较所需的token列表
+        ins_tw = []
+        for i in sres.ids:
+            content_ltks = sres.field[i].get(cfield, "").split()
             title_tks = [t for t in sres.field[i].get("title_tks", "").split() if t]
             question_tks = [t for t in sres.field[i].get("question_tks", "").split() if t]
-            important_kwd = sres.field[i].get("important_kwd", [])
+            important_kwd = []
+
+            # 处理important_kwd字段，它可能是字符串或列表
+            if "important_kwd" in sres.field[i]:
+                if isinstance(sres.field[i]["important_kwd"], list):
+                    important_kwd = sres.field[i]["important_kwd"]
+                elif isinstance(sres.field[i]["important_kwd"], str):
+                    if sres.field[i]["important_kwd"]:
+                        important_kwd = [sres.field[i]["important_kwd"]]
+
+            # 合并所有token，给不同来源的token加权
             tks = content_ltks + title_tks * 2 + important_kwd * 5 + question_tks * 6
             ins_tw.append(tks)
 
-        sim, tksim, vtsim = self.qryr.hybrid_similarity(sres.query_vector,
-                                                        ins_embd,
-                                                        keywords,
-                                                        ins_tw, tkweight, vtweight)
+        # 计算混合相似度
+        sim, tksim, vtsim = self.qryr.hybrid_similarity(
+            sres.query_vector,
+            ins_embd,
+            keywords,
+            ins_tw,
+            tkweight,
+            vtweight
+        )
+
         return sim, tksim, vtsim
 
     def rerank_by_model(self, rerank_mdl, sres, query, tkweight=0.3,

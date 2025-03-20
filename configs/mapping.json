@@ -2,7 +2,7 @@
   "mappings": {
     "dynamic_templates": [
       {
-        "vector_template": {
+        "standard_vector_template": {
           "match": "vector",
           "mapping": {
             "type": "FLOAT_VECTOR",
@@ -12,88 +12,46 @@
         }
       },
       {
-        "text_template": {
+        "dynamic_vector_template": {
+          "match_pattern": "regex",
+          "match": "q_[0-9]+_vec",
+          "mapping": {
+            "type": "FLOAT_VECTOR",
+            "dims": "auto",
+            "similarity": "COSINE"
+          }
+        }
+      },
+      {
+        "primary_key_template": {
+          "match": "pk",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 512,
+            "is_primary": true
+          }
+        }
+      },
+      {
+        "doc_id_template": {
           "match": "doc_id",
           "mapping": {
-            "type": "VarChar",
+            "type": "VARCHAR",
             "max_length": 128
           }
         }
       },
       {
-        "text_template": {
+        "kb_id_template": {
           "match": "kb_id",
           "mapping": {
-            "type": "VarChar",
+            "type": "VARCHAR",
             "max_length": 128
           }
         }
       },
       {
-        "text_template": {
-          "match": "docnm_kwd",
-          "mapping": {
-            "type": "VarChar",
-            "max_length": 256
-          }
-        }
-      },
-      {
-        "text_template": {
-          "match": "title_tks",
-          "mapping": {
-            "type": "VarChar",
-            "max_length": 256
-          }
-        }
-      },
-      {
-        "text_template": {
-          "match": "title_sm_tks",
-          "mapping": {
-            "type": "VarChar",
-            "max_length": 256
-          }
-        }
-      },
-      {
-        "text_template": {
-          "match": "content_with_weight",
-          "mapping": {
-            "type": "VarChar",
-            "max_length": 8192
-          }
-        }
-      },
-      {
-        "text_template": {
-          "match": "content_ltks",
-          "mapping": {
-            "type": "VarChar",
-            "max_length": 8192
-          }
-        }
-      },
-      {
-        "text_template": {
-          "match": "content_sm_ltks",
-          "mapping": {
-            "type": "VarChar",
-            "max_length": 8192
-          }
-        }
-      },
-      {
-        "text_template": {
-          "match": "create_time",
-          "mapping": {
-            "type": "VarChar",
-            "max_length": 64
-          }
-        }
-      },
-      {
-        "text_template": {
+        "timestamp_template": {
           "match": "create_timestamp_flt",
           "mapping": {
             "type": "FLOAT"
@@ -101,16 +59,79 @@
         }
       },
       {
-        "text_template": {
-          "match": "pk",
+        "content_with_weight_template": {
+          "match": "content_with_weight",
           "mapping": {
-            "type": "VarChar",
-            "max_length": 512
+            "type": "VARCHAR",
+            "max_length": 8192
           }
         }
       },
-            {
-        "text_template": {
+      {
+        "content_ltks_template": {
+          "match": "content_ltks",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 8192
+          }
+        }
+      },
+      {
+        "content_sm_ltks_template": {
+          "match": "content_sm_ltks",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 8192
+          }
+        }
+      },
+      {
+        "docnm_kwd_template": {
+          "match": "docnm_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "title_tks_template": {
+          "match": "title_tks",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "title_sm_tks_template": {
+          "match": "title_sm_tks",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "img_id_template": {
+          "match": "img_id",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "create_time_template": {
+          "match": "create_time",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 64
+          }
+        }
+      },
+      {
+        "page_num_int_template": {
           "match": "page_num_int",
           "mapping": {
             "type": "JSON"
@@ -118,7 +139,7 @@
         }
       },
       {
-        "text_template": {
+        "position_int_template": {
           "match": "position_int",
           "mapping": {
             "type": "JSON"
@@ -126,7 +147,7 @@
         }
       },
       {
-        "text_template": {
+        "top_int_template": {
           "match": "top_int",
           "mapping": {
             "type": "JSON"
@@ -134,19 +155,45 @@
         }
       },
       {
-        "text_template": {
-          "match": "img_id",
+        "auth_template": {
+          "match": "auth",
           "mapping": {
-            "type": "VarChar",
-            "max_length": 256
+            "type": "ARRAY",
+            "element_type": "VARCHAR",
+            "max_length": 256,
+            "max_capacity": 100
           }
         }
       },
       {
-        "text_template": {
-          "match": "auth",
+        "important_kwd_template": {
+          "match": "important_kwd",
           "mapping": {
-            "type": "Array"
+            "type": "ARRAY",
+            "element_type": "VARCHAR",
+            "max_length": 256,
+            "max_capacity": 100
+          }
+        }
+      },
+      {
+        "question_kwd_template": {
+          "match": "question_kwd",
+          "mapping": {
+            "type": "ARRAY",
+            "element_type": "VARCHAR",
+            "max_length": 256,
+            "max_capacity": 100
+          }
+        }
+      },
+      {
+        "default_template": {
+          "match_pattern": "regex",
+          "match": ".*",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
           }
         }
       }

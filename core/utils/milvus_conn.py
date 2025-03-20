@@ -7,6 +7,7 @@
 @desc:
 """
 import logging
+import re
 from uuid import uuid4
 from datetime import datetime
 
@@ -80,10 +81,21 @@ class MilvusConnection(DocStoreConnection):
         return result[0] if result else None
 
     def search(
-            self, selectFields: list[str], highlightFields: list[str], condition: dict,
-            matchExprs: list[MatchExpr], orderBy: OrderByExpr, offset: int, limit: int,
-            indexNames: str | list[str], knowledgebaseIds: list[str]
+            self, selectFields: list[str],
+            highlightFields: list[str],
+            condition: dict,
+            matchExprs: list[MatchExpr],
+            orderBy: OrderByExpr,
+            offset: int,
+            limit: int,
+            indexNames: str | list[str],
+            knowledgebaseIds: list[str],
+            aggFields: list[str] = [],
+            rank_feature: dict | None = None
     ) -> list[dict] | pl.DataFrame:
+        """
+        TODO: Milvus doesn't provide highlight
+        """
         data = [expr.query_data for expr in matchExprs if isinstance(expr, MatchDenseExpr)]
         if not data:
             raise ValueError("No valid dense vector query data found in matchExprs")
@@ -764,50 +776,171 @@ class MilvusConnection(DocStoreConnection):
             self.create_index(collection_name, index_params, timeout=timeout)
             self.load_collection(collection_name, timeout=timeout)
 
-    def create_collection_with_mapping(self, collection_name, mapping):
+
+    def create_collection_with_mapping(self, collection_name, mapping, auto_dimensions=None):
+        """
+        根据mapping配置创建Milvus集合，支持动态向量维度
+
+        Args:
+            collection_name: 集合名称
+            mapping: 映射配置，包含字段定义和索引设置
+            auto_dimensions: 维度特定值的字典，格式为 {"字段名": 实际维度}
+        """
         dynamic_templates = mapping.get("mappings", {}).get("dynamic_templates", [])
         fields = []
+
+        # 初始化自动维度字典
+        if auto_dimensions is None:
+            auto_dimensions = {}
+
+        # 先找出所有regex模式的模板
+        regex_patterns = []
+        for template in dynamic_templates:
+            for key, value in template.items():
+                if value.get("match_pattern", "") == "regex":
+                    regex_patterns.append((value.get("match", ""), value.get("mapping", {})))
 
         # 解析动态模板中的字段信息
         for template in dynamic_templates:
             for key, value in template.items():
-                match_pattern = value.get("match", "")
-                mapping_type = value.get("mapping", {}).get("type", "")
-                dims = value.get("mapping", {}).get("dims", 128)
+                match_pattern = value.get("match_pattern", "")
+                # 如果是正则匹配模式，跳过直接创建字段
+                if match_pattern == "regex":
+                    continue
 
-                if match_pattern == "vector":
-                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.FLOAT_VECTOR, dim=dims))
-                elif mapping_type == "VarChar" and match_pattern != "pk":
-                    max_length = value.get("mapping", {}).get("max_length", 256)  # 默认设置 max_length 为 256
-                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.VARCHAR, max_length=max_length, is_nullable=True))
-                elif match_pattern == "pk":
-                    max_length = value.get("mapping", {}).get("max_length", 256)  # 默认设置 max_length 为 256
-                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.VARCHAR, max_length=max_length,
-                                              is_primary=True))
+                match = value.get("match", "")
+                mapping_type = value.get("mapping", {}).get("type", "")
+
+                # 处理向量字段的维度
+                if mapping_type == "FLOAT_VECTOR":
+                    dims = value.get("mapping", {}).get("dims", 768)
+                    if dims == "auto":
+                        if match in auto_dimensions:
+                            dims = auto_dimensions[match]
+                        else:
+                            # 默认使用768维
+                            dims = 768
+
+                    fields.append(FieldSchema(name=match, dtype=DataType.FLOAT_VECTOR, dim=dims, is_nullable=True))
+                elif mapping_type == "VARCHAR":
+                    max_length = value.get("mapping", {}).get("max_length", 256)
+                    is_primary = value.get("mapping", {}).get("is_primary", False)
+                    fields.append(FieldSchema(name=match, dtype=DataType.VARCHAR,
+                                              max_length=max_length, is_primary=is_primary,
+                                              is_nullable=True))
                 elif mapping_type == "FLOAT":
-                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.FLOAT, is_nullable=True))
+                    fields.append(FieldSchema(name=match, dtype=DataType.FLOAT, is_nullable=True))
+                elif mapping_type == "INT64":
+                    fields.append(FieldSchema(name=match, dtype=DataType.INT64, is_nullable=True))
                 elif mapping_type == "JSON":
-                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.JSON, is_nullable=True))
-                elif mapping_type == "Array":
-                    fields.append(FieldSchema(name=match_pattern, dtype=DataType.ARRAY, element_type=DataType.VARCHAR,
-                                              max_length=256, max_capacity=4096, is_nullable=True))
+                    fields.append(FieldSchema(name=match, dtype=DataType.JSON, is_nullable=True))
+                elif mapping_type == "ARRAY":
+                    element_type = value.get("mapping", {}).get("element_type", DataType.VARCHAR)
+                    max_length = value.get("mapping", {}).get("max_length", 256)
+                    max_capacity = value.get("mapping", {}).get("max_capacity", 4096)
+                    fields.append(FieldSchema(name=match, dtype=DataType.ARRAY,
+                                              element_type=getattr(DataType, element_type) if isinstance(element_type,
+                                                                                                         str) else element_type,
+                                              max_length=max_length, max_capacity=max_capacity,
+                                              is_nullable=True))
+
+        # 添加维度特定的向量字段
+        for vector_field, dim in auto_dimensions.items():
+            # 跳过已添加的字段
+            if any(field.name == vector_field for field in fields):
+                continue
+
+            # 如果是维度特定字段模式 (q_{dim}_vec)
+            if re.match(r'q_\d+_vec', vector_field):
+                fields.append(FieldSchema(name=vector_field, dtype=DataType.FLOAT_VECTOR, dim=dim, is_nullable=True))
+                logging.info(f"添加维度特定向量字段: {vector_field}, 维度: {dim}")
+
+        # 创建集合模式
         schema = CollectionSchema(fields=fields, description="Created from mapping file", enable_dynamic_field=True)
+
+        # 创建集合
         self.create_collection(collection_name, schema=schema)
+        logging.info(f"成功创建集合: {collection_name} 包含字段: {[field.name for field in fields]}")
+
         # 处理索引相关的逻辑
-        for template in dynamic_templates:
-            for key, value in template.items():
-                if value.get("match", "") == "vector":
-                    index_params = {
-                        "field_name": "vector",  # 确保 field_name 正确
-                        "index_type": "IVF_FLAT",
-                        "params": {"nlist": 1024},
-                        "index_name": "vector",
-                        "metric_type": value.get("mapping", {}).get("similarity", "COSINE")
-                    }
+        for field in fields:
+            if field.dtype == DataType.FLOAT_VECTOR:
+                index_params = {
+                    "field_name": field.name,
+                    "index_type": "IVF_FLAT",
+                    "params": {"nlist": 128},
+                    "index_name": field.name,
+                    "metric_type": "COSINE"
+                }
+                try:
                     self.create_index(collection_name, index_params)
+                    logging.info(f"为字段 {field.name} 创建索引成功")
+                except Exception as e:
+                    logging.warning(f"为字段 {field.name} 创建索引失败: {str(e)}")
 
         # 加载集合
-        self.load_collection(collection_name)
+        try:
+            self.load_collection(collection_name)
+            logging.info(f"成功加载集合 {collection_name}")
+        except Exception as e:
+            logging.warning(f"加载集合 {collection_name} 失败: {str(e)}")
+
+    def update_collection_schema(self, collection_name, vector_dimension):
+        """
+        更新现有集合的模式，添加支持新的向量维度
+
+        Args:
+            collection_name: 集合名称
+            vector_dimension: 要添加的向量维度
+
+        Returns:
+            bool: 成功返回True，失败返回False
+        """
+        if not self.has_collection(collection_name):
+            logging.error(f"集合 {collection_name} 不存在")
+            return False
+
+        try:
+            # 检查字段是否已存在
+            schema = self.describe_collection(collection_name)
+            field_exists = False
+
+            for field in schema['fields']:
+                if field['name'] == f"q_{vector_dimension}_vec":
+                    field_exists = True
+                    break
+
+            if field_exists:
+                logging.info(f"字段 q_{vector_dimension}_vec 已存在于集合 {collection_name} 中")
+                return True
+
+            # 向集合添加新字段
+            from pymilvus.orm import FieldSchema, DataType
+            field_schema = FieldSchema(
+                name=f"q_{vector_dimension}_vec",
+                dtype=DataType.FLOAT_VECTOR,
+                dim=vector_dimension
+            )
+
+            conn = self._get_connection()
+            conn.create_field(collection_name, field_schema)
+            logging.info(f"成功向集合 {collection_name} 添加字段 q_{vector_dimension}_vec")
+
+            # 为新字段创建索引
+            index_params = {
+                "field_name": f"q_{vector_dimension}_vec",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": 1024},
+                "metric_type": "COSINE"
+            }
+            self.create_index(collection_name, index_params)
+            logging.info(f"成功为字段 q_{vector_dimension}_vec 创建索引")
+
+            return True
+        except Exception as e:
+            logging.error(f"更新集合模式失败: {e}")
+            return False
+
 
     def close(self):
         connections.disconnect(self._using)

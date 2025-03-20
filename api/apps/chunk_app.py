@@ -8,7 +8,9 @@
 """
 import datetime
 import json
+import logging
 
+import numpy as np
 import xxhash
 import re
 
@@ -554,10 +556,14 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
                 [rag_tokenizer.is_chinese(t) for t in q + a]))
 
         # 计算向量
-        v, c = embd_mdl.encode([doc.name, request.content_with_weight if not d["question_kwd"] else "\n".join(d["question_kwd"])])
+        v, c = embd_mdl.encode(
+            [doc.name, request.content_with_weight if not d["question_kwd"] else "\n".join(d["question_kwd"])])
         v = 0.1 * v[0] + 0.9 * v[1] if doc.parser_id != ParserType.QA else v[1]
-        # todo 需要支持任意维度向量字段，目前写死vector
-        d["vector"] = v.tolist()
+
+        # 同时存储到标准vector字段和维度特定字段
+        vector_dim = len(v.tolist())
+        d["vector"] = v.tolist()  # 始终保存到标准vector字段以保持兼容性
+        d[f"q_{vector_dim}_vec"] = v.tolist()  # 同时保存到维度特定字段
 
         # 更新数据库
         update_condition = {"pk": request.chunk_id}  # 主键查询条件
@@ -940,10 +946,15 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         embd_id = DocumentService.get_embd_id(db, req["doc_id"])
         embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, embd_id)
 
-        v, c = embd_mdl.encode([doc.name, req["content_with_weight"] if not d["question_kwd"] else "\n".join(d["question_kwd"])])
+        v, c = embd_mdl.encode(
+            [doc.name, req["content_with_weight"] if not d["question_kwd"] else "\n".join(d["question_kwd"])])
         v = 0.1 * v[0] + 0.9 * v[1]
-        # todo 需要支持任意维度向量字段，目前写死vector
-        d["vector"] = v.tolist()
+
+        # 同时存储到标准vector字段和维度特定字段
+        vector_dim = len(v.tolist())
+        d["vector"] = v.tolist()  # 始终保存到标准vector字段以保持兼容性
+        d[f"q_{vector_dim}_vec"] = v.tolist()  # 同时保存到维度特定字段
+
         settings.docStoreConn.insert(search.index_name_one(tenant_id, kb.name), [d])
 
         DocumentService.increment_chunk_num(
@@ -1008,9 +1019,29 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             question += keyword_extraction(chat_mdl, question)
         filter_exp = ""
         kb = KnowledgebaseService.get_by_id(db, req["kb_id"])
-        ranks = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, kb.name, req["page"], req["size"],
-                                      req["similarity_threshold"], req["vector_similarity_weight"], req["top_k"],
-                                      req["doc_ids"], rerank_mdl=rerank_mdl)
+
+        # 在embd_mdl定义后添加以下代码以获取向量维度
+        sample_vec, _ = embd_mdl.encode(["测试文本"])
+        vector_dim = None
+        if isinstance(sample_vec, np.ndarray) and sample_vec.ndim > 1:
+            vector_dim = sample_vec.shape[1]
+        elif isinstance(sample_vec, list) and len(sample_vec) > 0:
+            if isinstance(sample_vec[0], np.ndarray) or isinstance(sample_vec[0], list):
+                vector_dim = len(sample_vec[0])
+            elif isinstance(sample_vec[0], (float, np.float32, np.float64)):
+                vector_dim = len(sample_vec)
+
+        # 如果获取到了向量维度，可以在过滤条件中包含这个信息
+        if vector_dim:
+            logging.info(f"检索使用向量维度: {vector_dim}")
+
+        # 当调用retrieval函数时，传递维度信息
+        ranks = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, kb.name, req["page"],
+                                               req["size"],
+                                               req["similarity_threshold"], req["vector_similarity_weight"],
+                                               req["top_k"],
+                                               req["doc_ids"], rerank_mdl=rerank_mdl)
+
         for c in ranks["chunks"]:
             c.pop("vector", None)
 

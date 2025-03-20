@@ -303,53 +303,132 @@ def build_chunks(task, progress_callback, db: Session):
 
 
 def init_kb(row, kb_name):
+    """
+    初始化知识库，创建集合并设置索引
+
+    Args:
+        row: 任务数据行
+        kb_name: 知识库名称
+    """
     idxnm = search.index_name_one(row["tenant_id"], kb_name)
     if MILVUS_CONNECTION.has_collection(idxnm):
         return
+
+    # 加载基础mapping配置
     mapping_path = os.path.join(get_project_base_directory(), "configs", "mapping.json")
     with open(mapping_path, 'r') as f:
         mapping = json.load(f)
-    MILVUS_CONNECTION.create_collection_with_mapping(idxnm, mapping)
+
+    # 获取当前嵌入模型的向量维度
+    vector_dim = None
+    try:
+        if "embd_id" in row and row["tenant_id"]:
+            with SessionLocal() as db:
+                embedding_model = LLMBundle(db, row["tenant_id"], LLMType.EMBEDDING,
+                                            llm_name=row["embd_id"], lang=row.get("language", "en"))
+                # 生成一个示例向量以获取维度
+                sample_vec, _ = embedding_model.encode(["测试文本"])
+                if len(sample_vec) > 0:
+                    vector_dim = len(sample_vec[0])
+                    logging.info(f"检测到嵌入模型维度: {vector_dim}")
+                else:
+                    logging.warning("无法确定嵌入模型维度，将使用默认维度")
+    except Exception as e:
+        logging.warning(f"获取嵌入模型维度失败: {str(e)}")
+
+    # 自动维度字典
+    auto_dimensions = {}
+
+    # 更新mapping中的向量维度
+    if vector_dim:
+        # 更新标准vector字段的维度
+        for template in mapping["mappings"]["dynamic_templates"]:
+            if "standard_vector_template" in template:
+                template["standard_vector_template"]["mapping"]["dims"] = vector_dim
+
+        # 添加维度特定字段
+        auto_dimensions["vector"] = vector_dim
+        auto_dimensions[f"q_{vector_dim}_vec"] = vector_dim
+
+    # 创建集合
+    MILVUS_CONNECTION.create_collection_with_mapping(idxnm, mapping, auto_dimensions)
+
+    logging.info(f"成功初始化知识库 {kb_name}")
 
 
 def convert_data_types(data, schema):
+    """
+    转换数据类型以匹配Milvus模式，确保所有必要字段都有值
+
+    Args:
+        data: 文档数据字典
+        schema: Milvus集合模式
+
+    Returns:
+        转换后的数据字典
+    """
+    # 创建数据的副本以避免修改原始数据
+    result = data.copy()
+
+    # 处理schema中所有定义的字段
+    schema_fields = {}
     for field in schema['fields']:
-        field_name = field['name']
-        field_type = field['type']
-        if field_name not in data:
-            # 根据字段类型填充空值
+        schema_fields[field['name']] = field
+
+    # 确保所有必要字段都有值
+    for field_name, field_info in schema_fields.items():
+        # 如果字段不在数据中，添加默认值
+        if field_name not in result:
+            field_type = field_info['type']
+
+            # 根据字段类型设置默认值
             if field_type == DataType.FLOAT_VECTOR:
-                data[field_name] = [0.0] * field['params']['dim']
+                result[field_name] = [0.0] * field_info['params']['dim']
             elif field_type == DataType.VARCHAR:
-                data[field_name] = ""
+                result[field_name] = ""
             elif field_type == DataType.FLOAT:
-                data[field_name] = 0.0
+                result[field_name] = 0.0
             elif field_type == DataType.INT64:
-                data[field_name] = 0
-            elif field_type == DataType.ARRAY:
-                data[field_name] = []
-            else:
-                data[field_name] = None
-        else:
-            # 转换数据类型
-            if field_type == DataType.FLOAT_VECTOR:
-                if not isinstance(data[field_name], list):
-                    data[field_name] = list(data[field_name])
-            elif field_type == DataType.VARCHAR:
-                if isinstance(data[field_name], list):
-                    data[field_name] = ','.join(data[field_name])
-                else:
-                    data[field_name] = str(data[field_name])
-            elif field_type == DataType.FLOAT:
-                data[field_name] = float(data[field_name])
-            elif field_type == DataType.INT64:
-                data[field_name] = int(data[field_name])
+                result[field_name] = 0
             elif field_type == DataType.JSON:
-                if isinstance(data[field_name], list):
-                    data[field_name] = json.dumps(data[field_name])
+                result[field_name] = "{}"
+            elif field_type == DataType.ARRAY:
+                result[field_name] = []
+        else:
+            # 转换现有数据的类型
+            field_type = field_info['type']
+            if field_type == DataType.FLOAT_VECTOR:
+                if not isinstance(result[field_name], list):
+                    result[field_name] = list(result[field_name])
+            elif field_type == DataType.VARCHAR:
+                if isinstance(result[field_name], list):
+                    result[field_name] = ','.join(map(str, result[field_name]))
                 else:
-                    data[field_name] = str(data[field_name])
-    return data
+                    result[field_name] = str(result[field_name])
+            elif field_type == DataType.FLOAT:
+                result[field_name] = float(result[field_name])
+            elif field_type == DataType.INT64:
+                result[field_name] = int(result[field_name])
+            elif field_type == DataType.JSON:
+                if isinstance(result[field_name], list) or isinstance(result[field_name], dict):
+                    result[field_name] = json.dumps(result[field_name])
+                elif not isinstance(result[field_name], str):
+                    result[field_name] = str(result[field_name])
+            elif field_type == DataType.ARRAY:
+                if not isinstance(result[field_name], list):
+                    if isinstance(result[field_name], str):
+                        result[field_name] = result[field_name].split(',')
+                    else:
+                        result[field_name] = [result[field_name]]
+
+    # 处理动态向量字段 (q_*_vec)
+    vector_fields = [k for k in result.keys() if re.match(r'q_\d+_vec', k)]
+    for vector_field in vector_fields:
+        if vector_field not in schema_fields:
+            # 如果这是一个新的向量字段，记录一下但保留它
+            logging.info(f"发现新的向量字段 {vector_field}，保留在数据中")
+
+    return result
 
 
 def get_schema(collection_name):
@@ -359,6 +438,18 @@ def get_schema(collection_name):
 
 
 def embedding(docs, mdl, parser_config=None, callback=None):
+    """
+    为文档生成向量嵌入，并同时存储到标准vector字段和维度特定字段中
+
+    Args:
+        docs: 文档列表
+        mdl: 嵌入模型对象
+        parser_config: 解析器配置
+        callback: 进度回调函数
+
+    Returns:
+        token_count: 处理的token数量
+    """
     if parser_config is None:
         parser_config = {}
     batch_size = 16
@@ -398,13 +489,21 @@ def embedding(docs, mdl, parser_config=None, callback=None):
     cnts = cnts_
 
     title_w = float(parser_config.get("filename_embd_weight", 0.1))
-    vects = (title_w * tts + (1 - title_w) *
-             cnts) if len(tts) == len(cnts) else cnts
+    vects = (title_w * tts + (1 - title_w) * cnts) if len(tts) == len(cnts) else cnts
 
     assert len(vects) == len(docs)
+
+    # 获取向量维度
+    vector_dim = len(vects[0]) if len(vects) > 0 else 0
+    logging.info(f"向量维度: {vector_dim}")
+
     for i, d in enumerate(docs):
         v = vects[i].tolist()
+        # 始终保存到标准vector字段
         d["vector"] = v
+        # 同时保存到维度特定字段
+        d[f"q_{vector_dim}_vec"] = v
+
     return tk_count
 
 
