@@ -58,22 +58,18 @@ class Dealer:
         embedding_data = [float(v) for v in qv]
         vector_dim = len(embedding_data)
 
-        # 根据向量维度选择字段名
-        vector_column_name = f"q_{vector_dim}_vec"
+        # 修改点：先使用标准向量字段名，避免报错
+        vector_column_name = "vector"
 
-        # 检查集合是否有该维度的字段，如果没有则回退到标准vector字段
+        # 再检查维度特定字段是否存在于集合中，如果存在则使用它
         try:
             schema = self.milvus_conn.describe_collection(collection_name)
-            has_dim_field = False
             for field in schema['fields']:
-                if field['name'] == vector_column_name:
-                    has_dim_field = True
+                if field['name'] == f"q_{vector_dim}_vec":
+                    vector_column_name = f"q_{vector_dim}_vec"
                     break
-            if not has_dim_field:
-                vector_column_name = "vector"
-        except Exception:
-            # 出错时默认使用标准vector字段
-            vector_column_name = "vector"
+        except Exception as e:
+            logging.warning(f"检查字段 q_{vector_dim}_vec 时出错: {str(e)}，将使用默认字段 vector")
 
         logging.info(f"使用向量字段: {vector_column_name} 进行查询，维度: {vector_dim}")
         return MatchDenseExpr(vector_column_name, embedding_data, 'float', 'cosine', topk, {"similarity": similarity})
@@ -130,20 +126,21 @@ class Dealer:
             raise ValueError("Failed to generate query for the given question.")
 
         src = req.get("fields", ["docnm_kwd", "content_ltks", "kb_id", "img_id", "title_tks",
-                                 "doc_id", "vector", "position_int", "content_with_weight"])
+                                 "doc_id", "position_int", "content_with_weight"])
+                                 # "doc_id", "vector", "position_int", "content_with_weight"])
         filter = req.get("filter_exp", "")
 
-        # 检查是否需要添加维度特定向量字段
-        vector_dim = None
-        if req.get("vector") and embd_mdl:
-            # 获取向量维度
-            sample_vec, _ = embd_mdl.encode_queries("测试")
-            if len(sample_vec) > 0:
-                vector_dim = len(sample_vec)
-                dim_field = f"q_{vector_dim}_vec"
-                if dim_field not in src:
-                    src.append(dim_field)
-                    logging.info(f"添加维度特定向量字段 {dim_field} 到查询字段")
+        # # 检查是否需要添加维度特定向量字段
+        # vector_dim = None
+        # if req.get("vector") and embd_mdl:
+        #     # 获取向量维度
+        #     sample_vec, _ = embd_mdl.encode_queries("测试")
+        #     if len(sample_vec) > 0:
+        #         vector_dim = len(sample_vec)
+        #         dim_field = f"q_{vector_dim}_vec"
+        #         if dim_field not in src:
+        #             src.append(dim_field)
+        #             logging.info(f"添加维度特定向量字段 {dim_field} 到查询字段")
 
         # Vector search parameters
         if req.get("vector"):
