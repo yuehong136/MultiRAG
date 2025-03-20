@@ -63,7 +63,7 @@
           "match": "content_with_weight",
           "mapping": {
             "type": "VARCHAR",
-            "max_length": 8192
+            "max_length": 16384
           }
         }
       },
@@ -72,7 +72,7 @@
           "match": "content_ltks",
           "mapping": {
             "type": "VARCHAR",
-            "max_length": 8192
+            "max_length": 16384
           }
         }
       },
@@ -81,7 +81,7 @@
           "match": "content_sm_ltks",
           "mapping": {
             "type": "VARCHAR",
-            "max_length": 8192
+            "max_length": 16384
           }
         }
       },
