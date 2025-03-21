@@ -167,6 +167,7 @@ class Dealer:
                         data=[query_vector],
                         anns_field=vector_search_params.vector_column_name,
                         limit=req.get("size", 10),
+                        offset=(req.get("page", 1) - 1) * req.get("size", 10),
                         search_params={"metric_type": "COSINE", "params": {"nprobe": 10}},
                         output_fields=src,
                         filter=filter
@@ -210,7 +211,8 @@ class Dealer:
                         # filter=f"doc_id == {doc_id}",
                         filter=f"doc_id == '{{doc_id}}'".format(doc_id=doc_id),
                         output_fields=fields_to_return,
-                        limit=req.get("size", 1024)
+                        limit=req.get("size", 10),
+                        offset=(req.get("page", 1) - 1) * req.get("size", 10),
                     )
                     if search_results:
                         total += len(search_results)
