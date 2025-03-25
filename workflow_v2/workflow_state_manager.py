@@ -1,7 +1,6 @@
 from datetime import datetime
 import asyncio
 from typing import Dict, Any, List, Optional
-import json
 
 
 class WorkflowStateManager:
@@ -102,8 +101,6 @@ class WorkflowStateManager:
                                  status: str,
                                  started_at: Optional[float] = None,
                                  execution_time: Optional[float] = None,
-                                 total_nodes: int = 0,
-                                 completed_nodes: int = 0,
                                  error_message: Optional[str] = None) -> None:
         """
         发布节点状态更新
@@ -115,8 +112,6 @@ class WorkflowStateManager:
             status: 节点状态（'waiting', 'executing', 'completed', 'failed'）
             started_at: 节点开始执行时间戳
             execution_time: 当前执行时间（秒）
-            total_nodes: 工作流总节点数
-            completed_nodes: 已完成的节点数
             error_message: 错误信息，如果有的话
         """
         state = {
@@ -125,11 +120,6 @@ class WorkflowStateManager:
                 "id": node_id,
                 "title": node_title,
                 "status": status,
-            },
-            "progress": {
-                "total_nodes": total_nodes,
-                "completed_nodes": completed_nodes,
-                "percentage": int(completed_nodes / total_nodes * 100) if total_nodes > 0 else 0
             }
         }
 

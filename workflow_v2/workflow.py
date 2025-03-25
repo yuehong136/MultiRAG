@@ -87,10 +87,6 @@ class AsyncWorkflowEngine:
         # 添加第一个失败的节点
         self.first_failed_node: Optional[WorkflowNode] = None
 
-        # 添加节点计数器
-        self.total_nodes = 0
-        self.completed_nodes = 0
-
     def build_graph(self, nodes_data, edges_data):
         self.logger.info(f"==================================")
         self.logger.info(f"Workflow ID: {self.workflow_id}")
@@ -99,7 +95,6 @@ class AsyncWorkflowEngine:
         for node_data in nodes_data:
             node = WorkflowNode(node_data['id'], node_data)
             self.nodes[node.id] = node
-            self.total_nodes += 1
 
         # 建立节点间的连接关系
         for edge in edges_data:
@@ -148,7 +143,6 @@ class AsyncWorkflowEngine:
                 node_id=start_node.id,
                 node_title=start_node.title,
                 status="waiting",
-                total_nodes=self.total_nodes,
                 completed_nodes=0
             )
 
@@ -188,9 +182,7 @@ class AsyncWorkflowEngine:
                     workflow_id=self.workflow_id,
                     node_id=node.id,
                     node_title=node.title,
-                    status="executing",
-                    total_nodes=self.total_nodes,
-                    completed_nodes=self.completed_nodes
+                    status="executing"
                 )
 
                 task = asyncio.create_task(self._process_node(node))
@@ -245,8 +237,6 @@ class AsyncWorkflowEngine:
                 status="failed",
                 started_at=node.execution_start_time,
                 execution_time=datetime.now().timestamp() - node.execution_start_time if node.execution_start_time else None,
-                total_nodes=self.total_nodes,
-                completed_nodes=self.completed_nodes,
                 error_message=str(e)
             )
 
@@ -280,8 +270,6 @@ class AsyncWorkflowEngine:
 
                 node.is_completed = True
                 node.status = "completed"
-                self.completed_nodes += 1
-
                 node_logger.info(f"Node 【{node.title}】 completed")
 
                 # 发布节点完成状态
@@ -292,8 +280,6 @@ class AsyncWorkflowEngine:
                     status="completed",
                     started_at=node.execution_start_time,
                     execution_time=datetime.now().timestamp() - node.execution_start_time,
-                    total_nodes=self.total_nodes,
-                    completed_nodes=self.completed_nodes
                 )
 
         except asyncio.TimeoutError:
@@ -308,8 +294,6 @@ class AsyncWorkflowEngine:
                 status="failed",
                 started_at=node.execution_start_time,
                 execution_time=node.timeout,
-                total_nodes=self.total_nodes,
-                completed_nodes=self.completed_nodes,
                 error_message=f"节点执行超时，超过{node.timeout}秒"
             )
 
@@ -334,8 +318,6 @@ class AsyncWorkflowEngine:
                 status="failed",
                 started_at=node.execution_start_time,
                 execution_time=datetime.now().timestamp() - node.execution_start_time if node.execution_start_time else None,
-                total_nodes=self.total_nodes,
-                completed_nodes=self.completed_nodes,
                 error_message=str(e)
             )
 
@@ -352,8 +334,6 @@ class AsyncWorkflowEngine:
                 status="failed",
                 started_at=node.execution_start_time,
                 execution_time=datetime.now().timestamp() - node.execution_start_time if node.execution_start_time else None,
-                total_nodes=self.total_nodes,
-                completed_nodes=self.completed_nodes,
                 error_message=str(e)
             )
 
