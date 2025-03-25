@@ -4,7 +4,6 @@ from enum import Enum
 from typing import Any
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 import json
@@ -224,38 +223,6 @@ async def workflow_events(workflow_id: str, request: Request):
             await workflow_state_manager.unsubscribe(workflow_id, queue)
 
     return EventSourceResponse(event_generator())
-
-
-@router.get("/workflow/{workflow_id}/status")
-async def workflow_status(workflow_id: str,
-                          db: Session = Depends(get_db),
-                          user=Depends(manager)):
-    """
-    获取工作流当前状态的REST API
-
-    Args:
-        workflow_id: 工作流ID
-
-    Returns:
-        JSONResponse: 当前工作流状态
-    """
-    try:
-        # 从状态管理器获取最新状态
-        latest_state = workflow_state_manager._latest_states.get(workflow_id)
-
-        if not latest_state:
-            return JSONResponse(
-                status_code=404,
-                content={"error": f"未找到工作流: {workflow_id}"}
-            )
-
-        return JSONResponse(content=latest_state)
-
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"获取工作流状态失败: {str(e)}"}
-        )
 
 
 def extract_literal_parameters(node_data):

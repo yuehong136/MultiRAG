@@ -26,6 +26,7 @@ from api import settings
 from errors.exceptions import AITranslateException
 from api.constants import API_VERSION
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
+from workflow_v2.workflow_state_manager import workflow_state_manager
 
 description = """
 Multi-RAG API helps you do awesome stuff. 🚀
@@ -73,6 +74,20 @@ app.add_middleware(
     allow_headers=["*"],  # 允许所有请求头
 )
 settings.init_settings()
+
+
+# 添加启动和关闭事件
+@app.on_event("startup")
+async def startup_event():
+    # 在FastAPI启动时启动状态管理器
+    await workflow_state_manager.start()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    # 在FastAPI关闭时关闭状态管理器
+    await workflow_state_manager.shutdown()
+
 
 # 初始化登录管理器，设置密钥和令牌URL
 manager = LoginManager(settings.SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))

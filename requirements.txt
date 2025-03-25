@@ -177,3 +177,4 @@ fastembed >= 0.5.0
 # Groq Python 库可让您从任何 Python 3.8+ 应用程序方便地访问 Groq REST API。该库包含所有请求参数和响应字段的类型定义，并提供由httpx支持的同步和异步客户端。
 groq >= 0.13.1
 pytest >= 8.3.4
+sse-starlette >= 2.2.1

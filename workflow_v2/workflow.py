@@ -87,10 +87,14 @@ class AsyncWorkflowEngine:
         # 添加第一个失败的节点
         self.first_failed_node: Optional[WorkflowNode] = None
 
-    def build_graph(self, nodes_data, edges_data):
+    async def build_graph(self, nodes_data, edges_data):
         self.logger.info(f"==================================")
         self.logger.info(f"Workflow ID: {self.workflow_id}")
         self.logger.info(f"Building workflow graph")
+
+        # 首先清除该工作流ID的之前状态记录
+        await workflow_state_manager.clear_workflow_state(self.workflow_id)
+
         # 创建所有节点
         for node_data in nodes_data:
             node = WorkflowNode(node_data['id'], node_data)
@@ -142,8 +146,7 @@ class AsyncWorkflowEngine:
                 workflow_id=self.workflow_id,
                 node_id=start_node.id,
                 node_title=start_node.title,
-                status="waiting",
-                completed_nodes=0
+                status="waiting"
             )
 
     async def execute(self):
@@ -398,7 +401,10 @@ async def run_workflow(workflow_data, start_input_values=None, workflow_id: str 
             engine.logger.error(f"{issue.format_message()}")
         raise WorkflowValidationError(message=f"工作流构建失败, 请检查验证问题: {issue_str}")
 
-    engine.build_graph(workflow_data['nodes'], workflow_data['edges'])
+    # 清除该工作流ID的之前状态记录 - 这里也清除一次，确保在构建图之前就已经清除了
+    await workflow_state_manager.clear_workflow_state(workflow_id)
+
+    await engine.build_graph(workflow_data['nodes'], workflow_data['edges'])
     try:
         await engine.execute()
         nodes_io = {k: {'input': getattr(v, 'input'), 'output': getattr(v, 'output')} for k, v in engine.nodes.items()}
