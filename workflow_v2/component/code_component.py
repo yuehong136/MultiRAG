@@ -1,7 +1,6 @@
 from typing import Any
 
-import requests
-
+import aiohttp
 from api.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
@@ -21,7 +20,7 @@ class CodeComponent(BaseComponent):
         try:
             if self.language == 3:  # Python
                 # 调用脚本调度服务
-                code_execute_resp = self.run_temporary_script(self.code, self.inputs)
+                code_execute_resp = await self.run_temporary_script(self.code, self.inputs)
                 if code_execute_resp.get('status') != 'success':
                     self.logger.error(f"Code component execution failed: {code_execute_resp.get('message')}")
                     raise Exception(f"Code component execution failed: {code_execute_resp.get('message')}")
@@ -33,10 +32,10 @@ class CodeComponent(BaseComponent):
             self.logger.error(f"Error occurred while executing code component: {e}")
             raise e
 
-    def run_temporary_script(self, script: str, args: dict[str, Any],
-                             base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
+    async def run_temporary_script(self, script: str, args: dict[str, Any],
+                                   base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
         """
-        Send a request to run a temporary script with given arguments.
+        Send an asynchronous request to run a temporary script with given arguments.
 
         Args:
             script (str): The Python script to execute
@@ -47,7 +46,7 @@ class CodeComponent(BaseComponent):
             dict: The response from the server
 
         Raises:
-            requests.exceptions.RequestException: If the request fails
+            aiohttp.ClientError: If the request fails
         """
         # Construct the endpoint URL
         endpoint = f"{base_url}/api/v1/script-scheduler/run-temporary-script"
@@ -64,21 +63,24 @@ class CodeComponent(BaseComponent):
         }
 
         try:
-            # Send POST request
-            response = requests.post(
-                url=endpoint,
-                headers=headers,
-                json=payload
-            )
+            # Create a timeout for the request
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
 
-            # Raise an exception for bad status codes
-            response.raise_for_status()
+            # Send POST request asynchronously
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                        url=endpoint,
+                        headers=headers,
+                        json=payload
+                ) as response:
+                    # Raise an exception for bad status codes
+                    response.raise_for_status()
 
-            # Return the JSON response
-            return response.json()
+                    # Return the JSON response
+                    return await response.json()
 
-        except requests.exceptions.RequestException as e:
-            print(f"Error making request: {str(e)}")
+        except aiohttp.ClientError as e:
+            self.logger.error(f"Error making request: {str(e)}")
             raise
 
     def parse_output(self, output_structure: list[dict], actual_output: Any) -> dict:
