@@ -1,11 +1,15 @@
+import asyncio
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request
+from fastapi.responses import JSONResponse
+from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 import json
 
+from workflow_v2.workflow_state_manager import workflow_state_manager
 from workflow_v2.component.component_manager import ComponentManager
 from workflow_v2.workflow import run_workflow, WorkflowNode
 from sqlalchemy.orm import Session
@@ -32,6 +36,7 @@ class ResponseSchema(BaseModel):
 async def run(
         schema_data: str = Form(..., alias="schema"),  # JSON string
         start_input_values: str = Form(...),  # JSON string
+        workflow_id: str = Form(...),
         files: list[UploadFile] = File(None),  # Optional files
         bucket_name: str = Form(None),  # bucket_name在任何情况下都会传入，所以下面处理文件时，先判断files是否为空，如果为空，处理bucket_name
         db: Session = Depends(get_db),
@@ -72,6 +77,7 @@ async def run(
         result = await run_workflow(
             workflow_data,
             start_input_values=input_values,
+            workflow_id=workflow_id,
             db=db,
             user=user
         )
@@ -162,6 +168,93 @@ async def component_run(
         raise HTTPException(
             status_code=500,
             detail=f"Error processing request: {str(e)}"
+        )
+
+
+@router.get("/workflow/{workflow_id}/events")
+async def workflow_events(workflow_id: str, request: Request):
+    """
+    SSE端点，用于接收工作流状态更新
+
+    Args:
+        workflow_id: 工作流ID
+        request: FastAPI请求对象
+
+    Returns:
+        EventSourceResponse: SSE事件流
+    """
+
+    async def event_generator():
+        # 订阅工作流状态更新
+        queue = await workflow_state_manager.subscribe(workflow_id)
+
+        try:
+            # 保持连接直到客户端断开或收到结束信号
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                # 等待状态更新，带有超时
+                try:
+                    state_update = await asyncio.wait_for(queue.get(), timeout=60)
+
+                    # 如果接收到None，表示工作流结束
+                    if state_update is None:
+                        # 发送一个结束事件
+                        yield {
+                            "event": "workflow_end",
+                            "data": json.dumps({"workflow_id": workflow_id, "status": "completed"})
+                        }
+                        break
+
+                    # 发送普通状态更新
+                    yield {
+                        "event": "workflow_update",
+                        "data": json.dumps(state_update)
+                    }
+
+                except asyncio.TimeoutError:
+                    # 发送保活消息
+                    yield {
+                        "event": "ping",
+                        "data": json.dumps({"timestamp": workflow_state_manager._current_timestamp()})
+                    }
+        finally:
+            # 确保取消订阅
+            await workflow_state_manager.unsubscribe(workflow_id, queue)
+
+    return EventSourceResponse(event_generator())
+
+
+@router.get("/workflow/{workflow_id}/status")
+async def workflow_status(workflow_id: str,
+                          db: Session = Depends(get_db),
+                          user=Depends(manager)):
+    """
+    获取工作流当前状态的REST API
+
+    Args:
+        workflow_id: 工作流ID
+
+    Returns:
+        JSONResponse: 当前工作流状态
+    """
+    try:
+        # 从状态管理器获取最新状态
+        latest_state = workflow_state_manager._latest_states.get(workflow_id)
+
+        if not latest_state:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"未找到工作流: {workflow_id}"}
+            )
+
+        return JSONResponse(content=latest_state)
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"获取工作流状态失败: {str(e)}"}
         )
 
 
