@@ -1,14 +1,15 @@
 import copy
 from typing import Any
 
-import requests
+# 替换 requests 为 aiohttp
+import aiohttp
+from aiohttp import ClientTimeout
 
 from api.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.utils import dict_arrays_to_array_dicts, match_parameters, map_schema_with_values
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor
 
 
 @dataclass
@@ -46,6 +47,8 @@ class PluginComponent(BaseComponent):
         self.plugin_info = node_data['data']['inputs'].get('pluginInfo', {})
         self.output_definition = node_data['data']['outputs']
         self.timeout = 30  # 默认超时时间
+        # 添加 session 属性以便复用 HTTP 连接
+        self._session = None
 
     def _extract_batch_config(self, node_data: dict[str, Any]) -> BatchConfig:
         """从节点数据中提取批处理配置"""
@@ -53,54 +56,70 @@ class PluginComponent(BaseComponent):
         return BatchConfig.from_batch_config(batch_data)
 
     async def execute(self) -> dict[str, Any]:
-        if self.batch_config.batch_enable:
-            input_value_dict_list = []
+        # 创建一个可复用的 aiohttp session
+        async with aiohttp.ClientSession() as session:
+            self._session = session
 
-            batch_param_list = dict_arrays_to_array_dicts(match_parameters(self.batch_config.input_lists, self.nodes))
-            for batch_param_value in batch_param_list:
-                temp_nodes = copy.deepcopy(self.nodes)
-                temp_node_output = temp_nodes.get(self.workflow_node.id).output
-                if temp_node_output:
-                    temp_nodes.get(self.workflow_node.id).output.update(batch_param_value)
-                else:
-                    temp_nodes.get(self.workflow_node.id).output = batch_param_value
-                result = match_parameters(self.workflow_node.input_schema, temp_nodes)
-                input_value_dict_list.append(result)
+            if self.batch_config.batch_enable:
+                input_value_dict_list = []
 
-            self.workflow_node.input = input_value_dict_list
+                batch_param_list = dict_arrays_to_array_dicts(
+                    match_parameters(self.batch_config.input_lists, self.nodes))
+                for batch_param_value in batch_param_list:
+                    temp_nodes = copy.deepcopy(self.nodes)
+                    temp_node_output = temp_nodes.get(self.workflow_node.id).output
+                    if temp_node_output:
+                        temp_nodes.get(self.workflow_node.id).output.update(batch_param_value)
+                    else:
+                        temp_nodes.get(self.workflow_node.id).output = batch_param_value
+                    result = match_parameters(self.workflow_node.input_schema, temp_nodes)
+                    input_value_dict_list.append(result)
 
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                def execute_single_plugin(input_value: dict[str, Any]) -> dict[str, Any]:
-                    code_execute_resp = self.run_plugin_script(
-                        self.plugin_info.get('script', ''),
-                        input_value,
-                        self.plugin_info.get('pluginId', '')
-                    )
-                    if code_execute_resp.get('status') != 'success':
-                        self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
-                        raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                self.workflow_node.input = input_value_dict_list
 
-                    # 对于批量执行，我们需要解析单个输出的结构
-                    # 从 output_definition 中获取实际的单个输出的 schema
-                    list_schema = next((item for item in self.output_definition if item['name'] == 'outputList'), None)
-                    if list_schema and list_schema.get('type') == 'list':
-                        single_output_schema = list_schema.get('schema', {}).get('schema', [])
-                        return self.parse_output(single_output_schema, code_execute_resp.get("data"))
-                    return {}
+                # 使用 asyncio 并发执行而不是 ThreadPoolExecutor
+                import asyncio
+                from asyncio import Semaphore
 
-                # 使用 list 保持原始顺序
-                parsed_outputs = list(executor.map(execute_single_plugin, input_value_dict_list))
+                # 创建信号量限制并发数
+                sem = Semaphore(self.batch_config.concurrent_size)
 
-            # 返回正确的输出格式
-            return {"outputList": parsed_outputs}
-        else:
-            code_execute_resp = self.run_plugin_script(self.plugin_info.get('script', ''), self.inputs,
-                                                       self.plugin_info.get('pluginId', ''))
-            if code_execute_resp.get('status') != 'success':
-                self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
-                raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
-            original_outputs = code_execute_resp.get("data")
-            return self.parse_output(self.output_definition, original_outputs)
+                async def execute_single_plugin_async(input_value: dict[str, Any]) -> dict[str, Any]:
+                    async with sem:  # 使用信号量控制并发
+                        code_execute_resp = await self.run_plugin_script(
+                            self.plugin_info.get('script', ''),
+                            input_value,
+                            self.plugin_info.get('pluginId', '')
+                        )
+                        if code_execute_resp.get('status') != 'success':
+                            self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                            raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+
+                        # 对于批量执行，我们需要解析单个输出的结构
+                        list_schema = next((item for item in self.output_definition if item['name'] == 'outputList'),
+                                           None)
+                        if list_schema and list_schema.get('type') == 'list':
+                            single_output_schema = list_schema.get('schema', {}).get('schema', [])
+                            return self.parse_output(single_output_schema, code_execute_resp.get("data"))
+                        return {}
+
+                # 并发执行所有任务并保持原始顺序
+                tasks = [execute_single_plugin_async(input_value) for input_value in input_value_dict_list]
+                parsed_outputs = await asyncio.gather(*tasks)
+
+                # 返回正确的输出格式
+                return {"outputList": parsed_outputs}
+            else:
+                code_execute_resp = await self.run_plugin_script(
+                    self.plugin_info.get('script', ''),
+                    self.inputs,
+                    self.plugin_info.get('pluginId', '')
+                )
+                if code_execute_resp.get('status') != 'success':
+                    self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                    raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                original_outputs = code_execute_resp.get("data")
+                return self.parse_output(self.output_definition, original_outputs)
 
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict:
         """Execute plugin component in standalone mode
@@ -115,73 +134,88 @@ class PluginComponent(BaseComponent):
         self.logger.info(f"PluginComponent {self.title} execute")
         self.logger.info(f"PluginComponent {self.title} inputs: {input_value}")
 
-        if self.batch_config.batch_enable:
-            # 使用辅助函数生成批量输入参数列表
-            input_value_dict_list = map_schema_with_values(self.workflow_node.input_schema, input_value, batch_value)
-            self.inputs = input_value_dict_list
+        # 创建一个可复用的 aiohttp session
+        async with aiohttp.ClientSession() as session:
+            self._session = session
 
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                def execute_single_plugin(input_value: dict[str, Any]) -> dict[str, Any]:
-                    code_execute_resp = self.run_plugin_script(
-                        self.plugin_info.get('script', ''),
-                        input_value,
-                        self.plugin_info.get('pluginId', '')
-                    )
-                    if code_execute_resp.get('status') != 'success':
-                        self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
-                        raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+            if self.batch_config.batch_enable:
+                # 使用辅助函数生成批量输入参数列表
+                input_value_dict_list = map_schema_with_values(self.workflow_node.input_schema, input_value,
+                                                               batch_value)
+                self.inputs = input_value_dict_list
 
-                    # 对于批量执行，我们需要解析单个输出的结构
-                    list_schema = next((item for item in self.output_definition if item['name'] == 'outputList'), None)
-                    if list_schema and list_schema.get('type') == 'list':
-                        single_output_schema = list_schema.get('schema', {}).get('schema', [])
-                        return self.parse_output(single_output_schema, code_execute_resp.get("data"))
-                    return {}
+                # 使用 asyncio 并发执行
+                import asyncio
+                from asyncio import Semaphore
 
-                # 使用 list 保持原始顺序
-                parsed_outputs = list(executor.map(execute_single_plugin, input_value_dict_list))
+                # 创建信号量限制并发数
+                sem = Semaphore(self.batch_config.concurrent_size)
 
-            # 返回正确的输出格式
-            return {"outputList": parsed_outputs}
-        else:
-            # 单次执行模式
-            self.inputs = input_value
-            code_execute_resp = self.run_plugin_script(
-                self.plugin_info.get('script', ''),
-                self.inputs,
-                self.plugin_info.get('pluginId', '')
-            )
-            if code_execute_resp.get('status') != 'success':
-                self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
-                raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
-            original_outputs = code_execute_resp.get("data")
-            return self.parse_output(self.output_definition, original_outputs)
+                async def execute_single_plugin_async(input_value: dict[str, Any]) -> dict[str, Any]:
+                    async with sem:  # 使用信号量控制并发
+                        code_execute_resp = await self.run_plugin_script(
+                            self.plugin_info.get('script', ''),
+                            input_value,
+                            self.plugin_info.get('pluginId', '')
+                        )
+                        if code_execute_resp.get('status') != 'success':
+                            self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                            raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
 
-    def run_plugin_script(self, script: str, args: dict[str, Any], plugin_id: str,
-                          base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
+                        # 对于批量执行，我们需要解析单个输出的结构
+                        list_schema = next((item for item in self.output_definition if item['name'] == 'outputList'),
+                                           None)
+                        if list_schema and list_schema.get('type') == 'list':
+                            single_output_schema = list_schema.get('schema', {}).get('schema', [])
+                            return self.parse_output(single_output_schema, code_execute_resp.get("data"))
+                        return {}
+
+                # 并发执行所有任务
+                tasks = [execute_single_plugin_async(input_value) for input_value in input_value_dict_list]
+                parsed_outputs = await asyncio.gather(*tasks)
+
+                # 返回正确的输出格式
+                return {"outputList": parsed_outputs}
+            else:
+                # 单次执行模式
+                self.inputs = input_value
+                code_execute_resp = await self.run_plugin_script(
+                    self.plugin_info.get('script', ''),
+                    self.inputs,
+                    self.plugin_info.get('pluginId', '')
+                )
+                if code_execute_resp.get('status') != 'success':
+                    self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                    raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
+                original_outputs = code_execute_resp.get("data")
+                return self.parse_output(self.output_definition, original_outputs)
+
+    async def run_plugin_script(self, script: str, args: dict[str, Any], plugin_id: str,
+                                base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
         """
-        Send a request to run a temporary script with given arguments.
+        异步发送请求执行临时脚本并传入参数。
 
         Args:
-            script (str): The Python script to execute
-            args (dict[str, Any]): Arguments to pass to the script
-            base_url (str): Base URL of the API endpoint (default: http://localhost:8124)
+            script (str): 要执行的Python脚本
+            args (dict[str, Any]): 传递给脚本的参数
+            plugin_id (str): 插件ID
+            base_url (str): API端点的基础URL (默认: http://localhost:8124)
 
         Returns:
-            dict: The response from the server
+            dict: 服务器的响应
 
         Raises:
-            requests.exceptions.RequestException: If the request fails
+            aiohttp.ClientError: 如果请求失败
         """
-        # Construct the endpoint URL
+        # 构建端点URL
         endpoint = f"{base_url}/api/v1/script-scheduler/run-plugin-script"
 
-        # Prepare the request headers
+        # 准备请求头
         headers = {
             "Content-Type": "application/json"
         }
 
-        # Prepare the request payload
+        # 准备请求载荷
         payload = {
             "script": script,
             "args": args,
@@ -189,21 +223,24 @@ class PluginComponent(BaseComponent):
         }
 
         try:
-            # Send POST request
-            response = requests.post(
-                url=endpoint,
-                headers=headers,
-                json=payload
-            )
+            # 创建请求超时
+            timeout = ClientTimeout(total=self.timeout)
 
-            # Raise an exception for bad status codes
-            response.raise_for_status()
+            # 发送POST请求
+            async with self._session.post(
+                    url=endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout
+            ) as response:
+                # 检查状态码
+                response.raise_for_status()
 
-            # Return the JSON response
-            return response.json()
+                # 返回JSON响应
+                return await response.json()
 
-        except requests.exceptions.RequestException as e:
-            print(f"Error making request: {str(e)}")
+        except aiohttp.ClientError as e:
+            self.logger.error(f"Error making request: {str(e)}")
             raise
 
     def parse_output(self, output_structure: list[dict], actual_output: Any) -> dict:
