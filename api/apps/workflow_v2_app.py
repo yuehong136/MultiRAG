@@ -170,7 +170,7 @@ async def component_run(
         )
 
 
-@router.get("/workflow/{workflow_id}/events")
+@router.get("/workflow/events/{workflow_id}")
 async def workflow_events(workflow_id: str, request: Request):
     """
     SSE端点，用于接收工作流状态更新
