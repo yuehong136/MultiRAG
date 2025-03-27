@@ -34,4 +34,5 @@ sdk/python/multirag.egg-info/
 sdk/python/build/
 sdk/python/dist/
 sdk/python/multirag_sdk.egg-info/
-
+huggingface.co/
+nltk_data/
