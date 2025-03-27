@@ -24,8 +24,8 @@ deps-job:       # This job runs in the build stage, which runs first.
   stage: deps
   script:
     - echo "------------开始下载必要的依赖------------"
-    - pip install nltk==3.9.1
-    - pip install huggingface-hub>=0.25.0,<0.26.0
+    - pip install nltk==3.9.1 -i https://mirrors.aliyun.com/pypi/simple
+    - pip install huggingface-hub>=0.25.0,<0.26.0 -i https://mirrors.aliyun.com/pypi/simple
     - python3 download_deps.py
 
 build-job:   # This job runs in the test stage.
