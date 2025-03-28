@@ -182,47 +182,60 @@ async def workflow_events(workflow_id: str, request: Request):
     Returns:
         EventSourceResponse: SSE事件流
     """
+    try:
+        async def event_generator():
+            try:
+                # 订阅工作流状态更新
+                queue = await workflow_state_manager.subscribe(workflow_id)
 
-    async def event_generator():
-        # 订阅工作流状态更新
-        queue = await workflow_state_manager.subscribe(workflow_id)
-
-        try:
-            # 保持连接直到客户端断开或收到结束信号
-            while True:
-                if await request.is_disconnected():
-                    break
-
-                # 等待状态更新，带有超时
                 try:
-                    state_update = await asyncio.wait_for(queue.get(), timeout=60)
+                    # 保持连接直到客户端断开或收到结束信号
+                    while True:
+                        if await request.is_disconnected():
+                            break
 
-                    # 如果接收到None，表示工作流结束
-                    if state_update is None:
-                        # 发送一个结束事件
-                        yield {
-                            "event": "workflow_end",
-                            "data": json.dumps({"workflow_id": workflow_id, "status": "completed"})
-                        }
-                        break
+                        # 等待状态更新，带有超时
+                        try:
+                            state_update = await asyncio.wait_for(queue.get(), timeout=60)
 
-                    # 发送普通状态更新
-                    yield {
-                        "event": "workflow_update",
-                        "data": json.dumps(state_update)
-                    }
+                            # 如果接收到None，表示工作流结束
+                            if state_update is None:
+                                # 发送一个结束事件
+                                yield {
+                                    "event": "workflow_end",
+                                    "data": json.dumps({"workflow_id": workflow_id, "status": "completed"})
+                                }
+                                break
 
-                except asyncio.TimeoutError:
-                    # 发送保活消息
-                    yield {
-                        "event": "ping",
-                        "data": json.dumps({"timestamp": workflow_state_manager._current_timestamp()})
-                    }
-        finally:
-            # 确保取消订阅
-            await workflow_state_manager.unsubscribe(workflow_id, queue)
+                            # 发送普通状态更新
+                            yield {
+                                "event": "workflow_update",
+                                "data": json.dumps(state_update)
+                            }
 
-    return EventSourceResponse(event_generator())
+                        except asyncio.TimeoutError:
+                            # 发送保活消息
+                            yield {
+                                "event": "ping",
+                                "data": json.dumps({"timestamp": workflow_state_manager._current_timestamp()})
+                            }
+                finally:
+                    # 确保取消订阅
+                    await workflow_state_manager.unsubscribe(workflow_id, queue)
+            except Exception as e:
+                # 在事件流中发送错误信息
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"error": str(e)})
+                }
+
+        return EventSourceResponse(event_generator())
+    except Exception as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"获取工作流实时数据异常: {str(e)}",
+            data=None
+        )
 
 
 def extract_literal_parameters(node_data):
