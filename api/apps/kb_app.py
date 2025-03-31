@@ -72,13 +72,26 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
         )
 
     dataset_name = dataset_name.strip()
-    req_data["name"] = duplicate_name(
-        KnowledgebaseService.query,
+    # 检查数据库中是否已存在同名知识库
+    existing_kb = KnowledgebaseService.query(
         db=db,
         name=dataset_name,
         tenant_id=user.id,
         status=StatusEnum.VALID.value
     )
+
+    if existing_kb:
+        # 如果已存在同名知识库，返回错误信息
+        return get_data_error_result(retmsg=f"已存在该知识库名: {existing_kb[0].name}，请调整！")
+
+    req_data["name"] = dataset_name
+    # req_data["name"] = duplicate_name(
+    #     KnowledgebaseService.query,
+    #     db=db,
+    #     name=dataset_name,
+    #     tenant_id=user.id,
+    #     status=StatusEnum.VALID.value
+    # )
     try:
         req_data["id"] = get_uuid()
         req_data["tenant_id"] = user.id
