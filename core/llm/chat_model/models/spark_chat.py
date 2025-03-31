@@ -2,9 +2,7 @@ from core.llm.chat_model.base import Base
 
 
 class SparkChat(Base):
-    def __init__(
-            self, key, model_name, base_url="https://spark-api-open.xf-yun.com/v1"
-    ):
+    def __init__(self, key, model_name, base_url="https://spark-api-open.xf-yun.com/v1"):
         if not base_url:
             base_url = "https://spark-api-open.xf-yun.com/v1"
         model2version = {

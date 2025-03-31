@@ -1,15 +1,18 @@
 from core.llm.chat_model.models.anthropic_chat import AnthropicChat
 from core.llm.chat_model.models.azure_chat import AzureChat
+from core.llm.chat_model.models.baiduyiyan_chat import BaiduYiyanChat
 from core.llm.chat_model.models.deepseek_chat import DeepSeekChat
 from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gemini_chat import GeminiChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
 from core.llm.chat_model.models.grop_chat import GroqChat
 from core.llm.chat_model.models.huggingface_chat import HuggingFaceChat
+from core.llm.chat_model.models.hunyuan_chat import HunyuanChat
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
 from core.llm.chat_model.models.openrouter_chat import OpenRouterChat
 from core.llm.chat_model.models.qwen_chat import QWenChat
+from core.llm.chat_model.models.siliconflow_chat import SILICONFLOWChat
 from core.llm.chat_model.models.spark_chat import SparkChat
 from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
@@ -92,20 +95,19 @@ ChatModel = {
     "Tongyi-Qianwen": QWenChat,
     "Ollama": OllamaChat,
     "Xinference": XinferenceChat,
-    # "Moonshot": MoonshotChat,
-    # "DeepSeek": DeepSeekChat,
+    "SILICONFLOW": SILICONFLOWChat,
     "Anthropic": AnthropicChat,
     "Groq": GroqChat,
     "DeepSeek": DeepSeekChat,
     "VolcEngine": VolcEngineChat,
     "OpenRouter": OpenRouterChat,
-    # "BaiChuan": BaiChuanChat,
-    # "MiniMax": MiniMaxChat,
-    # "Mistral": MistralChat,
+    "Tencent Hunyuan": HunyuanChat,
+    "BaiduYiyan": BaiduYiyanChat,
     "Gemini": GeminiChat,
     "Doubao": DoubaoChat,
     "XunFei Spark": SparkChat,
     "OpenAI-API-Compatible": OpenAI_APIChat,
+    "VLLM": OpenAI_APIChat,
     "HuggingFace": HuggingFaceChat
 }
 
