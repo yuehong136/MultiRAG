@@ -6,6 +6,7 @@
 @date：2024/7/11 14:30
 @desc:
 """
+import asyncio
 import logging
 import json
 import os
@@ -15,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
-from api.apps import manager
+from api.apps import manager, executor
 from api.db.database import get_db
 from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService, LLMBundle
 from api.db.services.user_service import TenantService
@@ -48,6 +49,18 @@ class AddLLMRequest(BaseModel):
     bedrock_region: str | None = None
     fish_audio_ak: str | None = None
     fish_audio_refid: str | None = None
+    hunyuan_sid: str | None = None
+    hunyuan_sk: str | None = None
+    tencent_cloud_sid: str | None = None
+    tencent_cloud_sk: str | None = None
+    spark_app_id: str | None = None
+    spark_api_secret: str | None = None
+    spark_api_key: str | None = None
+    yiyan_ak: str | None = None
+    yiyan_sk: str | None = None
+    google_project_id: str | None = None
+    google_region: str | None = None
+    google_service_account_key: str | None = None
 
 
 class DeleteLLMRequest(BaseModel):
@@ -90,7 +103,7 @@ router = APIRouter()
 
 
 @router.get('/factories', summary="获取模型供应商信息", response_description="成功获取到所有模型供应商信息")
-async def factories(db: Session = Depends(get_db), user=Depends(manager)):
+def factories(db: Session = Depends(get_db), user=Depends(manager)):
     """
     此异步函数用于获取所有模型供应商的信息，排除特定供应商，并将结果以JSON格式返回。
     摘要: 获取模型供应商信息
@@ -138,7 +151,7 @@ async def factories(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post('/set_api_key', summary="新增模型厂商api key", response_description="成功保存该模型服务厂商的api key")
-async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     此异步函数用于设置模型制造商的API密钥，并验证其是否能正确访问特定类型的模型。
     摘要: 新增模型厂商api key
@@ -242,7 +255,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
 
 
 @router.post('/add_llm', summary="新增模型", response_description="成功新增该模型")
-async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     此异步函数用于添加新的语言模型（LLM），支持不同的模型供应商，并验证模型的可用性。
     摘要: 新增模型
@@ -292,10 +305,11 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
 
     elif factory == "Tencent Hunyuan":
         req["api_key"] = apikey_json(["hunyuan_sid", "hunyuan_sk"])
-        return set_api_key()
+        return set_api_key(SetAPIKeyRequest(**req), db, user)
 
     elif factory == "Tencent Cloud":
         req["api_key"] = apikey_json(["tencent_cloud_sid", "tencent_cloud_sk"])
+        return set_api_key(SetAPIKeyRequest(**req), db, user)
 
     elif factory == "Bedrock":
         llm_name = req["llm_name"]
@@ -319,10 +333,6 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
             api_key = req.get("spark_api_password", "xxxxxxxxxxxxxxx")
         elif req["mdl_type"] == "tts":
             api_key = apikey_json(["spark_app_id", "spark_api_secret", "spark_api_key"])
-
-    elif factory == "BaiduYiyan":
-        llm_name = req["llm_name"]
-        api_key = apikey_json(["yiyan_ak", "yiyan_sk"])
 
     elif factory == "Fish Audio":
         llm_name = req["llm_name"]
@@ -427,7 +437,7 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
 
 
 @router.post('/delete_llm', summary="删除模型", response_description="成功删除该模型")
-async def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     此异步函数用于删除指定的语言模型（LLM）。
     摘要: 删除模型
@@ -473,7 +483,7 @@ def delete_factory(request: DeleteFactoryRequest, db: Session = Depends(get_db),
 
 
 @router.get('/my_llms', summary="获取用户的所有模型", response_description="成功获取到用户的所有模型")
-async def my_llms(db: Session = Depends(get_db), user=Depends(manager)):
+def my_llms(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取当前用户的所有模型信息。
     摘要: 获取用户的所有模型
@@ -517,7 +527,7 @@ async def my_llms(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.get('/list', summary="列出所有模型", response_description="成功列出所有模型")
-async def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=Depends(manager)):
+def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=Depends(manager)):
     """
     列出所有模型，支持按模型类型筛选。
     摘要: 列出所有模型
@@ -661,9 +671,8 @@ def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user
 
     return get_json_result(data=data)
 
-
 @router.post('/chat_service_sse', summary="模型对话服务", response_description="成功调用对话模型")
-def chat_service_sse(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def chat_service_sse(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/v1/llm/chat_service` 模型对话服务
 
@@ -784,66 +793,330 @@ def chat_service_sse(request: LLMServiceRequest, db: Session = Depends(get_db), 
 
     """
     req = request.model_dump()
-    tenants = TenantService.get_info_by(db, user.id)
-    if not tenants:
-        raise HTTPException(status_code=404, detail="Tenant not found!")
 
-    my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
+    # 将同步操作封装在函数中
+    def process_non_streaming_request():
+        # 获取租户信息
+        tenants = TenantService.get_info_by(db, user.id)
+        if not tenants:
+            raise HTTPException(status_code=404, detail="Tenant not found!")
 
-    def get_llm_type(model_name, my_llms):
-        for row in my_llms:
-            if row[4] == model_name:  # 这里的第5个元素是 model_name
-                return row[-3]  # 倒数第三个元素是 llm_type
-        return None  # 如果找不到，返回 None
+        my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
 
-    llm_type = get_llm_type(req["llm_name"], my_llms)
-    if llm_type:
-        logging.debug(f"The llm_type for model {req['llm_name']} is: {llm_type}")
-    else:
-        raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
+        def get_llm_type(model_name, my_llms):
+            for row in my_llms:
+                if row[4] == model_name:
+                    return row[-3]
+            return None
 
-    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
-    # 构建调用参数
-    call_params = {
-        "system": req["prompt"],
-        "history": req["messages"],
-        "gen_conf": req["gen_conf"]
-    }
+        llm_type = get_llm_type(req["llm_name"], my_llms)
+        if llm_type:
+            logging.debug(f"The llm_type for model {req['llm_name']} is: {llm_type}")
+        else:
+            raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
 
-    # 如果llm_type为image2text，添加image参数
-    if llm_type == 'image2text':
-        call_params["image"] = req["image"]
+        chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+        # 构建调用参数
+        call_params = {
+            "system": req["prompt"],
+            "history": req["messages"],
+            "gen_conf": req["gen_conf"]
+        }
 
+        # 如果llm_type为image2text，添加image参数
+        if llm_type == 'image2text':
+            call_params["image"] = req["image"]
+
+        # 非流式调用，直接返回完整响应
+        data = chat_mdl.chat(**call_params)
+        return data
+
+    # 获取初始设置的同步函数
+    def get_initial_setup():
+        tenants = TenantService.get_info_by(db, user.id)
+        if not tenants:
+            raise HTTPException(status_code=404, detail="Tenant not found!")
+
+        my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
+
+        def get_llm_type(model_name, my_llms):
+            for row in my_llms:
+                if row[4] == model_name:
+                    return row[-3]
+            return None
+
+        llm_type = get_llm_type(req["llm_name"], my_llms)
+        if not llm_type:
+            raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
+
+        chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+
+        # 构建调用参数
+        call_params = {
+            "system": req["prompt"],
+            "history": req["messages"],
+            "gen_conf": req["gen_conf"]
+        }
+
+        # 如果llm_type为image2text，添加image参数
+        if llm_type == 'image2text':
+            call_params["image"] = req["image"]
+
+        return chat_mdl, call_params
+
+    # 处理流式响应
     async def stream_response():
-        """
-        Stream SSE response to the client.
-        """
         try:
+            # 在线程池中获取初始设置
+            loop = asyncio.get_running_loop()
+            chat_mdl, call_params = await loop.run_in_executor(executor, get_initial_setup)
+
+            # 在线程池中执行流式生成并迭代结果
+            def generate_stream():
+                try:
+                    # 调用模型的流式生成方法
+                    result_generator = chat_mdl.chat_streamly(**call_params)
+                    # 返回生成器对象
+                    return result_generator
+                except Exception as e:
+                    # 捕获异常并返回
+                    raise e
+
+            # 获取生成器
+            generator = await loop.run_in_executor(executor, generate_stream)
+
+            # 保持与原代码相同的累加逻辑
             last_ans = ""  # 初始化累加变量
-            for ans in chat_mdl.chat_streamly(**call_params):
-                delta_ans = ans[len(last_ans):]  # 计算增量
+
+            # 使用线程池处理每次迭代，但保持原始累加逻辑
+            def get_next_chunk(generator):
+                try:
+                    return next(generator), False  # 返回下一个结果和未完成标志
+                except StopIteration:
+                    return None, True  # 返回None和完成标志
+                except Exception as e:
+                    raise e
+
+            is_complete = False
+            while not is_complete:
+                # 在线程池中获取下一个响应
+                chunk, is_complete = await loop.run_in_executor(executor, get_next_chunk, generator)
+
+                if is_complete:
+                    # 流结束
+                    end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
+                    yield f"data: {end_message}\n\n"
+                    break
+
+                # 计算增量，与原代码保持一致
+                delta_ans = chunk[len(last_ans):]  # 计算增量
                 if not delta_ans:  # 如果没有新内容，跳过
                     continue
-                last_ans = ans  # 更新累加内容
+
+                last_ans = chunk  # 更新累加内容
                 sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": last_ans}, ensure_ascii=False)
-                yield f"data: {sse_data}\n\n"  # SSE 格式：data: 数据\n\n
+                yield f"data: {sse_data}\n\n"  # 注意这里返回的是累加的内容，与原代码一致
+
         except Exception as e:
-            error_message = json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": f"**ERROR**: {str(e)}"}},
-                                       ensure_ascii=False)
+            error_message = json.dumps(
+                {"retcode": 500, "retmsg": str(e), "data": {"answer": f"**ERROR**: {str(e)}"}},
+                ensure_ascii=False
+            )
             yield f"data: {error_message}\n\n"
-        finally:
             # 流结束标记
             end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
             yield f"data: {end_message}\n\n"
 
     # 根据是否流式调用选择合适的方法
     if req["stream"]:
-        # data = chat_mdl.chat_streamly(**call_params)
         return StreamingResponse(stream_response(), media_type="text/event-stream")
     else:
-        data = chat_mdl.chat(**call_params)
-
+        # 在线程池中运行同步代码
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(executor, process_non_streaming_request)
         return get_json_result(data=data)
+# @router.post('/chat_service_sse', summary="模型对话服务", response_description="成功调用对话模型")
+# def chat_service_sse(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
+#     """
+#     ### POST `/v1/llm/chat_service` 模型对话服务
+#
+# **功能描述**:
+# 此接口用于调用对话模型，基于用户提供的输入生成对应的响应内容。支持文本生成、图像到文本转换、消息处理等多种模型类型，接口根据请求体中的配置，选择适当的模型及生成方式，提供流式和非流式响应模式。
+#
+# ---
+#
+# ### 请求体 (Request Body)
+#
+# | 字段         | 类型                | 必填 | 描述                                                                                  |
+# |--------------|---------------------|------|---------------------------------------------------------------------------------------|
+# | `prompt`     | `string`           | 否   | 用户提供的提示内容，用于引导对话模型生成响应。                                        |
+# | `messages`   | `list[dict]`       | 是   | 对话消息列表，包含用户与模型之间的对话历史，格式为 `{ "role": "user/assistant", "content": "..." }`。|
+# | `llm_name`   | `string`           | 是   | 模型名称，用于指定所调用的语言模型。                                                 |
+# | `stream`     | `boolean`          | 是   | 指定是否使用流式响应，`true` 表示流式响应，`false` 表示非流式响应。                   |
+# | `gen_conf`   | `object`           | 否   | 生成配置，控制对话生成行为，例如温度值、生成长度等（具体配置视模型能力而定）。         |
+# | `image`      | `string (Base64)`  | 否   | Base64 编码的图像数据，适用于图像到文本的转换模型。                                   |
+#
+# ---
+#
+# ### 响应 (Response)
+#
+# #### 成功响应 (200)
+#
+# - **流式响应**:
+#     - **`Content-Type: text/event-stream`**
+#     - 数据按块流式返回，每条消息以 `data:` 开头，并以两个换行符 `\\n\\n` 结束。
+#
+#     **示例**:
+#
+#     ```plaintext
+#     data: {"retcode": 0, "retmsg": "", "data": "你好"}
+#
+#     data: {"retcode": 0, "retmsg": "", "data": "你好👋！"}
+#
+#     data: {"retcode": 0, "retmsg": "", "data": "你好👋！我是人工智能助手"}
+#
+#     data: {"retcode": 0, "retmsg": "", "data": true}
+#     ```
+#
+# - **非流式响应**:
+#     - **`Content-Type: application/json`**
+#     - **示例**:
+#     ```json
+#     {
+#         "retcode": 0,
+#         "retmsg": "success",
+#         "data": "你好👋！我是人工智能助手，很高兴见到你！欢迎问我任何问题。"
+#     }
+#     ```
+#
+# ---
+#
+# ### 错误响应
+#
+# #### **404: Tenant not found**
+# - **描述**: 当根据用户ID查找租户信息失败时，返回此错误。
+# - **示例**:
+#     ```json
+#     {
+#         "detail": "Tenant not found!"
+#     }
+#     ```
+#
+# #### **404: Model not found**
+# - **描述**: 当指定的模型名称在用户租户可用模型列表中未找到时，返回此错误。
+# - **示例**:
+#     ```json
+#     {
+#         "detail": "Model glm-4-airx not found in the list."
+#     }
+#     ```
+#
+# #### **500: 内部错误**
+# - **描述**: 当发生意外错误时，返回此错误。
+# - **示例**:
+#     - **流式响应错误**:
+#         ```plaintext
+#         data: {"retcode": 500, "retmsg": "Internal server error", "data": {"answer": "**ERROR**: Internal error"}}
+#         ```
+#     - **非流式响应错误**:
+#         ```json
+#         {
+#             "retcode": 500,
+#             "retmsg": "Internal server error",
+#             "data": {"answer": "**ERROR**: Internal error"}
+#         }
+#         ```
+#
+# ---
+#
+# ### 主要流程
+#
+# 1. 从请求中提取用户输入的内容、模型名称和配置信息。
+# 2. 通过用户信息获取租户信息，确保用户的租户身份；如果未找到租户信息，返回404错误。
+# 3. 获取用户租户关联的模型列表，确定模型类型 (`llm_type`)。
+# 4. 根据 `llm_type` 判断是否需要传入 `image` 参数，构建生成请求。
+# 5. 根据 `stream` 参数选择流式或非流式的生成方法，调用模型获取对话响应内容。
+# 6. 返回生成的对话结果。
+#
+# ---
+#
+# ### 注意事项
+#
+# - **模型选择**:
+#     - 仅当 `llm_type` 为 `image2text` 时传递 `image` 参数，以确保在需要图像到文本转换时能处理Base64编码的图像数据。
+#     - 支持多种模型类型 (如文本生成、图像到文本、消息对话)，请根据需求选择适当的 `llm_name` 和 `llm_type`。
+# - **流式调用**:
+#     - 若 `stream` 参数为 `True`，将返回流式响应，用于实时数据生成；若为 `False`，返回完整的响应数据。
+# - **数据格式**:
+#     - 返回数据格式可能因模型及请求内容不同而有所变化；默认返回JSON格式的结构化数据或文本响应。
+# - **流式响应结束标记**:
+#     - 流式响应的最后一条消息为:
+#       ```plaintext
+#       data: {"retcode": 0, "retmsg": "", "data": true}
+#       ```
+#
+#     """
+#     req = request.model_dump()
+#     tenants = TenantService.get_info_by(db, user.id)
+#     if not tenants:
+#         raise HTTPException(status_code=404, detail="Tenant not found!")
+#
+#     my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
+#
+#     def get_llm_type(model_name, my_llms):
+#         for row in my_llms:
+#             if row[4] == model_name:  # 这里的第5个元素是 model_name
+#                 return row[-3]  # 倒数第三个元素是 llm_type
+#         return None  # 如果找不到，返回 None
+#
+#     llm_type = get_llm_type(req["llm_name"], my_llms)
+#     if llm_type:
+#         logging.debug(f"The llm_type for model {req['llm_name']} is: {llm_type}")
+#     else:
+#         raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
+#
+#     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+#     # 构建调用参数
+#     call_params = {
+#         "system": req["prompt"],
+#         "history": req["messages"],
+#         "gen_conf": req["gen_conf"]
+#     }
+#
+#     # 如果llm_type为image2text，添加image参数
+#     if llm_type == 'image2text':
+#         call_params["image"] = req["image"]
+#
+#     async def stream_response():
+#         """
+#         Stream SSE response to the client.
+#         """
+#         try:
+#             last_ans = ""  # 初始化累加变量
+#             for ans in chat_mdl.chat_streamly(**call_params):
+#                 delta_ans = ans[len(last_ans):]  # 计算增量
+#                 if not delta_ans:  # 如果没有新内容，跳过
+#                     continue
+#                 last_ans = ans  # 更新累加内容
+#                 sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": last_ans}, ensure_ascii=False)
+#                 yield f"data: {sse_data}\n\n"  # SSE 格式：data: 数据\n\n
+#         except Exception as e:
+#             error_message = json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": f"**ERROR**: {str(e)}"}},
+#                                        ensure_ascii=False)
+#             yield f"data: {error_message}\n\n"
+#         finally:
+#             # 流结束标记
+#             end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
+#             yield f"data: {end_message}\n\n"
+#
+#     # 根据是否流式调用选择合适的方法
+#     if req["stream"]:
+#         # data = chat_mdl.chat_streamly(**call_params)
+#         return StreamingResponse(stream_response(), media_type="text/event-stream")
+#     else:
+#         data = chat_mdl.chat(**call_params)
+#
+#         return get_json_result(data=data)
 
 
 @router.post('/fine_prompt', summary="优化提示词", response_description="返回优化后的提示词")

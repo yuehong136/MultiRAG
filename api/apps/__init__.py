@@ -8,6 +8,7 @@
 """
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -46,6 +47,10 @@ tags_metadata = [
         },
     },
 ]
+
+# 在模块顶部（路由定义之前）创建线程池
+executor = ThreadPoolExecutor(max_workers=20)  # 可以根据服务器性能调整
+
 # 创建FastAPI实例
 app = FastAPI(
     title="Multi-RAG",
@@ -63,6 +68,8 @@ app = FastAPI(
         "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
     },
     openapi_tags=tags_metadata,
+    docs_url=None,
+    redoc_url=None
 )
 # 添加处理CORS（跨域资源共享）的中间件
 app.add_middleware(
