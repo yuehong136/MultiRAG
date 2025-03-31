@@ -28,11 +28,20 @@ class MultiRAGMinio(object):
             pass
 
         try:
-            self.conn = Minio(settings.MINIO["host"],
-                              access_key=settings.MINIO["user"],
-                              secret_key=settings.MINIO["password"],
-                              secure=False
-                              )
+            # Create connection parameters dictionary
+            conn_params = {
+                "endpoint": settings.MINIO["host"],
+                "access_key": settings.MINIO["user"],
+                "secret_key": settings.MINIO["password"],
+                "secure": False
+            }
+
+            # Only add region parameter if it's not empty
+            if settings.MINIO["region"]:
+                conn_params["region"] = settings.MINIO["region"]
+
+            # Initialize MinIO client with the parameters
+            self.conn = Minio(**conn_params)
         except Exception:
             logging.exception(
                 "Fail to connect %s " % settings.MINIO["host"])

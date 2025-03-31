@@ -32,6 +32,8 @@ minio:
   password: ''
   # MinIO服务的主机名和端口
   host: ''
+  # MinIO服务的主机名和端口
+  region: ''
   # 工作流过程中使用的桶名称
   workflow_bucket: 'multirag-workflow'
 
