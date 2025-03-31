@@ -1,11 +1,15 @@
+import asyncio
+import time
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request
+from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 import json
 
+from workflow_v2.workflow_state_manager import workflow_state_manager
 from workflow_v2.component.component_manager import ComponentManager
 from workflow_v2.workflow import run_workflow, WorkflowNode
 from sqlalchemy.orm import Session
@@ -32,6 +36,7 @@ class ResponseSchema(BaseModel):
 async def run(
         schema_data: str = Form(..., alias="schema"),  # JSON string
         start_input_values: str = Form(...),  # JSON string
+        workflow_id: str = Form(...),
         files: list[UploadFile] = File(None),  # Optional files
         bucket_name: str = Form(None),  # bucket_name在任何情况下都会传入，所以下面处理文件时，先判断files是否为空，如果为空，处理bucket_name
         db: Session = Depends(get_db),
@@ -72,6 +77,7 @@ async def run(
         result = await run_workflow(
             workflow_data,
             start_input_values=input_values,
+            workflow_id=workflow_id,
             db=db,
             user=user
         )
@@ -162,6 +168,93 @@ async def component_run(
         raise HTTPException(
             status_code=500,
             detail=f"Error processing request: {str(e)}"
+        )
+
+
+@router.get("/workflow/events/{workflow_id}")
+async def workflow_events(workflow_id: str, request: Request):
+    """
+    SSE端点，用于接收工作流状态更新
+
+    Args:
+        workflow_id: 工作流ID
+        request: FastAPI请求对象
+
+    Returns:
+        EventSourceResponse: SSE事件流
+    """
+    max_duration = 180  # 默认最大连接时间(秒)
+    max_idle_time = 120  # 默认最大空闲时间(秒)
+    try:
+        async def event_generator():
+            try:
+                # 订阅工作流状态更新
+                queue = await workflow_state_manager.subscribe(workflow_id)
+
+                # 记录开始时间
+                start_time = time.time()
+
+                try:
+                    # 保持连接直到客户端断开、收到结束信号或超时
+                    while True:
+                        # 检查客户端是否断开连接
+                        if await request.is_disconnected():
+                            break
+
+                        # 检查是否超过最大连接时间
+                        current_time = time.time()
+                        if (current_time - start_time) > max_duration:
+                            yield {
+                                "event": "timeout",
+                                "data": json.dumps({
+                                    "workflow_id": workflow_id,
+                                    "message": f"连接超过最大时长 {max_duration} 秒，服务端断开连接"
+                                })
+                            }
+                            break
+
+                        # 等待状态更新，带有超时
+                        try:
+                            # timeout控制的是单次等待队列中新消息的最大时间
+                            state_update = await asyncio.wait_for(queue.get(), timeout=max_idle_time)
+
+                            # 如果接收到None，表示工作流结束
+                            if state_update is None:
+                                # 发送一个结束事件
+                                yield {
+                                    "event": "workflow_end",
+                                    "data": json.dumps({"workflow_id": workflow_id, "status": "completed"})
+                                }
+                                break
+
+                            # 发送普通状态更新
+                            yield {
+                                "event": "workflow_update",
+                                "data": json.dumps(state_update)
+                            }
+
+                        except asyncio.TimeoutError:
+                            # 发送保活消息
+                            yield {
+                                "event": "ping",
+                                "data": json.dumps({"timestamp": workflow_state_manager._current_timestamp()})
+                            }
+                finally:
+                    # 确保取消订阅
+                    await workflow_state_manager.unsubscribe(workflow_id, queue)
+            except Exception as e:
+                # 在事件流中发送错误信息
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"error": str(e)})
+                }
+
+        return EventSourceResponse(event_generator())
+    except Exception as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"获取工作流实时数据异常: {str(e)}",
+            data=None
         )
 
 
