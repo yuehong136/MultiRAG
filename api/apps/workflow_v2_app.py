@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -182,21 +183,40 @@ async def workflow_events(workflow_id: str, request: Request):
     Returns:
         EventSourceResponse: SSE事件流
     """
+    max_duration = 180  # 默认最大连接时间(秒)
+    max_idle_time = 120  # 默认最大空闲时间(秒)
     try:
         async def event_generator():
             try:
                 # 订阅工作流状态更新
                 queue = await workflow_state_manager.subscribe(workflow_id)
 
+                # 记录开始时间
+                start_time = time.time()
+
                 try:
-                    # 保持连接直到客户端断开或收到结束信号
+                    # 保持连接直到客户端断开、收到结束信号或超时
                     while True:
+                        # 检查客户端是否断开连接
                         if await request.is_disconnected():
+                            break
+
+                        # 检查是否超过最大连接时间
+                        current_time = time.time()
+                        if (current_time - start_time) > max_duration:
+                            yield {
+                                "event": "timeout",
+                                "data": json.dumps({
+                                    "workflow_id": workflow_id,
+                                    "message": f"连接超过最大时长 {max_duration} 秒，服务端断开连接"
+                                })
+                            }
                             break
 
                         # 等待状态更新，带有超时
                         try:
-                            state_update = await asyncio.wait_for(queue.get(), timeout=60)
+                            # timeout控制的是单次等待队列中新消息的最大时间
+                            state_update = await asyncio.wait_for(queue.get(), timeout=max_idle_time)
 
                             # 如果接收到None，表示工作流结束
                             if state_update is None:
