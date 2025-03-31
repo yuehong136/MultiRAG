@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 from dataclasses import dataclass
 import copy
@@ -6,7 +7,6 @@ from api.db.services.llm_service import LLMBundle
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.utils import parse_template, match_parameters, dict_arrays_to_array_dicts, map_schema_with_values
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
-from concurrent.futures import ThreadPoolExecutor
 
 
 @dataclass
@@ -161,20 +161,27 @@ class LLMComponent(BaseComponent):
             system_prompt_list = [parse_template(self.llm_params.system_prompt, item) for item in input_value_dict_list]
             prompt_list = [parse_template(self.llm_params.prompt, item) for item in input_value_dict_list]
 
-            # 并发调用存在限制，目前先使用普通 for 循环替代并发处理
-            execute_info = []
+            # 使用asyncio.gather并发处理
+            tasks = []
             for i in range(len(input_value_dict_list)):
-                args = (
-                    self.db,
-                    self.user.id,
-                    model,
-                    system_prompt_list[i],
-                    prompt_list[i],
-                    self.llm_params,
-                    input_value_dict_list[i]
+                tasks.append(
+                    process_single_chat_async(
+                        self.db,
+                        self.user.id,
+                        model,
+                        system_prompt_list[i],
+                        prompt_list[i],
+                        self.llm_params,
+                        input_value_dict_list[i]
+                    )
                 )
-                result = process_single_chat(args)
-                execute_info.append(result)
+
+            # 限制并发数量
+            execute_info = []
+            for i in range(0, len(tasks), self.batch_config.concurrent_size):
+                batch_tasks = tasks[i:i + self.batch_config.concurrent_size]
+                batch_results = await asyncio.gather(*batch_tasks)
+                execute_info.extend(batch_results)
 
             # 转换为目标格式，保持原始顺序
             output_list = [{"output": item["output"]} for item in execute_info]
@@ -186,13 +193,20 @@ class LLMComponent(BaseComponent):
             actual_prompt = parse_template(self.llm_params.prompt, self.inputs)
             chat_mdl = LLMBundle(self.db, self.user.id, LLMType.CHAT, model)
             history = [{"role": "user", "content": actual_prompt}]
-            response = chat_mdl.chat(system=actual_system_prompt,
-                                     history=history,
-                                     gen_conf={"temperature": self.llm_params.temperature,
-                                               "top_p": self.llm_params.top_p,
-                                               "max_tokens": self.llm_params.max_tokens,
-                                               "frequency_penalty": self.llm_params.frequency_penalty,
-                                               })
+
+            # 使用 asyncio.to_thread 防止阻塞主事件循环
+            response = await asyncio.to_thread(
+                chat_mdl.chat,
+                system=actual_system_prompt,
+                history=history,
+                gen_conf={
+                    "temperature": self.llm_params.temperature,
+                    "top_p": self.llm_params.top_p,
+                    "max_tokens": self.llm_params.max_tokens,
+                    "frequency_penalty": self.llm_params.frequency_penalty,
+                }
+            )
+
             return {"output": response}
 
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict:
@@ -206,9 +220,11 @@ class LLMComponent(BaseComponent):
             system_prompt_list = [parse_template(self.llm_params.system_prompt, item) for item in input_value_dict_list]
             prompt_list = [parse_template(self.llm_params.prompt, item) for item in input_value_dict_list]
 
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                args_list = [
-                    (
+            # 使用asyncio.gather并发处理，并限制并发数
+            tasks = []
+            for i in range(len(input_value_dict_list)):
+                tasks.append(
+                    process_single_chat_async(
                         self.db,
                         self.user.id,
                         model,
@@ -217,14 +233,17 @@ class LLMComponent(BaseComponent):
                         self.llm_params,
                         input_value_dict_list[i]
                     )
-                    for i in range(len(input_value_dict_list))
-                ]
+                )
 
-                # 使用 list 保持原始顺序
-                execute_info = list(executor.map(process_single_chat, args_list))
+            # 限制并发数量
+            execute_info = []
+            for i in range(0, len(tasks), self.batch_config.concurrent_size):
+                batch_tasks = tasks[i:i + self.batch_config.concurrent_size]
+                batch_results = await asyncio.gather(*batch_tasks)
+                execute_info.extend(batch_results)
 
-                # 转换为目标格式，保持原始顺序
-                output_list = [{"output": item["output"]} for item in execute_info]
+            # 转换为目标格式，保持原始顺序
+            output_list = [{"output": item["output"]} for item in execute_info]
 
             # 批处理
             return {"outputList": output_list}
@@ -234,16 +253,45 @@ class LLMComponent(BaseComponent):
             actual_prompt = parse_template(self.llm_params.prompt, self.inputs)
             chat_mdl = LLMBundle(self.db, self.user.id, LLMType.CHAT, model)
             history = [{"role": "user", "content": actual_prompt}]
-            response = chat_mdl.chat(system=actual_system_prompt,
-                                     history=history,
-                                     gen_conf={"temperature": self.llm_params.temperature,
-                                               "top_p": self.llm_params.top_p,
-                                               "max_tokens": self.llm_params.max_tokens,
-                                               "frequency_penalty": self.llm_params.frequency_penalty,
-                                               })
+
+            # 使用 asyncio.to_thread 防止阻塞主事件循环
+            response = await asyncio.to_thread(
+                chat_mdl.chat,
+                system=actual_system_prompt,
+                history=history,
+                gen_conf={
+                    "temperature": self.llm_params.temperature,
+                    "top_p": self.llm_params.top_p,
+                    "max_tokens": self.llm_params.max_tokens,
+                    "frequency_penalty": self.llm_params.frequency_penalty,
+                }
+            )
+
             return {"output": response}
 
 
+# 新增异步版本
+async def process_single_chat_async(db, user_id, model, system_prompt, prompt, llm_params, input_dict):
+    chat_mdl = LLMBundle(db, user_id, LLMType.CHAT, model)
+    history = [{"role": "user", "content": prompt}]
+
+    # 使用 asyncio.to_thread 防止阻塞
+    response = await asyncio.to_thread(
+        chat_mdl.chat,
+        system=system_prompt,
+        history=history,
+        gen_conf={
+            "temperature": llm_params.temperature,
+            "top_p": llm_params.top_p,
+            "max_tokens": llm_params.max_tokens,
+            "frequency_penalty": llm_params.frequency_penalty,
+        }
+    )
+
+    return {"input": input_dict, "output": response}
+
+
+# 同步版本保留，但不再直接使用
 def process_single_chat(args):
     db, user_id, model, system_prompt, prompt, llm_params, input_dict = args
     chat_mdl = LLMBundle(db, user_id, LLMType.CHAT, model)

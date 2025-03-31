@@ -2,6 +2,7 @@ from datetime import datetime
 import asyncio
 from typing import Dict, Any, Optional, List
 
+from workflow_v2.workflow_state_manager import workflow_state_manager
 from workflow_v2.component.component_manager import ComponentManager
 from workflow_v2.component.selector_component import Branch
 from workflow_v2.utils import match_parameters
@@ -32,6 +33,9 @@ class WorkflowNode:
         self.is_completed = False
         self.is_executing = False  # 新增：标记节点是否正在执行
         self.execution_lock = asyncio.Lock()  # 新增：节点执行锁
+
+        # 新增：节点状态
+        self.status = "waiting"  # 可能的值: "waiting", "executing", "completed", "failed"
 
         # IO Schema
         self.input_schema = node_data.get('data', {}).get('inputs', {}).get('inputParameters', [])
@@ -65,9 +69,9 @@ class WorkflowNode:
 
 
 class AsyncWorkflowEngine:
-    def __init__(self, workflow_id: Optional[str] = None, start_input_values: Optional[Dict[str, Any]] = None,
+    def __init__(self, workflow_id: str, start_input_values: Optional[Dict[str, Any]] = None,
                  **kwargs):
-        self.workflow_id = workflow_id or datetime.now().strftime("%Y%m%d%H%M%S")
+        self.workflow_id = workflow_id
         self.nodes = {}
         self.start_nodes = []
         self.tasks = {}
@@ -83,10 +87,14 @@ class AsyncWorkflowEngine:
         # 添加第一个失败的节点
         self.first_failed_node: Optional[WorkflowNode] = None
 
-    def build_graph(self, nodes_data, edges_data):
+    async def build_graph(self, nodes_data, edges_data):
         self.logger.info(f"==================================")
         self.logger.info(f"Workflow ID: {self.workflow_id}")
         self.logger.info(f"Building workflow graph")
+
+        # 首先清除该工作流ID的之前状态记录
+        await workflow_state_manager.clear_workflow_state(self.workflow_id)
+
         # 创建所有节点
         for node_data in nodes_data:
             node = WorkflowNode(node_data['id'], node_data)
@@ -127,6 +135,20 @@ class AsyncWorkflowEngine:
             if not node.previous_nodes:
                 self.start_nodes.append(node)
 
+        # 发布初始工作流状态
+        asyncio.create_task(self._publish_workflow_init())
+
+    async def _publish_workflow_init(self):
+        """发布工作流初始状态"""
+        if self.start_nodes:
+            start_node = self.start_nodes[0]
+            await workflow_state_manager.publish_node_state(
+                workflow_id=self.workflow_id,
+                node_id=start_node.id,
+                node_title=start_node.title,
+                status="waiting"
+            )
+
     async def execute(self):
         self.logger.info(f"Starting workflow execution")
         try:
@@ -138,6 +160,10 @@ class AsyncWorkflowEngine:
             start_tasks = [self.execute_node(node) for node in self.start_nodes]
             # 并行执行所有起始任务
             await asyncio.gather(*start_tasks)
+
+            # 发布工作流完成状态
+            await workflow_state_manager.publish_workflow_completed(self.workflow_id)
+
         except Exception as e:
             self.logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
             raise
@@ -152,6 +178,15 @@ class AsyncWorkflowEngine:
                     return
                 node.is_executing = True
                 node.in_execution_path = True  # 标记当前节点在执行路径上
+                node.status = "executing"  # 更新节点状态
+
+                # 发布节点开始执行状态
+                await workflow_state_manager.publish_node_state(
+                    workflow_id=self.workflow_id,
+                    node_id=node.id,
+                    node_title=node.title,
+                    status="executing"
+                )
 
                 task = asyncio.create_task(self._process_node(node))
                 self.tasks[node.id] = task
@@ -194,9 +229,22 @@ class AsyncWorkflowEngine:
 
         except Exception as e:
             node_logger.error(f"Node execution failed: {str(e)}", exc_info=True)
+            node.status = "failed"
+            node.failure_reason = str(e)
+
+            # 发布节点失败状态
+            await workflow_state_manager.publish_node_state(
+                workflow_id=self.workflow_id,
+                node_id=node.id,
+                node_title=node.title,
+                status="failed",
+                started_at=node.execution_start_time,
+                execution_time=datetime.now().timestamp() - node.execution_start_time if node.execution_start_time else None,
+                error_message=str(e)
+            )
+
             if self.first_failed_node is None:
                 self.first_failed_node = node
-                node.failure_reason = str(e)
             raise NodeExecutionError(node_id=node.id, node_title=node.title, message=str(e))
 
     async def _process_node(self, node: WorkflowNode) -> None:
@@ -224,10 +272,34 @@ class AsyncWorkflowEngine:
                 node.output = outputs
 
                 node.is_completed = True
+                node.status = "completed"
                 node_logger.info(f"Node 【{node.title}】 completed")
+
+                # 发布节点完成状态
+                await workflow_state_manager.publish_node_state(
+                    workflow_id=self.workflow_id,
+                    node_id=node.id,
+                    node_title=node.title,
+                    status="completed",
+                    started_at=node.execution_start_time,
+                    execution_time=datetime.now().timestamp() - node.execution_start_time,
+                )
 
         except asyncio.TimeoutError:
             node_logger.error(f"Node execution timed out")
+            node.status = "failed"
+
+            # 发布节点超时状态
+            await workflow_state_manager.publish_node_state(
+                workflow_id=self.workflow_id,
+                node_id=node.id,
+                node_title=node.title,
+                status="failed",
+                started_at=node.execution_start_time,
+                execution_time=node.timeout,
+                error_message=f"节点执行超时，超过{node.timeout}秒"
+            )
+
             raise NodeTimeoutError(
                 node_id=node.id,
                 node_title=node.title,
@@ -239,9 +311,35 @@ class AsyncWorkflowEngine:
                 'message': str(e),
                 'details': e.details
             }
+            node.status = "failed"
+
+            # 发布节点错误状态
+            await workflow_state_manager.publish_node_state(
+                workflow_id=self.workflow_id,
+                node_id=node.id,
+                node_title=node.title,
+                status="failed",
+                started_at=node.execution_start_time,
+                execution_time=datetime.now().timestamp() - node.execution_start_time if node.execution_start_time else None,
+                error_message=str(e)
+            )
+
             node_logger.error(f"Node failed: {str(e)}", exc_info=True)
             raise
         except Exception as e:
+            node.status = "failed"
+
+            # 发布节点错误状态
+            await workflow_state_manager.publish_node_state(
+                workflow_id=self.workflow_id,
+                node_id=node.id,
+                node_title=node.title,
+                status="failed",
+                started_at=node.execution_start_time,
+                execution_time=datetime.now().timestamp() - node.execution_start_time if node.execution_start_time else None,
+                error_message=str(e)
+            )
+
             node_logger.error(f"Node processing failed: {str(e)}", exc_info=True)
             raise
         finally:
@@ -279,9 +377,21 @@ class AsyncWorkflowEngine:
             self.logger.info("Workflow resources cleaned up")
 
 
-# 使用示例
-async def run_workflow(workflow_data, start_input_values=None, **kwargs):
-    engine = AsyncWorkflowEngine(workflow_id="test", start_input_values=start_input_values, **kwargs)
+# 修改run_workflow函数，将workflow_id作为返回值的一部分
+async def run_workflow(workflow_data, start_input_values=None, workflow_id: str = "test", **kwargs):
+    """
+    运行工作流
+
+    Args:
+        workflow_data: 工作流数据，包含nodes和edges
+        start_input_values: 起始输入值
+        workflow_id: 工作流ID
+        **kwargs: 其他参数
+
+    Returns:
+        dict: 包含执行结果和工作流ID
+    """
+    engine = AsyncWorkflowEngine(workflow_id=workflow_id, start_input_values=start_input_values, **kwargs)
 
     # 先进行验证
     validation_issues = WorkflowValidator(workflow_data['nodes'], workflow_data['edges']).validate_all()
@@ -291,7 +401,10 @@ async def run_workflow(workflow_data, start_input_values=None, **kwargs):
             engine.logger.error(f"{issue.format_message()}")
         raise WorkflowValidationError(message=f"工作流构建失败, 请检查验证问题: {issue_str}")
 
-    engine.build_graph(workflow_data['nodes'], workflow_data['edges'])
+    # 清除该工作流ID的之前状态记录 - 这里也清除一次，确保在构建图之前就已经清除了
+    await workflow_state_manager.clear_workflow_state(workflow_id)
+
+    await engine.build_graph(workflow_data['nodes'], workflow_data['edges'])
     try:
         await engine.execute()
         nodes_io = {k: {'input': getattr(v, 'input'), 'output': getattr(v, 'output')} for k, v in engine.nodes.items()}
@@ -302,20 +415,22 @@ async def run_workflow(workflow_data, start_input_values=None, **kwargs):
 
         engine.logger.info(f"==================================")
 
-        # 返回结果时包含节点执行时间
+        # 返回结果时包含节点执行时间和工作流ID
         return {
+            "workflow_id": workflow_id,  # 添加工作流ID
             "nodes_io": nodes_io,
             "end_node_output": end_node.output,
             "node_execution_times": engine.node_execution_times
         }
     except NodeExecutionError as e:
-        failed_nodes: List[str] = [engine.first_failed_node.id]
+        failed_nodes: List[str] = [engine.first_failed_node.id] if engine.first_failed_node else []
         # 如果节点IO均为空，则认为是失败节点
         empty_io_nodes = get_empty_io_nodes(engine)
         if empty_io_nodes:
             failed_nodes.extend(empty_io_nodes)
 
         data = {
+            "workflow_id": workflow_id,  # 添加工作流ID
             "nodes_io": {k: {'input': getattr(v, 'input'), 'output': getattr(v, 'output'),
                              'failure_reason': getattr(v, 'failure_reason')} for k, v in
                          engine.nodes.items()},
