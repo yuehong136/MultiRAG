@@ -96,20 +96,6 @@ app.add_middleware(
 )
 settings.init_settings()
 
-
-# 添加启动和关闭事件
-@app.on_event("startup")
-async def startup_event():
-    # 在FastAPI启动时启动状态管理器
-    await workflow_state_manager.start()
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    # 在FastAPI关闭时关闭状态管理器
-    await workflow_state_manager.shutdown()
-
-
 # 初始化登录管理器，设置密钥和令牌URL
 manager = LoginManager(settings.SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))
 
