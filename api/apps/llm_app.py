@@ -53,11 +53,10 @@ class AddLLMRequest(BaseModel):
     hunyuan_sk: str | None = None
     tencent_cloud_sid: str | None = None
     tencent_cloud_sk: str | None = None
+    spark_api_password: str | None = None
     spark_app_id: str | None = None
     spark_api_secret: str | None = None
     spark_api_key: str | None = None
-    yiyan_ak: str | None = None
-    yiyan_sk: str | None = None
     google_project_id: str | None = None
     google_region: str | None = None
     google_service_account_key: str | None = None
@@ -257,38 +256,103 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
 @router.post('/add_llm', summary="新增模型", response_description="成功新增该模型")
 def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    此异步函数用于添加新的语言模型（LLM），支持不同的模型供应商，并验证模型的可用性。
-    摘要: 新增模型
-    响应描述: 成功新增该模型
+# POST /add_llm
 
-    参数:
-    - request (AddLLMRequest): 一个依赖注入的请求对象，包含模型供应商、模型类型、模型名称、API密钥等信息。
+## 接口描述
+用于向系统中添加一个新的大语言模型(LLM)，并验证相关连接是否有效。
 
-    返回:
-    - dict: 成功时返回一个表示操作成功的JSON结果。
+## 请求方式
+POST
 
-    功能:
-    1. 根据模型供应商（如VolcEngine、Bedrock或其他）构造特定格式的API密钥。
-    2. 验证模型的可用性，包括嵌入（Embedding）和聊天（Chat）模型。
-    3. 如果模型不可用，收集错误信息并抛出HTTP异常。
-    4. 更新或创建租户的模型配置。
-    5. 如果在更新或创建过程中遇到完整性错误（例如，模型已存在），则抛出HTTP异常。
+## 接口权限
+需要用户认证
 
-    流程:
-    1. 解析请求体，根据模型供应商构造API密钥。
-    2. 根据模型类型实例化相应的模型类，并尝试访问模型。
-    3. 如果访问失败，收集错误信息。
-    4. 如果有错误信息，抛出HTTP异常。
-    5. 否则，更新或创建租户的模型配置。
-    6. 返回操作成功的JSON结果。
+## 请求参数
+| 参数名称 | 类型 | 必填 | 描述 |
+|----------|------|------|------|
+| llm_factory | string | 是 | 模型提供商/工厂，例如: "OpenAI", "Azure-OpenAI", "Bedrock", "VolcEngine", "Tencent Hunyuan", "Tencent Cloud", "LocalAI", "HuggingFace", "OpenAI-API-Compatible", "XunFei Spark", "Fish Audio", "Google Cloud" 等 |
+| llm_name | string | 是 | 模型名称 |
+| mdl_type | string | 是 | 模型类型，可以是 "chat" (聊天), "embedding" (嵌入), "rerank" (重排序), "image2text" (图像转文本), "tts" (文本转语音) |
+| api_key | string | 否 | API密钥，根据不同的工厂可能需要或者不需要 |
+| api_base | string | 否 | API基础URL地址 |
+| ark_api_key | string | 否 | VolcEngine专用: ARK API密钥 |
+| endpoint_id | string | 否 | VolcEngine专用: 终端节点ID |
+| bedrock_ak | string | 否 | AWS Bedrock专用: Access Key |
+| bedrock_sk | string | 否 | AWS Bedrock专用: Secret Key |
+| bedrock_region | string | 否 | AWS Bedrock专用: 区域名称 |
+| fish_audio_ak | string | 否 | Fish Audio专用: Access Key |
+| fish_audio_refid | string | 否 | Fish Audio专用: 参考ID |
+| hunyuan_sid | string | 否 | 腾讯混元专用: SID |
+| hunyuan_sk | string | 否 | 腾讯混元专用: Secret Key |
+| tencent_cloud_sid | string | 否 | 腾讯云专用: SID |
+| tencent_cloud_sk | string | 否 | 腾讯云专用: Secret Key |
+| spark_api_password | string | 否 | 讯飞星火专用: API密码 (用于chat模型) |
+| spark_app_id | string | 否 | 讯飞星火专用: 应用ID (用于tts模型) |
+| spark_api_secret | string | 否 | 讯飞星火专用: API Secret (用于tts模型) |
+| spark_api_key | string | 否 | 讯飞星火专用: API Key (用于tts模型) |
+| google_project_id | string | 否 | Google Cloud专用: 项目ID |
+| google_region | string | 否 | Google Cloud专用: 区域 |
+| google_service_account_key | string | 否 | Google Cloud专用: 服务账号密钥 |
 
-    异常处理:
-    - 如果在验证模型可用性或执行数据库操作过程中发生异常，将捕获异常并抛出HTTP异常。
+## 响应参数
+| 参数名称 | 类型 | 描述 |
+|----------|------|------|
+| success | boolean | 操作是否成功 |
+| data | boolean | 返回true表示添加成功 |
+| message | string | 当操作失败时，返回错误信息 |
 
-    注意:
-    - 支持的模型供应商包括VolcEngine、Bedrock和其他供应商，每种供应商的API密钥格式不同。
-    - 模型验证过程包括尝试访问嵌入和聊天模型，确保API密钥有效。
-    - 在更新或创建租户模型配置时，会检查模型是否已存在，以避免重复。
+## 特性
+1. 根据不同的模型提供商，自动组装API密钥格式
+2. 添加模型前，会进行连接测试，确保API密钥和URL有效
+3. 对于不同类型的模型，执行不同的有效性验证:
+   - 对于embedding模型: 验证能否成功编码测试文本
+   - 对于chat模型: 验证能否成功生成回复
+   - 对于rerank模型: 验证能否成功计算相似度
+   - 对于image2text模型: 验证能否成功描述图像
+   - 对于tts模型: 验证能否成功生成语音
+
+## 错误码
+| 错误码 | 描述 |
+|--------|------|
+| 400 | 请求参数错误或模型已存在或模型验证失败 |
+| 401 | 用户未认证 |
+
+## 示例
+
+### 请求示例 (添加OpenAI模型)
+```json
+{
+  "llm_factory": "OpenAI",
+  "llm_name": "gpt-4",
+  "mdl_type": "chat",
+  "api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "api_base": "https://api.openai.com/v1"
+}
+```
+
+### 响应示例 (成功)
+```json
+{
+  "success": true,
+  "data": true,
+  "message": ""
+}
+```
+
+### 响应示例 (失败)
+```json
+{
+  "success": false,
+  "data": null,
+  "message": "Fail to access model(gpt-4). Invalid API key."
+}
+```
+
+## 注意事项
+1. 不同的模型提供商需要不同的API密钥格式，请确保提供正确的参数组合
+2. 添加前，系统会验证模型连接，如果验证失败将返回400错误
+3. 对于同一个租户，相同工厂和名称的模型不能重复添加
+4. 对于某些特殊的模型工厂，系统会自动在模型名称后添加后缀，例如LocalAI会添加"___LocalAI"
     """
     req = request.model_dump()
     factory = req["llm_factory"]
