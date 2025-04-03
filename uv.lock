@@ -336,6 +336,9 @@ resolution-markers = [
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/56/2f/558a77e4f3be8edd588dc037239792d10e830f42b11d4c80360dd65f6471/Aspose.Slides-25.3.0-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:2a1b2ef82f5805d208c933fbc36ede4628a21a02b66043def2a0bc674cb52cf9" },
     { url = "https://mirrors.aliyun.com/pypi/packages/f7/7c/f825cca15367baf6462d61a16544f14daabc1e3d85920a7fac93d85291df/Aspose.Slides-25.3.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3adff4a32f5cd91785abfdbf9f004fa0d9b7137967871c1b2f147ec6537b298d" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/57/ca/fae7781ffeeca0e720f3e453d7efd0927d3eb68e8d33e031a9be92fe6b93/Aspose.Slides-25.3.0-py3-none-manylinux1_x86_64.whl", hash = "sha256:39b7f2820830ba4abe480cad206223f1581c8cc37e0a00459f06ccff27a23026" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/5f/68/3308c98e73fb5012334284b8c568e7bb4b1d2465ba4a94165478c864f703/Aspose.Slides-25.3.0-py3-none-win32.whl", hash = "sha256:ca9bd8bb102d684ef49b3c696dd536c44b0440feeb9ca4e0c9d1355f308803b1" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/b5/5b/ffee94d0db5565fc27c9f13e3a67491975b0d7a11da6dfa9a1f394a63403/Aspose.Slides-25.3.0-py3-none-win_amd64.whl", hash = "sha256:7a5255f7cc4891b5da0f416059a008205605b9ef7279006cfd12b81cd3dac671" },
 ]
 
 [[package]]
@@ -3031,6 +3034,7 @@ dependencies = [
     { name = "setuptools" },
     { name = "shapely" },
     { name = "six" },
+    { name = "sse-starlette" },
     { name = "streamlit" },
     { name = "strenum" },
     { name = "tabulate" },
@@ -3188,6 +3192,7 @@ requires-dist = [
     { name = "setuptools", specifier = ">=75.2.0,<76.0.0" },
     { name = "shapely", specifier = "==2.0.5" },
     { name = "six", specifier = "==1.16.0" },
+    { name = "sse-starlette", specifier = ">=2.2.1" },
     { name = "streamlit", specifier = ">=1.37.1" },
     { name = "strenum", specifier = "==0.4.15" },
     { name = "strenum", specifier = ">=0.4.15" },
@@ -5238,6 +5243,19 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/f9/df/3f9d14480946f6e3808d29f986ce8b6f6cca2a0c974dbed583366010f764/sqlglot-11.7.1.tar.gz", hash = "sha256:72624837266f3760b17ea9d20abf86835735f17d7eb7351c919b2188dc7905aa" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/6c/60/ddcb8f70eaad61b5e574a8adba10cc8d8c0b8e5ad87f4836c3c52767a2ad/sqlglot-11.7.1-py3-none-any.whl", hash = "sha256:1ed7f5965eb4c917821f8a324af6586432d0019628c2e067958d1470637e1398" },
+]
+
+[[package]]
+name = "sse-starlette"
+version = "2.2.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "starlette" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/71/a4/80d2a11af59fe75b48230846989e93979c892d3a20016b42bb44edb9e398/sse_starlette-2.2.1.tar.gz", hash = "sha256:54470d5f19274aeed6b2d473430b08b4b379ea851d953b11d7f1c4a2c118b419" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/d9/e0/5b8bd393f27f4a62461c5cf2479c75a2cc2ffa330976f9f00f5f6e4f50eb/sse_starlette-2.2.1-py3-none-any.whl", hash = "sha256:6410a3d3ba0c89e7675d4c273a301d64649c03a5ef1ca101f10b47f895fd0e99" },
 ]
 
 [[package]]
