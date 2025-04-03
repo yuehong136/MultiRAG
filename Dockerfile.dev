@@ -7,7 +7,8 @@ ARG LIGHTEN=0
 ENV LIGHTEN=${LIGHTEN}
 
 # 创建必要的目录
-RUN mkdir -p /root/.ragdatav /root/nltk_data
+RUN mkdir -p /root/.ragdatav /root/nltk_data && \
+    mkdir -p /multirag/core/res
 
 # 安装libssl
 COPY libssl1.1_1.1.1f-1ubuntu2_amd64.deb /root/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
@@ -66,6 +67,9 @@ RUN --mount=type=bind,source=./huggingface.co,target=/mnt/models \
         cp -r /mnt/models/BAAI/bge-reranker-v2-m3 /root/.ragdatav/ && \
         cp -r /mnt/models/maidalun1020/bce-embedding-base_v1 /root/.ragdatav/ && \
         cp -r /mnt/models/maidalun1020/bce-reranker-base_v1 /root/.ragdatav/ && \
+        cp -r /mnt/models/InfiniFlow/deepdoc /multirag/core/res && \
+        cp -r /mnt/models/InfiniFlow/huqie/huqie.txt /multirag/core/res && \
+        cp -r /mnt/models/InfiniFlow/huqie/huqie.txt.trie /multirag/core/res && \
         echo "Large models copied successfully."; \
     else \
         echo "Lightweight mode enabled, skipping large models."; \
