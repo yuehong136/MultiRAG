@@ -1,4 +1,4 @@
-FROM mdc.datav.com/datav/multirag-base:latest AS builder
+FROM mdc.datav.com/datav/multirag-base:latest AS base
 USER root
 
 WORKDIR /multirag
