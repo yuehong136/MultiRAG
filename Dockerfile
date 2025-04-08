@@ -1,4 +1,4 @@
-FROM mdc.datav.com/datav/multirag-base:latest AS base
+FROM mdc.datav.com/datav/multirag-base:latest AS builder
 USER root
 
 WORKDIR /multirag
@@ -8,7 +8,7 @@ COPY pyproject.toml uv.lock ./
 
 # https://github.com/astral-sh/uv/issues/10462
 # uv records index url into uv.lock but doesn't failover among multiple indexes
-RUN uv sync --python 3.12 --frozen --all-extras
+RUN uv sync --python 3.12 --frozen --all-extras;
 
 COPY .git /multirag/.git
 RUN version_info=$(git describe --tags --match=v* --first-parent --always); \
@@ -21,7 +21,7 @@ RUN version_info=$(git describe --tags --match=v* --first-parent --always); \
     echo $version_info > /multirag/VERSION
 
 # production stage
-FROM base AS production
+FROM builder AS production
 USER root
 
 WORKDIR /multirag
