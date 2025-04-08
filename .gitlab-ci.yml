@@ -22,11 +22,5 @@ stages:
 build-job:   # This job runs in the test stage.
   stage: build    # It only starts when the job in the build stage completes successfully.
   script:
-    - echo "------------开始下载必要的依赖------------"
-    - pip install "nltk==3.9.1" -i https://mirrors.aliyun.com/pypi/simple
-    - pip install "huggingface-hub>=0.25.0,<0.26.0" -i https://mirrors.aliyun.com/pypi/simple
-    - export HF_ENDPOINT=https://hf-mirror.com
-    - python3 download_deps.py
-    - echo "------------正在构建multirag项目镜像------------"
-    - docker build -t multirag-dev:latest -f Dockerfile.dev .
+    - docker build -t multirag:latest -f Dockerfile .
 
