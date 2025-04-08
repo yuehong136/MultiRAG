@@ -8,8 +8,7 @@ COPY pyproject.toml uv.lock ./
 
 # https://github.com/astral-sh/uv/issues/10462
 # uv records index url into uv.lock but doesn't failover among multiple indexes
-RUN --mount=type=cache,id=multirag_uv,target=/root/.cache/uv,sharing=locked \
-    uv sync --python 3.12 --frozen --all-extras;
+RUN uv sync --python 3.12 --frozen --all-extras
 
 COPY .git /multirag/.git
 RUN version_info=$(git describe --tags --match=v* --first-parent --always); \
