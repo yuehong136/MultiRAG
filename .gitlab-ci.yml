@@ -22,5 +22,5 @@ stages:
 build-job:   # This job runs in the test stage.
   stage: build    # It only starts when the job in the build stage completes successfully.
   script:
-    - docker build -t multirag:latest -f Dockerfile .
+    - docker build -t docker.datav.com/datav/multirag:latest -f Dockerfile .
 
