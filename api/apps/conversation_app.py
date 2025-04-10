@@ -19,7 +19,7 @@ from api.db.db_models import APIToken
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, chat, ask, label_question
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMBundle, TenantService, TenantLLMService
+from api.db.services.llm_service import LLMBundle, TenantService
 from api.db import LLMType
 from api.db.services.user_service import UserTenantService
 from api import settings
@@ -755,7 +755,7 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
     if not kb:
         return get_data_error_result(retmsg="Knowledgebase not found!")
 
-    embd_mdl = TenantLLMService.model_instance(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+    embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
     chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name])

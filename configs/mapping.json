@@ -231,6 +231,15 @@
         }
       },
       {
+        "tag_feas_template": {
+          "match": "tag_feas",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
         "default_template": {
           "match_pattern": "regex",
           "match": ".*",

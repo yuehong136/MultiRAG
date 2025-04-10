@@ -12,6 +12,7 @@ import json
 import pathlib
 import re
 from io import BytesIO
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form
 from fastapi.responses import StreamingResponse
@@ -33,7 +34,7 @@ from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
 from api import settings
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
-    get_json_result, get_data_error_result
+    get_json_result, get_data_error_result, server_error_response
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type, thumbnail, get_project_base_directory
 from api.utils.web_utils import html2pdf, is_valid_url
@@ -83,6 +84,9 @@ class ChangeParserRequest(BaseModel):
     parser_id: str = Field(..., description="解析器ID")
     parser_config: dict | None = Field(None, description="解析器配置")
 
+class SetMetaRequest(BaseModel):
+    doc_id: str = Field(..., description="文档ID")
+    meta: dict[str, Any] = Field(..., description="元数据对象")
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
 async def upload(
@@ -846,3 +850,33 @@ async def parse(
             retmsg=str(e),
             data=False
         )
+
+
+@router.post("/set_meta", summary="设置文档元数据", response_description="成功设置文档元数据")
+def set_meta(
+        request: SetMetaRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    req = request.model_dump()
+    if not DocumentService.accessible(db, req["doc_id"], user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
+        )
+
+    try:
+        doc = DocumentService.get_by_id(db, req["doc_id"])
+        if not doc:
+            return get_data_error_result(retmsg="Document not found!")
+
+        # meta已经是字典对象，不需要再解析
+        if not DocumentService.update_by_id(
+                db, req["doc_id"], {"meta_fields": req["meta"]}):
+            return get_data_error_result(
+                retmsg="Database error (meta updates)!")
+
+        return get_json_result(data=True)
+    except Exception as e:
+        return server_error_response(e)

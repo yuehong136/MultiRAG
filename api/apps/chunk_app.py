@@ -49,10 +49,11 @@ class SetChunkRequest(BaseModel):
     doc_id: str
     chunk_id: str
     content_with_weight: str
-    important_kwd: list[str] | None = None
-    question_kwd: list[str] | None = None
+    important_kwd: list[str] | None = []
+    question_kwd: list[str] | None = []
     available_int: int | None = None
     tag_kwd: str | None = None
+    tag_feas: str | None = None
 
 
 class SwitchChunkRequest(BaseModel):
@@ -533,14 +534,17 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
     }
     important_kwd = request.important_kwd if request.important_kwd is not None else []
     d["important_kwd"] = important_kwd
-    d["important_tks"] = rag_tokenizer.tokenize(" ".join(important_kwd)) if important_kwd else []
+    d["important_tks"] = rag_tokenizer.tokenize(" ".join(important_kwd)) if important_kwd else ""
 
     question_kwd = request.question_kwd if request.question_kwd is not None else []
     d["question_kwd"] = question_kwd
-    d["question_tks"] = rag_tokenizer.tokenize("\n".join(question_kwd)) if question_kwd else []
+    d["question_tks"] = rag_tokenizer.tokenize("\n".join(question_kwd)) if question_kwd else ""
 
     if request.tag_kwd is not None:
         d["tag_kwd"] = request.tag_kwd
+
+    if request.tag_feas is not None:
+        d["tag_feas"] = request.tag_feas
 
     if request.available_int is not None:
         d["available_int"] = request.available_int
