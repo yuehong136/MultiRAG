@@ -6,7 +6,7 @@ import typing
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime, BigInteger
+from sqlalchemy import String, DateTime, BigInteger, event
 from sqlalchemy import create_engine, Column
 from sqlalchemy.orm import sessionmaker, declarative_base
 from api.settings import DATABASE
@@ -34,6 +34,22 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def db_connection():
+    """提供数据库连接的上下文管理器。
+
+    用法:
+    with db_connection() as db:
+        # 使用db进行操作
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 def get_db():
     db = SessionLocal()
@@ -43,6 +59,7 @@ def get_db():
         db.close()
 
 
+# 保留原代码中的常量和辅助函数
 CONTINUOUS_FIELD_TYPE = {int, float, datetime}
 AUTO_DATE_TIMESTAMP_FIELD_PREFIX = {
     "create",
@@ -70,18 +87,33 @@ def auto_date_timestamp_field():
     return {f"{f}_time" for f in AUTO_DATE_TIMESTAMP_FIELD_PREFIX}
 
 
+def get_utc_now():
+    """获取当前UTC时间"""
+    return datetime.now(timezone.utc)
+
+
+def get_timestamp_ms():
+    """获取当前UTC时间的毫秒时间戳"""
+    return int(get_utc_now().timestamp() * 1000)
+
+
 class BaseModel(Base):
     __abstract__ = True
 
-    id = Column(String, primary_key=False, nullable=False, index=True, default=lambda: str(uuid.uuid4()))
+    id = Column(String, primary_key=False, nullable=False, index=True,
+                default=lambda: str(uuid.uuid4()))
+
+    # 日期时间对象
+    create_date = Column(DateTime, nullable=True, index=True,
+                         default=get_utc_now)
+    update_date = Column(DateTime, nullable=True, index=True,
+                         default=get_utc_now, onupdate=get_utc_now)
+
+    # 毫秒时间戳
     create_time = Column(BigInteger, nullable=True, index=True,
-                         default=lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
-    create_date = Column(DateTime, nullable=True, index=True, default=datetime.now(timezone.utc))
+                         default=get_timestamp_ms)
     update_time = Column(BigInteger, nullable=True, index=True,
-                         default=lambda: int(datetime.now(timezone.utc).timestamp() * 1000),
-                         onupdate=lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
-    update_date = Column(DateTime, nullable=True, index=True, default=datetime.now(timezone.utc),
-                         onupdate=datetime.now(timezone.utc))
+                         default=get_timestamp_ms, onupdate=get_timestamp_ms)
 
     def to_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
@@ -128,3 +160,26 @@ class BaseModel(Base):
             return query.all()
         finally:
             session.close()
+
+
+# 使用SQLAlchemy事件来确保时间戳和日期时间的一致性
+@event.listens_for(BaseModel, 'before_insert', propagate=True)
+def before_insert(mapper, connection, target):
+    """在插入前同步时间字段"""
+    now = get_utc_now()
+    timestamp = int(now.timestamp() * 1000)
+
+    target.create_date = now
+    target.update_date = now
+    target.create_time = timestamp
+    target.update_time = timestamp
+
+
+@event.listens_for(BaseModel, 'before_update', propagate=True)
+def before_update(mapper, connection, target):
+    """在更新前同步更新时间字段"""
+    now = get_utc_now()
+    timestamp = int(now.timestamp() * 1000)
+
+    target.update_date = now
+    target.update_time = timestamp

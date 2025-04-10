@@ -144,7 +144,7 @@ def init_llm_factory(db: Session):
     TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "QAnything"], {"llm_factory": "Youdao"})
     TenantLLMService.filter_update(db, [TenantLLMService.model.llm_factory == "cohere"], {"llm_factory": "Cohere"})
     TenantService.filter_update(db, [1 == 1], {
-        "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email"})
+        "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email,tag:Tag"})
     # insert openai two embedding models to the current openai user.
     # print("Start to insert 2 OpenAI embedding models...")
     # tenant_ids = set([row.tenant_id for row in TenantLLMService.get_openai_models(db)])
@@ -164,15 +164,6 @@ def init_llm_factory(db: Session):
     #         break
     for kb_id in KnowledgebaseService.get_all_ids(db):
         KnowledgebaseService.update_by_id(db, kb_id, {"doc_num": DocumentService.get_kb_doc_count(db, kb_id)})
-    """
-    DROP TABLE IF EXISTS t_ai_llm CASCADE;
-    DROP TABLE IF EXISTS t_ai_llm_factories CASCADE;
-    UPDATE t_ai_tenants
-    SET parser_ids = 'naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email';
-    ALTER TABLE t_ai_knowledgebases ALTER COLUMN avatar TYPE TEXT;
-    ALTER TABLE t_ai_users ALTER COLUMN avatar TYPE TEXT;
-    ALTER TABLE t_ai_dialogs ALTER COLUMN icon TYPE TEXT;
-    """
 
 
 def add_graph_templates(db: Session):

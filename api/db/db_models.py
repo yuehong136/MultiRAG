@@ -165,7 +165,7 @@ class Knowledgebase(BaseModel):
     vector_similarity_weight = Column(Float, index=True, nullable=False, default=0.3)
     parser_id = Column(String(32), index=True, nullable=False, doc="default parser ID")
     parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]]})
-    # pagerank = Column(Integer, index=False, nullable=False, default=0)
+    pagerank = Column(Integer, index=False, nullable=False, default=0)
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 

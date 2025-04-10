@@ -17,7 +17,7 @@ from typing import Generator
 
 from api.db.db_models import APIToken
 from api.db.services.conversation_service import ConversationService, structure_answer
-from api.db.services.dialog_service import DialogService, chat, ask
+from api.db.services.dialog_service import DialogService, chat, ask, label_question
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle, TenantService, TenantLLMService
 from api.db import LLMType
@@ -760,7 +760,7 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name])
     ranks = settings.retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3,
-                                  aggs=False)
+                                  aggs=False, rank_feature=label_question(db, req["question"], [kb]))
     mindmap = MindMapExtractor(chat_mdl)
     mind_map = mindmap([c["text"] for c in ranks["chunks"]]).output
     if "error" in mind_map:

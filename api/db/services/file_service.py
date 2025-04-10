@@ -232,8 +232,9 @@ class FileService(CommonService):
 
     @classmethod
     def insert(cls, db: Session, file_data: dict) -> File:
-        file = cls.save(db, **file_data)
-        return file
+        if not cls.save(db, **file_data):
+            raise RuntimeError("Database error (File)!")
+        return File(**file_data)
 
     @classmethod
     def delete(cls, db: Session, file: File) -> int:

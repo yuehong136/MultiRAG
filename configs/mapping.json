@@ -177,13 +177,56 @@
         }
       },
       {
+        "important_tks_template": {
+          "match": "important_tks",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
         "question_kwd_template": {
           "match": "question_kwd",
           "mapping": {
             "type": "ARRAY",
             "element_type": "VARCHAR",
             "max_length": 256,
-            "max_capacity": 100
+            "default_value": ""
+          }
+        }
+      },
+      {
+        "question_tks_template": {
+          "match": "question_tks",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "pagerank_fea_template": {
+          "match": "pagerank_fea",
+          "mapping": {
+            "type": "INT64"
+          }
+        }
+      },
+      {
+        "available_int_template": {
+          "match": "available_int",
+          "mapping": {
+            "type": "INT64"
+          }
+        }
+      },
+      {
+        "tag_kwd_template": {
+          "match": "tag_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
           }
         }
       },

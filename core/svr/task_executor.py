@@ -1,3 +1,4 @@
+import random
 import sys
 from api.utils.log_utils import initRootLogger
 
@@ -13,7 +14,7 @@ for module in ["sqlalchemy"]:
     module_logger.handlers.clear()
     module_logger.propagate = True
 from datetime import datetime
-from graphrag.utils import get_llm_cache, set_llm_cache
+from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
 import json
 import os
 import xxhash
@@ -35,7 +36,7 @@ from timeit import default_timer as timer
 import tracemalloc
 
 from api.db.database import SessionLocal
-from api.db.services.dialog_service import keyword_extraction, question_proposal
+from api.db.services.dialog_service import keyword_extraction, question_proposal, content_tagging
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db import LLMType, ParserType, TaskStatus
 from api.db.services.document_service import DocumentService
@@ -46,12 +47,12 @@ from api import settings
 from api.versions import get_multirag_version
 from api.utils.file_utils import get_project_base_directory
 from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, email, \
-    knowledge_graph
+    knowledge_graph, tag
 from core.nlp import search, rag_tokenizer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from core.settings import DOC_MAXIMUM_SIZE, SVR_QUEUE_NAME, print_multirag_settings
+from core.settings import DOC_MAXIMUM_SIZE, SVR_QUEUE_NAME, print_multirag_settings, TAG_FLD, PAGERANK_FLD
 from core.utils import rmSpace, num_tokens_from_string
-from core.utils.milvus_conn import MILVUS_CONNECTION
+# from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils.redis_conn import REDIS_CONN, Payload
 from core.utils.storage_factory import STORAGE_IMPL
 
@@ -72,7 +73,8 @@ FACTORY = {
     ParserType.ONE.value: one,
     ParserType.AUDIO.value: audio,
     ParserType.EMAIL.value: email,
-    ParserType.KG.value: knowledge_graph
+    ParserType.KG.value: knowledge_graph,
+    ParserType.TAG.value: tag
 }
 
 CONSUMER_NAME = "task_consumer_" + CONSUMER_NO
@@ -224,7 +226,7 @@ def build_chunks(task, progress_callback, db: Session):
     if "auth" in task and task["auth"]:
         doc["auth"] = task["auth"]
     if task.get("pagerank"):
-        doc["pagerank_fea"] = int(task["pagerank"])
+        doc[PAGERANK_FLD] = int(task["pagerank"])
     el = 0
     for ck in cks:
         d = copy.deepcopy(doc)
@@ -299,6 +301,37 @@ def build_chunks(task, progress_callback, db: Session):
             d["question_tks"] = rag_tokenizer.tokenize("\n".join(d["question_kwd"]))
         progress_callback(msg="Question generation completed in {:.2f}s".format(timer() - st))
 
+    if task["kb_parser_config"].get("tag_kb_ids", []):
+        progress_callback(msg="Start to tag for every chunk ...")
+        kb_ids = task["kb_parser_config"]["tag_kb_ids"]
+        tenant_id = task["tenant_id"]
+        topn_tags = task["kb_parser_config"].get("topn_tags", 3)
+        S = 1000
+        st = timer()
+        examples = []
+        all_tags = get_tags_from_cache(kb_ids)
+        if not all_tags:
+            all_tags = settings.retrievaler.all_tags_in_portion(tenant_id, kb_ids, S)
+            set_tags_to_cache(kb_ids, all_tags)
+        else:
+            all_tags = json.loads(all_tags)
+
+        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
+        for d in docs:
+            if settings.retrievaler.tag_content(tenant_id, kb_ids, d, all_tags, topn_tags=topn_tags, S=S):
+                examples.append({"content": d["content_with_weight"], TAG_FLD: d[TAG_FLD]})
+                continue
+            cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], all_tags, {"topn": topn_tags})
+            if not cached:
+                cached = content_tagging(chat_mdl, d["content_with_weight"], all_tags,
+                                         random.choices(examples, k=2) if len(examples)>2 else examples,
+                                         topn=topn_tags)
+                if cached:
+                    set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, all_tags, {"topn": topn_tags})
+            d[TAG_FLD] = json.loads(cached)
+
+        progress_callback(msg="Tagging completed in {:.2f}s".format(timer() - st))
+
     return docs
 
 
@@ -311,7 +344,7 @@ def init_kb(row, kb_name):
         kb_name: 知识库名称
     """
     idxnm = search.index_name_one(row["tenant_id"], kb_name)
-    if MILVUS_CONNECTION.has_collection(idxnm):
+    if settings.docStoreConn.has_collection(idxnm):
         return
 
     # 加载基础mapping配置
@@ -351,7 +384,7 @@ def init_kb(row, kb_name):
         auto_dimensions[f"q_{vector_dim}_vec"] = vector_dim
 
     # 创建集合
-    MILVUS_CONNECTION.create_collection_with_mapping(idxnm, mapping, auto_dimensions)
+    settings.docStoreConn.create_collection_with_mapping(idxnm, mapping, auto_dimensions)
 
     logging.info(f"成功初始化知识库 {kb_name}")
 
@@ -389,7 +422,11 @@ def convert_data_types(data, schema):
             elif field_type == DataType.FLOAT:
                 result[field_name] = 0.0
             elif field_type == DataType.INT64:
-                result[field_name] = 0
+                if field_name == "available_int":
+                    # 特别处理 available_int 字段，设置默认值为 1
+                    result[field_name] = 1
+                else:
+                    result[field_name] = 0
             elif field_type == DataType.JSON:
                 result[field_name] = "{}"
             elif field_type == DataType.ARRAY:
@@ -432,7 +469,7 @@ def convert_data_types(data, schema):
 
 
 def get_schema(collection_name):
-    schema = MILVUS_CONNECTION.describe_collection(collection_name)
+    schema = settings.docStoreConn.describe_collection(collection_name)
     # print("Schema of the collection:", schema)
     return schema
 
@@ -531,7 +568,7 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
         "title_tks": rag_tokenizer.tokenize(row["name"])
     }
     if row.get("pagerank"):
-        doc["pagerank_fea"] = int(row["pagerank"])
+        doc[PAGERANK_FLD] = int(row["pagerank"])
     res = []
     tk_count = 0
     for content, vctr in chunks[original_length:]:
@@ -676,8 +713,8 @@ def do_handle_task(db, task):
 
         doc_store_result = {}
         try:
-            # 调用你自定义的 MILVUS_CONNECTION.insert 方法
-            doc_store_result = MILVUS_CONNECTION.insert(
+            # 调用自定义的 settings.docStoreConn.insert 方法
+            doc_store_result = settings.docStoreConn.insert(
                 collection_name=collection_name,
                 data=converted_batch
             )
@@ -702,11 +739,11 @@ def do_handle_task(db, task):
                 "Insert chunk error, detail info please check log file. Please also check Milvus status!"
             )
             try:
-                if MILVUS_CONNECTION.has_collection(collection_name):
+                if settings.docStoreConn.has_collection(collection_name):
                     # 删除本批次已经尝试插入的记录（这里按 doc_id 删除，可根据业务实际情况调整 filter 条件）
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
-                            MILVUS_CONNECTION.delete(
+                            settings.docStoreConn.delete(
                                 collection_name=collection_name,
                                 filter=f"doc_id == '{chunk['doc_id']}'"
                             )
@@ -736,10 +773,10 @@ def do_handle_task(db, task):
             )
             # 如果 TaskService 中没有这个 task，则删除已插入数据并退出
             try:
-                if MILVUS_CONNECTION.has_collection(collection_name):
+                if settings.docStoreConn.has_collection(collection_name):
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
-                            MILVUS_CONNECTION.delete(
+                            settings.docStoreConn.delete(
                                 collection_name=collection_name,
                                 filter=f"doc_id == '{chunk['doc_id']}'"
                             )
@@ -768,8 +805,8 @@ def do_handle_task(db, task):
     # 如果任务被取消，则清理已插入的数据并返回
     if TaskService.do_cancel(db, task_id):
         try:
-            if MILVUS_CONNECTION.has_collection(collection_name):
-                MILVUS_CONNECTION.delete(
+            if settings.docStoreConn.has_collection(collection_name):
+                settings.docStoreConn.delete(
                     collection_name=collection_name,
                     filter=f"doc_id == '{task_doc_id}'"
                 )
@@ -808,7 +845,7 @@ def do_handle_task(db, task):
     #
     #     try:
     #         # 使用 Milvus 的插入方法插入数据
-    #         doc_store_result = MILVUS_CONNECTION.insert(
+    #         doc_store_result = settings.docStoreConn.insert(
     #             collection_name=search.index_name_one(task_tenant_id, kb.name),
     #             data=converted_chunk
     #         )
@@ -818,8 +855,8 @@ def do_handle_task(db, task):
     #         progress_callback(-1, f"Insert chunk error, detail info please check log file. Please also check Milvus status!")
     #         collection_name = search.index_name_one(task_tenant_id, kb.name)
     #         try:
-    #             if MILVUS_CONNECTION.has_collection(collection_name):
-    #                 MILVUS_CONNECTION.delete(
+    #             if settings.docStoreConn.has_collection(collection_name):
+    #                 settings.docStoreConn.delete(
     #                     collection_name=collection_name,
     #                     filter=f"doc_id == '{{doc_id}}'".format(doc_id=task["doc_id"])
     #                 )
@@ -848,8 +885,8 @@ def do_handle_task(db, task):
     #     collection_name = search.index_name_one(task_tenant_id, kb.name)
     #     # 检查集合是否存在并删除 Milvus 中的数据
     #     try:
-    #         if MILVUS_CONNECTION.has_collection(collection_name):
-    #             MILVUS_CONNECTION.delete(
+    #         if settings.docStoreConn.has_collection(collection_name):
+    #             settings.docStoreConn.delete(
     #                 collection_name=collection_name,
     #                 filter=f"doc_id == '{{doc_id}}'".format(doc_id=task_doc_id)
     #             )

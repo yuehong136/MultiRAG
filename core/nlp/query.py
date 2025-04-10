@@ -4,6 +4,8 @@ import re
 import copy
 
 from core.nlp import rag_tokenizer, term_weight, synonym
+from core.utils.doc_store_conn import MatchTextExpr
+
 
 class MilvusQueryer:
     def __init__(self, milvus):
@@ -42,7 +44,9 @@ class MilvusQueryer:
                 "",
             ),
             (r"(^| )(what|who|how|which|where|why)('re|'s)? ", " "),
-            (r"(^| )('s|'re|is|are|were|was|do|does|did|don't|doesn't|didn't|has|have|be|there|you|me|your|my|mine|just|please|may|i|should|would|wouldn't|will|won't|done|go|for|with|so|the|a|an|by|i'm|it's|he's|she's|they|they're|you're|as|by|on|in|at|up|out|down|of|to|or|and|if) "," ")
+            (
+                r"(^| )('s|'re|is|are|were|was|do|does|did|don't|doesn't|didn't|has|have|be|there|you|me|your|my|mine|just|please|may|i|should|would|wouldn't|will|won't|done|go|for|with|so|the|a|an|by|i'm|it's|he's|she's|they|they're|you're|as|by|on|in|at|up|out|down|of|to|or|and|if) ",
+                " ")
         ]
         for r, p in patts:
             txt = re.sub(r, p, txt, flags=re.IGNORECASE)
@@ -73,7 +77,8 @@ class MilvusQueryer:
                 syn = ["\"{}\"^{:.4f}".format(s, w / 4.) for s in syn if s.strip()]
                 syns.append(" ".join(syn))
 
-            q = ["({}^{:.4f}".format(tk, w) + " {})".format(syn) for (tk, w), syn in zip(tks_w, syns) if tk and not re.match(r"[.^+\(\)-]", tk)]
+            q = ["({}^{:.4f}".format(tk, w) + " {})".format(syn) for (tk, w), syn in zip(tks_w, syns) if
+                 tk and not re.match(r"[.^+\(\)-]", tk)]
             for i in range(1, len(tks_w)):
                 left, right = tks_w[i - 1][0].strip(), tks_w[i][0].strip()
                 if not left or not right:
@@ -88,17 +93,10 @@ class MilvusQueryer:
                 )
             if not q:
                 q.append(txt)
-            return {
-                "bool": {
-                    "must": {
-                        "query_string": {
-                            "fields": self.query_fields,
-                            "query": " ".join(q),
-                            "boost": 1
-                        }
-                    }
-                }
-            }, tks
+            query = " ".join(q)
+            return MatchTextExpr(
+                self.query_fields, query, 100
+            ), keywords
 
         def need_fine_grained_tokenize(tk):
             if len(tk) < 3:
@@ -112,6 +110,7 @@ class MilvusQueryer:
         for tt in self.tw.split(txt)[:256]:  # .split():
             if not tt:
                 continue
+            keywords.append(tt)
             twts = self.tw.weights([tt])
             syns = self.syn.lookup(tt)
             if syns and len(keywords) < 32:
@@ -120,7 +119,7 @@ class MilvusQueryer:
             tms = []
             for tk, w in sorted(twts, key=lambda x: x[1] * -1):
                 sm = (
-                    rag_tokenizer.fine_grained_tokenize(tk).split(" ")
+                    rag_tokenizer.fine_grained_tokenize(tk).split()
                     if need_fine_grained_tokenize(tk)
                     else []
                 )
@@ -163,8 +162,6 @@ class MilvusQueryer:
 
             if len(twts) > 1:
                 tms += ' ("%s"~2)^1.5' % rag_tokenizer.tokenize(tt)
-            if re.match(r"[0-9a-z ]+$", tt):
-                tms = f'("{tt}" OR "%s")' % rag_tokenizer.tokenize(tt)
 
             syns = " OR ".join(
                 [
@@ -178,25 +175,13 @@ class MilvusQueryer:
 
             qs.append(tms)
 
-        flds = copy.deepcopy(self.query_fields)
-        mst = []
         if qs:
-            mst.append(
-                {
-                    "query_string": {
-                        "fields": flds,
-                        "query": " OR ".join([f"({t})" for t in qs if t]),
-                        "boost": 1,
-                        "minimum_should_match": min_match
-                    }
-                }
-            )
+            query = " OR ".join([f"({t})" for t in qs if t])
+            return MatchTextExpr(
+                self.query_fields, query, 100, {"minimum_should_match": min_match}
+            ), keywords
+        return None, keywords
 
-        return {
-            "bool": {
-                "must": mst
-            }
-        }, keywords
     def hybrid_similarity(self, avec, bvecs, atks, btkss, tkweight=0.3, vtweight=0.7):
         from sklearn.metrics.pairwise import cosine_similarity as CosineSimilarity
         import numpy as np
@@ -233,3 +218,28 @@ class MilvusQueryer:
         for k, v in qtwt.items():
             q += v
         return s / q
+
+    def paragraph(self, content_tks: str, keywords=None, keywords_topn=30):
+        if keywords is None:
+            keywords = []
+        if isinstance(content_tks, str):
+            content_tks = [c.strip() for c in content_tks.strip() if c.strip()]
+        tks_w = self.tw.weights(content_tks, preprocess=False)
+
+        keywords = [f'"{k.strip()}"' for k in keywords]
+        for tk, w in sorted(tks_w, key=lambda x: x[1] * -1)[:keywords_topn]:
+            tk_syns = self.syn.lookup(tk)
+            tk_syns = [MilvusQueryer.subSpecialChar(s) for s in tk_syns]
+            tk_syns = [rag_tokenizer.fine_grained_tokenize(s) for s in tk_syns if s]
+            tk_syns = [f"\"{s}\"" if s.find(" ") > 0 else s for s in tk_syns]
+            tk = MilvusQueryer.subSpecialChar(tk)
+            if tk.find(" ") > 0:
+                tk = '"%s"' % tk
+            if tk_syns:
+                tk = f"({tk} OR (%s)^0.2)" % " ".join(tk_syns)
+            if tk:
+                keywords.append(f"{tk}^{w}")
+
+        return MatchTextExpr(self.query_fields, " ".join(keywords), 100,
+                             {"minimum_should_match": min(3, len(keywords) / 10)})
+

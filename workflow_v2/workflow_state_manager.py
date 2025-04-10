@@ -51,7 +51,6 @@ class WorkflowStateManager:
             pass
 
     async def cleanup_expired_workflows(self):
-        print("Cleaning up expired workflows...")
         """清理过期的工作流状态"""
         now = time.time()
         expired_workflows = []

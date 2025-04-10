@@ -38,7 +38,7 @@ from api.utils import get_uuid
 from api.utils.file_utils import filename_type, thumbnail, get_project_base_directory
 from api.utils.web_utils import html2pdf, is_valid_url
 from core.nlp import search
-from core.utils.milvus_conn import MILVUS_CONNECTION
+# from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 
@@ -355,7 +355,7 @@ async def change_status(
         status_int = 0 if str(req["status"]) == "0" else 1
 
         try:
-            update_result = MILVUS_CONNECTION.upsert(
+            update_result = settings.docStoreConn.upsert(
                 collection_name=search.index_name_one(kb.tenant_id, kb.name),
                 data={"doc_id": req["doc_id"], "available_int": status_int}
             )
@@ -473,8 +473,8 @@ async def run(
             if req.get("delete", False):
                 TaskService.filter_delete(db, [Task.doc_id == id])
                 try:
-                    if MILVUS_CONNECTION.has_collection(collection_name):
-                        delete_result = MILVUS_CONNECTION.delete(
+                    if settings.docStoreConn.has_collection(collection_name):
+                        delete_result = settings.docStoreConn.delete(
                             collection_name=collection_name,
                             filter=f"doc_id == '{{doc_id}}'".format(doc_id=d["id"])
                         )
@@ -580,13 +580,12 @@ async def change_parser(
 ):
     req = request_body.model_dump()
 
-    for doc_id in req["doc_ids"]:
-        if not DocumentService.accessible(db, doc_id, user.id):
-            return get_json_result(
-                data=False,
-                retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
-            )
+    if not DocumentService.accessible(db, req["doc_id"], user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
+        )
 
     try:
         # 根据文档ID获取文档信息
@@ -650,7 +649,7 @@ async def change_parser(
             kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
             # 删除Milvus中的数据
             try:
-                delete_result = MILVUS_CONNECTION.delete(
+                delete_result = settings.docStoreConn.delete(
                     collection_name=search.index_name_one(tenant_id, kb.name),
                     filter=f"doc_id == '{doc.id}'"
                 )

@@ -4,9 +4,12 @@ from enum import IntEnum, Enum
 import core.utils
 from core.nlp import search
 from graphrag import search as kg_search
-from core.utils.milvus_conn import MILVUS_CONNECTION
+# from core.utils.milvus_conn import MILVUS_CONNECTION
+import core.utils.milvus_conn
+# import core.utils.infinity_conn
 from api.utils import get_base_config, decrypt_database_config
 from api.constants import MULTI_RAG_SERVICE_NAME
+
 
 LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
 
@@ -130,7 +133,7 @@ def init_settings():
     API_KEY = LLM.get("api_key", "")
     PARSERS = LLM.get(
         "parsers",
-        "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email")
+        "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email,tag:Tag")
 
     HOST_IP = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("host", "127.0.0.1")
     HOST_PORT = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("http_port")
@@ -160,7 +163,7 @@ def init_settings():
     DOC_ENGINE = os.environ.get('DOC_ENGINE', "milvus")
     lower_case_doc_engine = DOC_ENGINE.lower()
     if lower_case_doc_engine == "milvus":
-        docStoreConn = core.utils.milvus_conn.MILVUS_CONNECTION
+        docStoreConn = core.utils.milvus_conn.MilvusConnection()
     elif lower_case_doc_engine == "infinity":
         docStoreConn = core.utils.infinity_conn.InfinityConnection()
     else:

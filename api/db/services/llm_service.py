@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from api.utils.file_utils import get_project_base_directory
 from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
 
+from api.db.database import db_connection  # 导入上下文管理器
 from api.db.services.user_service import TenantService
 from api.db import LLMType
 from api.db.db_models import LLMFactories, LLM, TenantLLM
@@ -81,7 +82,7 @@ class TenantLLMService(CommonService):
 
 
     @classmethod
-    def model_instance(cls, db: Session, tenant_id: str, llm_type: str, llm_name: str = None, lang: str = "Chinese"):
+    def model_instance(cls, db: Session, tenant_id: str, llm_type: str, llm_name: str | None = None, lang: str = "Chinese"):
         tenant = TenantService.get_by_id(db, tenant_id)
         if not tenant:
             raise LookupError("Tenant not found")
@@ -179,7 +180,7 @@ class TenantLLMService(CommonService):
                 base_url=model_config["api_base"],
             )
     @classmethod
-    def increase_usage(cls, db: Session, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str = None):
+    def increase_usage(cls, db: Session, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str | None = None):
         tenant = TenantService.get_by_id(db, tenant_id)
         if not tenant:
             raise LookupError("Tenant not found")
@@ -254,7 +255,92 @@ class TenantLLMService(CommonService):
         ).all()
         return objs
 
-
+# class LLMBundle(object):
+#     def __init__(self, tenant_id: str, llm_type: str, llm_name: str = None, lang: str = "Chinese"):
+#         self.tenant_id = tenant_id
+#         self.llm_type = llm_type
+#         self.llm_name = llm_name
+#         self.lang = lang
+#         # 使用上下文管理器初始化
+#         with db_connection() as db:
+#             self.mdl = TenantLLMService.model_instance(db, tenant_id, llm_type, llm_name)
+#             if not self.mdl:
+#                 raise ValueError(f"Can't find model for {tenant_id}/{llm_type}/{llm_name}")
+#
+#             self.max_length = 8192
+#             for lm in LLMService.query(db, llm_name=llm_name):
+#                 self.max_length = lm.max_tokens
+#                 break
+#
+#     def encode(self, texts: list):
+#         embeddings, used_tokens = self.mdl.encode(texts)
+#         with db_connection() as db:
+#             if not TenantLLMService.increase_usage(db, self.tenant_id, self.llm_type, used_tokens):
+#                 logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
+#         return embeddings, used_tokens
+#
+#     def encode_queries(self, query: str):
+#         emd, used_tokens = self.mdl.encode_queries(query)
+#         with db_connection() as db:
+#             if not TenantLLMService.increase_usage(db, self.tenant_id, self.llm_type, used_tokens):
+#                 logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
+#         return emd, used_tokens
+#
+#     def similarity(self, query: str, texts: list):
+#         sim, used_tokens = self.mdl.similarity(query, texts)
+#         with db_connection() as db:
+#             if not TenantLLMService.increase_usage(db, self.tenant_id, self.llm_type, used_tokens):
+#                 logging.error(f"Can't update token usage for {self.tenant_id}/RERANK used_tokens: {used_tokens}")
+#         return sim, used_tokens
+#
+#     def describe(self, image, max_tokens: int = 300):
+#         txt, used_tokens = self.mdl.describe(image, max_tokens)
+#         with db_connection() as db:
+#             if not TenantLLMService.increase_usage(db, self.tenant_id, self.llm_type, used_tokens):
+#                 logging.error(f"Can't update token usage for {self.tenant_id}/IMAGE2TEXT used_tokens: {used_tokens}")
+#         return txt
+#
+#     def transcription(self, audio):
+#         txt, used_tokens = self.mdl.transcription(audio)
+#         with db_connection() as db:
+#             if not TenantLLMService.increase_usage(
+#                     db, self.tenant_id, self.llm_type, used_tokens):
+#                 logging.error(
+#                     "Can't update token usage for {}/SEQUENCE2TXT used_tokens: {}".format(self.tenant_id, used_tokens))
+#         return txt
+#
+#     def tts(self, text):
+#         if not text.strip():
+#             return  # Skip processing if text is empty or whitespace
+#         try:
+#             for chunk in self.mdl.tts(text):
+#                 if isinstance(chunk, int):
+#                     with db_connection() as db:
+#                         if not TenantLLMService.increase_usage(
+#                                 db, self.tenant_id, self.llm_type, chunk, self.llm_name):
+#                             logging.error(
+#                                 "Can't update token usage for {}/TTS".format(self.tenant_id))
+#                     return
+#                 yield chunk
+#         except Exception as e:
+#             logging.error(f"TTS processing failed for text '{text}': {e}")
+#
+#     def chat(self, system, history, gen_conf, **kwargs):
+#         txt, used_tokens = self.mdl.chat(system, history, gen_conf, **kwargs)
+#         if not isinstance(txt, int):
+#             with db_connection() as db:
+#                 if not TenantLLMService.increase_usage(db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+#                     logging.error(f"Can't update token usage for {self.tenant_id}/CHAT used_tokens: {used_tokens}")
+#         return txt
+#
+#     def chat_streamly(self, system, history, gen_conf, **kwargs):
+#         for txt in self.mdl.chat_streamly(system, history, gen_conf, **kwargs):
+#             if isinstance(txt, int):
+#                 with db_connection() as db:
+#                     if not TenantLLMService.increase_usage(db, self.tenant_id, self.llm_type, txt, self.llm_name):
+#                         logging.error(f"Can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, content: {txt}")
+#                 return
+#             yield txt
 class LLMBundle(object):
     def __init__(self, db: Session, tenant_id: str, llm_type: str, llm_name: str = None, lang: str = "Chinese"):
         self.db = db

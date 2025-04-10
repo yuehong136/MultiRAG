@@ -6,6 +6,7 @@
 @date：2024/8/5 9:22
 @desc:
 """
+import logging
 import re
 
 from fastapi import APIRouter, Depends
@@ -26,7 +27,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import get_json_result
 from api.db.database import get_db
 from api.apps import manager
-from core.utils.milvus_conn import MILVUS_CONNECTION
+# from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.nlp import search
 from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
 from core.utils.storage_factory import STORAGE_IMPL
@@ -52,6 +53,16 @@ class UpdateKnowledgebaseRequest(BaseModel):
 
 class RemoveKnowledgebaseRequest(BaseModel):
     kb_id: str
+
+
+class RemoveTagsRequest(BaseModel):
+    tags: list[str]
+
+
+class RenameTagRequest(BaseModel):
+    from_tag: str
+    to_tag: str
+
 
 
 @router.post('/create', summary="创建知识库", response_description="成功创建知识库")
@@ -136,13 +147,30 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         if not KnowledgebaseService.update_by_id(db, kb.id, req_data):
             return get_data_error_result()
 
-        # if kb.pagerank != req_data.get("pagerank", 0):
-        #     if req_data.get("pagerank", 0) > 0:
-        #         settings.docStoreConn.update({"kb_id": kb.id}, {"pagerank_fea": req_data["pagerank"]},
-        #                                  search.index_name_one(kb.tenant_id, kb.name), kb.id)
-        #     else:
-        #         settings.docStoreConn.update({"exist": "pagerank_fea"}, {"remove": "pagerank_fea"},
-        #                                  search.index_name_one(kb.tenant_id, kb.name), kb.id)
+        if kb.pagerank != req_data.get("pagerank", 0):
+            if req_data.get("pagerank", 0) > 0:
+                try:
+                    settings.docStoreConn.update(
+                        {"kb_id": kb.id},
+                        {"pagerank_fea": req_data["pagerank"]},
+                        search.index_name_one(kb.tenant_id, kb.name),
+                        kb.id
+                    )
+                    logging.info(f"已更新知识库 {kb.id} 的 PageRank 值为 {req_data['pagerank']}")
+                except Exception as e:
+                    logging.error(f"更新知识库 {kb.id} 的 PageRank 失败: {str(e)}")
+            else:
+                # 移除PageRank（设置为0）
+                try:
+                    settings.docStoreConn.update(
+                        {"kb_id": id},
+                        {"remove": "pagerank_fea"},  # 使用与ES相同的格式
+                        search.index_name_one(kb.tenant_id, kb.name),
+                        kb.id
+                    )
+                    logging.info(f"已移除知识库 {kb.id} 的 PageRank 值")
+                except Exception as e:
+                    logging.error(f"移除知识库 {kb.id} 的 PageRank 失败: {str(e)}")
 
         kb = KnowledgebaseService.get_by_id(db, kb.id)
         if not kb:
@@ -248,9 +276,77 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
             return get_data_error_result(retmsg="Database error (Knowledgebase removal)!")
         tenants = UserTenantService.query(db, user_id=user.id)
         for tenant in tenants:
-            MILVUS_CONNECTION.deleteIdx(search.index_name_one(tenant.tenant_id, kb_name), req_data["kb_id"])
+            settings.docStoreConn.deleteIdx(search.index_name_one(tenant.tenant_id, kb_name), req_data["kb_id"])
         # 知识库删除成功，返回成功标志
         return get_json_result(data=True)
     except Exception as e:
         # 捕获异常，返回服务器错误响应
         return server_error_response(e)
+
+
+@router.get("/{kb_id}/tags", summary="获取知识库标签")
+def list_tags(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+    if not KnowledgebaseService.accessible(db, kb_id, user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
+        )
+    tags = settings.retrievaler.all_tags(user.id, [kb_id])
+    return get_json_result(data=tags)
+
+
+@router.get("/tags", summary="获取多个知识库的标签")
+def list_tags_from_kbs(kb_ids: str, db: Session = Depends(get_db), user=Depends(manager)):
+    kb_id_list = kb_ids.split(",")
+    for kb_id in kb_id_list:
+        if not KnowledgebaseService.accessible(db, kb_id, user.id):
+            return get_json_result(
+                data=False,
+                retmsg='No authorization.',
+                retcode=settings.RetCode.AUTHENTICATION_ERROR
+            )
+    tags = settings.retrievaler.all_tags(user.id, kb_id_list)
+    return get_json_result(data=tags)
+
+
+@router.post("/{kb_id}/rm_tags", summary="删除知识库标签")
+def rm_tags(kb_id: str, request: RemoveTagsRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    if not KnowledgebaseService.accessible(db, kb_id, user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
+        )
+    kb = KnowledgebaseService.get_by_id(db, kb_id)
+
+    for tag in request.tags:
+        settings.docStoreConn.update(
+            {"tag_kwd": tag, "kb_id": [kb_id]},
+            {"remove": {"tag_kwd": tag}},
+            search.index_name_one(kb.tenant_id, kb.name),
+            kb_id,
+        )
+    return get_json_result(data=True)
+
+
+@router.post("/{kb_id}/rename_tag", summary="重命名知识库标签")
+def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    if not KnowledgebaseService.accessible(db, kb_id, user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
+        )
+    kb = KnowledgebaseService.get_by_id(db, kb_id)
+
+    settings.docStoreConn.update(
+        {"tag_kwd": request.from_tag, "kb_id": [kb_id]},
+        {
+            "remove": {"tag_kwd": request.from_tag.strip()},
+            "add": {"tag_kwd": request.to_tag},
+        },
+        search.index_name_one(kb.tenant_id, kb.name),
+        kb_id,
+    )
+    return get_json_result(data=True)

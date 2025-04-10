@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from api.db.services.dialog_service import keyword_extraction
+from api.db.services.dialog_service import keyword_extraction, label_question
 from core.app.qa import rmPrefix, beAdoc
 from core.nlp import search, rag_tokenizer
 from core.utils import rmSpace
@@ -29,6 +29,7 @@ from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.db.services.document_service import DocumentService
 from api import settings
+from core.settings import PAGERANK_FLD
 # from api.settings import RetCode, retrievaler#, kg_retrievaler
 from api.utils.api_utils import get_json_result
 from api.db.database import get_db
@@ -51,6 +52,7 @@ class SetChunkRequest(BaseModel):
     important_kwd: list[str] | None = None
     question_kwd: list[str] | None = None
     available_int: int | None = None
+    tag_kwd: str | None = None
 
 
 class SwitchChunkRequest(BaseModel):
@@ -72,7 +74,7 @@ class CreateChunkRequest(BaseModel):
 
 
 class RetrievalTestRequest(BaseModel):
-    kb_id: str
+    kb_ids: list[str]
     question: str
     page: int | None = 1
     size: int | None = 30
@@ -278,6 +280,7 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        kb_ids = KnowledgebaseService.get_kb_ids(db, tenant_id)
         query = {
             "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords,
             "sort": True
@@ -287,9 +290,14 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
             "doc_ids": [request.doc_id], "question": request.keywords,
             "sort": True
         }
-        total = settings.retrievaler.count(query_count, search.index_name_one(tenant_id, kb.name)).total
-        sres = settings.retrievaler.search(query, search.index_name_one(tenant_id, kb.name))
-        res = {"total": total, "chunks": [], "doc": doc.to_dict()}
+        if "available_int" in request:
+            query["available_int"] = int(request["available_int"])
+            query_count["available_int"] = int(request["available_int"])
+        # total = settings.retrievaler.count(query_count, search.index_name_one(tenant_id, kb.name)).total
+        # sres = settings.retrievaler.search(query, search.index_name_one(tenant_id, kb.name))
+        # total = settings.retrievaler.search(query_count, search.index_name_one(tenant_id, kb.name), kb_ids).total
+        sres = settings.retrievaler.search(query, search.index_name_one(tenant_id, kb.name), kb_ids)
+        res = {"total": sres.total, "chunks": [], "doc": doc.to_dict()}
         for id in sres.ids:
             d = {
                 "chunk_id": id,
@@ -530,6 +538,9 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
     question_kwd = request.question_kwd if request.question_kwd is not None else []
     d["question_kwd"] = question_kwd
     d["question_tks"] = rag_tokenizer.tokenize("\n".join(question_kwd)) if question_kwd else []
+
+    if request.tag_kwd is not None:
+        d["tag_kwd"] = request.tag_kwd
 
     if request.available_int is not None:
         d["available_int"] = request.available_int
@@ -931,6 +942,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         d["top_int"] = []
         d["img_id"] = ""
         d["auth"] = []
+        d["available_int"] = 1
 
         tenant_id = DocumentService.get_tenant_id(db, req["doc_id"])
         if not tenant_id:
@@ -939,9 +951,8 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         if not kb:
             return get_data_error_result(retmsg="Knowledgebase not found!")
-        # todo 待新增kb.pagerank 字段，这边需要解开注释
-        # if kb.pagerank:
-        #     d["pagerank_fea"] = kb.pagerank
+        if kb.pagerank is not None:
+            d["pagerank_fea"] = kb.pagerank
 
         embd_id = DocumentService.get_embd_id(db, req["doc_id"])
         embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, embd_id)
@@ -965,7 +976,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
 
 
 @router.post('/retrieval_test', summary="检索测试")
-async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     检索测试
 
@@ -973,7 +984,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
 
     参数:
     - request: RetrievalTestRequest对象，包含检索参数
-        - kb_id: 知识库的唯一标识符
+        - kb_ids: 知识库的唯一标识符
         - question: 检索问题
         - page: 页码，默认值为1
         - size: 每页的结果数，默认值为30
@@ -993,7 +1004,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     req = request.model_dump()
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
-        for kid in req["kb_id"]:
+        for kid in req["kb_ids"]:
             for tenant in tenants:
                 if KnowledgebaseService.query(
                         db, tenant_id=tenant.tenant_id, id=kid):
@@ -1003,22 +1014,23 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
                     data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
                     retcode=settings.RetCode.OPERATING_ERROR)
 
-        kb = KnowledgebaseService.get_by_id(db, request.kb_id)
+        kb = KnowledgebaseService.get_by_id(db, request.kb_ids[0])
         if not kb:
             return get_data_error_result(retmsg="Knowledgebase not found!")
 
-        embd_mdl = LLMBundle(db, db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
 
         rerank_mdl = None
         if req.get("rerank_id"):
-            rerank_mdl = LLMBundle(kb.tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
+            rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
 
         question = req["question"]
         if req.get("keyword", False):
             chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
         filter_exp = ""
-        kb = KnowledgebaseService.get_by_id(db, req["kb_id"])
+        labels = label_question(db, question, [kb])
+        retr = settings.retrievaler if kb.parser_id != ParserType.KG else settings.kg_retrievaler
 
         # 在embd_mdl定义后添加以下代码以获取向量维度
         sample_vec, _ = embd_mdl.encode(["测试文本"])
@@ -1036,14 +1048,13 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             logging.info(f"检索使用向量维度: {vector_dim}")
 
         # 当调用retrieval函数时，传递维度信息
-        ranks = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, kb.name, req["page"],
-                                               req["size"],
-                                               req["similarity_threshold"], req["vector_similarity_weight"],
-                                               req["top_k"],
-                                               req["doc_ids"], rerank_mdl=rerank_mdl)
-
+        ranks = retr.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], req["page"],
+                               req["size"], req["similarity_threshold"], req["vector_similarity_weight"],
+                               req["top_k"], req["doc_ids"], rerank_mdl=rerank_mdl, highlight=req.get("highlight"),
+                               rank_feature=labels)
         for c in ranks["chunks"]:
             c.pop("vector", None)
+        ranks["labels"] = labels
 
         return get_json_result(data=ranks)
     except Exception as e:

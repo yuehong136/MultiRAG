@@ -34,8 +34,9 @@ class File2DocumentService(CommonService):
 
     @classmethod
     def insert(cls, db: Session, obj: dict):
-        file2document = cls.save(db, **obj)
-        return file2document
+        if not cls.save(db, **obj):
+            raise RuntimeError("Database error (File)!")
+        return File2Document(**obj)
 
     @classmethod
     def delete_by_file_id(cls, db: Session, file_id: str):

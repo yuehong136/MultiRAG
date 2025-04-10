@@ -30,7 +30,7 @@ class KnowledgebaseService(CommonService):
 
     @classmethod
     def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc,
-                          keywords=None):
+                          keywords=None, parser_id=None):
         fields = [
             cls.model.id,
             cls.model.avatar,
@@ -54,11 +54,11 @@ class KnowledgebaseService(CommonService):
              (cls.model.tenant_id == user_id)) &
             (cls.model.status == StatusEnum.VALID.value)
         )
-
+        if parser_id:
+            query = query.filter(cls.model.parser_id == parser_id)
         # 如果提供了关键词，则增加模糊搜索条件
         if keywords:
             query = query.filter(func.lower(cls.model.name).ilike(f"%{keywords}%"))
-
         # 根据desc参数确定排序方式
         if desc:
             query = query.order_by(getattr(cls.model, orderby).desc())
@@ -171,8 +171,8 @@ class KnowledgebaseService(CommonService):
             cls.model.token_num,
             cls.model.chunk_num,
             cls.model.parser_id,
-            cls.model.parser_config#,
-            # cls.model.pagerank
+            cls.model.parser_config,
+            cls.model.pagerank
         ]
         # 根据ID和状态查询知识库信息，并关联租户信息
         query = db.query(*fields).join(Tenant, (Tenant.id == cls.model.tenant_id)).filter(

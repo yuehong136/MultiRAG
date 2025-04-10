@@ -11,7 +11,7 @@ from api import settings
 from api.utils import get_uuid
 from api.utils.file_utils import get_project_base_directory
 from core.nlp import tokenize, search
-from core.utils.milvus_conn import MILVUS_CONNECTION
+# from core.utils.milvus_conn import MILVUS_CONNECTION
 from ranx import evaluate
 import pandas as pd
 from tqdm import tqdm
@@ -126,11 +126,11 @@ class Benchmark:
                     qrels[query][d["id"]] = int(rel)
                 if len(docs) >= 32:
                     docs = self.embedding(docs)
-                    MILVUS_CONNECTION.bulk(docs, search.index_name(index_name))
+                    settings.docStoreConn.bulk(docs, search.index_name(index_name))
                     docs = []
 
         docs = self.embedding(docs)
-        MILVUS_CONNECTION.upsert(docs, search.index_name(index_name))
+        settings.docStoreConn.upsert(docs, search.index_name(index_name))
         return qrels, texts
 
     def miracl_index(self, file_path, corpus_path, index_name):
@@ -171,11 +171,11 @@ class Benchmark:
                 qrels[query][d["id"]] = int(rel)
                 if len(docs) >= 32:
                     docs = self.embedding(docs)
-                    MILVUS_CONNECTION.bulk(docs, search.index_name(index_name))
+                    settings.docStoreConn.bulk(docs, search.index_name(index_name))
                     docs = []
 
         docs = self.embedding(docs)
-        MILVUS_CONNECTION.bulk(docs, search.index_name(index_name))
+        settings.docStoreConn.bulk(docs, search.index_name(index_name))
 
         return qrels, texts
 

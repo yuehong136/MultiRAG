@@ -25,7 +25,8 @@ from api.utils import current_timestamp, get_format_time, get_uuid
 from api.utils.db_utils import bulk_insert_into_db
 from core.nlp import search, rag_tokenizer
 from core import settings
-from core.utils.milvus_conn import MILVUS_CONNECTION
+from api.settings import docStoreConn
+# from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
 
@@ -149,8 +150,8 @@ class DocumentService(CommonService):
         collection_name = search.index_name_one(tenant_id, kb.name)
         # 检查集合是否存在并删除 Milvus 中的数据
         try:
-            if MILVUS_CONNECTION.has_collection(collection_name):
-                MILVUS_CONNECTION.delete(
+            if docStoreConn.has_collection(collection_name):
+                docStoreConn.delete(
                     collection_name=collection_name,
                     filter=f"doc_id == '{doc.id}'"
                 )

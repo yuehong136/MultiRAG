@@ -28,7 +28,9 @@ from api import settings
 from api.utils.file_utils import get_project_base_directory
 from core.app.resume import forbidden_select_fields4resume
 from core.nlp.search import index_name
+from core.settings import TAG_FLD
 from core.utils import rmSpace, num_tokens_from_string, encoder
+from graphrag.utils import get_tags_from_cache, set_tags_to_cache
 
 
 class DialogService(CommonService):
@@ -156,6 +158,29 @@ def kb_prompt(kbinfos, max_tokens):
     return knowledges
 
 
+def label_question(db: Session, question, kbs):
+    tags = None
+    tag_kb_ids = []
+    for kb in kbs:
+        if kb.parser_config.get("tag_kb_ids"):
+            tag_kb_ids.extend(kb.parser_config["tag_kb_ids"])
+    if tag_kb_ids:
+        all_tags = get_tags_from_cache(tag_kb_ids)
+        if not all_tags:
+            all_tags = settings.retrievaler.all_tags_in_portion(kb.tenant_id, tag_kb_ids)
+            set_tags_to_cache(all_tags, tag_kb_ids)
+        else:
+            all_tags = json.loads(all_tags)
+        tag_kbs = KnowledgebaseService.get_by_ids(db, tag_kb_ids)
+        tags = settings.retrievaler.tag_query(question,
+                                              list(set([kb.tenant_id for kb in tag_kbs])),
+                                              tag_kb_ids,
+                                              all_tags,
+                                              kb.parser_config.get("topn_tags", 3)
+                                              )
+    return tags
+
+
 def chat(dialog, messages, db: Session, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
@@ -166,7 +191,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     llm_id, model_provider = TenantLLMService.split_model_name_and_factory(dialog.llm_id)
 
     # Get llm model instance by model and provide name
-    llm = LLMService.query(db, llm_name=llm_id) if not model_provider else LLMService.query(db, llm_name=llm_id, fid=model_provider)
+    llm = LLMService.query(db, llm_name=llm_id) if not model_provider else LLMService.query(db, llm_name=llm_id,
+                                                                                            fid=model_provider)
 
     if not llm:
         # Model name is provided by tenant, but not system built-in
@@ -194,10 +220,8 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         yield {"answer": "**ERROR**: Knowledge bases use different embedding models.", "reference": []}
         return {"answer": "**ERROR**: Knowledge bases use different embedding models.", "reference": []}
 
-
     is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
     retriever = settings.retrievaler if not is_knowledge_graph else settings.kg_retrievaler
-
 
     # 提取用户提出的问题
     questions = [m["content"] for m in messages if m["role"] == "user"]
@@ -285,11 +309,13 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
             generate_keyword_ts = timer()
 
         kbinfos = retriever.retrieval(" ".join(questions), filter_exp, embd_mdl, dialog.tenant_id, kb_names, 1,
-                                        dialog.top_n,
-                                        dialog.similarity_threshold,
-                                        dialog.vector_similarity_weight,
-                                        doc_ids=attachments,
-                                        top=1024, aggs=False, rerank_mdl=rerank_mdl)
+                                      dialog.top_n,
+                                      dialog.similarity_threshold,
+                                      dialog.vector_similarity_weight,
+                                      doc_ids=attachments,
+                                      top=1024, aggs=False, rerank_mdl=rerank_mdl,
+                                      rank_feature=label_question(db, " ".join(questions), kbs)
+                                      )
 
     retrieval_ts = timer()
 
@@ -350,11 +376,11 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         # 如果需要插入引用文献，处理回答内容
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
             answer, idx = retriever.insert_citations(answer,
-                                                       [ck["content_ltks"] for ck in kbinfos["chunks"]],
-                                                       [ck["vector"] for ck in kbinfos["chunks"]],
-                                                       embd_mdl,
-                                                       tkweight=1 - dialog.vector_similarity_weight,
-                                                       vtweight=dialog.vector_similarity_weight)
+                                                     [ck["content_ltks"] for ck in kbinfos["chunks"]],
+                                                     [ck["vector"] for ck in kbinfos["chunks"]],
+                                                     embd_mdl,
+                                                     tkweight=1 - dialog.vector_similarity_weight,
+                                                     vtweight=dialog.vector_similarity_weight)
             idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
             recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
             if not recall_docs:
@@ -538,7 +564,6 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True):
     }
 
 
-
 def relevant(tenant_id, llm_id, question, contents: list, db: Session):
     if llm_id2llm_type(llm_id) == "image2text":
         chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
@@ -657,7 +682,7 @@ Role: A helpful assistant
 Task and steps: 
     1. Generate a full user question that would follow the conversation.
     2. If the user's question involves relative date, you need to convert it into absolute date based on the current date, which is {today}. For example: 'yesterday' would be converted to {yesterday}.
-    
+
 Requirements & Restrictions:
   - Text generated MUST be in the same language of the original user's question.
   - If the user's latest question is completely, don't do anything, just return the original question.
@@ -728,7 +753,11 @@ def ask(db: Session, question, kb_ids, tenant_id):
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
-    kbinfos = retriever.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, 1, 12, 0.1, 0.3, aggs=False)
+    # kbinfos = retriever.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, 1, 12, 0.1, 0.3, aggs=False)
+    kbinfos = retriever.retrieval(question, filter_exp, embd_mdl, tenant_ids, kb_names,
+                                  1, 12, 0.1, 0.3, aggs=False,
+                                  rank_feature=label_question(db, question, kbs)
+                                  )
     knowledges = kb_prompt(kbinfos, max_tokens)
 
     prompt = """
@@ -752,13 +781,13 @@ def ask(db: Session, question, kb_ids, tenant_id):
     def decorate_answer(answer):
         nonlocal knowledges, kbinfos, prompt
         answer, idx = retriever.insert_citations(answer,
-                                                   [ck["content_ltks"]
-                                                    for ck in kbinfos["chunks"]],
-                                                   [ck["vector"]
-                                                    for ck in kbinfos["chunks"]],
-                                                   embd_mdl,
-                                                   tkweight=0.7,
-                                                   vtweight=0.3)
+                                                 [ck["content_ltks"]
+                                                  for ck in kbinfos["chunks"]],
+                                                 [ck["vector"]
+                                                  for ck in kbinfos["chunks"]],
+                                                 embd_mdl,
+                                                 tkweight=0.7,
+                                                 vtweight=0.3)
         idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
         recall_docs = [
             d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
@@ -779,3 +808,57 @@ def ask(db: Session, question, kb_ids, tenant_id):
         answer = ans
         yield {"answer": answer, "reference": {}}
     yield decorate_answer(answer)
+
+
+
+def content_tagging(chat_mdl, content, all_tags, examples, topn=3):
+    prompt = f"""
+Role: You're a text analyzer. 
+
+Task: Tag (put on some labels) to a given piece of text content based on the examples and the entire tag set.
+
+Steps:: 
+  - Comprehend the tag/label set.
+  - Comprehend examples which all consist of both text content and assigned tags with relevance score in format of JSON.
+  - Summarize the text content, and tag it with top {topn} most relevant tags from the set of tag/label and the corresponding relevance score.
+
+Requirements
+  - The tags MUST be from the tag set.
+  - The output MUST be in JSON format only, the key is tag and the value is its relevance score.
+  - The relevance score must be range from 1 to 10.
+  - Keywords ONLY in output.
+
+# TAG SET
+{", ".join(all_tags)}
+
+"""
+    for i, ex in enumerate(examples):
+        prompt += """
+# Examples {}
+### Text Content
+{}
+
+Output:
+{}
+
+        """.format(i, ex["content"], json.dumps(ex[TAG_FLD], indent=2, ensure_ascii=False))
+
+    prompt += f"""
+# Real Data
+### Text Content
+{content}
+
+"""
+    msg = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": "Output: "}
+    ]
+    _, msg = message_fit_in(msg, chat_mdl.max_length)
+    kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.5})
+    if isinstance(kwd, tuple):
+        kwd = kwd[0]
+    if kwd.find("**ERROR**") >= 0:
+        raise Exception(kwd)
+
+    kwd = re.sub(r".*?\{", "{", kwd)
+    return json.loads(kwd)

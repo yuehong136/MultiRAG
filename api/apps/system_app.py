@@ -25,7 +25,7 @@ from api.versions import get_multirag_version
 from core.utils.storage_factory import STORAGE_IMPL, STORAGE_IMPL_TYPE
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN
-from core.utils.milvus_conn import MILVUS_CONNECTION
+# from core.utils.milvus_conn import MILVUS_CONNECTION
 from api.db.database import get_db
 from api.apps import manager
 
@@ -90,7 +90,7 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
     res = {}
     st = timer()
     try:
-        res["doc_engine"] = MILVUS_CONNECTION.health()
+        res["doc_engine"] = settings.docStoreConn.health()
         res["doc_engine"]["elapsed"] = "{:.1f}".format((timer() - st) * 1000.0)
     except Exception as e:
         res["doc_engine"] = {

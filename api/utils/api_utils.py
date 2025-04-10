@@ -337,6 +337,7 @@ def get_parser_config(chunk_method, parser_config):
         "qa": {"raptor": {"use_raptor": False}},
         "resume": None,
         "manual": {"raptor": {"use_raptor": False}},
+        "tag": None,
         "table": None,
         "paper": {"raptor": {"use_raptor": False}},
         "book": {"raptor": {"use_raptor": False}},

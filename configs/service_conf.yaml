@@ -1,7 +1,7 @@
 # 配置文件用于定义各种服务的连接和认证信息，以确保应用程序能正确地与这些服务通信。
 multirag:
   # multirag服务的监听地址
-  host: 0.0.0.0
+  host: 127.0.0.1
   # multirag服务的HTTP端口
   http_port: 8123
   # multirag服务的SECRET_KEY
@@ -11,13 +11,13 @@ postgresql:
   # 数据库的类型
   name: 'postgresql'
   # 数据库的名称
-  dbname: 'multirag'
+  dbname: ''
   # postgresql数据库的用户名
-  user: 'postgres'
+  user: ''
   # postgresql数据库的密码
-  password: '1234'
+  password: ''
   # postgresql数据库的主机名
-  host: '192.168.188.123'
+  host: '127.0.0.1'
   # postgresql数据库的端口
   port: 5432
   # postgresql的最大连接数
@@ -27,11 +27,11 @@ postgresql:
 
 minio:
   # MinIO服务的用户名
-  user: 'minioadmin'
+  user: ''
   # MinIO服务的密码
-  password: '12345678'
+  password: ''
   # MinIO服务的主机名和端口
-  host: '192.168.188.123'
+  host: ''
   # MinIO服务的主机名和端口
   region: ''
   # 工作流过程中使用的桶名称
@@ -55,7 +55,7 @@ s3:
 
 milvus:
   # Milvus服务的主机地址
-  hosts: 'http://192.168.188.123:19530'
+  hosts: 'http://127.0.0.1:19530'
   # Milvus服务的用户名
   username: 'root'
   # Milvus服务的密码
@@ -78,9 +78,9 @@ redis:
   # Redis数据库的编号
   db: 1
   # Redis数据库的密码
-  password: '1234'
+  password: ''
   # Redis数据库的主机名和端口
-  host: '192.168.188.123:6379'
+  host: '127.0.0.1:6379'
 
 user_default_llm:
   # 默认的LLM（Large Language Model）工厂
