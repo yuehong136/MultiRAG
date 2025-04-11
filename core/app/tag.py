@@ -91,7 +91,6 @@ def chunk(filename, binary=None, lang="Chinese", callback=None, **kwargs):
         callback(0.1, "Start to parse.")
         txt = get_text(filename, binary)
         lines = txt.split("\n")
-        delimiter = "\t" if any("\t" in line for line in lines) else ","
 
         fails = []
         content = ""

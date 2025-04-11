@@ -20,8 +20,10 @@ from sqlalchemy import asc
 from sqlalchemy.orm import Session
 
 from api.db import LLMType, StatusEnum, ParserType
+from api.db.database import db_connection
 from api.db.db_models import Dialog, Conversation
 from api.db.services.common_service import CommonService
+from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMService, TenantLLMService, LLMBundle
 from api import settings
@@ -142,19 +144,22 @@ def kb_prompt(kbinfos, max_tokens):
         if max_tokens * 0.97 < used_token_count:
             knowledges = knowledges[:i]
             break
+    with db_connection() as db:
+        docs = DocumentService.get_by_ids(db, [ck["doc_id"] for ck in kbinfos["chunks"][:chunks_num]])
+        docs = {d.id: d.meta_fields for d in docs}
 
-    #docs = DocumentService.get_by_ids([ck["doc_id"] for ck in kbinfos["chunks"][:chunks_num]])
-    #docs = {d.id: d.meta_fields for d in docs}
-
-    doc2chunks = defaultdict(list)
+    doc2chunks = defaultdict(lambda: {"chunks": [], "meta": []})
     for ck in kbinfos["chunks"][:chunks_num]:
-        doc2chunks[ck["docnm_kwd"]].append(ck["text"])
+        doc2chunks[ck["docnm_kwd"]]["chunks"].append(ck["text"])
+        doc2chunks[ck["docnm_kwd"]]["meta"] = docs.get(ck["doc_id"], {})
 
     knowledges = []
-    for nm, chunks in doc2chunks.items():
+    for nm, cks_meta in doc2chunks.items():
         txt = f"Document: {nm} \n"
-        txt += "Contains the following relevant fragments:\n"
-        for i, chunk in enumerate(chunks, 1):
+        for k,v in cks_meta["meta"].items():
+            txt += f"{k}: {v}\n"
+        txt += "Relevant fragments as following:\n"
+        for i, chunk in enumerate(cks_meta["chunks"], 1):
             txt += f"{i}. {chunk}\n"
         knowledges.append(txt)
     return knowledges
@@ -342,7 +347,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         yield {"answer": empty_res, "reference": kbinfos, "audio_binary": tts(tts_mdl, empty_res)}
         return {"answer": prompt_config["empty_response"], "reference": kbinfos}
 
-    kwargs["knowledge"] = "\n\n------\n\n".join(knowledges)
+    kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
     gen_conf = dialog.llm_setting
 
     # 拼接系统提示和消息内容
