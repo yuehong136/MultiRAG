@@ -866,6 +866,11 @@ def set_meta(
             retcode=settings.RetCode.AUTHENTICATION_ERROR
         )
 
+    if not isinstance(req["meta"], dict):
+        return get_json_result(
+            data=False, retmsg='Meta data should be in Json map format, like {"key": "value"}',
+            retcode=settings.RetCode.ARGUMENT_ERROR)
+
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:

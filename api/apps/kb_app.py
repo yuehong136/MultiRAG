@@ -49,6 +49,7 @@ class UpdateKnowledgebaseRequest(BaseModel):
     description: str | None = None
     permission: str | None = None
     parser_id: str | None = None
+    pagerank: int | None = 0
 
 
 class RemoveKnowledgebaseRequest(BaseModel):
@@ -175,8 +176,10 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         kb = KnowledgebaseService.get_by_id(db, kb.id)
         if not kb:
             return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
+        kb = kb.to_dict()
+        kb.update(req_data)
 
-        return get_json_result(data=kb.to_dict())
+        return get_json_result(data=kb)
     except Exception as e:
         return server_error_response(e)
 
