@@ -5,6 +5,7 @@ from core.llm.chat_model.models.deepseek_chat import DeepSeekChat
 from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gemini_chat import GeminiChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
+from core.llm.chat_model.models.gpustack_chat import GPUStackChat
 from core.llm.chat_model.models.grop_chat import GroqChat
 from core.llm.chat_model.models.huggingface_chat import HuggingFaceChat
 from core.llm.chat_model.models.hunyuan_chat import HunyuanChat
@@ -26,6 +27,7 @@ from core.llm.cv_model.models.qwen_cv import QWenCV
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.default_embedding import DefaultEmbedding
+from core.llm.embedding_model.gpustack_embed import GPUStackEmbed
 from core.llm.embedding_model.huggingface_embed import HuggingFaceEmbed
 from core.llm.embedding_model.jina_embed import JinaEmbed
 from core.llm.embedding_model.ollama_embed import OllamaEmbed
@@ -37,6 +39,7 @@ from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
 from core.llm.rerank_model.default_rerank import DefaultRerank
+from core.llm.rerank_model.gpustack_rerank import GPUStackRerank
 from core.llm.rerank_model.jina_rerank import JinaRerank
 from core.llm.rerank_model.localai_rerank import LocalAIRerank
 from core.llm.rerank_model.openai_api_rerank import OpenAI_APIRerank
@@ -45,11 +48,13 @@ from core.llm.rerank_model.xinference_rerank import XInferenceRerank
 from core.llm.rerank_model.youdao_rerank import YoudaoRerank
 from core.llm.sequence2txt_model.azureseq2txt import AzureSeq2txt
 from core.llm.sequence2txt_model.gptseq2txt import GPTSeq2txt
+from core.llm.sequence2txt_model.gpustackseq2txt import GPUStackSeq2txt
 from core.llm.sequence2txt_model.ollamaseq2txt import OllamaSeq2txt
 from core.llm.sequence2txt_model.qwenseq2txt import QWenSeq2txt
 from core.llm.sequence2txt_model.tencentcloudseq2txt import TencentCloudSeq2txt
 from core.llm.sequence2txt_model.xinferenceseq2txt import XinferenceSeq2txt
 from core.llm.tts_model.models.fish_audiotts import FishAudioTTS
+from core.llm.tts_model.models.gpustacktts import GPUStackTTS
 from core.llm.tts_model.models.ollamatts import OllamaTTS
 from core.llm.tts_model.models.openaitts import OpenAITTS
 from core.llm.tts_model.models.qwentts import QwenTTS
@@ -63,9 +68,8 @@ EmbeddingModel = {
     "Xinference": XinferenceEmbed,
     "Tongyi-Qianwen": QWenEmbed,
     "ZHIPU-AI": ZhipuEmbed,
-    # "FastEmbed": FastEmbed,
     "Youdao": YoudaoEmbed,
-    # "BaiChuan": BaiChuanEmbed,
+    "GPUStack": GPUStackEmbed,
     "Jina": JinaEmbed,
     "BAAI": DefaultEmbedding,
     "OpenAI-API-Compatible": OpenAI_APIEmbed,
@@ -108,7 +112,8 @@ ChatModel = {
     "XunFei Spark": SparkChat,
     "OpenAI-API-Compatible": OpenAI_APIChat,
     "VLLM": OpenAI_APIChat,
-    "HuggingFace": HuggingFaceChat
+    "HuggingFace": HuggingFaceChat,
+    "GPUStack": GPUStackChat
 }
 
 RerankModel = {
@@ -118,7 +123,8 @@ RerankModel = {
     "OpenAI-API-Compatible": OpenAI_APIRerank,
     "Youdao": YoudaoRerank,
     "Xinference": XInferenceRerank,
-    "Tongyi-Qianwen": QWenRerank
+    "Tongyi-Qianwen": QWenRerank,
+    "GPUStack": GPUStackRerank
 }
 
 
@@ -128,7 +134,8 @@ Seq2txtModel = {
     "Tongyi-Qianwen": QWenSeq2txt,
     "Azure-OpenAI": AzureSeq2txt,
     "Xinference": XinferenceSeq2txt,
-    "Tencent Cloud": TencentCloudSeq2txt
+    "Tencent Cloud": TencentCloudSeq2txt,
+    "GPUStack": GPUStackSeq2txt
 }
 
 
@@ -138,5 +145,6 @@ TTSModel = {
     "OpenAI":OpenAITTS,
     "XunFei Spark": SparkTTS,
     "Xinference": XinferenceTTS,
-    "Ollama": OllamaTTS
+    "Ollama": OllamaTTS,
+    "GPUStack": GPUStackTTS
 }

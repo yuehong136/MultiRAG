@@ -622,7 +622,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
     - 模型信息按模型工厂分类，每个工厂下包含多个模型信息。
     - 可选的模型类型参数用于筛选模型信息，只返回指定类型的模型。
     """
-    self_deploied = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio"]
+    self_deployed = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio", "GPUStack"]
     weighted = ["Youdao", "FastEmbed", "BAAI"] if settings.LIGHTEN != 0 else []
     try:
         objs = TenantLLMService.query(db, tenant_id=user.id)
@@ -631,7 +631,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
         llms = [m.to_dict() for m in llms if m.status == StatusEnum.VALID.value and m.fid not in weighted]
 
         for m in llms:
-            m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in self_deploied
+            m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in self_deployed
 
         llm_set = set([m["llm_name"] + "@" + m["fid"] for m in llms])
         for o in objs:
