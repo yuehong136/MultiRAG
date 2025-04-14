@@ -499,7 +499,9 @@ class DocumentService(CommonService):
         docs = cls.get_unfinished_docs(db)
         for d in docs:
             try:
-                tsks = db.query(Task).filter_by(doc_id=d.id).order_by(Task.create_time).all()
+                # 从元组中提取文档ID
+                doc_id = d[0] if isinstance(d, tuple) else d.id
+                tsks = db.query(Task).filter_by(doc_id=doc_id).order_by(Task.create_time).all()
                 if not tsks:
                     continue
                 msg = []
@@ -507,8 +509,17 @@ class DocumentService(CommonService):
                 finished = True
                 bad = 0
 
-                doc = DocumentService.get_by_id(db, d.id)
+                doc = DocumentService.get_by_id(db, doc_id)
+                # 如果文档是元组，提取实际对象
+                if isinstance(doc, tuple):
+                    doc = doc[1] if len(doc) > 1 else None
+                    if not doc:
+                        continue
+
                 status = doc.run  # TaskStatus.RUNNING.value
+
+                # 安全获取parser_config
+                parser_config = getattr(doc, 'parser_config', {})
 
                 for t in tsks:
                     if 0 <= t.progress < 1:
@@ -520,27 +531,34 @@ class DocumentService(CommonService):
 
                     if t.progress == -1:
                         bad += 1
+
                 prg /= len(tsks)
                 if finished and bad:
                     prg = -1
                     status = TaskStatus.FAIL.value
                 elif finished:
                     m = "\n".join(sorted(msg))
-                    if d["parser_config"].get("raptor", {}).get("use_raptor") and m.find(MSG["raptor"]) < 0:
-                        queue_raptor_o_graphrag_tasks(db, d, "raptor", MSG["raptor"])
+
+                    # 安全获取嵌套配置
+                    raptor_config = parser_config.get("raptor", {})
+                    graphrag_config = parser_config.get("graphrag", {})
+
+                    use_raptor = raptor_config.get("use_raptor") if isinstance(raptor_config, dict) else False
+                    use_graphrag = graphrag_config.get("use_graphrag") if isinstance(graphrag_config, dict) else False
+                    resolution = graphrag_config.get("resolution") if isinstance(graphrag_config, dict) else False
+                    community = graphrag_config.get("community") if isinstance(graphrag_config, dict) else False
+
+                    if use_raptor and m.find(MSG["raptor"]) < 0:
+                        queue_raptor_o_graphrag_tasks(db, doc, "raptor", MSG["raptor"])
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
-                    elif d["parser_config"].get("graphrag", {}).get("use_graphrag") and m.find(MSG["graphrag"]) < 0:
-                        queue_raptor_o_graphrag_tasks(db, d, "graphrag", MSG["graphrag"])
+                    elif use_graphrag and m.find(MSG["graphrag"]) < 0:
+                        queue_raptor_o_graphrag_tasks(db, doc, "graphrag", MSG["graphrag"])
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
-                    elif d["parser_config"].get("graphrag", {}).get("use_graphrag") \
-                            and d["parser_config"].get("graphrag", {}).get("resolution") \
-                            and m.find(MSG["graph_resolution"]) < 0:
-                        queue_raptor_o_graphrag_tasks(db, d, "graph_resolution", MSG["graph_resolution"])
+                    elif use_graphrag and resolution and m.find(MSG["graph_resolution"]) < 0:
+                        queue_raptor_o_graphrag_tasks(db, doc, "graph_resolution", MSG["graph_resolution"])
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
-                    elif d["parser_config"].get("graphrag", {}).get("use_graphrag") \
-                            and d["parser_config"].get("graphrag", {}).get("community") \
-                            and m.find(MSG["graph_community"]) < 0:
-                        queue_raptor_o_graphrag_tasks(db, d, "graph_community", MSG["graph_community"])
+                    elif use_graphrag and community and m.find(MSG["graph_community"]) < 0:
+                        queue_raptor_o_graphrag_tasks(db, doc, "graph_community", MSG["graph_community"])
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
                     else:
                         status = TaskStatus.DONE.value
