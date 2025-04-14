@@ -64,7 +64,7 @@ class AnthropicChat(Base):
                 stream=True,
                 **gen_conf,
             )
-            for res in response.iter_lines():
+            for res in response:
                 if res.type == 'content_block_delta':
                     text = res.delta.text
                     ans += text
