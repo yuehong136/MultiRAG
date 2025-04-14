@@ -872,14 +872,14 @@ class Dealer:
             id = sres.ids[i]
             chunk = sres.field[id]
             text = chunk["content_with_weight"]
-            dnm = chunk["docnm_kwd"]
-            did = chunk["doc_id"]
+            dnm = chunk.get("docnm_kwd", "")
+            did = chunk.get("doc_id", "")
             # position_int = chunk.get("position_int", [])
             d = {
                 "chunk_id": id,
                 "content_ltks": sres.field[id].get("content_ltks", ""),
                 "text": text,
-                "doc_id": sres.field[id]["doc_id"],
+                "doc_id": did,
                 "docnm_kwd": dnm,
                 "kb_id": sres.field[id]["kb_id"],
                 "important_kwd": list(sres.field[id].get("important_kwd", [])), # todo 临时用list解决important_kwd非标准python类型问题

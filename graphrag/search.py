@@ -159,7 +159,6 @@ class KGSearch(Dealer):
 
         idxnms = [index_name(tid, kb_names) for tid in tenant_ids]
         ty_kwds = []
-        ents = []
         try:
             ty_kwds, ents = self.query_rewrite(llm, qst, [index_name(tid, kb_names) for tid in tenant_ids], kb_ids)
             logging.info(f"Q: {qst}, Types: {ty_kwds}, Entities: {ents}")
@@ -174,6 +173,9 @@ class KGSearch(Dealer):
         nhop_pathes = defaultdict(dict)
         for _, ent in ents_from_query.items():
             nhops = ent.get("n_hop_ents", [])
+            if not isinstance(nhops, list):
+                logging.warning(f"Abnormal n_hop_ents: {nhops}")
+                continue
             for nbr in nhops:
                 path = nbr["path"]
                 wts = nbr["weights"]
@@ -251,7 +253,7 @@ class KGSearch(Dealer):
                 "From Entity": f,
                 "To Entity": t,
                 "Score": "%.2f" % (rel["sim"] * rel["pagerank"]),
-                "Description": json.loads(ent["description"]).get("description", "")
+                "Description": json.loads(rel["description"]).get("description", "")
             })
             max_token -= num_tokens_from_string(str(relas[-1]))
             if max_token <= 0:
