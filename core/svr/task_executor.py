@@ -422,7 +422,11 @@ def convert_data_types(data, schema):
             if field_type == DataType.FLOAT_VECTOR:
                 result[field_name] = [0.0] * field_info['params']['dim']
             elif field_type == DataType.VARCHAR:
-                result[field_name] = ""
+                if field_name == "tag_feas":
+                    # 特别处理 available_int 字段，设置默认值为 1
+                    result[field_name] = "{}"
+                else:
+                    result[field_name] = ""
             elif field_type == DataType.FLOAT:
                 result[field_name] = 0.0
             elif field_type == DataType.INT64:

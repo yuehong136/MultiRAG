@@ -97,40 +97,10 @@ class Dealer:
         for key in ["knowledge_graph_kwd", "available_int", "entity_kwd", "from_entity_kwd", "to_entity_kwd", "removed_kwd"]:
             if key in req and req[key] is not None:
                 condition[key] = req[key]
+        if req.get("filter_exp"):
+            condition["auth"] = req["filter_exp"]
         return condition
 
-    def _add_filters(self, base_filter, req):
-        filters = []
-
-        # 添加知识库ID过滤条件
-        if req.get("kb_ids"):
-            kb_ids_filter = f"kb_id in {tuple(req['kb_ids'])}"
-            filters.append(kb_ids_filter)
-
-        # 添加文档ID过滤条件
-        if req.get("doc_ids"):
-            doc_ids_filter = f"doc_id in {tuple(req['doc_ids'])}"
-            filters.append(doc_ids_filter)
-
-        # 添加知识图谱关键字过滤条件
-        if req.get("knowledge_graph_kwd"):
-            kg_kwd_filter = f"knowledge_graph_kwd in {tuple(req['knowledge_graph_kwd'])}"
-            filters.append(kg_kwd_filter)
-
-        # 添加可用性过滤条件
-        if "available_int" in req:
-            if req["available_int"] == 0:
-                available_int_filter = "available_int < 1"
-            else:
-                available_int_filter = "available_int >= 1"
-            filters.append(available_int_filter)
-
-        # 将所有过滤条件组合成SQL风格的表达式
-        if filters:
-            combined_filter = " AND ".join(filters)
-            base_filter = f"{base_filter} AND {combined_filter}" if base_filter else combined_filter
-
-        return base_filter
 
     # def search(self, req, idxnms, embd_mdl=None, rank_feature: dict | None = None):
     #     qst = req.get("question", "")

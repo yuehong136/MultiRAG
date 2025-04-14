@@ -580,7 +580,9 @@ class MilvusConnection(DocStoreConnection):
                     else:
                         filter_parts.append(f"doc_id == '{v}'")
                 elif k == "available_int":
-                    filter_parts.append(f"available_int >= {v}")
+                    filter_parts.append(f"available_int != {v-1}") # 为了兼容老版本不存在available_int字段才这么写
+                elif k == "auth":
+                    filter_parts.append(f"ARRAY_CONTAINS(auth,{v})")
                 elif isinstance(v, list):
                     values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
                     filter_parts.append(f"{k} in [{','.join(values)}]")
@@ -912,18 +914,26 @@ class MilvusConnection(DocStoreConnection):
         return 0
 
     def getChunkIds(self, res):
-        """获取块ID列表"""
+        """获取块ID列表，兼容不同版本的Milvus"""
+        # 检查结果是否为元组，如果是则提取第一个元素
         if isinstance(res, tuple):
             results = res[0]
         else:
             results = res
 
+        chunk_ids = []
         if isinstance(results, list):
-            return [item.get("pk") for item in results if "pk" in item]
-        return []
+            for item in results:
+                # 优先检查'id'字段(低版本)，如果不存在则尝试'pk'字段(高版本)
+                if "id" in item:
+                    chunk_ids.append(item.get("id"))
+                elif "pk" in item:
+                    chunk_ids.append(item.get("pk"))
+
+        return chunk_ids
 
     def getFields(self, res, fields: list[str]) -> dict[str, dict]:
-        """获取指定字段的值"""
+        """获取指定字段的值，兼容不同版本的Milvus"""
         result = {}
 
         # 获取结果列表
@@ -937,10 +947,19 @@ class MilvusConnection(DocStoreConnection):
 
         # 处理每一个结果项
         for item in results:
-            if not isinstance(item, dict) or "pk" not in item:
+            if not isinstance(item, dict):
                 continue
 
-            doc_id = item.get("pk")
+            # 兼容低版本使用'id'和高版本使用'pk'的情况
+            doc_id = None
+            if "pk" in item:
+                doc_id = item.get("pk")
+            elif "id" in item:
+                doc_id = item.get("id")
+
+            if doc_id is None:
+                continue
+
             row_dict = {}
 
             # 处理常规字段和嵌套的entity字段
@@ -987,11 +1006,14 @@ class MilvusConnection(DocStoreConnection):
 
                 row_dict[field] = value
 
-            # 将pk加入结果字典
-            if "pk" not in row_dict and "pk" in item:
-                row_dict["pk"] = item["pk"]
+            # 将主键加入结果字典，兼容不同版本
+            if "pk" not in row_dict and "id" not in row_dict:
+                if "pk" in item:
+                    row_dict["pk"] = item["pk"]
+                elif "id" in item:
+                    row_dict["id"] = item["id"]
 
-            # 添加到结果字典，使用pk作为键
+            # 添加到结果字典，使用主键作为键
             if row_dict:
                 result[doc_id] = row_dict
 
@@ -1012,10 +1034,18 @@ class MilvusConnection(DocStoreConnection):
 
         # 处理每一个结果项
         for item in results:
-            if not isinstance(item, dict) or "pk" not in item:
+            if not isinstance(item, dict):
                 continue
 
-            doc_id = item.get("pk")
+            # 兼容低版本使用'id'和高版本使用'pk'的情况
+            doc_id = None
+            if "pk" in item:
+                doc_id = item.get("pk")
+            elif "id" in item:
+                doc_id = item.get("id")
+
+            if doc_id is None:
+                continue
 
             # 尝试从item或者entity中获取字段值
             text = None

@@ -248,16 +248,6 @@
           }
         }
       },
-
-      {
-        "important_kwd_template": {
-          "match": "important_kwd",
-          "mapping": {
-            "type": "VARCHAR",
-            "max_length": 256
-          }
-        }
-      },
       {
         "from_entity_kwd_template": {
           "match": "from_entity_kwd",
