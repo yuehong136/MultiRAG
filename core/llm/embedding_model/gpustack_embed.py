@@ -2,7 +2,7 @@ import os
 
 from openai import OpenAI
 
-from core.llm import OpenAIEmbed
+from core.llm.embedding_model.openai_embed import OpenAIEmbed
 
 
 class GPUStackEmbed(OpenAIEmbed):
