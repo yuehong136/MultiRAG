@@ -369,8 +369,13 @@ def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(mana
         "kb_id": [kb_id],
         "knowledge_graph_kwd": ["graph"]
     }
-    sres = settings.retrievaler.search(req, search.index_name(kb.tenant_id, [kb.name]), [kb_id])
     obj = {"graph": {}, "mind_map": {}}
+    try:
+        sres = settings.retrievaler.search(req, search.index_name(kb.tenant_id, [kb.name]), [kb_id])
+    except Exception as e:
+        logging.exception(e)
+        return get_json_result(data=obj)
+
     for id in sres.ids[:1]:
         ty = sres.field[id]["knowledge_graph_kwd"]
         try:
