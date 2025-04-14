@@ -63,11 +63,6 @@ class UserService(CommonService):
             return None
 
     @classmethod
-    def user_gateway(cls, db: Session, tenant_id):
-        hashobj = hashlib.sha256(tenant_id.encode("utf-8"))
-        return int(hashobj.hexdigest(), 16)%len(MINIO)
-
-    @classmethod
     def query_user_onlywith_email(cls, db: Session, email: str):
         user = db.query(cls.model).filter(
             cls.model.email == email,
@@ -203,6 +198,11 @@ class TenantService(CommonService):
         db.commit()
         if result == 0:
             raise LookupError("Tenant not found which is supposed to be there")
+
+    @classmethod
+    def user_gateway(cls, db: Session, tenant_id):
+        hashobj = hashlib.sha256(tenant_id.encode("utf-8"))
+        return int(hashobj.hexdigest(), 16)%len(MINIO)
 
 
 class UserTenantService(CommonService):
