@@ -66,9 +66,13 @@ class KGSearch(Dealer):
 
     def _ent_info_from_(self, milvus_res, sim_thr=0.3):
         res = {}
-        milvus_res = self.dataStore.getFields(milvus_res, ["content_with_weight", "_score", "entity_kwd", "rank_flt",
-                                                   "n_hop_with_weight"])
+        flds = ["content_with_weight", "_score", "entity_kwd", "rank_flt", "n_hop_with_weight"]
+        milvus_res = self.dataStore.getFields(milvus_res, flds)
+
         for _, ent in milvus_res.items():
+            for f in flds:
+                if f in ent and ent[f] is None:
+                    del ent[f]
             if float(ent.get("_score", 0)) < sim_thr:
                 continue
             if isinstance(ent["entity_kwd"], list):
