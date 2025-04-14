@@ -1,11 +1,18 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： raptor.py
-@date：2024/7/9 9:00
-@desc:
-"""
+#
+#  Copyright 2024 The InfiniFlow Authors. All Rights Reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, ALL_COMPLETED, wait
@@ -64,7 +71,7 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
         start, end = 0, len(chunks)
         if len(chunks) <= 1:
             return
-        chunks = [(s, a) for s, a in chunks if len(a) > 0]
+        chunks = [(s, a) for s, a in chunks if s and len(a) > 0]
 
         def summarize(ck_idx, lock):
             nonlocal chunks
@@ -77,9 +84,8 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
                                              "content": self._prompt.format(cluster_content=cluster_content)}],
                                            {"temperature": 0.3, "max_tokens": self._max_token}
                                            )
-                cnt = re.sub(
-                    "(······\n由于长度的原因，回答被截断了，要继续吗？|For the content length reason, it stopped, continue?)",
-                    "", cnt)
+                cnt = re.sub("(······\n由于长度的原因，回答被截断了，要继续吗？|For the content length reason, it stopped, continue?)", "",
+                             cnt)
                 logging.debug(f"SUM: {cnt}")
                 embds, _ = self._embd_model.encode([cnt])
                 with lock:
@@ -119,6 +125,8 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
                 threads = []
                 for c in range(n_clusters):
                     ck_idx = [i + start for i in range(len(lbls)) if lbls[i] == c]
+                    if not ck_idx:
+                        continue
                     threads.append(executor.submit(summarize, ck_idx, lock))
                 wait(threads, return_when=ALL_COMPLETED)
                 for th in threads:

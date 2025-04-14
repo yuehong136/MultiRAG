@@ -20,6 +20,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.user_service import TenantService, UserTenantService
+from api.settings import DOC_ENGINE
 from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
@@ -139,6 +140,13 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
         if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
+
+        if req_data["parser_id"] == "tag" and DOC_ENGINE == "infinity":
+            return get_json_result(
+                data=False,
+                retmsg='The chunk method Tag has not been supported by Infinity yet.',
+                retcode=settings.RetCode.OPERATING_ERROR
+            )
 
         if req_data["name"].lower() != kb.name.lower() \
                 and len(KnowledgebaseService.query(db, name=req_data["name"], tenant_id=user.id,
