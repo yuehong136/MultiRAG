@@ -202,32 +202,23 @@ class TenantLLMService(CommonService):
 
         llm_name, llm_factory = TenantLLMService.split_model_name_and_factory(mdlnm)
 
-        num = 0
         try:
-            if llm_factory:
-                tenant_llm = db.query(cls.model)\
-                    .filter(cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name, cls.model.llm_factory == llm_factory)\
-                    .first()
-            else:
-                tenant_llm = db.query(cls.model) \
-                    .filter(cls.model.tenant_id == tenant_id, cls.model.llm_name == llm_name) \
-                    .first()
-            if tenant_llm:
-                # 如果存在，执行更新
-                stmt = (
-                    update(cls.model)
-                    .where(
-                        cls.model.tenant_id == tenant_id,
-                        cls.model.llm_factory == tenant_llm.llm_factory,
-                        cls.model.llm_name == llm_name
-                    )
-                    .values(used_tokens=tenant_llm.used_tokens + used_tokens)
+            # 简化更新逻辑 - 直接更新增加的令牌数
+            stmt = (
+                update(cls.model)
+                .where(
+                    cls.model.tenant_id == tenant_id,
+                    cls.model.llm_name == llm_name,
+                    cls.model.llm_factory == llm_factory if llm_factory else True
                 )
-                result = db.execute(stmt)
-                db.commit()
-                num = result.rowcount  # 受影响的行数
-            else:
-                # 如果不存在，创建新记录
+                .values(used_tokens=cls.model.used_tokens + used_tokens)
+            )
+            result = db.execute(stmt)
+            db.commit()
+            num = result.rowcount
+
+            # 如果没有更新任何行，创建新记录
+            if num == 0:
                 if not llm_factory:
                     llm_factory = mdlnm
                 new_tenant_llm = cls.model(
@@ -242,8 +233,13 @@ class TenantLLMService(CommonService):
                 num = 1
 
         except SQLAlchemyError:
-            db.rollback()  # 回滚事务
-            logging.exception("TenantLLMService.increase_usage got exception")
+            db.rollback()
+            logging.exception(
+                "TenantLLMService.increase_usage 出现异常，为tenant_id=%s, llm_name=%s更新used_tokens失败",
+                tenant_id, llm_name
+            )
+            return 0
+
         return num
 
 
