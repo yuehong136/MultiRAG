@@ -6,6 +6,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+import hashlib
 from datetime import datetime
 
 from fastapi import HTTPException
@@ -18,6 +19,8 @@ from api.db import UserTenantRole, StatusEnum
 from api.db.db_models import User, Tenant, UserTenant
 from api.db.services.common_service import CommonService
 from api.utils import get_uuid, current_timestamp, datetime_format
+from core.settings import MINIO
+
 
 # # 创建密码上下文
 # pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -58,6 +61,11 @@ class UserService(CommonService):
             return user
         else:
             return None
+
+    @classmethod
+    def user_gateway(cls, db: Session, tenant_id):
+        hashobj = hashlib.sha256(tenant_id.encode("utf-8"))
+        return int(hashobj.hexdigest(), 16)%len(MINIO)
 
     @classmethod
     def query_user_onlywith_email(cls, db: Session, email: str):
