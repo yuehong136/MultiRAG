@@ -582,7 +582,7 @@ class MilvusConnection(DocStoreConnection):
                 elif k == "available_int":
                     filter_parts.append(f"available_int != {v-1}") # 为了兼容老版本不存在available_int字段才这么写
                 elif k == "auth":
-                    filter_parts.append(f"ARRAY_CONTAINS(auth,{v})")
+                    filter_parts.append(f"{v}")
                 elif isinstance(v, list):
                     values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
                     filter_parts.append(f"{k} in [{','.join(values)}]")
