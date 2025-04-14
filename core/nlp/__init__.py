@@ -10,9 +10,9 @@ import roman_numbers as r
 from word2number import w2n
 from cn2an import cn2an
 from PIL import Image
-import json
 
 import chardet
+
 all_codecs = [
     'utf-8', 'gb2312', 'gbk', 'utf_16', 'ascii', 'big5', 'big5hkscs',
     'cp037', 'cp273', 'cp424', 'cp437',
@@ -375,17 +375,17 @@ def title_frequency(bull, sections):
         return bullets_size + 1, levels
 
     for i, (txt, layout) in enumerate(sections):
-        for level, c in sorted(Counter(levels).items(), key=lambda x: x[1] * -1):
-            if level <= bullets_size:
-                most_level = level
+        for j, p in enumerate(BULLET_PATTERN[bull]):
+            if re.match(p, txt.strip()) and not not_bullet(txt):
+                levels[i] = j
                 break
         else:
             if re.search(r"(title|head)", layout) and not not_title(txt.split("@")[0]):
                 levels[i] = bullets_size
     most_level = bullets_size + 1
-    for l, c in sorted(Counter(levels).items(), key=lambda x: x[1] * -1):
-        if l <= bullets_size:
-            most_level = l
+    for level, c in sorted(Counter(levels).items(), key=lambda x: x[1] * -1):
+        if level <= bullets_size:
+            most_level = level
             break
     return most_level, levels
 
