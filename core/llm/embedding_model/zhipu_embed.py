@@ -39,10 +39,10 @@ class ZhipuEmbed(Base):
             res = self.client.embeddings.create(input=txt,
                                                 model=self.model_name, dimensions=768)
             arr.append(res.data[0].embedding)
-            tks_num += res.usage.total_tokens
+            tks_num += self.total_token_count(res)
         return np.array(arr), tks_num
 
     def encode_queries(self, text):
         res = self.client.embeddings.create(input=text,
                                             model=self.model_name)
-        return np.array(res.data[0].embedding), res.usage.total_tokens
+        return np.array(res.data[0].embedding), self.total_token_count(res)

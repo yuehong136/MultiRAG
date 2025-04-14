@@ -1,5 +1,4 @@
-from dataclasses import dataclass
-from abc import ABC, abstractmethod
+from abc import ABC
 import numpy as np
 
 
@@ -7,16 +6,21 @@ def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
 
-@dataclass
 class Base(ABC):
-    key: str
-    model_name: str
-
     def __init__(self, key, model_name):
-        self.key = key
-        self.model_name = model_name
+        pass
 
-    @abstractmethod
     def similarity(self, query: str, texts: list):
         raise NotImplementedError("Please implement encode method!")
+
+    def total_token_count(self, resp):
+        try:
+            return resp.usage.total_tokens
+        except Exception:
+            pass
+        try:
+            return resp["usage"]["total_tokens"]
+        except Exception:
+            pass
+        return 0
 

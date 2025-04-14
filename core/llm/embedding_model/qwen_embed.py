@@ -28,7 +28,7 @@ class QWenEmbed(Base):
                 for e in resp["output"]["embeddings"]:
                     embds[e["text_index"]] = e["embedding"]
                 res.extend(embds)
-                token_count += resp["usage"]["total_tokens"]
+                token_count += self.total_token_count(resp)
             return np.array(res), token_count
         except Exception as e:
             raise Exception("Account abnormal. Please ensure it's on good standing to use QWen's " + self.model_name)
@@ -43,7 +43,7 @@ class QWenEmbed(Base):
                 text_type="query"
             )
             return np.array(resp["output"]["embeddings"][0]
-                            ["embedding"]), resp["usage"]["total_tokens"]
+                            ["embedding"]), self.total_token_count(resp)
         except Exception as e:
             raise Exception("Account abnormal. Please ensure it's on good standing to use QWen's " + self.model_name)
         return np.array([]), 0

@@ -1,10 +1,10 @@
 from groq import Groq
 
-from core.llm.chat_model.base import LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN
+from core.llm.chat_model.base import LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN, Base
 from core.nlp import is_chinese
 
 
-class GroqChat:
+class GroqChat(Base):
     def __init__(self, key, model_name, base_url=''):
         self.client = Groq(api_key=key)
         self.model_name = model_name
@@ -28,7 +28,7 @@ class GroqChat:
                     ans += LENGTH_NOTIFICATION_CN
                 else:
                     ans += LENGTH_NOTIFICATION_EN
-            return ans, response.usage.total_tokens
+            return ans, self.total_token_count(response)
         except Exception as e:
             return ans + "\n**ERROR**: " + str(e), 0
 

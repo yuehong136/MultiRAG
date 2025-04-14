@@ -27,4 +27,4 @@ class JinaRerank(Base):
         rank = np.zeros(len(texts), dtype=float)
         for d in res["results"]:
             rank[d["index"]] = d["relevance_score"]
-        return rank, res["usage"]["total_tokens"]
+        return rank, self.total_token_count(res)

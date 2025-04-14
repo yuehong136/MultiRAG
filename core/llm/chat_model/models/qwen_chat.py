@@ -38,7 +38,7 @@ class QWenChat(Base):
             tk_count = 0
             if response.status_code == HTTPStatus.OK:
                 ans += response.output.choices[0]['message']['content']
-                tk_count += response.usage.total_tokens
+                tk_count += self.total_token_count(response)
                 if response.output.choices[0].get("finish_reason", "") == "length":
                     if is_chinese([ans]):
                         ans += LENGTH_NOTIFICATION_CN
@@ -74,7 +74,7 @@ class QWenChat(Base):
             for resp in response:
                 if resp.status_code == HTTPStatus.OK:
                     ans = resp.output.choices[0]['message']['content']
-                    tk_count = resp.usage.total_tokens
+                    tk_count = self.total_token_count(resp)
                     if resp.output.choices[0].get("finish_reason", "") == "length":
                         if is_chinese([ans]):
                             ans += LENGTH_NOTIFICATION_CN

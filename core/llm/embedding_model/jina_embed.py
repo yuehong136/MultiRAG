@@ -29,7 +29,7 @@ class JinaEmbed(Base):
             }
             res = requests.post(self.base_url, headers=self.headers, json=data).json()
             ress.extend([d["embedding"] for d in res["data"]])
-            token_count += res["usage"]["total_tokens"]
+            token_count += self.total_token_count(res)
         return np.array(ress), token_count
 
     def encode_queries(self, text):

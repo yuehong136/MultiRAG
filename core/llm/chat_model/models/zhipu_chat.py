@@ -37,7 +37,7 @@ class ZhipuChat(Base):
                     ans += LENGTH_NOTIFICATION_CN
                 else:
                     ans += LENGTH_NOTIFICATION_EN
-            return ans, response.usage.total_tokens
+            return ans, self.total_token_count(response)
         except Exception as e:
             return f"**ERROR**: {str(e)}", 0
 
@@ -67,9 +67,9 @@ class ZhipuChat(Base):
                         ans += LENGTH_NOTIFICATION_CN
                     else:
                         ans += LENGTH_NOTIFICATION_EN
-                    tk_count = resp.usage.total_tokens
-                if resp.choices[0].finish_reason == 'stop':
-                    tk_count = resp.usage.total_tokens
+                    tk_count = self.total_token_count(resp)
+                if resp.choices[0].finish_reason == "stop":
+                    tk_count = self.total_token_count(resp)
                 yield ans
         except Exception as e:
             yield ans + "\n**ERROR**: " + str(e)

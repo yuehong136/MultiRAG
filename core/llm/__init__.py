@@ -34,6 +34,7 @@ from core.llm.embedding_model.ollama_embed import OllamaEmbed
 from core.llm.embedding_model.openai_api_embed import OpenAI_APIEmbed
 from core.llm.embedding_model.openai_embed import OpenAIEmbed
 from core.llm.embedding_model.qwen_embed import QWenEmbed
+from core.llm.embedding_model.siliconflow_embed import SILICONFLOWEmbed
 from core.llm.embedding_model.volcengine_embed import VolcEngineEmbed
 from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
@@ -71,6 +72,7 @@ EmbeddingModel = {
     "Youdao": YoudaoEmbed,
     "GPUStack": GPUStackEmbed,
     "Jina": JinaEmbed,
+    "SILICONFLOW": SILICONFLOWEmbed,
     "BAAI": DefaultEmbedding,
     "OpenAI-API-Compatible": OpenAI_APIEmbed,
     "VolcEngine": VolcEngineEmbed,

@@ -10,3 +10,14 @@ class Base(ABC):
 
     def encode_queries(self, text: str):
         raise NotImplementedError("Please implement encode method!")
+
+    def total_token_count(self, resp):
+        try:
+            return resp.usage.total_tokens
+        except Exception:
+            pass
+        try:
+            return resp["usage"]["total_tokens"]
+        except Exception:
+            pass
+        return 0

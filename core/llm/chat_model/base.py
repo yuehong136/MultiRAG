@@ -38,7 +38,7 @@ class Base(ABC):
                     ans += LENGTH_NOTIFICATION_CN
                 else:
                     ans += LENGTH_NOTIFICATION_EN
-            return ans, response.usage.total_tokens
+            return ans, self.total_token_count(response)
         except openai.APIError as e:
             return "**ERROR**: " + str(e), 0
 
@@ -67,15 +67,11 @@ class Base(ABC):
                 else:
                     ans += resp.choices[0].delta.content
 
-                if not hasattr(resp, "usage") or not resp.usage:
-                    total_tokens = (
-                            total_tokens
-                            + num_tokens_from_string(resp.choices[0].delta.content)
-                    )
-                elif isinstance(resp.usage, dict):
-                    total_tokens = resp.usage.get("total_tokens", total_tokens)
+                tol = self.total_token_count(resp)
+                if not tol:
+                    total_tokens += num_tokens_from_string(resp.choices[0].delta.content)
                 else:
-                    total_tokens = resp.usage.total_tokens
+                    total_tokens = tol
 
                 if resp.choices[0].finish_reason == "length":
                     if is_chinese(ans):
@@ -88,3 +84,14 @@ class Base(ABC):
             yield ans + "\n**ERROR**: " + str(e)
 
         yield total_tokens
+
+    def total_token_count(self, resp):
+        try:
+            return resp.usage.total_tokens
+        except Exception:
+            pass
+        try:
+            return resp["usage"]["total_tokens"]
+        except Exception:
+            pass
+        return 0

@@ -20,10 +20,10 @@ class XinferenceEmbed(Base):
         for i in range(0, len(texts), batch_size):
             res = self.client.embeddings.create(input=texts[i:i + batch_size], model=self.model_name)
             ress.extend([d.embedding for d in res.data])
-            total_tokens += res.usage.total_tokens
+            total_tokens += self.total_token_count(res)
         return np.array(ress), total_tokens
 
     def encode_queries(self, text):
         res = self.client.embeddings.create(input=[text],
                                             model=self.model_name)
-        return np.array(res.data[0].embedding), res.usage.total_tokens
+        return np.array(res.data[0].embedding), self.total_token_count(res)
