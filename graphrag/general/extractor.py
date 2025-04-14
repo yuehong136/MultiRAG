@@ -99,6 +99,7 @@ class Extractor:
         with ThreadPoolExecutor(max_workers=max_workers) as exe:
             threads = []
             for i, (cid, ck) in enumerate(chunks):
+                ck = truncate(ck, int(self._llm.max_length*0.8))
                 threads.append(
                     exe.submit(self._process_single_content, (cid, ck)))
 
