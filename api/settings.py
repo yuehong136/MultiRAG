@@ -7,7 +7,8 @@ from graphrag import search as kg_search
 # from core.utils.milvus_conn import MILVUS_CONNECTION
 import core.utils.milvus_conn
 # import core.utils.infinity_conn
-from api.utils import get_base_config, decrypt_database_config
+# from api.utils import get_base_config, decrypt_database_config
+from api.utils import get_base_config
 from api.constants import MULTI_RAG_SERVICE_NAME
 
 
@@ -27,8 +28,8 @@ HOST_IP = None
 HOST_PORT = None
 SECRET_KEY = None
 
-DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
-DATABASE = decrypt_database_config(name=DATABASE_TYPE)
+# DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
+# DATABASE = decrypt_database_config(name=DATABASE_TYPE)
 
 # authentication
 AUTHENTICATION_CONF = None
@@ -47,10 +48,15 @@ kg_retrievaler = None
 
 
 def init_settings():
-    global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, DATABASE_TYPE, DATABASE
+    # global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, DATABASE_TYPE, DATABASE
+    # LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
+    # DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
+    # DATABASE = decrypt_database_config(name=DATABASE_TYPE)
+    # LLM = get_base_config("user_default_llm", {})
+    # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
+    # LLM_BASE_URL = LLM.get("base_url")
+    global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN
     LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
-    DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
-    DATABASE = decrypt_database_config(name=DATABASE_TYPE)
     LLM = get_base_config("user_default_llm", {})
     LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
     LLM_BASE_URL = LLM.get("base_url")

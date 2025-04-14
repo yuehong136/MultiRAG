@@ -240,6 +240,88 @@
         }
       },
       {
+        "rank_flt_template": {
+          "match": "rank_flt",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+
+      {
+        "important_kwd_template": {
+          "match": "important_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "from_entity_kwd_template": {
+          "match": "from_entity_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "to_entity_kwd_template": {
+          "match": "to_entity_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "entity_kwd_template": {
+          "match": "entity_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "entity_type_kwd_template": {
+          "match": "entity_type_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "source_id_template": {
+          "match": "source_id",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "n_hop_with_weight_template": {
+          "match": "n_hop_with_weight",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "removed_kwd_template": {
+          "match": "removed_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
         "default_template": {
           "match_pattern": "regex",
           "match": ".*",

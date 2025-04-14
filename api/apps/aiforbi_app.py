@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, Body
 
 from api.apps import manager
-from api.db.database import get_db
+from api.db.db_models import get_db
+# from api.db.database import get_db
 from api.service.aiforbi_service.aiforbi_service import AIForBIService
 from sqlalchemy.orm import Session
 
@@ -70,7 +71,7 @@ async def nl2sql(body: NL2SQLReqBody = Body(...), db: Session = Depends(get_db),
       - data: 生成的SQL查询语句
     """
     sql = await AIForBIService.nl2sql(nl2sql_req_body=body, db=db, user_id=user.id, llm_name=body.llm_name)
-    return ResponseSchema(status="success", data=sql)
+    return ResponseSchema(data=sql)
 
 
 @router.post("/chart-type", summary="获取推荐图表类型", response_description="成功获取推荐图表类型列表")
@@ -94,7 +95,7 @@ async def chart_type(body: ChartTypeReqBody = Body(...), db: Session = Depends(g
       - data: 推荐的图表类型列表
     """
     chart_type_list = await AIForBIService.chart_type(chart_type_req_body=body, db=db, user_id=user.id, llm_name=body.llm_name)
-    return ResponseSchema(status="success", data=chart_type_list)
+    return ResponseSchema(data=chart_type_list)
 
 
 @router.post("/dynamic-chart-option-function", summary="动态生成图表配置", response_description="成功生成动态图表配置函数")
@@ -121,7 +122,7 @@ async def dynamic_chart_option_function(body: DynamicChartOptionFunctionReqBody 
     """
     func = await AIForBIService.dynamic_chart_option_function(dynamic_chart_option_function_req_body=body, db=db,
                                                               user_id=user.id, llm_name=body.llm_name)
-    return ResponseSchema(status="success", data=func)
+    return ResponseSchema(data=func)
 
 
 @router.post("/static-chart-option", summary="静态生成图表配置", response_description="成功生成静态图表配置")
@@ -148,4 +149,4 @@ async def static_chart_option(body: StaticChartOptionReqBody = Body(...),
     """
     func = await AIForBIService.static_chart_option(static_chart_option_req_body=body, db=db,
                                                     user_id=user.id, llm_name=body.llm_name)
-    return ResponseSchema(status="success", data=func)
+    return ResponseSchema(data=func)

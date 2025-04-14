@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from api.db import FileType, FileSource
-from api.db.database import get_db
+from api.db.db_models import get_db
+# from api.db.database import get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService

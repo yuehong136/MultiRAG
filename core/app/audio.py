@@ -9,7 +9,8 @@
 import re
 
 from api.db import LLMType
-from api.db.database import SessionLocal
+from api.db.db_models import SessionLocal
+# from api.db.database import SessionLocal
 from core.nlp import rag_tokenizer
 from api.db.services.llm_service import LLMBundle
 from core.nlp import tokenize

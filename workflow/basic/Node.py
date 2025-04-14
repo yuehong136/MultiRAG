@@ -6,7 +6,8 @@ from fastapi import Depends
 from requests import Session
 
 from api.apps import manager
-from api.db.database import get_db
+from api.db.db_models import get_db
+# from api.db.database import get_db
 from workflow.WorkflowContext import WorkflowContext
 
 from dataclasses import dataclass

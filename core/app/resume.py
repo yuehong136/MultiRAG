@@ -19,7 +19,8 @@ import re
 import pandas as pd
 import requests
 
-from api.db.database import SessionLocal
+from api.db.db_models import SessionLocal
+# from api.db.database import SessionLocal
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from core.nlp import rag_tokenizer
 from deepdoc.parser.resume import refactor

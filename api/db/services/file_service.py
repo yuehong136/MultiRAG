@@ -382,7 +382,7 @@ class FileService(CommonService):
             ParserType.AUDIO.value: audio,
             ParserType.EMAIL.value: email
         }
-        parser_config = {"chunk_token_num": 16096, "delimiter": "\n!?;。；！？", "layout_recognize": False}
+        parser_config = {"chunk_token_num": 16096, "delimiter": "\n!?;。；！？", "layout_recognize": "Plain Text"}
         exe = ThreadPoolExecutor(max_workers=12)
         threads = []
 

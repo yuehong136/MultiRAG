@@ -16,11 +16,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from api.db.db_models import get_db
 from api.db.services.canvas_service import CanvasTemplateService, UserCanvasService
 from api import settings
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.apps import manager
 from agent.canvas import Canvas
 

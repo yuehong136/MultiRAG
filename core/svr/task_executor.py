@@ -1,6 +1,11 @@
 import random
 import sys
+
+from api.db.db_models import SessionLocal, db_connection
 from api.utils.log_utils import initRootLogger
+from graphrag.general.index import WithCommunity, WithResolution, Dealer
+from graphrag.light.graph_extractor import GraphExtractor as LightKGExt
+from graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
 
 CONSUMER_NO = "0" if len(sys.argv) < 2 else sys.argv[1]
 CONSUMER_NAME = "task_executor_" + CONSUMER_NO
@@ -35,7 +40,6 @@ from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
 import tracemalloc
 
-from api.db.database import SessionLocal
 from api.db.services.dialog_service import keyword_extraction, question_proposal, content_tagging
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db import LLMType, ParserType, TaskStatus
@@ -46,8 +50,8 @@ from api.db.services.file2document_service import File2DocumentService
 from api import settings
 from api.versions import get_multirag_version
 from api.utils.file_utils import get_project_base_directory
-from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, email, \
-    knowledge_graph, tag
+from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, \
+    email, tag
 from core.nlp import search, rag_tokenizer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 from core.settings import DOC_MAXIMUM_SIZE, SVR_QUEUE_NAME, print_multirag_settings, TAG_FLD, PAGERANK_FLD
@@ -73,7 +77,7 @@ FACTORY = {
     ParserType.ONE.value: one,
     ParserType.AUDIO.value: audio,
     ParserType.EMAIL.value: email,
-    ParserType.KG.value: knowledge_graph,
+    ParserType.KG.value: naive,
     ParserType.TAG.value: tag
 }
 
@@ -112,7 +116,8 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
 
     if to_page > 0:
         if msg:
-            msg = f"Page({from_page + 1}~{to_page + 1}): " + msg
+            if from_page < to_page:
+                msg = f"Page({from_page + 1}~{to_page + 1}): " + msg
     if msg:
         msg = datetime.now().strftime("%H:%M:%S") + " " + msg
     d = {"progress_msg": msg}
@@ -170,8 +175,7 @@ def collect(db: Session):
         logging.info(f"collect task {msg['id']} {state}")
         return None
 
-    if msg.get("type", "") == "raptor":
-        task["task_type"] = "raptor"
+    task["task_type"] = msg.get("task_type", "")
     return task
 
 
@@ -356,7 +360,7 @@ def init_kb(row, kb_name):
     vector_dim = None
     try:
         if "embd_id" in row and row["tenant_id"]:
-            with SessionLocal() as db:
+            with db_connection() as db:
                 embedding_model = LLMBundle(db, row["tenant_id"], LLMType.EMBEDDING,
                                             llm_name=row["embd_id"], lang=row.get("language", "en"))
                 # 生成一个示例向量以获取维度
@@ -537,11 +541,14 @@ def embedding(docs, mdl, parser_config=None, callback=None):
     return tk_count
 
 
-def run_raptor(row, chat_mdl, embd_mdl, callback=None):
-    vts, _ = embd_mdl.encode(["ok"])
-    vctr_nm = "vector"
+def run_raptor(row, chat_mdl, embd_mdl, vector_size, callback=None):
     chunks = []
-    for d in settings.retrievaler.chunk_list(row["doc_id"], row["tenant_id"], fields=["content_with_weight", vctr_nm]):
+    if vector_size != 768:
+        vctr_nm = "q_%d_vec"%vector_size
+    else:
+        vctr_nm = "vector"
+    for d in settings.retrievaler.chunk_list(row["doc_id"], row["tenant_id"], [str(row["kb_id"])],
+                                             fields=["content_with_weight", vctr_nm]):
         chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
 
     raptor = Raptor(
@@ -560,7 +567,7 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
         "docnm_kwd": row["name"],
         "title_tks": rag_tokenizer.tokenize(row["name"])
     }
-    if row.get("pagerank"):
+    if row["pagerank"]:
         doc[PAGERANK_FLD] = int(row["pagerank"])
     res = []
     tk_count = 0
@@ -569,13 +576,30 @@ def run_raptor(row, chat_mdl, embd_mdl, callback=None):
         d["pk"] = xxhash.xxh64((content + str(d["doc_id"])).encode("utf-8")).hexdigest()
         d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
         d["create_timestamp_flt"] = datetime.now().timestamp()
-        d["vector"] = vctr.tolist()
-        d["text"] = content
+        d[vctr_nm] = vctr.tolist()
+        d["content_with_weight"] = content
         d["content_ltks"] = rag_tokenizer.tokenize(content)
         d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
         res.append(d)
         tk_count += num_tokens_from_string(content)
     return res, tk_count
+
+
+def run_graphrag(row, chat_model, language, embedding_model, callback=None):
+    chunks = []
+    for d in settings.retrievaler.chunk_list(row["doc_id"], row["tenant_id"], [str(row["kb_id"])],
+                                             fields=["content_with_weight", "doc_id"]):
+        chunks.append((d["doc_id"], d["content_with_weight"]))
+
+    Dealer(LightKGExt if row["parser_config"]["graphrag"]["method"] != 'general' else GeneralKGExt,
+                    row["tenant_id"],
+                    str(row["kb_id"]),
+                    chat_model,
+                    chunks=chunks,
+                    language=language,
+                    entity_types=row["parser_config"]["graphrag"]["entity_types"],
+                    embed_bdl=embedding_model,
+                    callback=callback)
 
 
 def do_handle_task(db, task):
@@ -635,20 +659,75 @@ def do_handle_task(db, task):
         logging.exception(error_message)
         raise
 
+    vts, _ = embedding_model.encode(["ok"])
+    vector_size = len(vts[0])
+    # init_kb(task, vector_size)
+    kb_id = DocumentService.get_by_doc_id(db, task_doc_id)["kb_id"]
+    kb_name = KnowledgebaseService.get_by_id(db, kb_id).name
+    init_kb(task, kb_name)
 
     # Either using RAPTOR or Standard chunking methods
     if task.get("task_type", "") == "raptor":
         try:
             # bind LLM for raptor
             chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
-
             # run RAPTOR
-            chunks, token_count = run_raptor(task, chat_model, embedding_model, progress_callback)
+            chunks, token_count = run_raptor(task, chat_model, embedding_model, vector_size, progress_callback)
         except TaskCanceledException:
             raise
         except Exception as e:
             progress_callback(-1, msg=f'Fail to bind LLM used by RAPTOR: {str(e)}')
             raise
+        # Either using graphrag or Standard chunking methods
+    elif task.get("task_type", "") == "graphrag":
+        start_ts = timer()
+        try:
+            chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
+            run_graphrag(task, chat_model, task_language, embedding_model, progress_callback)
+            progress_callback(prog=1.0, msg="Knowledge Graph is done ({:.2f}s)".format(timer() - start_ts))
+        except TaskCanceledException:
+            raise
+        except Exception as e:
+            error_message = f'Fail to bind LLM used by Knowledge Graph: {str(e)}'
+            progress_callback(-1, msg=error_message)
+            logging.exception(error_message)
+            raise
+        return
+    elif task.get("task_type", "") == "graph_resolution":
+        start_ts = timer()
+        try:
+            chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
+            WithResolution(
+                task["tenant_id"], str(task["kb_id"]), chat_model, embedding_model,
+                progress_callback
+            )
+            progress_callback(prog=1.0, msg="Knowledge Graph resolution is done ({:.2f}s)".format(timer() - start_ts))
+        except TaskCanceledException:
+            raise
+        except Exception as e:
+            error_message = f'Fail to bind LLM used by Knowledge Graph resolution: {str(e)}'
+            progress_callback(-1, msg=error_message)
+            logging.exception(error_message)
+            raise
+        return
+    elif task.get("task_type", "") == "graph_community":
+        start_ts = timer()
+        try:
+            chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
+            WithCommunity(
+                task["tenant_id"], str(task["kb_id"]), chat_model, embedding_model,
+                progress_callback
+            )
+            progress_callback(prog=1.0,
+                              msg="GraphRAG community reports generation is done ({:.2f}s)".format(timer() - start_ts))
+        except TaskCanceledException:
+            raise
+        except Exception as e:
+            error_message = f'Fail to bind LLM used by GraphRAG community reports generation: {str(e)}'
+            progress_callback(-1, msg=error_message)
+            logging.exception(error_message)
+            raise
+        return
     else:
         # Standard chunking methods
         start_ts = timer()
@@ -675,9 +754,9 @@ def do_handle_task(db, task):
         logging.info(progress_message)
         progress_callback(msg=progress_message)
 
-    kb_id = DocumentService.get_by_doc_id(db, task_doc_id)["kb_id"]
-    kb = KnowledgebaseService.get_by_id(db, kb_id)
-    init_kb(task, kb.name)
+    # kb_id = DocumentService.get_by_doc_id(db, task_doc_id)["kb_id"]
+    # kb = KnowledgebaseService.get_by_id(db, kb_id)
+    # init_kb(task, kb.name)
 
     chunk_count = len(set([chunk["pk"] for chunk in chunks]))
     # 记录开始时间
@@ -691,8 +770,8 @@ def do_handle_task(db, task):
     failed_inserts = []
 
     # 获取集合 schema，用于做数据类型转换
-    schema = get_schema(search.index_name_one(task_tenant_id, kb.name))
-    collection_name = search.index_name_one(task_tenant_id, kb.name)
+    schema = get_schema(search.index_name_one(task_tenant_id, kb_name))
+    collection_name = search.index_name_one(task_tenant_id, kb_name)
     # 循环分批插入
     for b in range(0, chunk_count, milvus_bulk_size):
         # 取出本批次要插入的 chunks
@@ -896,7 +975,7 @@ def do_handle_task(db, task):
 
 def handle_task():
     global PAYLOAD, mt_lock, DONE_TASKS, FAILED_TASKS, CURRENT_TASK
-    with SessionLocal() as db:
+    with db_connection() as db:
         task_dict = None  # 确保变量初始化
         try:
             task = collect(db)

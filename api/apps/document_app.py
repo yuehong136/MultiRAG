@@ -22,8 +22,8 @@ from urllib.parse import quote
 
 from api.constants import IMG_BASE64_PREFIX
 from api.db import FileType, TaskStatus, ParserType, FileSource, db_models
-from api.db.database import get_db
-from api.db.db_models import Task
+# from api.db.database import get_db
+from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService

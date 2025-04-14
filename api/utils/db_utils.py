@@ -16,7 +16,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from api.utils import current_timestamp, timestamp_to_date
 
-from api.db.database import BaseModel as DataBaseModel
+# from api.db.database import BaseModel as DataBaseModel
+from api.db.db_models import BaseModel as DataBaseModel
 
 
 

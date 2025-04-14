@@ -20,8 +20,8 @@ from sqlalchemy import asc
 from sqlalchemy.orm import Session
 
 from api.db import LLMType, StatusEnum, ParserType
-from api.db.database import db_connection
-from api.db.db_models import Dialog, Conversation
+# from api.db.database import db_connection
+from api.db.db_models import Dialog, Conversation, db_connection
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -227,8 +227,7 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
         yield {"answer": "**ERROR**: Knowledge bases use different embedding models.", "reference": []}
         return {"answer": "**ERROR**: Knowledge bases use different embedding models.", "reference": []}
 
-    is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
-    retriever = settings.retrievaler if not is_knowledge_graph else settings.kg_retrievaler
+    retriever = settings.retrievaler
 
     # 提取用户提出的问题
     questions = [m["content"] for m in messages if m["role"] == "user"]
@@ -323,6 +322,15 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
                                       top=1024, aggs=False, rerank_mdl=rerank_mdl,
                                       rank_feature=label_question(db, " ".join(questions), kbs)
                                       )
+
+        if prompt_config.get("use_kg"):
+            ck = settings.kg_retrievaler.retrieval(" ".join(questions),
+                                              dialog.tenant_id,
+                                              kb_names,
+                                              embd_mdl,
+                                              LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
+            if ck["content_with_weight"]:
+                kbinfos["chunks"].insert(0, ck)
 
     retrieval_ts = timer()
 

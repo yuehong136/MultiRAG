@@ -24,13 +24,13 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from api.apps import app
-from api.db.database import SessionLocal
+# from api.db.database import SessionLocal
 from api.db.runtime_config import RuntimeConfig
 from api.db.services.document_service import DocumentService
 from api import settings
 from api import utils, validation
 
-from api.db.db_models import init_database_tables as init_web_db
+from api.db.db_models import init_database_tables as init_web_db, SessionLocal
 from api.db.init_data import init_web_data
 from api.versions import get_multirag_version
 import uvicorn

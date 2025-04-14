@@ -16,7 +16,8 @@ import numpy as np
 from PIL import Image
 
 from api.db import LLMType
-from api.db.database import SessionLocal
+from api.db.db_models import SessionLocal
+# from api.db.database import SessionLocal
 from api.db.services.llm_service import LLMBundle
 from core.nlp import tokenize
 from deepdoc.vision import OCR

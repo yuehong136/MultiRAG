@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Generator
 
-from api.db.db_models import APIToken
+from api.db.db_models import APIToken, get_db
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, chat, ask, label_question
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -26,9 +26,9 @@ from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.apps import manager
-from graphrag.mind_map_extractor import MindMapExtractor
+from graphrag.general.mind_map_extractor import MindMapExtractor
 
 
 class SetConversationRequest(BaseModel):

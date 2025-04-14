@@ -12,10 +12,10 @@ from sqlalchemy import inspect
 
 from api import settings
 from api.db import UserTenantRole, StatusEnum
-from api.db.db_models import UserTenant
+from api.db.db_models import UserTenant, get_db
 from api.utils import get_uuid, delta_seconds
 from api.apps import manager
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.utils.api_utils import server_error_response, get_data_error_result
 from sqlalchemy.orm import Session
 from api.db.services.user_service import UserTenantService, UserService

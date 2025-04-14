@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from api.db.db_models import get_db
 from api.db.services.dialog_service import keyword_extraction, label_question
 from core.app.qa import rmPrefix, beAdoc
 from core.nlp import search, rag_tokenizer
@@ -32,7 +33,7 @@ from api import settings
 from core.settings import PAGERANK_FLD
 # from api.settings import RetCode, retrievaler#, kg_retrievaler
 from api.utils.api_utils import get_json_result
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.apps import manager
 
 router = APIRouter()
@@ -82,6 +83,7 @@ class RetrievalTestRequest(BaseModel):
     doc_ids: list[str] | None
     similarity_threshold: float | None = 0.0
     vector_similarity_weight: float | None = 0.3
+    use_kg: bool | None = False
     top_k: int | None = 1024
     rerank_id: str | None = None
     keyword: bool | None = False
@@ -567,7 +569,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
                     r"[\n\t]",
                     request.content_with_weight) if len(t) > 1]
             q, a = rmPrefix(arr[0]), rmPrefix("\n".join(arr[1:]))
-            d = beAdoc(d, arr[0], arr[1], not any(
+            d = beAdoc(d, q, a, not any(
                 [rag_tokenizer.is_chinese(t) for t in q + a]))
 
         # 计算向量
@@ -1034,7 +1036,6 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             question += keyword_extraction(chat_mdl, question)
         filter_exp = ""
         labels = label_question(db, question, [kb])
-        retr = settings.retrievaler if kb.parser_id != ParserType.KG else settings.kg_retrievaler
 
         # 在embd_mdl定义后添加以下代码以获取向量维度
         sample_vec, _ = embd_mdl.encode(["测试文本"])
@@ -1052,10 +1053,19 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             logging.info(f"检索使用向量维度: {vector_dim}")
 
         # 当调用retrieval函数时，传递维度信息
-        ranks = retr.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], req["page"],
+        ranks = settings.retrievaler(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], req["page"],
                                req["size"], req["similarity_threshold"], req["vector_similarity_weight"],
                                req["top_k"], req["doc_ids"], rerank_mdl=rerank_mdl, highlight=req.get("highlight"),
                                rank_feature=labels)
+        if req["use_kg"]:
+            ck = settings.kg_retrievaler.retrieval(question,
+                                                   kb.tenant_id,
+                                                   [kb.name],
+                                                   embd_mdl,
+                                                   LLMBundle(db, kb.tenant_id, LLMType.CHAT))
+            if ck["content_with_weight"]:
+                ranks["chunks"].insert(0, ck)
+
         for c in ranks["chunks"]:
             c.pop("vector", None)
         ranks["labels"] = labels

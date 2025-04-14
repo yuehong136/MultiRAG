@@ -22,7 +22,8 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from sqlalchemy.orm import Session
 
-from api.db.database import get_db, SessionLocal
+from api.db.db_models import get_db, SessionLocal
+# from api.db.database import get_db, SessionLocal
 from api.db.services import UserService
 from api import settings
 from errors.exceptions import AITranslateException

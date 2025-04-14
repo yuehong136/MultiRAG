@@ -4,7 +4,8 @@ import traceback
 
 from sqlalchemy.orm import Session
 
-from api.db.database import SessionLocal
+from api.db.db_models import SessionLocal
+# from api.db.database import SessionLocal
 from api.db.services.task_service import TaskService
 from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN

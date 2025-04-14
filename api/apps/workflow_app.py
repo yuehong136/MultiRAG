@@ -5,7 +5,8 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 
 from api.apps import manager
-from api.db.database import get_db
+from api.db.db_models import get_db
+# from api.db.database import get_db
 from workflow.WorkflowParser import WorkflowParser
 from sqlalchemy.orm import Session
 

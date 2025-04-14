@@ -9,11 +9,12 @@ from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 import json
 
+from api.db.db_models import get_db
 from workflow_v2.workflow_state_manager import workflow_state_manager
 from workflow_v2.component.component_manager import ComponentManager
 from workflow_v2.workflow import run_workflow, WorkflowNode
 from sqlalchemy.orm import Session
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.apps import manager
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 from workflow_v2.workflow_logging_config import WorkflowContextLogger, WorkflowLogger

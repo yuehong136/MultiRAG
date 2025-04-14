@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Body, Depends
 
 from api.apps import manager
-from api.db.database import get_db
+from api.db.db_models import get_db
+# from api.db.database import get_db
 from api.service.ai_translate_service.ai_translate_service import AITranslateService
 from sqlalchemy.orm import Session
 from enum import Enum

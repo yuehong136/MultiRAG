@@ -23,8 +23,8 @@ from sqlalchemy.orm import Session
 from api.constants import NAME_LENGTH_LIMIT
 from api.db import FileType, ParserType, FileSource, TaskStatus
 from api.db import StatusEnum
-from api.db.database import SessionLocal
-from api.db.db_models import File
+# from api.db.database import get_db, SessionLocal
+from api.db.db_models import File, get_db, SessionLocal
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -38,7 +38,6 @@ from api.utils.api_utils import construct_result
 from api.utils.file_utils import filename_type, thumbnail
 from core.app import book, laws, manual, naive, one, paper, presentation, qa, resume, table, picture
 from core.utils.storage_factory import STORAGE_IMPL
-from api.db.database import get_db
 from api.apps import manager
 from pydantic import BaseModel, Field
 

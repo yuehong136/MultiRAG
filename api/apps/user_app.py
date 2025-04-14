@@ -16,8 +16,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from api.db.database import get_db
-from api.db.db_models import TenantLLM
+# from api.db.database import get_db
+from api.db.db_models import TenantLLM, get_db
 from api.db.services.llm_service import TenantLLMService, LLMService
 from api.db.services.user_service import UserService, TenantService, UserTenantService#, pwd_context
 from api.db.services.file_service import FileService

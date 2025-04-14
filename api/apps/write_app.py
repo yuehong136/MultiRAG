@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db import StatusEnum
-from api.db.database import get_db
-from api.db.db_models import WritingChapter, WritingProject, WritingReferenceMaterial
+# from api.db.database import get_db
+from api.db.db_models import WritingChapter, WritingProject, WritingReferenceMaterial, get_db
 from api.db.services.project_service import ProjectService
 from api.db.services.chapter_service import ChapterService
 from api.db.services.reference_service import ReferenceService

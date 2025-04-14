@@ -8,6 +8,8 @@
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+
+from api.db.db_models import get_db
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -16,7 +18,7 @@ from api.utils import get_uuid
 from api.db import FileType
 from api.db.services.document_service import DocumentService
 from api import settings
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.apps import manager
 
 router = APIRouter()

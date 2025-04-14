@@ -17,13 +17,13 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from api.apps import manager, executor
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService, LLMBundle
 from api.db.services.user_service import TenantService
 from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from api.db import StatusEnum, LLMType
-from api.db.db_models import TenantLLM
+from api.db.db_models import TenantLLM, get_db
 from api.utils.file_utils import get_project_base_directory
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 from pydantic import BaseModel, Field

@@ -4,10 +4,10 @@
 Reference:
  - [graphrag](https://github.com/microsoft/graphrag)
 """
+
 import logging
 import argparse
 import json
-import logging
 import re
 import traceback
 from dataclasses import dataclass
@@ -15,9 +15,8 @@ from typing import Any
 
 import tiktoken
 
-from api.db.database import SessionLocal
-from graphrag.claim_prompt import CLAIM_EXTRACTION_PROMPT, CONTINUE_PROMPT, LOOP_PROMPT
-from graphrag.extractor import Extractor
+from graphrag.general.claim_prompt import CLAIM_EXTRACTION_PROMPT, CONTINUE_PROMPT, LOOP_PROMPT
+from graphrag.general.extractor import Extractor
 from core.llm.chat_model.base import Base as CompletionLLM
 from graphrag.utils import ErrorHandlerFn, perform_variable_replacements
 
@@ -254,10 +253,14 @@ if __name__ == "__main__":
     from api.db import LLMType
     from api.db.services.llm_service import LLMBundle
     from api import settings
-    db = SessionLocal()
+    from api.db.services.knowledgebase_service import KnowledgebaseService
+    from api.db.db_models import db_connection
 
-    ex = ClaimExtractor(LLMBundle(db, args.tenant_id, LLMType.CHAT))
-    docs = [d["content_with_weight"] for d in settings.retrievaler.chunk_list(args.doc_id, args.tenant_id, max_count=12, fields=["content_with_weight"])]
+    with db_connection() as db:
+        kb_ids = KnowledgebaseService.get_kb_ids(db, args.tenant_id)
+
+        ex = ClaimExtractor(LLMBundle(db, args.tenant_id, LLMType.CHAT))
+    docs = [d["content_with_weight"] for d in settings.retrievaler.chunk_list(args.doc_id, args.tenant_id, kb_ids, max_count=12, fields=["content_with_weight"])]
     info = {
         "input_text": docs,
         "entity_specs": "organization, person",

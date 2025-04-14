@@ -8,8 +8,9 @@ import io
 import logging
 import traceback
 
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.apps import manager
+from api.db.db_models import get_db
 
 from api.service.docx2zjform_service.docx2zjform_service import Docx2ZJFormService
 

@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, Body
 from api.apps import manager
-from api.db.database import get_db
+# from api.db.database import get_db
 from sqlalchemy.orm import Session
 
+from api.db.db_models import get_db
 from api.service.plugin_service.plugin_service import PluginService
 from api.service.script_scheduler_service.script_scheduler_service import ScriptSchedulerService
 

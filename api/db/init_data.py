@@ -9,7 +9,7 @@ import bcrypt
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from api.db import LLMType, UserTenantRole
-from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM
+from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM, SessionLocal
 from api.db.services import UserService
 from api.db.services.canvas_service import CanvasTemplateService
 from api.db.services.document_service import DocumentService
@@ -17,7 +17,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMFactoriesService, LLMService, TenantLLMService, LLMBundle
 from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
-from api.db.database import SessionLocal
+# from api.db.database import SessionLocal
 from api.utils.file_utils import get_project_base_directory
 
 
@@ -144,7 +144,7 @@ def init_llm_factory(db: Session):
     TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "QAnything"], {"llm_factory": "Youdao"})
     TenantLLMService.filter_update(db, [TenantLLMService.model.llm_factory == "cohere"], {"llm_factory": "Cohere"})
     TenantService.filter_update(db, [1 == 1], {
-        "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email,tag:Tag"})
+        "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"})
     # insert openai two embedding models to the current openai user.
     # print("Start to insert 2 OpenAI embedding models...")
     # tenant_ids = set([row.tenant_id for row in TenantLLMService.get_openai_models(db)])

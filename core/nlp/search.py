@@ -3,7 +3,9 @@ import re
 from dataclasses import dataclass
 
 import numpy as np
-import polars as pl
+
+from api.db.db_models import db_connection, SessionLocal
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from core.utils import rmSpace
 from core.settings import TAG_FLD, PAGERANK_FLD
 from core.nlp import rag_tokenizer, query, is_english
@@ -92,7 +94,7 @@ class Dealer:
             if key in req and req[key] is not None:
                 condition[field] = req[key]
         # TODO(yzc): `available_int` is nullable however infinity doesn't support nullable columns.
-        for key in ["knowledge_graph_kwd"]:
+        for key in ["knowledge_graph_kwd", "available_int", "entity_kwd", "from_entity_kwd", "to_entity_kwd", "removed_kwd"]:
             if key in req and req[key] is not None:
                 condition[key] = req[key]
         return condition
@@ -615,6 +617,11 @@ class Dealer:
             return answer, set([])
 
         ans_v, _ = embd_mdl.encode(pieces_)
+        for i in range(len(chunk_v)):
+            if len(ans_v[0]) != len(chunk_v[i]):
+                chunk_v[i] = [0.0]*len(ans_v[0])
+                logging.warning("The dimension of query and chunk do not match: {} vs. {}".format(len(ans_v[0]), len(chunk_v[i])))
+
         assert len(ans_v[0]) == len(chunk_v[0]), "The dimension of query and chunk do not match: {} vs. {}".format(
             len(ans_v[0]), len(chunk_v[0]))
 
@@ -967,325 +974,396 @@ class Dealer:
             logging.error(f"SQL failure: {sql} =>" + str(e))
             return {"error": str(e)}
 
+
     def chunk_list(self, doc_id: str, tenant_id: str,
                    kb_ids: list[str], max_count=1024,
                    offset=0,
                    fields=["docnm_kwd", "content_with_weight", "img_id"]):
-        """
-        获取文档的所有块
-
-        Args:
-            doc_id: 文档ID
-            tenant_id: 租户ID
-            kb_ids: 知识库ID列表
-            max_count: 最大返回数量
-            offset: 起始偏移
-            fields: 要返回的字段列表
-
-        Returns:
-            list: 文档块列表
-        """
         condition = {"doc_id": doc_id}
         res = []
-        bs = 128  # 批量大小
+        bs = 128
 
-        # 获取集合名称列表
-        if isinstance(kb_ids, str):
-            kb_ids = [kb_ids]
-
-        for kb_id in kb_ids:
-            collection_name = index_name_one(tenant_id, kb_id)
-
-            try:
-                # 检查集合是否存在
-                if not self.dataStore.has_collection(collection_name):
-                    logging.warning(f"集合 {collection_name} 不存在")
-                    continue
-
-                # 分批获取文档块
-                for p in range(offset, max_count, bs):
-                    filter_expr = f"doc_id == '{doc_id}'"
-
-                    # 执行查询
-                    query_results = self.dataStore.query(
-                        collection_name=collection_name,
-                        filter=filter_expr,
-                        output_fields=fields,
-                        offset=p,
-                        limit=min(bs, max_count - p)
-                    )
-
-                    if not query_results:
-                        break
-
-                    # 处理结果
-                    for chunk in query_results:
-                        chunk_data = {}
-                        for field in fields:
-                            if field in chunk:
-                                # 处理特殊字段
-                                if field in ["important_kwd", "question_kwd", "entities_kwd"] and isinstance(
-                                        chunk[field], str):
-                                    chunk_data[field] = chunk[field].split("###") if chunk[field] else []
-                                elif field == "position_int" and isinstance(chunk[field], str):
-                                    if chunk[field]:
-                                        arr = [int(hex_val, 16) for hex_val in chunk[field].split('_')]
-                                        chunk_data[field] = [arr[i:i + 5] for i in range(0, len(arr), 5)]
-                                    else:
-                                        chunk_data[field] = []
-                                elif field in ["page_num_int", "top_int"] and isinstance(chunk[field], str):
-                                    if chunk[field]:
-                                        chunk_data[field] = [int(hex_val, 16) for hex_val in chunk[field].split('_')]
-                                    else:
-                                        chunk_data[field] = []
-                                else:
-                                    chunk_data[field] = chunk[field]
-
-                        res.append(chunk_data)
-
-                    # 如果结果数量少于批量大小，说明已经没有更多结果
-                    if len(query_results) < bs:
-                        break
-
-            except Exception as e:
-                logging.error(f"获取文档块失败: {str(e)}")
-
+        # db = SessionLocal()
+        with db_connection() as db:
+            kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
+        for p in range(offset, max_count, bs):
+            milvus_res = self.dataStore.search(fields, [], condition, [], OrderByExpr(), p, bs, index_name(tenant_id, [kb.kb_name]),
+                                           kb_ids)
+            dict_chunks = self.dataStore.getFields(milvus_res, fields)
+            for id, doc in dict_chunks.items():
+                doc["id"] = id
+            if dict_chunks:
+                res.extend(dict_chunks.values())
+            if len(dict_chunks.values()) < bs:
+                break
         return res
 
     def all_tags(self, tenant_id: str, kb_ids: list[str], S=1000):
-        """
-        获取所有标签
-
-        Args:
-            tenant_id: 租户ID
-            kb_ids: 知识库ID列表
-            S: 平滑参数
-
-        Returns:
-            list: 标签和频次列表
-        """
-        if isinstance(kb_ids, str):
-            kb_ids = [kb_ids]
-
-        agg_results = []
-
-        for kb_id in kb_ids:
-            collection_name = index_name_one(tenant_id, kb_id)
-
-            try:
-                # 检查集合是否存在
-                if not self.dataStore.has_collection(collection_name):
-                    logging.warning(f"集合 {collection_name} 不存在")
-                    continue
-
-                # 查询所有数据获取标签字段
-                query_results = self.dataStore.query(
-                    collection_name=collection_name,
-                    filter="",  # 空过滤器查询所有
-                    output_fields=["tag_kwd"]
-                )
-
-                # 统计标签频次
-                tag_count = {}
-                for result in query_results:
-                    if "tag_kwd" in result and result["tag_kwd"]:
-                        tags = result["tag_kwd"]
-                        # 处理标签字段，可能是字符串也可能是列表
-                        if isinstance(tags, str):
-                            tags = tags.split("###") if tags else []
-
-                        for tag in tags:
-                            if tag:
-                                tag_count[tag] = tag_count.get(tag, 0) + 1
-
-                # 将结果转换为(tag, count)元组列表
-                for tag, count in tag_count.items():
-                    agg_results.append((tag, count))
-
-            except Exception as e:
-                logging.error(f"获取标签失败: {str(e)}")
-
-        return agg_results
+        with db_connection() as db:
+            kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
+        res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids, ["tag_kwd"])
+        return self.dataStore.getAggregation(res, "tag_kwd")
 
     def all_tags_in_portion(self, tenant_id: str, kb_ids: list[str], S=1000):
-        """
-        获取所有标签的比例
-
-        Args:
-            tenant_id: 租户ID
-            kb_ids: 知识库ID列表
-            S: 平滑参数
-
-        Returns:
-            dict: 标签比例字典
-        """
-        # 获取标签统计
-        tags_counts = self.all_tags(tenant_id, kb_ids)
-
-        # 计算总频次
-        total = np.sum([c for _, c in tags_counts])
-
-        # 计算每个标签的比例
-        result = {t: (c + 1) / (total + S) for t, c in tags_counts}
-
-        return result
+        with db_connection() as db:
+            kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
+        res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids, ["tag_kwd"])
+        res = self.dataStore.getAggregation(res, "tag_kwd")
+        total = np.sum([c for _, c in res])
+        return {t: (c + 1) / (total + S) for t, c in res}
 
     def tag_content(self, tenant_id: str, kb_ids: list[str], doc, all_tags, topn_tags=3, keywords_topn=30, S=1000):
-        """
-        为文档内容打标签
-
-        Args:
-            tenant_id: 租户ID
-            kb_ids: 知识库ID列表
-            doc: 文档内容
-            all_tags: 所有标签的比例
-            topn_tags: 返回的标签数量
-            keywords_topn: 关键词数量
-            S: 平滑参数
-
-        Returns:
-            bool: 是否成功添加标签
-        """
-        if isinstance(kb_ids, str):
-            kb_ids = [kb_ids]
-
-        aggs = []
-
-        # 获取文档的文本内容
-        doc_text = doc.get("title_tks", "") + " " + doc.get("content_ltks", "")
-        important_keywords = doc.get("important_kwd", [])
-
-        # 创建查询匹配文本
-        match_txt = self.qryr.paragraph(doc_text, important_keywords, keywords_topn)
-
-        for kb_id in kb_ids:
-            collection_name = index_name_one(tenant_id, kb_id)
-
-            try:
-                # 检查集合是否存在
-                if not self.dataStore.has_collection(collection_name):
-                    logging.warning(f"集合 {collection_name} 不存在")
-                    continue
-
-                # 使用关键词查询相关内容
-                query_results = self.dataStore.query(
-                    collection_name=collection_name,
-                    filter=f"match_phrase(title_tks, '{match_txt}') OR match_phrase(content_ltks, '{match_txt}')",
-                    output_fields=["tag_kwd"]
-                )
-
-                # 统计标签频次
-                tag_count = {}
-                for result in query_results:
-                    if "tag_kwd" in result and result["tag_kwd"]:
-                        tags = result["tag_kwd"]
-                        # 处理标签字段，可能是字符串也可能是列表
-                        if isinstance(tags, str):
-                            tags = tags.split("###") if tags else []
-
-                        for tag in tags:
-                            if tag:
-                                tag_count[tag] = tag_count.get(tag, 0) + 1
-
-                # 将结果转换为(tag, count)元组列表
-                for tag, count in tag_count.items():
-                    aggs.append((tag, count))
-
-            except Exception as e:
-                logging.error(f"为内容添加标签失败: {str(e)}")
-
-        # 如果没有获取到标签，返回失败
+        with db_connection() as db:
+            kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
+        idx_nm = index_name(tenant_id, [kb.kb_name])
+        match_txt = self.qryr.paragraph(doc["title_tks"] + " " + doc["content_ltks"], doc.get("important_kwd", []), keywords_topn)
+        res = self.dataStore.search([], [], {}, [match_txt], OrderByExpr(), 0, 0, idx_nm, kb_ids, ["tag_kwd"])
+        aggs = self.dataStore.getAggregation(res, "tag_kwd")
         if not aggs:
             return False
-
-        # 计算总频次
         cnt = np.sum([c for _, c in aggs])
-
-        # 计算标签特征值并排序
-        tag_fea = sorted([(a, round(0.1 * (c + 1) / (cnt + S) / (all_tags.get(a, 0.0001)))) for a, c in aggs],
+        tag_fea = sorted([(a, round(0.1*(c + 1) / (cnt + S) / (all_tags.get(a, 0.0001)))) for a, c in aggs],
                          key=lambda x: x[1] * -1)[:topn_tags]
-
-        # 将标签特征添加到文档中
-        doc["tag_fea"] = {a: c for a, c in tag_fea if c > 0}
-
+        doc[TAG_FLD] = {a: c for a, c in tag_fea if c > 0}
         return True
 
     def tag_query(self, question: str, tenant_ids: str | list[str], kb_ids: list[str], all_tags, topn_tags=3, S=1000):
-        """
-        为查询添加标签
-
-        Args:
-            question: 查询问题
-            tenant_ids: 租户ID（单个或列表）
-            kb_ids: 知识库ID列表
-            all_tags: 所有标签的比例
-            topn_tags: 返回的标签数量
-            S: 平滑参数
-
-        Returns:
-            dict: 标签特征字典
-        """
-        # 统一tenant_ids格式
+        with db_connection() as db:
+            kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         if isinstance(tenant_ids, str):
-            tenant_ids = [tenant_ids]
-
-        # 统一kb_ids格式
-        if isinstance(kb_ids, str):
-            kb_ids = [kb_ids]
-
-        # 生成查询匹配文本
+            idx_nms = index_name(tenant_ids, [kb.kb_name])
+        else:
+            idx_nms = [index_name(tid, [kb.kb_name]) for tid in tenant_ids]
         match_txt, _ = self.qryr.question(question, min_match=0.0)
-
-        aggs = []
-
-        # 为每个租户和知识库执行查询
-        for tenant_id in tenant_ids:
-            for kb_id in kb_ids:
-                collection_name = index_name_one(tenant_id, kb_id)
-
-                try:
-                    # 检查集合是否存在
-                    if not self.dataStore.has_collection(collection_name):
-                        logging.warning(f"集合 {collection_name} 不存在")
-                        continue
-
-                    # 使用查询匹配文本搜索相关内容
-                    query_results = self.dataStore.query(
-                        collection_name=collection_name,
-                        filter=f"match_phrase(title_tks, '{match_txt}') OR match_phrase(content_ltks, '{match_txt}')",
-                        output_fields=["tag_kwd"]
-                    )
-
-                    # 统计标签频次
-                    tag_count = {}
-                    for result in query_results:
-                        if "tag_kwd" in result and result["tag_kwd"]:
-                            tags = result["tag_kwd"]
-                            # 处理标签字段，可能是字符串也可能是列表
-                            if isinstance(tags, str):
-                                tags = tags.split("###") if tags else []
-
-                            for tag in tags:
-                                if tag:
-                                    tag_count[tag] = tag_count.get(tag, 0) + 1
-
-                    # 将结果转换为(tag, count)元组列表
-                    for tag, count in tag_count.items():
-                        aggs.append((tag, count))
-
-                except Exception as e:
-                    logging.error(f"为查询添加标签失败: {str(e)}")
-
-        # 如果没有获取到标签，返回空字典
+        res = self.dataStore.search([], [], {}, [match_txt], OrderByExpr(), 0, 0, idx_nms, kb_ids, ["tag_kwd"])
+        aggs = self.dataStore.getAggregation(res, "tag_kwd")
         if not aggs:
             return {}
-
-        # 计算总频次
         cnt = np.sum([c for _, c in aggs])
-
-        # 计算标签特征值并排序
-        tag_fea = sorted([(a, round(0.1 * (c + 1) / (cnt + S) / (all_tags.get(a, 0.0001)))) for a, c in aggs],
+        tag_fea = sorted([(a, round(0.1*(c + 1) / (cnt + S) / (all_tags.get(a, 0.0001)))) for a, c in aggs],
                          key=lambda x: x[1] * -1)[:topn_tags]
-
-        # 返回标签特征字典
         return {a: c for a, c in tag_fea if c > 0}
+
+    # def chunk_list(self, doc_id: str, tenant_id: str,
+    #                kb_ids: list[str], max_count=1024,
+    #                offset=0,
+    #                fields=["docnm_kwd", "content_with_weight", "img_id"]):
+    #     """
+    #     获取文档的所有块
+    #
+    #     Args:
+    #         doc_id: 文档ID
+    #         tenant_id: 租户ID
+    #         kb_ids: 知识库ID列表
+    #         max_count: 最大返回数量
+    #         offset: 起始偏移
+    #         fields: 要返回的字段列表
+    #
+    #     Returns:
+    #         list: 文档块列表
+    #     """
+    #     condition = {"doc_id": doc_id}
+    #     res = []
+    #     bs = 128  # 批量大小
+    #
+    #     # 获取集合名称列表
+    #     if isinstance(kb_ids, str):
+    #         kb_ids = [kb_ids]
+    #
+    #     for kb_id in kb_ids:
+    #         collection_name = index_name_one(tenant_id, kb_id)
+    #
+    #         try:
+    #             # 检查集合是否存在
+    #             if not self.dataStore.has_collection(collection_name):
+    #                 logging.warning(f"集合 {collection_name} 不存在")
+    #                 continue
+    #
+    #             # 分批获取文档块
+    #             for p in range(offset, max_count, bs):
+    #                 filter_expr = f"doc_id == '{doc_id}'"
+    #
+    #                 # 执行查询
+    #                 query_results = self.dataStore.query(
+    #                     collection_name=collection_name,
+    #                     filter=filter_expr,
+    #                     output_fields=fields,
+    #                     offset=p,
+    #                     limit=min(bs, max_count - p)
+    #                 )
+    #
+    #                 if not query_results:
+    #                     break
+    #
+    #                 # 处理结果
+    #                 for chunk in query_results:
+    #                     chunk_data = {}
+    #                     for field in fields:
+    #                         if field in chunk:
+    #                             # 处理特殊字段
+    #                             if field in ["important_kwd", "question_kwd", "entities_kwd"] and isinstance(
+    #                                     chunk[field], str):
+    #                                 chunk_data[field] = chunk[field].split("###") if chunk[field] else []
+    #                             elif field == "position_int" and isinstance(chunk[field], str):
+    #                                 if chunk[field]:
+    #                                     arr = [int(hex_val, 16) for hex_val in chunk[field].split('_')]
+    #                                     chunk_data[field] = [arr[i:i + 5] for i in range(0, len(arr), 5)]
+    #                                 else:
+    #                                     chunk_data[field] = []
+    #                             elif field in ["page_num_int", "top_int"] and isinstance(chunk[field], str):
+    #                                 if chunk[field]:
+    #                                     chunk_data[field] = [int(hex_val, 16) for hex_val in chunk[field].split('_')]
+    #                                 else:
+    #                                     chunk_data[field] = []
+    #                             else:
+    #                                 chunk_data[field] = chunk[field]
+    #
+    #                     res.append(chunk_data)
+    #
+    #                 # 如果结果数量少于批量大小，说明已经没有更多结果
+    #                 if len(query_results) < bs:
+    #                     break
+    #
+    #         except Exception as e:
+    #             logging.error(f"获取文档块失败: {str(e)}")
+    #
+    #     return res
+
+
+    # def all_tags(self, tenant_id: str, kb_ids: list[str], S=1000):
+    #     """
+    #     获取所有标签
+    #
+    #     Args:
+    #         tenant_id: 租户ID
+    #         kb_ids: 知识库ID列表
+    #         S: 平滑参数
+    #
+    #     Returns:
+    #         list: 标签和频次列表
+    #     """
+    #     if isinstance(kb_ids, str):
+    #         kb_ids = [kb_ids]
+    #
+    #     agg_results = []
+    #
+    #     for kb_id in kb_ids:
+    #         collection_name = index_name_one(tenant_id, kb_id)
+    #
+    #         try:
+    #             # 检查集合是否存在
+    #             if not self.dataStore.has_collection(collection_name):
+    #                 logging.warning(f"集合 {collection_name} 不存在")
+    #                 continue
+    #
+    #             # 查询所有数据获取标签字段
+    #             query_results = self.dataStore.query(
+    #                 collection_name=collection_name,
+    #                 filter="",  # 空过滤器查询所有
+    #                 output_fields=["tag_kwd"]
+    #             )
+    #
+    #             # 统计标签频次
+    #             tag_count = {}
+    #             for result in query_results:
+    #                 if "tag_kwd" in result and result["tag_kwd"]:
+    #                     tags = result["tag_kwd"]
+    #                     # 处理标签字段，可能是字符串也可能是列表
+    #                     if isinstance(tags, str):
+    #                         tags = tags.split("###") if tags else []
+    #
+    #                     for tag in tags:
+    #                         if tag:
+    #                             tag_count[tag] = tag_count.get(tag, 0) + 1
+    #
+    #             # 将结果转换为(tag, count)元组列表
+    #             for tag, count in tag_count.items():
+    #                 agg_results.append((tag, count))
+    #
+    #         except Exception as e:
+    #             logging.error(f"获取标签失败: {str(e)}")
+    #
+    #     return agg_results
+    #
+    # def all_tags_in_portion(self, tenant_id: str, kb_ids: list[str], S=1000):
+    #     """
+    #     获取所有标签的比例
+    #
+    #     Args:
+    #         tenant_id: 租户ID
+    #         kb_ids: 知识库ID列表
+    #         S: 平滑参数
+    #
+    #     Returns:
+    #         dict: 标签比例字典
+    #     """
+    #     # 获取标签统计
+    #     tags_counts = self.all_tags(tenant_id, kb_ids)
+    #
+    #     # 计算总频次
+    #     total = np.sum([c for _, c in tags_counts])
+    #
+    #     # 计算每个标签的比例
+    #     result = {t: (c + 1) / (total + S) for t, c in tags_counts}
+    #
+    #     return result
+    #
+    # def tag_content(self, tenant_id: str, kb_ids: list[str], doc, all_tags, topn_tags=3, keywords_topn=30, S=1000):
+    #     """
+    #     为文档内容打标签
+    #
+    #     Args:
+    #         tenant_id: 租户ID
+    #         kb_ids: 知识库ID列表
+    #         doc: 文档内容
+    #         all_tags: 所有标签的比例
+    #         topn_tags: 返回的标签数量
+    #         keywords_topn: 关键词数量
+    #         S: 平滑参数
+    #
+    #     Returns:
+    #         bool: 是否成功添加标签
+    #     """
+    #     if isinstance(kb_ids, str):
+    #         kb_ids = [kb_ids]
+    #
+    #     aggs = []
+    #
+    #     # 获取文档的文本内容
+    #     doc_text = doc.get("title_tks", "") + " " + doc.get("content_ltks", "")
+    #     important_keywords = doc.get("important_kwd", [])
+    #
+    #     # 创建查询匹配文本
+    #     match_txt = self.qryr.paragraph(doc_text, important_keywords, keywords_topn)
+    #
+    #     for kb_id in kb_ids:
+    #         collection_name = index_name_one(tenant_id, kb_id)
+    #
+    #         try:
+    #             # 检查集合是否存在
+    #             if not self.dataStore.has_collection(collection_name):
+    #                 logging.warning(f"集合 {collection_name} 不存在")
+    #                 continue
+    #
+    #             # 使用关键词查询相关内容
+    #             query_results = self.dataStore.query(
+    #                 collection_name=collection_name,
+    #                 filter=f"match_phrase(title_tks, '{match_txt}') OR match_phrase(content_ltks, '{match_txt}')",
+    #                 output_fields=["tag_kwd"]
+    #             )
+    #
+    #             # 统计标签频次
+    #             tag_count = {}
+    #             for result in query_results:
+    #                 if "tag_kwd" in result and result["tag_kwd"]:
+    #                     tags = result["tag_kwd"]
+    #                     # 处理标签字段，可能是字符串也可能是列表
+    #                     if isinstance(tags, str):
+    #                         tags = tags.split("###") if tags else []
+    #
+    #                     for tag in tags:
+    #                         if tag:
+    #                             tag_count[tag] = tag_count.get(tag, 0) + 1
+    #
+    #             # 将结果转换为(tag, count)元组列表
+    #             for tag, count in tag_count.items():
+    #                 aggs.append((tag, count))
+    #
+    #         except Exception as e:
+    #             logging.error(f"为内容添加标签失败: {str(e)}")
+    #
+    #     # 如果没有获取到标签，返回失败
+    #     if not aggs:
+    #         return False
+    #
+    #     # 计算总频次
+    #     cnt = np.sum([c for _, c in aggs])
+    #
+    #     # 计算标签特征值并排序
+    #     tag_fea = sorted([(a, round(0.1 * (c + 1) / (cnt + S) / (all_tags.get(a, 0.0001)))) for a, c in aggs],
+    #                      key=lambda x: x[1] * -1)[:topn_tags]
+    #
+    #     # 将标签特征添加到文档中
+    #     doc["tag_fea"] = {a: c for a, c in tag_fea if c > 0}
+    #
+    #     return True
+    #
+    # def tag_query(self, question: str, tenant_ids: str | list[str], kb_ids: list[str], all_tags, topn_tags=3, S=1000):
+    #     """
+    #     为查询添加标签
+    #
+    #     Args:
+    #         question: 查询问题
+    #         tenant_ids: 租户ID（单个或列表）
+    #         kb_ids: 知识库ID列表
+    #         all_tags: 所有标签的比例
+    #         topn_tags: 返回的标签数量
+    #         S: 平滑参数
+    #
+    #     Returns:
+    #         dict: 标签特征字典
+    #     """
+    #     # 统一tenant_ids格式
+    #     if isinstance(tenant_ids, str):
+    #         tenant_ids = [tenant_ids]
+    #
+    #     # 统一kb_ids格式
+    #     if isinstance(kb_ids, str):
+    #         kb_ids = [kb_ids]
+    #
+    #     # 生成查询匹配文本
+    #     match_txt, _ = self.qryr.question(question, min_match=0.0)
+    #
+    #     aggs = []
+    #
+    #     # 为每个租户和知识库执行查询
+    #     for tenant_id in tenant_ids:
+    #         for kb_id in kb_ids:
+    #             collection_name = index_name_one(tenant_id, kb_id)
+    #
+    #             try:
+    #                 # 检查集合是否存在
+    #                 if not self.dataStore.has_collection(collection_name):
+    #                     logging.warning(f"集合 {collection_name} 不存在")
+    #                     continue
+    #
+    #                 # 使用查询匹配文本搜索相关内容
+    #                 query_results = self.dataStore.query(
+    #                     collection_name=collection_name,
+    #                     filter=f"match_phrase(title_tks, '{match_txt}') OR match_phrase(content_ltks, '{match_txt}')",
+    #                     output_fields=["tag_kwd"]
+    #                 )
+    #
+    #                 # 统计标签频次
+    #                 tag_count = {}
+    #                 for result in query_results:
+    #                     if "tag_kwd" in result and result["tag_kwd"]:
+    #                         tags = result["tag_kwd"]
+    #                         # 处理标签字段，可能是字符串也可能是列表
+    #                         if isinstance(tags, str):
+    #                             tags = tags.split("###") if tags else []
+    #
+    #                         for tag in tags:
+    #                             if tag:
+    #                                 tag_count[tag] = tag_count.get(tag, 0) + 1
+    #
+    #                 # 将结果转换为(tag, count)元组列表
+    #                 for tag, count in tag_count.items():
+    #                     aggs.append((tag, count))
+    #
+    #             except Exception as e:
+    #                 logging.error(f"为查询添加标签失败: {str(e)}")
+    #
+    #     # 如果没有获取到标签，返回空字典
+    #     if not aggs:
+    #         return {}
+    #
+    #     # 计算总频次
+    #     cnt = np.sum([c for _, c in aggs])
+    #
+    #     # 计算标签特征值并排序
+    #     tag_fea = sorted([(a, round(0.1 * (c + 1) / (cnt + S) / (all_tags.get(a, 0.0001)))) for a, c in aggs],
+    #                      key=lambda x: x[1] * -1)[:topn_tags]
+    #
+    #     # 返回标签特征字典
+    #     return {a: c for a, c in tag_fea if c > 0}

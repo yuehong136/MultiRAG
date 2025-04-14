@@ -142,7 +142,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     """
     pdf_parser = None
     if re.search(r"\.pdf$", filename, re.IGNORECASE):
-        if not kwargs.get("parser_config", {}).get("layout_recognize", True):
+        if kwargs.get("parser_config", {}).get("layout_recognize", "DeepDOC") == "Plain Text":
             pdf_parser = PlainParser()
             paper = {
                 "title": filename,

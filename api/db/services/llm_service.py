@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from api.utils.file_utils import get_project_base_directory
 from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
 
-from api.db.database import db_connection  # 导入上下文管理器
+from api.db.db_models import db_connection  # 导入上下文管理器
 from api.db.services.user_service import TenantService
 from api.db import LLMType
 from api.db.db_models import LLMFactories, LLM, TenantLLM

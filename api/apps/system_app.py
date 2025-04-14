@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
 
 from api.apps.api_app import generate_confirmation_token
-from api.db.db_models import APIToken
+from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
@@ -26,7 +26,7 @@ from core.utils.storage_factory import STORAGE_IMPL, STORAGE_IMPL_TYPE
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN
 # from core.utils.milvus_conn import MILVUS_CONNECTION
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.apps import manager
 
 router = APIRouter()

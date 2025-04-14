@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.db import FileType, LLMType, ParserType, FileSource
-from api.db.db_models import APIToken, Task, File
+from api.db.db_models import APIToken, Task, File, get_db
 from api.db.services import duplicate_name
 from api.db.services.api_service import APITokenService, API4ConversationService
 from api.db.services.dialog_service import DialogService, chat, keyword_extraction
@@ -38,7 +38,7 @@ from api.db.services.canvas_service import UserCanvasService
 from agent.canvas import Canvas
 from functools import partial
 
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.apps import manager
 
 

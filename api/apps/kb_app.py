@@ -6,6 +6,7 @@
 @date：2024/8/5 9:22
 @desc:
 """
+import json
 import logging
 import re
 
@@ -13,7 +14,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from api.db.db_models import File
+from api.db.db_models import File, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -25,7 +26,7 @@ from api.utils import get_uuid
 from api.db import StatusEnum, FileSource
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import get_json_result
-from api.db.database import get_db
+# from api.db.database import get_db
 from api.apps import manager
 # from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.nlp import search
@@ -353,3 +354,34 @@ def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get
         kb_id,
     )
     return get_json_result(data=True)
+
+
+@router.get("/<kb_id>/knowledge_graph'", summary="获取知识图谱")
+def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+    if not KnowledgebaseService.accessible(db, kb_id, user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
+        )
+    kb = KnowledgebaseService.get_by_id(db, kb_id)
+    req = {
+        "kb_id": [kb_id],
+        "knowledge_graph_kwd": ["graph"]
+    }
+    sres = settings.retrievaler.search(req, search.index_name(kb.tenant_id, [kb.name]), [kb_id])
+    obj = {"graph": {}, "mind_map": {}}
+    for id in sres.ids[:1]:
+        ty = sres.field[id]["knowledge_graph_kwd"]
+        try:
+            content_json = json.loads(sres.field[id]["content_with_weight"])
+        except Exception:
+            continue
+
+        obj[ty] = content_json
+
+    if "nodes" in obj["graph"]:
+        obj["graph"]["nodes"] = sorted(obj["graph"]["nodes"], key=lambda x: x.get("pagerank", 0), reverse=True)[:256]
+    if "edges" in obj["graph"]:
+        obj["graph"]["edges"] = sorted(obj["graph"]["edges"], key=lambda x: x.get("weight", 0), reverse=True)[:128]
+    return get_json_result(data=obj)

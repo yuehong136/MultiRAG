@@ -23,6 +23,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils import current_timestamp, get_format_time, get_uuid
 from api.utils.db_utils import bulk_insert_into_db
+from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.nlp import search, rag_tokenizer
 from core import settings
 from api.settings import docStoreConn
