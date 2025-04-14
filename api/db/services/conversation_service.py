@@ -1,3 +1,4 @@
+import time
 import json
 from uuid import uuid4
 
@@ -70,9 +71,9 @@ def structure_answer(conv, ans, message_id, session_id):
     if not conv.message:
         conv.message = []
     if not conv.message or conv.message[-1].get("role", "") != "assistant":
-        conv.message.append({"role": "assistant", "content": ans["answer"], "id": message_id})
+        conv.message.append({"role": "assistant", "content": ans["answer"], "created_at": time.time(), "id": message_id})
     else:
-        conv.message[-1] = {"role": "assistant", "content": ans["answer"], "id": message_id}
+        conv.message[-1] = {"role": "assistant", "content": ans["answer"], "created_at": time.time(), "id": message_id}
     if conv.reference:
         conv.reference[-1] = reference
         # conv.reference.append(reference)
@@ -90,7 +91,7 @@ def completion(db, tenant_id, chat_id, question, name="New session", session_id=
             "id":session_id ,
             "dialog_id": chat_id,
             "name": name,
-            "message": [{"role": "assistant", "content": dia[0].prompt_config.get("prologue")}]
+            "message": [{"role": "assistant", "content": dia[0].prompt_config.get("prologue"), "created_at": time.time()}],
         }
         ConversationService.save(**conv)
         yield "data:" + json.dumps({"code": 0, "message": "",
@@ -153,15 +154,15 @@ def completion(db, tenant_id, chat_id, question, name="New session", session_id=
 
 
 def iframe_completion(db, dialog_id, question, session_id=None, stream=True, **kwargs):
-    e, dia = DialogService.get_by_id(db, dialog_id)
-    assert e, "Dialog not found"
+    dia = DialogService.get_by_id(db, dialog_id)
+    assert dia, "Dialog not found"
     if not session_id:
         session_id = get_uuid()
         conv = {
             "id": session_id,
             "dialog_id": dialog_id,
             "user_id": kwargs.get("user_id", ""),
-            "message": [{"role": "assistant", "content": dia.prompt_config["prologue"]}]
+            "message": [{"role": "assistant", "content": dia.prompt_config["prologue"], "created_at": time.time()}]
         }
         API4ConversationService.save(db, **conv)
         yield "data:" + json.dumps({"code": 0, "message": "",
