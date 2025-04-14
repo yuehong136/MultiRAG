@@ -288,7 +288,7 @@ def set_entity(tenant_id, kb_id, embd_mdl, ent_name, meta):
                 logging.exception(f"Fail to embed entity: {e}")
         if ebd is not None:
             chunk["q_%d_vec" % len(ebd)] = ebd
-        settings.docStoreConn.insert([{"id": chunk_id(chunk), **chunk}], search.index_name(tenant_id, [KnowledgebaseService.get_by_id(db, kb_id).name]))
+        settings.docStoreConn.insert([{"id": chunk_id(chunk), **chunk}], search.index_name(tenant_id, [KnowledgebaseService.get_by_id(db, kb_id).name]), kb_id)
 
 
 def get_relation(tenant_id, kb_id, from_ent_name, to_ent_name, size=1):
@@ -354,7 +354,7 @@ def set_relation(tenant_id, kb_id, embd_mdl, from_ent_name, to_ent_name, meta):
                 logging.exception(f"Fail to embed entity relation: {e}")
         if ebd is not None:
             chunk["q_%d_vec" % len(ebd)] = ebd
-        settings.docStoreConn.insert([{"id": chunk_id(chunk), **chunk}], search.index_name(tenant_id, [KnowledgebaseService.get_by_id(db, kb_id).name]))
+        settings.docStoreConn.insert([{"id": chunk_id(chunk), **chunk}], search.index_name(tenant_id, [KnowledgebaseService.get_by_id(db, kb_id).name]), kb_id)
 
 
 def get_graph(tenant_id, kb_id):
@@ -364,6 +364,7 @@ def get_graph(tenant_id, kb_id):
         "size": 1,
         "knowledge_graph_kwd": ["graph"]
     }
+    db = SessionLocal()
     res = settings.retrievaler.search(conds, search.index_name(tenant_id, [KnowledgebaseService.get_by_id(db, kb_id).name]), [kb_id])
     for id in res.ids:
         try:
@@ -391,7 +392,7 @@ def set_graph(tenant_id, kb_id, graph, docids):
         settings.docStoreConn.update({"knowledge_graph_kwd": "graph"}, chunk,
                                      search.index_name(tenant_id, [KnowledgebaseService.get_by_id(db, kb_id).name]), kb_id)
     else:
-        settings.docStoreConn.insert([{"id": chunk_id(chunk), **chunk}], search.index_name(tenant_id, [KnowledgebaseService.get_by_id(db, kb_id).name]))
+        settings.docStoreConn.insert([{"id": chunk_id(chunk), **chunk}], search.index_name(tenant_id, [KnowledgebaseService.get_by_id(db, kb_id).name]), kb_id)
 
 
 def is_continuous_subsequence(subseq, seq):
