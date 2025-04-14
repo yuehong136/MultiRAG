@@ -18,11 +18,12 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, asc
 
 from api.db import FileType, TaskStatus, StatusEnum
-from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant
+from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, db_connection
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils import current_timestamp, get_format_time, get_uuid
 from api.utils.db_utils import bulk_insert_into_db
+from core.settings import SVR_QUEUE_NAME
 from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.nlp import search, rag_tokenizer
 from core import settings
@@ -145,20 +146,35 @@ class DocumentService(CommonService):
 
     @classmethod
     def remove_document(cls, db: Session, doc: Document, tenant_id: str):
+        cls.clear_chunk_num(db, doc.id)
         document = DocumentService.get_by_doc_id(db, doc.id)
         kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
         # 构建 Milvus 集合名称
         collection_name = search.index_name_one(tenant_id, kb.name)
         # 检查集合是否存在并删除 Milvus 中的数据
+
         try:
             if docStoreConn.has_collection(collection_name):
                 docStoreConn.delete(
                     collection_name=collection_name,
                     filter=f"doc_id == '{doc.id}'"
                 )
+            # todo 待测试【docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
+            # docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id, [kb.name]), doc.kb_id)
+            # docStoreConn.update(
+            #     {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "community_report"],
+            #      "source_id": doc.id},
+            #     {"remove": {"source_id": doc.id}},
+            #     search.index_name(tenant_id, [kb.name]), doc.kb_id)
+            # docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
+            #                              {"removed_kwd": "Y"},
+            #                              search.index_name(tenant_id, [kb.name]), doc.kb_id)
+            # docStoreConn.delete(
+            #     {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "community_report"],
+            #      "must_not": {"exists": "source_id"}},
+            #     search.index_name(tenant_id, [kb.name]), doc.kb_id)
         except MilvusException as e:
             return e
-        cls.clear_chunk_num(db, doc.id)
         return cls.delete_by_id(db, doc.id)
 
     @classmethod
@@ -181,7 +197,8 @@ class DocumentService(CommonService):
     @classmethod
     def get_unfinished_docs(cls, db: Session):
         query = db.query(
-            cls.model.id, cls.model.process_begin_at, cls.model.parser_config, cls.model.progress_msg, cls.model.run
+            cls.model.id, cls.model.process_begin_at, cls.model.parser_config,
+            cls.model.progress_msg, cls.model.run, cls.model.parser_id
         ).filter(
             cls.model.status == StatusEnum.VALID.value,
             cls.model.type != FileType.VIRTUAL.value,
@@ -473,6 +490,12 @@ class DocumentService(CommonService):
 
     @classmethod
     def update_progress(cls, db: Session):
+        MSG = {
+            "raptor": "Start RAPTOR (Recursive Abstractive Processing for Tree-Organized Retrieval).",
+            "graphrag": "Entities extraction progress",
+            "graph_resolution": "Start Graph Resolution",
+            "graph_community": "Start Graph Community Reports Generation"
+        }
         docs = cls.get_unfinished_docs(db)
         for d in docs:
             try:
@@ -502,15 +525,27 @@ class DocumentService(CommonService):
                     prg = -1
                     status = TaskStatus.FAIL.value
                 elif finished:
-                    if d.parser_config.get("raptor", {}).get("use_raptor") and d.progress_msg.lower().find(
-                            " raptor") < 0:
-                        queue_raptor_tasks(db, d)
+                    m = "\n".join(sorted(msg))
+                    if d["parser_config"].get("raptor", {}).get("use_raptor") and m.find(MSG["raptor"]) < 0:
+                        queue_raptor_o_graphrag_tasks(db, d, "raptor", MSG["raptor"])
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
-                        msg.append("------ RAPTOR -------")
+                    elif d["parser_config"].get("graphrag", {}).get("use_graphrag") and m.find(MSG["graphrag"]) < 0:
+                        queue_raptor_o_graphrag_tasks(db, d, "graphrag", MSG["graphrag"])
+                        prg = 0.98 * len(tsks) / (len(tsks) + 1)
+                    elif d["parser_config"].get("graphrag", {}).get("use_graphrag") \
+                            and d["parser_config"].get("graphrag", {}).get("resolution") \
+                            and m.find(MSG["graph_resolution"]) < 0:
+                        queue_raptor_o_graphrag_tasks(db, d, "graph_resolution", MSG["graph_resolution"])
+                        prg = 0.98 * len(tsks) / (len(tsks) + 1)
+                    elif d["parser_config"].get("graphrag", {}).get("use_graphrag") \
+                            and d["parser_config"].get("graphrag", {}).get("community") \
+                            and m.find(MSG["graph_community"]) < 0:
+                        queue_raptor_o_graphrag_tasks(db, d, "graph_community", MSG["graph_community"])
+                        prg = 0.98 * len(tsks) / (len(tsks) + 1)
                     else:
                         status = TaskStatus.DONE.value
 
-                msg = "\n".join(msg)
+                msg = "\n".join(sorted(msg))
                 info = {
                     "process_duration": datetime.timestamp(datetime.now()) - d.process_begin_at.timestamp(),
                     "run": status
@@ -561,6 +596,32 @@ def queue_raptor_tasks(db: Session, doc):
     bulk_insert_into_db(db, Task, [task], True)
     task["type"] = "raptor"
     assert REDIS_CONN.queue_product(settings.SVR_QUEUE_NAME, message=task), "Can't access Redis. Please check the Redis' status."
+
+
+def queue_raptor_o_graphrag_tasks(db, doc, ty, msg):
+    chunking_config = DocumentService.get_chunking_config(db, doc["id"])
+    hasher = xxhash.xxh64()
+    for field in sorted(chunking_config.keys()):
+        hasher.update(str(chunking_config[field]).encode("utf-8"))
+
+    def new_task():
+        nonlocal doc
+        return {
+            "id": get_uuid(),
+            "doc_id": doc["id"],
+            "from_page": 100000000,
+            "to_page": 100000000,
+            "progress_msg":  datetime.now().strftime("%H:%M:%S") + " " + msg
+        }
+
+    task = new_task()
+    for field in ["doc_id", "from_page", "to_page"]:
+        hasher.update(str(task.get(field, "")).encode("utf-8"))
+    hasher.update(ty.encode("utf-8"))
+    task["digest"] = hasher.hexdigest()
+    bulk_insert_into_db(db, Task, [task], True)
+    task["task_type"] = ty
+    assert REDIS_CONN.queue_product(SVR_QUEUE_NAME, message=task), "Can't access Redis. Please check the Redis' status."
 
 # def doc_upload_and_parse(conversation_id, file_objs, user_id):
 #     from core.app import presentation, picture, naive, audio, email
