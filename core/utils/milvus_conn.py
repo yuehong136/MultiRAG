@@ -113,7 +113,7 @@ class MilvusConnection(DocStoreConnection):
     表操作
     """
 
-    def createIdx(self, indexName: str, knowledgebaseId: list[str], vectorSize: int):
+    def createIdx(self, indexName: str | list[str], knowledgebaseId: list[str], vectorSize: int):
         """
         创建索引（对应于创建Milvus集合），根据提供的mapping文件定义字段
 
@@ -126,7 +126,18 @@ class MilvusConnection(DocStoreConnection):
             bool: 创建成功返回True
         """
         # collection_name = f"{indexName}_{knowledgebaseId}"
-        collection_name = indexName
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return False
+            collection_name = indexName[0]  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {collection_name}")
+        elif isinstance(indexName, str):
+            collection_name = indexName
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return False
 
         try:
             # 检查集合是否已存在
@@ -307,7 +318,7 @@ class MilvusConnection(DocStoreConnection):
             logger.error(f"创建集合 {collection_name} 失败: {str(e)}")
             raise e
 
-    def _create_default_collection(self, indexName: str, knowledgebaseId: list[str], vectorSize: int):
+    def _create_default_collection(self, indexName: str | list[str], knowledgebaseId: list[str], vectorSize: int):
         """
         使用默认字段定义创建集合（当找不到mapping文件时使用）
 
@@ -319,8 +330,18 @@ class MilvusConnection(DocStoreConnection):
         Returns:
             bool: 创建成功返回True
         """
-        # collection_name = f"{indexName}_{knowledgebaseId}"
-        collection_name = indexName
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return False
+            collection_name = indexName[0]  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {collection_name}")
+        elif isinstance(indexName, str):
+            collection_name = indexName
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return False
 
         # 创建包含基本字段的模式
         fields = []
@@ -392,10 +413,20 @@ class MilvusConnection(DocStoreConnection):
         logger.info(f"成功创建集合 {collection_name}（使用默认字段），向量维度 {vectorSize}")
         return True
 
-    def deleteIdx(self, indexName: str, knowledgebaseId: list[str]):
+    def deleteIdx(self, indexName: str | list[str], knowledgebaseId: list[str]):
         """删除索引，对应于删除Milvus集合"""
-        # collection_name = f"{indexName}_{knowledgebaseId}"
-        collection_name = indexName
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return False
+            collection_name = indexName[0]  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {collection_name}")
+        elif isinstance(indexName, str):
+            collection_name = indexName
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return False
         try:
             conn = self._get_connection()
             if conn.has_collection(collection_name):
@@ -406,10 +437,20 @@ class MilvusConnection(DocStoreConnection):
             logger.error(f"删除集合 {collection_name} 失败: {str(e)}")
             raise e
 
-    def indexExist(self, indexName: str, knowledgebaseId: list[str]) -> bool:
+    def indexExist(self, indexName: str | list[str], knowledgebaseId: list[str]) -> bool:
         """检查索引是否存在，对应于检查Milvus集合是否存在"""
-        # collection_name = f"{indexName}_{knowledgebaseId}"
-        collection_name = indexName
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return False
+            collection_name = indexName[0]  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {collection_name}")
+        elif isinstance(indexName, str):
+            collection_name = indexName
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return False
         try:
             conn = self._get_connection()
             return conn.has_collection(collection_name)
@@ -417,10 +458,20 @@ class MilvusConnection(DocStoreConnection):
             logger.warning(f"检查集合 {collection_name} 是否存在失败: {str(e)}")
             return False
 
-    def insert(self, rows: list[dict], indexName: str, knowledgebaseId: list[str] | None = None) -> list[str]:
+    def insert(self, rows: list[dict], indexName: str | list[str], knowledgebaseId: list[str] | None = None) -> list[str]:
         """插入数据"""
-        # collection_name = f"{indexName}_{knowledgebaseId}"
-        collection_name = indexName
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return []
+            collection_name = indexName[0]  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {collection_name}")
+        elif isinstance(indexName, str):
+            collection_name = indexName
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return []
         conn = self._get_connection()
 
         # 检查集合是否存在
@@ -493,12 +544,23 @@ class MilvusConnection(DocStoreConnection):
             logger.error(f"插入到 {collection_name} 失败: {error_msg}")
             return [error_msg]  # 返回错误信息
 
-    def get(self, chunkId: str, indexName: str, knowledgebaseIds: list[str]) -> dict | None:
+    def get(self, chunkId: str, indexName: str | list[str], knowledgebaseIds: list[str]) -> dict | None:
         """获取单个文档块"""
         # for kb_id in knowledgebaseIds:
         #     collection_name = f"{indexName}_{kb_id}"
         #     conn = self._get_connection()
-        collection_name = indexName
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return None
+            collection_name = indexName[0]  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {collection_name}")
+        elif isinstance(indexName, str):
+            collection_name = indexName
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return None
         conn = self._get_connection()
         try:
             if not conn.has_collection(collection_name):
@@ -854,10 +916,20 @@ class MilvusConnection(DocStoreConnection):
     #         logger.error(f"插入更新后的记录失败: {str(e)}")
     #         return False
 
-    def delete(self, condition: dict, indexName: str, knowledgebaseId: list[str]) -> int:
+    def delete(self, condition: dict, indexName: str | list[str], knowledgebaseId: list[str]) -> int:
         """删除文档"""
-        # collection_name = f"{indexName}_{knowledgebaseId}"
-        collection_name = indexName
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return False
+            collection_name = indexName[0]  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {collection_name}")
+        elif isinstance(indexName, str):
+            collection_name = indexName
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return False
         conn = self._get_connection()
 
         if not conn.has_collection(collection_name):
@@ -1193,7 +1265,7 @@ class MilvusConnection(DocStoreConnection):
             logger.error(f"SQL 解析或执行失败: {str(e)}")
             raise ValueError(f"SQL 查询失败: {str(e)}")
 
-    def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: list[str]) -> bool:
+    def update(self, condition: dict, newValue: dict, indexName: str | list[str], knowledgebaseId: list[str]) -> bool:
         """
         更新 Milvus 中的文档，基于条件查询并应用新值。
         支持处理特殊操作如移除字段（通过设置为默认值）和处理时间字段更新。
@@ -1208,7 +1280,18 @@ class MilvusConnection(DocStoreConnection):
             bool: 操作是否成功
         """
         # collection_name = f"{indexName}_{knowledgebaseId}"
-        collection_name = indexName
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return False
+            collection_name = indexName[0]  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {collection_name}")
+        elif isinstance(indexName, str):
+            collection_name = indexName
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return False
         conn = self._get_connection()
 
         # 复制新值以避免修改原始数据
@@ -1350,7 +1433,7 @@ class MilvusConnection(DocStoreConnection):
                 break  # 其他错误直接中断
 
         return False
-    # def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: list[str]) -> bool:
+    # def update(self, condition: dict, newValue: dict, indexName: str | list[str], knowledgebaseId: list[str]) -> bool:
     #     """
     #     使用“查询原始数据 + 删除 + 重新插入”来模拟更新操作。
     #     自动更新时间字段 create_time 和 create_timestamp_flt。
