@@ -37,6 +37,7 @@ from core.nlp.search import index_name
 from core.settings import TAG_FLD
 from core.utils import rmSpace, num_tokens_from_string, encoder
 from graphrag.utils import get_tags_from_cache, set_tags_to_cache
+from core.utils.tavily_conn import Tavily
 
 
 class DialogService(CommonService):
@@ -139,7 +140,11 @@ def llm_id2llm_type(llm_id):
 
 
 def kb_prompt(kbinfos, max_tokens):
-    knowledges = [ck["text"] for ck in kbinfos["chunks"]]
+    # 兼容不同字段名
+    def get_text(ck):
+        return ck.get("text") or ck.get("content_with_weight") or ""
+
+    knowledges = [get_text(ck) for ck in kbinfos["chunks"]]
     used_token_count = 0
     chunks_num = 0
     for i, c in enumerate(knowledges):
@@ -147,6 +152,7 @@ def kb_prompt(kbinfos, max_tokens):
         chunks_num += 1
         if max_tokens * 0.97 < used_token_count:
             knowledges = knowledges[:i]
+            logging.warning(f"Not all the retrieval into prompt: {i+1}/{len(knowledges)}")
             break
     with db_connection() as db:
         docs = DocumentService.get_by_ids(db, [ck["doc_id"] for ck in kbinfos["chunks"][:chunks_num]])
@@ -154,7 +160,7 @@ def kb_prompt(kbinfos, max_tokens):
 
     doc2chunks = defaultdict(lambda: {"chunks": [], "meta": []})
     for ck in kbinfos["chunks"][:chunks_num]:
-        doc2chunks[ck["docnm_kwd"]]["chunks"].append(ck["text"])
+        doc2chunks[ck["docnm_kwd"]]["chunks"].append((f"URL: {ck['url']}\n" if "url" in ck else "") + get_text(ck))
         doc2chunks[ck["docnm_kwd"]]["meta"] = docs.get(ck["doc_id"], {})
 
     knowledges = []
@@ -358,7 +364,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
         knowledges = []
         if prompt_config.get("reasoning", False):
-            for think in reasoning(kbinfos, " ".join(questions), chat_mdl, embd_mdl, dialog.tenant_id, kb_names, MAX_SEARCH_LIMIT=3):
+            for think in reasoning(kbinfos, " ".join(questions), chat_mdl, embd_mdl, dialog.tenant_id, kb_names, prompt_config, MAX_SEARCH_LIMIT=3):
                 if isinstance(think, str):
                     thought = think
                     knowledges = [t for t in think.split("\n") if t]
@@ -373,7 +379,11 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                                           top=1024, aggs=False, rerank_mdl=rerank_mdl,
                                           rank_feature=label_question(db, " ".join(questions), kbs)
                                           )
-
+            if prompt_config.get("tavily_api_key"):
+                tav = Tavily(prompt_config["tavily_api_key"])
+                tav_res = tav.retrieve_chunks(" ".join(questions))
+                kbinfos["chunks"].extend(tav_res["chunks"])
+                kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
                 ck = settings.kg_retrievaler.retrieval(" ".join(questions),
                                                   dialog.tenant_id,
@@ -946,7 +956,7 @@ Output:
 
 
 def reasoning(chunk_info: dict, question: str, chat_mdl: LLMBundle, embd_mdl: LLMBundle,
-              tenant_id: str, kb_names: list[str], MAX_SEARCH_LIMIT: int = 3,
+              tenant_id: str, kb_names: list[str], prompt_config, MAX_SEARCH_LIMIT: int = 3,
               top_n: int = 5, similarity_threshold: float = 0.4, vector_similarity_weight: float = 0.3):
     BEGIN_SEARCH_QUERY = "<|begin_search_query|>"
     END_SEARCH_QUERY = "<|end_search_query|>"
@@ -1117,10 +1127,28 @@ def reasoning(chunk_info: dict, question: str, chat_mdl: LLMBundle, embd_mdl: LL
                             truncated_prev_reasoning += '...\n\n'
             truncated_prev_reasoning = truncated_prev_reasoning.strip('\n')
 
+            # Retrieval procedure:
+            # 1. KB search
+            # 2. Web search (optional)
+            # 3. KG search (optional)
             kbinfos = settings.retrievaler.retrieval(search_query, "",embd_mdl, tenant_id, kb_names, 1, top_n,
                                                      similarity_threshold,
                                                      vector_similarity_weight
                                                      )
+            if prompt_config.get("tavily_api_key", "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"):
+                tav = Tavily(prompt_config["tavily_api_key"])
+                tav_res = tav.retrieve_chunks(" ".join(search_query))
+                kbinfos["chunks"].extend(tav_res["chunks"])
+                kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
+            if prompt_config.get("use_kg"):
+                ck = settings.kg_retrievaler.retrieval(search_query,
+                                                       tenant_id,
+                                                       kb_names,
+                                                       embd_mdl,
+                                                       chat_mdl)
+                if ck["content_with_weight"]:
+                    kbinfos["chunks"].insert(0, ck)
+
             # Merge chunk info for citations
             if not chunk_info["chunks"]:
                 for k in chunk_info.keys():
@@ -1142,7 +1170,7 @@ def reasoning(chunk_info: dict, question: str, chat_mdl: LLMBundle, embd_mdl: LL
                     relevant_extraction_prompt.format(
                         prev_reasoning=truncated_prev_reasoning,
                         search_query=search_query,
-                        document="\n".join(kb_prompt(kbinfos, 512))
+                        document="\n".join(kb_prompt(kbinfos, 4096))
                     ),
                     [{"role": "user",
                      "content": f'Now you should analyze each web page and find helpful information based on the current search query "{search_query}" and previous reasoning steps.'}],
