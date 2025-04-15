@@ -20,8 +20,13 @@ class QWenChat(Base):
         import dashscope
         dashscope.api_key = key
         self.model_name = model_name
+        if model_name.lower().find("deepseek") >= 0:
+            super().__init__(key, model_name, "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
     def chat(self, system, history, gen_conf):
+        if self.model_name.lower().find("deepseek") >= 0:
+            return super.chat(system, history, gen_conf)
+
         stream_flag = str(os.environ.get('QWEN_CHAT_BY_STREAM', 'true')).lower() == 'true'
         if not stream_flag:
             from http import HTTPStatus
