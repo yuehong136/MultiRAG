@@ -136,8 +136,9 @@ def register_page(page_path):
     page = module_from_spec(spec)
     sys.modules[module_name] = page
     spec.loader.exec_module(page)
+    sdk_path = "\\sdk\\" if sys.platform.startswith("win") else "/sdk/"
     url_prefix = (
-        f"/api/{API_VERSION}" if "/sdk/" in path else f"/{API_VERSION}/{page_name}"
+        f"/api/{API_VERSION}" if sdk_path in path else f"/{API_VERSION}/{page_name}"
     )
     # 确保模块有 router 属性
     if hasattr(page, 'router'):
