@@ -32,6 +32,8 @@ class Base(ABC):
                 messages=history,
                 **gen_conf
             )
+            if not response.choices:
+                return "", 0
             ans = response.choices[0].message.content.strip()
             if response.choices[0].finish_reason == "length":
                 if is_chinese(ans):
