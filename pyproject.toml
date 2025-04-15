@@ -169,7 +169,7 @@ dependencies = [
 [tool.uv]
 python-install-mirror = "http://maven.datav.com/repository/static/indygreg/python-build-standalone/"
 [[tool.uv.index]]
-url = "http://maven.datav.com/repository/pypi-public/simple"
-trusted-host = "maven.datav.com"
+url = "https://mirrors.aliyun.com/pypi/simple"
+trusted-host = "mirrors.aliyun.com"
 default = true
 

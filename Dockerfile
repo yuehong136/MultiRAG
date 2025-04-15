@@ -139,7 +139,7 @@ COPY workflow workflow
 COPY workflow_v2 workflow_v2
 COPY errors errors
 COPY docker docker
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock alembic.ini ./
 
 # 添加并配置entrypoint
 COPY ./docker/entrypoint.sh ./entrypoint.sh
