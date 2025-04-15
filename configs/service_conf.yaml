@@ -83,12 +83,15 @@ redis:
   host: '127.0.0.1:6379'
 
 user_default_llm:
-  # 默认的LLM（Large Language Model）工厂
   factory: 'ZHIPU-AI'
-  # LLM的API密钥
   api_key: '7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv'
-  # LLM的基础URL
   base_url: ''
+  default_models:
+    chat_model: 'glm-4-airx'
+    embedding_model: 'BAAI/bge-large-zh-v1.5@BAAI'
+    rerank_model: ''
+    asr_model: ''
+    image2text_model: ''
 
 oauth:
   github:
