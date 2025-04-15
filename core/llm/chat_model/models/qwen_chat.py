@@ -25,7 +25,7 @@ class QWenChat(Base):
 
     def chat(self, system, history, gen_conf):
         if self.model_name.lower().find("deepseek") >= 0:
-            return super.chat(system, history, gen_conf)
+            return super().chat(system, history, gen_conf)
 
         stream_flag = str(os.environ.get('QWEN_CHAT_BY_STREAM', 'true')).lower() == 'true'
         if not stream_flag:
@@ -94,4 +94,7 @@ class QWenChat(Base):
         yield tk_count
 
     def chat_streamly(self, system, history, gen_conf):
+        if self.model_name.lower().find("deepseek") >= 0:
+            return super().chat_streamly(system, history, gen_conf)
+
         return self._chat_streamly(system, history, gen_conf)
