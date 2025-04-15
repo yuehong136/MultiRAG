@@ -12,6 +12,7 @@ from core.llm.chat_model.models.hunyuan_chat import HunyuanChat
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
 from core.llm.chat_model.models.openrouter_chat import OpenRouterChat
+from core.llm.chat_model.models.ppio_chat import PPIOChat
 from core.llm.chat_model.models.qwen_chat import QWenChat
 from core.llm.chat_model.models.siliconflow_chat import SILICONFLOWChat
 from core.llm.chat_model.models.spark_chat import SparkChat
@@ -112,6 +113,7 @@ ChatModel = {
     "Gemini": GeminiChat,
     "Doubao": DoubaoChat,
     "XunFei Spark": SparkChat,
+    "PPIO": PPIOChat,
     "OpenAI-API-Compatible": OpenAI_APIChat,
     "VLLM": OpenAI_APIChat,
     "HuggingFace": HuggingFaceChat,
