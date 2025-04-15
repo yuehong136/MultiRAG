@@ -972,6 +972,8 @@ class Dealer:
     def all_tags(self, tenant_id: str, kb_ids: list[str], S=1000):
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
+        if not self.dataStore.indexExist(index_name_one(tenant_id, kb.kb_name), kb_ids[0]):
+            return []
         res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids, ["tag_kwd"])
         return self.dataStore.getAggregation(res, "tag_kwd")
 
