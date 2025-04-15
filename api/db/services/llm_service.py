@@ -80,9 +80,8 @@ class TenantLLMService(CommonService):
             logging.exception(f"TenantLLMService.split_model_name_and_factory got exception: {e}")
         return model_name, None
 
-
     @classmethod
-    def model_instance(cls, db: Session, tenant_id: str, llm_type: str, llm_name: str | None = None, lang: str = "Chinese"):
+    def get_model_config(cls, db: Session, tenant_id, llm_type, llm_name=None):
         tenant = TenantService.get_by_id(db, tenant_id)
         if not tenant:
             raise LookupError("Tenant not found")
@@ -129,6 +128,11 @@ class TenantLLMService(CommonService):
                     if not mdlnm:
                         raise LookupError(f"Type of {llm_type} model is not set.")
                     raise LookupError(f"Model({mdlnm}) not authorized")
+        return model_config
+
+    @classmethod
+    def model_instance(cls, db: Session, tenant_id, llm_type, llm_name=None, lang="Chinese"):
+        model_config = TenantLLMService.get_model_config(db, tenant_id, llm_type, llm_name)
 
         if llm_type == LLMType.EMBEDDING.value:
             if model_config["llm_factory"] not in EmbeddingModel:
@@ -179,6 +183,7 @@ class TenantLLMService(CommonService):
                 model_config["llm_name"],
                 base_url=model_config["api_base"],
             )
+
     @classmethod
     def increase_usage(cls, db: Session, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str | None = None):
         tenant = TenantService.get_by_id(db, tenant_id)
@@ -242,7 +247,6 @@ class TenantLLMService(CommonService):
             return 0
 
         return num
-
 
     @classmethod
     def get_openai_models(cls, db: Session):

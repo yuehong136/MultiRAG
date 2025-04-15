@@ -189,30 +189,37 @@ def label_question(db: Session, question, kbs):
     return tags
 
 
-def chat(dialog, messages, db: Session, stream=True, **kwargs):
+def chat(dialog, messages, db, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
 
     chat_start_ts = timer()
 
-    # Get llm model name and model provider name
-    llm_id, model_provider = TenantLLMService.split_model_name_and_factory(dialog.llm_id)
+    # # Get llm model name and model provider name
+    # llm_id, model_provider = TenantLLMService.split_model_name_and_factory(dialog.llm_id)
+    #
+    # # Get llm model instance by model and provide name
+    # llm = LLMService.query(db, llm_name=llm_id) if not model_provider else LLMService.query(db, llm_name=llm_id,
+    #                                                                                         fid=model_provider)
+    #
+    # if not llm:
+    #     # Model name is provided by tenant, but not system built-in
+    #     llm = TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id) if not model_provider else \
+    #         TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id, llm_factory=model_provider)
+    #     print("TenantLLMService.query result:", llm)
+    #     if not llm:
+    #         # 如果仍然查询不到，则抛出异常
+    #         raise LookupError("LLM(%s) not found" % dialog.llm_id)
+    #     max_tokens = 8192
+    # else:
+    #     max_tokens = llm[0].max_tokens
 
-    # Get llm model instance by model and provide name
-    llm = LLMService.query(db, llm_name=llm_id) if not model_provider else LLMService.query(db, llm_name=llm_id,
-                                                                                            fid=model_provider)
-
-    if not llm:
-        # Model name is provided by tenant, but not system built-in
-        llm = TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id) if not model_provider else \
-            TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id, llm_factory=model_provider)
-        print("TenantLLMService.query result:", llm)
-        if not llm:
-            # 如果仍然查询不到，则抛出异常
-            raise LookupError("LLM(%s) not found" % dialog.llm_id)
-        max_tokens = 8192
+    if llm_id2llm_type(dialog.llm_id) == "image2text":
+        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
     else:
-        max_tokens = llm[0].max_tokens
+        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+
+    max_tokens = llm_model_config.get("max_tokens", 8192)
 
     check_llm_ts = timer()
 
