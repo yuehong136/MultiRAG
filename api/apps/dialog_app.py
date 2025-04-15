@@ -15,6 +15,7 @@ from api.db.db_models import get_db
 from api.db.services.dialog_service import DialogService
 from api.db import StatusEnum
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
@@ -79,7 +80,7 @@ def get_kb_names(kb_ids, db: Session):
     return ids, nms
 
 @router.post('/set', summary="设置对话", response_description="成功设置对话")
-async def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     设置对话
 
@@ -134,7 +135,9 @@ async def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user
             return get_data_error_result(retmsg="Tenant not found!")
 
         kbs = KnowledgebaseService.get_by_ids(db, request.kb_ids)
-        embd_count = len(set([kb.embd_id for kb in kbs]))
+        # embd_count = len(set([kb.embd_id for kb in kbs]))
+        embd_ids = [TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]  # remove vendor suffix for comparison
+        embd_count = len(set(embd_ids))
         if embd_count != 1 and kbs:
             return get_data_error_result(
                 retmsg=f'Datasets use different embedding models: {[kb.embd_id for kb in kbs]}"')
