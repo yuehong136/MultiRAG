@@ -489,6 +489,10 @@ class DocumentService(CommonService):
         })
 
     @classmethod
+    def update_meta_fields(cls, db: Session, doc_id, meta_fields):
+        return cls.update_by_id(db, doc_id, {"meta_fields": meta_fields})
+
+    @classmethod
     def update_progress(cls, db: Session):
         MSG = {
             "raptor": "Start RAPTOR (Recursive Abstractive Processing for Tree-Organized Retrieval).",
