@@ -30,7 +30,7 @@ from api.db.services.document_service import DocumentService
 from api import settings
 from api import utils, validation
 
-from api.db.db_models import init_database_tables as init_web_db, SessionLocal
+from api.db.db_models import init_database_tables as init_web_db, upgrade_database_tables as upgrade_database, SessionLocal
 from api.db.init_data import init_web_data
 from api.versions import get_multirag_version
 import uvicorn
@@ -88,6 +88,7 @@ if __name__ == '__main__':
 
     # 初始化数据库
     init_web_db()
+    upgrade_database()
     init_web_data()
 
     # 初始化运行时配置

@@ -14,9 +14,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, BigInteger, text
 from sqlalchemy.dialects.postgresql import JSONB
-# from api.db.database import BaseModel, engine
-from alembic import command
-from alembic.config import Config
 import typing
 import uuid
 from datetime import datetime, timezone
@@ -26,6 +23,11 @@ from sqlalchemy import create_engine, Column
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from api.utils import decrypt_database_config
+
+from alembic.config import Config
+from alembic import command
+from alembic.script import ScriptDirectory
+from alembic.runtime.migration import MigrationContext
 
 DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
 DATABASE = decrypt_database_config(name=DATABASE_TYPE)
@@ -704,8 +706,6 @@ class WritingChapterContent(BaseModel):
 '''
 没有权限，采用这种方式
 '''
-
-
 def init_database_tables():
     # 需要检查的 schema 名称
     schema_name = 'usr_ai'
@@ -754,3 +754,61 @@ def init_database_tables():
     if create_failed_list:
         logging.error(f"Failed to create tables: {create_failed_list}")
         raise Exception(f"Failed to create tables: {create_failed_list}")
+
+def upgrade_database_tables():
+    logging.info("开始执行数据库结构升级...")
+
+    # 获取项目根目录
+    # 注意：此处假设db_models.py位于api/db目录下，根据实际项目结构调整
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.abspath(os.path.join(current_dir, "..", ".."))
+
+    # Alembic配置文件路径
+    alembic_ini_path = os.path.join(base_dir, "alembic.ini")
+    alembic_path = os.path.join(base_dir, "configs", "alembic")
+
+    if not os.path.exists(alembic_ini_path):
+        error_msg = f"Alembic配置文件不存在: {alembic_ini_path}"
+        logging.error(error_msg)
+        return error_msg
+
+    try:
+        # 创建Alembic配置对象
+        alembic_cfg = Config(alembic_ini_path)
+
+        # 更新SQLAlchemy URL
+        alembic_cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+        alembic_cfg.set_main_option("script_location", alembic_path)
+        # 获取数据库连接
+        with engine.connect() as connection:
+            # 检查schema是否存在
+            schema_name = 'usr_ai'
+
+            # 获取当前数据库版本
+            context = MigrationContext.configure(connection, opts={"version_table_schema": schema_name})
+            current_rev = context.get_current_revision()
+
+            # 获取最新迁移版本
+            script_directory = ScriptDirectory.from_config(alembic_cfg)
+            head_rev = script_directory.get_current_head()
+
+            if current_rev == head_rev:
+                logging.info(f"数据库已经是最新版本: {current_rev}")
+                return "数据库已经是最新版本"
+
+            logging.info(f"当前数据库版本: {current_rev or '无版本'}")
+            logging.info(f"目标数据库版本: {head_rev or '无版本'}")
+
+            # 执行迁移升级到最新版本
+            logging.info("开始执行数据库迁移...")
+            command.upgrade(alembic_cfg, "head")
+
+            logging.info("数据库迁移成功完成")
+            return "数据库迁移成功完成"
+
+    except Exception as e:
+        error_msg = f"数据库迁移过程中发生错误: {str(e)}"
+        logging.error(error_msg)
+        import traceback
+        logging.error(traceback.format_exc())
+        return error_msg
