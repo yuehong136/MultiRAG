@@ -2,7 +2,7 @@ import random
 import sys
 
 from api.db.db_models import SessionLocal, db_connection
-from api.utils.log_utils import initRootLogger
+from api.utils.log_utils import initRootLogger, get_project_base_directory
 from graphrag.general.index import WithCommunity, WithResolution, Dealer
 from graphrag.light.graph_extractor import GraphExtractor as LightKGExt
 from graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
 import tracemalloc
+import signal
 
 from api.db.services.dialog_service import keyword_extraction, question_proposal, content_tagging
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -49,7 +50,7 @@ from api.db.services.task_service import TaskService
 from api.db.services.file2document_service import File2DocumentService
 from api import settings
 from api.versions import get_multirag_version
-from api.utils.file_utils import get_project_base_directory
+# from api.utils.file_utils import get_project_base_directory
 from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, \
     email, tag
 from core.nlp import search, rag_tokenizer
@@ -92,6 +93,35 @@ DONE_TASKS = 0
 FAILED_TASKS = 0
 CURRENT_TASK = None
 
+tracemalloc_started = False
+
+# SIGUSR1 handler: start tracemalloc and take snapshot
+def start_tracemalloc_and_snapshot(signum, frame):
+    global tracemalloc_started
+    if not tracemalloc_started:
+        logging.info("got SIGUSR1, start tracemalloc")
+        tracemalloc.start()
+        tracemalloc_started = True
+    else:
+        logging.info("got SIGUSR1, tracemalloc is already running")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    snapshot_file = f"snapshot_{timestamp}.trace"
+    snapshot_file = os.path.abspath(os.path.join(get_project_base_directory(), "logs", f"{os.getpid()}_snapshot_{timestamp}.trace"))
+
+    snapshot = tracemalloc.take_snapshot()
+    snapshot.dump(snapshot_file)
+    logging.info(f"taken snapshot {snapshot_file}")
+
+# SIGUSR2 handler: stop tracemalloc
+def stop_tracemalloc(signum, frame):
+    global tracemalloc_started
+    if tracemalloc_started:
+        logging.info("go SIGUSR2, stop tracemalloc")
+        tracemalloc.stop()
+        tracemalloc_started = False
+    else:
+        logging.info("got SIGUSR2, tracemalloc not running")
 
 class TaskCanceledException(Exception):
     def __init__(self, msg):
@@ -1105,26 +1135,18 @@ def main():
     logging.info(f'TaskExecutor - MultiRAG version: {get_multirag_version()}')
     settings.init_settings()
     print_multirag_settings()
+    signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)
+    signal.signal(signal.SIGUSR2, stop_tracemalloc)
+    TRACE_MALLOC_ENABLED = int(os.environ.get('TRACE_MALLOC_ENABLED', "0"))
+    if TRACE_MALLOC_ENABLED:
+        start_tracemalloc_and_snapshot(None, None)
+
     background_thread = threading.Thread(target=report_status)
     background_thread.daemon = True
     background_thread.start()
 
-    TRACE_MALLOC_DELTA = int(os.environ.get('TRACE_MALLOC_DELTA', "0"))
-    TRACE_MALLOC_FULL = int(os.environ.get('TRACE_MALLOC_FULL', "0"))
-    if TRACE_MALLOC_DELTA > 0:
-        if TRACE_MALLOC_FULL < TRACE_MALLOC_DELTA:
-            TRACE_MALLOC_FULL = TRACE_MALLOC_DELTA
-        tracemalloc.start()
-        snapshot1 = tracemalloc.take_snapshot()
     while True:
         handle_task()
-        num_tasks = DONE_TASKS + FAILED_TASKS
-        if TRACE_MALLOC_DELTA> 0 and num_tasks > 0 and num_tasks % TRACE_MALLOC_DELTA == 0:
-            snapshot2 = tracemalloc.take_snapshot()
-            analyze_heap(snapshot1, snapshot2, int(num_tasks/TRACE_MALLOC_DELTA), num_tasks % TRACE_MALLOC_FULL == 0)
-            snapshot1 = snapshot2
-            snapshot2 = None
-
 
 if __name__ == "__main__":
     main()
