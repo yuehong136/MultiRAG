@@ -378,10 +378,10 @@ def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(mana
         "knowledge_graph_kwd": ["graph"]
     }
     obj = {"graph": {}, "mind_map": {}}
-    try:
-        sres = settings.retrievaler.search(req, search.index_name(kb.tenant_id, [kb.name]), [kb_id])
-    except Exception as e:
-        logging.exception(e)
+    if not settings.docStoreConn.indexExist(search.index_name(kb.tenant_id, [kb.name])):
+        return get_json_result(data=obj)
+    sres = settings.retrievaler.search(req, search.index_name(kb.tenant_id, [kb.name]), [kb_id])
+    if not len(sres.ids):
         return get_json_result(data=obj)
 
     for id in sres.ids[:1]:
