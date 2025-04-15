@@ -57,14 +57,7 @@ class YoudaoRerank(DefaultRerank):
         for _, t in pairs:
             token_count += num_tokens_from_string(t)
         batch_size = 8
-        res = []
-        for i in range(0, len(pairs), batch_size):
-            scores = self._model.compute_score(pairs[i:i + batch_size], max_length=self._model.max_length)
-            scores = sigmoid(np.array(scores)).tolist()
-            if isinstance(scores, float):
-                res.append(scores)
-            else:
-                res.extend(scores)
+        res = res = self._process_batch(pairs, max_batch_size=batch_size)
         return np.array(res), token_count
 
 if __name__ == '__main__':
