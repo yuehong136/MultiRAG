@@ -444,7 +444,7 @@ POST
         try:
             m, tc = mdl.chat("", [{"role": "user", "content": "Hello! How are you doing!"}],
                              {"temperature": 0.9, 'max_tokens': 500})
-            if m.find("**ERROR**") >= 0:
+            if not tc and m.find("**ERROR**:") >= 0:
                 raise Exception(m)
         except Exception as e:
             msg += f"\nFail to access model({mdl_nm})." + str(e)
