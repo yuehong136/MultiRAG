@@ -134,13 +134,12 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         if not tenant:
             return get_data_error_result(retmsg="Tenant not found!")
 
-        kbs = KnowledgebaseService.get_by_ids(db, request.kb_ids)
+        kbs = KnowledgebaseService.get_by_ids(db, request.kb_ids or [])
         # embd_count = len(set([kb.embd_id for kb in kbs]))
         embd_ids = [TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]  # remove vendor suffix for comparison
         embd_count = len(set(embd_ids))
-        if embd_count != 1 and kbs:
-            return get_data_error_result(
-                retmsg=f'Datasets use different embedding models: {[kb.embd_id for kb in kbs]}"')
+        if embd_count > 1:
+            return get_data_error_result(retmsg=f'Datasets use different embedding models: {[kb.embd_id for kb in kbs]}"')
 
         llm_id = request.llm_id or tenant.llm_id
         if not request.dialog_id:
@@ -148,7 +147,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
                 "id": get_uuid(),
                 "tenant_id": user.id,
                 "name": request.name,
-                "kb_ids": request.kb_ids,
+                "kb_ids": request.kb_ids or [],
                 "description": request.description,
                 "llm_id": llm_id,
                 "llm_setting": request.llm_setting,
