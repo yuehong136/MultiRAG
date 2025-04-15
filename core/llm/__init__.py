@@ -9,6 +9,7 @@ from core.llm.chat_model.models.gpustack_chat import GPUStackChat
 from core.llm.chat_model.models.grop_chat import GroqChat
 from core.llm.chat_model.models.huggingface_chat import HuggingFaceChat
 from core.llm.chat_model.models.hunyuan_chat import HunyuanChat
+from core.llm.chat_model.models.modelscope_chat import ModelScopeChat
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
 from core.llm.chat_model.models.openrouter_chat import OpenRouterChat
@@ -104,6 +105,7 @@ ChatModel = {
     "Xinference": XinferenceChat,
     "SILICONFLOW": SILICONFLOWChat,
     "Anthropic": AnthropicChat,
+    "ModelScope": ModelScopeChat,
     "Groq": GroqChat,
     "DeepSeek": DeepSeekChat,
     "VolcEngine": VolcEngineChat,
