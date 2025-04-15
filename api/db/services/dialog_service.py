@@ -236,9 +236,6 @@ def chat(dialog, messages, db: Session, stream=True, **kwargs):
     attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None
     if "doc_ids" in messages[-1]:
         attachments = messages[-1]["doc_ids"]
-        for m in messages[:-1]:
-            if "doc_ids" in m:
-                attachments.extend(m["doc_ids"])
 
     create_retriever_ts = timer()
 
