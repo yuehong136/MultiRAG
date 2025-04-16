@@ -58,6 +58,12 @@ def show_configs():
             if "api_key" in v:
                 v = copy.deepcopy(v)
                 v["api_key"] = "*" * 8
+            if "access_key" in v:
+                v = copy.deepcopy(v)
+                v["access_key"] = "*" * 8
+            if "secret_key" in v:
+                v = copy.deepcopy(v)
+                v["secret_key"] = "*" * 8
         msg += f"\n\t{k}: {v}"
     # logging.info("默认不展示service_conf.yaml,如有需要,请至 api/utils/__init__.py 解开注释")
     logging.info(msg)

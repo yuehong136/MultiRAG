@@ -20,6 +20,7 @@ MILVUS = get_base_config("milvus", {})
 AZURE = get_base_config("azure", {})
 S3 = get_base_config("s3", {})
 MINIO = decrypt_database_config(name="minio")
+OSS = get_base_config("oss", {})
 try:
     REDIS = decrypt_database_config(name="redis")
 except Exception as e:

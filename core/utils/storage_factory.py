@@ -5,6 +5,7 @@ from core.utils.azure_sas_conn import MultiRAGAzureSasBlob
 from core.utils.azure_spn_conn import MultiRAGAzureSpnBlob
 from core.utils.minio_conn import MultiRAGMinio
 from core.utils.s3_conn import MultiRAGS3
+from core.utils.oss_conn import MultiRAGOSS
 
 
 class Storage(Enum):
@@ -12,6 +13,7 @@ class Storage(Enum):
     AZURE_SPN = 2
     AZURE_SAS = 3
     AWS_S3 = 4
+    OSS = 5
 
 
 class StorageFactory:
@@ -20,6 +22,7 @@ class StorageFactory:
         Storage.AZURE_SPN: MultiRAGAzureSpnBlob,
         Storage.AZURE_SAS: MultiRAGAzureSasBlob,
         Storage.AWS_S3: MultiRAGS3,
+        Storage.OSS: MultiRAGOSS,
     }
 
     @classmethod
