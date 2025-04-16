@@ -339,46 +339,45 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
 
 @router.get('/get', summary="获取文档块")
 def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    获取文档块
-
-    该接口用于获取指定ID的文档块信息。
-
-    参数:
-    - chunk_id: 文档块的唯一标识符
-    - db: 数据库会话对象
-    - user: 当前用户对象
-
-    返回:
-    - 成功时返回包含文档块详细信息的JSON结果
-    - 失败时返回错误信息
-    """
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
-
-        tenant_id = tenants[0].tenant_id
-        kb_ids = KnowledgebaseService.get_kb_ids(db, tenant_id)
-        chunk = settings.docStoreConn.get(chunk_id, search.index_name(db, tenant_id), kb_ids)
+        for tenant in tenants:
+            kb_ids = KnowledgebaseService.get_kb_ids(db, tenant.tenant_id)
+            for kb_id in kb_ids:
+                kb = KnowledgebaseService.get_by_id(db, kb_id)
+                chunk = settings.docStoreConn.get(chunk_id, search.index_name_one(tenant.tenant_id, kb.name), kb_ids)
+                if chunk:
+                    break
         if chunk is None:
             return server_error_response(Exception("Chunk not found"))
-        res = ELASTICSEARCH.get(
-            chunk_id, search.index_name(
-                tenants[0].tenant_id))
-        if not res.get("found"):
-            return server_error_response("Chunk not found")
-        id = res["_id"]
-        res = res["_source"]
-        res["chunk_id"] = id
+
         k = []
         for n in chunk.keys():
-            if re.search(r"(_vec$|_sm_|_tks|_ltks)", n):
+            if re.search(r"(_vec$|_sm_|_tks|_ltks|vector)", n):
                 k.append(n)
         for n in k:
             del chunk[n]
 
-        return get_json_result(data=chunk)
+        def convert_numpy_types(obj):
+            """递归转换对象中的所有 NumPy 类型为 Python 原生类型"""
+            if isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):  # 这会处理所有的浮点类型，包括 float32
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, dict):
+                return {key: convert_numpy_types(value) for key, value in obj.items()}
+            elif isinstance(obj, list) or isinstance(obj, tuple):
+                return [convert_numpy_types(item) for item in obj]
+            else:
+                return obj
+
+        converted_chunk = convert_numpy_types(chunk)
+
+        return get_json_result(data=converted_chunk)
     except Exception as e:
         if str(e).find("NotFoundError") >= 0:
             return get_json_result(data=False, retmsg='Chunk not found!',

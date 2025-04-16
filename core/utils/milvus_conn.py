@@ -566,33 +566,12 @@ class MilvusConnection(DocStoreConnection):
             if not conn.has_collection(collection_name):
                 return None
 
-            filter_expr = f"id == '{chunkId}'"
+            filter_expr = f"pk == '{chunkId}'"
             results = conn.query(collection_name, filter_expr, output_fields=["*"])
 
             if results and len(results) > 0:
                 # 处理特殊字段
                 result = results[0]
-
-                # 处理关键词字段
-                for kwd_field in ["important_kwd", "question_kwd", "entities_kwd"]:
-                    if kwd_field in result and isinstance(result[kwd_field], str):
-                        result[kwd_field] = result[kwd_field].split("###") if result[kwd_field] else []
-
-                # 处理位置信息字段
-                if "position_int" in result and isinstance(result["position_int"], str):
-                    if result["position_int"]:
-                        arr = [int(hex_val, 16) for hex_val in result["position_int"].split('_')]
-                        result["position_int"] = [arr[i:i + 5] for i in range(0, len(arr), 5)]
-                    else:
-                        result["position_int"] = []
-
-                # 处理页码和顶部位置字段
-                for pos_field in ["page_num_int", "top_int"]:
-                    if pos_field in result and isinstance(result[pos_field], str):
-                        if result[pos_field]:
-                            result[pos_field] = [int(hex_val, 16) for hex_val in result[pos_field].split('_')]
-                        else:
-                            result[pos_field] = []
 
                 return result
         except Exception as e:
@@ -2080,49 +2059,49 @@ class MilvusConnection(DocStoreConnection):
             **kwargs,
         )
 
-    def get(
-            self,
-            collection_name: str,
-            ids: list | str | int,
-            output_fields: list[str] | None = None,
-            timeout: float | None = None,
-            partition_names: list[str] | None = None,
-            **kwargs,
-    ) -> list[dict]:
-        if not isinstance(ids, list):
-            ids = [ids]
-
-        if len(ids) == 0:
-            return []
-
-        conn = self._get_connection()
-        try:
-            schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
-        except Exception as ex:
-            logging.error("Failed to describe collection: %s", collection_name)
-            raise ex from ex
-
-        if not output_fields:
-            output_fields = ["*"]
-            vec_field_name = self._get_vector_field_name(schema_dict)
-            if vec_field_name:
-                output_fields.append(vec_field_name)
-
-        expr = self._pack_pks_expr(schema_dict, ids)
-        try:
-            res = conn.query(
-                collection_name,
-                expr=expr,
-                output_fields=output_fields,
-                partition_names=partition_names,
-                timeout=timeout,
-                **kwargs,
-            )
-        except Exception as ex:
-            logging.error("Failed to get collection: %s", collection_name)
-            raise ex from ex
-
-        return res
+    # def get(
+    #         self,
+    #         collection_name: str,
+    #         ids: list | str | int,
+    #         output_fields: list[str] | None = None,
+    #         timeout: float | None = None,
+    #         partition_names: list[str] | None = None,
+    #         **kwargs,
+    # ) -> list[dict]:
+    #     if not isinstance(ids, list):
+    #         ids = [ids]
+    #
+    #     if len(ids) == 0:
+    #         return []
+    #
+    #     conn = self._get_connection()
+    #     try:
+    #         schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
+    #     except Exception as ex:
+    #         logging.error("Failed to describe collection: %s", collection_name)
+    #         raise ex from ex
+    #
+    #     if not output_fields:
+    #         output_fields = ["*"]
+    #         vec_field_name = self._get_vector_field_name(schema_dict)
+    #         if vec_field_name:
+    #             output_fields.append(vec_field_name)
+    #
+    #     expr = self._pack_pks_expr(schema_dict, ids)
+    #     try:
+    #         res = conn.query(
+    #             collection_name,
+    #             expr=expr,
+    #             output_fields=output_fields,
+    #             partition_names=partition_names,
+    #             timeout=timeout,
+    #             **kwargs,
+    #         )
+    #     except Exception as ex:
+    #         logging.error("Failed to get collection: %s", collection_name)
+    #         raise ex from ex
+    #
+    #     return res
 
     def delete(
             self,
