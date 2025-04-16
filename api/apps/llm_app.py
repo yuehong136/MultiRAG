@@ -476,7 +476,7 @@ POST
         try:
             with open(os.path.join(get_project_base_directory(), "assets/imgs/logo.png"), "rb") as f:
                 m, tc = mdl.describe(f.read())
-                if not tc:
+                if not m and not tc:
                     raise Exception(m)
         except Exception as e:
             msg += f"\nFail to access model({llm['llm_name']})." + str(e)
