@@ -22,6 +22,7 @@ import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 from api.apps import app
 # from api.db.database import SessionLocal
@@ -37,23 +38,29 @@ import uvicorn
 from api.utils import show_configs
 from core.settings import print_multirag_settings
 
+stop_event = threading.Event()
 
 def update_progress():
     """
     定期更新文档服务进度
     """
-    while True:
-        time.sleep(6)
+    while not stop_event.is_set():
         db = None
         try:
             db = SessionLocal()  # 创建数据库会话
             DocumentService.update_progress(db)  # 更新文档服务进度
+            stop_event.wait(6)
         except Exception:
             logging.exception("update_progress exception")
         finally:
             if db:
                 db.close()
 
+def signal_handler(sig, frame):
+    logging.info("Received interrupt signal, shutting down...")
+    stop_event.set()
+    time.sleep(1)
+    sys.exit(0)
 
 if __name__ == '__main__':
 #     logging.info(r"""
@@ -110,6 +117,9 @@ if __name__ == '__main__':
     RuntimeConfig.init_env()  # 初始化环境变量
     RuntimeConfig.init_config(JOB_SERVER_HOST=settings.HOST_IP, HTTP_PORT=settings.HOST_PORT)  # 初始化配置
 
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     # 启动进度更新线程
     thread = ThreadPoolExecutor(max_workers=1)
     thread.submit(update_progress)
@@ -122,4 +132,6 @@ if __name__ == '__main__':
                     reload=RuntimeConfig.DEBUG)  # 启动 uvicorn 服务器
     except Exception:
         traceback.print_exc()
+        stop_event.set()
+        time.sleep(1)
         os.kill(os.getpid(), signal.SIGKILL)  # 在异常情况下终止进程
