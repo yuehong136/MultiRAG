@@ -17,7 +17,7 @@ from typing import Generator
 
 from api.db.db_models import APIToken, get_db
 from api.db.services.conversation_service import ConversationService, structure_answer
-from api.db.services.dialog_service import DialogService, chat, ask, label_question
+from api.db.services.dialog_service import DialogService, chat, ask
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle, TenantService
 from api.db import LLMType
@@ -29,6 +29,7 @@ from api.utils.api_utils import get_json_result
 # from api.db.database import get_db
 from api.apps import manager
 from graphrag.general.mind_map_extractor import MindMapExtractor
+from core.app.tag import label_question
 
 
 class SetConversationRequest(BaseModel):

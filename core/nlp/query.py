@@ -73,7 +73,7 @@ class MilvusQueryer:
             tks_w = [(re.sub(r"^[\+-]", "", tk), w) for tk, w in tks_w if tk]
             tks_w = [(tk.strip(), w) for tk, w in tks_w if tk.strip()]
             syns = []
-            for tk, w in tks_w:
+            for tk, w in tks_w[:256]:
                 syn = self.syn.lookup(tk)
                 syn = rag_tokenizer.tokenize(" ".join(syn)).split()
                 keywords.extend(syn)

@@ -8,35 +8,30 @@
 """
 import logging
 import binascii
-import json
 import time
+from functools import partial
 
-import json_repair
-import os
 import re
-from collections import defaultdict
 from copy import deepcopy
 from timeit import default_timer as timer
+from agentic_reasoning import DeepResearcher
 import datetime
 from datetime import timedelta
 from sqlalchemy import asc
 from sqlalchemy.orm import Session
 
 from api.db import LLMType, StatusEnum, ParserType
-# from api.db.database import db_connection
 from api.db.db_models import Dialog, Conversation, db_connection
 from api.db.services.common_service import CommonService
-from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMService, TenantLLMService, LLMBundle
 from api import settings
-from api.utils.file_utils import get_project_base_directory
 from core.app.resume import forbidden_select_fields4resume
+from core.app.tag import label_question
 from core.nlp import extract_between
 from core.nlp.search import index_name
-from core.settings import TAG_FLD
-from core.utils import rmSpace, num_tokens_from_string, encoder
-from graphrag.utils import get_tags_from_cache, set_tags_to_cache
+from core.prompts import kb_prompt, message_fit_in, llm_id2llm_type, keyword_extraction, full_question
+from core.utils import rmSpace, num_tokens_from_string
 from core.utils.tavily_conn import Tavily
 
 
@@ -71,131 +66,131 @@ class DialogService(CommonService):
         return [item.__dict__ for item in results]
 
 
-def message_fit_in(msg, max_length=4000):
-    """
-    检查消息是否能在给定的最大长度内适配，如果超出，则尝试调整消息内容以适应。
-
-    :param msg: 消息列表，每个元素包含角色和内容。
-    :param max_length: 允许的最大长度。
-    :return: 调整后的消息长度和消息列表。
-    """
-
-    def count():
-        """
-        计算消息中所有内容的令牌总数。
-
-        :return: 令牌总数。
-        """
-        nonlocal msg
-        tks_cnts = []
-        for m in msg:
-            tks_cnts.append(
-                {"role": m["role"], "count": num_tokens_from_string(m["content"])})
-        total = 0
-        for m in tks_cnts:
-            total += m["count"]
-        return total
-
-    c = count()
-    if c < max_length:
-        return c, msg
-
-    # 优先保留系统消息
-    # 筛选出消息列表中所有角色为"system"的消息，以及最后一条消息
-    msg_ = [m for m in msg[:-1] if m["role"] == "system"]
-    if len(msg) > 1:
-        msg_.append(msg[-1])
-    msg = msg_
-
-    # 初始化计数器
-    c = count()
-
-    # 如果当前消息长度小于最大长度限制，则返回当前消息长度和消息列表
-    if c < max_length:
-        return c, msg
-
-    # 如果系统消息仍超出长度，尝试截断长消息
-    ll = num_tokens_from_string(msg_[0]["content"])
-    ll2 = num_tokens_from_string(msg_[-1]["content"])
-    if ll / (ll + ll2) > 0.8:
-        m = msg_[0]["content"]
-        m = encoder.decode(encoder.encode(m)[:max_length - ll2])
-        msg[0]["content"] = m
-        return max_length, msg
-
-    m = msg_[1]["content"]
-    m = encoder.decode(encoder.encode(m)[:max_length - ll2])
-    msg[1]["content"] = m
-    return max_length, msg
-
-
-def llm_id2llm_type(llm_id):
-    llm_id, _ = TenantLLMService.split_model_name_and_factory(llm_id)
-    fnm = os.path.join(get_project_base_directory(), "configs")
-    llm_factories = json.load(open(os.path.join(fnm, "llm_factories.json"), "r", encoding="utf-8"))
-    for llm_factory in llm_factories["factory_llm_infos"]:
-        for llm in llm_factory["llm"]:
-            if llm_id == llm["llm_name"]:
-                return llm["mdl_type"].strip(",")[-1]
+# def message_fit_in(msg, max_length=4000):
+#     """
+#     检查消息是否能在给定的最大长度内适配，如果超出，则尝试调整消息内容以适应。
+#
+#     :param msg: 消息列表，每个元素包含角色和内容。
+#     :param max_length: 允许的最大长度。
+#     :return: 调整后的消息长度和消息列表。
+#     """
+#
+#     def count():
+#         """
+#         计算消息中所有内容的令牌总数。
+#
+#         :return: 令牌总数。
+#         """
+#         nonlocal msg
+#         tks_cnts = []
+#         for m in msg:
+#             tks_cnts.append(
+#                 {"role": m["role"], "count": num_tokens_from_string(m["content"])})
+#         total = 0
+#         for m in tks_cnts:
+#             total += m["count"]
+#         return total
+#
+#     c = count()
+#     if c < max_length:
+#         return c, msg
+#
+#     # 优先保留系统消息
+#     # 筛选出消息列表中所有角色为"system"的消息，以及最后一条消息
+#     msg_ = [m for m in msg[:-1] if m["role"] == "system"]
+#     if len(msg) > 1:
+#         msg_.append(msg[-1])
+#     msg = msg_
+#
+#     # 初始化计数器
+#     c = count()
+#
+#     # 如果当前消息长度小于最大长度限制，则返回当前消息长度和消息列表
+#     if c < max_length:
+#         return c, msg
+#
+#     # 如果系统消息仍超出长度，尝试截断长消息
+#     ll = num_tokens_from_string(msg_[0]["content"])
+#     ll2 = num_tokens_from_string(msg_[-1]["content"])
+#     if ll / (ll + ll2) > 0.8:
+#         m = msg_[0]["content"]
+#         m = encoder.decode(encoder.encode(m)[:max_length - ll2])
+#         msg[0]["content"] = m
+#         return max_length, msg
+#
+#     m = msg_[1]["content"]
+#     m = encoder.decode(encoder.encode(m)[:max_length - ll2])
+#     msg[1]["content"] = m
+#     return max_length, msg
 
 
-def kb_prompt(kbinfos, max_tokens):
-    # 兼容不同字段名
-    def get_text(ck):
-        return ck.get("text") or ck.get("content_with_weight") or ""
-
-    knowledges = [get_text(ck) for ck in kbinfos["chunks"]]
-    used_token_count = 0
-    chunks_num = 0
-    for i, c in enumerate(knowledges):
-        used_token_count += num_tokens_from_string(c)
-        chunks_num += 1
-        if max_tokens * 0.97 < used_token_count:
-            knowledges = knowledges[:i]
-            logging.warning(f"Not all the retrieval into prompt: {i+1}/{len(knowledges)}")
-            break
-    with db_connection() as db:
-        docs = DocumentService.get_by_ids(db, [ck["doc_id"] for ck in kbinfos["chunks"][:chunks_num]])
-        docs = {d.id: d.meta_fields for d in docs}
-
-    doc2chunks = defaultdict(lambda: {"chunks": [], "meta": []})
-    for ck in kbinfos["chunks"][:chunks_num]:
-        doc2chunks[ck["docnm_kwd"]]["chunks"].append((f"URL: {ck['url']}\n" if "url" in ck else "") + get_text(ck))
-        doc2chunks[ck["docnm_kwd"]]["meta"] = docs.get(ck["doc_id"], {})
-
-    knowledges = []
-    for nm, cks_meta in doc2chunks.items():
-        txt = f"Document: {nm} \n"
-        for k, v in cks_meta["meta"].items():
-            txt += f"{k}: {v}\n"
-        txt += "Relevant fragments as following:\n"
-        for i, chunk in enumerate(cks_meta["chunks"], 1):
-            txt += f"{i}. {chunk}\n"
-        knowledges.append(txt)
-    return knowledges
-
-
-def label_question(db: Session, question, kbs):
-    tags = None
-    tag_kb_ids = []
-    for kb in kbs:
-        if kb.parser_config.get("tag_kb_ids"):
-            tag_kb_ids.extend(kb.parser_config["tag_kb_ids"])
-    if tag_kb_ids:
-        all_tags = get_tags_from_cache(tag_kb_ids)
-        if not all_tags:
-            all_tags = settings.retrievaler.all_tags_in_portion(kb.tenant_id, tag_kb_ids)
-            set_tags_to_cache(all_tags, tag_kb_ids)
-        else:
-            all_tags = json.loads(all_tags)
-        tag_kbs = KnowledgebaseService.get_by_ids(db, tag_kb_ids)
-        tags = settings.retrievaler.tag_query(question,
-                                              list(set([kb.tenant_id for kb in tag_kbs])),
-                                              tag_kb_ids,
-                                              all_tags,
-                                              kb.parser_config.get("topn_tags", 3)
-                                              )
-    return tags
+# def llm_id2llm_type(llm_id):
+#     llm_id, _ = TenantLLMService.split_model_name_and_factory(llm_id)
+#     fnm = os.path.join(get_project_base_directory(), "configs")
+#     llm_factories = json.load(open(os.path.join(fnm, "llm_factories.json"), "r", encoding="utf-8"))
+#     for llm_factory in llm_factories["factory_llm_infos"]:
+#         for llm in llm_factory["llm"]:
+#             if llm_id == llm["llm_name"]:
+#                 return llm["mdl_type"].strip(",")[-1]
+#
+#
+# def kb_prompt(kbinfos, max_tokens):
+#     # 兼容不同字段名
+#     def get_text(ck):
+#         return ck.get("text") or ck.get("content_with_weight") or ""
+#
+#     knowledges = [get_text(ck) for ck in kbinfos["chunks"]]
+#     used_token_count = 0
+#     chunks_num = 0
+#     for i, c in enumerate(knowledges):
+#         used_token_count += num_tokens_from_string(c)
+#         chunks_num += 1
+#         if max_tokens * 0.97 < used_token_count:
+#             knowledges = knowledges[:i]
+#             logging.warning(f"Not all the retrieval into prompt: {i+1}/{len(knowledges)}")
+#             break
+#     with db_connection() as db:
+#         docs = DocumentService.get_by_ids(db, [ck["doc_id"] for ck in kbinfos["chunks"][:chunks_num]])
+#         docs = {d.id: d.meta_fields for d in docs}
+#
+#     doc2chunks = defaultdict(lambda: {"chunks": [], "meta": []})
+#     for ck in kbinfos["chunks"][:chunks_num]:
+#         doc2chunks[ck["docnm_kwd"]]["chunks"].append((f"URL: {ck['url']}\n" if "url" in ck else "") + get_text(ck))
+#         doc2chunks[ck["docnm_kwd"]]["meta"] = docs.get(ck["doc_id"], {})
+#
+#     knowledges = []
+#     for nm, cks_meta in doc2chunks.items():
+#         txt = f"Document: {nm} \n"
+#         for k, v in cks_meta["meta"].items():
+#             txt += f"{k}: {v}\n"
+#         txt += "Relevant fragments as following:\n"
+#         for i, chunk in enumerate(cks_meta["chunks"], 1):
+#             txt += f"{i}. {chunk}\n"
+#         knowledges.append(txt)
+#     return knowledges
+#
+#
+# def label_question(db: Session, question, kbs):
+#     tags = None
+#     tag_kb_ids = []
+#     for kb in kbs:
+#         if kb.parser_config.get("tag_kb_ids"):
+#             tag_kb_ids.extend(kb.parser_config["tag_kb_ids"])
+#     if tag_kb_ids:
+#         all_tags = get_tags_from_cache(tag_kb_ids)
+#         if not all_tags:
+#             all_tags = settings.retrievaler.all_tags_in_portion(kb.tenant_id, tag_kb_ids)
+#             set_tags_to_cache(all_tags, tag_kb_ids)
+#         else:
+#             all_tags = json.loads(all_tags)
+#         tag_kbs = KnowledgebaseService.get_by_ids(db, tag_kb_ids)
+#         tags = settings.retrievaler.tag_query(question,
+#                                               list(set([kb.tenant_id for kb in tag_kbs])),
+#                                               tag_kb_ids,
+#                                               all_tags,
+#                                               kb.parser_config.get("topn_tags", 3)
+#                                               )
+#     return tags
 
 
 def chat_solo(db, dialog, messages, stream=True):
@@ -364,7 +359,14 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
         knowledges = []
         if prompt_config.get("reasoning", False):
-            for think in reasoning(kbinfos, " ".join(questions), chat_mdl, embd_mdl, dialog.tenant_id, kb_names, prompt_config, MAX_SEARCH_LIMIT=3):
+            # for think in reasoning(kbinfos, " ".join(questions), chat_mdl, embd_mdl, dialog.tenant_id, kb_names, prompt_config, MAX_SEARCH_LIMIT=3):
+            reasoner = DeepResearcher(chat_mdl,
+                                      prompt_config,
+                                      partial(retriever.retrieval, filter_exp="", embd_mdl=embd_mdl, tenant_id=dialog.tenant_id,
+                                              kb_names=kb_names, page=1, page_size=dialog.top_n,
+                                              similarity_threshold=0.2, vector_similarity_weight=0.3))
+
+            for think in reasoner.thinking(kbinfos, " ".join(questions)):
                 if isinstance(think, str):
                     thought = think
                     knowledges = [t for t in think.split("\n") if t]
@@ -644,104 +646,104 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True):
     }
 
 
-def relevant(tenant_id, llm_id, question, contents: list, db: Session):
-    if llm_id2llm_type(llm_id) == "image2text":
-        chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
-    else:
-        chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_id)
-    prompt = """
-        You are a grader assessing relevance of a retrieved document to a user question. 
-        It does not need to be a stringent test. The goal is to filter out erroneous retrievals.
-        If the document contains keyword(s) or semantic meaning related to the user question, grade it as relevant. 
-        Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question.
-        No other words needed except 'yes' or 'no'.
-    """
-    if not contents:
-        return False
-    contents = "Documents: \n" + "   - ".join(contents)
-    contents = f"Question: {question}\n" + contents
-    if num_tokens_from_string(contents) >= chat_mdl.max_length - 4:
-        contents = encoder.decode(encoder.encode(contents)[:chat_mdl.max_length - 4])
-    ans = chat_mdl.chat(prompt, [{"role": "user", "content": contents}], {"temperature": 0.01})
-    if ans.lower().find("yes") >= 0:
-        return True
-    return False
+# def relevant(tenant_id, llm_id, question, contents: list, db: Session):
+#     if llm_id2llm_type(llm_id) == "image2text":
+#         chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
+#     else:
+#         chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_id)
+#     prompt = """
+#         You are a grader assessing relevance of a retrieved document to a user question.
+#         It does not need to be a stringent test. The goal is to filter out erroneous retrievals.
+#         If the document contains keyword(s) or semantic meaning related to the user question, grade it as relevant.
+#         Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question.
+#         No other words needed except 'yes' or 'no'.
+#     """
+#     if not contents:
+#         return False
+#     contents = "Documents: \n" + "   - ".join(contents)
+#     contents = f"Question: {question}\n" + contents
+#     if num_tokens_from_string(contents) >= chat_mdl.max_length - 4:
+#         contents = encoder.decode(encoder.encode(contents)[:chat_mdl.max_length - 4])
+#     ans = chat_mdl.chat(prompt, [{"role": "user", "content": contents}], {"temperature": 0.01})
+#     if ans.lower().find("yes") >= 0:
+#         return True
+#     return False
 
 
-def rewrite(tenant_id, llm_id, question, db: Session):
-    if llm_id2llm_type(llm_id) == "image2text":
-        chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
-    else:
-        chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_id)
-    prompt = """
-        You are an expert at query expansion to generate a paraphrasing of a question.
-        I can't retrieval relevant information from the knowledge base by using user's question directly.     
-        You need to expand or paraphrase user's question by multiple ways such as using synonyms words/phrase, 
-        writing the abbreviation in its entirety, adding some extra descriptions or explanations, 
-        changing the way of expression, translating the original question into another language (English/Chinese), etc. 
-        And return 5 versions of question and one is from translation.
-        Just list the question. No other words are needed.
-    """
-    ans = chat_mdl.chat(prompt, [{"role": "user", "content": question}], {"temperature": 0.8})
-    return ans
+# def rewrite(tenant_id, llm_id, question, db: Session):
+#     if llm_id2llm_type(llm_id) == "image2text":
+#         chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
+#     else:
+#         chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_id)
+#     prompt = """
+#         You are an expert at query expansion to generate a paraphrasing of a question.
+#         I can't retrieval relevant information from the knowledge base by using user's question directly.
+#         You need to expand or paraphrase user's question by multiple ways such as using synonyms words/phrase,
+#         writing the abbreviation in its entirety, adding some extra descriptions or explanations,
+#         changing the way of expression, translating the original question into another language (English/Chinese), etc.
+#         And return 5 versions of question and one is from translation.
+#         Just list the question. No other words are needed.
+#     """
+#     ans = chat_mdl.chat(prompt, [{"role": "user", "content": question}], {"temperature": 0.8})
+#     return ans
 
 
-def keyword_extraction(chat_mdl, content, topn=3):
-    prompt = f"""
-Role: You're a text analyzer. 
-Task: extract the most important keywords/phrases of a given piece of text content.
-Requirements: 
-  - Summarize the text content, and give top {topn} important keywords/phrases.
-  - The keywords MUST be in language of the given piece of text content.
-  - The keywords are delimited by ENGLISH COMMA.
-  - Keywords ONLY in output.
+# def keyword_extraction(chat_mdl, content, topn=3):
+#     prompt = f"""
+# Role: You're a text analyzer.
+# Task: extract the most important keywords/phrases of a given piece of text content.
+# Requirements:
+#   - Summarize the text content, and give top {topn} important keywords/phrases.
+#   - The keywords MUST be in language of the given piece of text content.
+#   - The keywords are delimited by ENGLISH COMMA.
+#   - Keywords ONLY in output.
+#
+# ### Text Content
+# {content}
+#
+# """
+#     msg = [
+#         {"role": "system", "content": prompt},
+#         {"role": "user", "content": "Output: "}
+#     ]
+#     _, msg = message_fit_in(msg, chat_mdl.max_length)
+#     kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.2})
+#     if isinstance(kwd, tuple):
+#         kwd = kwd[0]
+#     kwd = re.sub(r"<think>.*</think>", "", kwd, flags=re.DOTALL)
+#     if kwd.find("**ERROR**") >= 0:
+#         return ""
+#     return kwd
 
-### Text Content 
-{content}
 
-"""
-    msg = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": "Output: "}
-    ]
-    _, msg = message_fit_in(msg, chat_mdl.max_length)
-    kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.2})
-    if isinstance(kwd, tuple):
-        kwd = kwd[0]
-    kwd = re.sub(r"<think>.*</think>", "", kwd, flags=re.DOTALL)
-    if kwd.find("**ERROR**") >= 0:
-        return ""
-    return kwd
-
-
-def question_proposal(chat_mdl, content, topn=3):
-    prompt = f"""
-Role: You're a text analyzer. 
-Task:  propose {topn} questions about a given piece of text content.
-Requirements: 
-  - Understand and summarize the text content, and propose top {topn} important questions.
-  - The questions SHOULD NOT have overlapping meanings.
-  - The questions SHOULD cover the main content of the text as much as possible.
-  - The questions MUST be in language of the given piece of text content.
-  - One question per line.
-  - Question ONLY in output.
-
-### Text Content 
-{content}
-
-"""
-    msg = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": "Output: "}
-    ]
-    _, msg = message_fit_in(msg, chat_mdl.max_length)
-    kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.2})
-    if isinstance(kwd, tuple):
-        kwd = kwd[0]
-    kwd = re.sub(r"<think>.*</think>", "", kwd, flags=re.DOTALL)
-    if kwd.find("**ERROR**") >= 0:
-        return ""
-    return kwd
+# def question_proposal(chat_mdl, content, topn=3):
+#     prompt = f"""
+# Role: You're a text analyzer.
+# Task:  propose {topn} questions about a given piece of text content.
+# Requirements:
+#   - Understand and summarize the text content, and propose top {topn} important questions.
+#   - The questions SHOULD NOT have overlapping meanings.
+#   - The questions SHOULD cover the main content of the text as much as possible.
+#   - The questions MUST be in language of the given piece of text content.
+#   - One question per line.
+#   - Question ONLY in output.
+#
+# ### Text Content
+# {content}
+#
+# """
+#     msg = [
+#         {"role": "system", "content": prompt},
+#         {"role": "user", "content": "Output: "}
+#     ]
+#     _, msg = message_fit_in(msg, chat_mdl.max_length)
+#     kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.2})
+#     if isinstance(kwd, tuple):
+#         kwd = kwd[0]
+#     kwd = re.sub(r"<think>.*</think>", "", kwd, flags=re.DOTALL)
+#     if kwd.find("**ERROR**") >= 0:
+#         return ""
+#     return kwd
 
 
 def full_question(db: Session, tenant_id, llm_id, messages):
@@ -893,66 +895,66 @@ def ask(db: Session, question, kb_ids, tenant_id):
     yield decorate_answer(answer)
 
 
-def content_tagging(chat_mdl, content, all_tags, examples, topn=3):
-    prompt = f"""
-Role: You're a text analyzer. 
-
-Task: Tag (put on some labels) to a given piece of text content based on the examples and the entire tag set.
-
-Steps:: 
-  - Comprehend the tag/label set.
-  - Comprehend examples which all consist of both text content and assigned tags with relevance score in format of JSON.
-  - Summarize the text content, and tag it with top {topn} most relevant tags from the set of tag/label and the corresponding relevance score.
-
-Requirements
-  - The tags MUST be from the tag set.
-  - The output MUST be in JSON format only, the key is tag and the value is its relevance score.
-  - The relevance score must be range from 1 to 10.
-  - Keywords ONLY in output.
-
-# TAG SET
-{", ".join(all_tags)}
-
-"""
-    for i, ex in enumerate(examples):
-        prompt += """
-# Examples {}
-### Text Content
-{}
-
-Output:
-{}
-
-        """.format(i, ex["content"], json.dumps(ex[TAG_FLD], indent=2, ensure_ascii=False))
-
-    prompt += f"""
-# Real Data
-### Text Content
-{content}
-
-"""
-    msg = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": "Output: "}
-    ]
-    _, msg = message_fit_in(msg, chat_mdl.max_length)
-    kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.5})
-    if isinstance(kwd, tuple):
-        kwd = kwd[0]
-    kwd = re.sub(r"<think>.*</think>", "", kwd, flags=re.DOTALL)
-    if kwd.find("**ERROR**") >= 0:
-        raise Exception(kwd)
-
-    try:
-        return json_repair.loads(kwd)
-    except json_repair.JSONDecodeError:
-        try:
-            result = kwd.replace(prompt[:-1], '').replace('user', '').replace('model', '').strip()
-            result = '{' + result.split('{')[1].split('}')[0] + '}'
-            return json_repair.loads(result)
-        except Exception as e:
-            logging.exception(f"JSON parsing error: {result} -> {e}")
-            raise e
+# def content_tagging(chat_mdl, content, all_tags, examples, topn=3):
+#     prompt = f"""
+# Role: You're a text analyzer.
+#
+# Task: Tag (put on some labels) to a given piece of text content based on the examples and the entire tag set.
+#
+# Steps::
+#   - Comprehend the tag/label set.
+#   - Comprehend examples which all consist of both text content and assigned tags with relevance score in format of JSON.
+#   - Summarize the text content, and tag it with top {topn} most relevant tags from the set of tag/label and the corresponding relevance score.
+#
+# Requirements
+#   - The tags MUST be from the tag set.
+#   - The output MUST be in JSON format only, the key is tag and the value is its relevance score.
+#   - The relevance score must be range from 1 to 10.
+#   - Keywords ONLY in output.
+#
+# # TAG SET
+# {", ".join(all_tags)}
+#
+# """
+#     for i, ex in enumerate(examples):
+#         prompt += """
+# # Examples {}
+# ### Text Content
+# {}
+#
+# Output:
+# {}
+#
+#         """.format(i, ex["content"], json.dumps(ex[TAG_FLD], indent=2, ensure_ascii=False))
+#
+#     prompt += f"""
+# # Real Data
+# ### Text Content
+# {content}
+#
+# """
+#     msg = [
+#         {"role": "system", "content": prompt},
+#         {"role": "user", "content": "Output: "}
+#     ]
+#     _, msg = message_fit_in(msg, chat_mdl.max_length)
+#     kwd = chat_mdl.chat(prompt, msg[1:], {"temperature": 0.5})
+#     if isinstance(kwd, tuple):
+#         kwd = kwd[0]
+#     kwd = re.sub(r"<think>.*</think>", "", kwd, flags=re.DOTALL)
+#     if kwd.find("**ERROR**") >= 0:
+#         raise Exception(kwd)
+#
+#     try:
+#         return json_repair.loads(kwd)
+#     except json_repair.JSONDecodeError:
+#         try:
+#             result = kwd.replace(prompt[:-1], '').replace('user', '').replace('model', '').strip()
+#             result = '{' + result.split('{')[1].split('}')[0] + '}'
+#             return json_repair.loads(result)
+#         except Exception as e:
+#             logging.exception(f"JSON parsing error: {result} -> {e}")
+#             raise e
 
 
 def reasoning(chunk_info: dict, question: str, chat_mdl: LLMBundle, embd_mdl: LLMBundle,

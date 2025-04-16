@@ -19,9 +19,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db
-from api.db.services.dialog_service import keyword_extraction, label_question
 from core.app.qa import rmPrefix, beAdoc
+from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
+from core.prompts import keyword_extraction
 from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService

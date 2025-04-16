@@ -233,9 +233,21 @@
                     "mdl_type": "chat"
                 },
                 {
-                    "llm_name": "glm-zero-preview",
+                    "llm_name": "glm-z1-air",
                     "tags": "LLM,CHAT,",
-                    "max_tokens": 16385,
+                    "max_tokens": 32768,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "glm-z1-airx",
+                    "tags": "LLM,CHAT,",
+                    "max_tokens": 32768,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "glm-z1-flash",
+                    "tags": "LLM,CHAT,",
+                    "max_tokens": 32768,
                     "mdl_type": "chat"
                 },
                 {

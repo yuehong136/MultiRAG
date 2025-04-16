@@ -6,6 +6,8 @@ from api.utils.log_utils import initRootLogger, get_project_base_directory
 from graphrag.general.index import WithCommunity, WithResolution, Dealer
 from graphrag.light.graph_extractor import GraphExtractor as LightKGExt
 from graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
+from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
+from core.prompts import keyword_extraction, question_proposal, content_tagging
 
 CONSUMER_NO = "0" if len(sys.argv) < 2 else sys.argv[1]
 CONSUMER_NAME = "task_executor_" + CONSUMER_NO
@@ -21,7 +23,6 @@ for module in ["sqlalchemy"]:
     module_logger.handlers.clear()
     module_logger.propagate = True
 from datetime import datetime
-from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
 import json
 import os
 import xxhash
@@ -43,7 +44,6 @@ from timeit import default_timer as timer
 import tracemalloc
 import signal
 
-from api.db.services.dialog_service import keyword_extraction, question_proposal, content_tagging
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db import LLMType, ParserType, TaskStatus
 from api.db.services.document_service import DocumentService
