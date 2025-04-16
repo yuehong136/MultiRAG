@@ -436,7 +436,6 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     # 如果消息长度小于2，说明函数可能存在bug，需要进行调试
     assert len(msg) >= 2, f"message_fit_in has bug: {msg}"
     prompt = msg[0]["content"]
-    prompt += "\n\n### Query:\n%s" % " ".join(questions)
 
     # 调整生成配置中的最大token数
     if "max_tokens" in gen_conf:
@@ -445,7 +444,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             max_tokens - used_token_count)
 
     def decorate_answer(answer):
-        nonlocal prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts
+        nonlocal prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions
 
         refs = []
         ans = answer.split("</think>")
@@ -489,6 +488,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         retrieval_time_cost = (retrieval_ts - generate_keyword_ts) * 1000
         generate_result_time_cost = (finish_chat_ts - retrieval_ts) * 1000
 
+        prompt += "\n\n### Query:\n%s" % " ".join(questions)
         prompt = f"{prompt}\n\n - Total: {total_time_cost:.1f}ms\n  - Check LLM: {check_llm_time_cost:.1f}ms\n  - Create retriever: {create_retriever_time_cost:.1f}ms\n  - Bind embedding: {bind_embedding_time_cost:.1f}ms\n  - Bind LLM: {bind_llm_time_cost:.1f}ms\n  - Tune question: {refine_question_time_cost:.1f}ms\n  - Bind reranker: {bind_reranker_time_cost:.1f}ms\n  - Generate keyword: {generate_keyword_time_cost:.1f}ms\n  - Retrieval: {retrieval_time_cost:.1f}ms\n  - Generate answer: {generate_result_time_cost:.1f}ms"
         return {"answer": think + answer, "reference": refs, "prompt": re.sub(r"\n", "  \n", prompt), "created_at": time.time()}
 
