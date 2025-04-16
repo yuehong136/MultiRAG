@@ -59,6 +59,7 @@ oss:
   endpoint_url: 'http://oss-cn-hangzhou.aliyuncs.com'
   region: 'cn-hangzhou'
   bucket: 'bucket_name'
+  prefix_path: 'prefix_path'
 
 milvus:
   # Milvus服务的主机地址

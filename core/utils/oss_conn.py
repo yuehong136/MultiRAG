@@ -33,6 +33,7 @@ class MultiRAGOSS(object):
         self.endpoint_url = self.oss_config.get('endpoint_url', None)
         self.region = self.oss_config.get('region', None)
         self.bucket = self.oss_config.get('bucket', None)
+        self.prefix_path = self.oss_config.get('prefix_path', None)
         self.__open__()
 
     @staticmethod
@@ -41,6 +42,15 @@ class MultiRAGOSS(object):
             # If there is a default bucket, use the default bucket
             actual_bucket = self.bucket if self.bucket else bucket
             return method(self, actual_bucket, *args, **kwargs)
+        return wrapper
+
+    @staticmethod
+    def use_prefix_path(method):
+        def wrapper(self, bucket, fnm, *args, **kwargs):
+            # If the prefix path is set, use the prefix path
+            fnm = f"{self.prefix_path}/{fnm}" if self.prefix_path else fnm
+            return method(self, bucket, fnm, *args, **kwargs)
+
         return wrapper
 
     def __open__(self):
@@ -79,8 +89,9 @@ class MultiRAGOSS(object):
         return exists
 
     def health(self):
-        bucket, fnm, binary = "txtxtxtxt1", "txtxtxtxt1", b"_t@@@1"
-
+        bucket = self.bucket
+        fnm = "txtxtxtxt1"
+        fnm, binary = f"{self.prefix_path}/{fnm}" if self.prefix_path else fnm, b"_t@@@1"
         if not self.bucket_exists(bucket):
             self.conn.create_bucket(Bucket=bucket)
             logging.debug(f"create bucket {bucket} ********")
@@ -94,6 +105,7 @@ class MultiRAGOSS(object):
     def list(self, bucket, dir, recursive=True):
         return []
 
+    @use_prefix_path
     @use_default_bucket
     def put(self, bucket, fnm, binary):
         logging.debug(f"bucket name {bucket}; filename :{fnm}:")
@@ -110,6 +122,7 @@ class MultiRAGOSS(object):
                 self.__open__()
                 time.sleep(1)
 
+    @use_prefix_path
     @use_default_bucket
     def rm(self, bucket, fnm):
         try:
@@ -117,6 +130,7 @@ class MultiRAGOSS(object):
         except Exception:
             logging.exception(f"Fail rm {bucket}/{fnm}")
 
+    @use_prefix_path
     @use_default_bucket
     def get(self, bucket, fnm):
         for _ in range(1):
@@ -130,6 +144,7 @@ class MultiRAGOSS(object):
                 time.sleep(1)
         return
 
+    @use_prefix_path
     @use_default_bucket
     def obj_exist(self, bucket, fnm):
         try:
@@ -141,6 +156,7 @@ class MultiRAGOSS(object):
             else:
                 raise
 
+    @use_prefix_path
     @use_default_bucket
     def get_presigned_url(self, bucket, fnm, expires):
         for _ in range(10):
