@@ -1,6 +1,7 @@
 from core.llm.chat_model.models.anthropic_chat import AnthropicChat
 from core.llm.chat_model.models.azure_chat import AzureChat
 from core.llm.chat_model.models.baiduyiyan_chat import BaiduYiyanChat
+from core.llm.chat_model.models.cohere_chat import CoHereChat
 from core.llm.chat_model.models.deepseek_chat import DeepSeekChat
 from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gemini_chat import GeminiChat
@@ -28,6 +29,7 @@ from core.llm.cv_model.models.openai_api_cv import OpenAI_APICV
 from core.llm.cv_model.models.qwen_cv import QWenCV
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
+from core.llm.embedding_model.cohere_embed import CoHereEmbed
 from core.llm.embedding_model.default_embedding import DefaultEmbedding
 from core.llm.embedding_model.gpustack_embed import GPUStackEmbed
 from core.llm.embedding_model.huggingface_embed import HuggingFaceEmbed
@@ -41,6 +43,7 @@ from core.llm.embedding_model.volcengine_embed import VolcEngineEmbed
 from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
+from core.llm.rerank_model.cohere_rerank import CoHereRerank
 from core.llm.rerank_model.default_rerank import DefaultRerank
 from core.llm.rerank_model.gpustack_rerank import GPUStackRerank
 from core.llm.rerank_model.jina_rerank import JinaRerank
@@ -77,6 +80,8 @@ EmbeddingModel = {
     "SILICONFLOW": SILICONFLOWEmbed,
     "BAAI": DefaultEmbedding,
     "OpenAI-API-Compatible": OpenAI_APIEmbed,
+    "VLLM": OpenAI_APIEmbed,
+    "Cohere": CoHereEmbed,
     "VolcEngine": VolcEngineEmbed,
     "HuggingFace": HuggingFaceEmbed
 }
@@ -88,11 +93,9 @@ CvModel = {
     "Xinference": XinferenceCV,
     "Tongyi-Qianwen": QWenCV,
     "ZHIPU-AI": Zhipu4V,
-    # "Moonshot": LocalCV,
     'Gemini':GeminiCV,
     "OpenAI-API-Compatible": OpenAI_APICV,
-    # 'OpenRouter':OpenRouterCV,
-    # "LocalAI":LocalAICV
+    "VLLM": OpenAI_APICV
 }
 
 
@@ -118,6 +121,7 @@ ChatModel = {
     "PPIO": PPIOChat,
     "OpenAI-API-Compatible": OpenAI_APIChat,
     "VLLM": OpenAI_APIChat,
+    "Cohere": CoHereChat,
     "HuggingFace": HuggingFaceChat,
     "GPUStack": GPUStackChat
 }
@@ -127,6 +131,8 @@ RerankModel = {
     "Jina": JinaRerank,
     "LocalAI": LocalAIRerank,
     "OpenAI-API-Compatible": OpenAI_APIRerank,
+    "VLLM": CoHereRerank,
+    "Cohere": CoHereRerank,
     "Youdao": YoudaoRerank,
     "Xinference": XInferenceRerank,
     "Tongyi-Qianwen": QWenRerank,
