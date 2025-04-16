@@ -609,13 +609,20 @@ def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depe
     - 成功时返回包含操作结果的JSON结果
     - 失败时返回错误信息
     """
+
+
+    req = request.model_dump()
     try:
-        tenant_id = DocumentService.get_tenant_id(db, request.doc_id)
-        if not tenant_id:
-            return get_data_error_result(retmsg="Tenant not found!")
-        if not ELASTICSEARCH.upsert([{"id": i, "available_int": request.available_int} for i in request.chunk_ids],
-                                    search.index_name(tenant_id)):
-            return get_data_error_result(retmsg="Index updating failure")
+        doc = DocumentService.get_by_id(db, req["doc_id"])
+        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        if not doc:
+            return get_data_error_result(retmsg="Document not found!")
+        for cid in req["chunk_ids"]:
+            if not settings.docStoreConn.update({"pk": cid},
+                                                {"available_int": int(req["available_int"])},
+                                                search.index_name_one(DocumentService.get_tenant_id(db, req["doc_id"]), kb.name),
+                                                doc.kb_id):
+                return get_data_error_result(retmsg="Index updating failure")
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
