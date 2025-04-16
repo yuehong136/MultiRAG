@@ -87,8 +87,9 @@ class DefaultRerank(Base):
 
     def _compute_batch_scores(self, batch_pairs, max_length=None):
         if max_length is None:
-            max_length = self._model.max_length
-        scores = self._model.compute_score(batch_pairs, max_length=max_length)
+            scores = self._model.compute_score(batch_pairs)
+        else:
+            scores = self._model.compute_score(batch_pairs, max_length=max_length)
         scores = sigmoid(np.array(scores)).tolist()
         return scores
 
