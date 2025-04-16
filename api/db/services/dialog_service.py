@@ -30,7 +30,7 @@ from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
 from core.nlp import extract_between
 from core.nlp.search import index_name
-from core.prompts import kb_prompt, message_fit_in, llm_id2llm_type, keyword_extraction, full_question
+from core.prompts import kb_prompt, message_fit_in, llm_id2llm_type, keyword_extraction, full_question, chunks_format
 from core.utils import rmSpace, num_tokens_from_string
 from core.utils.tavily_conn import Tavily
 
@@ -886,7 +886,7 @@ def ask(db: Session, question, kb_ids, tenant_id):
 
         if answer.lower().find("invalid key") >= 0 or answer.lower().find("invalid api") >= 0:
             answer += " Please set LLM API-Key in 'User Setting -> Model providers -> API-Key'"
-        return {"answer": answer, "reference": refs}
+        return {"answer": answer, "reference": chunks_format(refs)}
 
     answer = ""
     for ans in chat_mdl.chat_streamly(prompt, msg, {"temperature": 0.1}):
@@ -957,236 +957,236 @@ def ask(db: Session, question, kb_ids, tenant_id):
 #             raise e
 
 
-def reasoning(chunk_info: dict, question: str, chat_mdl: LLMBundle, embd_mdl: LLMBundle,
-              tenant_id: str, kb_names: list[str], prompt_config, MAX_SEARCH_LIMIT: int = 6,
-              top_n: int = 5, similarity_threshold: float = 0.4, vector_similarity_weight: float = 0.3):
-    BEGIN_SEARCH_QUERY = "<|begin_search_query|>"
-    END_SEARCH_QUERY = "<|end_search_query|>"
-    BEGIN_SEARCH_RESULT = "<|begin_search_result|>"
-    END_SEARCH_RESULT = "<|end_search_result|>"
-
-    def rm_query_tags(line):
-        pattern = re.escape(BEGIN_SEARCH_QUERY) + r"(.*?)" + re.escape(END_SEARCH_QUERY)
-        return re.sub(pattern, "", line)
-
-    def rm_result_tags(line):
-        pattern = re.escape(BEGIN_SEARCH_RESULT) + r"(.*?)" + re.escape(END_SEARCH_RESULT)
-        return re.sub(pattern, "", line)
-
-    reason_prompt = (
-        "You are a reasoning assistant with the ability to perform dataset searches to help "
-        "you answer the user's question accurately. You have special tools:\n\n"
-        f"- To perform a search: write {BEGIN_SEARCH_QUERY} your query here {END_SEARCH_QUERY}.\n"
-        f"Then, the system will search and analyze relevant content, then provide you with helpful information in the format {BEGIN_SEARCH_RESULT} ...search results... {END_SEARCH_RESULT}.\n\n"
-        f"You can repeat the search process multiple times if necessary. The maximum number of search attempts is limited to {MAX_SEARCH_LIMIT}.\n\n"
-        "Once you have all the information you need, continue your reasoning.\n\n"
-        "-- Example 1 --\n"  ########################################
-        "Question: \"Are both the directors of Jaws and Casino Royale from the same country?\"\n"
-        "Assistant:\n"
-        f"    {BEGIN_SEARCH_QUERY}Who is the director of Jaws?{END_SEARCH_QUERY}\n\n"
-        "User:\n"
-        f"    {BEGIN_SEARCH_RESULT}\nThe director of Jaws is Steven Spielberg...\n{END_SEARCH_RESULT}\n\n"
-        "Continues reasoning with the new information.\n"
-        "Assistant:\n"
-        f"    {BEGIN_SEARCH_QUERY}Where is Steven Spielberg from?{END_SEARCH_QUERY}\n\n"
-        "User:\n"
-        f"    {BEGIN_SEARCH_RESULT}\nSteven Allan Spielberg is an American filmmaker...\n{END_SEARCH_RESULT}\n\n"
-        "Continues reasoning with the new information...\n\n"
-        "Assistant:\n"
-        f"    {BEGIN_SEARCH_QUERY}Who is the director of Casino Royale?{END_SEARCH_QUERY}\n\n"
-        "User:\n"
-        f"    {BEGIN_SEARCH_RESULT}\nCasino Royale is a 2006 spy film directed by Martin Campbell...\n{END_SEARCH_RESULT}\n\n"
-        "Continues reasoning with the new information...\n\n"
-        "Assistant:\n"
-        f"    {BEGIN_SEARCH_QUERY}Where is Martin Campbell from?{END_SEARCH_QUERY}\n\n"
-        "User:\n"
-        f"    {BEGIN_SEARCH_RESULT}\nMartin Campbell (born 24 October 1943) is a New Zealand film and television director...\n{END_SEARCH_RESULT}\n\n"
-        "Continues reasoning with the new information...\n\n"
-        "Assistant:\nIt's enough to answer the question\n"
-
-        "-- Example 2 --\n"  #########################################
-        "Question: \"When was the founder of craigslist born?\"\n"
-        "Assistant:\n"
-        f"    {BEGIN_SEARCH_QUERY}Who was the founder of craigslist?{END_SEARCH_QUERY}\n\n"
-        "User:\n"
-        f"    {BEGIN_SEARCH_RESULT}\nCraigslist was founded by Craig Newmark...\n{END_SEARCH_RESULT}\n\n"
-        "Continues reasoning with the new information.\n"
-        "Assistant:\n"
-        f"    {BEGIN_SEARCH_QUERY} When was Craig Newmark born?{END_SEARCH_QUERY}\n\n"
-        "User:\n"
-        f"    {BEGIN_SEARCH_RESULT}\nCraig Newmark was born on December 6, 1952...\n{END_SEARCH_RESULT}\n\n"
-        "Continues reasoning with the new information...\n\n"
-        "Assistant:\nIt's enough to answer the question\n"
-        "**Remember**:\n"
-        f"- You have a dataset to search, so you just provide a proper search query.\n"
-        f"- Use {BEGIN_SEARCH_QUERY} to request a dataset search and end with {END_SEARCH_QUERY}.\n"
-        "- The language of query MUST be as the same as 'Question' or 'search result'.\n"
-        "- When done searching, continue your reasoning.\n\n"
-        'Please answer the following question. You should think step by step to solve it.\n\n'
-    )
-
-    relevant_extraction_prompt = """**Task Instruction:**
-
-    You are tasked with reading and analyzing web pages based on the following inputs: **Previous Reasoning Steps**, **Current Search Query**, and **Searched Web Pages**. Your objective is to extract relevant and helpful information for **Current Search Query** from the **Searched Web Pages** and seamlessly integrate this information into the **Previous Reasoning Steps** to continue reasoning for the original question.
-
-    **Guidelines:**
-
-    1. **Analyze the Searched Web Pages:**
-    - Carefully review the content of each searched web page.
-    - Identify factual information that is relevant to the **Current Search Query** and can aid in the reasoning process for the original question.
-
-    2. **Extract Relevant Information:**
-    - Select the information from the Searched Web Pages that directly contributes to advancing the **Previous Reasoning Steps**.
-    - Ensure that the extracted information is accurate and relevant.
-
-    3. **Output Format:**
-    - **If the web pages provide helpful information for current search query:** Present the information beginning with `**Final Information**` as shown below.
-    - The language of query **MUST BE** as the same as 'Search Query' or 'Web Pages'.\n"
-    **Final Information**
-
-    [Helpful information]
-
-    - **If the web pages do not provide any helpful information for current search query:** Output the following text.
-
-    **Final Information**
-
-    No helpful information found.
-
-    **Inputs:**
-    - **Previous Reasoning Steps:**  
-    {prev_reasoning}
-
-    - **Current Search Query:**  
-    {search_query}
-
-    - **Searched Web Pages:**  
-    {document}
-
-    """
-
-    executed_search_queries = []
-    msg_hisotry = [{"role": "user", "content": f'Question:\"{question}\"\n'}]
-    all_reasoning_steps = []
-    think = "<think>"
-    for ii in range(MAX_SEARCH_LIMIT + 1):
-        if ii == MAX_SEARCH_LIMIT - 1:
-            summary_think = f"\n{BEGIN_SEARCH_RESULT}\nThe maximum search limit is exceeded. You are not allowed to search.\n{END_SEARCH_RESULT}\n"
-            yield {"answer": think + summary_think + "</think>", "reference": {}, "audio_binary": None}
-            all_reasoning_steps.append(summary_think)
-            msg_hisotry.append({"role": "assistant", "content": summary_think})
-            break
-
-        query_think = ""
-        if msg_hisotry[-1]["role"] != "user":
-            msg_hisotry.append({"role": "user", "content": "Continues reasoning with the new information.\n"})
-        else:
-            msg_hisotry[-1]["content"] += "\n\nContinues reasoning with the new information.\n"
-        for ans in chat_mdl.chat_streamly(reason_prompt, msg_hisotry, {"temperature": 0.7}):
-            ans = re.sub(r"<think>.*</think>", "", ans, flags=re.DOTALL)
-            if not ans:
-                continue
-            query_think = ans
-            yield {"answer": think + rm_query_tags(query_think) + "</think>", "reference": {}, "audio_binary": None}
-
-        think += rm_query_tags(query_think)
-        all_reasoning_steps.append(query_think)
-        queries = extract_between(query_think, BEGIN_SEARCH_QUERY, END_SEARCH_QUERY)
-        if not queries:
-            if ii > 0:
-                break
-            queries = [question]
-
-        for search_query in queries:
-            logging.info(f"[THINK]Query: {ii}. {search_query}")
-            msg_hisotry.append({"role": "assistant", "content": search_query})
-            think += f"\n\n> {ii + 1}. {search_query}\n\n"
-            yield {"answer": think + "</think>", "reference": {}, "audio_binary": None}
-
-            summary_think = ""
-            # The search query has been searched in previous steps.
-            if search_query in executed_search_queries:
-                summary_think = f"\n{BEGIN_SEARCH_RESULT}\nYou have searched this query. Please refer to previous results.\n{END_SEARCH_RESULT}\n"
-                yield {"answer": think + summary_think + "</think>", "reference": {}, "audio_binary": None}
-                all_reasoning_steps.append(summary_think)
-                msg_hisotry.append({"role": "user", "content": summary_think})
-                think += summary_think
-                continue
-
-            truncated_prev_reasoning = ""
-            for i, step in enumerate(all_reasoning_steps):
-                truncated_prev_reasoning += f"Step {i + 1}: {step}\n\n"
-
-            prev_steps = truncated_prev_reasoning.split('\n\n')
-            if len(prev_steps) <= 5:
-                truncated_prev_reasoning = '\n\n'.join(prev_steps)
-            else:
-                truncated_prev_reasoning = ''
-                for i, step in enumerate(prev_steps):
-                    if i == 0 or i >= len(prev_steps) - 4 or BEGIN_SEARCH_QUERY in step or BEGIN_SEARCH_RESULT in step:
-                        truncated_prev_reasoning += step + '\n\n'
-                    else:
-                        if truncated_prev_reasoning[-len('\n\n...\n\n'):] != '\n\n...\n\n':
-                            truncated_prev_reasoning += '...\n\n'
-            truncated_prev_reasoning = truncated_prev_reasoning.strip('\n')
-
-            # Retrieval procedure:
-            # 1. KB search
-            # 2. Web search (optional)
-            # 3. KG search (optional)
-            kbinfos = settings.retrievaler.retrieval(search_query, "",embd_mdl, tenant_id, kb_names, 1, top_n,
-                                                     similarity_threshold,
-                                                     vector_similarity_weight
-                                                     )
-            if prompt_config.get("tavily_api_key", "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"):
-                tav = Tavily(prompt_config["tavily_api_key"])
-                tav_res = tav.retrieve_chunks(" ".join(search_query))
-                kbinfos["chunks"].extend(tav_res["chunks"])
-                kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
-            if prompt_config.get("use_kg"):
-                ck = settings.kg_retrievaler.retrieval(search_query,
-                                                       tenant_id,
-                                                       kb_names,
-                                                       embd_mdl,
-                                                       chat_mdl)
-                if ck["content_with_weight"]:
-                    kbinfos["chunks"].insert(0, ck)
-
-            # Merge chunk info for citations
-            if not chunk_info["chunks"]:
-                for k in chunk_info.keys():
-                    chunk_info[k] = kbinfos[k]
-            else:
-                cids = [c["chunk_id"] for c in chunk_info["chunks"]]
-                for c in kbinfos["chunks"]:
-                    if c["chunk_id"] in cids:
-                        continue
-                    chunk_info["chunks"].append(c)
-                dids = [d["doc_id"] for d in chunk_info["doc_aggs"]]
-                for d in kbinfos["doc_aggs"]:
-                    if d["doc_id"] in dids:
-                        continue
-                    chunk_info["doc_aggs"].append(d)
-
-            think += "\n\n"
-            for ans in chat_mdl.chat_streamly(
-                    relevant_extraction_prompt.format(
-                        prev_reasoning=truncated_prev_reasoning,
-                        search_query=search_query,
-                        document="\n".join(kb_prompt(kbinfos, 4096))
-                    ),
-                    [{"role": "user",
-                     "content": f'Now you should analyze each web page and find helpful information based on the current search query "{search_query}" and previous reasoning steps.'}],
-                    {"temperature": 0.7}):
-                ans = re.sub(r"<think>.*</think>", "", ans, flags=re.DOTALL)
-                if not ans:
-                    continue
-                summary_think = ans
-                yield {"answer": think + rm_result_tags(summary_think) + "</think>", "reference": {}, "audio_binary": None}
-
-            all_reasoning_steps.append(summary_think)
-            msg_hisotry.append(
-                {"role": "user", "content": f"\n\n{BEGIN_SEARCH_RESULT}{summary_think}{END_SEARCH_RESULT}\n\n"})
-            think += rm_result_tags(summary_think)
-            logging.info(f"[THINK]Summary: {ii}. {summary_think}")
-
-    yield think + "</think>"
+# def reasoning(chunk_info: dict, question: str, chat_mdl: LLMBundle, embd_mdl: LLMBundle,
+#               tenant_id: str, kb_names: list[str], prompt_config, MAX_SEARCH_LIMIT: int = 6,
+#               top_n: int = 5, similarity_threshold: float = 0.4, vector_similarity_weight: float = 0.3):
+#     BEGIN_SEARCH_QUERY = "<|begin_search_query|>"
+#     END_SEARCH_QUERY = "<|end_search_query|>"
+#     BEGIN_SEARCH_RESULT = "<|begin_search_result|>"
+#     END_SEARCH_RESULT = "<|end_search_result|>"
+#
+#     def rm_query_tags(line):
+#         pattern = re.escape(BEGIN_SEARCH_QUERY) + r"(.*?)" + re.escape(END_SEARCH_QUERY)
+#         return re.sub(pattern, "", line)
+#
+#     def rm_result_tags(line):
+#         pattern = re.escape(BEGIN_SEARCH_RESULT) + r"(.*?)" + re.escape(END_SEARCH_RESULT)
+#         return re.sub(pattern, "", line)
+#
+#     reason_prompt = (
+#         "You are a reasoning assistant with the ability to perform dataset searches to help "
+#         "you answer the user's question accurately. You have special tools:\n\n"
+#         f"- To perform a search: write {BEGIN_SEARCH_QUERY} your query here {END_SEARCH_QUERY}.\n"
+#         f"Then, the system will search and analyze relevant content, then provide you with helpful information in the format {BEGIN_SEARCH_RESULT} ...search results... {END_SEARCH_RESULT}.\n\n"
+#         f"You can repeat the search process multiple times if necessary. The maximum number of search attempts is limited to {MAX_SEARCH_LIMIT}.\n\n"
+#         "Once you have all the information you need, continue your reasoning.\n\n"
+#         "-- Example 1 --\n"  ########################################
+#         "Question: \"Are both the directors of Jaws and Casino Royale from the same country?\"\n"
+#         "Assistant:\n"
+#         f"    {BEGIN_SEARCH_QUERY}Who is the director of Jaws?{END_SEARCH_QUERY}\n\n"
+#         "User:\n"
+#         f"    {BEGIN_SEARCH_RESULT}\nThe director of Jaws is Steven Spielberg...\n{END_SEARCH_RESULT}\n\n"
+#         "Continues reasoning with the new information.\n"
+#         "Assistant:\n"
+#         f"    {BEGIN_SEARCH_QUERY}Where is Steven Spielberg from?{END_SEARCH_QUERY}\n\n"
+#         "User:\n"
+#         f"    {BEGIN_SEARCH_RESULT}\nSteven Allan Spielberg is an American filmmaker...\n{END_SEARCH_RESULT}\n\n"
+#         "Continues reasoning with the new information...\n\n"
+#         "Assistant:\n"
+#         f"    {BEGIN_SEARCH_QUERY}Who is the director of Casino Royale?{END_SEARCH_QUERY}\n\n"
+#         "User:\n"
+#         f"    {BEGIN_SEARCH_RESULT}\nCasino Royale is a 2006 spy film directed by Martin Campbell...\n{END_SEARCH_RESULT}\n\n"
+#         "Continues reasoning with the new information...\n\n"
+#         "Assistant:\n"
+#         f"    {BEGIN_SEARCH_QUERY}Where is Martin Campbell from?{END_SEARCH_QUERY}\n\n"
+#         "User:\n"
+#         f"    {BEGIN_SEARCH_RESULT}\nMartin Campbell (born 24 October 1943) is a New Zealand film and television director...\n{END_SEARCH_RESULT}\n\n"
+#         "Continues reasoning with the new information...\n\n"
+#         "Assistant:\nIt's enough to answer the question\n"
+#
+#         "-- Example 2 --\n"  #########################################
+#         "Question: \"When was the founder of craigslist born?\"\n"
+#         "Assistant:\n"
+#         f"    {BEGIN_SEARCH_QUERY}Who was the founder of craigslist?{END_SEARCH_QUERY}\n\n"
+#         "User:\n"
+#         f"    {BEGIN_SEARCH_RESULT}\nCraigslist was founded by Craig Newmark...\n{END_SEARCH_RESULT}\n\n"
+#         "Continues reasoning with the new information.\n"
+#         "Assistant:\n"
+#         f"    {BEGIN_SEARCH_QUERY} When was Craig Newmark born?{END_SEARCH_QUERY}\n\n"
+#         "User:\n"
+#         f"    {BEGIN_SEARCH_RESULT}\nCraig Newmark was born on December 6, 1952...\n{END_SEARCH_RESULT}\n\n"
+#         "Continues reasoning with the new information...\n\n"
+#         "Assistant:\nIt's enough to answer the question\n"
+#         "**Remember**:\n"
+#         f"- You have a dataset to search, so you just provide a proper search query.\n"
+#         f"- Use {BEGIN_SEARCH_QUERY} to request a dataset search and end with {END_SEARCH_QUERY}.\n"
+#         "- The language of query MUST be as the same as 'Question' or 'search result'.\n"
+#         "- When done searching, continue your reasoning.\n\n"
+#         'Please answer the following question. You should think step by step to solve it.\n\n'
+#     )
+#
+#     relevant_extraction_prompt = """**Task Instruction:**
+#
+#     You are tasked with reading and analyzing web pages based on the following inputs: **Previous Reasoning Steps**, **Current Search Query**, and **Searched Web Pages**. Your objective is to extract relevant and helpful information for **Current Search Query** from the **Searched Web Pages** and seamlessly integrate this information into the **Previous Reasoning Steps** to continue reasoning for the original question.
+#
+#     **Guidelines:**
+#
+#     1. **Analyze the Searched Web Pages:**
+#     - Carefully review the content of each searched web page.
+#     - Identify factual information that is relevant to the **Current Search Query** and can aid in the reasoning process for the original question.
+#
+#     2. **Extract Relevant Information:**
+#     - Select the information from the Searched Web Pages that directly contributes to advancing the **Previous Reasoning Steps**.
+#     - Ensure that the extracted information is accurate and relevant.
+#
+#     3. **Output Format:**
+#     - **If the web pages provide helpful information for current search query:** Present the information beginning with `**Final Information**` as shown below.
+#     - The language of query **MUST BE** as the same as 'Search Query' or 'Web Pages'.\n"
+#     **Final Information**
+#
+#     [Helpful information]
+#
+#     - **If the web pages do not provide any helpful information for current search query:** Output the following text.
+#
+#     **Final Information**
+#
+#     No helpful information found.
+#
+#     **Inputs:**
+#     - **Previous Reasoning Steps:**
+#     {prev_reasoning}
+#
+#     - **Current Search Query:**
+#     {search_query}
+#
+#     - **Searched Web Pages:**
+#     {document}
+#
+#     """
+#
+#     executed_search_queries = []
+#     msg_hisotry = [{"role": "user", "content": f'Question:\"{question}\"\n'}]
+#     all_reasoning_steps = []
+#     think = "<think>"
+#     for ii in range(MAX_SEARCH_LIMIT + 1):
+#         if ii == MAX_SEARCH_LIMIT - 1:
+#             summary_think = f"\n{BEGIN_SEARCH_RESULT}\nThe maximum search limit is exceeded. You are not allowed to search.\n{END_SEARCH_RESULT}\n"
+#             yield {"answer": think + summary_think + "</think>", "reference": {}, "audio_binary": None}
+#             all_reasoning_steps.append(summary_think)
+#             msg_hisotry.append({"role": "assistant", "content": summary_think})
+#             break
+#
+#         query_think = ""
+#         if msg_hisotry[-1]["role"] != "user":
+#             msg_hisotry.append({"role": "user", "content": "Continues reasoning with the new information.\n"})
+#         else:
+#             msg_hisotry[-1]["content"] += "\n\nContinues reasoning with the new information.\n"
+#         for ans in chat_mdl.chat_streamly(reason_prompt, msg_hisotry, {"temperature": 0.7}):
+#             ans = re.sub(r"<think>.*</think>", "", ans, flags=re.DOTALL)
+#             if not ans:
+#                 continue
+#             query_think = ans
+#             yield {"answer": think + rm_query_tags(query_think) + "</think>", "reference": {}, "audio_binary": None}
+#
+#         think += rm_query_tags(query_think)
+#         all_reasoning_steps.append(query_think)
+#         queries = extract_between(query_think, BEGIN_SEARCH_QUERY, END_SEARCH_QUERY)
+#         if not queries:
+#             if ii > 0:
+#                 break
+#             queries = [question]
+#
+#         for search_query in queries:
+#             logging.info(f"[THINK]Query: {ii}. {search_query}")
+#             msg_hisotry.append({"role": "assistant", "content": search_query})
+#             think += f"\n\n> {ii + 1}. {search_query}\n\n"
+#             yield {"answer": think + "</think>", "reference": {}, "audio_binary": None}
+#
+#             summary_think = ""
+#             # The search query has been searched in previous steps.
+#             if search_query in executed_search_queries:
+#                 summary_think = f"\n{BEGIN_SEARCH_RESULT}\nYou have searched this query. Please refer to previous results.\n{END_SEARCH_RESULT}\n"
+#                 yield {"answer": think + summary_think + "</think>", "reference": {}, "audio_binary": None}
+#                 all_reasoning_steps.append(summary_think)
+#                 msg_hisotry.append({"role": "user", "content": summary_think})
+#                 think += summary_think
+#                 continue
+#
+#             truncated_prev_reasoning = ""
+#             for i, step in enumerate(all_reasoning_steps):
+#                 truncated_prev_reasoning += f"Step {i + 1}: {step}\n\n"
+#
+#             prev_steps = truncated_prev_reasoning.split('\n\n')
+#             if len(prev_steps) <= 5:
+#                 truncated_prev_reasoning = '\n\n'.join(prev_steps)
+#             else:
+#                 truncated_prev_reasoning = ''
+#                 for i, step in enumerate(prev_steps):
+#                     if i == 0 or i >= len(prev_steps) - 4 or BEGIN_SEARCH_QUERY in step or BEGIN_SEARCH_RESULT in step:
+#                         truncated_prev_reasoning += step + '\n\n'
+#                     else:
+#                         if truncated_prev_reasoning[-len('\n\n...\n\n'):] != '\n\n...\n\n':
+#                             truncated_prev_reasoning += '...\n\n'
+#             truncated_prev_reasoning = truncated_prev_reasoning.strip('\n')
+#
+#             # Retrieval procedure:
+#             # 1. KB search
+#             # 2. Web search (optional)
+#             # 3. KG search (optional)
+#             kbinfos = settings.retrievaler.retrieval(search_query, "",embd_mdl, tenant_id, kb_names, 1, top_n,
+#                                                      similarity_threshold,
+#                                                      vector_similarity_weight
+#                                                      )
+#             if prompt_config.get("tavily_api_key", "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"):
+#                 tav = Tavily(prompt_config["tavily_api_key"])
+#                 tav_res = tav.retrieve_chunks(" ".join(search_query))
+#                 kbinfos["chunks"].extend(tav_res["chunks"])
+#                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
+#             if prompt_config.get("use_kg"):
+#                 ck = settings.kg_retrievaler.retrieval(search_query,
+#                                                        tenant_id,
+#                                                        kb_names,
+#                                                        embd_mdl,
+#                                                        chat_mdl)
+#                 if ck["content_with_weight"]:
+#                     kbinfos["chunks"].insert(0, ck)
+#
+#             # Merge chunk info for citations
+#             if not chunk_info["chunks"]:
+#                 for k in chunk_info.keys():
+#                     chunk_info[k] = kbinfos[k]
+#             else:
+#                 cids = [c["chunk_id"] for c in chunk_info["chunks"]]
+#                 for c in kbinfos["chunks"]:
+#                     if c["chunk_id"] in cids:
+#                         continue
+#                     chunk_info["chunks"].append(c)
+#                 dids = [d["doc_id"] for d in chunk_info["doc_aggs"]]
+#                 for d in kbinfos["doc_aggs"]:
+#                     if d["doc_id"] in dids:
+#                         continue
+#                     chunk_info["doc_aggs"].append(d)
+#
+#             think += "\n\n"
+#             for ans in chat_mdl.chat_streamly(
+#                     relevant_extraction_prompt.format(
+#                         prev_reasoning=truncated_prev_reasoning,
+#                         search_query=search_query,
+#                         document="\n".join(kb_prompt(kbinfos, 4096))
+#                     ),
+#                     [{"role": "user",
+#                      "content": f'Now you should analyze each web page and find helpful information based on the current search query "{search_query}" and previous reasoning steps.'}],
+#                     {"temperature": 0.7}):
+#                 ans = re.sub(r"<think>.*</think>", "", ans, flags=re.DOTALL)
+#                 if not ans:
+#                     continue
+#                 summary_think = ans
+#                 yield {"answer": think + rm_result_tags(summary_think) + "</think>", "reference": {}, "audio_binary": None}
+#
+#             all_reasoning_steps.append(summary_think)
+#             msg_hisotry.append(
+#                 {"role": "user", "content": f"\n\n{BEGIN_SEARCH_RESULT}{summary_think}{END_SEARCH_RESULT}\n\n"})
+#             think += rm_result_tags(summary_think)
+#             logging.info(f"[THINK]Summary: {ii}. {summary_think}")
+#
+#     yield think + "</think>"

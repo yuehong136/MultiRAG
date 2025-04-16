@@ -12,6 +12,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.dialog_service import DialogService, chat
 from api.utils import get_uuid
 
+from core.prompts import chunks_format
 
 class ConversationService(CommonService):
     model = Conversation
@@ -49,18 +50,7 @@ def structure_answer(conv, ans, message_id, session_id):
         reference = {}
         ans["reference"] = {}
 
-    def get_value(d, k1, k2):
-        return d.get(k1, d.get(k2))
-    chunk_list = [{
-            "id": get_value(chunk, "chunk_id", "id"),
-            "content": get_value(chunk, "content", "text"),
-            "document_id": get_value(chunk, "doc_id", "document_id"),
-            "document_name": get_value(chunk, "docnm_kwd", "document_name"),
-            "dataset_id": get_value(chunk, "kb_id", "dataset_id"),
-            "image_id": get_value(chunk, "image_id", "img_id"),
-            "positions": get_value(chunk, "positions", "position_int"),
-            "url": chunk.get("url")
-    } for chunk in reference.get("chunks", [])]
+    chunk_list = chunks_format(reference)
 
     reference["chunks"] = chunk_list
     ans["id"] = message_id
