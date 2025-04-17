@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
 
 from api.apps.api_app import generate_confirmation_token
-from api.db.db_models import APIToken, get_db
+from api.db.db_models import APIToken, get_db, DATABASE_TYPE
 from api.db.services.api_service import APITokenService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
@@ -25,8 +25,6 @@ from api.versions import get_multirag_version
 from core.utils.storage_factory import STORAGE_IMPL, STORAGE_IMPL_TYPE
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN
-# from core.utils.milvus_conn import MILVUS_CONNECTION
-# from api.db.database import get_db
 from api.apps import manager
 
 router = APIRouter()
@@ -120,13 +118,13 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
     try:
         KnowledgebaseService.get_by_id(db, "x")
         res["database"] = {
-            "database": settings.DATABASE_TYPE.lower(),
+            "database": DATABASE_TYPE.lower(),
             "status": "green",
             "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
         }
     except Exception as e:
         res["database"] = {
-            "database": settings.DATABASE_TYPE.lower(),
+            "database": DATABASE_TYPE.lower(),
             "status": "red",
             "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
             "error": str(e),
