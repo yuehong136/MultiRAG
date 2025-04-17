@@ -628,8 +628,6 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
 
         llm_set = set([m["llm_name"] + "@" + m["fid"] for m in llms])
         for o in objs:
-            if not o.api_key:
-                continue
             if o.llm_name + "@" + o.llm_factory in llm_set:
                 continue
             llms.append({"llm_name": o.llm_name, "mdl_type": o.mdl_type, "fid": o.llm_factory, "available": True})
