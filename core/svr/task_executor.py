@@ -37,7 +37,6 @@ from sqlalchemy.orm import Session
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
 import tracemalloc
-import resource
 import signal
 import trio
 # import exceptiongroup
@@ -113,7 +112,13 @@ def start_tracemalloc_and_snapshot(signum, frame):
     snapshot = tracemalloc.take_snapshot()
     snapshot.dump(snapshot_file)
     current, peak = tracemalloc.get_traced_memory()
-    max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "win32":
+        import  psutil
+        process = psutil.Process()
+        max_rss = process.memory_info().rss / 1024
+    else:
+        import resource
+        max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     logging.info(f"taken snapshot {snapshot_file}. max RSS={max_rss / 1000:.2f} MB, current memory usage: {current / 10**6:.2f} MB, Peak memory usage: {peak / 10**6:.2f} MB")
 
 # SIGUSR2 handler: stop tracemalloc
@@ -1052,6 +1057,9 @@ async def main():
     logging.info(f'TaskExecutor - MultiRAG version: {get_multirag_version()}')
     settings.init_settings()
     print_multirag_settings()
+    if sys.platform != "win32":
+        signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)
+        signal.signal(signal.SIGUSR2, stop_tracemalloc)
     signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)
     signal.signal(signal.SIGUSR2, stop_tracemalloc)
     TRACE_MALLOC_ENABLED = int(os.environ.get('TRACE_MALLOC_ENABLED', "0"))
