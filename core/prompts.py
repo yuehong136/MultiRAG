@@ -20,6 +20,7 @@ import os
 import re
 from collections import defaultdict
 import json_repair
+from api.settings import FACTORY_LLM_INFOS
 from api.db import LLMType
 from api.db.db_models import db_connection
 from api.db.services.document_service import DocumentService
@@ -47,9 +48,9 @@ def chunks_format(reference):
 
 def llm_id2llm_type(llm_id):
     llm_id, _ = TenantLLMService.split_model_name_and_factory(llm_id)
-    fnm = os.path.join(get_project_base_directory(), "configs")
-    llm_factories = json.load(open(os.path.join(fnm, "llm_factories.json"), "r"))
-    for llm_factory in llm_factories["factory_llm_infos"]:
+
+    llm_factories = FACTORY_LLM_INFOS
+    for llm_factory in llm_factories:
         for llm in llm_factory["llm"]:
             if llm_id == llm["llm_name"]:
                 return llm["mdl_type"].strip(",")[-1]

@@ -111,27 +111,22 @@ def init_llm_factory(db: Session):
         LLMService.filter_delete(db, [(LLM.fid == "MiniMax" or LLM.fid == "Minimax")])
         LLMService.filter_delete(db, [(LLM.fid == "cohere")])
         LLMFactoriesService.filter_delete(db, [LLMFactories.name == "cohere"])
-    except Exception as e:
+    except Exception:
         pass
 
-    factory_llm_infos = json.load(
-        open(
-            os.path.join(get_project_base_directory(), "configs", "llm_factories.json"),
-            "r",
-        )
-    )
-    for factory_llm_info in factory_llm_infos["factory_llm_infos"]:
+    factory_llm_infos = settings.FACTORY_LLM_INFOS
+    for factory_llm_info in factory_llm_infos:
         llm_infos = factory_llm_info.pop("llm")
         try:
             LLMFactoriesService.save(db, **factory_llm_info)
-        except Exception as e:
+        except Exception:
             pass
         LLMService.filter_delete(db, [LLM.fid == factory_llm_info["name"]])
         for llm_info in llm_infos:
             llm_info["fid"] = factory_llm_info["name"]
             try:
                 LLMService.save(db, **llm_info)
-            except Exception as e:
+            except Exception:
                 pass
 
     LLMFactoriesService.filter_delete(db, [LLMFactories.name == "Local"])

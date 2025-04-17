@@ -1,6 +1,7 @@
 import os
 from datetime import date
 from enum import IntEnum, Enum
+import json
 import core.utils
 from core.nlp import search
 from graphrag import search as kg_search
@@ -10,6 +11,7 @@ import core.utils.milvus_conn
 # from api.utils import get_base_config, decrypt_database_config
 from api.utils import get_base_config
 from api.constants import MULTI_RAG_SERVICE_NAME
+from api.utils.file_utils import get_project_base_directory
 
 
 LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
@@ -27,6 +29,7 @@ PARSERS = None
 HOST_IP = None
 HOST_PORT = None
 SECRET_KEY = None
+FACTORY_LLM_INFOS = None
 
 # DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
 # DATABASE = decrypt_database_config(name=DATABASE_TYPE)
@@ -48,19 +51,25 @@ kg_retrievaler = None
 
 
 def init_settings():
-    # global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, DATABASE_TYPE, DATABASE
+    # global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, DATABASE_TYPE, DATABASE, FACTORY_LLM_INFOS
     # LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
     # DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
     # DATABASE = decrypt_database_config(name=DATABASE_TYPE)
     # LLM = get_base_config("user_default_llm", {})
     # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
     # LLM_BASE_URL = LLM.get("base_url")
-    global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN
+    global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, FACTORY_LLM_INFOS
     LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
     LLM = get_base_config("user_default_llm", {})
     LLM_DEFAULT_MODELS = LLM.get("default_models", {})
     LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
     LLM_BASE_URL = LLM.get("base_url")
+
+    try:
+        with open(os.path.join(get_project_base_directory(), "configs", "llm_factories.json"), "r") as f:
+            FACTORY_LLM_INFOS = json.load(f)["factory_llm_infos"]
+    except Exception:
+        FACTORY_LLM_INFOS = []
 
     global CHAT_MDL, EMBEDDING_MDL, RERANK_MDL, ASR_MDL, IMAGE2TEXT_MDL
     if not LIGHTEN:

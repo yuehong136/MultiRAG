@@ -1,16 +1,14 @@
-import json
 import logging
-import os
 
 from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from api.utils.file_utils import get_project_base_directory
 from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
 
 from api.db.db_models import db_connection  # 导入上下文管理器
 from api.db.services.user_service import TenantService
+from api import settings
 from api.db import LLMType
 from api.db.db_models import LLMFactories, LLM, TenantLLM
 from api.db.services.common_service import CommonService
@@ -71,7 +69,8 @@ class TenantLLMService(CommonService):
 
         # model name must be xxx@yyy
         try:
-            model_factories = json.load(open(os.path.join(get_project_base_directory(), "configs/llm_factories.json"), "r"))["factory_llm_infos"]
+            # model_factories = json.load(open(os.path.join(get_project_base_directory(), "configs/llm_factories.json"), "r"))["factory_llm_infos"]
+            model_factories = settings.FACTORY_LLM_INFOS
             model_factories = set([f["name"] for f in model_factories])
             if arr[-1] not in model_factories:
                 return model_name, None
