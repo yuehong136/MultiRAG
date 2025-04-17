@@ -25,7 +25,6 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils import current_timestamp, get_format_time, get_uuid
 from api.utils.db_utils import bulk_insert_into_db
 from core.settings import SVR_QUEUE_NAME
-from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.nlp import search, rag_tokenizer
 from core import settings
 from api.settings import docStoreConn
