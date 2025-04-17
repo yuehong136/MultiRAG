@@ -32,7 +32,7 @@ from api.db.db_models import SessionLocal
 
 ErrorHandlerFn = Callable[[BaseException | None, str | None, dict | None], None]
 
-chat_limiter = trio.CapacityLimiter(int(os.environ.get('MAX_CONCURRENT_CHATS', 100)))
+chat_limiter = trio.CapacityLimiter(int(os.environ.get('MAX_CONCURRENT_CHATS', 10)))
 
 
 def perform_variable_replacements(
