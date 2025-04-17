@@ -19,6 +19,8 @@ class DoubaoChat(Base):
     def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> tuple[str, int]:
         if system:
             history.insert(0, {"role": "system", "content": system})
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         # try:
         response = self.client.chat.completions.create(
             model=self.model_name,
@@ -33,6 +35,8 @@ class DoubaoChat(Base):
     def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         ans = ""
         total_tokens = 0
         try:

@@ -18,6 +18,8 @@ class OllamaChat:
     def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         try:
             options = {}
             if "temperature" in gen_conf:
@@ -45,6 +47,8 @@ class OllamaChat:
     def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         options = {}
         if "temperature" in gen_conf:
             options["temperature"] = gen_conf["temperature"]

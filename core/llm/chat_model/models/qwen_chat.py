@@ -24,6 +24,8 @@ class QWenChat(Base):
             super().__init__(key, model_name, "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
     def chat(self, system, history, gen_conf):
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         if self.model_name.lower().find("deepseek") >= 0:
             return super().chat(system, history, gen_conf)
 
@@ -65,6 +67,8 @@ class QWenChat(Base):
         from http import HTTPStatus
         if system:
             history.insert(0, {"role": "system", "content": system})
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         ans = ""
         tk_count = 0
         try:
@@ -94,6 +98,8 @@ class QWenChat(Base):
         yield tk_count
 
     def chat_streamly(self, system, history, gen_conf):
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         if self.model_name.lower().find("deepseek") >= 0:
             return super().chat_streamly(system, history, gen_conf)
 

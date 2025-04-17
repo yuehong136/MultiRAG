@@ -14,8 +14,6 @@ class AnthropicChat(Base):
     def chat(self, system, history, gen_conf):
         if system:
             self.system = system
-        if "max_tokens" not in gen_conf:
-            gen_conf["max_tokens"] = 4096
         if "presence_penalty" in gen_conf:
             del gen_conf["presence_penalty"]
         if "frequency_penalty" in gen_conf:
@@ -47,8 +45,6 @@ class AnthropicChat(Base):
     def chat_streamly(self, system, history, gen_conf):
         if system:
             self.system = system
-        if "max_tokens" not in gen_conf:
-            gen_conf["max_tokens"] = 4096
         if "presence_penalty" in gen_conf:
             del gen_conf["presence_penalty"]
         if "frequency_penalty" in gen_conf:

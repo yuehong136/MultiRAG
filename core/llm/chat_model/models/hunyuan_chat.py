@@ -27,6 +27,8 @@ class HunyuanChat(Base):
             _history.insert(0, {"Role": "system", "Content": system})
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         if "temperature" in gen_conf:
             _gen_conf["Temperature"] = gen_conf["temperature"]
         if "top_p" in gen_conf:
@@ -53,6 +55,8 @@ class HunyuanChat(Base):
         _history = [{k.capitalize(): v for k, v in item.items()} for item in history]
         if system:
             _history.insert(0, {"Role": "system", "Content": system})
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
         if "temperature" in gen_conf:

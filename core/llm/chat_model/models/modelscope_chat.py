@@ -1,3 +1,5 @@
+import os
+
 from core.llm.chat_model.base import Base
 
 

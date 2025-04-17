@@ -17,11 +17,8 @@ class GeminiChat(Base):
 
         if system:
             self.model._system_instruction = content_types.to_content(system)
-
-        if 'max_tokens' in gen_conf:
-            gen_conf['max_output_tokens'] = gen_conf['max_tokens']
         for k in list(gen_conf.keys()):
-            if k not in ["temperature", "top_p", "max_output_tokens"]:
+            if k not in ["temperature", "top_p", "max_tokens"]:
                 del gen_conf[k]
         for item in history:
             if 'role' in item and item['role'] == 'assistant':
@@ -45,10 +42,8 @@ class GeminiChat(Base):
 
         if system:
             self.model._system_instruction = content_types.to_content(system)
-        if 'max_tokens' in gen_conf:
-            gen_conf['max_output_tokens'] = gen_conf['max_tokens']
         for k in list(gen_conf.keys()):
-            if k not in ["temperature", "top_p", "max_output_tokens"]:
+            if k not in ["temperature", "top_p", "max_tokens"]:
                 del gen_conf[k]
         for item in history:
             if 'role' in item and item['role'] == 'assistant':

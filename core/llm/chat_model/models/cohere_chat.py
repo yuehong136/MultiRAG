@@ -15,6 +15,8 @@ class CoHereChat(Base):
             history.insert(0, {"role": "system", "content": system})
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         if "top_p" in gen_conf:
             gen_conf["p"] = gen_conf.pop("top_p")
         if "frequency_penalty" in gen_conf and "presence_penalty" in gen_conf:
@@ -43,6 +45,8 @@ class CoHereChat(Base):
     def chat_streamly(self, system, history, gen_conf):
         if system:
             history.insert(0, {"role": "system", "content": system})
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
         if "top_p" in gen_conf:
