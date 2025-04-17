@@ -355,7 +355,7 @@ POST
     """
     req = request.model_dump()
     factory = req["llm_factory"]
-    api_key = req.get("api_key", "")
+    api_key = req.get("api_key", "x")
     llm_name = req["llm_name"]
     def apikey_json(keys):
         nonlocal req
