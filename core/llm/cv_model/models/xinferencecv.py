@@ -18,7 +18,6 @@ class XinferenceCV(Base):
 
         res = self.client.chat.completions.create(
             model=self.model_name,
-            messages=self.prompt(b64),
-            max_tokens=max_tokens,
+            messages=self.prompt(b64)
         )
         return res.choices[0].message.content.strip(), res.usage.total_tokens

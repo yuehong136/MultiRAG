@@ -22,8 +22,7 @@ class GeminiCV(Base):
         img = open(BytesIO(base64.b64decode(b64)))
         input = [prompt,img]
         res = self.model.generate_content(
-            input,
-            generation_config=gen_config,
+            input
         )
         return res.text,res.usage_metadata.total_token_count
 
@@ -43,7 +42,7 @@ class GeminiCV(Base):
             history[-1]["parts"].append("data:image/jpeg;base64," + image)
 
             response = self.model.generate_content(history, generation_config=GenerationConfig(
-                max_output_tokens=gen_conf.get("max_tokens", 1000), temperature=gen_conf.get("temperature", 0.3),
+                temperature=gen_conf.get("temperature", 0.3),
                 top_p=gen_conf.get("top_p", 0.7)))
 
             ans = response.text
@@ -69,7 +68,7 @@ class GeminiCV(Base):
             history[-1]["parts"].append("data:image/jpeg;base64," + image)
 
             response = self.model.generate_content(history, generation_config=GenerationConfig(
-                max_output_tokens=gen_conf.get("max_tokens", 1000), temperature=gen_conf.get("temperature", 0.3),
+                temperature=gen_conf.get("temperature", 0.3),
                 top_p=gen_conf.get("top_p", 0.7)), stream=True)
 
             for resp in response:

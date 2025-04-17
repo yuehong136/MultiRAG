@@ -29,8 +29,7 @@ class Zhipu4V(Base):
 
         res = self.client.chat.completions.create(
             model=self.model_name,
-            messages=prompt,
-            max_tokens=max_tokens,
+            messages=prompt
         )
         return res.choices[0].message.content.strip(), res.usage.total_tokens
 
@@ -48,7 +47,6 @@ class Zhipu4V(Base):
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=history,
-                max_tokens=gen_conf.get("max_tokens", 1000),
                 temperature=gen_conf.get("temperature", 0.3),
                 top_p=gen_conf.get("top_p", 0.7)
             )
@@ -72,7 +70,6 @@ class Zhipu4V(Base):
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=history,
-                max_tokens=gen_conf.get("max_tokens", 1000),
                 temperature=gen_conf.get("temperature", 0.3),
                 top_p=gen_conf.get("top_p", 0.7),
                 stream=True

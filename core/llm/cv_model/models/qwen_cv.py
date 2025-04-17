@@ -70,7 +70,6 @@ class QWenCV(Base):
             if his["role"] == "user":
                 his["content"] = self.chat_prompt(his["content"], image)
         response = MultiModalConversation.call(model=self.model_name, messages=history,
-                                               max_tokens=gen_conf.get("max_tokens", 1000),
                                                temperature=gen_conf.get("temperature", 0.3),
                                                top_p=gen_conf.get("top_p", 0.7))
 
@@ -100,7 +99,6 @@ class QWenCV(Base):
         tk_count = 0
         try:
             response = MultiModalConversation.call(model=self.model_name, messages=history,
-                                                   max_tokens=gen_conf.get("max_tokens", 1000),
                                                    temperature=gen_conf.get("temperature", 0.3),
                                                    top_p=gen_conf.get("top_p", 0.7),
                                                    stream=True)

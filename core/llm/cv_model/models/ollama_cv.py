@@ -12,12 +12,10 @@ class OllamaCV(Base):
     def describe(self, image, max_tokens=1024):
         prompt = self.prompt("")
         try:
-            options = {"num_predict": max_tokens}
             response = self.client.generate(
                 model=self.model_name,
                 prompt=prompt[0]["content"][1]["text"],
-                images=[image],
-                options=options
+                images=[image]
             )
             ans = response["response"].strip()
             return ans, 128
@@ -35,8 +33,6 @@ class OllamaCV(Base):
             options = {}
             if "temperature" in gen_conf:
                 options["temperature"] = gen_conf["temperature"]
-            if "max_tokens" in gen_conf:
-                options["num_predict"] = gen_conf["max_tokens"]
             if "top_p" in gen_conf:
                 options["top_k"] = gen_conf["top_p"]
             if "presence_penalty" in gen_conf:
@@ -65,8 +61,6 @@ class OllamaCV(Base):
         options = {}
         if "temperature" in gen_conf:
             options["temperature"] = gen_conf["temperature"]
-        if "max_tokens" in gen_conf:
-            options["num_predict"] = gen_conf["max_tokens"]
         if "top_p" in gen_conf:
             options["top_k"] = gen_conf["top_p"]
         if "presence_penalty" in gen_conf:

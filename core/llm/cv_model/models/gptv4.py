@@ -29,8 +29,7 @@ class GptV4(Base):
 
         res = self.client.chat.completions.create(
             model=self.model_name,
-            messages=prompt,
-            max_tokens=max_tokens,
+            messages=prompt
         )
         return res.choices[0].message.content.strip(), res.usage.total_tokens
 
