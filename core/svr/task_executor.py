@@ -7,9 +7,6 @@ from graphrag.general.index import run_graphrag
 from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
 from core.prompts import keyword_extraction, question_proposal, content_tagging
 
-CONSUMER_NO = "0" if len(sys.argv) < 2 else sys.argv[1]
-CONSUMER_NAME = "task_executor_" + CONSUMER_NO
-
 import logging
 for module in ["pdfminer"]:
     module_logger = logging.getLogger(module)
@@ -83,6 +80,8 @@ FACTORY = {
 }
 
 UNACKED_ITERATOR = None
+
+CONSUMER_NO = "0" if len(sys.argv) < 2 else sys.argv[1]
 CONSUMER_NAME = "task_consumer_" + CONSUMER_NO
 BOOT_AT = datetime.now().astimezone().isoformat(timespec="milliseconds")
 PENDING_TASKS = 0
