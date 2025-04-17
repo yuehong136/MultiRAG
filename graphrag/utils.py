@@ -15,6 +15,8 @@ from collections import defaultdict
 from copy import deepcopy
 from hashlib import md5
 from typing import Any, Callable
+import os
+import trio
 
 import networkx as nx
 import numpy as np
@@ -29,6 +31,8 @@ from core.utils.redis_conn import REDIS_CONN
 from api.db.db_models import SessionLocal
 
 ErrorHandlerFn = Callable[[BaseException | None, str | None, dict | None], None]
+
+chat_limiter = trio.CapacityLimiter(int(os.environ.get('MAX_CONCURRENT_CHATS', 100)))
 
 
 def perform_variable_replacements(

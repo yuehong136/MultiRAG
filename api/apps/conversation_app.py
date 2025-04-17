@@ -9,6 +9,7 @@
 import json
 import re
 from copy import deepcopy
+import trio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -761,7 +762,8 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
     ranks = settings.retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3,
                                   aggs=False, rank_feature=label_question(db, req["question"], [kb]))
     mindmap = MindMapExtractor(chat_mdl)
-    mind_map = mindmap([c["text"] for c in ranks["chunks"]]).output
+    mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
+    mind_map = mind_map.output
     if "error" in mind_map:
         return server_error_response(Exception(mind_map["error"]))
     return get_json_result(data=mind_map)

@@ -10,6 +10,7 @@ import logging
 import random
 import time
 from datetime import datetime
+import trio
 
 import xxhash
 from pymilvus import MilvusException
