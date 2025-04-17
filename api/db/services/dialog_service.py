@@ -750,73 +750,73 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True):
 #     return kwd
 
 
-def full_question(db: Session, tenant_id, llm_id, messages):
-    if llm_id2llm_type(llm_id) == "image2text":
-        chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
-    else:
-        chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_id)
-    conv = []
-    for m in messages:
-        if m["role"] not in ["user", "assistant"]:
-            continue
-        conv.append("{}: {}".format(m["role"].upper(), m["content"]))
-    conv = "\n".join(conv)
-    today = datetime.date.today().isoformat()
-    yesterday = (datetime.date.today() - timedelta(days=1)).isoformat()
-    tomorrow = (datetime.date.today() + timedelta(days=1)).isoformat()
-    prompt = f"""
-Role: A helpful assistant
-
-Task and steps: 
-    1. Generate a full user question that would follow the conversation.
-    2. If the user's question involves relative date, you need to convert it into absolute date based on the current date, which is {today}. For example: 'yesterday' would be converted to {yesterday}.
-
-Requirements & Restrictions:
-  - Text generated MUST be in the same language of the original user's question.
-  - If the user's latest question is completely, don't do anything, just return the original question.
-  - DON'T generate anything except a refined question.
-
-######################
--Examples-
-######################
-
-# Example 1
-## Conversation
-USER: What is the name of Donald Trump's father?
-ASSISTANT:  Fred Trump.
-USER: And his mother?
-###############
-Output: What's the name of Donald Trump's mother?
-
-------------
-# Example 2
-## Conversation
-USER: What is the name of Donald Trump's father?
-ASSISTANT:  Fred Trump.
-USER: And his mother?
-ASSISTANT:  Mary Trump.
-User: What's her full name?
-###############
-Output: What's the full name of Donald Trump's mother Mary Trump?
-
-------------
-# Example 3
-## Conversation
-USER: What's the weather today in London?
-ASSISTANT:  Cloudy.
-USER: What's about tomorrow in Rochester?
-###############
-Output: What's the weather in Rochester on {tomorrow}?
-######################
-
-# Real Data
-## Conversation
-{conv}
-###############
-    """
-    ans = chat_mdl.chat(prompt, [{"role": "user", "content": "Output: "}], {"temperature": 0.2})
-    ans = re.sub(r"<think>.*</think>", "", ans, flags=re.DOTALL)
-    return ans if ans.find("**ERROR**") < 0 else messages[-1]["content"]
+# def full_question(db: Session, tenant_id, llm_id, messages):
+#     if llm_id2llm_type(llm_id) == "image2text":
+#         chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
+#     else:
+#         chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_id)
+#     conv = []
+#     for m in messages:
+#         if m["role"] not in ["user", "assistant"]:
+#             continue
+#         conv.append("{}: {}".format(m["role"].upper(), m["content"]))
+#     conv = "\n".join(conv)
+#     today = datetime.date.today().isoformat()
+#     yesterday = (datetime.date.today() - timedelta(days=1)).isoformat()
+#     tomorrow = (datetime.date.today() + timedelta(days=1)).isoformat()
+#     prompt = f"""
+# Role: A helpful assistant
+#
+# Task and steps:
+#     1. Generate a full user question that would follow the conversation.
+#     2. If the user's question involves relative date, you need to convert it into absolute date based on the current date, which is {today}. For example: 'yesterday' would be converted to {yesterday}.
+#
+# Requirements & Restrictions:
+#   - Text generated MUST be in the same language of the original user's question.
+#   - If the user's latest question is completely, don't do anything, just return the original question.
+#   - DON'T generate anything except a refined question.
+#
+# ######################
+# -Examples-
+# ######################
+#
+# # Example 1
+# ## Conversation
+# USER: What is the name of Donald Trump's father?
+# ASSISTANT:  Fred Trump.
+# USER: And his mother?
+# ###############
+# Output: What's the name of Donald Trump's mother?
+#
+# ------------
+# # Example 2
+# ## Conversation
+# USER: What is the name of Donald Trump's father?
+# ASSISTANT:  Fred Trump.
+# USER: And his mother?
+# ASSISTANT:  Mary Trump.
+# User: What's her full name?
+# ###############
+# Output: What's the full name of Donald Trump's mother Mary Trump?
+#
+# ------------
+# # Example 3
+# ## Conversation
+# USER: What's the weather today in London?
+# ASSISTANT:  Cloudy.
+# USER: What's about tomorrow in Rochester?
+# ###############
+# Output: What's the weather in Rochester on {tomorrow}?
+# ######################
+#
+# # Real Data
+# ## Conversation
+# {conv}
+# ###############
+#     """
+#     ans = chat_mdl.chat(prompt, [{"role": "user", "content": "Output: "}], {"temperature": 0.2})
+#     ans = re.sub(r"<think>.*</think>", "", ans, flags=re.DOTALL)
+#     return ans if ans.find("**ERROR**") < 0 else messages[-1]["content"]
 
 
 def tts(tts_mdl, text):
