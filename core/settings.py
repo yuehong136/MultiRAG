@@ -26,7 +26,7 @@ try:
 except Exception as e:
     REDIS = {}
     pass
-DOC_MAXIMUM_SIZE = int(os.environ.get("MAX_CONTENT_LENGTH", 128 * 1024 * 1024))
+DOC_MAXIMUM_SIZE = int(os.environ.get("MAX_CONTENT_LENGTH", 1024 * 1024 * 1024))
 
 SVR_QUEUE_NAME = "multi_rag_svr_queue"
 SVR_QUEUE_RETENTION = 60*60
