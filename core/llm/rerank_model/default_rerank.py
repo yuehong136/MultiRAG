@@ -2,6 +2,7 @@
 import os
 import re
 import threading
+from collections.abc import Iterable
 import numpy as np
 from huggingface_hub import snapshot_download
 from core.llm.rerank_model.base import Base, sigmoid
@@ -91,6 +92,8 @@ class DefaultRerank(Base):
         else:
             scores = self._model.compute_score(batch_pairs, max_length=max_length)
         scores = sigmoid(np.array(scores)).tolist()
+        if not isinstance(scores, Iterable):
+            scores = [scores]
         return scores
 
     def similarity(self, query: str, texts: list):
