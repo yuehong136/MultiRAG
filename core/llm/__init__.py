@@ -46,6 +46,7 @@ from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
 from core.llm.rerank_model.cohere_rerank import CoHereRerank
 from core.llm.rerank_model.default_rerank import DefaultRerank
 from core.llm.rerank_model.gpustack_rerank import GPUStackRerank
+from core.llm.rerank_model.huggingface_rerank import HuggingfaceRerank
 from core.llm.rerank_model.jina_rerank import JinaRerank
 from core.llm.rerank_model.localai_rerank import LocalAIRerank
 from core.llm.rerank_model.openai_api_rerank import OpenAI_APIRerank
@@ -136,7 +137,8 @@ RerankModel = {
     "Youdao": YoudaoRerank,
     "Xinference": XInferenceRerank,
     "Tongyi-Qianwen": QWenRerank,
-    "GPUStack": GPUStackRerank
+    "GPUStack": GPUStackRerank,
+    "HuggingFace": HuggingfaceRerank
 }
 
 

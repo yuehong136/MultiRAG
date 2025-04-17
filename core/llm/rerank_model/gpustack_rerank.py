@@ -14,7 +14,7 @@ class GPUStackRerank(Base):
             raise ValueError("url cannot be None")
 
         self.model_name = model_name
-        self.base_url = str(URL(base_url)/ "v1" / "rerank")
+        self.base_url = str(URL(base_url) / "v1" / "rerank")
         self.headers = {
             "accept": "application/json",
             "content-type": "application/json",
