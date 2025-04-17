@@ -197,7 +197,7 @@ def new_token(db: Session = Depends(get_db), user=Depends(manager)):
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
 
-        tenant_id = tenants[0].tenant_id
+        tenant_id = [tenant for tenant in tenants if tenant.role == 'owner'][0].tenant_id
         obj = {"tenant_id": tenant_id, "token": generate_confirmation_token(tenant_id),
                "create_time": current_timestamp(),
                "create_date": datetime_format(datetime.now()),
@@ -246,7 +246,7 @@ def token_list(db: Session = Depends(get_db), user=Depends(manager)):
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
 
-        tenant_id = tenants[0].tenant_id
+        tenant_id = [tenant for tenant in tenants if tenant.role == 'owner'][0].tenant_id
         objs = APITokenService.query(db, tenant_id=tenant_id)
         objs = [o.to_dict() for o in objs]
         for o in objs:
