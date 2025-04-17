@@ -16,8 +16,9 @@ fi
 echo "Redis started successfully with /etc/redis/redis.conf"
 
 function task_exe(){
+    JEMALLOC_PATH=$(pkg-config --variable=libdir jemalloc)/libjemalloc.so
     while [ 1 -eq 1 ];do
-      $PY -m core.svr.task_executor $1;
+      LD_PRELOAD=$JEMALLOC_PATH $PY -m core.svr.task_executor $1;
     done
 }
 
