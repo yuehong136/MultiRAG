@@ -9,8 +9,8 @@ from typing import Any
 
 from core.utils import num_tokens_from_string
 
-LENGTH_NOTIFICATION_CN = "······\n由于长度的原因，回答被截断了，要继续吗？"
-LENGTH_NOTIFICATION_EN = "...\nFor the content length reason, it stopped, continue?"
+LENGTH_NOTIFICATION_CN = "······\n由于大模型的上下文窗口大小限制，回答已经被大模型截断。"
+LENGTH_NOTIFICATION_EN = "...\nThe answer is truncated by your chosen LLM due to its context length limitation."
 
 @dataclass
 class Base(ABC):
