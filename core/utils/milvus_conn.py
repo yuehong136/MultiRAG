@@ -14,7 +14,7 @@ import re
 import time
 from uuid import uuid4
 from datetime import datetime
-
+from pymilvus import MilvusClient
 from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
 from pymilvus.client.types import ExceptionsMessage, LoadState
 from pymilvus.client.utils import is_vector_type, get_params
@@ -1550,9 +1550,9 @@ class MilvusConnection(DocStoreConnection):
             kwargs["consistency_level"] = DEFAULT_CONSISTENCY_LEVEL
         try:
             conn.create_collection(collection_name, schema, timeout=timeout, **kwargs)
-            logging.debug("Successfully created collection: %s", collection_name)
+            logger.debug("Successfully created collection: %s", collection_name)
         except Exception as ex:
-            logging.error("Failed to create collection: %s", collection_name)
+            logger.error("Failed to create collection: %s", collection_name)
             raise ex from ex
 
         index_params = IndexParams()
@@ -1567,38 +1567,29 @@ class MilvusConnection(DocStoreConnection):
             timeout: float | None = None,
             **kwargs,
     ):
-        # 确保 index_params 是字典形式
-        if isinstance(index_params, IndexParams):
-            index_params = {
-                "field_name": index_params.field_name,
-                "index_type": index_params.index_type,
-                "params": index_params.params,
-                "index_name": index_params.index_name,
-                "metric_type": index_params.metric_type
-            }
-
-        self._create_index(collection_name, index_params, timeout=timeout, **kwargs)
+        for index_param in index_params:
+            self._create_index(collection_name, index_param, timeout=timeout, **kwargs)
 
     def _create_index(
             self, collection_name: str, index_param: dict, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         try:
-            field_name = index_param.get("field_name", "")
-            index_name = index_param.get("index_name", "")
-            metric_type = index_param.get("metric_type", "")
-
+            params = index_param.pop("params", {})
+            field_name = index_param.pop("field_name", "")
+            index_name = index_param.pop("index_name", "")
+            params.update(index_param)
             conn.create_index(
                 collection_name,
                 field_name,
-                {"metric_type": metric_type},
+                params,
                 timeout=timeout,
                 index_name=index_name,
                 **kwargs,
             )
-            logging.debug("Successfully created an index on collection: %s", collection_name)
+            logger.debug("Successfully created an index on collection: %s", collection_name)
         except Exception as ex:
-            logging.error("Failed to create an index on collection: %s", collection_name)
+            logger.error("Failed to create an index on collection: %s", collection_name)
             raise ex from ex
 
     # def create_index(
@@ -1701,7 +1692,7 @@ class MilvusConnection(DocStoreConnection):
                 **kwargs,
             )
         except Exception as ex:
-            logging.error(f"混合搜索集合失败: {collection_name}")
+            logger.error(f"混合搜索集合失败: {collection_name}")
             raise ex from ex
 
         ret = []
@@ -1789,9 +1780,9 @@ class MilvusConnection(DocStoreConnection):
         if records:
             try:
                 self.upsert(collection_name, records)
-                logging.info("Successfully upserted records to Milvus")
+                logger.info("Successfully upserted records to Milvus")
             except Exception as e:
-                logging.error("Failed to upsert records to Milvus: " + str(e))
+                logger.error("Failed to upsert records to Milvus: " + str(e))
                 raise e
 
     # 使用示例
@@ -1847,7 +1838,7 @@ class MilvusConnection(DocStoreConnection):
                 **kwargs,
             )
         except Exception as ex:
-            logging.error(f"搜索集合失败: {collection_name}")
+            logger.error(f"搜索集合失败: {collection_name}")
             raise ex from ex
 
         ret = []
@@ -1887,7 +1878,7 @@ class MilvusConnection(DocStoreConnection):
         try:
             schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
         except Exception as ex:
-            logging.error("Failed to describe collection: %s", collection_name)
+            logger.error("Failed to describe collection: %s", collection_name)
             raise ex from ex
 
         if ids:
@@ -1909,7 +1900,7 @@ class MilvusConnection(DocStoreConnection):
                 **kwargs,
             )
         except Exception as ex:
-            logging.error("Failed to query collection: %s", collection_name)
+            logger.error("Failed to query collection: %s", collection_name)
             raise ex from ex
 
         return res
@@ -1971,7 +1962,7 @@ class MilvusConnection(DocStoreConnection):
         except Exception as ex:
             from pymilvus.exceptions import ServerVersionIncompatibleException
             if isinstance(ex, ServerVersionIncompatibleException):
-                logging.warning("SearchIteratorV2不受支持，回退到SearchIteratorV1")
+                logger.warning("SearchIteratorV2不受支持，回退到SearchIteratorV1")
             else:
                 raise ex from ex
 
@@ -1986,7 +1977,7 @@ class MilvusConnection(DocStoreConnection):
         try:
             schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
         except Exception as ex:
-            logging.error(f"获取集合描述失败: {collection_name}")
+            logger.error(f"获取集合描述失败: {collection_name}")
             raise ex from ex
 
         # 如果未提供anns_field，尝试自动确定
@@ -2159,7 +2150,7 @@ class MilvusConnection(DocStoreConnection):
             try:
                 schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
             except Exception as ex:
-                logging.error(f"获取集合描述失败: {collection_name}")
+                logger.error(f"获取集合描述失败: {collection_name}")
                 raise ex from ex
             expr = self._pack_pks_expr(schema_dict, pks)
         else:
@@ -2182,7 +2173,7 @@ class MilvusConnection(DocStoreConnection):
             if res.primary_keys:
                 ret_pks.extend(res.primary_keys)
         except Exception as ex:
-            logging.error(f"删除集合中的主键失败: {collection_name}")
+            logger.error(f"删除集合中的主键失败: {collection_name}")
             raise ex from ex
 
         # 兼容返回主键的情况
@@ -2239,9 +2230,9 @@ class MilvusConnection(DocStoreConnection):
             kwargs["consistency_level"] = DEFAULT_CONSISTENCY_LEVEL
         try:
             conn.create_collection(collection_name, schema, timeout=timeout, **kwargs)
-            logging.debug("Successfully created collection: %s", collection_name)
+            logger.debug("Successfully created collection: %s", collection_name)
         except Exception as ex:
-            logging.error("Failed to create collection: %s", collection_name)
+            logger.error("Failed to create collection: %s", collection_name)
             raise ex from ex
 
         if index_params:
@@ -2325,37 +2316,55 @@ class MilvusConnection(DocStoreConnection):
             # 如果是维度特定字段模式 (q_{dim}_vec)
             if re.match(r'q_\d+_vec', vector_field):
                 fields.append(FieldSchema(name=vector_field, dtype=DataType.FLOAT_VECTOR, dim=dim))
-                logging.info(f"添加维度特定向量字段: {vector_field}, 维度: {dim}")
+                # logger.info(f"添加特定维度向量字段: {vector_field}, 维度: {dim}")
 
         # 创建集合模式
         schema = CollectionSchema(fields=fields, description="Created from mapping file", enable_dynamic_field=True)
 
         # 创建集合
         self.create_collection(collection_name, schema=schema)
-        logging.info(f"成功创建集合: {collection_name} 包含字段: {[field.name for field in fields]}")
+        logger.info(f"成功创建集合: {collection_name} 包含字段: {[field.name for field in fields]}")
 
         # 处理索引相关的逻辑
         for field in fields:
             if field.dtype == DataType.FLOAT_VECTOR:
-                index_params = {
-                    "field_name": field.name,
-                    "index_type": "IVF_FLAT",
-                    "params": {"nlist": 128},
-                    "index_name": field.name,
-                    "metric_type": "COSINE"
-                }
+                # index_params = {
+                #     "field_name": field.name,
+                #     "index_type": "",
+                #     "params": {"nlist": 128},
+                #     "index_name": field.name,
+                #     "metric_type": "COSINE"
+                # }
+                index_params = IndexParams()
+                index_params.add_index(
+                    field.name,
+                    "IVF_FLAT",
+                    field.name,
+                    metric_type="COSINE",
+                    params={"nlist": 128}
+                )
                 try:
                     self.create_index(collection_name, index_params)
-                    logging.info(f"为字段 {field.name} 创建索引成功")
-                except Exception as e:
-                    logging.warning(f"为字段 {field.name} 创建索引失败: {str(e)}")
+                    # 直接把 index_params 作为 %s 参数，它会调用 __str__ 输出你的 [{…}] 列表结构
+                    logger.info(
+                        "索引创建成功 | 集合：%s | 索引配置：%s",
+                        collection_name,
+                        index_params,
+                    )
+                except Exception:
+                    # exception 自动打印 traceback
+                    logger.exception(
+                        "索引创建失败 | 集合：%s | 索引配置：%s",
+                        collection_name,
+                        index_params,
+                    )
 
         # 加载集合
         try:
             self.load_collection(collection_name)
-            logging.info(f"成功加载集合 {collection_name}")
+            logger.info(f"集合 {collection_name} 已加载")
         except Exception as e:
-            logging.warning(f"加载集合 {collection_name} 失败: {str(e)}")
+            logger.warning(f"集合 {collection_name} 加载失败: {str(e)}")
 
     def update_collection_schema(self, collection_name, vector_dimension):
         """
@@ -2369,7 +2378,7 @@ class MilvusConnection(DocStoreConnection):
             bool: 成功返回True，失败返回False
         """
         if not self.has_collection(collection_name):
-            logging.error(f"集合 {collection_name} 不存在")
+            logger.error(f"集合 {collection_name} 不存在")
             return False
 
         try:
@@ -2383,7 +2392,7 @@ class MilvusConnection(DocStoreConnection):
                     break
 
             if field_exists:
-                logging.info(f"字段 q_{vector_dimension}_vec 已存在于集合 {collection_name} 中")
+                logger.info(f"字段 q_{vector_dimension}_vec 已存在于集合 {collection_name} 中")
                 return True
 
             # 向集合添加新字段
@@ -2396,7 +2405,7 @@ class MilvusConnection(DocStoreConnection):
 
             conn = self._get_connection()
             conn.create_field(collection_name, field_schema)
-            logging.info(f"成功向集合 {collection_name} 添加字段 q_{vector_dimension}_vec")
+            logger.info(f"成功向集合 {collection_name} 添加字段 q_{vector_dimension}_vec")
 
             # 为新字段创建索引
             index_params = {
@@ -2406,11 +2415,11 @@ class MilvusConnection(DocStoreConnection):
                 "metric_type": "COSINE"
             }
             self.create_index(collection_name, index_params)
-            logging.info(f"成功为字段 q_{vector_dimension}_vec 创建索引")
+            logger.info(f"成功为字段 q_{vector_dimension}_vec 创建索引")
 
             return True
         except Exception as e:
-            logging.error(f"更新集合模式失败: {e}")
+            logger.error(f"更新集合模式失败: {e}")
             return False
 
 
@@ -2486,7 +2495,7 @@ class MilvusConnection(DocStoreConnection):
         try:
             conn.load_collection(collection_name, timeout=timeout, **kwargs)
         except MilvusException as ex:
-            logging.error("Failed to load collection: %s", collection_name)
+            logger.error("Failed to load collection: %s", collection_name)
             raise ex from ex
 
     def release_collection(self, collection_name: str, timeout: float | None = None, **kwargs):
@@ -2494,7 +2503,7 @@ class MilvusConnection(DocStoreConnection):
         try:
             conn.release_collection(collection_name, timeout=timeout, **kwargs)
         except MilvusException as ex:
-            logging.error("Failed to load collection: %s", collection_name)
+            logger.error("Failed to load collection: %s", collection_name)
             raise ex from ex
 
     def get_load_state(
