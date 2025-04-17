@@ -342,7 +342,7 @@ class TenantLLMService(CommonService):
 #                         logging.error(f"Can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, content: {txt}")
 #                 return
 #             yield txt
-class LLMBundle(object):
+class LLMBundle:
     def __init__(self, db: Session, tenant_id: str, llm_type: str, llm_name: str = None, lang: str = "Chinese"):
         self.db = db
         self.tenant_id = tenant_id

@@ -8,7 +8,7 @@ from azure.storage.blob import ContainerClient
 
 
 @singleton
-class MultiRAGAzureSasBlob(object):
+class MultiRAGAzureSasBlob:
     def __init__(self):
         self.conn = None
         self.container_url = os.getenv('CONTAINER_URL', settings.AZURE["container_url"])

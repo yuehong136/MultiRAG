@@ -8,7 +8,7 @@ from core import settings
 from core.utils import singleton
 
 @singleton
-class MultiRAGS3(object):
+class MultiRAGS3:
     def __init__(self):
         self.conn = None
         self.s3_config = settings.S3

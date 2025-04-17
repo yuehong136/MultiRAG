@@ -24,7 +24,7 @@ from core import settings
 
 
 @singleton
-class MultiRAGOSS(object):
+class MultiRAGOSS:
     def __init__(self):
         self.conn = None
         self.oss_config = settings.OSS

@@ -15,7 +15,7 @@ from core.utils import singleton
 
 
 @singleton
-class MultiRAGMinio(object):
+class MultiRAGMinio:
     def __init__(self):
         self.conn = None
         self.__open__()
