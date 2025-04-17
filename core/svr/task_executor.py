@@ -3,9 +3,7 @@ import sys
 
 from api.db.db_models import SessionLocal, db_connection
 from api.utils.log_utils import initRootLogger, get_project_base_directory
-from graphrag.general.index import WithCommunity, WithResolution, Dealer
-from graphrag.light.graph_extractor import GraphExtractor as LightKGExt
-from graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
+from graphrag.general.index import run_graphrag
 from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
 from core.prompts import keyword_extraction, question_proposal, content_tagging
 
@@ -42,6 +40,7 @@ import tracemalloc
 import resource
 import signal
 import trio
+# import exceptiongroup
 
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db import LLMType, ParserType, TaskStatus
@@ -400,7 +399,7 @@ async def init_kb(row, kb_name):
                 sample_vec, _ = embedding_model.encode(["测试文本"])
                 if len(sample_vec) > 0:
                     vector_dim = len(sample_vec[0])
-                    logging.info(f"检测到嵌入模型维度: {vector_dim}")
+                    logging.info(f"当前embedding模型维度: {vector_dim}")
                 else:
                     logging.warning("无法确定嵌入模型维度，将使用默认维度")
     except Exception as e:
@@ -423,8 +422,6 @@ async def init_kb(row, kb_name):
 
     # 创建集合
     await trio.to_thread.run_sync(lambda: settings.docStoreConn.create_collection_with_mapping(idxnm, mapping, auto_dimensions))
-
-    logging.info(f"成功初始化知识库 {kb_name}")
 
 
 def convert_data_types(data, schema):
@@ -566,7 +563,6 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
 
     # 获取向量维度
     vector_dim = len(vects[0]) if len(vects) > 0 else 0
-    logging.info(f"向量维度: {vector_dim}")
 
     for i, d in enumerate(docs):
         v = vects[i].tolist()
@@ -620,24 +616,6 @@ async def run_raptor(row, chat_mdl, embd_mdl, vector_size, callback=None):
         res.append(d)
         tk_count += num_tokens_from_string(content)
     return res, tk_count
-
-
-async def run_graphrag(row, chat_model, language, embedding_model, callback=None):
-    chunks = []
-    for d in settings.retrievaler.chunk_list(row["doc_id"], row["tenant_id"], [str(row["kb_id"])],
-                                             fields=["content_with_weight", "doc_id"]):
-        chunks.append((d["doc_id"], d["content_with_weight"]))
-
-    dealer = Dealer(LightKGExt if row["parser_config"]["graphrag"]["method"] != 'general' else GeneralKGExt,
-                    row["tenant_id"],
-                    str(row["kb_id"]),
-                    chat_model,
-                    chunks=chunks,
-                    language=language,
-                    entity_types=row["parser_config"]["graphrag"]["entity_types"],
-                    embed_bdl=embedding_model,
-                    callback=callback)
-    await dealer()
 
 
 async def do_handle_task(db, task):
@@ -714,24 +692,10 @@ async def do_handle_task(db, task):
             return
         start_ts = timer()
         chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
-        await run_graphrag(task, chat_model, task_language, embedding_model, progress_callback)
-        progress_callback(prog=1.0, msg="Knowledge Graph basic is done ({:.2f}s)".format(timer() - start_ts))
-        if graphrag_conf.get("resolution", False):
-            start_ts = timer()
-            with_res = WithResolution(
-                task["tenant_id"], str(task["kb_id"]), chat_model, embedding_model,
-                progress_callback
-            )
-            await with_res()
-            progress_callback(prog=1.0, msg="Knowledge Graph resolution is done ({:.2f}s)".format(timer() - start_ts))
-        if graphrag_conf.get("community", False):
-            start_ts = timer()
-            with_comm = WithCommunity(
-                task["tenant_id"], str(task["kb_id"]), chat_model, embedding_model,
-                progress_callback
-            )
-            await with_comm()
-            progress_callback(prog=1.0, msg="Knowledge Graph community is done ({:.2f}s)".format(timer() - start_ts))
+        with_resolution = graphrag_conf.get("resolution", False)
+        with_community = graphrag_conf.get("community", False)
+        await run_graphrag(task, task_language, with_resolution, with_community, chat_model, embedding_model, progress_callback)
+        progress_callback(prog=1.0, msg="Knowledge Graph done ({:.2f}s)".format(timer() - start_ts))
         return
     else:
         # Standard chunking methods
@@ -1013,7 +977,12 @@ async def handle_task():
                 FAILED_TASKS += 1
                 CURRENT_TASKS.pop(task["id"], None)
                 try:
-                    set_progress(db, task["id"], prog=-1, msg=f"[Exception]: {e}")
+                    err_msg = str(e)
+                    # while isinstance(e, exceptiongroup.ExceptionGroup):
+                    while isinstance(e, ExceptionGroup):
+                        e = e.exceptions[0]
+                        err_msg += ' -- ' + str(e)
+                    set_progress(db, task["id"], prog=-1, msg=f"[Exception]: {err_msg}")
                 except Exception:
                     pass
                 logging.exception(f"handle_task got exception for task {json.dumps(task)}")

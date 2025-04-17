@@ -18,6 +18,8 @@ import argparse
 import json
 from api import settings
 import networkx as nx
+import logging
+import trio
 
 from api.db import LLMType
 # from api.db.database import db_connection
@@ -26,16 +28,34 @@ from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import TenantService
-from graphrag.general.index import Dealer
+from graphrag.general.index import update_graph
 from graphrag.light.graph_extractor import GraphExtractor
-from core.utils.redis_conn import RedisDistributedLock
 
 settings.init_settings()
 
-if __name__ == "__main__":
+
+def callback(prog=None, msg="Processing..."):
+    logging.info(msg)
+
+
+async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-t', '--tenant_id', default=False, help="Tenant ID", action='store', required=True)
-    parser.add_argument('-d', '--doc_id', default=False, help="Document ID", action='store', required=True)
+    parser.add_argument(
+        "-t",
+        "--tenant_id",
+        default=False,
+        help="Tenant ID",
+        action="store",
+        required=True,
+    )
+    parser.add_argument(
+        "-d",
+        "--doc_id",
+        default=False,
+        help="Document ID",
+        action="store",
+        required=True,
+    )
     args = parser.parse_args()
 
     with db_connection() as db:
@@ -44,18 +64,36 @@ if __name__ == "__main__":
         raise LookupError("Document not found.")
     kb_id = doc.kb_id
 
-    chunks = [d["content_with_weight"] for d in
-              settings.retrievaler.chunk_list(args.doc_id, args.tenant_id, [kb_id], max_count=6,
-                                              fields=["content_with_weight"])]
-    chunks = [("x", c) for c in chunks]
+    chunks = [
+        d["content_with_weight"]
+        for d in settings.retrievaler.chunk_list(
+            args.doc_id,
+            args.tenant_id,
+            [kb_id],
+            max_count=6,
+            fields=["content_with_weight"],
+        )
+    ]
 
-    RedisDistributedLock.clean_lock(kb_id)
     with db_connection() as db:
         tenant = TenantService.get_by_id(db, args.tenant_id)
         llm_bdl = LLMBundle(db, args.tenant_id, LLMType.CHAT, tenant.llm_id)
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         embed_bdl = LLMBundle(db, args.tenant_id, LLMType.EMBEDDING, kb.embd_id)
 
-    dealer = Dealer(GraphExtractor, args.tenant_id, kb_id, llm_bdl, chunks, "English", embed_bdl=embed_bdl)
+    graph, doc_ids = await update_graph(
+        GraphExtractor,
+        args.tenant_id,
+        kb_id,
+        args.doc_id,
+        chunks,
+        "English",
+        llm_bdl,
+        embed_bdl,
+        callback,
+    )
 
-    print(json.dumps(nx.node_link_data(dealer.graph), ensure_ascii=False, indent=2))
+    print(json.dumps(nx.node_link_data(graph), ensure_ascii=False, indent=2))
+
+if __name__ == "__main__":
+    trio.run(main)

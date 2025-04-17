@@ -37,6 +37,7 @@ from api.versions import get_multirag_version
 import uvicorn
 from api.utils import show_configs
 from core.settings import print_multirag_settings
+from core.utils.redis_conn import RedisDistributedLock
 
 stop_event = threading.Event()
 
@@ -44,9 +45,12 @@ def update_progress():
     """
     定期更新文档服务进度
     """
+    redis_lock = RedisDistributedLock("update_progress", timeout=60)
     while not stop_event.is_set():
         db = None
         try:
+            if not redis_lock.acquire():
+                continue
             db = SessionLocal()  # 创建数据库会话
             DocumentService.update_progress(db)  # 更新文档服务进度
             stop_event.wait(6)
@@ -55,6 +59,7 @@ def update_progress():
         finally:
             if db:
                 db.close()
+            redis_lock.release()
 
 def signal_handler(sig, frame):
     logging.info("Received interrupt signal, shutting down...")

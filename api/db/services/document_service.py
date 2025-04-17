@@ -537,10 +537,10 @@ class DocumentService(CommonService):
                     prg = -1
                     status = TaskStatus.FAIL.value
                 elif finished:
-                    if d["parser_config"].get("raptor", {}).get("use_raptor") and not has_raptor:
+                    if d.parser_config.get("raptor", {}).get("use_raptor") and not has_raptor:
                         queue_raptor_o_graphrag_tasks(db, d, "raptor")
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
-                    elif d["parser_config"].get("graphrag", {}).get("use_graphrag") and not has_graphrag:
+                    elif d.parser_config.get("graphrag", {}).get("use_graphrag") and not has_graphrag:
                         queue_raptor_o_graphrag_tasks(db, d, "graphrag")
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
                     else:
