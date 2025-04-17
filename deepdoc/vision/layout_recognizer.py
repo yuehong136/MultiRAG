@@ -56,9 +56,8 @@ class LayoutRecognizer(Recognizer):
     def __call__(self, image_list, ocr_res, scale_factor=3,
                  thr=0.2, batch_size=16, drop=True):
         def __is_garbage(b):
-            patt = [r"^•+$", r"(版权归©|免责条款|地址[:：])", r"\.{3,}", "^[0-9]{1,2} / ?[0-9]{1,2}$",
+            patt = [r"^•+$", "^[0-9]{1,2} / ?[0-9]{1,2}$",
                     r"^[0-9]{1,2} of [0-9]{1,2}$", "^http://[^ ]{12,}",
-                    "(资料|数据)来源[:：]", "[0-9a-z._-]+@[a-z0-9-]+\\.[a-z]{2,3}",
                     "\\(cid *: *[0-9]+ *\\)"
                     ]
             return any([re.search(p, b["text"]) for p in patt])
