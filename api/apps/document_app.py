@@ -355,19 +355,20 @@ async def change_status(
             return construct_json_result(data=False, message="Database error (Document update)!",
                                          code=settings.RetCode.ARGUMENT_ERROR)
 
-        # 更新Milvus中的数据
-        status_int = 0 if str(req["status"]) == "0" else 1
-
-        try:
-            update_result = settings.docStoreConn.upsert(
-                collection_name=search.index_name_one(kb.tenant_id, kb.name),
-                data={"doc_id": req["doc_id"], "available_int": status_int}
-            )
-            if update_result["upsert_count"] == 0:
-                return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message="Milvus update failed!")
-        except MilvusException as e:
-            return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message=str(e))
-
+        # # 更新Milvus中的数据
+        # status_int = 0 if str(req["status"]) == "0" else 1
+        # try:
+        #     update_result = settings.docStoreConn.upsert(
+        #         collection_name=search.index_name_one(kb.tenant_id, kb.name),
+        #         data={"doc_id": req["doc_id"], "available_int": status_int}
+        #     )
+        #     if update_result["upsert_count"] == 0:
+        #         return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message="Milvus update failed!")
+        # except MilvusException as e:
+        #     return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message=str(e))
+        status = int(req["status"])
+        settings.docStoreConn.update({"doc_id": req["doc_id"]}, {"available_int": status},
+                                     search.index_name_one(kb.tenant_id, kb.name), doc.kb_id)
         return construct_json_result(data=True)
     except Exception as e:
         return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message=str(e))
