@@ -46,6 +46,28 @@ class DeleteByOwnerTypeRequest(BaseModel):
         }
 
 
+class DeleteByElementTypeRequest(BaseModel):
+    """删除特定元素类型和ID的向量数据请求模型"""
+    element_type: SemanticElementType = Field(
+        ...,
+        title="元素类型",
+        description="要删除的元素类型，对应SemanticElementType枚举中的类型"
+    )
+    id: str = Field(
+        ...,
+        title="元素ID",
+        description="要删除的元素ID"
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "element_type": "METRIC",
+                "id": "12345"
+            }
+        }
+
+
 class TextItemBase(BaseModel):
     """文本转向量的基础模型"""
     text: str = Field(
@@ -201,7 +223,54 @@ async def delete_embeddings_by_owner_type_and_id(
         result = await service.delete_by_owner_type_and_id(owner_type=body.owner_type, id=body.id)
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
-            message=f"成功删除 {body.owner_type}_ID={body.id} 的向量数据"
+            message=f"成功删除 {body.owner_type}_ID={body.id} 的向量数据，删除数量: {result.get('deleted_count', 0)}"
+        )
+    except (ValueError, RuntimeError) as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=str(e)
+        )
+    except Exception as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"删除向量数据时发生未知错误: {str(e)}"
+        )
+
+
+@router.post("/delete-embeddings-by-element-type-and-id", summary="删除特定元素类型和ID的向量数据")
+async def delete_embeddings_by_element_type_and_id(
+        body: DeleteByElementTypeRequest = Body(
+            ...,
+            title="删除请求信息",
+            description="指定要删除的元素类型和ID",
+            example={
+                "element_type": "METRIC",
+                "id": "12345"
+            }
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: TextEmbeddingService = Depends(get_text_embedding_service)
+):
+    """删除特定元素类型和ID的向量数据
+
+    Args:
+        body: 包含元素类型和ID的请求体
+        db: 数据库会话
+        user: 当前用户
+        service: 文本嵌入服务
+
+    Returns:
+        包含删除操作状态和结果信息的响应
+
+    Raises:
+        HTTPException: 当删除操作失败时
+    """
+    try:
+        result = await service.delete_by_element_type_and_id(element_type=body.element_type, id=body.id)
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message=f"成功删除元素类型 {body.element_type} ID={body.id} 的向量数据，删除数量: {result.get("delete_count", 0)}"
         )
     except (ValueError, RuntimeError) as e:
         return ResponseSchema(

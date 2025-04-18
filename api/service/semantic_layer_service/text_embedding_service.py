@@ -10,7 +10,7 @@ from api.db import LLMType
 from api.db.db_models import get_db
 from api.db.services.llm_service import LLMBundle
 from api.settings import docStoreConn
-from api.service.semantic_layer_service.models import SemanticTextData, OwnerType
+from api.service.semantic_layer_service.models import SemanticTextData, OwnerType, SemanticElementType
 from core.utils.milvus_conn import MilvusConnection
 
 
@@ -85,6 +85,34 @@ class TextEmbeddingService:
         result = self.vector_database.delete(
             collection_name=self.COLLECTION_NAME,
             filter=f"{field_name} == '{id}'"
+        )
+
+        return result
+
+    async def delete_by_element_type_and_id(self, element_type: SemanticElementType, id: str):
+        """删除指定元素类型和ID的向量数据
+
+        Args:
+            element_type (SemanticElementType): 元素类型，必须是 SemanticElementType 枚举中的一个值
+            id (str): 元素ID
+
+        Returns:
+            dict: 删除操作的结果
+
+        Raises:
+            RuntimeError: 当集合不存在时
+        """
+        # 检查集合是否存在
+        if not self.vector_database.has_collection(collection_name=self.COLLECTION_NAME):
+            raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
+
+        # 构建 element_id 格式为: element_type + "_" + id
+        element_id = f"{element_type.value}_{id}"
+
+        # 执行删除操作
+        result = self.vector_database.delete(
+            collection_name=self.COLLECTION_NAME,
+            filter=f"element_id == '{element_id}'"
         )
 
         return result
