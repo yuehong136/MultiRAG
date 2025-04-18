@@ -46,3 +46,9 @@ class SemanticElementType(str, Enum):
     TERM = "TERM"  # 术语
     TERM_DESC = "TERM_DESC"  # 术语描述
     TERM_SYNONYMS = "TERM_SYNONYMS"  # 术语同义词
+
+
+class OwnerType(str, Enum):
+    MODEL = "MODEL"
+    DATASET = "DATASET"
+    THEME_DOMAIN = "THEME_DOMAIN"

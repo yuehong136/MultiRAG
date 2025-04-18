@@ -10,7 +10,7 @@ from api.db import LLMType
 from api.db.db_models import get_db
 from api.db.services.llm_service import LLMBundle
 from api.settings import docStoreConn
-from api.service.semantic_layer_service.models import SemanticTextData
+from api.service.semantic_layer_service.models import SemanticTextData, OwnerType
 from core.utils.milvus_conn import MilvusConnection
 
 
@@ -57,6 +57,37 @@ class TextEmbeddingService:
 
         # 批量插入到向量数据库
         self.vector_database.insert(collection_name=self.COLLECTION_NAME, data=batch_data)
+
+    async def delete_by_owner_type_and_id(self, owner_type: OwnerType, id: str):
+        """删除指定类型和ID相关的数据
+
+        Args:
+            owner_type (str): 实体类型，必须是 'MODEL', 'DATASET' 或 'THEME_DOMAIN'
+            id (str): 实体ID
+
+        Raises:
+            ValueError: 当实体类型不是预期的值时
+            RuntimeError: 当集合不存在时
+        """
+        # 检查集合是否存在
+        if not self.vector_database.has_collection(collection_name=self.COLLECTION_NAME):
+            raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
+
+        # 映射实体类型到对应的字段名
+        field_mapping = {
+            OwnerType.MODEL: "model_id",
+            OwnerType.DATASET: "dataset_id",
+            OwnerType.THEME_DOMAIN: "theme_domain_id"
+        }
+
+        field_name = field_mapping[owner_type]
+        # 执行删除操作
+        result = self.vector_database.delete(
+            collection_name=self.COLLECTION_NAME,
+            filter=f"{field_name} == '{id}'"
+        )
+
+        return result
 
     def _get_embedding_model_dim(self, embedding_model: str) -> int:
         """获取嵌入模型的向量维度"""

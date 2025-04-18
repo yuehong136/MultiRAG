@@ -1,16 +1,37 @@
-from enum import Enum, auto
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Body
-from pydantic import BaseModel, Field, validator
+from fastapi import APIRouter, Depends, Body, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from api.db.db_models import get_db
 from api.apps import manager
 
 from api.service.semantic_layer_service.text_embedding_service import TextEmbeddingService, get_text_embedding_service
-from api.service.semantic_layer_service.models import SemanticTextData, SemanticElementType
+from api.service.semantic_layer_service.models import SemanticTextData, SemanticElementType, OwnerType
 
 router = APIRouter()
+
+
+class DeleteByOwnerTypeRequest(BaseModel):
+    """删除特定类型实体相关向量的请求模型"""
+    owner_type: OwnerType = Field(
+        ...,
+        title="实体类型",
+        description="要删除的实体类型，必须是 MODEL, DATASET 或 THEME_DOMAIN"
+    )
+    id: str = Field(
+        ...,
+        title="实体ID",
+        description="要删除的实体ID"
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "type": "MODEL",
+                "id": "model_12345"
+            }
+        }
 
 
 class TextItemBase(BaseModel):
@@ -124,6 +145,46 @@ async def save_text_to_embedding(
     )
     await service.save_semantic_text_to_embedding(semantic_data=semantic_data)
     return {"status": "success", "message": "文本已成功转换为向量并保存"}
+
+
+@router.post("/delete-embeddings-by-owner-type-and-id", summary="删除特定类型实体相关的向量数据")
+async def delete_embeddings_by_owner_type_and_id(
+        body: DeleteByOwnerTypeRequest = Body(
+            ...,
+            title="删除请求信息",
+            description="指定要删除的实体类型和ID",
+            example={
+                "type": "MODEL",
+                "id": "12345"
+            }
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: TextEmbeddingService = Depends(get_text_embedding_service)
+):
+    """删除与特定实体相关的所有向量数据
+
+    Args:
+        body: 包含实体类型和ID的请求体
+        db: 数据库会话
+        user: 当前用户
+        service: 文本嵌入服务
+
+    Returns:
+        包含删除操作状态和结果信息的响应
+
+    Raises:
+        HTTPException: 当删除操作失败时
+    """
+    try:
+        result = await service.delete_by_owner_type_and_id(owner_type=body.owner_type, id=body.id)
+        return {
+            "status": "success",
+            "message": f"成功删除 {body.owner_type}_ID={body.id} 的向量数据",
+            "deleted_count": result.delete_count if hasattr(result, 'delete_count') else 0
+        }
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/save-texts-to-embedding-batch", summary="批量将多个文本转为向量并保存")
