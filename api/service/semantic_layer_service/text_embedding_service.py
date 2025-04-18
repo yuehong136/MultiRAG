@@ -46,7 +46,8 @@ class TextEmbeddingService:
         for i, item in enumerate(semantic_data_list):
             insert_data = {
                 "element_type": item.element_type,
-                "element_id": item.element_type + "_" + item.element_id,
+                "original_id": item.original_id,
+                "element_id": item.element_type + "_" + item.original_id,
                 "original_text": item.text,
                 "model_id": item.model_id,
                 "dataset_id": item.dataset_id,
@@ -58,12 +59,12 @@ class TextEmbeddingService:
         # 批量插入到向量数据库
         self.vector_database.insert(collection_name=self.COLLECTION_NAME, data=batch_data)
 
-    async def delete_by_owner_type_and_id(self, owner_type: OwnerType, id: str):
+    async def delete_by_owner_type_and_id(self, owner_type: OwnerType, original_id: str):
         """删除指定类型和ID相关的数据
 
         Args:
             owner_type (str): 实体类型，必须是 'MODEL', 'DATASET' 或 'THEME_DOMAIN'
-            id (str): 实体ID
+            original_id (str): 实体ID
 
         Raises:
             ValueError: 当实体类型不是预期的值时
@@ -84,17 +85,17 @@ class TextEmbeddingService:
         # 执行删除操作
         result = self.vector_database.delete(
             collection_name=self.COLLECTION_NAME,
-            filter=f"{field_name} == '{id}'"
+            filter=f"{field_name} == '{original_id}'"
         )
 
         return result
 
-    async def delete_by_element_type_and_id(self, element_type: SemanticElementType, id: str):
+    async def delete_by_element_type_and_id(self, element_type: SemanticElementType, original_id: str):
         """删除指定元素类型和ID的向量数据
 
         Args:
             element_type (SemanticElementType): 元素类型，必须是 SemanticElementType 枚举中的一个值
-            id (str): 元素ID
+            original_id (str): 元素ID
 
         Returns:
             dict: 删除操作的结果
@@ -107,7 +108,7 @@ class TextEmbeddingService:
             raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
 
         # 构建 element_id 格式为: element_type + "_" + id
-        element_id = f"{element_type.value}_{id}"
+        element_id = f"{element_type.value}_{original_id}"
 
         # 执行删除操作
         result = self.vector_database.delete(
@@ -153,6 +154,11 @@ class TextEmbeddingService:
             max_length=256,
         )
         schema.add_field(
+            field_name="original_id",
+            datatype=DataType.VARCHAR,
+            max_length=256,
+        )
+        schema.add_field(
             field_name="element_id",  # element_type + id 为唯一标识
             datatype=DataType.VARCHAR,
             max_length=256,
@@ -194,11 +200,16 @@ class TextEmbeddingService:
                                metric_type="COSINE",
                                index_type="IVF_FLAT",
                                index_name="vector_index",
-                               param={"nlist": 128})
+                               param={"nlist": 1024})
         index_params.add_index(
             field_name="element_type",
             index_type="BITMAP",
             index_name="element_type_index"
+        )
+        index_params.add_index(
+            field_name="original_id",
+            index_type="INVERTED",
+            index_name="original_id_index"
         )
         index_params.add_index(
             field_name="element_id",

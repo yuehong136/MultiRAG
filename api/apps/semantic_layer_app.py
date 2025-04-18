@@ -31,10 +31,10 @@ class DeleteByOwnerTypeRequest(BaseModel):
         title="实体类型",
         description="要删除的实体类型，必须是 MODEL, DATASET 或 THEME_DOMAIN"
     )
-    id: str = Field(
+    original_id: str = Field(
         ...,
         title="实体ID",
-        description="要删除的实体ID"
+        description="MODEL, DATASET 或 THEME_DOMAIN 的ID"
     )
 
     class Config:
@@ -53,9 +53,9 @@ class DeleteByElementTypeRequest(BaseModel):
         title="元素类型",
         description="要删除的元素类型，对应SemanticElementType枚举中的类型"
     )
-    id: str = Field(
+    original_id: str = Field(
         ...,
-        title="元素ID",
+        title="元素在中台表中的ID",
         description="要删除的元素ID"
     )
 
@@ -80,9 +80,9 @@ class TextItemBase(BaseModel):
         title="文本类型",
         description="文本的类型，对应 SemanticElementType 枚举中的类型名称",
     )
-    id: str = Field(
+    original_id: str = Field(
         ...,
-        title="ID",
+        title="original_id",
         description="在中台表中的ID",
     )
     model_id: Optional[str] = Field(
@@ -133,13 +133,13 @@ class BatchTextItem(BaseModel):
                     {
                         "text": "这是第一个示例文本，描述了某个数据集的内容",
                         "type": "DATASET_DESC",
-                        "id": "12345",
+                        "original_id": "12345",
                         "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
                     },
                     {
                         "text": "这是第二个示例文本，描述了某个术语的含义",
                         "type": "TERM_DESC",
-                        "id": "67890",
+                        "original_id": "67890",
                         "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
                     }
                 ]
@@ -156,7 +156,7 @@ async def save_text_to_embedding(
             example={
                 "text": "这是一个术语描述的示例文本，该术语代表某个特定的概念。",
                 "type": "TERM_DESC",
-                "id": "term_67890",
+                "original_id": "term_67890",
                 "model_id": "12345",
                 "dataset_id": "12345",
                 "theme_domain_id": "12345",
@@ -172,7 +172,7 @@ async def save_text_to_embedding(
         semantic_data = SemanticTextData(
             text=body.text,
             element_type=body.type,
-            element_id=body.id,
+            original_id=body.original_id,
             embedding_model=body.embedding_model,
             model_id=body.model_id,
             dataset_id=body.dataset_id,
@@ -198,7 +198,7 @@ async def delete_embeddings_by_owner_type_and_id(
             description="指定要删除的实体类型和ID",
             example={
                 "type": "MODEL",
-                "id": "12345"
+                "original_id": "12345"
             }
         ),
         db: Session = Depends(get_db),
@@ -220,10 +220,10 @@ async def delete_embeddings_by_owner_type_and_id(
         HTTPException: 当删除操作失败时
     """
     try:
-        result = await service.delete_by_owner_type_and_id(owner_type=body.owner_type, id=body.id)
+        result = await service.delete_by_owner_type_and_id(owner_type=body.owner_type, original_id=body.original_id)
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
-            message=f"成功删除 {body.owner_type}_ID={body.id} 的向量数据，删除数量: {result.get('deleted_count', 0)}"
+            message=f"成功删除 {body.owner_type}_ID={body.original_id} 的向量数据，删除数量: {result.get('delete_count', 0)}"
         )
     except (ValueError, RuntimeError) as e:
         return ResponseSchema(
@@ -245,7 +245,7 @@ async def delete_embeddings_by_element_type_and_id(
             description="指定要删除的元素类型和ID",
             example={
                 "element_type": "METRIC",
-                "id": "12345"
+                "original_id": "12345"
             }
         ),
         db: Session = Depends(get_db),
@@ -267,10 +267,11 @@ async def delete_embeddings_by_element_type_and_id(
         HTTPException: 当删除操作失败时
     """
     try:
-        result = await service.delete_by_element_type_and_id(element_type=body.element_type, id=body.id)
+        result = await service.delete_by_element_type_and_id(element_type=body.element_type,
+                                                             original_id=body.original_id)
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
-            message=f"成功删除元素类型 {body.element_type} ID={body.id} 的向量数据，删除数量: {result.get("delete_count", 0)}"
+            message=f"成功删除元素类型 {body.element_type} ID={body.original_id} 的向量数据，删除数量: {result.get("delete_count", 0)}"
         )
     except (ValueError, RuntimeError) as e:
         return ResponseSchema(
@@ -294,13 +295,13 @@ async def save_texts_to_embedding_batch(
                 {
                     "text": "这是第一个示例文本",
                     "type": "DATASET_DESC",
-                    "id": "12345",
+                    "original_id": "12345",
                     "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
                 },
                 {
                     "text": "这是第二个示例文本",
                     "type": "TERM_DESC",
-                    "id": "67890",
+                    "original_id": "67890",
                     "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
                 }
             ]
@@ -315,7 +316,7 @@ async def save_texts_to_embedding_batch(
             SemanticTextData(
                 text=item.text,
                 element_type=item.type,
-                element_id=item.id,
+                original_id=item.original_id,
                 embedding_model=item.embedding_model,
                 model_id=item.model_id,
                 dataset_id=item.dataset_id,
