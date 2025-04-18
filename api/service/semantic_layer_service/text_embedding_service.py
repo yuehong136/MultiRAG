@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, List
 
 from fastapi.params import Depends
 from pymilvus import CollectionSchema, DataType
@@ -23,32 +23,43 @@ class TextEmbeddingService:
         self.vector_database = docStoreConn
 
     async def save_semantic_text_to_embedding(self, semantic_data: SemanticTextData):
-        """将文本转为向量并保存到数据库"""
+        """将单条文本转为向量并保存到数据库"""
+        await self.save_semantic_texts_to_embedding_batch([semantic_data])
+
+    async def save_semantic_texts_to_embedding_batch(self, semantic_data_list: List[SemanticTextData]):
+        """批量将多个文本转为向量并保存到数据库"""
+        if not semantic_data_list:
+            return
+
+        # 确保集合存在
+        embedding_model_name = semantic_data_list[0].embedding_model
         if not self.vector_database.has_collection(collection_name=self.COLLECTION_NAME):
-            self._create_collection(embedding_model=semantic_data.embedding_model)
+            self._create_collection(embedding_model=embedding_model_name)
 
-        insert_data = self._assemble_insert_data(semantic_data)
-        self.vector_database.insert(collection_name=self.COLLECTION_NAME, data=insert_data)
+        # 批量生成嵌入向量
+        texts = [item.text for item in semantic_data_list]
+        embedding_model = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model_name)
+        vectors, _ = embedding_model.encode(texts)
 
-    def _assemble_insert_data(self, semantic_data: SemanticTextData):
-        embedding = self._generate_embedding(semantic_data.embedding_model, semantic_data.text)
-        insert_data = {
-            "element_type": semantic_data.element_type,
-            "element_id": semantic_data.element_type + "_" + semantic_data.element_id,
-            "original_text": semantic_data.text,
-            "model_id": semantic_data.model_id,
-            "dataset_id": semantic_data.dataset_id,
-            "theme_domain_id": semantic_data.theme_domain_id,
-            "vector": embedding
-        }
-        return insert_data
+        # 组装批量插入数据
+        batch_data = []
+        for i, item in enumerate(semantic_data_list):
+            insert_data = {
+                "element_type": item.element_type,
+                "element_id": item.element_type + "_" + item.element_id,
+                "original_text": item.text,
+                "model_id": item.model_id,
+                "dataset_id": item.dataset_id,
+                "theme_domain_id": item.theme_domain_id,
+                "vector": vectors[i]
+            }
+            batch_data.append(insert_data)
 
-    def _generate_embedding(self, embedding_model: str, text: str):
-        embedding_model = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
-        vectors, _ = embedding_model.encode([text])
-        return vectors[0]
+        # 批量插入到向量数据库
+        self.vector_database.insert(collection_name=self.COLLECTION_NAME, data=batch_data)
 
     def _get_embedding_model_dim(self, embedding_model: str) -> int:
+        """获取嵌入模型的向量维度"""
         embedding_model = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
         sample_vec, _ = embedding_model.encode(["测试"])
         vector_dim = len(sample_vec[0])
@@ -68,6 +79,7 @@ class TextEmbeddingService:
                                                index_params=index_params)
 
     def _create_schema(self, embedding_model: str) -> CollectionSchema:
+        """创建集合的schema定义"""
         schema = self.vector_database.create_schema(enable_dynamic_field=True)
         schema.add_field(
             field_name="element_pk",
@@ -117,6 +129,7 @@ class TextEmbeddingService:
         return schema
 
     def _create_index(self):
+        """创建集合的索引参数"""
         index_params = self.vector_database.prepare_index_params()
         index_params.add_index(field_name="vector",
                                metric_type="COSINE",
@@ -152,4 +165,5 @@ class TextEmbeddingService:
 
 
 def get_text_embedding_service(db: Session = Depends(get_db), user=Depends(manager)) -> TextEmbeddingService:
+    """依赖注入获取TextEmbeddingService实例"""
     return TextEmbeddingService(db, user)
