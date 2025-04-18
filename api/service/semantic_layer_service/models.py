@@ -1,7 +1,6 @@
 """
 Shared data models for semantic layer services
 """
-from typing import Optional
 
 
 class SemanticTextData:

@@ -11,6 +11,7 @@ from api.db.db_models import get_db
 from api.db.services.llm_service import LLMBundle
 from api.settings import docStoreConn
 from api.service.semantic_layer_service.models import SemanticTextData
+from core.utils.milvus_conn import MilvusConnection
 
 
 class TextEmbeddingService:
@@ -25,6 +26,27 @@ class TextEmbeddingService:
         """将文本转为向量并保存到数据库"""
         if not self.vector_database.has_collection(collection_name=self.COLLECTION_NAME):
             self._create_collection(embedding_model=semantic_data.embedding_model)
+
+        insert_data = self._assemble_insert_data(semantic_data)
+        self.vector_database.insert(collection_name=self.COLLECTION_NAME, data=insert_data)
+
+    def _assemble_insert_data(self, semantic_data: SemanticTextData):
+        embedding = self._generate_embedding(semantic_data.embedding_model, semantic_data.text)
+        insert_data = {
+            "element_type": semantic_data.element_type,
+            "element_id": semantic_data.element_type + "_" + semantic_data.element_id,
+            "original_text": semantic_data.text,
+            "model_id": semantic_data.model_id,
+            "dataset_id": semantic_data.dataset_id,
+            "theme_domain_id": semantic_data.theme_domain_id,
+            "vector": embedding
+        }
+        return insert_data
+
+    def _generate_embedding(self, embedding_model: str, text: str):
+        embedding_model = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
+        vectors, _ = embedding_model.encode([text])
+        return vectors[0]
 
     def _get_embedding_model_dim(self, embedding_model: str) -> int:
         embedding_model = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
@@ -43,11 +65,10 @@ class TextEmbeddingService:
         self.vector_database.create_collection(collection_name=self.COLLECTION_NAME,
                                                dimension=self._get_embedding_model_dim(embedding_model),
                                                schema=schema,
-                                               index_params=index_params,
-                                               enable_dynamic_field=True)
+                                               index_params=index_params)
 
     def _create_schema(self, embedding_model: str) -> CollectionSchema:
-        schema = self.vector_database.create_schema()
+        schema = self.vector_database.create_schema(enable_dynamic_field=True)
         schema.add_field(
             field_name="element_pk",
             datatype=DataType.VARCHAR,
