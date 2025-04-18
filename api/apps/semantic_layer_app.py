@@ -1,4 +1,5 @@
-from typing import List, Optional
+from enum import Enum
+from typing import List, Optional, Any
 
 from fastapi import APIRouter, Depends, Body, HTTPException
 from pydantic import BaseModel, Field
@@ -10,6 +11,17 @@ from api.service.semantic_layer_service.text_embedding_service import TextEmbedd
 from api.service.semantic_layer_service.models import SemanticTextData, SemanticElementType, OwnerType
 
 router = APIRouter()
+
+
+class StatusEnum(str, Enum):
+    SUCCESS = "success"
+    ERROR = "error"
+
+
+class ResponseSchema(BaseModel):
+    status: StatusEnum = StatusEnum.SUCCESS
+    message: str | None = None
+    data: Any | None = None
 
 
 class DeleteByOwnerTypeRequest(BaseModel):
@@ -134,17 +146,26 @@ async def save_text_to_embedding(
         service: TextEmbeddingService = Depends(get_text_embedding_service)
 ):
     """保存单条文本到向量数据库"""
-    semantic_data = SemanticTextData(
-        text=body.text,
-        element_type=body.type,
-        element_id=body.id,
-        embedding_model=body.embedding_model,
-        model_id=body.model_id,
-        dataset_id=body.dataset_id,
-        theme_domain_id=body.theme_domain_id
-    )
-    await service.save_semantic_text_to_embedding(semantic_data=semantic_data)
-    return {"status": "success", "message": "文本已成功转换为向量并保存"}
+    try:
+        semantic_data = SemanticTextData(
+            text=body.text,
+            element_type=body.type,
+            element_id=body.id,
+            embedding_model=body.embedding_model,
+            model_id=body.model_id,
+            dataset_id=body.dataset_id,
+            theme_domain_id=body.theme_domain_id
+        )
+        await service.save_semantic_text_to_embedding(semantic_data=semantic_data)
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="文本已成功转换为向量并保存"
+        )
+    except Exception as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"文本转向量保存失败: {str(e)}"
+        )
 
 
 @router.post("/delete-embeddings-by-owner-type-and-id", summary="删除特定类型实体相关的向量数据")
@@ -178,13 +199,20 @@ async def delete_embeddings_by_owner_type_and_id(
     """
     try:
         result = await service.delete_by_owner_type_and_id(owner_type=body.owner_type, id=body.id)
-        return {
-            "status": "success",
-            "message": f"成功删除 {body.owner_type}_ID={body.id} 的向量数据",
-            "deleted_count": result.delete_count if hasattr(result, 'delete_count') else 0
-        }
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message=f"成功删除 {body.owner_type}_ID={body.id} 的向量数据"
+        )
     except (ValueError, RuntimeError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=str(e)
+        )
+    except Exception as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"删除向量数据时发生未知错误: {str(e)}"
+        )
 
 
 @router.post("/save-texts-to-embedding-batch", summary="批量将多个文本转为向量并保存")
@@ -213,20 +241,26 @@ async def save_texts_to_embedding_batch(
         service: TextEmbeddingService = Depends(get_text_embedding_service)
 ):
     """批量保存多条文本到向量数据库"""
-    semantic_data_list = [
-        SemanticTextData(
-            text=item.text,
-            element_type=item.type,
-            element_id=item.id,
-            embedding_model=item.embedding_model,
-            model_id=item.model_id,
-            dataset_id=item.dataset_id,
-            theme_domain_id=item.theme_domain_id
-        ) for item in body
-    ]
+    try:
+        semantic_data_list = [
+            SemanticTextData(
+                text=item.text,
+                element_type=item.type,
+                element_id=item.id,
+                embedding_model=item.embedding_model,
+                model_id=item.model_id,
+                dataset_id=item.dataset_id,
+                theme_domain_id=item.theme_domain_id
+            ) for item in body
+        ]
 
-    await service.save_semantic_texts_to_embedding_batch(semantic_data_list=semantic_data_list)
-    return {
-        "status": "success",
-        "message": f"批量文本转向量处理成功，共处理 {len(semantic_data_list)} 条数据"
-    }
+        await service.save_semantic_texts_to_embedding_batch(semantic_data_list=semantic_data_list)
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message=f"批量文本转向量处理成功，共处理 {len(semantic_data_list)} 条数据"
+        )
+    except Exception as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"批量文本转向量处理失败: {str(e)}"
+        )
