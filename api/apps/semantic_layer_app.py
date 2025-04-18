@@ -8,39 +8,9 @@ from api.db.db_models import get_db
 from api.apps import manager
 
 from api.service.semantic_layer_service.text_embedding_service import TextEmbeddingService, get_text_embedding_service
-from api.service.semantic_layer_service.models import SemanticTextData
+from api.service.semantic_layer_service.models import SemanticTextData, SemanticElementType
 
 router = APIRouter()
-
-
-class Type(Enum):
-    THEME_DOMAIN = auto()  # 主题域
-    THEME_DOMAIN_EN = auto()  # 主题域英文
-
-    DATASET = auto()  # 数据集
-    DATASET_EN = auto()  # 数据集英文
-    DATASET_DESC = auto()  # 数据集描述
-
-    MODEL = auto()  # 模型
-    MODEL_EN = auto()  # 模型英文
-    MODEL_DESC = auto()  # 模型描述
-
-    METRIC = auto()  # 指标
-    METRIC_EN = auto()  # 指标英文
-    METRIC_DESC = auto()  # 指标描述
-    METRIC_SYNONYMS = auto()  # 指标同义词
-
-    DIMENSION = auto()  # 维度
-    DIMENSION_EN = auto()  # 维度英文
-    DIMENSION_DESC = auto()  # 维度描述
-    DIMENSION_SYNONYMS = auto()  # 维度同义词
-
-    DIMENSION_VALUE = auto()  # 维度值
-    DIMENSION_VALUE_SYNONYMS = auto()  # 维度值同义词
-
-    TERM = auto()  # 术语
-    TERM_DESC = auto()  # 术语描述
-    TERM_SYNONYMS = auto()  # 术语同义词
 
 
 class TextItemBase(BaseModel):
@@ -50,10 +20,10 @@ class TextItemBase(BaseModel):
         title="文本内容",
         description="需要转换为向量的文本内容",
     )
-    type: str = Field(
+    type: SemanticElementType = Field(
         ...,
         title="文本类型",
-        description="文本的类型，对应 Type 枚举中的类型名称",
+        description="文本的类型，对应 SemanticElementType 枚举中的类型名称",
     )
     id: str = Field(
         ...,
@@ -80,16 +50,6 @@ class TextItemBase(BaseModel):
         title="嵌入模型",
         description="嵌入模型的名称",
     )
-
-    @validator('type')
-    def validate_type(cls, v):
-        """验证type是否为Type枚举中的有效值"""
-        try:
-            Type[v]
-            return v
-        except KeyError:
-            valid_types = [t.name for t in Type]
-            raise ValueError(f"无效的类型: {v}. 有效类型: {', '.join(valid_types)}")
 
     class Config:
         schema_extra = {
