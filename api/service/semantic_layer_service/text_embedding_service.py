@@ -149,6 +149,11 @@ class TextEmbeddingService:
             max_length=256,
         )
         schema.add_field(
+            field_name="original_text",
+            datatype=DataType.VARCHAR,
+            max_length=1024,
+        )
+        schema.add_field(
             field_name="element_type",
             datatype=DataType.VARCHAR,
             max_length=256,
@@ -162,11 +167,6 @@ class TextEmbeddingService:
             field_name="element_id",  # element_type + id 为唯一标识
             datatype=DataType.VARCHAR,
             max_length=256,
-        )
-        schema.add_field(
-            field_name="original_text",
-            datatype=DataType.VARCHAR,
-            max_length=1024,
         )
         schema.add_field(
             field_name="model_id",
