@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 
 from fastapi import APIRouter, Depends, Body, HTTPException
 from pydantic import BaseModel, Field
@@ -147,6 +147,66 @@ class BatchTextItem(BaseModel):
         }
 
 
+class SearchVectorsRequest(BaseModel):
+    """向量搜索请求模型"""
+    query_text: str = Field(
+        ...,
+        title="查询文本",
+        description="用于查询相似向量的文本内容"
+    )
+    embedding_model: str = Field(
+        ...,
+        title="嵌入模型",
+        description="用于生成查询向量的嵌入模型名称"
+    )
+    element_types: Optional[List[SemanticElementType]] = Field(
+        None,
+        title="元素类型列表",
+        description="用于过滤的元素类型列表，可选"
+    )
+    theme_domain_ids: Optional[List[str]] = Field(
+        None,
+        title="主题域ID列表",
+        description="用于过滤的主题域ID列表，可选"
+    )
+    dataset_ids: Optional[List[str]] = Field(
+        None,
+        title="数据集ID列表",
+        description="用于过滤的数据集ID列表，可选"
+    )
+    model_ids: Optional[List[str]] = Field(
+        None,
+        title="模型ID列表",
+        description="用于过滤的模型ID列表，可选"
+    )
+    top_k: int = Field(
+        10,
+        title="返回结果数量",
+        description="返回的最大结果数量",
+        ge=1,
+        le=100
+    )
+    score_threshold: float = Field(
+        0.82,
+        title="相似度阈值",
+        description="相似度分数阈值，低于该值的结果将被过滤",
+        ge=0,
+        le=1
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "query_text": "气象数据分析",
+                "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+                "element_types": ["DATASET_DESC", "MODEL_DESC"],
+                "theme_domain_ids": ["theme_domain_123"],
+                "top_k": 5,
+                "score_threshold": 0.7
+            }
+        }
+
+
 @router.post("/save-text-to-embedding", summary="将单条文本转为向量并保存")
 async def save_text_to_embedding(
         body: TextItemBase = Body(
@@ -271,7 +331,7 @@ async def delete_embeddings_by_element_type_and_id(
                                                              original_id=body.original_id)
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
-            message=f"成功删除元素类型 {body.element_type} ID={body.original_id} 的向量数据，删除数量: {result.get("delete_count", 0)}"
+            message=f"成功删除元素类型 {body.element_type} ID={body.original_id} 的向量数据，删除数量: {result.get('delete_count', 0)}"
         )
     except (ValueError, RuntimeError) as e:
         return ResponseSchema(
@@ -333,4 +393,59 @@ async def save_texts_to_embedding_batch(
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"批量文本转向量处理失败: {str(e)}"
+        )
+
+
+@router.post("/search-similar-vectors", summary="根据文本查询相似的向量数据")
+async def search_similar_vectors(
+        body: SearchVectorsRequest = Body(
+            ...,
+            title="查询请求信息",
+            description="用于查询相似向量的文本和过滤条件"
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: TextEmbeddingService = Depends(get_text_embedding_service)
+):
+    """
+    根据文本查询相似的向量数据，支持组合条件过滤
+
+    Args:
+        body: 包含查询文本和过滤条件的请求体
+        db: 数据库会话
+        user: 当前用户
+        service: 文本嵌入服务
+
+    Returns:
+        包含查询结果的响应
+
+    Raises:
+        HTTPException: 当查询操作失败时
+    """
+    try:
+        results = await service.search_similar_vectors(
+            query_text=body.query_text,
+            embedding_model=body.embedding_model,
+            element_types=body.element_types,
+            theme_domain_ids=body.theme_domain_ids,
+            dataset_ids=body.dataset_ids,
+            model_ids=body.model_ids,
+            top_k=body.top_k,
+            score_threshold=body.score_threshold
+        )
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message=f"查询成功，找到 {len(results)} 条相似结果",
+            data=results
+        )
+    except RuntimeError as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=str(e)
+        )
+    except Exception as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"查询相似向量时发生未知错误: {str(e)}"
         )

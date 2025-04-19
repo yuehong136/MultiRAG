@@ -1,5 +1,5 @@
 import logging
-from typing import Any, List
+from typing import Any, List, Optional, Dict, Union
 
 from fastapi.params import Depends
 from pymilvus import CollectionSchema, DataType
@@ -58,6 +58,111 @@ class TextEmbeddingService:
 
         # 批量插入到向量数据库
         self.vector_database.insert(collection_name=self.COLLECTION_NAME, data=batch_data)
+
+    async def search_similar_vectors(
+            self,
+            query_text: str,
+            embedding_model: str,
+            element_types: Optional[List[SemanticElementType]] = None,
+            theme_domain_ids: Optional[List[str]] = None,
+            dataset_ids: Optional[List[str]] = None,
+            model_ids: Optional[List[str]] = None,
+            top_k: int = 10,
+            score_threshold: float = 0.6
+    ) -> List[Dict[str, Any]]:
+        """
+        根据文本查询相似的向量数据，支持组合条件过滤
+
+        Args:
+            query_text (str): 查询文本
+            embedding_model (str): 使用的嵌入模型
+            element_types (List[SemanticElementType], optional): 元素类型列表，用于过滤结果
+            theme_domain_ids (List[str], optional): 主题域ID列表，用于过滤结果
+            dataset_ids (List[str], optional): 数据集ID列表，用于过滤结果
+            model_ids (List[str], optional): 模型ID列表，用于过滤结果
+            top_k (int): 返回的最大结果数量，默认为10
+            score_threshold (float): 相似度阈值，低于该值的结果将被过滤，默认为0.6
+
+        Returns:
+            List[Dict[str, Any]]: 查询结果列表，每个结果包含匹配项的详细信息和相似度分数
+
+        Raises:
+            RuntimeError: 当集合不存在时
+        """
+        # 检查集合是否存在
+        if not self.vector_database.has_collection(collection_name=self.COLLECTION_NAME):
+            raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
+
+        # 生成查询向量
+        embedding_model_instance = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
+        query_vector, _ = embedding_model_instance.encode([query_text])
+
+        # 构建过滤条件
+        filter_conditions = []
+
+        # 添加元素类型过滤条件
+        if element_types and len(element_types) > 0:
+            element_type_values = [f"'{et.value}'" for et in element_types]
+            element_type_condition = f"element_type in [{', '.join(element_type_values)}]"
+            filter_conditions.append(element_type_condition)
+
+        # 添加主题域ID过滤条件
+        if theme_domain_ids and len(theme_domain_ids) > 0:
+            theme_domain_values = [f"'{tid}'" for tid in theme_domain_ids]
+            theme_domain_condition = f"theme_domain_id in [{', '.join(theme_domain_values)}]"
+            filter_conditions.append(theme_domain_condition)
+
+        # 添加数据集ID过滤条件
+        if dataset_ids and len(dataset_ids) > 0:
+            dataset_values = [f"'{did}'" for did in dataset_ids]
+            dataset_condition = f"dataset_id in [{', '.join(dataset_values)}]"
+            filter_conditions.append(dataset_condition)
+
+        # 添加模型ID过滤条件
+        if model_ids and len(model_ids) > 0:
+            model_values = [f"'{mid}'" for mid in model_ids]
+            model_condition = f"model_id in [{', '.join(model_values)}]"
+            filter_conditions.append(model_condition)
+
+        # 组合所有过滤条件
+        filter_expr = " and ".join(filter_conditions) if filter_conditions else ""
+
+        # 执行向量搜索
+        search_params = {
+            "metric_type": "COSINE",  # 使用余弦相似度
+            "params": {"nprobe": 16}  # 搜索参数，可根据性能需求调整
+        }
+
+        results = self.vector_database.search_by_milvus(
+            collection_name=self.COLLECTION_NAME,
+            data=[query_vector[0]],
+            anns_field="vector",
+            filter=filter_expr if filter_expr else None,
+            output_fields=["element_type", "original_id", "element_id", "original_text",
+                           "model_id", "dataset_id", "theme_domain_id"],
+            limit=top_k,
+            search_params=search_params
+        )
+
+        # 处理搜索结果
+        processed_results = []
+        for hit in results[0]:
+            if hit.get("distance", 0) < score_threshold:
+                continue
+
+            result_item = {
+                "score": hit.get("distance"),
+                "original_text": hit.get("entity").get("original_text"),
+                "element_type": hit.get("entity").get("element_type"),
+                "original_id": hit.get("entity").get("original_id"),
+                "element_id": hit.get("entity").get("element_id"),
+                "model_id": hit.get("entity").get("model_id"),
+                "dataset_id": hit.get("entity").get("dataset_id"),
+                "theme_domain_id": hit.get("entity").get("theme_domain_id")
+            }
+            processed_results.append(result_item)
+
+        return processed_results
 
     async def delete_by_owner_type_and_id(self, owner_type: OwnerType, original_id: str):
         """删除指定类型和ID相关的数据
