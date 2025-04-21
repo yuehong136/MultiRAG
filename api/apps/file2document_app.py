@@ -24,7 +24,7 @@ from api.apps import manager
 router = APIRouter()
 
 @router.post("/convert", summary="转换文件", response_description="成功转换文件")
-async def convert(
+def convert(
         kb_ids: list[str],
         file_ids: list[str],
         db: Session = Depends(get_db),
@@ -98,7 +98,7 @@ async def convert(
 
 
 @router.post("/rm", summary="删除文件", response_description="成功删除文件")
-async def rm(
+def rm(
         file_ids: list[str],
         db: Session = Depends(get_db),
         user=Depends(manager)

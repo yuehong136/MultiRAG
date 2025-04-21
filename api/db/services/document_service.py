@@ -10,8 +10,8 @@ import logging
 import random
 import time
 from datetime import datetime
-import trio
 
+import trio
 import xxhash
 from pymilvus import MilvusException
 from sqlalchemy.exc import NoResultFound, OperationalError
@@ -24,11 +24,10 @@ from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils import current_timestamp, get_format_time, get_uuid
 from api.utils.db_utils import bulk_insert_into_db
+from api.settings import docStoreConn
 from core.settings import SVR_QUEUE_NAME
 from core.nlp import search, rag_tokenizer
 from core import settings
-from api.settings import docStoreConn
-# from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
 
@@ -132,15 +131,9 @@ class DocumentService(CommonService):
 
     @classmethod
     def insert(cls, db: Session, doc: dict):
-        # new_doc = cls.save(db, **doc)
-        # kb = KnowledgebaseService.get_by_id(db, doc["kb_id"])
-        # KnowledgebaseService.update_by_id(db, kb.id, {"doc_num": kb.doc_num + 1})
-        # return new_doc
         if not cls.save(db, **doc):
             raise RuntimeError("Database error (Document)!")
-        kb = KnowledgebaseService.get_by_id(db, doc["kb_id"])
-        if not KnowledgebaseService.update_by_id(
-                db, kb.id, {"doc_num": kb.doc_num + 1}):
+        if not KnowledgebaseService.atomic_increase_doc_num_by_id(db, doc["kb_id"]):
             raise RuntimeError("Database error (Knowledgebase)!")
         return Document(**doc)
 

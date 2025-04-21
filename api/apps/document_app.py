@@ -211,7 +211,7 @@ async def web_crawl(
 
 
 @router.post("/create", summary="创建文件或文件夹", response_description="成功创建文件或文件夹")
-async def create_document(
+def create_document(
         request_body: CreateDocumentRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)

@@ -6,11 +6,14 @@
 @date：2024/7/9 9:00
 @desc:
 """
+from datetime import datetime
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from api.db import StatusEnum, TenantPermission
 from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document
 from api.db.services.common_service import CommonService
+from api.utils import current_timestamp, datetime_format
 
 
 class KnowledgebaseService(CommonService):
@@ -384,3 +387,21 @@ class KnowledgebaseService(CommonService):
             return False
         return True
 
+    @classmethod
+    def atomic_increase_doc_num_by_id(cls, db: Session, kb_id):
+        data = {
+            "update_time": current_timestamp(),
+            "update_date": datetime_format(datetime.now())
+        }
+        # 在SQLAlchemy中，直接使用表达式来原子递增
+        from sqlalchemy import update
+
+        update_stmt = update(cls.model).where(
+            cls.model.id == kb_id
+        ).values(
+            doc_num=cls.model.doc_num + 1,
+            **data
+        )
+        result = db.execute(update_stmt)
+        db.commit()
+        return result.rowcount > 0
