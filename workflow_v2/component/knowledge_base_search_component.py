@@ -7,6 +7,7 @@ from api.db import LLMType
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.settings import SCRIPT_SCHEDULER_PORT
+from core.app.tag import label_question
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 
@@ -55,7 +56,9 @@ class KnowledgeBaseSearchComponent(BaseComponent):
                                                  1 - self.keywords_similarity_weight,
                                                  top=self.top_k,
                                                  aggs=False,
-                                                 rerank_mdl=rerank_mdl)
+                                                 rerank_mdl=rerank_mdl,
+                                                 rank_feature=label_question(self.db, " ".join(query), kbs)
+                                                 )
 
         if not kbinfos["chunks"]:
             if self.empty_response and self.empty_response.strip():
