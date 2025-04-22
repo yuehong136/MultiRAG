@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import Any, List, Optional, Dict, Union
 
 from fastapi.params import Depends
@@ -34,12 +35,14 @@ class TextEmbeddingService:
         # 确保集合存在
         embedding_model_name = semantic_data_list[0].embedding_model
         if not self.vector_database.has_collection(collection_name=self.COLLECTION_NAME):
-            self._create_collection(embedding_model=embedding_model_name)
+            await self._create_collection(embedding_model=embedding_model_name)
 
         # 批量生成嵌入向量
         texts = [item.text for item in semantic_data_list]
         embedding_model = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model_name)
-        vectors, _ = embedding_model.encode(texts)
+
+        # 使用asyncio.to_thread将同步encode方法转为异步
+        vectors, _ = await asyncio.to_thread(embedding_model.encode, texts)
 
         # 组装批量插入数据
         batch_data = []
@@ -57,7 +60,12 @@ class TextEmbeddingService:
             batch_data.append(insert_data)
 
         # 批量插入到向量数据库
-        self.vector_database.insert(collection_name=self.COLLECTION_NAME, data=batch_data)
+        # 如果vector_database.insert是耗时操作，也可以考虑使用asyncio.to_thread包装
+        await asyncio.to_thread(
+            self.vector_database.insert,
+            collection_name=self.COLLECTION_NAME,
+            data=batch_data
+        )
 
     async def search_similar_vectors(
             self,
@@ -90,12 +98,17 @@ class TextEmbeddingService:
             RuntimeError: 当集合不存在时
         """
         # 检查集合是否存在
-        if not self.vector_database.has_collection(collection_name=self.COLLECTION_NAME):
+        has_collection = await asyncio.to_thread(
+            self.vector_database.has_collection,
+            collection_name=self.COLLECTION_NAME
+        )
+        if not has_collection:
             raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
 
         # 生成查询向量
         embedding_model_instance = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
-        query_vector, _ = embedding_model_instance.encode([query_text])
+        # 使用asyncio.to_thread将同步encode方法转为异步
+        query_vector, _ = await asyncio.to_thread(embedding_model_instance.encode, [query_text])
 
         # 构建过滤条件
         filter_conditions = []
@@ -133,7 +146,9 @@ class TextEmbeddingService:
             "params": {"nprobe": 16}  # 搜索参数，可根据性能需求调整
         }
 
-        results = self.vector_database.search_by_milvus(
+        # 使用asyncio.to_thread将search_by_milvus方法转为异步
+        results = await asyncio.to_thread(
+            self.vector_database.search_by_milvus,
             collection_name=self.COLLECTION_NAME,
             data=[query_vector[0]],
             anns_field="vector",
@@ -176,7 +191,11 @@ class TextEmbeddingService:
             RuntimeError: 当集合不存在时
         """
         # 检查集合是否存在
-        if not self.vector_database.has_collection(collection_name=self.COLLECTION_NAME):
+        has_collection = await asyncio.to_thread(
+            self.vector_database.has_collection,
+            collection_name=self.COLLECTION_NAME
+        )
+        if not has_collection:
             raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
 
         # 映射实体类型到对应的字段名
@@ -187,8 +206,9 @@ class TextEmbeddingService:
         }
 
         field_name = field_mapping[owner_type]
-        # 执行删除操作
-        result = self.vector_database.delete(
+        # 使用asyncio.to_thread将delete方法转为异步
+        result = await asyncio.to_thread(
+            self.vector_database.delete,
             collection_name=self.COLLECTION_NAME,
             filter=f"{field_name} == '{original_id}'"
         )
@@ -209,41 +229,53 @@ class TextEmbeddingService:
             RuntimeError: 当集合不存在时
         """
         # 检查集合是否存在
-        if not self.vector_database.has_collection(collection_name=self.COLLECTION_NAME):
+        has_collection = await asyncio.to_thread(
+            self.vector_database.has_collection,
+            collection_name=self.COLLECTION_NAME
+        )
+        if not has_collection:
             raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
 
         # 构建 element_id 格式为: element_type + "_" + id
         element_id = f"{element_type.value}_{original_id}"
 
-        # 执行删除操作
-        result = self.vector_database.delete(
+        # 使用asyncio.to_thread将delete方法转为异步
+        result = await asyncio.to_thread(
+            self.vector_database.delete,
             collection_name=self.COLLECTION_NAME,
             filter=f"element_id == '{element_id}'"
         )
 
         return result
 
-    def _get_embedding_model_dim(self, embedding_model: str) -> int:
+    async def _get_embedding_model_dim(self, embedding_model: str) -> int:
         """获取嵌入模型的向量维度"""
-        embedding_model = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
-        sample_vec, _ = embedding_model.encode(["测试"])
+        embedding_model_instance = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
+        # 使用asyncio.to_thread将encode方法转为异步
+        sample_vec, _ = await asyncio.to_thread(embedding_model_instance.encode, ["测试"])
         vector_dim = len(sample_vec[0])
         return vector_dim
 
-    def _create_collection(self, embedding_model: str):
+    async def _create_collection(self, embedding_model: str):
         """创建Milvus集合
 
         Args:
             embedding_model (str): 嵌入模型的名称，用于确定向量维度
         """
-        schema = self._create_schema(embedding_model)
+        schema = await self._create_schema(embedding_model)
         index_params = self._create_index()
-        self.vector_database.create_collection(collection_name=self.COLLECTION_NAME,
-                                               dimension=self._get_embedding_model_dim(embedding_model),
-                                               schema=schema,
-                                               index_params=index_params)
+        dimension = await self._get_embedding_model_dim(embedding_model)
 
-    def _create_schema(self, embedding_model: str) -> CollectionSchema:
+        # 使用asyncio.to_thread将create_collection方法转为异步
+        await asyncio.to_thread(
+            self.vector_database.create_collection,
+            collection_name=self.COLLECTION_NAME,
+            dimension=dimension,
+            schema=schema,
+            index_params=index_params
+        )
+
+    async def _create_schema(self, embedding_model: str) -> CollectionSchema:
         """创建集合的schema定义"""
         schema = self.vector_database.create_schema(enable_dynamic_field=True)
         schema.add_field(
@@ -294,7 +326,7 @@ class TextEmbeddingService:
         schema.add_field(
             field_name="vector",
             datatype=DataType.FLOAT_VECTOR,
-            dim=self._get_embedding_model_dim(embedding_model)
+            dim=await self._get_embedding_model_dim(embedding_model)
         )
         return schema
 
@@ -339,6 +371,6 @@ class TextEmbeddingService:
         return index_params
 
 
-def get_text_embedding_service(db: Session = Depends(get_db), user=Depends(manager)) -> TextEmbeddingService:
+async def get_text_embedding_service(db: Session = Depends(get_db), user=Depends(manager)) -> TextEmbeddingService:
     """依赖注入获取TextEmbeddingService实例"""
     return TextEmbeddingService(db, user)
