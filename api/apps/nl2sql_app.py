@@ -1,0 +1,123 @@
+from enum import Enum
+from typing import List, Optional, Any, Dict
+
+from fastapi import APIRouter, Depends, Body, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from api.db.db_models import get_db
+from api.apps import manager
+from api.service.nl2sql_service.nl2sql_service import NL2SQLService, get_nl2sql_service
+
+router = APIRouter()
+
+
+class StatusEnum(str, Enum):
+    SUCCESS = "success"
+    ERROR = "error"
+
+
+class ResponseSchema(BaseModel):
+    status: StatusEnum = StatusEnum.SUCCESS
+    message: str | None = None
+    data: Any | None = None
+
+
+class QueryRewriteRequest(BaseModel):
+    """查询重写请求的基础模型"""
+    query_text: str = Field(
+        ...,
+        title="查询文本",
+        description="需要重写的原始自然语言查询文本",
+    )
+    llm_name: str = Field(
+        "gpt-4",
+        title="LLM模型名称",
+        description="用于重写查询的LLM模型名称",
+    )
+    max_variations: int | None = Field(
+        5,
+        title="最大变体数量",
+        description="生成的查询变体的最大数量",
+    )
+    preserve_keywords: bool | None = Field(
+        True,
+        title="保留关键词",
+        description="是否在重写过程中保留关键词",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "query_text": "显示上个季度的销售数据",
+                "llm_name": "gpt-4",
+                "max_variations": 3,
+                "preserve_keywords": True
+            }
+        }
+
+
+class QueryRewriteResponse(BaseModel):
+    """查询重写响应模型"""
+    original_query: str = Field(
+        ...,
+        title="原始查询",
+        description="提交进行重写的原始查询文本",
+    )
+    rewritten_queries: List[str] = Field(
+        ...,
+        title="重写后的查询列表",
+        description="LLM生成的重写查询变体列表",
+    )
+
+
+@router.post("/rewrite-query", response_model=ResponseSchema, summary="重写自然语言查询为多个变体")
+async def rewrite_natural_language_query(
+        body: QueryRewriteRequest = Body(
+            ...,
+            title="查询重写请求",
+            description="需要重写的自然语言查询信息",
+            example={
+                "query_text": "显示上个季度的销售数据",
+                "llm_name": "gpt-4",
+                "max_variations": 3,
+                "preserve_keywords": True
+            }
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: NL2SQLService = Depends(get_nl2sql_service)
+):
+    """将自然语言查询重写为多个语义相同但表达不同的变体"""
+    try:
+        # 调用服务重写查询
+        rewritten_queries = await service.rewrite_query(
+            query_text=body.query_text,
+            llm_name=body.llm_name
+        )
+
+        # 如果max_variations参数有效，限制返回的变体数量
+        if body.max_variations and len(rewritten_queries) > body.max_variations:
+            rewritten_queries = rewritten_queries[:body.max_variations]
+
+        # 构建响应数据
+        response_data = QueryRewriteResponse(
+            original_query=body.query_text,
+            rewritten_queries=rewritten_queries
+        )
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="查询重写成功",
+            data=response_data
+        )
+    except FileNotFoundError as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"查询重写失败：提示词模板文件未找到 - {str(e)}"
+        )
+    except Exception as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"查询重写失败：{str(e)}"
+        )
