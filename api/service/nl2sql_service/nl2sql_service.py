@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
+from api.service.nl2sql_service.query_intent_analyzer import QueryIntentType, QueryIntentAnalyzer
 from api.service.nl2sql_service.query_rewriter import QueryRewriter
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,8 @@ class NL2SQLService:
         self.prompt_dir = os.path.join(os.path.dirname(__file__), "prompt")
         # 初始化查询重写器
         self.query_rewriter = QueryRewriter(db, user.id, self.prompt_dir)
+        # 初始化查询意图分析器
+        self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
 
     async def rewrite_query(self, query_text: str, llm_name: str) -> List[str]:
         """
@@ -34,6 +37,12 @@ class NL2SQLService:
             重写后的查询变体列表
         """
         return await self.query_rewriter.rewrite_query(query_text, llm_name)
+
+    async def analyze_query_intent(self, query_text: str, llm_name: str) -> List[QueryIntentType]:
+        """
+        使用LLM分析自然语言查询意图
+        """
+        return await self.query_intent_analyzer.analyze_query_intent(query_text, llm_name)
 
 
 def get_nl2sql_service(db: Session = Depends(get_db), user=Depends(manager)) -> NL2SQLService:

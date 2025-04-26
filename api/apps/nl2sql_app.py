@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import get_db
 from api.apps import manager
 from api.service.nl2sql_service.nl2sql_service import NL2SQLService, get_nl2sql_service
+from api.service.nl2sql_service.query_intent_analyzer import QueryIntentType
 
 router = APIRouter()
 
@@ -120,4 +121,98 @@ async def rewrite_natural_language_query(
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"查询重写失败：{str(e)}"
+        )
+
+
+class QueryIntentRequest(BaseModel):
+    """查询意图分析请求的基础模型"""
+    query_text: str = Field(
+        ...,
+        title="查询文本",
+        description="需要分析意图的原始自然语言查询文本",
+    )
+    llm_name: str = Field(
+        "gpt-4",
+        title="LLM模型名称",
+        description="用于分析意图的LLM模型名称",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "query_text": "查询销售额最高的前10个产品",
+                "llm_name": "gpt-4"
+            }
+        }
+
+
+class QueryIntentResponse(BaseModel):
+    """查询意图分析响应模型"""
+    original_query: str = Field(
+        ...,
+        title="原始查询",
+        description="提交进行意图分析的原始查询文本",
+    )
+    intents: List[str] = Field(
+        ...,
+        title="查询意图列表",
+        description="LLM识别的查询意图类型列表",
+    )
+    primary_intent: str = Field(
+        ...,
+        title="主要意图",
+        description="识别出的主要查询意图",
+    )
+
+
+@router.post("/analyze-intent", response_model=ResponseSchema, summary="分析自然语言查询的意图")
+async def analyze_query_intent(
+        body: QueryIntentRequest = Body(
+            ...,
+            title="查询意图分析请求",
+            description="需要分析意图的自然语言查询信息",
+            example={
+                "query_text": "查询销售额最高的前10个产品",
+                "llm_name": "gpt-4"
+            }
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: NL2SQLService = Depends(get_nl2sql_service)
+):
+    """分析自然语言查询的意图类型"""
+    try:
+        # 调用服务分析查询意图
+        intent_types = await service.analyze_query_intent(
+            query_text=body.query_text,
+            llm_name=body.llm_name
+        )
+
+        # 将枚举类型转换为字符串列表
+        intent_strings = [intent.value for intent in intent_types]
+
+        # 确定主要意图（这里简单地取第一个意图作为主要意图）
+        primary_intent = intent_strings[0] if intent_strings else QueryIntentType.AMBIGUOUS.value
+
+        # 构建响应数据
+        response_data = QueryIntentResponse(
+            original_query=body.query_text,
+            intents=intent_strings,
+            primary_intent=primary_intent
+        )
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="查询意图分析成功",
+            data=response_data
+        )
+    except FileNotFoundError as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"查询意图分析失败：提示词模板文件未找到 - {str(e)}"
+        )
+    except Exception as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"查询意图分析失败：{str(e)}"
         )
