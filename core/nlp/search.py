@@ -815,35 +815,30 @@ class Dealer:
         ranks = {"total": 0, "chunks": [], "doc_aggs": {}}
         if not question:
             return ranks
-        RERANK_PAGE_LIMIT = 3
-        req = {"kb_names": kb_names, "doc_ids": doc_ids, "size": max(page_size * RERANK_PAGE_LIMIT, 128),
+        RERANK_LIMIT = 64
+        req = {"kb_names": kb_names, "doc_ids": doc_ids, "page": page, "size": RERANK_LIMIT,
                "question": question, "vector": True, "topk": top,
                "similarity": similarity_threshold,
                "available_int": 1, "filter_exp": filter_exp}
+
         idxnms = index_name(tenant_id, kb_names)
-        if page > RERANK_PAGE_LIMIT:
-            req["page"] = page
-            req["size"] = page_size
+
         sres = self.search(req, idxnms, kb_names, embd_mdl, rank_feature=rank_feature)
         ranks["total"] = sres.total
 
-        if not sres.ids:
-            return ranks
+        # if not sres.ids:
+        #     return ranks
 
-        if page <= RERANK_PAGE_LIMIT:
-            if rerank_mdl and sres.total > 0:
-                sim, tsim, vsim = self.rerank_by_model(rerank_mdl,
-                                                       sres, question, 1 - vector_similarity_weight,
-                                                       vector_similarity_weight,
-                                                       rank_feature=rank_feature)
-            else:
-                sim, tsim, vsim = self.rerank(
-                    sres, question, 1 - vector_similarity_weight, vector_similarity_weight,
-                    rank_feature=rank_feature)
-            idx = np.argsort(sim * -1)[(page - 1) * page_size:page * page_size]
+        if rerank_mdl and sres.total > 0:
+            sim, tsim, vsim = self.rerank_by_model(rerank_mdl,
+                                                   sres, question, 1 - vector_similarity_weight,
+                                                   vector_similarity_weight,
+                                                   rank_feature=rank_feature)
         else:
-            sim = tsim = vsim = [1] * len(sres.ids)
-            idx = list(range(len(sres.ids)))
+            sim, tsim, vsim = self.rerank(
+                sres, question, 1 - vector_similarity_weight, vector_similarity_weight,
+                rank_feature=rank_feature)
+        idx = np.argsort(sim * -1)[(page - 1) * page_size:page * page_size]
 
         # def floor_sim(score):
         #     return (int(score * 100.) % 100) / 100.
