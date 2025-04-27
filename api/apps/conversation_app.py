@@ -83,7 +83,7 @@ class ThumbupRequest(BaseModel):
     message_id: str
     """消息ID"""
 
-    set: bool | None = None
+    thumbup: bool | None = None
     """点赞状态"""
 
     feedback: str
@@ -679,7 +679,7 @@ async def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=D
     conv = ConversationService.get_by_id(db, req["conversation_id"])
     if not conv:
         return get_data_error_result(retmsg="Conversation not found!")
-    up_down = req.get("set")
+    up_down = req.get("thumbup")
     feedback = req.get("feedback", "")
     conv = conv.to_dict()
     for i, msg in enumerate(conv["message"]):
