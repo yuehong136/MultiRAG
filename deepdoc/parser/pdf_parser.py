@@ -1,3 +1,6 @@
+#
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+#
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 #  You may obtain a copy of the License at
@@ -17,6 +20,7 @@ import random
 from timeit import default_timer as timer
 import sys
 import threading
+import trio
 
 import xgboost as xgb
 from io import BytesIO
@@ -37,8 +41,9 @@ LOCK_KEY_pdfplumber = "global_shared_lock_pdfplumber"
 if LOCK_KEY_pdfplumber not in sys.modules:
     sys.modules[LOCK_KEY_pdfplumber] = threading.Lock()
 
+
 class RAGFlowPdfParser:
-    def __init__(self):
+    def __init__(self, parallel_devices: int | None = None):
         """
         If you have trouble downloading HuggingFace models, -_^ this might help!!
 
@@ -50,7 +55,13 @@ class RAGFlowPdfParser:
         ^_-
 
         """
-        self.ocr = OCR()
+
+        self.ocr = OCR(parallel_devices=parallel_devices)
+        self.parallel_devices = parallel_devices
+        self.parallel_limiter = None
+        if parallel_devices is not None and parallel_devices > 1:
+            self.parallel_limiter = [trio.CapacityLimiter(1) for _ in range(parallel_devices)]
+
         if hasattr(self, "model_speciess"):
             self.layouter = LayoutRecognizer("layout." + self.model_speciess)
         else:
@@ -60,7 +71,7 @@ class RAGFlowPdfParser:
         self.updown_cnt_mdl = xgb.Booster()
         if not settings.LIGHTEN:
             try:
-                import torch
+                import torch.cuda
                 if torch.cuda.is_available():
                     self.updown_cnt_mdl.set_param({"device": "cuda"})
             except Exception:
@@ -71,7 +82,7 @@ class RAGFlowPdfParser:
                 "core/res/deepdoc")
             self.updown_cnt_mdl.load_model(os.path.join(
                 model_dir, "updown_concat_xgb.model"))
-        except Exception as e:
+        except Exception:
             model_dir = snapshot_download(
                 repo_id="InfiniFlow/text_concat_xgb_v1.0",
                 local_dir=os.path.join(get_project_base_directory(), "core/res/deepdoc"),
@@ -280,9 +291,9 @@ class RAGFlowPdfParser:
                 b["H_right"] = spans[ii]["x1"]
                 b["SP"] = ii
 
-    def __ocr(self, pagenum, img, chars, ZM=3):
+    def __ocr(self, pagenum, img, chars, ZM=3, device_id: int | None = None):
         start = timer()
-        bxs = self.ocr.detect(np.array(img))
+        bxs = self.ocr.detect(np.array(img), device_id)
         logging.info(f"__ocr detecting boxes of a image cost ({timer() - start}s)")
 
         start = timer()
@@ -328,7 +339,7 @@ class RAGFlowPdfParser:
                     [[left, top], [right, top], [right, bott], [left, bott]], dtype=np.float32))
                 boxes_to_reg.append(b)
             del b["txt"]
-        texts = self.ocr.recognize_batch([b["box_image"] for b in boxes_to_reg])
+        texts = self.ocr.recognize_batch([b["box_image"] for b in boxes_to_reg], device_id)
         for i in range(len(boxes_to_reg)):
             boxes_to_reg[i]["text"] = texts[i]
             del boxes_to_reg[i]["box_image"]
@@ -446,7 +457,7 @@ class RAGFlowPdfParser:
                     b_["text"],
                     any(feats),
                     any(concatting_feats),
-                    ))
+                ))
                 i += 1
                 continue
             # merge up and down
@@ -1011,7 +1022,6 @@ class RAGFlowPdfParser:
         if not self.outlines:
             logging.warning("Miss outlines")
 
-
         logging.debug("Images converted.")
         self.is_english = [re.search(r"[a-zA-Z0-9,/¸;:'\[\]\(\)!@#$%^&*\"?<>._-]{30,}", "".join(
             random.choices([c["text"] for c in self.page_chars[i]], k=min(100, len(self.page_chars[i]))))) for i in
@@ -1022,16 +1032,7 @@ class RAGFlowPdfParser:
         else:
             self.is_english = False
 
-        start = timer()
-        for i, img in enumerate(self.page_images):
-            chars = self.page_chars[i] if not self.is_english else []
-            self.mean_height.append(
-                np.median(sorted([c["height"] for c in chars])) if chars else 0
-            )
-            self.mean_width.append(
-                np.median(sorted([c["width"] for c in chars])) if chars else 8
-            )
-            self.page_cum_height.append(img.size[1] / zoomin)
+        async def __img_ocr(i, id, img, chars, limiter):
             j = 0
             while j + 1 < len(chars):
                 if chars[j]["text"] and chars[j + 1]["text"] \
@@ -1041,9 +1042,44 @@ class RAGFlowPdfParser:
                     chars[j]["text"] += " "
                 j += 1
 
-            self.__ocr(i + 1, img, chars, zoomin)
+            if limiter:
+                async with limiter:
+                    await trio.to_thread.run_sync(lambda: self.__ocr(i + 1, img, chars, zoomin, id))
+            else:
+                self.__ocr(i + 1, img, chars, zoomin, id)
+
             if callback and i % 6 == 5:
                 callback(prog=(i + 1) * 0.6 / len(self.page_images), msg="")
+
+        async def __img_ocr_launcher():
+            def __ocr_preprocess():
+                chars = self.page_chars[i] if not self.is_english else []
+                self.mean_height.append(
+                    np.median(sorted([c["height"] for c in chars])) if chars else 0
+                )
+                self.mean_width.append(
+                    np.median(sorted([c["width"] for c in chars])) if chars else 8
+                )
+                self.page_cum_height.append(img.size[1] / zoomin)
+                return chars
+
+            if self.parallel_limiter:
+                async with trio.open_nursery() as nursery:
+                    for i, img in enumerate(self.page_images):
+                        chars = __ocr_preprocess()
+
+                        nursery.start_soon(__img_ocr, i, i % self.parallel_devices, img, chars,
+                                           self.parallel_limiter[i % self.parallel_devices])
+                        await trio.sleep(0.1)
+            else:
+                for i, img in enumerate(self.page_images):
+                    chars = __ocr_preprocess()
+                    await __img_ocr(i, 0, img, chars, None)
+
+        start = timer()
+
+        trio.run(__img_ocr_launcher)
+
         logging.info(f"__images__ {len(self.page_images)} pages cost {timer() - start}s")
 
         if not self.is_english and not any(
@@ -1108,7 +1144,7 @@ class RAGFlowPdfParser:
                 self.page_images[pns[0]].crop((left * ZM, top * ZM,
                                                right *
                                                ZM, min(
-                    bottom, self.page_images[pns[0]].size[1])
+                        bottom, self.page_images[pns[0]].size[1])
                                                ))
             )
             if 0 < ii < len(poss) - 1:
