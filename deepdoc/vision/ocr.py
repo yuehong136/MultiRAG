@@ -22,6 +22,7 @@ import os
 from huggingface_hub import snapshot_download
 
 from api.utils.file_utils import get_project_base_directory
+from core.settings import PARALLEL_DEVICES
 from .operators import *
 from . import operators
 import math
@@ -510,7 +511,7 @@ class TextDetector:
 
 
 class OCR:
-    def __init__(self, model_dir=None, parallel_devices: int | None = None):
+    def __init__(self, model_dir=None):
         """
         If you have trouble downloading HuggingFace models, -_^ this might help!!
 
@@ -529,10 +530,10 @@ class OCR:
                     "core/res/deepdoc")
 
                 # Append muti-gpus task to the list
-                if parallel_devices is not None and parallel_devices > 0:
+                if PARALLEL_DEVICES is not None and PARALLEL_DEVICES > 0:
                     self.text_detector = []
                     self.text_recognizer = []
-                    for device_id in range(parallel_devices):
+                    for device_id in range(PARALLEL_DEVICES):
                         self.text_detector.append(TextDetector(model_dir, device_id))
                         self.text_recognizer.append(TextRecognizer(model_dir, device_id))
                 else:
@@ -544,11 +545,11 @@ class OCR:
                                               local_dir=os.path.join(get_project_base_directory(), "core/res/deepdoc"),
                                               local_dir_use_symlinks=False)
 
-                if parallel_devices is not None:
-                    assert parallel_devices > 0, "Number of devices must be >= 1"
+                if PARALLEL_DEVICES is not None:
+                    assert PARALLEL_DEVICES > 0, "Number of devices must be >= 1"
                     self.text_detector = []
                     self.text_recognizer = []
-                    for device_id in range(parallel_devices):
+                    for device_id in range(PARALLEL_DEVICES):
                         self.text_detector.append(TextDetector(model_dir, device_id))
                         self.text_recognizer.append(TextRecognizer(model_dir, device_id))
                 else:
