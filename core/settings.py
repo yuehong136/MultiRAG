@@ -29,19 +29,27 @@ except Exception as e:
 DOC_MAXIMUM_SIZE = int(os.environ.get("MAX_CONTENT_LENGTH", 1024 * 1024 * 1024))
 
 SVR_QUEUE_NAME = "multi_rag_svr_queue"
-SVR_QUEUE_RETENTION = 60*60
-SVR_QUEUE_MAX_LEN = 1024
-SVR_CONSUMER_NAME = "multi_rag_svr_consumer"
-SVR_CONSUMER_GROUP_NAME = "multi_rag_svr_consumer_group"
+SVR_CONSUMER_GROUP_NAME = "multi_rag_svr_task_broker"
 PAGERANK_FLD = "pagerank_fea"
 TAG_FLD = "tag_feas"
+# SVR_QUEUE_RETENTION = 60*60
+# SVR_QUEUE_MAX_LEN = 1024
+# SVR_CONSUMER_NAME = "multi_rag_svr_consumer"
+# SVR_CONSUMER_GROUP_NAME = "multi_rag_svr_consumer_group"
 
-def print_multirag_settings():
+
+def print_rag_settings():
     logging.info(f"MAX_CONTENT_LENGTH: {DOC_MAXIMUM_SIZE}")
-    logging.info(f"SERVER_QUEUE_MAX_LEN: {SVR_QUEUE_MAX_LEN}")
-    logging.info(f"SERVER_QUEUE_RETENTION: {SVR_QUEUE_RETENTION}")
     logging.info(f"MAX_FILE_COUNT_PER_USER: {int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))}")
 
+
+def get_svr_queue_name(priority: int) -> str:
+    if priority == 0:
+        return SVR_QUEUE_NAME
+    return f"{SVR_QUEUE_NAME}_{priority}"
+
+def get_svr_queue_names():
+    return [get_svr_queue_name(priority) for priority in [1, 0]]
 # import logging
 # from api.utils.log_utils import LoggerFactory, getLogger
 # SUBPROCESS_STD_LOG_NAME = "std.log"

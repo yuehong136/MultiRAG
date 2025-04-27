@@ -44,10 +44,25 @@ class RedisMsg:
 
 @singleton
 class RedisDB:
+    lua_delete_if_equal = None
+    LUA_DELETE_IF_EQUAL_SCRIPT = """
+        local current_value = redis.call('get', KEYS[1])
+        if current_value and current_value == ARGV[1] then
+            redis.call('del', KEYS[1])
+            return 1
+        end
+        return 0
+    """
+
     def __init__(self):
         self.REDIS = None
         self.config = settings.REDIS
         self.__open__()
+
+    def register_scripts(self) -> None:
+        cls = self.__class__
+        client = self.REDIS
+        cls.lua_delete_if_equal = client.register_script(cls.LUA_DELETE_IF_EQUAL_SCRIPT)
 
     def __open__(self):
         try:
@@ -58,6 +73,7 @@ class RedisDB:
                 password=self.config.get("password"),
                 decode_responses=True,
             )
+            self.register_scripts()
         except Exception:
             logging.warning("Redis can't be connected.")
         return self.REDIS
@@ -190,14 +206,11 @@ class RedisDB:
             self.__open__()
         return False
 
-    def queue_product(self, queue, message, exp=settings.SVR_QUEUE_RETENTION) -> bool:
+    def queue_product(self, queue, message) -> bool:
         for _ in range(3):
             try:
                 payload = {"message": json.dumps(message)}
-                pipeline = self.REDIS.pipeline()
-                pipeline.xadd(queue, payload)
-                # pipeline.expire(queue, exp)
-                pipeline.execute()
+                self.REDIS.xadd(queue, payload)
                 return True
             except Exception as e:
                 logging.exception(
@@ -209,7 +222,7 @@ class RedisDB:
         """https://redis.io/docs/latest/commands/xreadgroup/"""
         try:
             group_info = self.REDIS.xinfo_groups(queue_name)
-            if not any(e["name"] == group_name for e in group_info):
+            if not any(gi["name"] == group_name for gi in group_info):
                 self.REDIS.xgroup_create(queue_name, group_name, id="0", mkstream=True)
             args = {
                 "groupname": group_name,
@@ -228,7 +241,7 @@ class RedisDB:
             res = RedisMsg(self.REDIS, queue_name, group_name, msg_id, payload)
             return res
         except Exception as e:
-            if "key" in str(e):
+            if str(e) == 'no such key':
                 pass
             else:
                 logging.exception(
@@ -239,24 +252,29 @@ class RedisDB:
                 )
         return None
 
-    def get_unacked_iterator(self, queue_name, group_name, consumer_name):
+    def get_unacked_iterator(self, queue_names: list[str], group_name, consumer_name):
         try:
-            group_info = self.REDIS.xinfo_groups(queue_name)
-            if not any(e["name"] == group_name for e in group_info):
-                return
-            current_min = 0
-            while True:
-                payload = self.queue_consumer(queue_name, group_name, consumer_name, current_min)
-                if not payload:
-                    return
-                current_min = payload.get_msg_id()
-                logging.info(f"RedisDB.get_unacked_iterator {consumer_name} msg_id {current_min}")
-                yield payload
-        except Exception as e:
-            if "key" in str(e):
-                return
+            for queue_name in queue_names:
+                try:
+                    group_info = self.REDIS.xinfo_groups(queue_name)
+                except Exception as e:
+                    if str(e) == 'no such key':
+                        logging.warning(f"RedisDB.get_unacked_iterator queue {queue_name} doesn't exist")
+                        continue
+                if not any(gi["name"] == group_name for gi in group_info):
+                    logging.warning(f"RedisDB.get_unacked_iterator queue {queue_name} group {group_name} doesn't exist")
+                    continue
+                current_min = 0
+                while True:
+                    payload = self.queue_consumer(queue_name, group_name, consumer_name, current_min)
+                    if not payload:
+                        break
+                    current_min = payload.get_msg_id()
+                    logging.info(f"RedisDB.get_unacked_iterator {queue_name} {consumer_name} {current_min}")
+                    yield payload
+        except Exception:
             logging.exception(
-                "RedisDB.get_unacked_iterator " + consumer_name + " got exception: "
+                "RedisDB.get_unacked_iterator got exception: "
             )
             self.__open__()
 
@@ -272,6 +290,12 @@ class RedisDB:
             )
         return None
 
+    def delete_if_equal(self, key: str, expected_value: str) -> bool:
+        """
+        Do follwing atomically:
+        Delete a key if its value is equals to the given one, do nothing otherwise.
+        """
+        return bool(self.lua_delete_if_equal(keys=[key], args=[expected_value], client=self.REDIS))
 
 REDIS_CONN = RedisDB()
 
@@ -287,7 +311,8 @@ class RedisDistributedLock:
         self.lock = Lock(REDIS_CONN.REDIS, lock_key, timeout=timeout, blocking_timeout=blocking_timeout)
 
     def acquire(self):
-        return self.lock.acquire()
+        REDIS_CONN.delete_if_equal(self.lock_key, self.lock_value)
+        return self.lock.acquire(token=self.lock_value)
 
     def release(self):
         return self.lock.release()

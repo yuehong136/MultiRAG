@@ -151,7 +151,7 @@ async def upload(
 
 
 @router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页")
-async def web_crawl(
+def web_crawl(
         request_body: WebCrawlRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -248,7 +248,7 @@ def create_document(
 
 
 @router.get("/list", summary="列出文档", response_description="成功列出文档")
-async def list_docs(
+def list_docs(
         kb_id: str,
         keywords: str = "",
         page: int = 1,
@@ -302,7 +302,7 @@ def docinfos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(man
 
 
 @router.get("/thumbnails", summary="获取文档缩略图", response_description="成功获取文档缩略图")
-async def thumbnails(
+def thumbnails(
         doc_ids: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -327,7 +327,7 @@ async def thumbnails(
 
 
 @router.post("/change_status", summary="更改文档状态", response_description="成功更改文档状态")
-async def change_status(
+def change_status(
         request_body: ChangeStatusRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -355,39 +355,16 @@ async def change_status(
             return construct_json_result(data=False, message="Database error (Document update)!",
                                          code=settings.RetCode.ARGUMENT_ERROR)
 
-        # # 更新Milvus中的数据
-        # status_int = 0 if str(req["status"]) == "0" else 1
-        # try:
-        #     update_result = settings.docStoreConn.upsert(
-        #         collection_name=search.index_name_one(kb.tenant_id, kb.name),
-        #         data={"doc_id": req["doc_id"], "available_int": status_int}
-        #     )
-        #     if update_result["upsert_count"] == 0:
-        #         return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message="Milvus update failed!")
-        # except MilvusException as e:
-        #     return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message=str(e))
         status = int(req["status"])
         settings.docStoreConn.update({"doc_id": req["doc_id"]}, {"available_int": status},
                                      search.index_name_one(kb.tenant_id, kb.name), doc.kb_id)
         return construct_json_result(data=True)
     except Exception as e:
         return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message=str(e))
-    #
-    #     if str(req["status"]) == "0":
-    #         ELASTICSEARCH.updateScriptByQuery(Q("term", doc_id=req["doc_id"]),
-    #                                           scripts="ctx._source.available_int=0;",
-    #                                           idxnm=search.index_name(kb.tenant_id))
-    #     else:
-    #         ELASTICSEARCH.updateScriptByQuery(Q("term", doc_id=req["doc_id"]),
-    #                                           scripts="ctx._source.available_int=1;",
-    #                                           idxnm=search.index_name(kb.tenant_id))
-    #     return construct_json_result(data=True)
-    # except Exception as e:
-    #     return construct_error_response(e)
 
 
 @router.post("/rm", summary="删除文档", response_description="成功删除文档")
-async def rm(
+def rm(
         request_body: RemoveRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -442,7 +419,7 @@ async def rm(
 
 
 @router.post("/run", summary="运行任务", response_description="成功运行任务")
-async def run(
+def run(
         request_body: RunRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -492,14 +469,14 @@ async def run(
                 doc = DocumentService.get_by_id(db, id).to_dict()
                 doc["tenant_id"] = tenant_id
                 bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])
-                queue_tasks(db, doc, bucket, name)
+                queue_tasks(db, doc, bucket, name, 0)
         return construct_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)
 
 
 @router.post("/rename", summary="重命名文档", response_description="成功重命名文档")
-async def rename(
+def rename(
         request_body: RenameRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -541,7 +518,7 @@ async def rename(
 
 
 @router.get("/get/{doc_id}", summary="获取文档内容", response_description="成功获取文档内容")
-async def get_document(
+def get_document(
         doc_id: str,
         db: Session = Depends(get_db),
         # user=Depends(manager)
@@ -578,7 +555,7 @@ async def get_document(
 
 
 @router.post("/change_parser", summary="更改解析器", response_description="成功更改解析器")
-async def change_parser(
+def change_parser(
         request_body: ChangeParserRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)

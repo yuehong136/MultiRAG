@@ -433,6 +433,7 @@ class Task(BaseModel):
     retry_count = Column(Integer, index=False, nullable=True, default=0)
     digest = Column(Text, index=False, nullable=True, default="", doc="task digest")
     chunk_ids = Column(Text, index=False, nullable=True, default="", doc="chunk ids")
+    priority = Column(Integer, index=False, nullable=False, default=0)
 
 class Dialog(BaseModel):
     __tablename__ = "t_ai_dialogs"

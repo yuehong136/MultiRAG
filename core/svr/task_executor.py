@@ -8,13 +8,13 @@ from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, se
 from core.prompts import keyword_extraction, question_proposal, content_tagging
 
 import logging
-for module in ["pdfminer"]:
-    module_logger = logging.getLogger(module)
-    module_logger.setLevel(logging.WARNING)
-for module in ["sqlalchemy"]:
-    module_logger = logging.getLogger(module)
-    module_logger.handlers.clear()
-    module_logger.propagate = True
+# for module in ["pdfminer"]:
+#     module_logger = logging.getLogger(module)
+#     module_logger.setLevel(logging.WARNING)
+# for module in ["sqlalchemy"]:
+#     module_logger = logging.getLogger(module)
+#     module_logger.handlers.clear()
+#     module_logger.propagate = True
 from datetime import datetime
 import json
 import os
@@ -51,7 +51,7 @@ from core.app import laws, paper, presentation, manual, qa, table, book, resume,
     email, tag
 from core.nlp import search, rag_tokenizer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from core.settings import DOC_MAXIMUM_SIZE, SVR_QUEUE_NAME, print_multirag_settings, TAG_FLD, PAGERANK_FLD
+from core.settings import DOC_MAXIMUM_SIZE, SVR_CONSUMER_GROUP_NAME, get_svr_queue_name, get_svr_queue_names, print_rag_settings, TAG_FLD, PAGERANK_FLD
 from core.utils import rmSpace, num_tokens_from_string
 # from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils.redis_conn import REDIS_CONN
@@ -95,6 +95,14 @@ MAX_CONCURRENT_TASKS = int(os.environ.get('MAX_CONCURRENT_TASKS', "5"))
 MAX_CONCURRENT_CHUNK_BUILDERS = int(os.environ.get('MAX_CONCURRENT_CHUNK_BUILDERS', "1"))
 task_limiter = trio.CapacityLimiter(MAX_CONCURRENT_TASKS)
 chunk_limiter = trio.CapacityLimiter(MAX_CONCURRENT_CHUNK_BUILDERS)
+
+PARALLEL_DEVICES = None
+try:
+    import torch.cuda
+    PARALLEL_DEVICES = torch.cuda.device_count()
+    logging.info(f"found {PARALLEL_DEVICES} gpus")
+except Exception:
+    logging.info("can't import package 'torch'")
 
 # SIGUSR1 handler: start tracemalloc and take snapshot
 def start_tracemalloc_and_snapshot(signum, frame):
@@ -167,20 +175,23 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
 async def collect(db: Session):
     global CONSUMER_NAME, DONE_TASKS, FAILED_TASKS
     global UNACKED_ITERATOR
+    svr_queue_names = get_svr_queue_names()
     try:
         if not UNACKED_ITERATOR:
-            UNACKED_ITERATOR = REDIS_CONN.get_unacked_iterator(SVR_QUEUE_NAME, "multi_rag_svr_task_broker", CONSUMER_NAME)
+            UNACKED_ITERATOR = REDIS_CONN.get_unacked_iterator(svr_queue_names, SVR_CONSUMER_GROUP_NAME, CONSUMER_NAME)
         try:
             redis_msg = next(UNACKED_ITERATOR)
         except StopIteration:
-            redis_msg = REDIS_CONN.queue_consumer(SVR_QUEUE_NAME, "multi_rag_svr_task_broker", CONSUMER_NAME)
-        if not redis_msg:
-            await trio.sleep(1)
-            return None, None
+            for svr_queue_name in svr_queue_names:
+                redis_msg = REDIS_CONN.queue_consumer(svr_queue_name, SVR_CONSUMER_GROUP_NAME, CONSUMER_NAME)
+                if redis_msg:
+                    break
     except Exception:
         logging.exception("collect got exception")
         return None, None
 
+    if not redis_msg:
+        return None, None
     msg = redis_msg.get_message()
     if not msg:
         logging.error(f"collect got empty message of {redis_msg.get_msg_id()}")
@@ -236,7 +247,7 @@ async def build_chunks(task, progress_callback, db: Session):
     try:
         async with chunk_limiter:
             cks = await trio.to_thread.run_sync(lambda: chunker.chunk(task["name"], binary=binary, from_page=task["from_page"],
-                                to_page=task["to_page"], lang=task["language"], callback=progress_callback,
+                                to_page=task["to_page"], lang=task["language"], parallel_devices = PARALLEL_DEVICES, callback=progress_callback,
                                 kb_id=task["kb_id"], parser_config=task["parser_config"], tenant_id=task["tenant_id"]))
         logging.info(
             "Chunking({}) {}/{}".format(timer() - st, task["location"], task["name"]))
@@ -967,6 +978,7 @@ async def handle_task():
         try:
             redis_msg, task = await collect(db)
             if not task:
+                await trio.sleep(5)
                 return
             try:
                 # 转换为可序列化的字典
@@ -1011,7 +1023,7 @@ async def report_status():
     while True:
         try:
             now = datetime.now()
-            group_info = REDIS_CONN.queue_info(SVR_QUEUE_NAME, "multi_rag_svr_task_broker")
+            group_info = REDIS_CONN.queue_info(get_svr_queue_name(0), SVR_CONSUMER_GROUP_NAME)
             if group_info is not None:
                 PENDING_TASKS = int(group_info.get("pending", 0))
                 LAG_TASKS = int(group_info.get("lag", 0))
@@ -1051,16 +1063,16 @@ async def main():
 #         """)
     logging.info(r"""
 ======================================================================
-   ______           __      ______                     __             
-  /_  __/___ ______/ /__   / ____/  _____  _______  __/ /_____  _____ 
-   / / / __ `/ ___/ //_/  / __/ | |/_/ _ \/ ___/ / / / __/ __ \/ ___/ 
-  / / / /_/ (__  ) ,<    / /____>  </  __/ /__/ /_/ / /_/ /_/ / /     
- /_/  \__,_/____/_/|_|  /_____/_/|_|\___/\___/\__,_/\__/\____/_/      
+  ______           __      ______                     __
+ /_  __/___ ______/ /__   / ____/  _____  _______  __/ /_____  _____
+  / / / __ `/ ___/ //_/  / __/ | |/_/ _ \/ ___/ / / / __/ __ \/ ___/
+ / / / /_/ (__  ) ,<    / /____>  </  __/ /__/ /_/ / /_/ /_/ / /
+/_/  \__,_/____/_/|_|  /_____/_/|_|\___/\___/\__,_/\__/\____/_/
 ======================================================================
     """)
     logging.info(f'TaskExecutor - MultiRAG version: {get_multirag_version()}')
     settings.init_settings()
-    print_multirag_settings()
+    print_rag_settings()
     if sys.platform != "win32":
         signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)
         signal.signal(signal.SIGUSR2, stop_tracemalloc)

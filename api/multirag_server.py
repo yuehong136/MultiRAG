@@ -8,21 +8,23 @@
 """
 import logging
 from api.utils.log_utils import initRootLogger
-initRootLogger("multirag_server")
-for module in ["pdfminer"]:
-    module_logger = logging.getLogger(module)
-    module_logger.setLevel(logging.WARNING)
-for module in ["sqlalchemy"]:
-    module_logger = logging.getLogger(module)
-    module_logger.handlers.clear()
-    module_logger.propagate = True
 import os
+initRootLogger("multirag_server")
+# initRootLogger("multirag_server")
+# for module in ["pdfminer"]:
+#     module_logger = logging.getLogger(module)
+#     module_logger.setLevel(logging.WARNING)
+# for module in ["sqlalchemy"]:
+#     module_logger = logging.getLogger(module)
+#     module_logger.handlers.clear()
+#     module_logger.propagate = True
 import signal
 import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import uuid
 
 from api.apps import app
 # from api.db.database import SessionLocal
@@ -36,7 +38,7 @@ from api.db.init_data import init_web_data
 from api.versions import get_multirag_version
 import uvicorn
 from api.utils import show_configs
-from core.settings import print_multirag_settings
+from core.settings import print_rag_settings
 from core.utils.redis_conn import RedisDistributedLock
 
 stop_event = threading.Event()
@@ -45,21 +47,22 @@ def update_progress():
     """
     定期更新文档服务进度
     """
-    redis_lock = RedisDistributedLock("update_progress", timeout=60)
+    lock_value = str(uuid.uuid4())
+    redis_lock = RedisDistributedLock("update_progress", lock_value=lock_value, timeout=60)
+    logging.info(f"update_progress lock_value: {lock_value}")
     while not stop_event.is_set():
         db = None
         try:
-            if not redis_lock.acquire():
-                continue
-            db = SessionLocal()  # 创建数据库会话
-            DocumentService.update_progress(db)  # 更新文档服务进度
+            if redis_lock.acquire():
+                db = SessionLocal()  # 创建数据库会话
+                DocumentService.update_progress(db)  # 更新文档服务进度
+                redis_lock.release()
             stop_event.wait(6)
         except Exception:
             logging.exception("update_progress exception")
         finally:
             if db:
                 db.close()
-            redis_lock.release()
 
 def signal_handler(sig, frame):
     logging.info("Received interrupt signal, shutting down...")
@@ -96,7 +99,7 @@ if __name__ == '__main__':
     )
     show_configs()
     settings.init_settings()
-    print_multirag_settings()
+    print_rag_settings()
 
     # 初始化数据库
     init_web_db()
