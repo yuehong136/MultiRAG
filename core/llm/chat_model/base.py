@@ -34,7 +34,7 @@ class Base(ABC):
                 messages=history,
                 **gen_conf
             )
-            if not response.choices:
+            if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
                 return "", 0
             ans = response.choices[0].message.content.strip()
             if response.choices[0].finish_reason == "length":
