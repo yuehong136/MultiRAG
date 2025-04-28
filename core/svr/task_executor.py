@@ -82,7 +82,7 @@ FACTORY = {
 UNACKED_ITERATOR = None
 
 CONSUMER_NO = "0" if len(sys.argv) < 2 else sys.argv[1]
-CONSUMER_NAME = "task_consumer_" + CONSUMER_NO
+CONSUMER_NAME = "task_executor_" + CONSUMER_NO
 BOOT_AT = datetime.now().astimezone().isoformat(timespec="milliseconds")
 PENDING_TASKS = 0
 LAG_TASKS = 0
@@ -135,35 +135,72 @@ class TaskCanceledException(Exception):
 
 
 def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing..."):
+    """
+    同步执行的进度更新工具函数。
+    - 不再把 db 传进 TaskService.update_progress；
+    - 直接调用 _update_progress_sync，避免协程里再 await；
+    - 避免关闭外层传进来的 db（由上层负责）。
+    """
     try:
         if prog is not None and prog < 0:
             msg = "[ERROR]" + msg
-        cancel = TaskService.do_cancel(db, task_id)
 
+        cancel = TaskService.do_cancel(db, task_id)
         if cancel:
             msg += " [Canceled]"
             prog = -1
 
-        if to_page > 0:
-            if msg:
-                if from_page < to_page:
-                    msg = f"Page({from_page + 1}~{to_page + 1}): " + msg
+        if to_page > 0 and msg and from_page < to_page:
+            msg = f"Page({from_page + 1}~{to_page + 1}): " + msg
         if msg:
             msg = datetime.now().strftime("%H:%M:%S") + " " + msg
-        d = {"progress_msg": msg}
+
+        info = {"progress_msg": msg}
         if prog is not None:
-            d["progress"] = prog
+            info["progress"] = prog
 
-        TaskService.update_progress(db, task_id, d)
+        # ★ 关键：同步直接调用核心，不传 db
+        TaskService._update_progress_sync(task_id, info)
 
-        db.close()
         if cancel:
             raise TaskCanceledException(msg)
+
         logging.info(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}")
+
     except NoResultFound:
         logging.warning("set_progress(%s): 记录不存在，无法更新进度", task_id)
     except Exception:
         logging.exception(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, got exception")
+# def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing..."):
+#     try:
+#         if prog is not None and prog < 0:
+#             msg = "[ERROR]" + msg
+#         cancel = TaskService.do_cancel(db, task_id)
+#
+#         if cancel:
+#             msg += " [Canceled]"
+#             prog = -1
+#
+#         if to_page > 0:
+#             if msg:
+#                 if from_page < to_page:
+#                     msg = f"Page({from_page + 1}~{to_page + 1}): " + msg
+#         if msg:
+#             msg = datetime.now().strftime("%H:%M:%S") + " " + msg
+#         d = {"progress_msg": msg}
+#         if prog is not None:
+#             d["progress"] = prog
+#
+#         TaskService.update_progress(db, task_id, d)
+#
+#         db.close()
+#         if cancel:
+#             raise TaskCanceledException(msg)
+#         logging.info(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}")
+#     except NoResultFound:
+#         logging.warning("set_progress(%s): 记录不存在，无法更新进度", task_id)
+#     except Exception:
+#         logging.exception(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, got exception")
 
 async def collect(db: Session):
     global CONSUMER_NAME, DONE_TASKS, FAILED_TASKS

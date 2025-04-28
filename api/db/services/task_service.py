@@ -13,10 +13,11 @@ from datetime import datetime
 import xxhash
 from sqlalchemy import asc, desc, select, update, text
 from sqlalchemy.orm import Session
+import trio
 
 from api.utils.db_utils import bulk_insert_into_db
 from deepdoc.parser import PdfParser
-from api.db.db_models import Task, Document, Knowledgebase, Tenant, File2Document, File
+from api.db.db_models import Task, Document, Knowledgebase, Tenant, File2Document, File, db_connection, engine
 from api.db import StatusEnum, FileType, TaskStatus
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
@@ -65,7 +66,7 @@ class TaskService(CommonService):
             Tenant.asr_id,
             Tenant.llm_id,
             cls.model.update_time,
-            cls.model.progress_msg
+            # cls.model.progress_msg
         ).join(Document, cls.model.doc_id == Document.id
                ).join(Knowledgebase, Document.kb_id == Knowledgebase.id
                       ).join(Tenant, Knowledgebase.tenant_id == Tenant.id
@@ -85,13 +86,13 @@ class TaskService(CommonService):
             prog = -1
 
         # 更新进度消息和进度
-        task["progress_msg"] = task["progress_msg"] + "\n" + msg
-        task["progress"] = prog
+        # task["progress_msg"] = task["progress_msg"] + "\n" + msg
+        # task["progress"] = prog
 
         # 将更新写入数据库
         db.query(cls.model).filter(cls.model.id == task["id"]).update({
-            "progress_msg": task["progress_msg"],
-            "progress": task["progress"]
+            "progress_msg": cls.model.progress_msg + msg,
+            "progress": prog
         })
 
         db.commit()
@@ -172,69 +173,120 @@ class TaskService(CommonService):
         # 判断文档是否满足取消条件
         return doc.run == TaskStatus.CANCEL.value or doc.progress < 0
 
+    # ------------------ 私有拼 values ------------------
     @classmethod
-    def update_progress(cls, db: Session, id: str, info: dict):
+    def _do_update(cls, session, id_: str, info: dict):
+        values = {}
+        if info.get("progress_msg"):
+            task = session.get(cls.model, id_)
+            values["progress_msg"] = trim_header_by_lines(
+                (task.progress_msg or "") + "\n" + info["progress_msg"], 3000
+            )
+        if "progress" in info:
+            values["progress"] = info["progress"]
+
+        if values:
+            session.execute(
+                update(cls.model)
+                .where(cls.model.id == id_)
+                .values(**values)
+            )
+
+    # ------------------ 同步核心（终版） -----------------
+    @classmethod
+    def _update_progress_sync(cls, id_: str, info: dict) -> None:
         """
-        更新任务的 progress 和 progress_msg，并使用数据库锁。
+        使用独立 AUTOCOMMIT 连接做 advisory-lock，
+        再开启普通 Session 执行 UPDATE，避免事务状态冲突。
         """
-        if os.environ.get("MACOS"):
-            # 直接更新逻辑
-            if "progress_msg" in info and info["progress_msg"]:
-                task = db.query(cls.model).get(id)
-                if task:
-                    progress_msg = trim_header_by_lines(
-                        (task.progress_msg or "") + "\n" + info["progress_msg"], 3000
-                    )
-                    db.execute(
-                        update(cls.model)
-                        .where(cls.model.id == id)
-                        .values(progress_msg=progress_msg)
-                    )
+        lock_key = f"update_progress_{id_}"
 
-            if "progress" in info:
-                db.execute(
-                    update(cls.model)
-                    .where(cls.model.id == id)
-                    .values(progress=info["progress"])
-                )
-            db.commit()
-            return
-        # 动态生成锁名
-        lock_name = f"update_progress_{id}"
-        lock_query = text(f"SELECT pg_advisory_lock(hashtext('{lock_name}'))")
-        unlock_query = text(f"SELECT pg_advisory_unlock(hashtext('{lock_name}'))")
-
-        try:
-            # 获取锁
-            db.execute(lock_query)
-            db.commit()
-
-            # 更新逻辑
-            if "progress_msg" in info and info["progress_msg"]:
-                task = db.query(cls.model).get(id)
-                if task:
-                    progress_msg = trim_header_by_lines(
-                        (task.progress_msg or "") + "\n" + info["progress_msg"], 3000
-                    )
-                    db.execute(
-                        update(cls.model)
-                        .where(cls.model.id == id)
-                        .values(progress_msg=progress_msg)
-                    )
-
-            if "progress" in info:
-                db.execute(
-                    update(cls.model)
-                    .where(cls.model.id == id)
-                    .values(progress=info["progress"])
+        # ① 先拿一条 AUTOCOMMIT 连接来加/解锁
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as lock_conn:
+            lock_conn.execute(
+                text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": lock_key}
+            )
+            try:
+                # ② 再用常规 Session 完成数据更新
+                with db_connection() as db:
+                    cls._do_update(db, id_, info)
+                    db.commit()
+            finally:
+                # ③ 立即释放锁
+                lock_conn.execute(
+                    text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
                 )
 
-            db.commit()
+    # ------------------ Trio 线程池壳 -------------------
+    @classmethod
+    async def update_progress(cls, id_: str, info: dict) -> None:
+        await trio.to_thread.run_sync(
+            cls._update_progress_sync, id_, info, cancellable=True
+        )
 
-        finally:
-            # 释放锁
-            db.execute(unlock_query)
-            db.commit()
+    # @classmethod
+    # def update_progress(cls, db: Session, id: str, info: dict):
+    #     """
+    #     更新任务的 progress 和 progress_msg，并使用数据库锁。
+    #     """
+    #     if os.environ.get("MACOS"):
+    #         # 直接更新逻辑
+    #         if "progress_msg" in info and info["progress_msg"]:
+    #             task = db.query(cls.model).get(id)
+    #             if task:
+    #                 progress_msg = trim_header_by_lines(
+    #                     (task.progress_msg or "") + "\n" + info["progress_msg"], 3000
+    #                 )
+    #                 db.execute(
+    #                     update(cls.model)
+    #                     .where(cls.model.id == id)
+    #                     .values(progress_msg=progress_msg)
+    #                 )
+    #
+    #         if "progress" in info:
+    #             db.execute(
+    #                 update(cls.model)
+    #                 .where(cls.model.id == id)
+    #                 .values(progress=info["progress"])
+    #             )
+    #         db.commit()
+    #         return
+    #     # 动态生成锁名
+    #     lock_name = f"update_progress_{id}"
+    #     lock_query = text(f"SELECT pg_advisory_lock(hashtext('{lock_name}'))")
+    #     unlock_query = text(f"SELECT pg_advisory_unlock(hashtext('{lock_name}'))")
+    #
+    #     try:
+    #         # 获取锁
+    #         db.execute(lock_query)
+    #         db.commit()
+    #
+    #         # 更新逻辑
+    #         if "progress_msg" in info and info["progress_msg"]:
+    #             task = db.query(cls.model).get(id)
+    #             if task:
+    #                 progress_msg = trim_header_by_lines(
+    #                     (task.progress_msg or "") + "\n" + info["progress_msg"], 3000
+    #                 )
+    #                 db.execute(
+    #                     update(cls.model)
+    #                     .where(cls.model.id == id)
+    #                     .values(progress_msg=progress_msg)
+    #                 )
+    #
+    #         if "progress" in info:
+    #             db.execute(
+    #                 update(cls.model)
+    #                 .where(cls.model.id == id)
+    #                 .values(progress=info["progress"])
+    #             )
+    #
+    #         db.commit()
+    #
+    #     finally:
+    #         # 释放锁
+    #         db.execute(unlock_query)
+    #         db.commit()
 
 def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
     """Create and queue document processing tasks.
