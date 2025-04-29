@@ -8,12 +8,15 @@ from ollama import Client
 class OllamaChat:
     key: str
     model_name: str
-    base_url: str = field(default="http://127.0.0.1:11434")  # 可以为 base_url 设置默认值
-    client: Client = field(init=False)  # client 会在 __post_init__ 中初始化
+    base_url: str = field(default="http://127.0.0.1:11434")
+    client: Client = field(init=False)
 
     def __post_init__(self):
-        # 初始化 client
-        self.client = Client(host=self.base_url)
+        # 根据 key 判断是否加 Authorization header
+        if not self.key or self.key == "x":
+            self.client = Client(host=self.base_url)
+        else:
+            self.client = Client(host=self.base_url, headers={"Authorization": f"Bearer {self.key}"})
 
     def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         if system:

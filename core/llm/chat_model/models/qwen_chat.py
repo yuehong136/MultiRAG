@@ -59,7 +59,7 @@ class QWenChat(Base):
             result_list = list(g)
             error_msg_list = [item for item in result_list if str(item).find("**ERROR**") >= 0]
             if len(error_msg_list) > 0:
-                return "**ERROR**: " + "".join(error_msg_list) , 0
+                return "**ERROR**: " + "".join(error_msg_list), 0
             else:
                 return "".join(result_list[:-1]), result_list[-1]
 
@@ -91,7 +91,8 @@ class QWenChat(Base):
                             ans += LENGTH_NOTIFICATION_EN
                     yield ans
                 else:
-                    yield ans + "\n**ERROR**: " + resp.message if not re.search(r" (key|quota)", str(resp.message).lower()) else "Out of credit. Please set the API key in **settings > Model providers.**"
+                    yield ans + "\n**ERROR**: " + resp.message if not re.search(r" (key|quota)",
+                                                                                str(resp.message).lower()) else "Out of credit. Please set the API key in **settings > Model providers.**"
         except Exception as e:
             yield ans + "\n**ERROR**: " + str(e)
 
