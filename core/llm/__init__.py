@@ -65,6 +65,7 @@ from core.llm.tts_model.models.gpustacktts import GPUStackTTS
 from core.llm.tts_model.models.ollamatts import OllamaTTS
 from core.llm.tts_model.models.openaitts import OpenAITTS
 from core.llm.tts_model.models.qwentts import QwenTTS
+from core.llm.tts_model.models.siliconflowtts import SILICONFLOWTTS
 from core.llm.tts_model.models.sparktts import SparkTTS
 from core.llm.tts_model.models.xinferencetts import XinferenceTTS
 
@@ -160,5 +161,6 @@ TTSModel = {
     "XunFei Spark": SparkTTS,
     "Xinference": XinferenceTTS,
     "Ollama": OllamaTTS,
-    "GPUStack": GPUStackTTS
+    "GPUStack": GPUStackTTS,
+    "SILICONFLOW": SILICONFLOWTTS,
 }
