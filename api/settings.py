@@ -11,7 +11,6 @@ import core.utils.milvus_conn
 from api.utils import get_base_config
 from api.constants import MULTI_RAG_SERVICE_NAME
 
-
 LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
 
 LLM = None
@@ -162,6 +161,7 @@ class RetCode(IntEnum, CustomEnum):
     FORBIDDEN = 403
     NOT_FOUND = 404
 
+
 # AIFORBI
 AIFORBI_BASE_CONFIG = get_base_config("aiforbi", {})
 AIFORBI_BASE_URL = AIFORBI_BASE_CONFIG.get("base_url")
@@ -178,11 +178,9 @@ SCRIPT_SCHEDULER_HOST = SCRIPT_SCHEDULER_BASE_CONFIG.get("host")
 SCRIPT_SCHEDULER_PORT = SCRIPT_SCHEDULER_BASE_CONFIG.get("port")
 
 DCS_SERVER_BASE_CONFIG = get_base_config("dcs_server", {})
+DCS_SERVER_PROTOCOL = DCS_SERVER_BASE_CONFIG.get("protocol")
 DCS_SERVER_HOST = DCS_SERVER_BASE_CONFIG.get("host")
 DCS_SERVER_PORT = DCS_SERVER_BASE_CONFIG.get("port")
-
-
-
 
 # LLM = get_base_config("user_default_llm", {})
 # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")

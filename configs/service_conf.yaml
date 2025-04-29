@@ -171,6 +171,7 @@ script_scheduler:
 
 dcs_server:
   # 有些功能需要与中台服务通信
+  protocol: http
   host: localhost
-  port: 8125
+  port: 8081
 
