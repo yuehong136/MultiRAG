@@ -9,13 +9,26 @@ class OllamaCV(Base):
         self.model_name = model_name
         self.lang = lang
 
-    def describe(self, image, max_tokens=1024):
+    def describe(self, image):
         prompt = self.prompt("")
         try:
             response = self.client.generate(
                 model=self.model_name,
                 prompt=prompt[0]["content"][1]["text"],
                 images=[image]
+            )
+            ans = response["response"].strip()
+            return ans, 128
+        except Exception as e:
+            return "**ERROR**: " + str(e), 0
+
+    def describe_with_prompt(self, image, prompt=None):
+        vision_prompt = self.vision_llm_prompt("", prompt) if prompt else self.vision_llm_prompt("")
+        try:
+            response = self.client.generate(
+                model=self.model_name,
+                prompt=vision_prompt[0]["content"][1]["text"],
+                images=[image],
             )
             ans = response["response"].strip()
             return ans, 128

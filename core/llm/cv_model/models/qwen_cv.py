@@ -6,6 +6,7 @@ from api.utils import get_uuid
 from api.utils.file_utils import get_project_base_directory
 from core.llm.cv_model.base import Base
 from core.nlp import is_english
+from core.prompts import vision_llm_describe_prompt
 
 
 class QWenCV(Base):
@@ -45,23 +46,57 @@ class QWenCV(Base):
             }
         ]
 
+    def vision_llm_prompt(self, binary, prompt=None):
+        # stupid as hell
+        tmp_dir = get_project_base_directory("tmp")
+        if not os.path.exists(tmp_dir):
+            os.mkdir(tmp_dir)
+        path = os.path.join(tmp_dir, "%s.jpg" % get_uuid())
+        Image.open(io.BytesIO(binary)).save(path)
+
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "image": f"file://{path}"
+                    },
+                    {
+                        "text":  prompt if prompt else vision_llm_describe_prompt(),
+                    },
+                ],
+            }
+        ]
+
     def chat_prompt(self, text, b64):
         return [
             {"image": f"data:image/jpeg;base64,{b64}"},
             {"text": text},
         ]
 
-    def describe(self, image, max_tokens=300):
+    def describe(self, image):
         from http import HTTPStatus
+
         from dashscope import MultiModalConversation
-        response = MultiModalConversation.call(model=self.model_name,
-                                               messages=self.prompt(image))
+        response = MultiModalConversation.call(model=self.model_name, messages=self.prompt(image))
+        if response.status_code == HTTPStatus.OK:
+            return response.output.choices[0]['message']['content'][0]["text"], response.usage.output_tokens
+        return response.message, 0
+
+    def describe_with_prompt(self, image, prompt=None):
+        from http import HTTPStatus
+
+        from dashscope import MultiModalConversation
+
+        vision_prompt = self.vision_llm_prompt(image, prompt) if prompt else self.vision_llm_prompt(image)
+        response = MultiModalConversation.call(model=self.model_name, messages=vision_prompt)
         if response.status_code == HTTPStatus.OK:
             return response.output.choices[0]['message']['content'][0]["text"], response.usage.output_tokens
         return response.message, 0
 
     def chat(self, system, history, gen_conf, image=""):
         from http import HTTPStatus
+
         from dashscope import MultiModalConversation
         if system:
             history[-1]["content"] = system + history[-1]["content"] + "user query: " + history[-1]["content"]
@@ -87,6 +122,7 @@ class QWenCV(Base):
 
     def chat_streamly(self, system, history, gen_conf, image=""):
         from http import HTTPStatus
+
         from dashscope import MultiModalConversation
         if system:
             history[-1]["content"] = system + history[-1]["content"] + "user query: " + history[-1]["content"]

@@ -17,26 +17,27 @@
 import logging
 import os
 import random
-from timeit import default_timer as timer
+import re
 import sys
 import threading
-import trio
-
-import xgboost as xgb
+from copy import deepcopy
 from io import BytesIO
-import re
-import pdfplumber
-from PIL import Image
+from timeit import default_timer as timer
+
 import numpy as np
+import pdfplumber
+import trio
+import xgboost as xgb
+from huggingface_hub import snapshot_download
+from PIL import Image
 from pypdf import PdfReader as pdf2_read
 
 from api import settings
 from api.utils.file_utils import get_project_base_directory
-from deepdoc.vision import OCR, Recognizer, LayoutRecognizer, TableStructureRecognizer
+from deepdoc.vision import OCR, LayoutRecognizer, Recognizer, TableStructureRecognizer
+from core.app.picture import vision_llm_chunk as picture_vision_llm_chunk
 from core.nlp import rag_tokenizer
-from copy import deepcopy
-from huggingface_hub import snapshot_download
-
+from core.prompts import vision_llm_describe_prompt
 from core.settings import PARALLEL_DEVICES
 
 LOCK_KEY_pdfplumber = "global_shared_lock_pdfplumber"
@@ -45,7 +46,7 @@ if LOCK_KEY_pdfplumber not in sys.modules:
 
 
 class RAGFlowPdfParser:
-    def __init__(self):
+    def __init__(self, **kwargs):
         """
         If you have trouble downloading HuggingFace models, -_^ this might help!!
 
@@ -1241,6 +1242,53 @@ class PlainParser:
     @staticmethod
     def remove_tag(txt):
         raise NotImplementedError
+
+
+class VisionParser(RAGFlowPdfParser):
+    def __init__(self, vision_model, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.vision_model = vision_model
+
+    def __images__(self, fnm, zoomin=3, page_from=0, page_to=299, callback=None):
+        try:
+            with sys.modules[LOCK_KEY_pdfplumber]:
+                self.pdf = pdfplumber.open(fnm) if isinstance(
+                    fnm, str) else pdfplumber.open(BytesIO(fnm))
+                self.page_images = [p.to_image(resolution=72 * zoomin).annotated for i, p in
+                                    enumerate(self.pdf.pages[page_from:page_to])]
+                self.total_page = len(self.pdf.pages)
+        except Exception:
+            self.page_images = None
+            self.total_page = 0
+            logging.exception("VisionParser __images__")
+
+    def __call__(self, filename, from_page=0, to_page=100000, **kwargs):
+        callback = kwargs.get("callback", lambda prog, msg: None)
+
+        self.__images__(fnm=filename, zoomin=3, page_from=from_page, page_to=to_page, **kwargs)
+
+        total_pdf_pages = self.total_page
+
+        start_page = max(0, from_page)
+        end_page = min(to_page, total_pdf_pages)
+
+        all_docs = []
+
+        for idx, img_binary in enumerate(self.page_images or []):
+            pdf_page_num = idx  # 0-based
+            if pdf_page_num < start_page or pdf_page_num >= end_page:
+                continue
+
+            docs = picture_vision_llm_chunk(
+                binary=img_binary,
+                vision_model=self.vision_model,
+                prompt=vision_llm_describe_prompt(page=pdf_page_num+1),
+                callback=callback,
+            )
+
+            if docs:
+                all_docs.append(docs)
+        return [(doc, "") for doc in all_docs], []
 
 
 if __name__ == "__main__":

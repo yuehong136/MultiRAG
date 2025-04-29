@@ -4,14 +4,13 @@ from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
-
 from api.db.db_models import db_connection  # 导入上下文管理器
 from api.db.services.user_service import TenantService
 from api import settings
 from api.db import LLMType
 from api.db.db_models import LLMFactories, LLM, TenantLLM
 from api.db.services.common_service import CommonService
+from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
 
 
 class LLMFactoriesService(CommonService):
@@ -378,6 +377,14 @@ class LLMBundle:
         txt, used_tokens = self.mdl.describe(image, max_tokens)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
             logging.error(f"Can't update token usage for {self.tenant_id}/IMAGE2TEXT used_tokens: {used_tokens}")
+        return txt
+
+    def describe_with_prompt(self, image, prompt):
+        txt, used_tokens = self.mdl.describe_with_prompt(image, prompt)
+        if not TenantLLMService.increase_usage(
+                self.db, self.tenant_id, self.llm_type, used_tokens):
+            logging.error(
+                "LLMBundle.describe can't update token usage for {}/IMAGE2TEXT used_tokens: {}".format(self.tenant_id, used_tokens))
         return txt
 
     def transcription(self, audio):

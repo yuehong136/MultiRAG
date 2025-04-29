@@ -10,8 +10,11 @@ from markdown import markdown
 from PIL import Image
 from tika import parser
 
+from api.db import LLMType
+from api.db.db_models import db_connection
+from api.db.services.llm_service import LLMBundle
 from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownParser, PdfParser, TxtParser
-from deepdoc.parser.pdf_parser import PlainParser
+from deepdoc.parser.pdf_parser import PlainParser, VisionParser
 from core.nlp import concat_img, find_codec, naive_merge, naive_merge_docx, rag_tokenizer, tokenize_chunks, tokenize_chunks_docx, tokenize_table
 from core.utils import num_tokens_from_string
 
@@ -223,9 +226,17 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         return res
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        pdf_parser = Pdf()
-        if parser_config.get("layout_recognize", "DeepDOC") == "Plain Text":
+        layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
+
+        if layout_recognizer == "DeepDOC":
+            pdf_parser = Pdf()
+        elif layout_recognizer == "Plain Text":
             pdf_parser = PlainParser()
+        else:
+            with db_connection() as db:
+                vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=layout_recognizer, lang=lang)
+            pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
+
         sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page,
                                       callback=callback)
         res = tokenize_table(tables, doc, eng)

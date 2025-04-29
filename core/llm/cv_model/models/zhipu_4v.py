@@ -22,14 +22,24 @@ class Zhipu4V(Base):
         self.lang = lang
 
 
-    def describe(self, image: bytes, max_tokens: int = 1024) -> tuple[str, int]:
+    def describe(self, image):
         b64 = self.image2base64(image)
         prompt = self.prompt(b64)
         prompt[0]["content"][1]["type"] = "text"
 
         res = self.client.chat.completions.create(
             model=self.model_name,
-            messages=prompt
+            messages=prompt,
+        )
+        return res.choices[0].message.content.strip(), res.usage.total_tokens
+
+    def describe_with_prompt(self, image, prompt=None):
+        b64 = self.image2base64(image)
+        vision_prompt = self.vision_llm_prompt(b64, prompt) if prompt else self.vision_llm_prompt(b64)
+
+        res = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=vision_prompt
         )
         return res.choices[0].message.content.strip(), res.usage.total_tokens
 

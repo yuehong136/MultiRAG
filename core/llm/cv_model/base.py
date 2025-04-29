@@ -6,22 +6,25 @@
 @date：2024/7/22 9:30
 @desc:
 """
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from abc import ABC
 import openai
-from openai import OpenAI
 from core.nlp import is_english
 from typing import Any
 import base64
 from io import BytesIO
+
+from core.prompts import vision_llm_describe_prompt
 
 
 class Base(ABC):
     def __init__(self, key, model_name):
         pass
 
-    def describe(self, image: bytes, max_tokens: int = 300):
-        raise NotImplementedError("Please implement describe method!")
+    def describe(self, image):
+        raise NotImplementedError("Please implement encode method!")
+
+    def describe_with_prompt(self, image, prompt=None):
+        raise NotImplementedError("Please implement encode method!")
 
     def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], image: str = "") -> tuple[str, int]:
         if system:
@@ -102,6 +105,25 @@ class Base(ABC):
                         "type": "text",
                         "text": "请用中文详细描述一下图中的内容，比如时间，地点，人物，事情，人物心情等，如果有数据请提取出数据。" if self.lang.lower() == "chinese" else
                         "Please describe the content of this picture, like where, when, who, what happen. If it has number data, please extract them out.",
+                    },
+                ],
+            }
+        ]
+
+    def vision_llm_prompt(self, b64, prompt=None):
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                                "url": f"data:image/jpeg;base64,{b64}"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt if prompt else vision_llm_describe_prompt(),
                     },
                 ],
             }

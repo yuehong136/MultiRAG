@@ -13,7 +13,7 @@ class AzureGptV4(Base):
         self.model_name = model_name
         self.lang = lang
 
-    def describe(self, image, max_tokens=300):
+    def describe(self, image):
         b64 = self.image2base64(image)
         prompt = self.prompt(b64)
         for i in range(len(prompt)):
@@ -24,5 +24,15 @@ class AzureGptV4(Base):
         res = self.client.chat.completions.create(
             model=self.model_name,
             messages=prompt
+        )
+        return res.choices[0].message.content.strip(), res.usage.total_tokens
+
+    def describe_with_prompt(self, image, prompt=None):
+        b64 = self.image2base64(image)
+        vision_prompt = self.vision_llm_prompt(b64, prompt) if prompt else self.vision_llm_prompt(b64)
+
+        res = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=vision_prompt,
         )
         return res.choices[0].message.content.strip(), res.usage.total_tokens
