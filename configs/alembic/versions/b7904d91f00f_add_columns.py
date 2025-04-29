@@ -9,7 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-
+from sqlalchemy import Inspector
 
 # revision identifiers, used by Alembic.
 revision: str = 'b7904d91f00f'
@@ -19,26 +19,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Upgrade schema."""
-    op.execute("""
-        DO $$
-        BEGIN
-            -- 检查 priority 列是否存在于 t_ai_tasks 表
-            IF NOT EXISTS (
-                SELECT 1 
-                FROM information_schema.columns 
-                WHERE table_schema = 'usr_ai' 
-                AND table_name = 't_ai_tasks' 
-                AND column_name = 'priority'
-            ) THEN
-                ALTER TABLE usr_ai.t_ai_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
-            END IF;
-        END
-        $$;
-        """)
+    bind = op.get_bind()
+    insp = Inspector.from_engine(bind)
 
+    # 检查 t_ai_tasks 表是否已有 priority 列
+    cols = [col["name"] for col in insp.get_columns("t_ai_tasks", schema="usr_ai")]
+    if "priority" not in cols:
+        with op.batch_alter_table("t_ai_tasks", schema="usr_ai") as batch_op:
+            # 添加 priority 列，并设置初始默认值 0
+            batch_op.add_column(
+                sa.Column(
+                    "priority",
+                    sa.Integer(),
+                    nullable=False,
+                    server_default="0"
+                )
+            )
+            # 可选：移除 server_default，让默认值仅在添加时生效
+            batch_op.alter_column("priority", server_default=None)
 
 
 def downgrade() -> None:
-    """Downgrade schema."""
-    pass
+    # 回滚时删除 priority 列
+    with op.batch_alter_table("t_ai_tasks", schema="usr_ai") as batch_op:
+        batch_op.drop_column("priority")

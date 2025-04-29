@@ -9,7 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-
+from sqlalchemy import Inspector
 
 # revision identifiers, used by Alembic.
 revision: str = 'a08220dd999f'
@@ -19,25 +19,25 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Upgrade schema."""
-    op.execute("""
-        DO $$
-        BEGIN
-            -- 检查 task_type 列是否存在于 t_ai_tasks 表
-            IF NOT EXISTS (
-                SELECT 1 
-                FROM information_schema.columns 
-                WHERE table_schema = 'usr_ai' 
-                AND table_name = 't_ai_tasks' 
-                AND column_name = 'task_type'
-            ) THEN
-                ALTER TABLE usr_ai.t_ai_tasks ADD COLUMN task_type VARCHAR(32) NOT NULL DEFAULT '';
-            END IF;
-        END
-        $$;
-        """)
+    bind = op.get_bind()
+    insp = Inspector.from_engine(bind)
+
+    # 检查 t_ai_tasks 表是否已有 task_type 列
+    cols = [col["name"] for col in insp.get_columns("t_ai_tasks", schema="usr_ai")]
+    if "task_type" not in cols:
+        with op.batch_alter_table("t_ai_tasks", schema="usr_ai") as batch_op:
+            # 添加列并给已有数据一个默认值
+            batch_op.add_column(
+                sa.Column(
+                    "task_type",
+                    sa.String(length=32),
+                    nullable=False,
+                    server_default=""
+                )
+            )
 
 
 def downgrade() -> None:
-    """Downgrade schema."""
-    pass
+    # 回滚时删除 task_type 列
+    with op.batch_alter_table("t_ai_tasks", schema="usr_ai") as batch_op:
+        batch_op.drop_column("task_type")

@@ -9,7 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-
+from sqlalchemy import Inspector
 
 # revision identifiers, used by Alembic.
 revision: str = '60e7c845e76c'
@@ -19,36 +19,40 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Upgrade schema."""
-    op.execute("""
-        DO $$
-        BEGIN
-            -- 检查pagerank列是否存在于t_ai_knowledgebases表
-            IF NOT EXISTS (
-                SELECT 1 
-                FROM information_schema.columns 
-                WHERE table_schema = 'usr_ai' 
-                AND table_name = 't_ai_knowledgebases' 
-                AND column_name = 'pagerank'
-            ) THEN
-                ALTER TABLE usr_ai.t_ai_knowledgebases ADD COLUMN pagerank INTEGER NOT NULL DEFAULT 0;
-            END IF;
+    bind = op.get_bind()
+    insp = Inspector.from_engine(bind)
 
-            -- 检查meta_fields列是否存在于t_ai_documents表
-            IF NOT EXISTS (
-                SELECT 1 
-                FROM information_schema.columns 
-                WHERE table_schema = 'usr_ai' 
-                AND table_name = 't_ai_documents' 
-                AND column_name = 'meta_fields'
-            ) THEN
-                ALTER TABLE usr_ai.t_ai_documents ADD COLUMN meta_fields JSONB NOT NULL DEFAULT '{}';
-            END IF;
-        END
-        $$;
-        """)
+    # 1) t_ai_knowledgebases 添加 pagerank 列
+    cols_kb = [c["name"] for c in insp.get_columns("t_ai_knowledgebases", schema="usr_ai")]
+    if "pagerank" not in cols_kb:
+        with op.batch_alter_table("t_ai_knowledgebases", schema="usr_ai") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "pagerank",
+                    sa.Integer(),
+                    nullable=False,
+                    server_default="0"
+                )
+            )
+
+    # 2) t_ai_documents 添加 meta_fields 列
+    cols_doc = [c["name"] for c in insp.get_columns("t_ai_documents", schema="usr_ai")]
+    if "meta_fields" not in cols_doc:
+        with op.batch_alter_table("t_ai_documents", schema="usr_ai") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "meta_fields",
+                    sa.JSON(),
+                    nullable=False,
+                    server_default=sa.text("'{ }'::jsonb")
+                )
+            )
 
 
 def downgrade() -> None:
-    """Downgrade schema."""
-    pass
+    # 如果需要回滚，删除刚才加的列
+    with op.batch_alter_table("t_ai_documents", schema="usr_ai") as batch_op:
+        batch_op.drop_column("meta_fields")
+
+    with op.batch_alter_table("t_ai_knowledgebases", schema="usr_ai") as batch_op:
+        batch_op.drop_column("pagerank")
