@@ -117,7 +117,7 @@ wheels = [
 
 [[package]]
 name = "akshare"
-version = "1.16.61"
+version = "1.16.83"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -138,9 +138,9 @@ dependencies = [
     { name = "urllib3" },
     { name = "xlrd" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/47/a8/2d9d2ba8182edf33d11a21e3ba3f7af8eea7e483233b7c14942adc468d18/akshare-1.16.61.tar.gz", hash = "sha256:9056588a482901cac031a7f4c2649160a9125587f980fa9c7c7c1cbf652e5dda" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/10/44/2290119b15f05a6ce29855e711d2083a392f08d7520a75a73257b690df6d/akshare-1.16.83.tar.gz", hash = "sha256:a4b5c53af45fe11bc644d1be59b0911ed6b0d295d9572c6fbac1db2ddc6425a2" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/4e/cf/fbd8c646427f755e1dcbd9a969860d5737b01193a5f6b35550d5746995b8/akshare-1.16.61-py3-none-any.whl", hash = "sha256:2b05ea6c08371d0731802b4f4bd90b2758c520b7de0edd17448c3997a4a6fad1" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/f0/b2/30991a3b96a7c2a725f86d46b071ea46d9006cc2a82afeb13f768adab0b4/akshare-1.16.83-py3-none-any.whl", hash = "sha256:3d1c99b62acc29184391bb3fde2a48be7e848e4869d84ab10e65645ddea3b933" },
 ]
 
 [[package]]
@@ -3198,7 +3198,7 @@ requires-dist = [
     { name = "strenum", specifier = ">=0.4.15" },
     { name = "tabulate", specifier = "==0.9.0" },
     { name = "tabulate", specifier = ">=0.9.0" },
-    { name = "tavily-python", specifier = "==0.5.1" },
+    { name = "tavily-python", specifier = "==0.5.4" },
     { name = "tencentcloud-sdk-python", specifier = "==3.0.1215" },
     { name = "tika", specifier = "==2.6.0" },
     { name = "tiktoken", specifier = "==0.7.0" },
@@ -3220,7 +3220,7 @@ requires-dist = [
     { name = "xpinyin", specifier = "==0.7.6" },
     { name = "xxhash", specifier = ">=3.5.0,<4.0.0" },
     { name = "yfinance", specifier = "==0.1.96" },
-    { name = "zhipuai", specifier = "==2.0.1" },
+    { name = "zhipuai", specifier = ">2.0.1" },
 ]
 
 [[package]]
@@ -5352,16 +5352,16 @@ wheels = [
 
 [[package]]
 name = "tavily-python"
-version = "0.5.1"
+version = "0.5.4"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "requests" },
     { name = "tiktoken" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/db/ff/ba1a3769c34d022aeba544ff7b18cbcd0d23a6358fc3566b2101c6bf2817/tavily_python-0.5.1.tar.gz", hash = "sha256:44b0eefe79a057cd11d3cd03780b63b4913400122350e38285acfb502c2fffc1" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/2c/72/f36a49c2fd344b45e6f1ddab59a7f809bff4f46dcc78af7ac9758461a5bf/tavily_python-0.5.4.tar.gz", hash = "sha256:fdad5303f9f6603a06fddcc7e21b128bebc1adf7694e553a664caf87eb2d2d9d" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/a5/cd/71088461d7720128c78802289b3b36298f42745e5f8c334b0ffc157b881e/tavily_python-0.5.1-py3-none-any.whl", hash = "sha256:169601f703c55cf338758dcacfa7102473b479a9271d65a3af6fc3668990f757" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/2f/dd/63d1d2fddcaaee040745ea58d13b54c0b1483260ddae52eb59abf691f757/tavily_python-0.5.4-py3-none-any.whl", hash = "sha256:47f8c0b41283d44849fe9531596cd26d3de42a59618ef66f9e1244d8fedba404" },
 ]
 
 [[package]]
@@ -6098,17 +6098,18 @@ wheels = [
 
 [[package]]
 name = "zhipuai"
-version = "2.0.1"
+version = "2.1.5.20250421"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "cachetools" },
     { name = "httpx" },
     { name = "pydantic" },
+    { name = "pydantic-core" },
     { name = "pyjwt" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/a4/90/299e3456ee7ee1e118593552e03b86da2e9adaa0d454e467aeb4b22032a4/zhipuai-2.0.1.tar.gz", hash = "sha256:297bbdbe9393da2d1dc8066c39cf39bb2342f170d86f2b7b7a13ba368c53d701" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/74/3a/622508148236575f9b80d0af9d51c2fe8b91133388a90b197be44d63ef16/zhipuai-2.1.5.20250421.tar.gz", hash = "sha256:11fe754ea11f5ec7c806ec281ecc4a169a4371f347b1cecccea6f0e538dc17ea" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/8f/05/c3d4556886b5c6cf8c0b96eb80448ee8154c0dcc87086df018e817779ed4/zhipuai-2.0.1-py3-none-any.whl", hash = "sha256:738033d95696c3d5117dc4487e37d924e3ebbcdfa0072812b3f63a08ff72274a" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/b9/09/9aab30ba41501e83dd696c827eb539d05e39fe5d902cdabccf97166b7de1/zhipuai-2.1.5.20250421-py3-none-any.whl", hash = "sha256:98d3bf624d8da0f5f9003bfd053b86349a17ccd8724f52334903e6ae6ea8b974" },
 ]
 
 [[package]]
