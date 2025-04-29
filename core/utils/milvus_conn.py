@@ -36,7 +36,7 @@ from pymilvus import __version__
 from api.utils.file_utils import get_project_base_directory
 from core import settings
 from core.settings import TAG_FLD, PAGERANK_FLD
-from core.utils import singleton
+from core.utils import singleton, get_float
 from core.utils.doc_store_conn import (
     DocStoreConnection,
     MatchExpr,
@@ -649,7 +649,7 @@ class MilvusConnection(DocStoreConnection):
                                                                                                     MatchDenseExpr) and isinstance(
                         matchExprs[2], FusionExpr):
                     weights = m.fusion_params["weights"]
-                    vector_similarity_weight = float(weights.split(",")[1])
+                    vector_similarity_weight = get_float(weights.split(",")[1])
 
         # 处理不同类型的匹配表达式
         for expr in matchExprs:
@@ -714,7 +714,7 @@ class MilvusConnection(DocStoreConnection):
                         if rank_boost and PAGERANK_FLD in selectFields:
                             # 添加得分字段
                             for result in results:
-                                pagerank = float(result.get(PAGERANK_FLD, 0))
+                                pagerank = get_float(result.get(PAGERANK_FLD, 0))
                                 result["SCORE"] = pagerank * rank_boost.get(PAGERANK_FLD, 1.0)
 
                             # 按分数排序
@@ -774,7 +774,7 @@ class MilvusConnection(DocStoreConnection):
 
                             # 应用 rank_feature 调整分数
                             if rank_boost and PAGERANK_FLD in hit_dict["entity"]:
-                                pagerank = float(hit_dict["entity"].get(PAGERANK_FLD, 0))
+                                pagerank = get_float(hit_dict["entity"].get(PAGERANK_FLD, 0))
                                 # 应用向量相似度权重和PageRank权重
                                 # todo 原始 ES 实现可能同时包含了全文检索和向量搜索，而在那种情况下，(1.0 - vector_similarity_weight) 部分可能是分配给全文检索得分的权重。但在我们目前的 Milvus 实现中，由于没有实现全文检索部分，这个权重被分配给了 PageRank，后续再调整。
                                 hit_dict["SCORE"] = (base_score * vector_similarity_weight +

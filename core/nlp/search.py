@@ -6,7 +6,7 @@ import numpy as np
 
 from api.db.db_models import db_connection, SessionLocal
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from core.utils import rmSpace
+from core.utils import rmSpace, get_float
 from core.settings import TAG_FLD, PAGERANK_FLD
 from core.nlp import rag_tokenizer, query, is_english
 from core.utils.doc_store_conn import MatchDenseExpr
@@ -69,7 +69,7 @@ class Dealer:
             raise Exception(
                 f"Dealer.get_vector returned array's shape {shape} doesn't match expectation(exact one dimension).")
 
-        embedding_data = [float(v) for v in qv]
+        embedding_data = [get_float(v) for v in qv]
         vector_dim = len(embedding_data)
 
         # 修改点：先使用标准向量字段名，避免报错
@@ -542,7 +542,7 @@ class Dealer:
 
     @staticmethod
     def trans2floats(txt):
-        return [float(t) for t in txt.split("\t")]
+        return [get_float(t) for t in txt.split("\t")]
 
     def insert_citations(self, answer, chunks, chunk_v,
                          embd_mdl, tkweight=0.1, vtweight=0.9):
@@ -723,7 +723,7 @@ class Dealer:
             if isinstance(vector, str):
                 # 如果是字符串格式，尝试解析
                 try:
-                    vector = [float(v) for v in vector.split()]
+                    vector = [get_float(v) for v in vector.split()]
                 except:
                     vector = [0.0] * vector_dim
 
