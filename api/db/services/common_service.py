@@ -166,14 +166,19 @@ class CommonService(Generic[ModelType]):
             db.rollback()
             raise
 
-
     @classmethod
     def get_by_id(cls, db: Session, pid: Any) -> ModelType | None:
-        try:
-            return db.query(cls.model).filter(cls.model.id == pid).one()
-        except Exception:
-            # raise HTTPException(status_code=404, detail="Item not found")
-            return None
+        """
+        通过主键或 ID 字段查询单个记录。
+        找不到时返回 None；其他异常（如数据库连接错误）会正常抛出。
+        """
+        # one_or_none() 在没有结果时返回 None，找到多条时会抛出 MultipleResultsFound
+        return (
+            db.query(cls.model)
+            .filter(cls.model.id == pid)
+            .one_or_none()
+        )
+
     @classmethod
     def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] = None) -> list[ModelType]:
         query = db.query(cls.model).filter(cls.model.id.in_(pids))
