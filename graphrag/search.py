@@ -333,7 +333,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     kb_id = args.kb_id
-    with db_connection as db:
+    with db_connection() as db:
         tenant = TenantService.get_by_id(db, args.tenant_id)
         llm_bdl = LLMBundle(db, args.tenant_id, LLMType.CHAT, tenant.llm_id)
         kb = KnowledgebaseService.get_by_id(db, kb_id)

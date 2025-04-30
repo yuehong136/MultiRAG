@@ -1,3 +1,19 @@
+#
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+
 import logging
 import re
 from functools import reduce
@@ -14,7 +30,7 @@ from api.db import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownParser, PdfParser, TxtParser
-from deepdoc.parser.figure_parser import VisionFigureParser
+from deepdoc.parser.figure_parser import VisionFigureParser, vision_figure_parser_figure_data_wraper
 from deepdoc.parser.pdf_parser import PlainParser, VisionParser
 from core.nlp import concat_img, find_codec, naive_merge, naive_merge_docx, rag_tokenizer, tokenize_chunks, tokenize_chunks_docx, tokenize_table
 from core.utils import num_tokens_from_string
@@ -93,7 +109,8 @@ class Docx(DocxParser):
                     continue
                 if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
                     pn += 1
-        new_line = [(line[0], reduce(concat_img, line[1])) for line in lines]
+        new_line = [(line[0], reduce(concat_img, line[1]) if line[1] else None) for line in lines]
+
         tbls = []
         for tb in self.doc.tables:
             html = "<table>"
@@ -213,10 +230,28 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     pdf_parser = None
     if re.search(r"\.docx$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
-        sections, tables = Docx()(filename, binary)
-        res = tokenize_table(tables, doc, is_english)  # just for table
 
+        try:
+            with db_connection() as db:
+                vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+            callback(0.15, "Visual model detected. Attempting to enhance figure extraction...")
+        except Exception:
+            vision_model = None
+
+        sections, tables = Docx()(filename, binary)
+
+        if vision_model:
+            figures_data = vision_figure_parser_figure_data_wraper(sections)
+            try:
+                docx_vision_parser = VisionFigureParser(vision_model=vision_model, figures_data=figures_data, **kwargs)
+                boosted_figures = docx_vision_parser(callback=callback)
+                tables.extend(boosted_figures)
+            except Exception as e:
+                callback(0.6, f"Visual model error: {e}. Skipping figure parsing enhancement.")
+
+        res = tokenize_table(tables, doc, is_english)
         callback(0.8, "Finish parsing.")
+
         st = timer()
 
         chunks, images = naive_merge_docx(
@@ -239,7 +274,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             pdf_parser = Pdf()
 
             try:
-                vision_model = LLMBundle(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+                with db_connection() as db:
+                    vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
                 callback(0.15, "Visual model detected. Attempting to enhance figure extraction...")
             except Exception:
                 vision_model = None
@@ -264,7 +300,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             if layout_recognizer == "Plain Text":
                 pdf_parser = PlainParser()
             else:
-                vision_model = LLMBundle(kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=layout_recognizer, lang=lang)
+                with db_connection() as db:
+                    vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=layout_recognizer, lang=lang)
                 pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
 
             sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page,
