@@ -17,10 +17,14 @@ from sqlalchemy.dialects.postgresql import JSONB
 import typing
 import uuid
 from datetime import datetime, timezone
+import time
+import functools
+import hashlib
 
 from sqlalchemy import String, DateTime, BigInteger, event
 from sqlalchemy import create_engine, Column
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from api.utils import decrypt_database_config
 
@@ -814,3 +818,389 @@ def upgrade_database_tables():
         import traceback
         logging.error(traceback.format_exc())
         return error_msg
+
+
+def with_retry(max_retries=3, retry_delay=1.0):
+    """为数据库操作添加重试机制
+
+    Args:
+        max_retries (int): 最大重试次数
+        retry_delay (float): 初始重试延迟(秒)，将指数增长
+
+    Returns:
+        装饰后的函数
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for retry in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    # 获取self和方法名用于日志记录
+                    self_obj = args[0] if args else None
+                    func_name = func.__name__
+                    lock_name = getattr(self_obj, 'lock_name', 'unknown') if self_obj else 'unknown'
+
+                    if retry < max_retries - 1:
+                        current_delay = retry_delay * (2 ** retry)
+                        logging.warning(f"{func_name} {lock_name} 失败: {str(e)}, 重试中 ({retry + 1}/{max_retries})")
+                        time.sleep(current_delay)
+                    else:
+                        logging.error(f"{func_name} {lock_name} 在所有尝试后失败: {str(e)}")
+
+            if last_exception:
+                raise last_exception
+            return False
+
+        return wrapper
+
+    return decorator
+
+
+class PostgreSQLDatabaseLock:
+    """PostgreSQL 数据库锁实现"""
+
+    def __init__(self, session: Session, lock_name: str, timeout: int = 10):
+        """初始化 PostgreSQL 锁
+
+        Args:
+            session: SQLAlchemy 会话对象
+            lock_name: 锁名称
+            timeout: 获取锁的超时时间(秒)
+        """
+        self.session = session
+        self.lock_name = lock_name
+        self.lock_id = int(hashlib.md5(lock_name.encode()).hexdigest(), 16) % (2 ** 31 - 1)
+        self.timeout = int(timeout)
+
+    @with_retry(max_retries=3, retry_delay=1.0)
+    def lock(self):
+        """获取锁
+
+        Returns:
+            bool: 成功时返回 True
+
+        Raises:
+            Exception: 获取锁失败时抛出异常
+        """
+        result = self.session.execute(
+            text("SELECT pg_try_advisory_lock(:lock_id)"),
+            {"lock_id": self.lock_id}
+        )
+        row = result.fetchone()
+
+        if not row or row[0] == 0:
+            raise Exception(f"获取 PostgreSQL 锁 {self.lock_name} 超时")
+        elif row[0] == 1:
+            return True
+        else:
+            raise Exception(f"获取锁 {self.lock_name} 失败")
+
+    @with_retry(max_retries=3, retry_delay=1.0)
+    def unlock(self):
+        """释放锁
+
+        Returns:
+            bool: 成功时返回 True
+
+        Raises:
+            Exception: 释放锁失败时抛出异常
+        """
+        result = self.session.execute(
+            text("SELECT pg_advisory_unlock(:lock_id)"),
+            {"lock_id": self.lock_id}
+        )
+        row = result.fetchone()
+
+        if not row or row[0] == 0:
+            raise Exception(f"PostgreSQL 锁 {self.lock_name} 不是由当前会话持有")
+        elif row[0] == 1:
+            return True
+        else:
+            raise Exception(f"PostgreSQL 锁 {self.lock_name} 不存在")
+
+    def __enter__(self):
+        """上下文管理器入口"""
+        self.lock()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器退出"""
+        self.unlock()
+
+    def __call__(self, func):
+        """使类实例可作为装饰器使用"""
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with self:
+                return func(*args, **kwargs)
+
+        return wrapper
+
+
+class MySQLDatabaseLock:
+    """MySQL 数据库锁实现"""
+
+    def __init__(self, session: Session, lock_name: str, timeout: int = 10):
+        """初始化 MySQL 锁
+
+        Args:
+            session: SQLAlchemy 会话对象
+            lock_name: 锁名称
+            timeout: 获取锁的超时时间(秒)
+        """
+        self.session = session
+        self.lock_name = lock_name
+        self.timeout = int(timeout)
+
+    @with_retry(max_retries=3, retry_delay=1.0)
+    def lock(self):
+        """获取锁
+
+        Returns:
+            bool: 成功时返回 True
+
+        Raises:
+            Exception: 获取锁失败时抛出异常
+        """
+        result = self.session.execute(
+            text("SELECT GET_LOCK(:lock_name, :timeout)"),
+            {"lock_name": self.lock_name, "timeout": self.timeout}
+        )
+        row = result.fetchone()
+
+        if not row or row[0] is None:
+            raise Exception(f"获取 MySQL 锁 {self.lock_name} 出错")
+        elif row[0] == 0:
+            raise Exception(f"获取 MySQL 锁 {self.lock_name} 超时")
+        elif row[0] == 1:
+            return True
+        else:
+            raise Exception(f"获取锁 {self.lock_name} 失败")
+
+    @with_retry(max_retries=3, retry_delay=1.0)
+    def unlock(self):
+        """释放锁
+
+        Returns:
+            bool: 成功时返回 True
+
+        Raises:
+            Exception: 释放锁失败时抛出异常
+        """
+        result = self.session.execute(
+            text("SELECT RELEASE_LOCK(:lock_name)"),
+            {"lock_name": self.lock_name}
+        )
+        row = result.fetchone()
+
+        if not row or row[0] is None:
+            raise Exception(f"释放 MySQL 锁 {self.lock_name} 出错")
+        elif row[0] == 0:
+            raise Exception(f"MySQL 锁 {self.lock_name} 不是由当前会话持有")
+        elif row[0] == 1:
+            return True
+        else:
+            raise Exception(f"MySQL 锁 {self.lock_name} 不存在")
+
+    def __enter__(self):
+        """上下文管理器入口"""
+        self.lock()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器退出"""
+        self.unlock()
+
+    def __call__(self, func):
+        """使类实例可作为装饰器使用"""
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with self:
+                return func(*args, **kwargs)
+
+        return wrapper
+
+
+class SQLiteDatabaseLock:
+    """SQLite 数据库锁实现 (使用表锁模拟)"""
+
+    def __init__(self, session: Session, lock_name: str, timeout: int = 10):
+        """初始化 SQLite 锁
+
+        Args:
+            session: SQLAlchemy 会话对象
+            lock_name: 锁名称
+            timeout: 获取锁的超时时间(秒)
+        """
+        self.session = session
+        self.lock_name = lock_name
+        self.timeout = int(timeout)
+        self._ensure_lock_table()
+
+    def _ensure_lock_table(self):
+        """确保锁表存在"""
+        try:
+            self.session.execute(text("""
+                                      CREATE TABLE IF NOT EXISTS advisory_locks
+                                      (
+                                          lock_name
+                                          TEXT
+                                          PRIMARY
+                                          KEY,
+                                          session_id
+                                          TEXT,
+                                          created_at
+                                          TIMESTAMP
+                                          DEFAULT
+                                          CURRENT_TIMESTAMP
+                                      )
+                                      """))
+            self.session.commit()
+        except SQLAlchemyError:
+            self.session.rollback()
+            # 如果表已存在，忽略错误
+
+    @with_retry(max_retries=3, retry_delay=1.0)
+    def lock(self):
+        """获取锁"""
+        session_id = str(id(self.session))
+        start_time = time.time()
+
+        while time.time() - start_time < self.timeout:
+            try:
+                self.session.execute(
+                    text("INSERT INTO advisory_locks (lock_name, session_id) VALUES (:lock_name, :session_id)"),
+                    {"lock_name": self.lock_name, "session_id": session_id}
+                )
+                self.session.commit()
+                return True
+            except SQLAlchemyError:
+                # 锁已被获取，回滚并等待重试
+                self.session.rollback()
+                time.sleep(0.5)
+
+        raise Exception(f"获取 SQLite 锁 {self.lock_name} 超时")
+
+    @with_retry(max_retries=3, retry_delay=1.0)
+    def unlock(self):
+        """释放锁"""
+        session_id = str(id(self.session))
+        try:
+            result = self.session.execute(
+                text("DELETE FROM advisory_locks WHERE lock_name = :lock_name AND session_id = :session_id"),
+                {"lock_name": self.lock_name, "session_id": session_id}
+            )
+            self.session.commit()
+
+            if result.rowcount == 0:
+                # 没有删除任何行，说明锁不是由当前会话持有
+                raise Exception(f"SQLite 锁 {self.lock_name} 不是由当前会话持有")
+
+            return True
+        except SQLAlchemyError as e:
+            self.session.rollback()
+            raise Exception(f"释放 SQLite 锁失败: {str(e)}")
+
+    def __enter__(self):
+        """上下文管理器入口"""
+        self.lock()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器退出"""
+        self.unlock()
+
+    def __call__(self, func):
+        """使类实例可作为装饰器使用"""
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with self:
+                return func(*args, **kwargs)
+
+        return wrapper
+
+
+class DatabaseLock:
+    """数据库锁工厂类，根据数据库类型创建合适的锁实现"""
+
+    @staticmethod
+    def create(session: Session, lock_name: str, timeout: int = 10, db_type: str = None):
+        """创建合适的数据库锁实例
+
+        Args:
+            session: SQLAlchemy 会话对象
+            lock_name: 锁名称
+            timeout: 获取锁超时时间(秒)
+            db_type: 数据库类型 ('postgresql', 'mysql', 'sqlite' 或 None 自动检测)
+
+        Returns:
+            对应数据库类型的锁对象
+        """
+        if db_type is None:
+            # 自动检测数据库类型
+            db_type = session.bind.dialect.name.lower()
+
+        if db_type == 'postgresql':
+            return PostgreSQLDatabaseLock(session, lock_name, timeout)
+        elif db_type == 'mysql':
+            return MySQLDatabaseLock(session, lock_name, timeout)
+        elif db_type == 'sqlite':
+            return SQLiteDatabaseLock(session, lock_name, timeout)
+        else:
+            # 对于其他数据库类型，使用 SQLite 的模拟实现
+            logging.warning(f"未知数据库类型 {db_type}，使用基于表的锁实现")
+            return SQLiteDatabaseLock(session, lock_name, timeout)
+
+
+# 辅助函数 - 创建任务锁名称
+def task_lock_name(task_id: str, operation: str = "update") -> str:
+    """为任务生成锁名称
+
+    Args:
+        task_id: 任务ID
+        operation: 操作类型
+
+    Returns:
+        格式化的锁名称
+    """
+    return f"{operation}_task_{task_id}"
+
+
+# 装饰器工厂函数 - 创建用于保护函数的锁装饰器
+def with_advisory_lock(lock_name_template: str, timeout: int = 10):
+    """创建一个数据库锁装饰器
+
+    Args:
+        lock_name_template: 锁名称模板，使用 {} 作为参数占位符
+        timeout: 获取锁的超时时间(秒)
+
+    Returns:
+        装饰器函数
+
+    示例:
+        @with_advisory_lock("update_progress_{}")
+        def update_progress(db: Session, task_id: str, info: dict):
+            # 函数内容...
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(db: Session, id: str, *args, **kwargs):
+            # 格式化锁名称
+            lock_name = lock_name_template.format(id)
+
+            # 创建并使用锁
+            with DatabaseLock.create(db, lock_name, timeout):
+                return func(db, id, *args, **kwargs)
+
+        return wrapper
+
+    return decorator

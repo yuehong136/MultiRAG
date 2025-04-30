@@ -18,7 +18,7 @@ import trio
 
 from api.utils.db_utils import bulk_insert_into_db
 from deepdoc.parser import PdfParser
-from api.db.db_models import Task, Document, Knowledgebase, Tenant, File2Document, File, db_connection, engine
+from api.db.db_models import Task, Document, Knowledgebase, Tenant, File2Document, File, db_connection, engine, DatabaseLock
 from api.db import StatusEnum, FileType, TaskStatus
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
@@ -250,20 +250,9 @@ class TaskService(CommonService):
                     .where(cls.model.id == id)
                     .values(progress=info["progress"])
                 )
-            db.commit()
             return
-        # 动态生成锁名
-        lock_name = f"update_progress_{id}"
-        # lock_query = text(f"SELECT pg_advisory_lock(hashtext('{lock_name}'))")
-        lock_query = text(f"SELECT pg_advisory_xact_lock(hashtext('{lock_name}'))")
-        # unlock_query = text(f"SELECT pg_advisory_unlock(hashtext('{lock_name}'))")
 
-        try:
-            # 获取锁
-            db.execute(lock_query)
-            db.commit()
-
-            # 更新逻辑
+        with DatabaseLock.create(db, f"update_progress_{id}"):
             if "progress_msg" in info and info["progress_msg"]:
                 task = db.query(cls.model).get(id)
                 if task:
@@ -283,14 +272,6 @@ class TaskService(CommonService):
                     .values(progress=info["progress"])
                 )
 
-            db.commit()
-        except Exception as e:
-            logging.exception(f"Error updating progress for task {id}: {e}")
-            db.rollback()
-        # finally:
-        #     # 释放锁
-        #     # db.execute(unlock_query)
-        #     db.commit()
 
 def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
     """Create and queue document processing tasks.
