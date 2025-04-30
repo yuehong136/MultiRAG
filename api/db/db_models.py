@@ -1148,11 +1148,11 @@ class DatabaseLock:
             # 自动检测数据库类型
             db_type = session.bind.dialect.name.lower()
 
-        if db_type == 'postgresql':
+        if db_type.lower() == 'postgresql':
             return PostgreSQLDatabaseLock(session, lock_name, timeout)
-        elif db_type == 'mysql':
+        elif db_type.lower() == 'mysql':
             return MySQLDatabaseLock(session, lock_name, timeout)
-        elif db_type == 'sqlite':
+        elif db_type.lower() == 'sqlite':
             return SQLiteDatabaseLock(session, lock_name, timeout)
         else:
             # 对于其他数据库类型，使用 SQLite 的模拟实现
