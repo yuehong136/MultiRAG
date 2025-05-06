@@ -19,6 +19,7 @@ import pandas as pd
 # from openpyxl import load_workbook
 from dateutil.parser import parse as datetime_parse
 
+from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from deepdoc.parser.utils import get_text
 from core.nlp import rag_tokenizer, tokenize
@@ -229,9 +230,9 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000,
                 continue
             tokenize(d, "; ".join(row_txt), eng)
             res.append(d)
-
-        KnowledgebaseService.update_parser_config(
-            kwargs["kb_id"], {"field_map": {k: v for k, v in clmns_map}})
+        with db_connection() as db:
+            KnowledgebaseService.update_parser_config(
+                db, kwargs["kb_id"], {"field_map": {k: v for k, v in clmns_map}})
     callback(0.35, "")
 
     return res
