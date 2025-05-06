@@ -63,6 +63,9 @@ class ChangeStatusRequest(BaseModel):
     doc_id: str = Field(..., description="文档ID")
     status: int = Field(..., description="状态")
 
+class ChangeAuthRequest(BaseModel):
+    doc_id: str = Field(..., description="文档ID")
+
 
 class RemoveRequest(BaseModel):
     doc_id: list[str] = Field(..., description="文档ID列表")
@@ -357,6 +360,49 @@ def change_status(
 
         status = int(req["status"])
         settings.docStoreConn.update({"doc_id": req["doc_id"]}, {"available_int": status},
+                                     search.index_name_one(kb.tenant_id, kb.name), doc.kb_id)
+        return construct_json_result(data=True)
+    except Exception as e:
+        return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message=str(e))
+
+
+@router.post("/change_auth", summary="更改文档授权", response_description="成功更改文档授权")
+def change_auth(
+        request_body: ChangeAuthRequest,
+        auths: str = Query(),  # labels 是一个 JSON 格式的字符串
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    req = request_body.model_dump()
+    if not DocumentService.accessible(db, req["doc_id"], user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR)
+
+    try:
+        doc = DocumentService.get_by_id(db, req["doc_id"])
+        if not doc:
+            return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
+        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        if not kb:
+            return construct_json_result(data=False, message="Can't find this knowledgebase!",
+                                         code=settings.RetCode.ARGUMENT_ERROR)
+        if isinstance(auths, str):
+            try:
+                auths = json.loads(auths)
+                if not isinstance(auths, list) or not all(isinstance(auth, str) for auth in auths):
+                    raise ValueError('auths must be a list of strings.')
+            except json.JSONDecodeError:
+                raise ValueError('Invalid JSON format for "auths".')
+        elif auths is not None:
+            raise ValueError('Auth must be a JSON-encoded list of strings or None.')
+        if not DocumentService.update_by_id(db, req["doc_id"], {"auth": json.dumps(auths) if auths else None}):
+            return construct_json_result(data=False, message="Database error (Document update)!",
+                                         code=settings.RetCode.ARGUMENT_ERROR)
+
+        # auth = str(req["auth"])
+        settings.docStoreConn.update({"doc_id": req["doc_id"]}, {"auth": auths},
                                      search.index_name_one(kb.tenant_id, kb.name), doc.kb_id)
         return construct_json_result(data=True)
     except Exception as e:
