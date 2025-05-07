@@ -21,6 +21,7 @@ from core.llm.chat_model.models.spark_chat import SparkChat
 from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
+from core.llm.cv_model.models.anthropic_cv import AnthropicCV
 from core.llm.cv_model.models.azuregptv4 import AzureGptV4
 from core.llm.cv_model.models.gemini_cv import GeminiCV
 from core.llm.cv_model.models.gptv4 import GptV4
@@ -97,7 +98,8 @@ CvModel = {
     "ZHIPU-AI": Zhipu4V,
     'Gemini':GeminiCV,
     "OpenAI-API-Compatible": OpenAI_APICV,
-    "VLLM": OpenAI_APICV
+    "VLLM": OpenAI_APICV,
+    "Anthropic": AnthropicCV
 }
 
 
