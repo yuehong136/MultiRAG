@@ -326,6 +326,30 @@ class TenantLLM(BaseModel):
     used_tokens = Column(Integer, index=True, nullable=False, default=0)
 
 
+class TenantLangfuse(BaseModel):
+    __tablename__ = "t_ai_tenant_langfuse"
+    __table_args__ = {"schema": "usr_ai"}
+
+    tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
+    secret_key = Column(String(2048), index=True, nullable=False, doc="SECRET KEY")
+    public_key = Column(String(2048), index=True, nullable=False, doc="PUBLIC KEY")
+    host = Column(String(128), index=True, nullable=False, doc="HOST")
+
+    def __str__(self):
+        # Mimicking the original __str__ method, but f-string is more Pythonic
+        return f"Langfuse tenant_id: {self.tenant_id}, host: {self.host}"
+
+    def to_dict(self):
+        # You can customize this if you want a different representation
+        # than the default BaseModel.to_dict() or if you want to exclude sensitive fields.
+        # For example, to exclude secret_key from general dictionary conversions:
+        return {
+            "tenant_id": self.tenant_id,
+            "public_key": self.public_key,
+            "host": self.host
+        }
+
+
 class Knowledgebase(BaseModel):
     __tablename__ = "t_ai_knowledgebases"
     __table_args__ = {"schema": "usr_ai"}
