@@ -231,26 +231,25 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
         if n in req:
             llm_config[n] = req[n]
 
-    try:
-        for llm in LLMService.query(db, fid=factory):
-            if not TenantLLMService.filter_update(
-                    db,
-                    [TenantLLM.tenant_id == user.id,
-                     TenantLLM.llm_factory == factory,
-                     TenantLLM.llm_name == llm.llm_name],
-                    llm_config
-            ):
-                TenantLLMService.save(
-                    db,
-                    tenant_id=user.id,
-                    llm_factory=factory,
-                    llm_name=llm.llm_name,
-                    mdl_type=llm.mdl_type,
-                    api_key=llm_config["api_key"],
-                    api_base=llm_config["api_base"]
-                )
-    except IntegrityError as e:
-        raise HTTPException(status_code=400, detail="API key already exists for this LLM factory and name.")
+    for llm in LLMService.query(db, fid=factory):
+        llm_config["max_tokens"] = llm.max_tokens
+        if not TenantLLMService.filter_update(
+                db,
+                [TenantLLM.tenant_id == user.id,
+                 TenantLLM.llm_factory == factory,
+                 TenantLLM.llm_name == llm.llm_name],
+                llm_config
+        ):
+            TenantLLMService.save(
+                db,
+                tenant_id=user.id,
+                llm_factory=factory,
+                llm_name=llm.llm_name,
+                mdl_type=llm.mdl_type,
+                api_key=llm_config["api_key"],
+                api_base=llm_config["api_base"],
+                max_tokens=llm_config["max_tokens"]
+            )
 
     return get_json_result(data=True)
 

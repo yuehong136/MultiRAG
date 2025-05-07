@@ -290,17 +290,6 @@ class UserTenant(BaseModel):
         }
 
 
-# class InvitationCode(Base):
-#     __tablename__ = "invitation_codes"
-#
-#     id = Column(String, primary_key=True, index=True)
-#     code = Column(String)
-#     visit_time = Column(DateTime)
-#     user_id = Column(String, ForeignKey("users.id"))
-#     tenant_id = Column(String, ForeignKey("tenants.id"))
-#     status = Column(String, default="1")
-
-
 class LLMFactories(BaseModel):
     __tablename__ = "t_ai_llm_factories"
     __table_args__ = {"schema": "usr_ai"}
@@ -333,6 +322,7 @@ class TenantLLM(BaseModel):
     llm_name = Column(String(128), primary_key=True, index=True, nullable=True)
     api_key = Column(String(2048), index=True, nullable=True)
     api_base = Column(String(255), index=False, nullable=True)
+    max_tokens = Column(Integer, index=True, nullable=False, default=8192)
     used_tokens = Column(Integer, index=True, nullable=False, default=0)
 
 
