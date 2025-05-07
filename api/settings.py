@@ -49,21 +49,27 @@ docStoreConn = None
 retrievaler = None
 kg_retrievaler = None
 
+# user registration switch
+REGISTER_ENABLED = 1
 
 def init_settings():
-    # global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, DATABASE_TYPE, DATABASE, FACTORY_LLM_INFOS
+    # global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, DATABASE_TYPE, DATABASE, FACTORY_LLM_INFOS, REGISTER_ENABLED
     # LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
     # DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
     # DATABASE = decrypt_database_config(name=DATABASE_TYPE)
     # LLM = get_base_config("user_default_llm", {})
     # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
     # LLM_BASE_URL = LLM.get("base_url")
-    global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, FACTORY_LLM_INFOS
+    global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, FACTORY_LLM_INFOS, REGISTER_ENABLED
     LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
     LLM = get_base_config("user_default_llm", {})
     LLM_DEFAULT_MODELS = LLM.get("default_models", {})
     LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
     LLM_BASE_URL = LLM.get("base_url")
+    try:
+        REGISTER_ENABLED = int(os.environ.get("REGISTER_ENABLED", "1"))
+    except Exception:
+        pass
 
     try:
         with open(os.path.join(get_project_base_directory(), "configs", "llm_factories.json"), "r") as f:

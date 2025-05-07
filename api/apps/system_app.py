@@ -257,7 +257,7 @@ def token_list(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post("/rm", summary="删除API访问令牌", response_description="成功删除指定的令牌")
-async def rm(
+def rm(
     token: str = Body(..., description="要删除的令牌"),
     db: Session = Depends(get_db),
     user=Depends(manager)
@@ -279,3 +279,24 @@ async def rm(
     )
     return get_json_result(data=True)
 
+
+@router.get('/config', summary="获取系统配置")  # noqa: F821
+def get_config():
+    """
+    Get system configuration.
+    ---
+    tags:
+        - System
+    responses:
+        200:
+            description: Return system configuration
+            schema:
+                type: object
+                properties:
+                    registerEnable:
+                        type: integer 0 means disabled, 1 means enabled
+                        description: Whether user registration is enabled
+    """
+    return get_json_result(data={
+        "registerEnabled": settings.REGISTER_ENABLED
+    })

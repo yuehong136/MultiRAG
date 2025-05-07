@@ -451,6 +451,14 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
     - 成功时返回包含访问令牌和用户信息的JSON结果
     - 失败时返回错误信息
     """
+
+    if not settings.REGISTER_ENABLED:
+        return get_json_result(
+            data=False,
+            message="User registration is disabled!",
+            code=settings.RetCode.OPERATING_ERROR,
+        )
+
     req = request.model_dump()
     email_address = req["email"]
     # Validate the email address
