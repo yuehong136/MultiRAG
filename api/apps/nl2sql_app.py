@@ -1,7 +1,7 @@
 from enum import Enum
-from typing import List, Optional, Any, Dict
+from typing import List, Any
 
-from fastapi import APIRouter, Depends, Body, HTTPException
+from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -215,4 +215,94 @@ async def analyze_query_intent(
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"查询意图分析失败：{str(e)}"
+        )
+
+
+class NL2SQLRequest(BaseModel):
+    """自然语言转SQL请求的基础模型"""
+    query_text: str = Field(
+        ...,
+        title="查询文本",
+        description="需要转换为SQL的原始自然语言查询文本",
+    )
+    llm_name: str = Field(
+        "gpt-4",
+        title="LLM模型名称",
+        description="用于将自然语言转换为SQL的LLM模型名称",
+    )
+    dataset_id_list: List[str] = Field(
+        ...,
+        title="数据集ID列表",
+        description="用于查询的数据集ID列表",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "query_text": "查询销售额最高的前10个产品",
+                "llm_name": "gpt-4",
+                "dataset_id_list": ["dataset1", "dataset2"]
+            }
+        }
+
+
+class NL2SQLResponse(BaseModel):
+    """自然语言转SQL响应模型"""
+    original_query: str = Field(
+        ...,
+        title="原始查询",
+        description="提交进行SQL转换的原始查询文本",
+    )
+    sql_query: str = Field(
+        ...,
+        title="生成的SQL查询",
+        description="从自然语言转换生成的SQL查询语句",
+    )
+
+
+@router.post("/nl-to-sql", response_model=ResponseSchema, summary="将自然语言查询转换为SQL")
+async def convert_nl_to_sql(
+        body: NL2SQLRequest = Body(
+            ...,
+            title="自然语言转SQL请求",
+            description="需要转换为SQL的自然语言查询信息",
+            example={
+                "query_text": "查询销售额最高的前10个产品",
+                "llm_name": "gpt-4",
+                "dataset_id_list": ["dataset1", "dataset2"]
+            }
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: NL2SQLService = Depends(get_nl2sql_service)
+):
+    """将自然语言查询转换为对应的SQL查询语句"""
+    try:
+        # 调用服务将自然语言转换为SQL
+        sql_query = await service.nl2sql(
+            query_text=body.query_text,
+            llm_name=body.llm_name,
+            dataset_id_list=body.dataset_id_list
+        )
+
+        # 构建响应数据
+        response_data = NL2SQLResponse(
+            original_query=body.query_text,
+            sql_query=sql_query
+        )
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="自然语言转SQL成功",
+            data=response_data
+        )
+    except FileNotFoundError as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"自然语言转SQL失败：提示词模板文件未找到 - {str(e)}"
+        )
+    except Exception as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"自然语言转SQL失败：{str(e)}"
         )
