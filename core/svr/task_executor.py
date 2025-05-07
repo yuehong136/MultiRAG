@@ -52,7 +52,7 @@ from core.app import laws, paper, presentation, manual, qa, table, book, resume,
 from core.nlp import search, rag_tokenizer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 from core.settings import DOC_MAXIMUM_SIZE, SVR_CONSUMER_GROUP_NAME, get_svr_queue_name, get_svr_queue_names, print_rag_settings, TAG_FLD, PAGERANK_FLD
-from core.utils import rmSpace, num_tokens_from_string
+from core.utils import rmSpace, num_tokens_from_string, truncate
 # from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.storage_factory import STORAGE_IMPL
@@ -599,7 +599,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
 
     cnts_ = np.array([])
     for i in range(0, len(cnts), batch_size):
-        vts, c = await trio.to_thread.run_sync(lambda: mdl.encode(cnts[i: i + batch_size]))
+        vts, c = await trio.to_thread.run_sync(lambda: mdl.encode([truncate(c, mdl.max_length-10) for c in cnts[i: i + batch_size]]))
         if len(cnts_) == 0:
             cnts_ = vts
         else:
