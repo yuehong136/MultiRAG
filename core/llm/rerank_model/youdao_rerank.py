@@ -36,6 +36,8 @@ class YoudaoRerank(DefaultRerank):
                         YoudaoRerank._model = RerankerModel(model_name_or_path=default_path)
 
         self._model = YoudaoRerank._model
+        self._dynamic_batch_size = 8
+        self._min_batch_size = 1
 
     def get_model_path(self, model_name: str) -> str:
         """
