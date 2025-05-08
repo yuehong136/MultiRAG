@@ -91,16 +91,19 @@ async def upload(
             return construct_json_result(data=False, retmsg='No file selected!', retcode=settings.RetCode.ARGUMENT_ERROR)
 
     try:
+        pf_folder = FileService.get_by_id(db, pf_id)
+        if not pf_folder:
+            return get_data_error_result(retmsg="Can't find this folder!")
         for file_obj in files:
-            file = FileService.get_by_id(db, pf_id)
-            if not file:
-                return get_data_error_result(retmsg="Can't find this folder!")
             MAX_FILE_NUM_PER_USER = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
-            if MAX_FILE_NUM_PER_USER > 0 and DocumentService.get_doc_count(db, user.id) >= MAX_FILE_NUM_PER_USER:
+            if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, user.id):
                 return get_data_error_result(retmsg="Exceed the maximum file number of a free user!")
 
-            full_path = '/' + file_obj.filename
-            file_obj_names = full_path.split('/')
+            if not file_obj.filename:
+                file_obj_names = [pf_folder.name, file_obj.filename]
+            else:
+                full_path = '/' + file_obj.filename
+                file_obj_names = full_path.split('/')
             file_len = len(file_obj_names)
 
             file_id_list = FileService.get_id_list_by_id(db, pf_id, file_obj_names, 1, [pf_id])
