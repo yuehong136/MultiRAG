@@ -255,7 +255,7 @@ async def list_files(
 
         parent_folder = FileService.get_parent_folder(db, parent_id)
         if not parent_folder:
-            return construct_json_result(retmsg="File not found!")
+            return construct_json_result(message="File not found!")
 
         return construct_json_result(data={"total": total, "files": files, "parent_folder": parent_folder.to_dict()})
     except Exception as e:
@@ -493,8 +493,14 @@ async def move(
     try:
         file_ids = req["src_file_ids"]
         parent_id = req["dest_file_id"]
+
+        files = FileService.get_by_ids(db, file_ids)
+        files_dict = {}
+        for file in files:
+            files_dict[file.id] = file
+
         for file_id in file_ids:
-            file = FileService.get_by_id(db, file_id)
+            file = files_dict[file_id]
             if not file:
                 return get_data_error_result(retmsg="File or Folder not found!")
             if not file.tenant_id:
