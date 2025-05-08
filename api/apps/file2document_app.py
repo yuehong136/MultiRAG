@@ -43,8 +43,12 @@ def convert(
     file2documents = []
 
     try:
+        files = FileService.get_by_ids(db, file_ids)
+        files_set = dict({file.id: file for file in files})
         for file_id in file_ids:
-            file = FileService.get_by_id(db, file_id)
+            file = files_set[file_id]
+            if not file:
+                return get_data_error_result(retmsg="File not found!")
             file_ids_list = [file_id]
             if file.type == FileType.FOLDER.value:
                 file_ids_list = FileService.get_all_innermost_file_ids(db, file_id, [])
