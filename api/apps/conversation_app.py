@@ -720,9 +720,7 @@ async def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), use
             for ans in ask(db, req["question"], req["kb_ids"], uid):
                 yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
-            yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e),
-                                        "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
-                                       ensure_ascii=False) + "\n\n"
+            yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
         yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False) + "\n\n"
 
     headers = {
@@ -735,7 +733,7 @@ async def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), use
 
 # 定义 mindmap 接口
 @router.post('/mindmap', summary="生成思维导图", response_description="返回思维导图")
-async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     生成思维导图
 
@@ -759,8 +757,7 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
     chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name])
-    ranks = settings.retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3,
-                                  aggs=False, rank_feature=label_question(db, req["question"], [kb]))
+    ranks = settings.retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3, aggs=False, rank_feature=label_question(db, req["question"], [kb]))
     mindmap = MindMapExtractor(chat_mdl)
     mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
     mind_map = mind_map.output
@@ -786,20 +783,55 @@ async def related_questions(request: RelatedQuestionsRequest, db: Session = Depe
     """
     req = request.model_dump()
     question = req["question"]
-
     chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
     prompt = """
-    Objective: To generate search terms related to the user's search keywords, helping users find more valuable information.
-    Instructions:
-     - Based on the keywords provided by the user, generate 5-10 related search terms.
-     - Each search term should be directly or indirectly related to the keyword, guiding the user to find more valuable information.
-     - Use common, general terms as much as possible, avoiding obscure words or technical jargon.
-     - Keep the term length between 2-4 words, concise and clear.
-     - DO NOT translate, use the language of the original keywords.
-    """
+Role: You are an AI language model assistant tasked with generating 5-10 related questions based on a user’s original query. These questions should help expand the search query scope and improve search relevance.
 
-    ans = chat_mdl.chat(prompt, [{"role": "user", "content": f"Keywords: {question}\nRelated search terms:"}],
-                        {"temperature": 0.9})
+Instructions:
+	Input: You are provided with a user’s question.
+	Output: Generate 5-10 alternative questions that are related to the original user question. These alternatives should help retrieve a broader range of relevant documents from a vector database.
+	Context: Focus on rephrasing the original question in different ways, making sure the alternative questions are diverse but still connected to the topic of the original query. Do not create overly obscure, irrelevant, or unrelated questions.
+	Fallback: If you cannot generate any relevant alternatives, do not return any questions.
+	Guidance:
+	1. Each alternative should be unique but still relevant to the original query.
+	2. Keep the phrasing clear, concise, and easy to understand.
+	3. Avoid overly technical jargon or specialized terms unless directly relevant.
+	4. Ensure that each question contributes towards improving search results by broadening the search angle, not narrowing it.
+
+Example:
+Original Question: What are the benefits of electric vehicles?
+
+Alternative Questions:
+	1. How do electric vehicles impact the environment?
+	2. What are the advantages of owning an electric car?
+	3. What is the cost-effectiveness of electric vehicles?
+	4. How do electric vehicles compare to traditional cars in terms of fuel efficiency?
+	5. What are the environmental benefits of switching to electric cars?
+	6. How do electric vehicles help reduce carbon emissions?
+	7. Why are electric vehicles becoming more popular?
+	8. What are the long-term savings of using electric vehicles?
+	9. How do electric vehicles contribute to sustainability?
+	10. What are the key benefits of electric vehicles for consumers?
+
+Reason:
+	Rephrasing the original query into multiple alternative questions helps the user explore different aspects of their search topic, improving the quality of search results.
+	These questions guide the search engine to provide a more comprehensive set of relevant documents.
+"""
+
+    ans = chat_mdl.chat(
+        prompt,
+        [
+            {
+                "role": "user",
+                "content": f"""
+    Keywords: {question}
+    Related search terms:
+        """,
+            }
+        ],
+        {"temperature": 0.9},
+    )
+
     related_terms = [re.sub(r"^[0-9]\. ", "", a) for a in ans.split("\n") if re.match(r"^[0-9]\. ", a)]
 
     return get_json_result(data=related_terms)
