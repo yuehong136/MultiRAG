@@ -8,7 +8,7 @@ from core.utils import truncate, num_tokens_from_string
 
 
 class XInferenceRerank(Base):
-    def __init__(self, key="xxxxxxx", model_name="", base_url=""):
+    def __init__(self, key="x", model_name="", base_url=""):
         if base_url.find("/v1") == -1:
             base_url = urljoin(base_url, "/v1/rerank")
         if base_url.find("/rerank") == -1:
@@ -17,9 +17,10 @@ class XInferenceRerank(Base):
         self.base_url = base_url
         self.headers = {
             "Content-Type": "application/json",
-            "accept": "application/json",
-            "Authorization": f"Bearer {key}"
+            "accept": "application/json"
         }
+        if key and key != "x":
+            self.headers["Authorization"] = f"Bearer {key}"
 
     def similarity(self, query: str, texts: list):
         if len(texts) == 0:
