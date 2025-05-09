@@ -58,7 +58,8 @@ class SemanticApiClient:
             "get_dimension_by_dimension_value": "/api/drm/semanticOpenApi/getDimensionByDimensionValue",
             "get_metric_info": "/api/drm/semanticOpenApi/getMetricInfoByKeyword",
             "get_business_term_info": "/api/drm/semanticOpenApi/getBusinessTermInfo",
-            "get_model_detail": "/api/drm/semanticOpenApi/getModelDetail"
+            "get_model_detail": "/api/drm/semanticOpenApi/getModelDetail",
+            "get_dimension_info_by_id": "/api/drm/semanticOpenApi/getDimensionInfoById",
         }
 
         # 设置请求头
@@ -828,9 +829,425 @@ class SemanticApiClient:
             logger.error(f"多关键词指标信息搜索过程中出错: {str(e)}")
             raise
 
+    async def get_dimension_info_by_id_async(
+            self,
+            dimension_ids: Union[str, List[str]],
+            max_concurrent: int = 5
+    ) -> List[Dict]:
+        """
+        异步获取维度详情信息（支持单个ID或ID列表，并发请求）
+
+        Args:
+            dimension_ids: 单个维度ID或维度ID列表
+            max_concurrent: 最大并发请求数
+
+        Returns:
+            List[Dict]: 维度详情信息列表
+        """
+        logger.info(f"\n=== 根据维度ID获取维度详情 ===")
+
+        # 确保API路径已添加
+        if "get_dimension_info_by_id" not in self.api_paths:
+            self.api_paths["get_dimension_info_by_id"] = "/api/drm/semanticOpenApi/getDimensionInfoById"
+
+        # 转换单个ID为列表
+        if isinstance(dimension_ids, str):
+            dimension_ids = [dimension_ids]
+
+        all_results = []
+
+        try:
+            # 创建异步任务列表
+            tasks = []
+            for dim_id in dimension_ids:
+                logger.info(f"正在准备获取维度ID: {dim_id} 的详情")
+                task = self._make_async_request(
+                    "POST",
+                    self.api_paths["get_dimension_info_by_id"],
+                    data={"dimensionId": dim_id}
+                )
+                tasks.append((dim_id, task))
+
+            # 限制并发请求数
+            processed_count = 0
+            for i in range(0, len(tasks), max_concurrent):
+                batch = tasks[i:i + max_concurrent]
+                batch_ids = [dim_id for dim_id, _ in batch]
+                batch_tasks = [task for _, task in batch]
+
+                logger.info(
+                    f"正在并发获取 {len(batch_ids)} 个维度详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
+
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+
+                # 处理结果
+                for idx, (dim_id, result) in enumerate(zip(batch_ids, batch_results)):
+                    if isinstance(result, Exception):
+                        logger.error(f"维度ID {dim_id} 的请求出错: {str(result)}")
+                        continue
+
+                    if str(result.get("code", "")) != "0":
+                        logger.warning(f"获取维度ID {dim_id} 失败: {result.get('msg', '未知错误')}")
+                        continue
+
+                    # 获取数据部分
+                    dimension_info = result.get("data", [])
+
+                    if dimension_info:
+                        # 添加原始请求的维度ID，以便跟踪匹配关系
+                        for item in dimension_info:
+                            if "requested_dimension_id" not in item:
+                                item["requested_dimension_id"] = dim_id
+
+                        all_results.extend(dimension_info)
+                        logger.info(f"维度ID {dim_id} 返回了 {len(dimension_info)} 条详情信息")
+
+                        # 打印第一条详情的关键信息
+                        if dimension_info:
+                            first_info = dimension_info[0]
+                            dimension_name = first_info.get('dimensionName', 'N/A')
+                            dimension_en_name = first_info.get('dimensionEnName', 'N/A')
+                            model_name = first_info.get('modelName', 'N/A')
+                            logger.info(
+                                f"  维度名称={dimension_name}, 英文名称={dimension_en_name}, 模型名称={model_name}")
+                    else:
+                        logger.warning(f"维度ID {dim_id} 未返回任何详情信息")
+
+                processed_count += len(batch)
+                logger.info(f"已处理 {processed_count}/{len(dimension_ids)} 个维度ID")
+
+            # 返回所有结果
+            logger.info(f"总共获取到 {len(all_results)} 条维度详情信息")
+            return all_results
+
+        except Exception as e:
+            logger.error(f"获取维度详情过程中出错: {str(e)}")
+            raise
+
+    async def get_model_detail_async(
+            self,
+            model_ids: Union[str, List[str]],
+            max_concurrent: int = 5
+    ) -> List[Dict]:
+        """
+        异步获取模型详情信息（支持单个ID或ID列表，并发请求）
+
+        Args:
+            model_ids: 单个模型ID或模型ID列表
+            max_concurrent: 最大并发请求数
+
+        Returns:
+            List[Dict]: 模型详情信息列表
+        """
+        logger.info(f"\n=== 根据模型ID获取模型详情 ===")
+
+        # 确保API路径已添加
+        if "get_model_detail" not in self.api_paths:
+            self.api_paths["get_model_detail"] = "/api/drm/semanticOpenApi/getModelDetail"
+
+        # 转换单个ID为列表
+        if isinstance(model_ids, str):
+            model_ids = [model_ids]
+
+        all_results = []
+
+        try:
+            # 创建异步任务列表
+            tasks = []
+            for model_id in model_ids:
+                logger.info(f"正在准备获取模型ID: {model_id} 的详情")
+                task = self._make_async_request(
+                    "POST",
+                    self.api_paths["get_model_detail"],
+                    data={"modelId": model_id}
+                )
+                tasks.append((model_id, task))
+
+            # 限制并发请求数
+            processed_count = 0
+            for i in range(0, len(tasks), max_concurrent):
+                batch = tasks[i:i + max_concurrent]
+                batch_ids = [model_id for model_id, _ in batch]
+                batch_tasks = [task for _, task in batch]
+
+                logger.info(
+                    f"正在并发获取 {len(batch_ids)} 个模型详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
+
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+
+                # 处理结果
+                for idx, (model_id, result) in enumerate(zip(batch_ids, batch_results)):
+                    if isinstance(result, Exception):
+                        logger.error(f"模型ID {model_id} 的请求出错: {str(result)}")
+                        continue
+
+                    if str(result.get("code", "")) != "0":
+                        logger.warning(f"获取模型ID {model_id} 失败: {result.get('msg', '未知错误')}")
+                        continue
+
+                    # 获取数据部分
+                    model_data = result.get("data")
+
+                    if model_data:
+                        # 添加原始请求的模型ID，以便跟踪匹配关系
+                        if "requested_model_id" not in model_data:
+                            model_data["requested_model_id"] = model_id
+
+                        all_results.append(model_data)
+
+                        # 打印模型的关键信息
+                        model_name = model_data.get('modelName', 'N/A')
+                        table_name = model_data.get('tableName', 'N/A')
+                        description = model_data.get('description', 'N/A')
+                        fields_count = len(model_data.get('fields', []))
+                        datasets = model_data.get('usedInDatasets', [])
+                        datasets_names = [d.get('datasetName', 'N/A') for d in datasets]
+
+                        logger.info(
+                            f"  模型ID {model_id} 详情: 模型名称={model_name}, 表名={table_name}, 描述={description}")
+                        logger.info(
+                            f"  字段数量: {fields_count}, 用于数据集: {', '.join(datasets_names[:3])}{'...' if len(datasets_names) > 3 else ''}")
+                    else:
+                        logger.warning(f"模型ID {model_id} 未返回任何详情信息")
+
+                processed_count += len(batch)
+                logger.info(f"已处理 {processed_count}/{len(model_ids)} 个模型ID")
+
+            # 返回所有结果
+            logger.info(f"总共获取到 {len(all_results)} 条模型详情信息")
+            return all_results
+
+        except Exception as e:
+            logger.error(f"获取模型详情过程中出错: {str(e)}")
+            raise
+
+    async def get_model_relationships_async(
+            self,
+            model_ids: Union[str, List[str]],
+            max_concurrent: int = 5
+    ) -> List[Dict]:
+        """
+        异步获取模型关系信息（支持单个ID或ID列表，并发请求，根据模型关系去重）
+
+        Args:
+            model_ids: 单个模型ID或模型ID列表
+            max_concurrent: 最大并发请求数
+
+        Returns:
+            List[Dict]: 去重后的模型关系信息列表
+        """
+        logger.info(f"\n=== 根据模型ID获取模型关系 ===")
+
+        # 确保API路径已添加
+        if "get_model_relationships" not in self.api_paths:
+            self.api_paths["get_model_relationships"] = "/api/drm/semanticOpenApi/getModelRelationships"
+
+        # 转换单个ID为列表
+        if isinstance(model_ids, str):
+            model_ids = [model_ids]
+
+        all_relationships = []
+        relationship_keys = set()  # 用于跟踪已见过的关系组合
+
+        try:
+            # 创建异步任务列表
+            tasks = []
+            for model_id in model_ids:
+                logger.info(f"正在准备获取模型ID: {model_id} 的关系信息")
+                task = self._make_async_request(
+                    "POST",
+                    self.api_paths["get_model_relationships"],
+                    data={"modelIds": [model_id]}  # API要求数组，虽然每次只传一个ID
+                )
+                tasks.append((model_id, task))
+
+            # 限制并发请求数
+            processed_count = 0
+            for i in range(0, len(tasks), max_concurrent):
+                batch = tasks[i:i + max_concurrent]
+                batch_ids = [model_id for model_id, _ in batch]
+                batch_tasks = [task for _, task in batch]
+
+                logger.info(
+                    f"正在并发获取 {len(batch_ids)} 个模型的关系信息 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
+
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+
+                # 处理结果
+                for idx, (model_id, result) in enumerate(zip(batch_ids, batch_results)):
+                    if isinstance(result, Exception):
+                        logger.error(f"模型ID {model_id} 的关系请求出错: {str(result)}")
+                        continue
+
+                    if str(result.get("code", "")) != "0":
+                        logger.warning(f"获取模型ID {model_id} 的关系失败: {result.get('msg', '未知错误')}")
+                        continue
+
+                    # 获取数据部分
+                    relationships = result.get("data", [])
+
+                    if relationships:
+                        added_count = 0
+                        for relation in relationships:
+                            # 添加原始请求的模型ID，以便跟踪匹配关系
+                            if "requested_model_id" not in relation:
+                                relation["requested_model_id"] = model_id
+
+                            # 根据sourceModelId和targetModelId组合创建唯一键
+                            source_id = relation.get('sourceModelId')
+                            target_id = relation.get('targetModelId')
+                            if not source_id or not target_id:
+                                logger.warning(f"关系数据缺少source或target模型ID: {relation}")
+                                continue
+
+                            # 创建一个排序后的键，确保无论方向如何都能识别相同的关系
+                            relation_key = tuple(sorted([source_id, target_id]) +
+                                                 [relation.get('sourceField', ''), relation.get('targetField', '')])
+
+                            # 检查是否已经存在相同的关系
+                            if relation_key in relationship_keys:
+                                continue
+
+                            # 添加关系并记录键
+                            relationship_keys.add(relation_key)
+                            all_relationships.append(relation)
+                            added_count += 1
+
+                        # 打印模型关系信息
+                        total_relations = len(relationships)
+                        logger.info(
+                            f"  模型ID {model_id} 返回了 {total_relations} 条关系信息，去重后新增 {added_count} 条")
+
+                        # 打印部分关系示例
+                        if added_count > 0:
+                            sample_size = min(3, added_count)
+                            sample_relations = [r for r in all_relationships[-added_count:]][:sample_size]
+
+                            for i, relation in enumerate(sample_relations):
+                                source_name = relation.get('sourceModelName', 'N/A')
+                                target_name = relation.get('targetModelName', 'N/A')
+                                source_field = relation.get('sourceField', 'N/A')
+                                target_field = relation.get('targetField', 'N/A')
+                                join_type = relation.get('joinType', 'N/A')
+
+                                logger.info(
+                                    f"    关系{i + 1}: {source_name}({source_field}) {join_type} JOIN {target_name}({target_field})")
+                    else:
+                        logger.info(f"  模型ID {model_id} 未返回任何关系信息")
+
+                processed_count += len(batch)
+                logger.info(f"已处理 {processed_count}/{len(model_ids)} 个模型ID")
+
+            # 返回所有去重后的结果
+            logger.info(f"总共获取到 {len(all_relationships)} 条唯一的模型关系信息")
+            return all_relationships
+
+        except Exception as e:
+            logger.error(f"获取模型关系过程中出错: {str(e)}")
+            raise
+
+    async def get_dataset_detail_async(
+            self,
+            dataset_ids: Union[str, List[str]],
+            max_concurrent: int = 5
+    ) -> List[Dict]:
+        """
+        异步获取数据集详情信息（支持单个ID或ID列表，并发请求）
+
+        Args:
+            dataset_ids: 单个数据集ID或数据集ID列表
+            max_concurrent: 最大并发请求数
+
+        Returns:
+            List[Dict]: 数据集详情信息列表
+        """
+        logger.info(f"\n=== 根据数据集ID获取数据集详情 ===")
+
+        # 确保API路径已添加
+        if "get_dataset_detail" not in self.api_paths:
+            self.api_paths["get_dataset_detail"] = "/api/drm/semanticOpenApi/getDatasetDetail"
+
+        # 转换单个ID为列表
+        if isinstance(dataset_ids, str):
+            dataset_ids = [dataset_ids]
+
+        all_results = []
+
+        try:
+            # 创建异步任务列表
+            tasks = []
+            for dataset_id in dataset_ids:
+                logger.info(f"正在准备获取数据集ID: {dataset_id} 的详情")
+                task = self._make_async_request(
+                    "POST",
+                    self.api_paths["get_dataset_detail"],
+                    data={"datasetId": dataset_id}
+                )
+                tasks.append((dataset_id, task))
+
+            # 限制并发请求数
+            processed_count = 0
+            for i in range(0, len(tasks), max_concurrent):
+                batch = tasks[i:i + max_concurrent]
+                batch_ids = [dataset_id for dataset_id, _ in batch]
+                batch_tasks = [task for _, task in batch]
+
+                logger.info(
+                    f"正在并发获取 {len(batch_ids)} 个数据集详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
+
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+
+                # 处理结果
+                for idx, (dataset_id, result) in enumerate(zip(batch_ids, batch_results)):
+                    if isinstance(result, Exception):
+                        logger.error(f"数据集ID {dataset_id} 的请求出错: {str(result)}")
+                        continue
+
+                    if str(result.get("code", "")) != "0":
+                        logger.warning(f"获取数据集ID {dataset_id} 失败: {result.get('msg', '未知错误')}")
+                        continue
+
+                    # 获取数据部分
+                    dataset_data = result.get("data")
+
+                    if dataset_data:
+                        # 添加原始请求的数据集ID，以便跟踪匹配关系
+                        if "requested_dataset_id" not in dataset_data:
+                            dataset_data["requested_dataset_id"] = dataset_id
+
+                        # 去除重复的模型（如示例中显示的可能有重复）
+                        if "models" in dataset_data and dataset_data["models"]:
+                            unique_models = []
+                            model_ids_seen = set()
+                            for model in dataset_data["models"]:
+                                model_id = model.get("modelId")
+                                if model_id and model_id not in model_ids_seen:
+                                    model_ids_seen.add(model_id)
+                                    unique_models.append(model)
+                            dataset_data["models"] = unique_models
+
+                        all_results.append(dataset_data)
+
+                        # 只打印最简单的数据集信息：ID和名称
+                        dataset_name = dataset_data.get('datasetName', 'N/A')
+                        logger.info(f"  已获取数据集: ID={dataset_id}, 名称={dataset_name}")
+                    else:
+                        logger.warning(f"数据集ID {dataset_id} 未返回任何详情信息")
+
+                processed_count += len(batch)
+                logger.info(f"已处理 {processed_count}/{len(dataset_ids)} 个数据集ID")
+
+            # 返回所有结果
+            logger.info(f"总共获取到 {len(all_results)} 条数据集详情信息")
+            return all_results
+
+        except Exception as e:
+            logger.error(f"获取数据集详情过程中出错: {str(e)}")
+            raise
+
     async def get_business_term_info_async(
             self,
-            keyword: str,
+            keyword: Union[str, List[str]],
             domain_ids: List[str],
             fuzzy_match: bool = True,
             page_size: int = 100,
@@ -839,10 +1256,10 @@ class SemanticApiClient:
             max_concurrent: int = 5
     ) -> Union[Dict, List[Dict]]:
         """
-        异步获取业务术语信息（自动分页，并发请求）
+        异步获取业务术语信息（支持多关键词，自动分页，并发请求）
 
         Args:
-            keyword: 搜索关键词
+            keyword: 搜索关键词或关键词列表
             domain_ids: 主题域ID列表
             fuzzy_match: 是否模糊匹配
             page_size: 每页大小
@@ -853,101 +1270,105 @@ class SemanticApiClient:
         Returns:
             Union[Dict, List[Dict]]: 合并后的完整响应或只包含所有rows的列表
         """
+        logger.info(f"\n=== 根据关键词搜索业务术语 ===")
+        logger.info(f"domain_ids: {domain_ids}")
+
+        # 转换单个关键词为列表
+        if isinstance(keyword, str):
+            keywords = [keyword]
+        else:
+            keywords = keyword
+
+        all_results = []
+
         try:
-            # 第一次请求，获取总数
-            first_result = await self._make_async_request(
-                "POST",
-                self.api_paths["get_business_term_info"],
-                params={"pi": 1, "ps": page_size},
-                data={"keyword": keyword, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
-            )
+            # 为每个关键词创建异步任务
+            for kw in keywords:
+                logger.info(f"正在处理业务术语关键词: {kw}")
 
-            if str(first_result.get("code", "")) != "0":
-                logger.warning(f"Failed to get first page: {first_result.get('msg', 'Unknown error')}")
-                return [] if extract_rows else first_result
-
-            # 计算总页数
-            data = first_result.get("data", {})
-            total = int(data.get("total", 0))
-            total_pages = (total + page_size - 1) // page_size  # 向上取整
-
-            # 限制最大页数
-            total_pages = min(total_pages, max_pages)
-
-            # 保存第一页结果
-            all_results = []
-            if extract_rows:
-                all_results.extend(data.get("rows", []))
-            else:
-                all_results.append(first_result)
-
-            if total_pages <= 1:
-                return all_results
-
-            # 创建剩余页面的异步任务
-            tasks = []
-            for page in range(2, total_pages + 1):
-                task = self._make_async_request(
+                # 第一次请求，获取总数
+                first_result = await self._make_async_request(
                     "POST",
                     self.api_paths["get_business_term_info"],
-                    params={"pi": page, "ps": page_size},
-                    data={"keyword": keyword, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
+                    params={"pi": 1, "ps": page_size},
+                    data={"keyword": kw, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
                 )
-                tasks.append(task)
 
-            # 限制并发请求数
-            results = []
-            for i in range(0, len(tasks), max_concurrent):
-                batch = tasks[i:i + max_concurrent]
-                batch_results = await asyncio.gather(*batch, return_exceptions=True)
-                results.extend(batch_results)
-
-            # 处理结果
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.error(f"Error in async request: {str(result)}")
+                if str(first_result.get("code", "")) != "0":
+                    logger.warning(f"获取关键词'{kw}'的第一页失败: {first_result.get('msg', '未知错误')}")
                     continue
 
-                if str(result.get("code", "")) == "0":
-                    if extract_rows:
-                        all_results.extend(result.get("data", {}).get("rows", []))
-                    else:
-                        all_results.append(result)
+                # 计算总页数
+                data = first_result.get("data", {})
+                total = int(data.get("total", 0))
+                total_pages = (total + page_size - 1) // page_size  # 向上取整
 
+                # 获取第一页结果
+                keyword_results = []
+                if extract_rows:
+                    first_page_rows = data.get("rows", [])
+                    keyword_results.extend(first_page_rows)
+                    logger.info(f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果")
+                else:
+                    keyword_results.append(first_result)
+                    logger.info(f"关键词'{kw}'的第一页已返回")
+
+                # 限制最大页数
+                total_pages = min(total_pages, max_pages)
+
+                if total_pages <= 1:
+                    logger.info(f"关键词'{kw}'的总结果数: {len(keyword_results)}条")
+                    all_results.extend(keyword_results)
+                    continue
+
+                # 创建剩余页面的异步任务
+                page_tasks = []
+                for page in range(2, total_pages + 1):
+                    task = self._make_async_request(
+                        "POST",
+                        self.api_paths["get_business_term_info"],
+                        params={"pi": page, "ps": page_size},
+                        data={"keyword": kw, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
+                    )
+                    page_tasks.append(task)
+
+                # 限制并发请求数
+                page_results = []
+                for i in range(0, len(page_tasks), max_concurrent):
+                    batch = page_tasks[i:i + max_concurrent]
+                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                    page_results.extend(batch_results)
+
+                # 处理结果
+                additional_rows_count = 0
+                for result in page_results:
+                    if isinstance(result, Exception):
+                        logger.error(f"关键词'{kw}'的异步请求出错: {str(result)}")
+                        continue
+
+                    if str(result.get("code", "")) != "0":
+                        logger.warning(f"关键词'{kw}'的请求返回错误: {result.get('msg', '未知错误')}")
+                        continue
+
+                    if extract_rows:
+                        rows = result.get("data", {}).get("rows", [])
+                        keyword_results.extend(rows)
+                        additional_rows_count += len(rows)
+                    else:
+                        keyword_results.append(result)
+                        additional_rows_count += 1
+
+                logger.info(f"关键词'{kw}'的额外页面返回了{additional_rows_count}条结果")
+                logger.info(f"关键词'{kw}'的总结果数: {len(keyword_results)}条")
+
+                # 添加到总结果
+                all_results.extend(keyword_results)
+
+            logger.info(f"所有业务术语关键词合并后的总结果数: {len(all_results)}条")
             return all_results
 
         except Exception as e:
-            logger.error(f"Error in async auto-pagination: {str(e)}")
-            raise
-
-    async def get_model_detail_async(self, model_id: str) -> Dict:
-        """
-        异步获取模型详情
-
-        Args:
-            model_id: 模型ID
-
-        Returns:
-            Dict: 模型详情信息
-        """
-        try:
-            logger.info(f"Getting model detail for model ID: {model_id}")
-
-            # 发送请求获取模型详情
-            result = await self._make_async_request(
-                "POST",
-                self.api_paths["get_model_detail"],
-                data={"modelId": model_id}
-            )
-
-            if str(result.get("code", "")) != "0":
-                logger.warning(f"Failed to get model detail: {result.get('msg', 'Unknown error')}")
-                return {}
-
-            return result.get("data", {})
-
-        except Exception as e:
-            logger.error(f"Error in get_model_detail_async: {str(e)}")
+            logger.error(f"业务术语搜索过程中出错: {str(e)}")
             raise
 
 
