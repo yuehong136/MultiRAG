@@ -29,6 +29,9 @@ from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 from pydantic import BaseModel, Field
 from typing import Any
 
+from core.prompts import kb_prompt
+from core.utils.tavily_conn import Tavily
+
 
 class SetAPIKeyRequest(BaseModel):
     llm_factory: str
@@ -82,6 +85,7 @@ class LLMServiceRequest(BaseModel):
     stream: bool = False
     gen_conf: dict[str, Any]
     image: str = ""
+    tavily_api_key: str = ""
 
 
 class FinePromptRequest(BaseModel):
@@ -920,10 +924,30 @@ async def chat_service_sse(request: LLMServiceRequest, db: Session = Depends(get
             "gen_conf": req["gen_conf"]
         }
 
-        # 如果llm_type为image2text，添加image参数
-        if llm_type == 'image2text':
-            call_params["image"] = req["image"]
+        # # 如果llm_type为image2text，添加image参数
+        # if llm_type == 'image2text':
+        #     call_params["image"] = req["image"]
 
+        if llm_type == "image2text":
+            llm_model_config = TenantLLMService.get_model_config(db, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT,
+                                                                 req["llm_name"])
+            call_params["image"] = req["image"]
+        else:
+            llm_model_config = TenantLLMService.get_model_config(db, tenants[0]["tenant_id"], LLMType.CHAT,
+                                                                 req["llm_name"])
+
+        max_tokens = llm_model_config.get("max_tokens", 8192)
+        kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
+        questions = [m["content"] for m in req["messages"] if m["role"] == "user"]
+        if req["tavily_api_key"]:
+            tav = Tavily(req["tavily_api_key"])
+            tav_res = tav.retrieve_chunks(" ".join(questions))
+            kbinfos["chunks"].extend(tav_res["chunks"])
+            kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
+            kbinfos["total"] = len(kbinfos["chunks"])
+        knowledges = kb_prompt(kbinfos, max_tokens)
+        knowledges = "\n------\n" + "\n\n------\n\n".join(knowledges)
+        call_params["system"] = "\n------\n" + call_params["system"] + knowledges
         return chat_mdl, call_params
 
     # 处理流式响应
