@@ -16,15 +16,91 @@ logger = logging.getLogger(__name__)
 
 
 class QueryIntentType(Enum):
-    """查询意图类型枚举"""
-    AGGREGATION = "Aggregation Query"  # 获取汇总统计信息 (如: 多少, 总数, 平均, 统计)
-    LIST_DETAIL = "List/Detail Query"  # 检索具体记录或字段 (如: 查询, 列出, 哪些, 详情)
-    RANKING_ORDERING = "Ranking/Ordering Query"  # 获取排序后数据或排名 (如: 最..., 前N, 按...排序)
-    EXISTENCE_BOOLEAN = "Existence/Boolean Query"  # 确认是否存在 (如: 有没有, 是否存在)
-    COMPARISON = "Comparison Query"  # 对比不同组或条件的数据 (如: 比较, 比...多/少)
-    TEMPORAL_TREND = "Temporal Trend/Periodic Query"  # 分析数据随时间变化 (如: 趋势, 按月/年统计)
-    METADATA_DEFINITION = "Metadata/Definition Query"  # 询问表结构、字段含义等 (如: 有哪些字段, ...是什么意思)
+    """查询意图类型枚举（细化版）"""
+    # 详情查询系列
+    SPECIFIC_ENTITY = "Specific Entity/Record Lookup"  # 查找特定实体/记录的详细信息
+    CONDITIONAL_LIST = "Conditional List Retrieval"  # 获取满足特定条件的一组记录列表
+    SIMPLE_LIST = "Simple List Retrieval"  # 获取某个表的所有或部分字段的列表
+
+    # 统计/聚合查询系列
+    COUNTING = "Counting"  # 计算满足条件的记录数量
+    SUMMATION = "Summation"  # 计算某个数值列的总和
+    AVERAGE = "Average"  # 计算某个数值列的平均值
+    MIN_MAX = "Min/Max"  # 查找最大值或最小值
+    GROUPED_AGGREGATION = "Grouped Aggregation"  # 按维度分组后进行聚合计算
+
+    # 比较查询系列
+    DIRECT_COMPARISON = "Direct Comparison"  # 比较两个或多个实体/组的某个指标
+    THRESHOLD_COMPARISON = "Threshold/Average Comparison"  # 与阈值或平均值比较
+
+    # 排序/排名查询系列
+    TOP_BOTTOM_N = "Top N/Bottom N"  # 找出排在前面或后面的N条记录
+    SIMPLE_ORDERING = "Simple Ordering"  # 按特定字段排序
+
+    # 趋势/时间序列分析
+    TIME_SERIES = "Time Series Analysis"  # 分析某个指标随时间的变化情况
+
+    # 存在性/布尔查询
+    EXISTENCE = "Existence/Boolean Query"  # 确认某个条件是否满足
+
+    # 关联/复杂查询
+    RELATIONAL = "Relational/Complex Query"  # 涉及多表关联或复杂逻辑
+
+    # 元数据查询
+    METADATA = "Metadata/Definition Query"  # 询问表结构、字段含义等
+
+    # 模糊查询（默认回退类型）
     AMBIGUOUS = "Ambiguous Query"  # 问题表达不清或信息不足
+
+    @classmethod
+    def get_chinese_description(cls, intent_type: 'QueryIntentType') -> str:
+        """
+        获取查询意图类型的中文描述
+
+        参数:
+            intent_type: 查询意图类型枚举值
+
+        返回:
+            查询意图类型的中文描述
+        """
+        descriptions = {
+            # 详情查询系列
+            cls.SPECIFIC_ENTITY: "特定实体查询 - 查找特定记录的详细信息，如'张三的订单'、'产品A001的详情'",
+            cls.CONDITIONAL_LIST: "条件列表查询 - 获取满足特定条件的记录列表，如'所有价格高于100元的商品'",
+            cls.SIMPLE_LIST: "简单列表查询 - 获取数据表的记录列表，如'显示所有员工名单'",
+
+            # 统计/聚合查询系列
+            cls.COUNTING: "计数查询 - 计算满足条件的记录数量，如'有多少个活跃用户'",
+            cls.SUMMATION: "求和查询 - 计算某个数值列的总和，如'本月总销售额是多少'",
+            cls.AVERAGE: "平均值查询 - 计算某个数值列的平均值，如'平均订单价格是多少'",
+            cls.MIN_MAX: "最值查询 - 查找最大值或最小值，如'哪个产品价格最高'",
+            cls.GROUPED_AGGREGATION: "分组统计查询 - 按维度分组后进行聚合计算，如'每个部门的员工人数'",
+
+            # 比较查询系列
+            cls.DIRECT_COMPARISON: "直接比较查询 - 比较两个或多个实体/组的指标，如'A产品和B产品的销量哪个高'",
+            cls.THRESHOLD_COMPARISON: "阈值比较查询 - 与阈值或平均值比较，如'哪些产品的利润率高于20%'",
+
+            # 排序/排名查询系列
+            cls.TOP_BOTTOM_N: "TopN/BottomN查询 - 找出排在前面或后面的N条记录，如'销量最高的10个产品'",
+            cls.SIMPLE_ORDERING: "简单排序查询 - 按特定字段排序，如'按价格从低到高显示所有商品'",
+
+            # 趋势/时间序列分析
+            cls.TIME_SERIES: "时间序列分析 - 分析指标随时间的变化情况，如'过去一年月度销售额变化趋势'",
+
+            # 存在性/布尔查询
+            cls.EXISTENCE: "存在性查询 - 确认条件是否满足，如'张三有没有下过单'",
+
+            # 关联/复杂查询
+            cls.RELATIONAL: "关联复杂查询 - 涉及多表关联或复杂逻辑，如'购买了A产品也购买了B产品的客户'",
+
+            # 元数据查询
+            cls.METADATA: "元数据查询 - 询问表结构、字段含义等，如'用户表有哪些字段'",
+
+            # 模糊查询
+            cls.AMBIGUOUS: "模糊查询 - 问题表达不清或信息不足，如'那个数据怎么样了'"
+        }
+
+        return descriptions.get(intent_type, "未知查询类型")
 
     @classmethod
     def from_string(cls, intent_str: str) -> Optional['QueryIntentType']:
@@ -50,6 +126,21 @@ class QueryIntentType(Enum):
         for intent_type in cls:
             if intent_type.value.lower() in lowercase_normalized:
                 return intent_type
+
+        # 处理一些特殊的映射关系（兼容旧类型或缩写）
+        mapping = {
+            "aggregation query": cls.GROUPED_AGGREGATION,
+            "list/detail query": cls.SIMPLE_LIST,
+            "ranking/ordering query": cls.SIMPLE_ORDERING,
+            "top n": cls.TOP_BOTTOM_N,
+            "temporal trend": cls.TIME_SERIES,
+            "trend": cls.TIME_SERIES,
+            "comparison query": cls.DIRECT_COMPARISON,
+        }
+
+        for key, value in mapping.items():
+            if key in lowercase_normalized:
+                return value
 
         return None
 
@@ -259,3 +350,44 @@ class QueryIntentAnalyzer:
         """
         intents = await self.analyze_query_intent(query_text, llm_name)
         return {intent.value for intent in intents}
+
+    async def get_query_intents_with_descriptions(self, query_text: str, llm_name: str) -> List[Dict[str, str]]:
+        """
+        获取查询的意图标签及其中文描述（便捷方法）
+
+        参数:
+            query_text: 原始自然语言查询文本
+            llm_name: 用于分析的LLM模型名称
+
+        返回:
+            包含意图类型、英文标签和中文描述的字典列表
+        """
+        intents = await self.analyze_query_intent(query_text, llm_name)
+        result = []
+
+        for intent in intents:
+            result.append({
+                "intent_type": intent.name,  # 枚举名称，如 SPECIFIC_ENTITY
+                "intent_label": intent.value,  # 英文标签，如 "Specific Entity/Record Lookup"
+                "description": QueryIntentType.get_chinese_description(intent)  # 中文描述
+            })
+
+        return result
+
+    def get_all_intent_types_with_descriptions(self) -> List[Dict[str, str]]:
+        """
+        获取所有可能的查询意图类型及其中文描述
+
+        返回:
+            包含所有查询意图类型、英文标签和中文描述的字典列表
+        """
+        result = []
+
+        for intent in QueryIntentType:
+            result.append({
+                "intent_type": intent.name,  # 枚举名称
+                "intent_label": intent.value,  # 英文标签
+                "description": QueryIntentType.get_chinese_description(intent)  # 中文描述
+            })
+
+        return result

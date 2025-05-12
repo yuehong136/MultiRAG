@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Any, List
+from typing import Any, List, Dict
 
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
@@ -41,11 +41,11 @@ class NL2SQLService:
         """
         return await self.query_rewriter.rewrite_query(query_text, llm_name)
 
-    async def analyze_query_intent(self, query_text: str, llm_name: str) -> List[QueryIntentType]:
+    async def analyze_query_intent(self, query_text: str, llm_name: str) -> List[Dict[str, str]]:
         """
         使用LLM分析自然语言查询意图
         """
-        return await self.query_intent_analyzer.analyze_query_intent(query_text, llm_name)
+        return await self.query_intent_analyzer.get_query_intents_with_descriptions(query_text, llm_name)
 
     async def _semantic_mapping(self, query_text: str, llm_name: str) -> List[str]:
         pass

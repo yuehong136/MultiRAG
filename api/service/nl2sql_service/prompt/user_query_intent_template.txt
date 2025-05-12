@@ -10,22 +10,53 @@
 3.  **仅** 输出一个包含所有识别出的意图标签的Python列表（List of Strings）。如果问题不清晰或信息不足，请识别为 `Ambiguous Query`。
 
 **[预定义的查询意图类型]** (标签及简要说明):
-*   `Aggregation Query`: 获取汇总统计信息 (如: 多少, 总数, 平均, 统计)。
-*   `List/Detail Query`: 检索具体记录或字段 (如: 查询, 列出, 哪些, 详情)。
-*   `Ranking/Ordering Query`: 获取排序后数据或排名 (如: 最..., 前N, 按...排序)。
-*   `Existence/Boolean Query`: 确认是否存在 (如: 有没有, 是否存在)。
-*   `Comparison Query`: 对比不同组或条件的数据 (如: 比较, 比...多/少)。
-*   `Temporal Trend/Periodic Query`: 分析数据随时间变化 (如: 趋势, 按月/年统计)。
-*   `Metadata/Definition Query`: 询问表结构、字段含义等 (如: 有哪些字段, ...是什么意思)。
-*   `Ambiguous Query`: 问题表达不清或信息不足。
+
+## 详情查询系列
+* `Specific Entity/Record Lookup`: 查找特定实体/记录的详细信息（如："张三的订单"、"编号为A001的产品详情"）
+* `Conditional List Retrieval`: 获取满足特定条件的一组记录列表（如："所有价格高于100元的商品"）
+* `Simple List Retrieval`: 获取某个表的所有或部分字段的列表（如："显示所有员工名单"）
+
+## 统计/聚合查询系列
+* `Counting`: 计算满足条件的记录数量（如："有多少个活跃用户？"）
+* `Summation`: 计算某个数值列的总和（如："本月总销售额是多少？"）
+* `Average`: 计算某个数值列的平均值（如："平均订单价格是多少？"）
+* `Min/Max`: 查找最大值或最小值（如："哪个产品价格最高？"）
+* `Grouped Aggregation`: 按维度分组后进行聚合计算（如："每个部门的员工人数？"）
+
+## 比较查询系列
+* `Direct Comparison`: 比较两个或多个实体/组的某个指标（如："A产品和B产品的销量哪个高？"）
+* `Threshold/Average Comparison`: 与阈值或平均值比较（如："哪些产品的利润率高于20%？"）
+
+## 排序/排名查询系列
+* `Top N/Bottom N`: 找出排在前面或后面的N条记录（如："销量最高的10个产品"）
+* `Simple Ordering`: 按特定字段排序（如："按价格从低到高显示所有商品"）
+
+## 其他专门查询类型
+* `Time Series Analysis`: 分析某个指标随时间的变化情况（如："过去一年月度销售额变化趋势"）
+* `Existence/Boolean Query`: 确认某个条件是否满足（如："张三有没有下过单？"）
+* `Relational/Complex Query`: 涉及多表关联或复杂逻辑（如："购买了A产品也购买了B产品的客户有哪些？"）
+* `Metadata/Definition Query`: 询问表结构、字段含义等（如："用户表有哪些字段？"）
+* `Ambiguous Query`: 问题表达不清或信息不足（如："那个数据怎么样了？"）
 
 **示例:**
 *   原始问题: "每个部门有多少员工？"
-*   输出: `["Aggregation Query"]`
+*   输出: `["Grouped Aggregation", "Counting"]`
+
 *   原始问题: "查询上个月销售额最高的3种产品及其销售额。"
-*   输出: `["Ranking/Ordering Query", "Aggregation Query", "List/Detail Query", "Temporal Trend/Periodic Query"]`
-*   原始问题: "给我看看用户信息。"
-*   输出: `["List/Detail Query"]` (假设这是最可能的意图，也可以根据上下文判断为 Ambiguous)
+*   输出: `["Top N/Bottom N", "Summation", "Time Series Analysis"]`
+
+*   原始问题: "张三的个人资料"
+*   输出: `["Specific Entity/Record Lookup"]`
+
+*   原始问题: "A产品和B产品哪个卖得好？"
+*   输出: `["Direct Comparison"]`
+
+*   原始问题: "每月新增用户数量趋势"
+*   输出: `["Time Series Analysis", "Counting"]`
+
+*   原始问题: "系统中有编号为XYZ的订单吗？"
+*   输出: `["Existence/Boolean Query"]`
+
 *   原始问题: "那个数据怎么样了？"
 *   输出: `["Ambiguous Query"]`
 
