@@ -85,8 +85,7 @@ class NL2SQLService:
         model_relations = await self.semantic_api_client.get_model_relationships_async(model_ids=model_ids)
 
         # 4.7 查询业务术语
-        dataset_ids = self._extract_unique_dataset_wids(dimensions, metrics)
-        dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_ids)
+        dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list)
         domain_ids = self._extract_unique_domain_ids(dataset_details)
         business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words,
                                                                                          domain_ids=domain_ids)
@@ -150,35 +149,6 @@ class NL2SQLService:
 
         # 将集合转换为列表并返回
         return list(unique_dimension_ids)
-
-    def _extract_unique_dataset_wids(self, dimensions: List[Any], metrics: List[Any]) -> List[str]:
-        """
-        从维度和指标数据中提取所有dataset_wid并去重
-
-        参数:
-            dimensions: 维度列表
-            metrics: 指标列表
-
-        返回:
-            去重后的dataset_wid列表
-        """
-        # 创建一个集合来存储唯一的dataset_wid
-        unique_dataset_wids = set()
-
-        # 从维度列表中提取dataset_wid
-        for dimension in dimensions:
-            dataset_wid = dimension.get('dataset_wid')
-            if dataset_wid:
-                unique_dataset_wids.add(dataset_wid)
-
-        # 从指标列表中提取dataset_wid
-        for metric in metrics:
-            dataset_wid = metric.get('dataset_wid')
-            if dataset_wid:
-                unique_dataset_wids.add(dataset_wid)
-
-        # 将集合转换为列表并返回
-        return list(unique_dataset_wids)
 
     def _extract_unique_domain_ids(self, dataset_details: List[Any]) -> List[str]:
         """
