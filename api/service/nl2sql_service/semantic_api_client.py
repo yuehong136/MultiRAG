@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+# !/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
@@ -22,6 +22,32 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# 自定义异常类
+class SemanticApiError(Exception):
+    """DRM语义化API请求错误的基类异常"""
+    pass
+
+
+class ApiRequestError(SemanticApiError):
+    """API请求发送错误"""
+    pass
+
+
+class ApiResponseError(SemanticApiError):
+    """API响应错误（业务状态码非0）"""
+    pass
+
+
+class ApiNetworkError(SemanticApiError):
+    """网络连接错误"""
+    pass
+
+
+class ApiJsonDecodeError(SemanticApiError):
+    """响应JSON解析错误"""
+    pass
 
 
 class SemanticApiClient:
@@ -60,6 +86,7 @@ class SemanticApiClient:
             "get_business_term_info": "/api/drm/semanticOpenApi/getBusinessTermInfo",
             "get_model_detail": "/api/drm/semanticOpenApi/getModelDetail",
             "get_dimension_info_by_id": "/api/drm/semanticOpenApi/getDimensionInfoById",
+            "get_dimension_values": "/api/drm/semanticOpenApi/getDimensionValues"
         }
 
         # 设置请求头
@@ -87,13 +114,19 @@ class SemanticApiClient:
 
         Returns:
             Dict: API响应结果
+
+        Raises:
+            ApiNetworkError: 网络连接错误
+            ApiJsonDecodeError: JSON解析错误
+            ApiResponseError: API响应业务状态码不为0
+            ApiRequestError: 其他API请求错误
         """
         url = urljoin(self.base_url, api_path)
 
         try:
-            logger.info(f"Sending {method} request to {url}")
+            logger.info(f"发送 {method} 请求到 {url}")
             if data:
-                logger.debug(f"Request data: {json.dumps(data, ensure_ascii=False)}")
+                logger.debug(f"请求数据: {json.dumps(data, ensure_ascii=False)}")
 
             response = requests.request(
                 method=method,
@@ -109,23 +142,30 @@ class SemanticApiClient:
 
             # 解析响应JSON
             result = response.json()
-            logger.debug(f"Response: {json.dumps(result, ensure_ascii=False)}")
+            logger.debug(f"响应: {json.dumps(result, ensure_ascii=False)}")
 
             # 检查业务状态码
             if "code" in result and str(result["code"]) != "0":
-                logger.warning(f"Business error: {result.get('msg', 'Unknown error')}")
+                error_msg = result.get('msg', '未知错误')
+                logger.warning(f"业务错误: {error_msg}")
+                raise ApiResponseError(f"业务错误(code={result['code']}): {error_msg}")
 
             return result
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request error: {str(e)}")
-            raise
+            error_msg = f"请求错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiNetworkError(error_msg) from e
         except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {str(e)}")
-            raise
+            error_msg = f"JSON解析错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiJsonDecodeError(error_msg) from e
         except Exception as e:
-            logger.error(f"Unexpected error: {str(e)}")
-            raise
+            if isinstance(e, SemanticApiError):
+                raise  # 如果是已经包装过的异常就直接抛出
+            error_msg = f"意外错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
 
     async def _make_async_request(
             self,
@@ -145,13 +185,19 @@ class SemanticApiClient:
 
         Returns:
             Dict: API响应结果
+
+        Raises:
+            ApiNetworkError: 网络连接错误
+            ApiJsonDecodeError: JSON解析错误
+            ApiResponseError: API响应业务状态码不为0
+            ApiRequestError: 其他API请求错误
         """
         url = urljoin(self.base_url, api_path)
 
         try:
-            logger.info(f"Sending async {method} request to {url}")
+            logger.info(f"异步发送 {method} 请求到 {url}")
             if data:
-                logger.debug(f"Async request data: {json.dumps(data, ensure_ascii=False)}")
+                logger.debug(f"异步请求数据: {json.dumps(data, ensure_ascii=False)}")
 
             async with aiohttp.ClientSession() as session:
                 async with session.request(
@@ -167,23 +213,30 @@ class SemanticApiClient:
 
                     # 解析响应JSON
                     result = await response.json()
-                    logger.debug(f"Async response: {json.dumps(result, ensure_ascii=False)}")
+                    logger.debug(f"异步响应: {json.dumps(result, ensure_ascii=False)}")
 
                     # 检查业务状态码
                     if "code" in result and str(result["code"]) != "0":
-                        logger.warning(f"Business error: {result.get('msg', 'Unknown error')}")
+                        error_msg = result.get('msg', '未知错误')
+                        logger.warning(f"业务错误: {error_msg}")
+                        raise ApiResponseError(f"业务错误(code={result['code']}): {error_msg}")
 
                     return result
 
         except aiohttp.ClientError as e:
-            logger.error(f"Async request error: {str(e)}")
-            raise
+            error_msg = f"异步请求错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiNetworkError(error_msg) from e
         except json.JSONDecodeError as e:
-            logger.error(f"Async JSON decode error: {str(e)}")
-            raise
+            error_msg = f"异步JSON解析错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiJsonDecodeError(error_msg) from e
         except Exception as e:
-            logger.error(f"Unexpected async error: {str(e)}")
-            raise
+            if isinstance(e, SemanticApiError):
+                raise  # 如果是已经包装过的异常就直接抛出
+            error_msg = f"意外异步错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
 
     async def get_dimension_info_by_keyword_async(
             self,
@@ -211,6 +264,9 @@ class SemanticApiClient:
 
         Returns:
             Union[Dict, List[Dict]]: 合并后的完整响应或只包含所有rows的列表（去重后）
+
+        Raises:
+            SemanticApiError: 请求或处理过程中的任何错误
         """
         logger.info(f"\n=== 根据维度名称搜索维度信息 ===")
         logger.info(f"dataset_ids: {dataset_ids}")
@@ -228,95 +284,92 @@ class SemanticApiClient:
             for kw in keywords:
                 logger.info(f"正在处理维度信息关键词: {kw}")
 
-                # 第一次请求，获取总数
-                first_result = await self._make_async_request(
-                    "POST",
-                    self.api_paths["get_dimension_info"],
-                    params={"pi": 1, "ps": page_size},
-                    data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
-                )
-
-                if str(first_result.get("code", "")) != "0":
-                    logger.warning(f"获取关键词'{kw}'的第一页失败: {first_result.get('msg', '未知错误')}")
-                    continue
-
-                # 计算总页数
-                data = first_result.get("data", {})
-                total = int(data.get("total", 0))
-                total_pages = (total + page_size - 1) // page_size  # 向上取整
-
-                # 获取第一页结果
-                keyword_results = []
-                duplicate_count = 0
-                if extract_rows:
-                    first_page_rows = data.get("rows", [])
-
-                    # 处理第一页结果（如果需要去重）
-                    for row in first_page_rows:
-                        dimension_id = row.get('dimensionId')
-                        if deduplicate_by_dimension_id:
-                            if dimension_id and dimension_id in dimension_id_set:
-                                duplicate_count += 1
-                                continue
-                            if dimension_id:
-                                dimension_id_set.add(dimension_id)
-
-                        keyword_results.append(row)
-
-                    logger.info(
-                        f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
-
-                    # 打印第一页结果的维度ID和维度名称
-                    if keyword_results:
-                        for idx, row in enumerate(keyword_results[:min(3, len(keyword_results))]):  # 只打印前3条
-                            dimension_id = row.get('dimensionId', 'N/A')
-                            dimension_name = row.get('dimensionName', 'N/A')
-                            dimension_code = row.get('dimensionCode', 'N/A')
-                            logger.info(
-                                f"  '{kw}'的结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}, 维度编码={dimension_code}")
-
-                        if len(keyword_results) > 3:
-                            logger.info(f"  ...以及第一页的其他{len(keyword_results) - 3}条结果")
-                else:
-                    keyword_results.append(first_result)
-                    logger.info(f"关键词'{kw}'的第一页已返回")
-
-                # 限制最大页数
-                total_pages = min(total_pages, max_pages)
-
-                if total_pages <= 1:
-                    logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
-                    all_results.extend(keyword_results)
-                    continue
-
-                # 创建剩余页面的异步任务
-                page_tasks = []
-                for page in range(2, total_pages + 1):
-                    task = self._make_async_request(
+                try:
+                    # 第一次请求，获取总数
+                    first_result = await self._make_async_request(
                         "POST",
                         self.api_paths["get_dimension_info"],
-                        params={"pi": page, "ps": page_size},
+                        params={"pi": 1, "ps": page_size},
                         data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
                     )
-                    page_tasks.append(task)
 
-                # 限制并发请求数
-                page_results = []
-                for i in range(0, len(page_tasks), max_concurrent):
-                    batch = page_tasks[i:i + max_concurrent]
-                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
-                    page_results.extend(batch_results)
+                    # 计算总页数
+                    data = first_result.get("data", {})
+                    total = int(data.get("total", 0))
+                    total_pages = (total + page_size - 1) // page_size  # 向上取整
 
-                # 处理结果
-                additional_total_rows = 0
-                additional_kept_rows = 0
-                additional_results = []
-                for result in page_results:
-                    if isinstance(result, Exception):
-                        logger.error(f"关键词'{kw}'的异步请求出错: {str(result)}")
+                    # 获取第一页结果
+                    keyword_results = []
+                    duplicate_count = 0
+                    if extract_rows:
+                        first_page_rows = data.get("rows", [])
+
+                        # 处理第一页结果（如果需要去重）
+                        for row in first_page_rows:
+                            dimension_id = row.get('dimensionId')
+                            if deduplicate_by_dimension_id:
+                                if dimension_id and dimension_id in dimension_id_set:
+                                    duplicate_count += 1
+                                    continue
+                                if dimension_id:
+                                    dimension_id_set.add(dimension_id)
+
+                            keyword_results.append(row)
+
+                        logger.info(
+                            f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
+
+                        # 打印第一页结果的维度ID和维度名称
+                        if keyword_results:
+                            for idx, row in enumerate(keyword_results[:min(3, len(keyword_results))]):  # 只打印前3条
+                                dimension_id = row.get('dimensionId', 'N/A')
+                                dimension_name = row.get('dimensionName', 'N/A')
+                                dimension_code = row.get('dimensionCode', 'N/A')
+                                logger.info(
+                                    f"  '{kw}'的结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}, 维度编码={dimension_code}")
+
+                            if len(keyword_results) > 3:
+                                logger.info(f"  ...以及第一页的其他{len(keyword_results) - 3}条结果")
+                    else:
+                        keyword_results.append(first_result)
+                        logger.info(f"关键词'{kw}'的第一页已返回")
+
+                    # 限制最大页数
+                    total_pages = min(total_pages, max_pages)
+
+                    if total_pages <= 1:
+                        logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
+                        all_results.extend(keyword_results)
                         continue
 
-                    if str(result.get("code", "")) == "0":
+                    # 创建剩余页面的异步任务
+                    page_tasks = []
+                    for page in range(2, total_pages + 1):
+                        task = self._make_async_request(
+                            "POST",
+                            self.api_paths["get_dimension_info"],
+                            params={"pi": page, "ps": page_size},
+                            data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
+                        )
+                        page_tasks.append(task)
+
+                    # 限制并发请求数
+                    page_results = []
+                    for i in range(0, len(page_tasks), max_concurrent):
+                        batch = page_tasks[i:i + max_concurrent]
+                        batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                        page_results.extend(batch_results)
+
+                    # 处理结果
+                    additional_total_rows = 0
+                    additional_kept_rows = 0
+                    additional_results = []
+                    for result in page_results:
+                        if isinstance(result, Exception):
+                            error_msg = f"关键词'{kw}'的异步请求出错: {str(result)}"
+                            logger.error(error_msg)
+                            raise ApiRequestError(error_msg) from result
+
                         if extract_rows:
                             rows = result.get("data", {}).get("rows", [])
                             additional_total_rows += len(rows)
@@ -338,42 +391,47 @@ class SemanticApiClient:
                             additional_kept_rows += 1
                             additional_total_rows += 1
 
-                logger.info(
-                    f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
+                    logger.info(
+                        f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
 
-                # 打印额外页面中的一些结果信息
-                if additional_results and extract_rows:
-                    sample_size = min(3, len(additional_results))
-                    logger.info(f"  关键词'{kw}'的额外页面样本:")
-                    for idx, row in enumerate(additional_results[:sample_size]):
-                        dimension_id = row.get('dimensionId', 'N/A')
-                        dimension_name = row.get('dimensionName', 'N/A')
-                        dimension_code = row.get('dimensionCode', 'N/A')
-                        logger.info(
-                            f"  '{kw}'的额外结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}, 维度编码={dimension_code}")
+                    # 打印额外页面中的一些结果信息
+                    if additional_results and extract_rows:
+                        sample_size = min(3, len(additional_results))
+                        logger.info(f"  关键词'{kw}'的额外页面样本:")
+                        for idx, row in enumerate(additional_results[:sample_size]):
+                            dimension_id = row.get('dimensionId', 'N/A')
+                            dimension_name = row.get('dimensionName', 'N/A')
+                            dimension_code = row.get('dimensionCode', 'N/A')
+                            logger.info(
+                                f"  '{kw}'的额外结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}, 维度编码={dimension_code}")
 
-                    if len(additional_results) > 3:
-                        logger.info(f"  ...以及额外页面的其他{len(additional_results) - 3}条结果")
+                        if len(additional_results) > 3:
+                            logger.info(f"  ...以及额外页面的其他{len(additional_results) - 3}条结果")
 
-                # 统计每个维度ID出现的次数，了解结果分布
-                if extract_rows and keyword_results:
-                    dimension_counts = {}
-                    for row in keyword_results:
-                        dim_id = row.get('dimensionId')
-                        dim_name = row.get('dimensionName', 'N/A')
-                        if dim_id:
-                            if dim_id not in dimension_counts:
-                                dimension_counts[dim_id] = {'count': 0, 'name': dim_name}
-                            dimension_counts[dim_id]['count'] += 1
+                    # 统计每个维度ID出现的次数，了解结果分布
+                    if extract_rows and keyword_results:
+                        dimension_counts = {}
+                        for row in keyword_results:
+                            dim_id = row.get('dimensionId')
+                            dim_name = row.get('dimensionName', 'N/A')
+                            if dim_id:
+                                if dim_id not in dimension_counts:
+                                    dimension_counts[dim_id] = {'count': 0, 'name': dim_name}
+                                dimension_counts[dim_id]['count'] += 1
 
-                    logger.info(f"  关键词'{kw}'的结果分布:")
-                    for dim_id, info in dimension_counts.items():
-                        logger.info(f"  - 维度ID={dim_id}, 维度名称={info['name']}: {info['count']}条结果")
+                        logger.info(f"  关键词'{kw}'的结果分布:")
+                        for dim_id, info in dimension_counts.items():
+                            logger.info(f"  - 维度ID={dim_id}, 维度名称={info['name']}: {info['count']}条结果")
 
-                logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
+                    logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
 
-                # 添加到总结果
-                all_results.extend(keyword_results)
+                    # 添加到总结果
+                    all_results.extend(keyword_results)
+
+                except SemanticApiError as e:
+                    # 某个关键词处理失败，但允许继续处理其他关键词
+                    logger.error(f"处理关键词 '{kw}' 时出错: {str(e)}")
+                    raise
 
             logger.info(f"所有维度信息关键词合并后的总唯一结果数: {len(all_results)}条")
 
@@ -398,8 +456,11 @@ class SemanticApiClient:
             return all_results
 
         except Exception as e:
-            logger.error(f"多关键词维度信息搜索过程中出错: {str(e)}")
-            raise
+            if not isinstance(e, SemanticApiError):
+                error_msg = f"多关键词维度信息搜索过程中出错: {str(e)}"
+                logger.error(error_msg)
+                raise ApiRequestError(error_msg) from e
+            raise  # 重新抛出已经包装的异常
 
     async def get_dimension_by_dimension_value_async(
             self,
@@ -427,6 +488,10 @@ class SemanticApiClient:
 
         Returns:
             Union[Dict, List[Dict]]: 合并后的完整响应或只包含所有rows的列表（去重后）
+
+        Raises:
+            ApiResponseError: API响应业务状态码不为0
+            ApiRequestError: 请求过程中的其他错误
         """
         logger.info(f"\n=== 根据维度值名称搜索维度信息 ===")
         logger.info(f"dataset_ids: {dataset_ids}")
@@ -444,93 +509,101 @@ class SemanticApiClient:
             for kw in keywords:
                 logger.info(f"正在处理维度值关键词: {kw}")
 
-                # 第一次请求，获取总数
-                first_result = await self._make_async_request(
-                    "POST",
-                    self.api_paths["get_dimension_by_dimension_value"],
-                    params={"pi": 1, "ps": page_size},
-                    data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
-                )
-
-                if str(first_result.get("code", "")) != "0":
-                    logger.warning(f"获取关键词'{kw}'的第一页失败: {first_result.get('msg', '未知错误')}")
-                    continue
-
-                # 计算总页数
-                data = first_result.get("data", {})
-                total = int(data.get("total", 0))
-                total_pages = (total + page_size - 1) // page_size  # 向上取整
-
-                # 获取第一页结果
-                keyword_results = []
-                duplicate_count = 0
-                if extract_rows:
-                    first_page_rows = data.get("rows", [])
-
-                    # 处理第一页结果（如果需要去重）
-                    for row in first_page_rows:
-                        dimension_id = row.get('dimensionId')
-                        if deduplicate_by_dimension_id:
-                            if dimension_id and dimension_id in dimension_id_set:
-                                duplicate_count += 1
-                                continue
-                            if dimension_id:
-                                dimension_id_set.add(dimension_id)
-
-                        keyword_results.append(row)
-
-                    logger.info(
-                        f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
-
-                    # 打印第一页结果的维度ID和维度名称
-                    if keyword_results:
-                        for idx, row in enumerate(keyword_results[:min(3, len(keyword_results))]):  # 只打印前3条
-                            dimension_id = row.get('dimensionId', 'N/A')
-                            dimension_name = row.get('dimensionName', 'N/A')
-                            logger.info(f"  '{kw}'的结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}")
-
-                        if len(keyword_results) > 3:
-                            logger.info(f"  ...以及第一页的其他{len(keyword_results) - 3}条结果")
-                else:
-                    keyword_results.append(first_result)
-                    logger.info(f"关键词'{kw}'的第一页已返回")
-
-                # 限制最大页数
-                total_pages = min(total_pages, max_pages)
-
-                if total_pages <= 1:
-                    logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
-                    all_results.extend(keyword_results)
-                    continue
-
-                # 创建剩余页面的异步任务
-                page_tasks = []
-                for page in range(2, total_pages + 1):
-                    task = self._make_async_request(
+                try:
+                    # 第一次请求，获取总数
+                    first_result = await self._make_async_request(
                         "POST",
                         self.api_paths["get_dimension_by_dimension_value"],
-                        params={"pi": page, "ps": page_size},
+                        params={"pi": 1, "ps": page_size},
                         data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
                     )
-                    page_tasks.append(task)
 
-                # 限制并发请求数
-                page_results = []
-                for i in range(0, len(page_tasks), max_concurrent):
-                    batch = page_tasks[i:i + max_concurrent]
-                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
-                    page_results.extend(batch_results)
+                    if str(first_result.get("code", "")) != "0":
+                        error_msg = f"获取关键词'{kw}'的第一页失败: {first_result.get('msg', '未知错误')}"
+                        logger.warning(error_msg)
+                        raise ApiResponseError(error_msg)
 
-                # 处理结果
-                additional_total_rows = 0
-                additional_kept_rows = 0
-                additional_results = []
-                for result in page_results:
-                    if isinstance(result, Exception):
-                        logger.error(f"关键词'{kw}'的异步请求出错: {str(result)}")
+                    # 计算总页数
+                    data = first_result.get("data", {})
+                    total = int(data.get("total", 0))
+                    total_pages = (total + page_size - 1) // page_size  # 向上取整
+
+                    # 获取第一页结果
+                    keyword_results = []
+                    duplicate_count = 0
+                    if extract_rows:
+                        first_page_rows = data.get("rows", [])
+
+                        # 处理第一页结果（如果需要去重）
+                        for row in first_page_rows:
+                            dimension_id = row.get('dimensionId')
+                            if deduplicate_by_dimension_id:
+                                if dimension_id and dimension_id in dimension_id_set:
+                                    duplicate_count += 1
+                                    continue
+                                if dimension_id:
+                                    dimension_id_set.add(dimension_id)
+
+                            keyword_results.append(row)
+
+                        logger.info(
+                            f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
+
+                        # 打印第一页结果的维度ID和维度名称
+                        if keyword_results:
+                            for idx, row in enumerate(keyword_results[:min(3, len(keyword_results))]):  # 只打印前3条
+                                dimension_id = row.get('dimensionId', 'N/A')
+                                dimension_name = row.get('dimensionName', 'N/A')
+                                logger.info(
+                                    f"  '{kw}'的结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}")
+
+                            if len(keyword_results) > 3:
+                                logger.info(f"  ...以及第一页的其他{len(keyword_results) - 3}条结果")
+                    else:
+                        keyword_results.append(first_result)
+                        logger.info(f"关键词'{kw}'的第一页已返回")
+
+                    # 限制最大页数
+                    total_pages = min(total_pages, max_pages)
+
+                    if total_pages <= 1:
+                        logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
+                        all_results.extend(keyword_results)
                         continue
 
-                    if str(result.get("code", "")) == "0":
+                    # 创建剩余页面的异步任务
+                    page_tasks = []
+                    for page in range(2, total_pages + 1):
+                        task = self._make_async_request(
+                            "POST",
+                            self.api_paths["get_dimension_by_dimension_value"],
+                            params={"pi": page, "ps": page_size},
+                            data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
+                        )
+                        page_tasks.append(task)
+
+                    # 限制并发请求数
+                    page_results = []
+                    for i in range(0, len(page_tasks), max_concurrent):
+                        batch = page_tasks[i:i + max_concurrent]
+                        batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                        page_results.extend(batch_results)
+
+                    # 处理结果
+                    additional_total_rows = 0
+                    additional_kept_rows = 0
+                    additional_results = []
+                    for result in page_results:
+                        if isinstance(result, Exception):
+                            error_msg = f"关键词'{kw}'的异步请求出错: {str(result)}"
+                            logger.error(error_msg)
+                            raise ApiRequestError(error_msg) from result
+
+                        if str(result.get("code", "")) != "0":
+                            error_msg = f"关键词'{kw}'的请求返回错误: {result.get('msg', '未知错误')}"
+                            logger.warning(error_msg)
+                            raise ApiResponseError(error_msg)
+
                         if extract_rows:
                             rows = result.get("data", {}).get("rows", [])
                             additional_total_rows += len(rows)
@@ -552,40 +625,46 @@ class SemanticApiClient:
                             additional_kept_rows += 1
                             additional_total_rows += 1
 
-                logger.info(
-                    f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
+                    logger.info(
+                        f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
 
-                # 打印额外页面中的一些结果信息
-                if additional_results and extract_rows:
-                    sample_size = min(3, len(additional_results))
-                    logger.info(f"  关键词'{kw}'的额外页面样本:")
-                    for idx, row in enumerate(additional_results[:sample_size]):
-                        dimension_id = row.get('dimensionId', 'N/A')
-                        dimension_name = row.get('dimensionName', 'N/A')
-                        logger.info(f"  '{kw}'的额外结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}")
+                    # 打印额外页面中的一些结果信息
+                    if additional_results and extract_rows:
+                        sample_size = min(3, len(additional_results))
+                        logger.info(f"  关键词'{kw}'的额外页面样本:")
+                        for idx, row in enumerate(additional_results[:sample_size]):
+                            dimension_id = row.get('dimensionId', 'N/A')
+                            dimension_name = row.get('dimensionName', 'N/A')
+                            logger.info(
+                                f"  '{kw}'的额外结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}")
 
-                    if len(additional_results) > 3:
-                        logger.info(f"  ...以及额外页面的其他{len(additional_results) - 3}条结果")
+                        if len(additional_results) > 3:
+                            logger.info(f"  ...以及额外页面的其他{len(additional_results) - 3}条结果")
 
-                # 统计每个维度ID出现的次数，了解结果分布
-                if extract_rows and keyword_results:
-                    dimension_counts = {}
-                    for row in keyword_results:
-                        dim_id = row.get('dimensionId')
-                        dim_name = row.get('dimensionName', 'N/A')
-                        if dim_id:
-                            if dim_id not in dimension_counts:
-                                dimension_counts[dim_id] = {'count': 0, 'name': dim_name}
-                            dimension_counts[dim_id]['count'] += 1
+                    # 统计每个维度ID出现的次数，了解结果分布
+                    if extract_rows and keyword_results:
+                        dimension_counts = {}
+                        for row in keyword_results:
+                            dim_id = row.get('dimensionId')
+                            dim_name = row.get('dimensionName', 'N/A')
+                            if dim_id:
+                                if dim_id not in dimension_counts:
+                                    dimension_counts[dim_id] = {'count': 0, 'name': dim_name}
+                                dimension_counts[dim_id]['count'] += 1
 
-                    logger.info(f"  关键词'{kw}'的结果分布:")
-                    for dim_id, info in dimension_counts.items():
-                        logger.info(f"  - 维度ID={dim_id}, 维度名称={info['name']}: {info['count']}条结果")
+                        logger.info(f"  关键词'{kw}'的结果分布:")
+                        for dim_id, info in dimension_counts.items():
+                            logger.info(f"  - 维度ID={dim_id}, 维度名称={info['name']}: {info['count']}条结果")
 
-                logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
+                    logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
 
-                # 添加到总结果
-                all_results.extend(keyword_results)
+                    # 添加到总结果
+                    all_results.extend(keyword_results)
+
+                except SemanticApiError as e:
+                    # 记录错误但继续处理其他关键词
+                    logger.error(f"处理关键词 '{kw}' 时出错: {str(e)}")
+                    raise  # 重新抛出异常
 
             logger.info(f"所有维度值关键词合并后的总唯一结果数: {len(all_results)}条")
 
@@ -610,8 +689,11 @@ class SemanticApiClient:
             return all_results
 
         except Exception as e:
-            logger.error(f"多关键词维度值搜索过程中出错: {str(e)}")
-            raise
+            if not isinstance(e, SemanticApiError):
+                error_msg = f"多关键词维度值搜索过程中出错: {str(e)}"
+                logger.error(error_msg)
+                raise ApiRequestError(error_msg) from e
+            raise  # 重新抛出已经包装的异常
 
     async def get_metric_info_by_keyword_async(
             self,
@@ -639,6 +721,10 @@ class SemanticApiClient:
 
         Returns:
             Union[Dict, List[Dict]]: 合并后的完整响应或只包含所有rows的列表（去重后）
+
+        Raises:
+            ApiResponseError: API响应业务状态码不为0
+            ApiRequestError: 请求过程中的其他错误
         """
         logger.info(f"\n=== 根据指标名称搜索指标信息 ===")
         logger.info(f"dataset_ids: {dataset_ids}")
@@ -656,95 +742,102 @@ class SemanticApiClient:
             for kw in keywords:
                 logger.info(f"正在处理指标信息关键词: {kw}")
 
-                # 第一次请求，获取总数
-                first_result = await self._make_async_request(
-                    "POST",
-                    self.api_paths["get_metric_info"],
-                    params={"pi": 1, "ps": page_size},
-                    data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
-                )
-
-                if str(first_result.get("code", "")) != "0":
-                    logger.warning(f"获取关键词'{kw}'的第一页失败: {first_result.get('msg', '未知错误')}")
-                    continue
-
-                # 计算总页数
-                data = first_result.get("data", {})
-                total = int(data.get("total", 0))
-                total_pages = (total + page_size - 1) // page_size  # 向上取整
-
-                # 获取第一页结果
-                keyword_results = []
-                duplicate_count = 0
-                if extract_rows:
-                    first_page_rows = data.get("rows", [])
-
-                    # 处理第一页结果（如果需要去重）
-                    for row in first_page_rows:
-                        metric_id = row.get('metricId')
-                        if deduplicate_by_metric_id:
-                            if metric_id and metric_id in metric_id_set:
-                                duplicate_count += 1
-                                continue
-                            if metric_id:
-                                metric_id_set.add(metric_id)
-
-                        keyword_results.append(row)
-
-                    logger.info(
-                        f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
-
-                    # 打印第一页结果的指标ID和指标名称
-                    if keyword_results:
-                        for idx, row in enumerate(keyword_results[:min(3, len(keyword_results))]):  # 只打印前3条
-                            metric_id = row.get('metricId', 'N/A')
-                            metric_name = row.get('metricName', 'N/A')
-                            metric_code = row.get('metricCode', 'N/A')
-                            logger.info(
-                                f"  '{kw}'的结果{idx + 1}: 指标ID={metric_id}, 指标名称={metric_name}, 指标编码={metric_code}")
-
-                        if len(keyword_results) > 3:
-                            logger.info(f"  ...以及第一页的其他{len(keyword_results) - 3}条结果")
-                else:
-                    keyword_results.append(first_result)
-                    logger.info(f"关键词'{kw}'的第一页已返回")
-
-                # 限制最大页数
-                total_pages = min(total_pages, max_pages)
-
-                if total_pages <= 1:
-                    logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
-                    all_results.extend(keyword_results)
-                    continue
-
-                # 创建剩余页面的异步任务
-                page_tasks = []
-                for page in range(2, total_pages + 1):
-                    task = self._make_async_request(
+                try:
+                    # 第一次请求，获取总数
+                    first_result = await self._make_async_request(
                         "POST",
                         self.api_paths["get_metric_info"],
-                        params={"pi": page, "ps": page_size},
+                        params={"pi": 1, "ps": page_size},
                         data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
                     )
-                    page_tasks.append(task)
 
-                # 限制并发请求数
-                page_results = []
-                for i in range(0, len(page_tasks), max_concurrent):
-                    batch = page_tasks[i:i + max_concurrent]
-                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
-                    page_results.extend(batch_results)
+                    if str(first_result.get("code", "")) != "0":
+                        error_msg = f"获取关键词'{kw}'的第一页失败: {first_result.get('msg', '未知错误')}"
+                        logger.warning(error_msg)
+                        raise ApiResponseError(error_msg)
 
-                # 处理结果
-                additional_total_rows = 0
-                additional_kept_rows = 0
-                additional_results = []
-                for result in page_results:
-                    if isinstance(result, Exception):
-                        logger.error(f"关键词'{kw}'的异步请求出错: {str(result)}")
+                    # 计算总页数
+                    data = first_result.get("data", {})
+                    total = int(data.get("total", 0))
+                    total_pages = (total + page_size - 1) // page_size  # 向上取整
+
+                    # 获取第一页结果
+                    keyword_results = []
+                    duplicate_count = 0
+                    if extract_rows:
+                        first_page_rows = data.get("rows", [])
+
+                        # 处理第一页结果（如果需要去重）
+                        for row in first_page_rows:
+                            metric_id = row.get('metricId')
+                            if deduplicate_by_metric_id:
+                                if metric_id and metric_id in metric_id_set:
+                                    duplicate_count += 1
+                                    continue
+                                if metric_id:
+                                    metric_id_set.add(metric_id)
+
+                            keyword_results.append(row)
+
+                        logger.info(
+                            f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
+
+                        # 打印第一页结果的指标ID和指标名称
+                        if keyword_results:
+                            for idx, row in enumerate(keyword_results[:min(3, len(keyword_results))]):  # 只打印前3条
+                                metric_id = row.get('metricId', 'N/A')
+                                metric_name = row.get('metricName', 'N/A')
+                                metric_code = row.get('metricCode', 'N/A')
+                                logger.info(
+                                    f"  '{kw}'的结果{idx + 1}: 指标ID={metric_id}, 指标名称={metric_name}, 指标编码={metric_code}")
+
+                            if len(keyword_results) > 3:
+                                logger.info(f"  ...以及第一页的其他{len(keyword_results) - 3}条结果")
+                    else:
+                        keyword_results.append(first_result)
+                        logger.info(f"关键词'{kw}'的第一页已返回")
+
+                    # 限制最大页数
+                    total_pages = min(total_pages, max_pages)
+
+                    if total_pages <= 1:
+                        logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
+                        all_results.extend(keyword_results)
                         continue
 
-                    if str(result.get("code", "")) == "0":
+                    # 创建剩余页面的异步任务
+                    page_tasks = []
+                    for page in range(2, total_pages + 1):
+                        task = self._make_async_request(
+                            "POST",
+                            self.api_paths["get_metric_info"],
+                            params={"pi": page, "ps": page_size},
+                            data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
+                        )
+                        page_tasks.append(task)
+
+                    # 限制并发请求数
+                    page_results = []
+                    for i in range(0, len(page_tasks), max_concurrent):
+                        batch = page_tasks[i:i + max_concurrent]
+                        batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                        page_results.extend(batch_results)
+
+                    # 处理结果
+                    additional_total_rows = 0
+                    additional_kept_rows = 0
+                    additional_results = []
+                    for result in page_results:
+                        if isinstance(result, Exception):
+                            error_msg = f"关键词'{kw}'的异步请求出错: {str(result)}"
+                            logger.error(error_msg)
+                            raise ApiRequestError(error_msg) from result
+
+                        if str(result.get("code", "")) != "0":
+                            error_msg = f"关键词'{kw}'的请求返回错误: {result.get('msg', '未知错误')}"
+                            logger.warning(error_msg)
+                            raise ApiResponseError(error_msg)
+
                         if extract_rows:
                             rows = result.get("data", {}).get("rows", [])
                             additional_total_rows += len(rows)
@@ -766,42 +859,47 @@ class SemanticApiClient:
                             additional_kept_rows += 1
                             additional_total_rows += 1
 
-                logger.info(
-                    f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
+                    logger.info(
+                        f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
 
-                # 打印额外页面中的一些结果信息
-                if additional_results and extract_rows:
-                    sample_size = min(3, len(additional_results))
-                    logger.info(f"  关键词'{kw}'的额外页面样本:")
-                    for idx, row in enumerate(additional_results[:sample_size]):
-                        metric_id = row.get('metricId', 'N/A')
-                        metric_name = row.get('metricName', 'N/A')
-                        metric_code = row.get('metricCode', 'N/A')
-                        logger.info(
-                            f"  '{kw}'的额外结果{idx + 1}: 指标ID={metric_id}, 指标名称={metric_name}, 指标编码={metric_code}")
+                    # 打印额外页面中的一些结果信息
+                    if additional_results and extract_rows:
+                        sample_size = min(3, len(additional_results))
+                        logger.info(f"  关键词'{kw}'的额外页面样本:")
+                        for idx, row in enumerate(additional_results[:sample_size]):
+                            metric_id = row.get('metricId', 'N/A')
+                            metric_name = row.get('metricName', 'N/A')
+                            metric_code = row.get('metricCode', 'N/A')
+                            logger.info(
+                                f"  '{kw}'的额外结果{idx + 1}: 指标ID={metric_id}, 指标名称={metric_name}, 指标编码={metric_code}")
 
-                    if len(additional_results) > 3:
-                        logger.info(f"  ...以及额外页面的其他{len(additional_results) - 3}条结果")
+                        if len(additional_results) > 3:
+                            logger.info(f"  ...以及额外页面的其他{len(additional_results) - 3}条结果")
 
-                # 统计每个指标ID出现的次数，了解结果分布
-                if extract_rows and keyword_results:
-                    metric_counts = {}
-                    for row in keyword_results:
-                        m_id = row.get('metricId')
-                        m_name = row.get('metricName', 'N/A')
-                        if m_id:
-                            if m_id not in metric_counts:
-                                metric_counts[m_id] = {'count': 0, 'name': m_name}
-                            metric_counts[m_id]['count'] += 1
+                    # 统计每个指标ID出现的次数，了解结果分布
+                    if extract_rows and keyword_results:
+                        metric_counts = {}
+                        for row in keyword_results:
+                            m_id = row.get('metricId')
+                            m_name = row.get('metricName', 'N/A')
+                            if m_id:
+                                if m_id not in metric_counts:
+                                    metric_counts[m_id] = {'count': 0, 'name': m_name}
+                                metric_counts[m_id]['count'] += 1
 
-                    logger.info(f"  关键词'{kw}'的结果分布:")
-                    for m_id, info in metric_counts.items():
-                        logger.info(f"  - 指标ID={m_id}, 指标名称={info['name']}: {info['count']}条结果")
+                        logger.info(f"  关键词'{kw}'的结果分布:")
+                        for m_id, info in metric_counts.items():
+                            logger.info(f"  - 指标ID={m_id}, 指标名称={info['name']}: {info['count']}条结果")
 
-                logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
+                    logger.info(f"关键词'{kw}'的总唯一结果数: {len(keyword_results)}条")
 
-                # 添加到总结果
-                all_results.extend(keyword_results)
+                    # 添加到总结果
+                    all_results.extend(keyword_results)
+
+                except SemanticApiError as e:
+                    # 记录错误但继续处理其他关键词
+                    logger.error(f"处理关键词 '{kw}' 时出错: {str(e)}")
+                    raise  # 重新抛出异常
 
             logger.info(f"所有指标信息关键词合并后的总唯一结果数: {len(all_results)}条")
 
@@ -826,8 +924,11 @@ class SemanticApiClient:
             return all_results
 
         except Exception as e:
-            logger.error(f"多关键词指标信息搜索过程中出错: {str(e)}")
-            raise
+            if not isinstance(e, SemanticApiError):
+                error_msg = f"多关键词指标信息搜索过程中出错: {str(e)}"
+                logger.error(error_msg)
+                raise ApiRequestError(error_msg) from e
+            raise  # 重新抛出已经包装的异常
 
     async def get_dimension_info_by_id_async(
             self,
@@ -843,8 +944,15 @@ class SemanticApiClient:
 
         Returns:
             List[Dict]: 维度详情信息列表
+
+        Raises:
+            ApiRequestError: 请求过程中的错误
+            ApiResponseError: API响应错误（业务状态码非0）
         """
         logger.info(f"\n=== 根据维度ID获取维度详情 ===")
+
+        if not dimension_ids:
+            return []
 
         # 确保API路径已添加
         if "get_dimension_info_by_id" not in self.api_paths:
@@ -855,6 +963,7 @@ class SemanticApiClient:
             dimension_ids = [dimension_ids]
 
         all_results = []
+        error_count = 0  # 跟踪错误数量
 
         try:
             # 创建异步任务列表
@@ -883,12 +992,17 @@ class SemanticApiClient:
                 # 处理结果
                 for idx, (dim_id, result) in enumerate(zip(batch_ids, batch_results)):
                     if isinstance(result, Exception):
-                        logger.error(f"维度ID {dim_id} 的请求出错: {str(result)}")
+                        error_msg = f"维度ID {dim_id} 的请求出错: {str(result)}"
+                        logger.error(error_msg)
+                        error_count += 1
+                        # 不立即抛出异常，继续处理其他ID，但记录错误
                         continue
 
                     if str(result.get("code", "")) != "0":
-                        logger.warning(f"获取维度ID {dim_id} 失败: {result.get('msg', '未知错误')}")
-                        continue
+                        error_msg = f"获取维度ID {dim_id} 失败: {result.get('msg', '未知错误')}"
+                        logger.warning(error_msg)
+                        error_count += 1
+                        raise ApiResponseError(error_msg)
 
                     # 获取数据部分
                     dimension_info = result.get("data", [])
@@ -911,18 +1025,35 @@ class SemanticApiClient:
                             logger.info(
                                 f"  维度名称={dimension_name}, 英文名称={dimension_en_name}, 模型名称={model_name}")
                     else:
-                        logger.warning(f"维度ID {dim_id} 未返回任何详情信息")
+                        error_msg = f"维度ID {dim_id} 未返回任何详情信息"
+                        logger.warning(error_msg)
+                        # 空结果也视为一种异常情况
+                        raise ApiResponseError(error_msg)
 
                 processed_count += len(batch)
                 logger.info(f"已处理 {processed_count}/{len(dimension_ids)} 个维度ID")
+
+            # 全部处理失败的情况
+            if error_count == len(dimension_ids):
+                raise ApiRequestError(f"所有 {len(dimension_ids)} 个维度ID的请求都失败了")
+
+            # 部分失败的情况下，如果没有任何结果，也抛出异常
+            if len(all_results) == 0:
+                raise ApiRequestError(f"未能获取到任何维度详情信息，{error_count} 个请求失败")
 
             # 返回所有结果
             logger.info(f"总共获取到 {len(all_results)} 条维度详情信息")
             return all_results
 
         except Exception as e:
-            logger.error(f"获取维度详情过程中出错: {str(e)}")
-            raise
+            if isinstance(e, SemanticApiError):
+                # 如果是已经封装好的API异常则直接抛出
+                raise
+
+            # 其他异常封装为ApiRequestError后抛出
+            error_msg = f"获取维度详情过程中出错: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
 
     async def get_model_detail_async(
             self,
@@ -938,6 +1069,11 @@ class SemanticApiClient:
 
         Returns:
             List[Dict]: 模型详情信息列表
+
+        Raises:
+            ApiRequestError: 请求过程中的错误
+            ApiResponseError: API响应错误（业务状态码非0）
+            ApiNetworkError: 网络连接错误
         """
         logger.info(f"\n=== 根据模型ID获取模型详情 ===")
 
@@ -950,6 +1086,7 @@ class SemanticApiClient:
             model_ids = [model_ids]
 
         all_results = []
+        error_count = 0  # 跟踪错误数量
 
         try:
             # 创建异步任务列表
@@ -978,12 +1115,17 @@ class SemanticApiClient:
                 # 处理结果
                 for idx, (model_id, result) in enumerate(zip(batch_ids, batch_results)):
                     if isinstance(result, Exception):
-                        logger.error(f"模型ID {model_id} 的请求出错: {str(result)}")
+                        error_msg = f"模型ID {model_id} 的请求出错: {str(result)}"
+                        logger.error(error_msg)
+                        error_count += 1
+                        # 不立即抛出异常，继续处理其他ID，但记录错误
                         continue
 
                     if str(result.get("code", "")) != "0":
-                        logger.warning(f"获取模型ID {model_id} 失败: {result.get('msg', '未知错误')}")
-                        continue
+                        error_msg = f"获取模型ID {model_id} 失败: {result.get('msg', '未知错误')}"
+                        logger.warning(error_msg)
+                        error_count += 1
+                        raise ApiResponseError(error_msg)
 
                     # 获取数据部分
                     model_data = result.get("data")
@@ -1008,18 +1150,39 @@ class SemanticApiClient:
                         logger.info(
                             f"  字段数量: {fields_count}, 用于数据集: {', '.join(datasets_names[:3])}{'...' if len(datasets_names) > 3 else ''}")
                     else:
-                        logger.warning(f"模型ID {model_id} 未返回任何详情信息")
+                        error_msg = f"模型ID {model_id} 未返回任何详情信息"
+                        logger.warning(error_msg)
+                        error_count += 1
+                        raise ApiResponseError(error_msg)
 
                 processed_count += len(batch)
                 logger.info(f"已处理 {processed_count}/{len(model_ids)} 个模型ID")
+
+            # 全部处理失败的情况
+            if error_count == len(model_ids):
+                raise ApiRequestError(f"所有 {len(model_ids)} 个模型ID的请求都失败了")
+
+            # 部分失败的情况下，如果没有任何结果，也抛出异常
+            if len(all_results) == 0:
+                raise ApiRequestError(f"未能获取到任何模型详情信息，{error_count}/{len(model_ids)} 个请求失败")
 
             # 返回所有结果
             logger.info(f"总共获取到 {len(all_results)} 条模型详情信息")
             return all_results
 
-        except Exception as e:
-            logger.error(f"获取模型详情过程中出错: {str(e)}")
+        except SemanticApiError as e:
+            # 如果是已经封装好的API异常则直接抛出
             raise
+        except aiohttp.ClientError as e:
+            # 网络连接错误单独处理
+            error_msg = f"获取模型详情时发生网络错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiNetworkError(error_msg) from e
+        except Exception as e:
+            # 其他异常封装为ApiRequestError后抛出
+            error_msg = f"获取模型详情过程中出错: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
 
     async def get_model_relationships_async(
             self,
@@ -1035,6 +1198,11 @@ class SemanticApiClient:
 
         Returns:
             List[Dict]: 去重后的模型关系信息列表
+
+        Raises:
+            ApiRequestError: 请求过程中的错误
+            ApiResponseError: API响应错误（业务状态码非0）
+            ApiNetworkError: 网络连接错误
         """
         logger.info(f"\n=== 根据模型ID获取模型关系 ===")
 
@@ -1048,6 +1216,8 @@ class SemanticApiClient:
 
         all_relationships = []
         relationship_keys = set()  # 用于跟踪已见过的关系组合
+        error_count = 0  # 跟踪错误数量
+        no_relation_count = 0  # 跟踪无关系的模型数量
 
         try:
             # 创建异步任务列表
@@ -1076,12 +1246,17 @@ class SemanticApiClient:
                 # 处理结果
                 for idx, (model_id, result) in enumerate(zip(batch_ids, batch_results)):
                     if isinstance(result, Exception):
-                        logger.error(f"模型ID {model_id} 的关系请求出错: {str(result)}")
+                        error_msg = f"模型ID {model_id} 的关系请求出错: {str(result)}"
+                        logger.error(error_msg)
+                        error_count += 1
+                        # 不立即抛出异常，继续处理其他ID，后续根据错误比例决定
                         continue
 
                     if str(result.get("code", "")) != "0":
-                        logger.warning(f"获取模型ID {model_id} 的关系失败: {result.get('msg', '未知错误')}")
-                        continue
+                        error_msg = f"获取模型ID {model_id} 的关系失败: {result.get('msg', '未知错误')}"
+                        logger.warning(error_msg)
+                        error_count += 1
+                        raise ApiResponseError(error_msg)
 
                     # 获取数据部分
                     relationships = result.get("data", [])
@@ -1097,7 +1272,8 @@ class SemanticApiClient:
                             source_id = relation.get('sourceModelId')
                             target_id = relation.get('targetModelId')
                             if not source_id or not target_id:
-                                logger.warning(f"关系数据缺少source或target模型ID: {relation}")
+                                error_msg = f"关系数据缺少source或target模型ID: {relation}"
+                                logger.warning(error_msg)
                                 continue
 
                             # 创建一个排序后的键，确保无论方向如何都能识别相同的关系
@@ -1134,17 +1310,46 @@ class SemanticApiClient:
                                     f"    关系{i + 1}: {source_name}({source_field}) {join_type} JOIN {target_name}({target_field})")
                     else:
                         logger.info(f"  模型ID {model_id} 未返回任何关系信息")
+                        # 没有关系不算错误，但记录下来
+                        no_relation_count += 1
 
                 processed_count += len(batch)
                 logger.info(f"已处理 {processed_count}/{len(model_ids)} 个模型ID")
+
+            # 全部处理失败的情况
+            if error_count == len(model_ids):
+                raise ApiRequestError(f"所有 {len(model_ids)} 个模型ID的关系请求都失败了")
+
+            # 部分失败的情况下，如果重大失败比例过高，也抛出异常
+            if error_count > 0 and error_count / len(model_ids) >= 0.5:  # 50%以上失败率
+                raise ApiRequestError(f"超过一半的模型关系请求失败，失败率: {error_count}/{len(model_ids)}")
+
+            # 没有获取到任何关系数据的情况
+            if len(all_relationships) == 0:
+                # 区分是因为错误还是因为模型确实没有关系
+                if error_count > 0:
+                    raise ApiRequestError(f"未能获取到任何模型关系信息，{error_count}/{len(model_ids)} 个请求失败")
+                elif no_relation_count == len(model_ids):
+                    logger.warning(f"所有 {len(model_ids)} 个模型都没有关联关系")
+                    # 这种情况下返回空列表，不抛出异常，因为没有关系不算错误
 
             # 返回所有去重后的结果
             logger.info(f"总共获取到 {len(all_relationships)} 条唯一的模型关系信息")
             return all_relationships
 
-        except Exception as e:
-            logger.error(f"获取模型关系过程中出错: {str(e)}")
+        except SemanticApiError as e:
+            # 如果是已经封装好的API异常则直接抛出
             raise
+        except aiohttp.ClientError as e:
+            # 网络连接错误单独处理
+            error_msg = f"获取模型关系时发生网络错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiNetworkError(error_msg) from e
+        except Exception as e:
+            # 其他异常封装为ApiRequestError后抛出
+            error_msg = f"获取模型关系过程中出错: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
 
     async def get_dataset_detail_async(
             self,
@@ -1160,6 +1365,11 @@ class SemanticApiClient:
 
         Returns:
             List[Dict]: 数据集详情信息列表
+
+        Raises:
+            ApiRequestError: 请求过程中的错误
+            ApiResponseError: API响应业务状态码不为0
+            ApiNetworkError: 网络连接错误
         """
         logger.info(f"\n=== 根据数据集ID获取数据集详情 ===")
 
@@ -1172,6 +1382,7 @@ class SemanticApiClient:
             dataset_ids = [dataset_ids]
 
         all_results = []
+        error_count = 0  # 跟踪错误数量
 
         try:
             # 创建异步任务列表
@@ -1200,12 +1411,17 @@ class SemanticApiClient:
                 # 处理结果
                 for idx, (dataset_id, result) in enumerate(zip(batch_ids, batch_results)):
                     if isinstance(result, Exception):
-                        logger.error(f"数据集ID {dataset_id} 的请求出错: {str(result)}")
+                        error_msg = f"数据集ID {dataset_id} 的请求出错: {str(result)}"
+                        logger.error(error_msg)
+                        error_count += 1
+                        # 记录错误但继续处理其他ID
                         continue
 
                     if str(result.get("code", "")) != "0":
-                        logger.warning(f"获取数据集ID {dataset_id} 失败: {result.get('msg', '未知错误')}")
-                        continue
+                        error_msg = f"获取数据集ID {dataset_id} 失败: {result.get('msg', '未知错误')}"
+                        logger.warning(error_msg)
+                        error_count += 1
+                        raise ApiResponseError(error_msg)
 
                     # 获取数据部分
                     dataset_data = result.get("data")
@@ -1224,26 +1440,75 @@ class SemanticApiClient:
                                 if model_id and model_id not in model_ids_seen:
                                     model_ids_seen.add(model_id)
                                     unique_models.append(model)
+
+                            # 记录是否有重复模型被移除
+                            if len(unique_models) < len(dataset_data["models"]):
+                                logger.info(
+                                    f"数据集ID {dataset_id} 中移除了 {len(dataset_data['models']) - len(unique_models)} 个重复模型")
+
                             dataset_data["models"] = unique_models
+
+                        # 验证模型列表的完整性
+                        if "models" in dataset_data and not dataset_data["models"]:
+                            logger.warning(f"数据集ID {dataset_id} 没有关联任何模型")
 
                         all_results.append(dataset_data)
 
-                        # 只打印最简单的数据集信息：ID和名称
+                        # 打印数据集的关键信息
                         dataset_name = dataset_data.get('datasetName', 'N/A')
-                        logger.info(f"  已获取数据集: ID={dataset_id}, 名称={dataset_name}")
+                        models_count = len(dataset_data.get('models', []))
+                        domain_name = dataset_data.get('domainName', 'N/A')
+
+                        logger.info(
+                            f"  已获取数据集: ID={dataset_id}, 名称={dataset_name}, 领域={domain_name}, 关联模型数={models_count}")
                     else:
-                        logger.warning(f"数据集ID {dataset_id} 未返回任何详情信息")
+                        error_msg = f"数据集ID {dataset_id} 未返回任何详情信息"
+                        logger.warning(error_msg)
+                        error_count += 1
+                        raise ApiResponseError(error_msg)
 
                 processed_count += len(batch)
                 logger.info(f"已处理 {processed_count}/{len(dataset_ids)} 个数据集ID")
 
+            # 全部处理失败的情况
+            if error_count == len(dataset_ids):
+                raise ApiRequestError(f"所有 {len(dataset_ids)} 个数据集ID的请求都失败了")
+
+            # 部分失败的情况下，如果失败比例过高，也抛出异常
+            if error_count > 0 and error_count / len(dataset_ids) >= 0.5:  # 50%以上失败率
+                raise ApiRequestError(f"超过一半的数据集请求失败，失败率: {error_count}/{len(dataset_ids)}")
+
+            # 没有获取到任何结果的情况
+            if len(all_results) == 0:
+                raise ApiRequestError(f"未能获取到任何数据集详情信息，{error_count}/{len(dataset_ids)} 个请求失败")
+
             # 返回所有结果
             logger.info(f"总共获取到 {len(all_results)} 条数据集详情信息")
+
+            # 验证结果的完整性
+            for result in all_results:
+                if "datasetName" not in result or not result["datasetName"]:
+                    logger.warning(f"数据集 {result.get('requested_dataset_id', '未知ID')} 缺少必要的名称信息")
+
+                if "models" not in result or not isinstance(result["models"], list):
+                    logger.warning(
+                        f"数据集 {result.get('datasetName', result.get('requested_dataset_id', '未知ID'))} 的模型信息格式不正确")
+
             return all_results
 
-        except Exception as e:
-            logger.error(f"获取数据集详情过程中出错: {str(e)}")
+        except SemanticApiError as e:
+            # 如果是已经封装好的API异常则直接抛出
             raise
+        except aiohttp.ClientError as e:
+            # 网络连接错误单独处理
+            error_msg = f"获取数据集详情时发生网络错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiNetworkError(error_msg) from e
+        except Exception as e:
+            # 其他异常封装为ApiRequestError后抛出
+            error_msg = f"获取数据集详情过程中出错: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
 
     async def get_business_term_info_async(
             self,
@@ -1253,10 +1518,11 @@ class SemanticApiClient:
             page_size: int = 100,
             max_pages: int = 10,
             extract_rows: bool = True,
-            max_concurrent: int = 5
+            max_concurrent: int = 5,
+            deduplicate_by_term_id: bool = True  # New parameter for deduplication
     ) -> Union[Dict, List[Dict]]:
         """
-        异步获取业务术语信息（支持多关键词，自动分页，并发请求）
+        异步获取业务术语信息（支持多关键词，自动分页，并发请求，支持术语ID去重）
 
         Args:
             keyword: 搜索关键词或关键词列表
@@ -1266,12 +1532,24 @@ class SemanticApiClient:
             max_pages: 最大页数限制，防止无限请求
             extract_rows: 是否只提取rows部分数据
             max_concurrent: 最大并发请求数
+            deduplicate_by_term_id: 是否根据术语ID去重
 
         Returns:
-            Union[Dict, List[Dict]]: 合并后的完整响应或只包含所有rows的列表
+            Union[Dict, List[Dict]]: 合并后的完整响应或只包含所有rows的列表（去重后）
+
+        Raises:
+            ApiRequestError: 请求过程中的错误
+            ApiResponseError: API响应业务状态码不为0
+            ApiNetworkError: 网络连接错误
         """
         logger.info(f"\n=== 根据关键词搜索业务术语 ===")
         logger.info(f"domain_ids: {domain_ids}")
+
+        # 参数验证
+        if not domain_ids:
+            error_msg = "主题域ID列表不能为空"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg)
 
         # 转换单个关键词为列表
         if isinstance(keyword, str):
@@ -1279,153 +1557,404 @@ class SemanticApiClient:
         else:
             keywords = keyword
 
+        if not keywords:
+            error_msg = "关键词不能为空"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg)
+
         all_results = []
+        term_id_set = set()  # 用于跟踪已见过的termId
+        error_count = 0  # 跟踪关键词处理失败的数量
+        processed_keywords = 0  # 成功处理的关键词数量
 
         try:
             # 为每个关键词创建异步任务
             for kw in keywords:
                 logger.info(f"正在处理业务术语关键词: {kw}")
 
-                # 第一次请求，获取总数
-                first_result = await self._make_async_request(
-                    "POST",
-                    self.api_paths["get_business_term_info"],
-                    params={"pi": 1, "ps": page_size},
-                    data={"keyword": kw, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
-                )
-
-                if str(first_result.get("code", "")) != "0":
-                    logger.warning(f"获取关键词'{kw}'的第一页失败: {first_result.get('msg', '未知错误')}")
-                    continue
-
-                # 计算总页数
-                data = first_result.get("data", {})
-                total = int(data.get("total", 0))
-                total_pages = (total + page_size - 1) // page_size  # 向上取整
-
-                # 获取第一页结果
-                keyword_results = []
-                if extract_rows:
-                    first_page_rows = data.get("rows", [])
-                    keyword_results.extend(first_page_rows)
-                    logger.info(f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果")
-                else:
-                    keyword_results.append(first_result)
-                    logger.info(f"关键词'{kw}'的第一页已返回")
-
-                # 限制最大页数
-                total_pages = min(total_pages, max_pages)
-
-                if total_pages <= 1:
-                    logger.info(f"关键词'{kw}'的总结果数: {len(keyword_results)}条")
-                    all_results.extend(keyword_results)
-                    continue
-
-                # 创建剩余页面的异步任务
-                page_tasks = []
-                for page in range(2, total_pages + 1):
-                    task = self._make_async_request(
+                try:
+                    # 第一次请求，获取总数
+                    first_result = await self._make_async_request(
                         "POST",
                         self.api_paths["get_business_term_info"],
-                        params={"pi": page, "ps": page_size},
+                        params={"pi": 1, "ps": page_size},
                         data={"keyword": kw, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
                     )
-                    page_tasks.append(task)
 
-                # 限制并发请求数
-                page_results = []
-                for i in range(0, len(page_tasks), max_concurrent):
-                    batch = page_tasks[i:i + max_concurrent]
-                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
-                    page_results.extend(batch_results)
+                    if str(first_result.get("code", "")) != "0":
+                        error_msg = f"获取关键词'{kw}'的第一页失败: {first_result.get('msg', '未知错误')}"
+                        logger.warning(error_msg)
+                        error_count += 1
+                        raise ApiResponseError(error_msg)
 
-                # 处理结果
-                additional_rows_count = 0
-                for result in page_results:
-                    if isinstance(result, Exception):
-                        logger.error(f"关键词'{kw}'的异步请求出错: {str(result)}")
-                        continue
+                    # 计算总页数
+                    data = first_result.get("data", {})
+                    total = int(data.get("total", 0))
+                    total_pages = (total + page_size - 1) // page_size  # 向上取整
 
-                    if str(result.get("code", "")) != "0":
-                        logger.warning(f"关键词'{kw}'的请求返回错误: {result.get('msg', '未知错误')}")
-                        continue
-
+                    # 获取第一页结果
+                    keyword_results = []
+                    duplicate_count = 0
                     if extract_rows:
-                        rows = result.get("data", {}).get("rows", [])
-                        keyword_results.extend(rows)
-                        additional_rows_count += len(rows)
+                        first_page_rows = data.get("rows", [])
+                        if first_page_rows:
+                            # 处理第一页结果（如果需要去重）
+                            for row in first_page_rows:
+                                # 给每行添加原始搜索关键词
+                                row['search_keyword'] = kw
+
+                                term_id = row.get('termId')
+                                if deduplicate_by_term_id:
+                                    if term_id and term_id in term_id_set:
+                                        duplicate_count += 1
+                                        continue
+                                    if term_id:
+                                        term_id_set.add(term_id)
+
+                                keyword_results.append(row)
+
+                            logger.info(
+                                f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
+
+                            # 打印样例结果
+                            sample_size = min(3, len(keyword_results))
+                            for i, row in enumerate(keyword_results[:sample_size]):
+                                term_id = row.get('termId', 'N/A')
+                                term_name = row.get('termName', 'N/A')
+                                term_code = row.get('termCode', 'N/A')
+                                logger.info(f"  示例 {i + 1}: ID={term_id}, 术语名称={term_name}, 术语编码={term_code}")
+
+                            if len(keyword_results) > sample_size:
+                                logger.info(f"  ...以及其他 {len(keyword_results) - sample_size} 条结果")
+                        else:
+                            logger.info(f"关键词'{kw}'的第一页没有返回任何结果")
                     else:
-                        keyword_results.append(result)
-                        additional_rows_count += 1
+                        keyword_results.append(first_result)
+                        logger.info(f"关键词'{kw}'的第一页已返回")
 
-                logger.info(f"关键词'{kw}'的额外页面返回了{additional_rows_count}条结果")
-                logger.info(f"关键词'{kw}'的总结果数: {len(keyword_results)}条")
+                    # 限制最大页数
+                    total_pages = min(total_pages, max_pages)
 
-                # 添加到总结果
-                all_results.extend(keyword_results)
+                    if total_pages <= 1:
+                        logger.info(f"关键词'{kw}'的总结果数: {len(keyword_results)}条")
+                        all_results.extend(keyword_results)
+                        processed_keywords += 1
+                        continue
 
+                    # 创建剩余页面的异步任务
+                    page_tasks = []
+                    for page in range(2, total_pages + 1):
+                        task = self._make_async_request(
+                            "POST",
+                            self.api_paths["get_business_term_info"],
+                            params={"pi": page, "ps": page_size},
+                            data={"keyword": kw, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
+                        )
+                        page_tasks.append(task)
+
+                    # 限制并发请求数
+                    page_results = []
+                    page_errors = 0
+                    for i in range(0, len(page_tasks), max_concurrent):
+                        batch = page_tasks[i:i + max_concurrent]
+                        logger.info(f"并发获取关键词'{kw}'的 {len(batch)} 个额外页面")
+                        batch_results = await asyncio.gather(*batch, return_exceptions=True)
+
+                        for result in batch_results:
+                            if isinstance(result, Exception):
+                                logger.error(f"获取关键词'{kw}'的页面时发生错误: {str(result)}")
+                                page_errors += 1
+                                continue
+                            page_results.append(result)
+
+                    # 处理结果
+                    additional_total_rows = 0
+                    additional_kept_rows = 0
+                    for result in page_results:
+                        if str(result.get("code", "")) != "0":
+                            error_msg = f"关键词'{kw}'的请求返回错误: {result.get('msg', '未知错误')}"
+                            logger.warning(error_msg)
+                            page_errors += 1
+                            continue
+
+                        if extract_rows:
+                            rows = result.get("data", {}).get("rows", [])
+                            additional_total_rows += len(rows)
+
+                            # 处理额外页面结果（如果需要去重）
+                            for row in rows:
+                                # 给每行添加原始搜索关键词
+                                row['search_keyword'] = kw
+
+                                term_id = row.get('termId')
+                                if deduplicate_by_term_id:
+                                    if term_id and term_id in term_id_set:
+                                        continue
+                                    if term_id:
+                                        term_id_set.add(term_id)
+
+                                keyword_results.append(row)
+                                additional_kept_rows += 1
+                        else:
+                            keyword_results.append(result)
+                            additional_kept_rows += 1
+                            additional_total_rows += 1
+
+                    # 记录页面错误情况
+                    if page_errors > 0:
+                        logger.warning(f"关键词'{kw}'的 {page_errors}/{len(page_tasks)} 个页面请求失败")
+
+                    logger.info(
+                        f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
+                    logger.info(f"关键词'{kw}'的总结果数: {len(keyword_results)}条")
+
+                    # 添加到总结果
+                    all_results.extend(keyword_results)
+                    processed_keywords += 1
+
+                except SemanticApiError as e:
+                    # 记录错误但继续处理其他关键词
+                    logger.error(f"处理关键词 '{kw}' 时出错: {str(e)}")
+                    error_count += 1
+                    # 不抛出异常，继续处理其他关键词
+
+            # 处理结果统计
             logger.info(f"所有业务术语关键词合并后的总结果数: {len(all_results)}条")
+            logger.info(f"成功处理了 {processed_keywords}/{len(keywords)} 个关键词")
+
+            # 检查是否所有关键词都处理失败
+            if error_count == len(keywords):
+                raise ApiRequestError(f"所有 {len(keywords)} 个关键词的业务术语搜索都失败了")
+
+            # 检查是否没有任何结果
+            if len(all_results) == 0:
+                # 区分是因为错误还是因为确实没有匹配的结果
+                if error_count > 0:
+                    raise ApiRequestError(f"未能获取到任何业务术语信息，{error_count}/{len(keywords)} 个关键词处理失败")
+                else:
+                    logger.warning(f"没有找到匹配的业务术语信息，所有 {len(keywords)} 个关键词均无结果")
+
+            # 最后检查一遍确保没有重复的termId（以防万一）
+            if deduplicate_by_term_id and extract_rows:
+                final_unique_results = []
+                final_term_id_set = set()
+                for result in all_results:
+                    term_id = result.get('termId')
+                    if term_id and term_id in final_term_id_set:
+                        continue
+                    if term_id:
+                        final_term_id_set.add(term_id)
+                    final_unique_results.append(result)
+
+                # 如果有发现额外的重复项（不应该发生，但以防万一）
+                if len(final_unique_results) < len(all_results):
+                    logger.warning(
+                        f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
+                    all_results = final_unique_results
+
+            # 数据完整性验证
+            if extract_rows and all_results:
+                # 验证结果字段的完整性
+                for idx, result in enumerate(all_results):
+                    if 'termId' not in result or not result['termId']:
+                        logger.warning(f"结果中第 {idx + 1} 条数据缺少术语ID")
+                    if 'termName' not in result or not result['termName']:
+                        logger.warning(f"术语ID {result.get('termId', '未知')} 缺少术语名称")
+
             return all_results
 
-        except Exception as e:
-            logger.error(f"业务术语搜索过程中出错: {str(e)}")
+        except SemanticApiError as e:
+            # 如果是已经封装好的API异常则直接抛出
             raise
-
-
-# 使用示例
-if __name__ == "__main__":
-    # 创建客户端实例
-    client = SemanticApiClient(
-        protocol=DCS_SERVER_PROTOCOL,
-        host=DCS_SERVER_HOST,
-        port=DCS_SERVER_PORT
-    )
-
-
-    # 异步请求示例
-    async def run_async_examples():
-        try:
-            # 1. 获取维度信息（自动分页）
-            dimension_rows = await client.get_dimension_info_by_keyword_async(
-                keyword="职称",
-                dataset_ids=["35799132679879680"],
-                fuzzy_match=True
-            )
-            print(f"\n获取维度信息结果行数: {len(dimension_rows)}")
-
-            # 打印第一行数据示例
-            if dimension_rows:
-                print(f"第一条维度信息: {json.dumps(dimension_rows[0], ensure_ascii=False)}")
-
-            # 2. 搜索维度值（自动分页）
-            dimension_value_rows = await client.get_dimension_by_dimension_value_async(
-                keyword="教授",
-                dataset_ids=["35799132679879680"],
-                fuzzy_match=True
-            )
-            print(f"\n搜索维度值结果行数: {len(dimension_value_rows)}")
-
-            # 打印第一行数据示例
-            if dimension_value_rows:
-                print(f"第一条维度值: {json.dumps(dimension_value_rows[0], ensure_ascii=False)}")
-
-            # 3. 获取指标信息（自动分页）
-            metric_rows = await client.get_metric_info_by_keyword_async(
-                keyword="总课时数",
-                dataset_ids=["35799132679879680"],
-                fuzzy_match=True
-            )
-            print(f"\n获取指标信息结果行数: {len(metric_rows)}")
-
-            # 打印第一行数据示例
-            if metric_rows:
-                print(f"第一条指标信息: {json.dumps(metric_rows[0], ensure_ascii=False)}")
-
+        except aiohttp.ClientError as e:
+            # 网络连接错误单独处理
+            error_msg = f"业务术语搜索过程中发生网络错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiNetworkError(error_msg) from e
         except Exception as e:
-            print(f"异步请求发生错误: {e}")
+            # 其他异常封装为ApiRequestError后抛出
+            error_msg = f"业务术语搜索过程中出错: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
 
+    async def get_dimension_values_async(
+            self,
+            dimension_ids: Union[str, List[str]],
+            page_size: int = 100,
+            max_pages: int = 100,
+            max_concurrent: int = 5
+    ) -> Dict[str, List[Dict]]:
+        """
+        异步获取维度值列表（支持单个维度ID或维度ID列表，自动分页，并发请求）
 
-    # 运行异步示例
-    if asyncio.get_event_loop().is_closed():
-        asyncio.set_event_loop(asyncio.new_event_loop())
-    asyncio.get_event_loop().run_until_complete(run_async_examples())
+        Args:
+            dimension_ids: 单个维度ID或维度ID列表
+            page_size: 每页大小
+            max_pages: 最大页数限制，防止无限请求
+            max_concurrent: 最大并发请求数
+
+        Returns:
+            Dict[str, List[Dict]]: 以维度ID为key，维度值列表为value的字典
+
+        Raises:
+            ApiRequestError: 请求过程中的错误
+            ApiResponseError: API响应业务状态码不为0
+            ApiNetworkError: 网络连接错误
+        """
+        logger.info(f"\n=== 获取维度值列表 ===")
+
+        if not dimension_ids:
+            return {}
+
+        # 确保API路径已添加
+        if "get_dimension_values" not in self.api_paths:
+            self.api_paths["get_dimension_values"] = "/api/drm/semanticOpenApi/getDimensionValues"
+
+        # 转换单个ID为列表
+        if isinstance(dimension_ids, str):
+            dimension_ids = [dimension_ids]
+
+        # 结果字典，key为维度ID，value为维度值列表
+        dimension_values_dict = {}
+        error_count = 0  # 跟踪错误数量
+
+        try:
+            # 为每个维度ID创建并发任务组
+            for dimension_id in dimension_ids:
+                logger.info(f"正在处理维度ID: {dimension_id}")
+                dimension_values = []
+
+                try:
+                    # 第一次请求，获取总数和第一页结果
+                    first_result = await self._make_async_request(
+                        "POST",
+                        self.api_paths["get_dimension_values"],
+                        params={"pi": 1, "ps": page_size},
+                        data={"dimensionId": dimension_id}
+                    )
+
+                    if str(first_result.get("code", "")) != "0":
+                        error_msg = f"获取维度ID '{dimension_id}' 的第一页值失败: {first_result.get('msg', '未知错误')}"
+                        logger.warning(error_msg)
+                        error_count += 1
+                        raise ApiResponseError(error_msg)
+
+                    # 解析第一页结果
+                    data = first_result.get("data", {})
+                    total = int(data.get("total", 0))
+                    first_page_rows = data.get("rows", [])
+
+                    # 添加第一页结果
+                    dimension_values.extend(first_page_rows)
+
+                    logger.info(f"维度ID '{dimension_id}' 第一页返回了 {len(first_page_rows)} 条维度值，总计 {total} 条")
+
+                    # 打印第一页部分示例值
+                    if first_page_rows:
+                        sample_size = min(3, len(first_page_rows))
+                        for i, row in enumerate(first_page_rows[:sample_size]):
+                            value = row.get('value', 'N/A')
+                            synonyms = row.get('synonyms', [])
+                            synonyms_str = ", ".join(synonyms) if synonyms else "无"
+                            logger.info(f"  示例 {i + 1}: 值={value}, 同义词={synonyms_str}")
+
+                        if len(first_page_rows) > sample_size:
+                            logger.info(f"  ...以及其他 {len(first_page_rows) - sample_size} 条维度值")
+
+                    # 计算总页数
+                    total_pages = (total + page_size - 1) // page_size  # 向上取整
+                    total_pages = min(total_pages, max_pages)  # 限制最大页数
+
+                    if total_pages <= 1:
+                        # 只有一页，直接添加到结果字典
+                        dimension_values_dict[dimension_id] = dimension_values
+                        logger.info(f"维度ID '{dimension_id}' 只有一页数据，已获取全部 {len(dimension_values)} 条维度值")
+                        continue
+
+                    # 创建剩余页面的异步任务
+                    page_tasks = []
+                    for page in range(2, total_pages + 1):
+                        task = self._make_async_request(
+                            "POST",
+                            self.api_paths["get_dimension_values"],
+                            params={"pi": page, "ps": page_size},
+                            data={"dimensionId": dimension_id}
+                        )
+                        page_tasks.append(task)
+
+                    # 限制并发请求数
+                    additional_values_count = 0
+                    page_errors = 0
+
+                    for i in range(0, len(page_tasks), max_concurrent):
+                        batch = page_tasks[i:i + max_concurrent]
+                        logger.info(f"并发获取维度ID '{dimension_id}' 的 {len(batch)} 个额外页面")
+                        batch_results = await asyncio.gather(*batch, return_exceptions=True)
+
+                        # 处理每个页面的结果
+                        for result in batch_results:
+                            if isinstance(result, Exception):
+                                logger.error(f"获取维度ID '{dimension_id}' 的页面时发生错误: {str(result)}")
+                                page_errors += 1
+                                continue
+
+                            if str(result.get("code", "")) != "0":
+                                error_msg = f"维度ID '{dimension_id}' 的请求返回错误: {result.get('msg', '未知错误')}"
+                                logger.warning(error_msg)
+                                page_errors += 1
+                                continue
+
+                            # 提取当前页面的维度值并添加到列表
+                            current_page_rows = result.get("data", {}).get("rows", [])
+                            dimension_values.extend(current_page_rows)
+                            additional_values_count += len(current_page_rows)
+
+                    # 记录页面错误情况
+                    if page_errors > 0:
+                        logger.warning(f"维度ID '{dimension_id}' 的 {page_errors}/{len(page_tasks)} 个页面请求失败")
+
+                    logger.info(f"维度ID '{dimension_id}' 的额外页面返回了 {additional_values_count} 条维度值")
+                    logger.info(f"维度ID '{dimension_id}' 总共获取了 {len(dimension_values)} 条维度值")
+
+                    # 添加到结果字典
+                    dimension_values_dict[dimension_id] = dimension_values
+
+                except SemanticApiError as e:
+                    # 记录错误但继续处理其他维度ID
+                    logger.error(f"处理维度ID '{dimension_id}' 时出错: {str(e)}")
+                    error_count += 1
+                    # 不抛出异常，继续处理其他维度ID
+
+            # 处理结果统计
+            successful_dimensions = len(dimension_values_dict)
+            logger.info(f"成功获取了 {successful_dimensions}/{len(dimension_ids)} 个维度的值")
+
+            # 检查是否所有维度ID都处理失败
+            if error_count == len(dimension_ids):
+                raise ApiRequestError(f"所有 {len(dimension_ids)} 个维度ID的值获取都失败了")
+
+            # 检查结果的完整性
+            for dim_id, values in dimension_values_dict.items():
+                if not values:
+                    logger.warning(f"维度ID '{dim_id}' 没有获取到任何维度值")
+                else:
+                    # 验证值的完整性
+                    for idx, value in enumerate(values):
+                        if 'value' not in value or not value['value']:
+                            logger.warning(f"维度ID '{dim_id}' 的第 {idx + 1} 个维度值缺少value字段")
+
+            return dimension_values_dict
+
+        except SemanticApiError as e:
+            # 如果是已经封装好的API异常则直接抛出
+            raise
+        except aiohttp.ClientError as e:
+            # 网络连接错误单独处理
+            error_msg = f"获取维度值过程中发生网络错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiNetworkError(error_msg) from e
+        except Exception as e:
+            # 其他异常封装为ApiRequestError后抛出
+            error_msg = f"获取维度值过程中出错: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
