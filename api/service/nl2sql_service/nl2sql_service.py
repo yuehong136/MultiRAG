@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from api.apps import manager
 from api.db.db_models import get_db
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
+from api.service.nl2sql_service.generate_nl2sql_prompt import generate_nl2sql_prompt
+from api.service.nl2sql_service.llm_sql_generator import LLMSQLGenerator
 from api.service.nl2sql_service.query_intent_analyzer import QueryIntentType, QueryIntentAnalyzer
 from api.service.nl2sql_service.query_rewriter import QueryRewriter
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
@@ -26,6 +28,7 @@ class NL2SQLService:
         self.query_rewriter = QueryRewriter(db, user.id, self.prompt_dir)
         # 初始化查询意图分析器
         self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
+        self.llm_sql_generator = LLMSQLGenerator(db, user.id)
         self.semantic_api_client = SemanticApiClient()
 
     async def rewrite_query(self, query_text: str, llm_name: str) -> List[str]:
@@ -71,6 +74,7 @@ class NL2SQLService:
             dataset_ids=dataset_id_list)
         # 4.3 根据dimensionId对dimensions_by_keyword和dimensions_by_value进行维度去重，获得最终维度列表
         unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
+        dimension_values = await self.semantic_api_client.get_dimension_values_async(dimension_ids=unique_dimensions)
         dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=unique_dimensions)
         # 4.4 根据分词关键字获得指标列表
         metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
@@ -89,8 +93,13 @@ class NL2SQLService:
         domain_ids = self._extract_unique_domain_ids(dataset_details)
         business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words,
                                                                                          domain_ids=domain_ids)
+        semantic_layer = dict(dataset_details=dataset_details, dimensions=dimensions, dimension_values=dimension_values,
+                              metrics=metrics, model_details=model_details,
+                              model_relations=model_relations, business_term_rows=business_term_rows)
+        prompt = generate_nl2sql_prompt(user_question=query_text, query_intents=intents, semantic_layer=semantic_layer)
+        sql = await self.llm_sql_generator.generate_sql(prompt=prompt, llm_name=llm_name)
 
-        return ""
+        return sql
 
     def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> List[str]:
         """
