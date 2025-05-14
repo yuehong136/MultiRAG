@@ -9,7 +9,7 @@ def generate_nl2sql_prompt(
         user_question: str,
         query_intents: List[Dict[str, str]],
         semantic_layer: Dict[str, Any]
-) -> str:
+):
     # 确定模板完整路径
     prompt_dir = os.path.join(os.path.dirname(__file__), "prompt")
 
@@ -35,8 +35,8 @@ def generate_nl2sql_prompt(
     template_data["current_date"] = date.today()
 
     # 使用PromptTemplateUtil填充模板
-    prompt =  PromptTemplateUtil.fill_template(template_content, template_data)
-    return prompt
+    prompt = PromptTemplateUtil.fill_template(template_content, template_data)
+    return prompt, template_data["semantic_layer"]
 
 
 def process_data_models(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -97,6 +97,7 @@ def process_business_datasets(
             dimension_id = dimension.get("dimensionId")
             if dataset_id in dimension.get("dataset_wid"):
                 dimension_output = {}
+                dimension_output["id"] = dimension_id
                 dimension_output["name"] = dimension.get("dimensionName")
                 dimension_output["field"] = dimension.get("dimensionEnName")
                 dimension_output["fromModel"] = dimension.get("modelName")
@@ -110,6 +111,7 @@ def process_business_datasets(
         for metric in metrics:
             if dataset_id in metric.get("datasetWid"):
                 metric_output = {}
+                metric_output["id"] = metric.get("metricId")
                 metric_output["name"] = metric.get("metricName")
                 metric_output["enName"] = metric.get("metricEnName")
                 metric_output["synonyms"] = metric.get("synonyms")

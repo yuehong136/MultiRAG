@@ -1,5 +1,6 @@
+import logging
 from enum import Enum
-from typing import List, Any
+from typing import List, Any, Dict
 
 from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
@@ -11,6 +12,9 @@ from api.service.nl2sql_service.nl2sql_service import NL2SQLService, get_nl2sql_
 from api.service.nl2sql_service.query_intent_analyzer import QueryIntentType
 
 router = APIRouter()
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class StatusEnum(str, Enum):
@@ -253,10 +257,15 @@ class NL2SQLResponse(BaseModel):
         title="原始查询",
         description="提交进行SQL转换的原始查询文本",
     )
-    sql_query: str = Field(
+    sql: str = Field(
         ...,
         title="生成的SQL查询",
         description="从自然语言转换生成的SQL查询语句",
+    )
+    semantic_layer_struct: Dict = Field(
+        ...,
+        title="语义层结构",
+        description="自然语言转SQL生成的语义层结构信息",
     )
 
 
@@ -279,7 +288,7 @@ async def convert_nl_to_sql(
     """将自然语言查询转换为对应的SQL查询语句"""
     try:
         # 调用服务将自然语言转换为SQL
-        sql_query = await service.nl2sql(
+        sql, semantic_layer_struct = await service.nl2sql(
             query_text=body.query_text,
             llm_name=body.llm_name,
             dataset_id_list=body.dataset_id_list
@@ -288,7 +297,8 @@ async def convert_nl_to_sql(
         # 构建响应数据
         response_data = NL2SQLResponse(
             original_query=body.query_text,
-            sql_query=sql_query
+            sql=sql,
+            semantic_layer_struct=semantic_layer_struct
         )
 
         return ResponseSchema(
@@ -302,6 +312,7 @@ async def convert_nl_to_sql(
             message=f"自然语言转SQL失败：提示词模板文件未找到 - {str(e)}"
         )
     except Exception as e:
+        logger.exception("发生异常")
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"自然语言转SQL失败：{str(e)}"

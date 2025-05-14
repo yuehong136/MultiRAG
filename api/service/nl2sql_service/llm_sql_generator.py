@@ -70,7 +70,7 @@ class LLMSQLGenerator:
             gen_conf = {
                 "temperature": 0.3,  # 降低温度以获得更确定的SQL结果
                 "top_p": 0.9,
-                "max_tokens": 2048
+                "max_tokens": 8192
             }
 
             # 调用LLM处理提示词

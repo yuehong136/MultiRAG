@@ -53,7 +53,7 @@ class NL2SQLService:
     async def _semantic_mapping(self, query_text: str, llm_name: str) -> List[str]:
         pass
 
-    async def nl2sql(self, query_text: str, llm_name: str, dataset_id_list: List[str]) -> str:
+    async def nl2sql(self, query_text: str, llm_name: str, dataset_id_list: List[str]):
         """
         使用LLM转换自然语言查询为SQL
         """
@@ -96,10 +96,11 @@ class NL2SQLService:
         semantic_layer = dict(dataset_details=dataset_details, dimensions=dimensions, dimension_values=dimension_values,
                               metrics=metrics, model_details=model_details,
                               model_relations=model_relations, business_term_rows=business_term_rows)
-        prompt = generate_nl2sql_prompt(user_question=query_text, query_intents=intents, semantic_layer=semantic_layer)
+        prompt, semantic_layer_struct = generate_nl2sql_prompt(user_question=query_text, query_intents=intents,
+                                                               semantic_layer=semantic_layer)
         sql = await self.llm_sql_generator.generate_sql(prompt=prompt, llm_name=llm_name)
 
-        return sql
+        return sql, semantic_layer_struct
 
     def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> List[str]:
         """
