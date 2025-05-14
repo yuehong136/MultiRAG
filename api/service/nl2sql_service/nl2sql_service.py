@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 from api.apps import manager
 from api.db.db_models import get_db
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
+from api.service.nl2sql_service.fill_sql_template import fill_sql_template
 from api.service.nl2sql_service.generate_nl2sql_prompt import generate_nl2sql_prompt
 from api.service.nl2sql_service.llm_sql_generator import LLMSQLGenerator
+from api.service.nl2sql_service.llm_sql_templating import LLMSQLTemplating
 from api.service.nl2sql_service.query_intent_analyzer import QueryIntentType, QueryIntentAnalyzer
 from api.service.nl2sql_service.query_rewriter import QueryRewriter
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
@@ -29,6 +31,7 @@ class NL2SQLService:
         # 初始化查询意图分析器
         self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
         self.llm_sql_generator = LLMSQLGenerator(db, user.id)
+        self.llm_sql_templating = LLMSQLTemplating(db, user.id)
         self.semantic_api_client = SemanticApiClient()
 
     async def rewrite_query(self, query_text: str, llm_name: str) -> List[str]:
@@ -181,6 +184,35 @@ class NL2SQLService:
 
         # 将集合转换为列表并返回
         return list(unique_domain_ids)
+
+    async def sql_templating(self, original_question: str, llm_name: str, sql: str,
+                             semantic_layer: Dict[str, Any]):
+        """
+        SQL模板化
+        """
+        # 1. 识别可参数化的内容，返回json
+        sql_template_data = await self.llm_sql_templating.generate_sql_template(original_question=original_question,
+                                                                                sql=sql,
+                                                                                semantic_layer=semantic_layer,
+                                                                                llm_name=llm_name)
+        # 2. 解析json，填充参数点对应的值
+        parameters = sql_template_data["parameters"]
+        for parameter in parameters:
+            if parameter["type"] == "DIMENSION_FILTER":
+                dimension_id = parameter["semantic_info"]["dimension_id"]
+                dimension_values = await self.semantic_api_client.get_dimension_values_async(
+                    dimension_ids=[dimension_id])
+                parameter["possible_values"] = dimension_values[dimension_id]
+
+        return sql_template_data
+
+    async def fill_sql_template(self, templated_sql: str, parameter_definitions: list,
+                                user_selected_values: dict) -> str:
+        """
+        根据用户选择的值填充SQL模板。
+        """
+        sql = fill_sql_template(templated_sql, parameter_definitions, user_selected_values)
+        return sql
 
 
 def get_nl2sql_service(db: Session = Depends(get_db), user=Depends(manager)) -> NL2SQLService:

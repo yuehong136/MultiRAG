@@ -316,7 +316,7 @@ class QueryIntentAnalyzer:
 
             # LLM配置
             gen_conf = {
-                "temperature": 0.2,  # 使用较低的温度以确保更一致的输出
+                "temperature": 0.4,
                 "top_p": 0.9,
                 "max_tokens": 1024
             }

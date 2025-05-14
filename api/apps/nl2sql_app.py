@@ -317,3 +317,223 @@ async def convert_nl_to_sql(
             status=StatusEnum.ERROR,
             message=f"自然语言转SQL失败：{str(e)}"
         )
+
+
+# Add this code to nl2sql_app.py after the existing routes
+
+class SQLTemplatingRequest(BaseModel):
+    """SQL模板化请求的基础模型"""
+    original_question: str = Field(
+        ...,
+        title="原始问题",
+        description="用户提出的原始自然语言问题",
+    )
+    llm_name: str = Field(
+        "gpt-4",
+        title="LLM模型名称",
+        description="用于SQL模板化的LLM模型名称",
+    )
+    sql: str = Field(
+        ...,
+        title="SQL查询",
+        description="需要进行模板化的SQL查询语句",
+    )
+    semantic_layer: Dict[str, Any] = Field(
+        ...,
+        title="语义层结构",
+        description="包含数据集、维度、指标等语义层信息的结构",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "original_question": "查询销售额最高的前10个产品",
+                "llm_name": "gpt-4",
+                "sql": "SELECT product_name, SUM(sales_amount) as total_sales FROM sales GROUP BY product_name ORDER BY total_sales DESC LIMIT 10",
+                "semantic_layer": {
+                    "dataset_details": [],
+                    "dimensions": [],
+                    "metrics": []
+                }
+            }
+        }
+
+
+@router.post("/sql-templating", summary="将SQL查询进行模板化处理")
+async def sql_templating(
+        body: SQLTemplatingRequest = Body(
+            ...,
+            title="SQL模板化请求",
+            description="需要进行模板化的SQL查询信息",
+            example={
+                "original_question": "查询销售额最高的前10个产品",
+                "llm_name": "gpt-4",
+                "sql": "SELECT product_name, SUM(sales_amount) as total_sales FROM sales GROUP BY product_name ORDER BY total_sales DESC LIMIT 10",
+                "semantic_layer": {
+                    "dataset_details": [],
+                    "dimensions": [],
+                    "metrics": []
+                }
+            }
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: NL2SQLService = Depends(get_nl2sql_service)
+):
+    """将SQL查询进行模板化处理，识别可参数化的内容"""
+    try:
+        # 调用服务进行SQL模板化
+        sql_template_data = await service.sql_templating(
+            original_question=body.original_question,
+            llm_name=body.llm_name,
+            sql=body.sql,
+            semantic_layer=body.semantic_layer
+        )
+
+        # 构建响应数据
+        response_data = {}
+        response_data["original_question"] = body.original_question
+        response_data["templated_sql"] = sql_template_data["sql_template"]
+        response_data["parameters"] = sql_template_data["parameters"]
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="SQL模板化处理成功",
+            data=response_data
+        )
+    except FileNotFoundError as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"SQL模板化处理失败：提示词模板文件未找到 - {str(e)}"
+        )
+    except Exception as e:
+        logger.exception("发生异常")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"SQL模板化处理失败：{str(e)}"
+        )
+
+
+# Add this code to nl2sql_app.py after the existing routes
+
+class FillSQLTemplateRequest(BaseModel):
+    """SQL模板填充请求的基础模型"""
+    templated_sql: str = Field(
+        ...,
+        title="SQL模板",
+        description="需要填充的SQL模板字符串",
+    )
+    parameter_definitions: List[Dict[str, Any]] = Field(
+        ...,
+        title="参数定义列表",
+        description="SQL模板中参数的定义列表",
+    )
+    user_selected_values: Dict[str, Any] = Field(
+        ...,
+        title="用户选择的值",
+        description="用户为SQL模板参数选择的值映射",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "templated_sql": "SELECT product_name, SUM(sales_amount) as total_sales FROM sales WHERE region = {{region}} GROUP BY product_name ORDER BY total_sales DESC LIMIT {{limit}}",
+                "parameter_definitions": [
+                    {
+                        "name": "region",
+                        "type": "DIMENSION_FILTER",
+                        "semantic_info": {
+                            "dimension_id": "dim001"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "type": "NUMBER",
+                        "default_value": 10
+                    }
+                ],
+                "user_selected_values": {
+                    "region": "北京",
+                    "limit": 5
+                }
+            }
+        }
+
+
+class FillSQLTemplateResponse(BaseModel):
+    """SQL模板填充响应模型"""
+    templated_sql: str = Field(
+        ...,
+        title="SQL模板",
+        description="原始SQL模板字符串",
+    )
+    filled_sql: str = Field(
+        ...,
+        title="填充后的SQL",
+        description="参数值填充后的SQL查询语句",
+    )
+
+
+@router.post("/fill-sql-template", response_model=ResponseSchema, summary="填充SQL模板参数")
+async def fill_sql_template(
+        body: FillSQLTemplateRequest = Body(
+            ...,
+            title="SQL模板填充请求",
+            description="需要填充参数的SQL模板信息",
+            example={
+                "templated_sql": "SELECT product_name, SUM(sales_amount) as total_sales FROM sales WHERE region = {{region}} GROUP BY product_name ORDER BY total_sales DESC LIMIT {{limit}}",
+                "parameter_definitions": [
+                    {
+                        "name": "region",
+                        "type": "DIMENSION_FILTER",
+                        "semantic_info": {
+                            "dimension_id": "dim001"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "type": "NUMBER",
+                        "default_value": 10
+                    }
+                ],
+                "user_selected_values": {
+                    "region": "北京",
+                    "limit": 5
+                }
+            }
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: NL2SQLService = Depends(get_nl2sql_service)
+):
+    """根据用户选择的参数值填充SQL模板"""
+    try:
+        # 调用服务填充SQL模板
+        filled_sql = await service.fill_sql_template(
+            templated_sql=body.templated_sql,
+            parameter_definitions=body.parameter_definitions,
+            user_selected_values=body.user_selected_values
+        )
+
+        # 构建响应数据
+        response_data = FillSQLTemplateResponse(
+            templated_sql=body.templated_sql,
+            filled_sql=filled_sql
+        )
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="SQL模板填充成功",
+            data=response_data
+        )
+    except KeyError as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"SQL模板填充失败：缺少必要的参数 - {str(e)}"
+        )
+    except Exception as e:
+        logger.exception("发生异常")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"SQL模板填充失败：{str(e)}"
+        )
