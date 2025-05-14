@@ -1060,7 +1060,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             logging.info(f"检索使用向量维度: {vector_dim}")
 
         # 当调用retrieval函数时，传递维度信息
-        ranks = settings.retrievaler(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], req["page"],
+        ranks = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], req["page"],
                                req["size"], req["similarity_threshold"], req["vector_similarity_weight"],
                                req["top_k"], req["doc_ids"], rerank_mdl=rerank_mdl, highlight=req.get("highlight"),
                                rank_feature=labels)
