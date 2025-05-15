@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
+from api.service.nl2sql_service.EChartsGenerator import EChartsGenerator
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.fill_sql_template import fill_sql_template
 from api.service.nl2sql_service.generate_nl2sql_prompt import generate_nl2sql_prompt
@@ -32,6 +33,7 @@ class NL2SQLService:
         self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
         self.llm_sql_generator = LLMSQLGenerator(db, user.id)
         self.llm_sql_templating = LLMSQLTemplating(db, user.id)
+        self.echarts_generator = EChartsGenerator(db, user.id)
         self.semantic_api_client = SemanticApiClient()
 
     async def rewrite_query(self, query_text: str, llm_name: str) -> List[str]:
@@ -213,6 +215,15 @@ class NL2SQLService:
         """
         sql = fill_sql_template(templated_sql, parameter_definitions, user_selected_values)
         return sql
+
+    async def generate_echarts(self, user_question: str, sql: str, column_and_type: str, sample_data: str,
+                               llm_name: str):
+        """
+        生成 ECharts配置的 JavaScript 代码
+        """
+        js_code = await self.echarts_generator.generate_echarts_config(user_question, sql, column_and_type, sample_data,
+                                                                       llm_name=llm_name)
+        return js_code
 
 
 def get_nl2sql_service(db: Session = Depends(get_db), user=Depends(manager)) -> NL2SQLService:

@@ -537,3 +537,94 @@ async def fill_sql_template(
             status=StatusEnum.ERROR,
             message=f"SQL模板填充失败：{str(e)}"
         )
+
+
+# Add this code to nl2sql_app.py after the existing routes
+
+class GenerateEChartsRequest(BaseModel):
+    """ECharts生成请求的基础模型"""
+    user_question: str = Field(
+        ...,
+        title="用户问题",
+        description="用户提出的原始问题，用于理解需要生成的图表类型",
+    )
+    sql: str = Field(
+        ...,
+        title="SQL查询",
+        description="执行的SQL查询语句，图表将基于该查询的结果生成",
+    )
+    column_and_type: str = Field(
+        ...,
+        title="列名与类型",
+        description="SQL查询结果的列名及其数据类型描述",
+    )
+    sample_data: str = Field(
+        ...,
+        title="样本数据",
+        description="SQL查询结果的样本数据，用于生成图表",
+    )
+    llm_name: str = Field(
+        "gpt-4",
+        title="LLM模型名称",
+        description="用于生成ECharts配置的LLM模型名称",
+    )
+
+
+class GenerateEChartsResponse(BaseModel):
+    """ECharts生成响应模型"""
+    user_question: str = Field(
+        ...,
+        title="用户问题",
+        description="生成图表对应的原始用户问题",
+    )
+    echarts_code: str = Field(
+        ...,
+        title="ECharts代码",
+        description="生成的ECharts配置JavaScript代码",
+    )
+
+
+@router.post("/generate-echarts", response_model=ResponseSchema, summary="生成ECharts配置代码")
+async def generate_echarts(
+        body: GenerateEChartsRequest = Body(
+            ...,
+            title="ECharts生成请求",
+            description="生成ECharts配置的请求信息"
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: NL2SQLService = Depends(get_nl2sql_service)
+):
+    """根据用户问题、SQL查询和查询结果生成ECharts配置代码"""
+    try:
+        # 调用服务生成ECharts配置
+        echarts_code = await service.generate_echarts(
+            user_question=body.user_question,
+            sql=body.sql,
+            column_and_type=body.column_and_type,
+            sample_data=body.sample_data,
+            llm_name=body.llm_name
+        )
+
+        # 构建响应数据
+        response_data = GenerateEChartsResponse(
+            user_question=body.user_question,
+            echarts_code=echarts_code
+        )
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="ECharts配置生成成功",
+            data=response_data
+        )
+    except FileNotFoundError as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"ECharts配置生成失败：提示词模板文件未找到 - {str(e)}"
+        )
+    except Exception as e:
+        logger.exception("发生异常")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"ECharts配置生成失败：{str(e)}"
+        )
