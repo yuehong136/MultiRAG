@@ -18,6 +18,8 @@ RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/root 
         dpkg -i /root/libssl1.1_1.1.1f-1ubuntu2_arm64.deb; \
     fi
 
+#禁用交互式模式
+ENV DEBIAN_FRONTEND=noninteractive
 # 设置apt镜像并安装依赖
 RUN apt update && apt -y install ca-certificates && \
     mv /etc/apt/sources.list /etc/apt/sources.list.bak && \
@@ -33,20 +35,31 @@ RUN apt update && apt -y install ca-certificates && \
     lsb-release curl gpg libgl1-mesa-glx libdatrie-dev default-jdk vim net-tools less gcc \
     build-essential libglib2.0-0 libglx-mesa0 pkg-config libicu-dev libatk-bridge2.0-0 \
     libpython3-dev libjemalloc-dev nginx \
-    libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus  python3-pip pipx && \
+    libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus  python3-pip pipx tcl-dev pkg-config && \
     # 安装uv
     pip3 config set global.index-url https://mirrors.aliyun.com/pypi/simple && \
     pip3 config set global.trusted-host mirrors.aliyun.com; \
     pipx install uv -i https://mirrors.aliyun.com/pypi/simple && \
-    # 添加Redis的GPG密钥和源
-    curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
-    chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list && \
     # 安装Redis
-    apt update && apt install -y --no-install-recommends redis && \
+    wget https://download.redis.io/releases/redis-7.4.3.tar.gz && \
+    tar -zxvf redis-7.4.3.tar.gz && \
+    cd redis-7.4.3 && \
+    make && \
+    make install PREFIX=/usr/local/redis && \
+    mkdir -p /etc/redis  && \
+    cp redis.conf /etc/redis/redis.conf && \
+    cd .. && \
+    rm -rf redis-7.4.3 redis-7.4.3.tar.gz && \
+    cd /usr/local/redis/bin && \
+    ln -s /usr/local/redis/bin/redis-server /usr/local/bin/redis-server && \
+    ln -s /usr/local/redis/bin/redis-cli /usr/local/bin/redis-cli && \
+    ln -s /usr/local/redis/bin/redis-benchmark /usr/local/bin/redis-benchmark && \
+    sed -i 's/daemonize no/daemonize yes/' /etc/redis/redis.conf && \
+    sed -i 's/# supervised no/supervised systemd/' /etc/redis/redis.conf && \
+    echo "pidfile /var/run/redis.pid" >> /etc/redis/redis.conf && \
     # 清理apt缓存和安装包
     apt clean && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/keyrings/redis-archive-keyring.gpg
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
 
 ENV PYTHONDONTWRITEBYTECODE=1 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1

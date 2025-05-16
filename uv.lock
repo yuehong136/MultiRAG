@@ -432,6 +432,15 @@ wheels = [
 ]
 
 [[package]]
+name = "backoff"
+version = "2.2.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/47/d7/5bbeb12c44d7c4f2fb5b56abce497eb5ed9f34d85701de869acedd602619/backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/df/73/b6e24bd22e6720ca8ee9a85a0c4a2971af8497d8f3193fa05390cbd46e09/backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8" },
+]
+
+[[package]]
 name = "bce-python-sdk"
 version = "0.9.29"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2518,6 +2527,25 @@ wheels = [
 ]
 
 [[package]]
+name = "langfuse"
+version = "2.60.5"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "backoff" },
+    { name = "httpx" },
+    { name = "idna" },
+    { name = "packaging" },
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/d1/19/475034a497a8a6e1156f62b3121522b753a1dad92a7187462402a9238467/langfuse-2.60.5.tar.gz", hash = "sha256:a33ecddc98cf6d12289372e63071b77b72230e7bc8260ee349f1465d53bf425b" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/e9/04/8d69112a6b24431bfdb257a2a394f0ab036e5be5dcf4cb3b15db43b367f6/langfuse-2.60.5-py3-none-any.whl", hash = "sha256:fd27d52017f36d6fa5ca652615213a2535dc93dd88c3375eeb811af26384d285" },
+]
+
+[[package]]
 name = "langsmith"
 version = "0.3.18"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2978,6 +3006,7 @@ dependencies = [
     { name = "langchain-community" },
     { name = "langchain-openai" },
     { name = "langchainhub" },
+    { name = "langfuse" },
     { name = "markdown" },
     { name = "markdown-to-json" },
     { name = "mini-racer" },
@@ -3125,6 +3154,7 @@ requires-dist = [
     { name = "langchain-community", specifier = ">=0.2.4" },
     { name = "langchain-openai", specifier = ">=0.1.8" },
     { name = "langchainhub", specifier = ">=0.1.20" },
+    { name = "langfuse", specifier = ">=2.60.0" },
     { name = "markdown", specifier = "==3.6" },
     { name = "markdown-to-json", specifier = "==2.1.1" },
     { name = "markdown-to-json", specifier = ">=2.1.1" },
