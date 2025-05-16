@@ -1,3 +1,5 @@
+import asyncio
+import json
 import logging
 from enum import Enum
 from typing import List, Any, Dict
@@ -5,9 +7,13 @@ from typing import List, Any, Dict
 from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from starlette.responses import StreamingResponse
 
 from api.db.db_models import get_db
 from api.apps import manager
+
+from api.service.nl2sql_service.event.event_handlers import create_sse_response
+from api.service.nl2sql_service.event.event_utils import send_event
 from api.service.nl2sql_service.nl2sql_service import NL2SQLService, get_nl2sql_service
 from api.service.nl2sql_service.query_intent_analyzer import QueryIntentType
 
@@ -628,3 +634,76 @@ async def generate_echarts(
             status=StatusEnum.ERROR,
             message=f"ECharts配置生成失败：{str(e)}"
         )
+
+
+class WholeProcessRequest(BaseModel):
+    """全流程处理请求的基础模型"""
+    user_question: str = Field(
+        ...,
+        title="用户问题",
+        description="用户提出的自然语言问题",
+    )
+    request_id: str = Field(
+        ...,
+        title="请求ID",
+        description="请求ID",
+    )
+
+
+@router.post("/whole-process", response_model=ResponseSchema, summary="执行从自然语言到查询结果的全流程处理")
+async def execute_whole_process(
+        body: WholeProcessRequest = Body(
+            ...,
+            title="全流程处理请求",
+            description="需要执行全流程处理的自然语言问题"
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: NL2SQLService = Depends(get_nl2sql_service)
+):
+    """执行从自然语言到查询结果的全流程处理，包括自然语言转SQL、执行查询等步骤"""
+    try:
+        await service.whole_process(user_question=body.user_question, request_id=body.request_id)
+
+        # 构建响应数据
+        response_data = {}
+
+        await send_event(body.request_id, {"message": "全流程处理完成"}, "completed")
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="处理成功",
+            data=response_data
+        )
+    except FileNotFoundError as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"全流程处理失败：提示词模板文件未找到 - {str(e)}"
+        )
+    except Exception as e:
+        logger.exception("发生异常")
+        await send_event(body.request_id, {"message": "处理失败"}, "error")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"全流程处理失败：{str(e)}"
+        )
+
+
+from fastapi import APIRouter, Request, Response, HTTPException, Depends
+from fastapi.responses import StreamingResponse
+from typing import AsyncGenerator, Optional
+
+
+@router.get("/events/{event_id}")
+async def subscribe_to_event(request: Request, event_id: str):
+    """
+    订阅指定事件ID的SSE端点
+
+    Args:
+        request: FastAPI请求对象
+        event_id: 事件ID
+
+    Returns:
+        StreamingResponse: SSE流响应
+    """
+    return create_sse_response(request, event_id)

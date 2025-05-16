@@ -64,8 +64,8 @@ class EChartsGenerator:
         # 如果提取失败，返回None和False
         return None, False
 
-    async def generate_echarts_config(self, user_query: str, sql_query: str, column_and_type: str,
-                                      sample_data: str, llm_name: str) -> Optional[str]:
+    async def generate_echarts_config(self, user_query: str, sql_query: str, column_and_type,
+                                      sample_data, llm_name: str) -> Optional[str]:
         """
         使用LLM生成ECharts配置代码。
 
