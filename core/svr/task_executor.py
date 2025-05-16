@@ -192,7 +192,7 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
             d["progress"] = prog
 
         TaskService.update_progress(db, task_id, d)
-
+        db.commit()
         db.close()
         if cancel:
             raise TaskCanceledException(msg)
