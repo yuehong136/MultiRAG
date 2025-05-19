@@ -16,7 +16,7 @@ from api.service.nl2sql_service.generate_nl2sql_prompt import generate_nl2sql_pr
 from api.service.nl2sql_service.llm_sql_generator import LLMSQLGenerator
 from api.service.nl2sql_service.llm_sql_templating import LLMSQLTemplating
 from api.service.nl2sql_service.pg_query_formatter import execute_sql_and_format_result
-from api.service.nl2sql_service.query_intent_analyzer import QueryIntentType, QueryIntentAnalyzer
+from api.service.nl2sql_service.query_intent_analyzer import QueryIntentAnalyzer
 from api.service.nl2sql_service.query_rewriter import QueryRewriter
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 
@@ -219,7 +219,7 @@ class NL2SQLService:
         sql = fill_sql_template(templated_sql, parameter_definitions, user_selected_values)
         return sql
 
-    async def generate_echarts(self, user_question: str, sql: str, column_and_type: str, sample_data: str,
+    async def generate_echarts(self, user_question: str, sql: str, column_and_type, sample_data,
                                llm_name: str):
         """
         生成 ECharts配置的 JavaScript 代码
@@ -315,9 +315,8 @@ class NL2SQLService:
         await send_event(request_id, {"message": "数据查询结果", "data": result}, "data")
 
         column_and_type = result['column_and_type']
-        columns = result['sql_result']['columns']
         data = result['sql_result']['data']
-        sample_data = {'columns': columns, 'data': data[:5]}
+        sample_data = data[:5]
 
         # --- 开始独立的并发流程 ---
         # 发送一个总的开始事件，表明后续步骤将并行启动
@@ -379,6 +378,15 @@ class NL2SQLService:
             logger.error(f"Error in ECharts generation flow: {e}", exc_info=True)
             await send_event(request_id, {"message": f"ECharts配置代码生成失败: {e}"}, "error")
             # 或者根据需要抛出异常
+
+    async def re_query(self, templated_sql: str, parameter_definitions: list,
+                       user_selected_values: dict):
+        """
+        根据用户选择的值填充SQL模板。
+        """
+        sql = fill_sql_template(templated_sql, parameter_definitions, user_selected_values)
+        result = execute_sql_and_format_result(sql=sql, db_config={})
+        return result
 
 
 def get_nl2sql_service(db: Session = Depends(get_db), user=Depends(manager)) -> NL2SQLService:

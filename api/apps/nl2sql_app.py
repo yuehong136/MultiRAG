@@ -1,5 +1,3 @@
-import asyncio
-import json
 import logging
 from enum import Enum
 from typing import List, Any, Dict
@@ -7,7 +5,6 @@ from typing import List, Any, Dict
 from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from starlette.responses import StreamingResponse
 
 from api.db.db_models import get_db
 from api.apps import manager
@@ -15,7 +12,6 @@ from api.apps import manager
 from api.service.nl2sql_service.event.event_handlers import create_sse_response
 from api.service.nl2sql_service.event.event_utils import send_event
 from api.service.nl2sql_service.nl2sql_service import NL2SQLService, get_nl2sql_service
-from api.service.nl2sql_service.query_intent_analyzer import QueryIntentType
 
 router = APIRouter()
 
@@ -131,100 +127,6 @@ async def rewrite_natural_language_query(
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"查询重写失败：{str(e)}"
-        )
-
-
-class QueryIntentRequest(BaseModel):
-    """查询意图分析请求的基础模型"""
-    query_text: str = Field(
-        ...,
-        title="查询文本",
-        description="需要分析意图的原始自然语言查询文本",
-    )
-    llm_name: str = Field(
-        "gpt-4",
-        title="LLM模型名称",
-        description="用于分析意图的LLM模型名称",
-    )
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "query_text": "查询销售额最高的前10个产品",
-                "llm_name": "gpt-4"
-            }
-        }
-
-
-class QueryIntentResponse(BaseModel):
-    """查询意图分析响应模型"""
-    original_query: str = Field(
-        ...,
-        title="原始查询",
-        description="提交进行意图分析的原始查询文本",
-    )
-    intents: List[str] = Field(
-        ...,
-        title="查询意图列表",
-        description="LLM识别的查询意图类型列表",
-    )
-    primary_intent: str = Field(
-        ...,
-        title="主要意图",
-        description="识别出的主要查询意图",
-    )
-
-
-@router.post("/analyze-intent", response_model=ResponseSchema, summary="分析自然语言查询的意图")
-async def analyze_query_intent(
-        body: QueryIntentRequest = Body(
-            ...,
-            title="查询意图分析请求",
-            description="需要分析意图的自然语言查询信息",
-            example={
-                "query_text": "查询销售额最高的前10个产品",
-                "llm_name": "gpt-4"
-            }
-        ),
-        db: Session = Depends(get_db),
-        user=Depends(manager),
-        service: NL2SQLService = Depends(get_nl2sql_service)
-):
-    """分析自然语言查询的意图类型"""
-    try:
-        # 调用服务分析查询意图
-        intent_types = await service.analyze_query_intent(
-            query_text=body.query_text,
-            llm_name=body.llm_name
-        )
-
-        # 将枚举类型转换为字符串列表
-        intent_strings = [intent.value for intent in intent_types]
-
-        # 确定主要意图（这里简单地取第一个意图作为主要意图）
-        primary_intent = intent_strings[0] if intent_strings else QueryIntentType.AMBIGUOUS.value
-
-        # 构建响应数据
-        response_data = QueryIntentResponse(
-            original_query=body.query_text,
-            intents=intent_strings,
-            primary_intent=primary_intent
-        )
-
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="查询意图分析成功",
-            data=response_data
-        )
-    except FileNotFoundError as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"查询意图分析失败：提示词模板文件未找到 - {str(e)}"
-        )
-    except Exception as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"查询意图分析失败：{str(e)}"
         )
 
 
@@ -350,37 +252,13 @@ class SQLTemplatingRequest(BaseModel):
         description="包含数据集、维度、指标等语义层信息的结构",
     )
 
-    class Config:
-        schema_extra = {
-            "example": {
-                "original_question": "查询销售额最高的前10个产品",
-                "llm_name": "gpt-4",
-                "sql": "SELECT product_name, SUM(sales_amount) as total_sales FROM sales GROUP BY product_name ORDER BY total_sales DESC LIMIT 10",
-                "semantic_layer": {
-                    "dataset_details": [],
-                    "dimensions": [],
-                    "metrics": []
-                }
-            }
-        }
-
 
 @router.post("/sql-templating", summary="将SQL查询进行模板化处理")
 async def sql_templating(
         body: SQLTemplatingRequest = Body(
             ...,
             title="SQL模板化请求",
-            description="需要进行模板化的SQL查询信息",
-            example={
-                "original_question": "查询销售额最高的前10个产品",
-                "llm_name": "gpt-4",
-                "sql": "SELECT product_name, SUM(sales_amount) as total_sales FROM sales GROUP BY product_name ORDER BY total_sales DESC LIMIT 10",
-                "semantic_layer": {
-                    "dataset_details": [],
-                    "dimensions": [],
-                    "metrics": []
-                }
-            }
+            description="需要进行模板化的SQL查询信息"
         ),
         db: Session = Depends(get_db),
         user=Depends(manager),
@@ -440,31 +318,6 @@ class FillSQLTemplateRequest(BaseModel):
         description="用户为SQL模板参数选择的值映射",
     )
 
-    class Config:
-        schema_extra = {
-            "example": {
-                "templated_sql": "SELECT product_name, SUM(sales_amount) as total_sales FROM sales WHERE region = {{region}} GROUP BY product_name ORDER BY total_sales DESC LIMIT {{limit}}",
-                "parameter_definitions": [
-                    {
-                        "name": "region",
-                        "type": "DIMENSION_FILTER",
-                        "semantic_info": {
-                            "dimension_id": "dim001"
-                        }
-                    },
-                    {
-                        "name": "limit",
-                        "type": "NUMBER",
-                        "default_value": 10
-                    }
-                ],
-                "user_selected_values": {
-                    "region": "北京",
-                    "limit": 5
-                }
-            }
-        }
-
 
 class FillSQLTemplateResponse(BaseModel):
     """SQL模板填充响应模型"""
@@ -485,28 +338,7 @@ async def fill_sql_template(
         body: FillSQLTemplateRequest = Body(
             ...,
             title="SQL模板填充请求",
-            description="需要填充参数的SQL模板信息",
-            example={
-                "templated_sql": "SELECT product_name, SUM(sales_amount) as total_sales FROM sales WHERE region = {{region}} GROUP BY product_name ORDER BY total_sales DESC LIMIT {{limit}}",
-                "parameter_definitions": [
-                    {
-                        "name": "region",
-                        "type": "DIMENSION_FILTER",
-                        "semantic_info": {
-                            "dimension_id": "dim001"
-                        }
-                    },
-                    {
-                        "name": "limit",
-                        "type": "NUMBER",
-                        "default_value": 10
-                    }
-                ],
-                "user_selected_values": {
-                    "region": "北京",
-                    "limit": 5
-                }
-            }
+            description="需要填充参数的SQL模板信息"
         ),
         db: Session = Depends(get_db),
         user=Depends(manager),
@@ -559,12 +391,12 @@ class GenerateEChartsRequest(BaseModel):
         title="SQL查询",
         description="执行的SQL查询语句，图表将基于该查询的结果生成",
     )
-    column_and_type: str = Field(
+    column_and_type: List = Field(
         ...,
         title="列名与类型",
         description="SQL查询结果的列名及其数据类型描述",
     )
-    sample_data: str = Field(
+    sample_data: List = Field(
         ...,
         title="样本数据",
         description="SQL查询结果的样本数据，用于生成图表",
@@ -689,9 +521,8 @@ async def execute_whole_process(
         )
 
 
-from fastapi import APIRouter, Request, Response, HTTPException, Depends
+from fastapi import Request, Depends
 from fastapi.responses import StreamingResponse
-from typing import AsyncGenerator, Optional
 
 
 @router.get("/events/{event_id}")
@@ -707,3 +538,87 @@ async def subscribe_to_event(request: Request, event_id: str):
         StreamingResponse: SSE流响应
     """
     return create_sse_response(request, event_id)
+
+
+import numpy as np
+import json
+
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NumpyEncoder, self).default(obj)
+
+
+class ReQueryRequest(BaseModel):
+    """SQL重新查询请求的基础模型"""
+    templated_sql: str = Field(
+        ...,
+        title="SQL模板",
+        description="需要填充的SQL模板字符串",
+    )
+    parameter_definitions: List[Dict[str, Any]] = Field(
+        ...,
+        title="参数定义列表",
+        description="SQL模板中参数的定义列表",
+    )
+    user_selected_values: Dict[str, Any] = Field(
+        ...,
+        title="用户选择的值",
+        description="用户为SQL模板参数选择的值映射",
+    )
+
+
+@router.post("/re-query", response_model=ResponseSchema, summary="使用填充后的SQL模板重新查询")
+async def re_query(
+        body: ReQueryRequest = Body(
+            ...,
+            title="SQL重新查询请求",
+            description="使用填充后的SQL模板重新查询的请求信息"
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: NL2SQLService = Depends(get_nl2sql_service)
+):
+    """根据用户选择的参数值填充SQL模板并执行查询"""
+    try:
+        # 调用服务填充SQL模板并执行查询
+        result = await service.re_query(
+            templated_sql=body.templated_sql,
+            parameter_definitions=body.parameter_definitions,
+            user_selected_values=body.user_selected_values
+        )
+
+        # 处理结果中的NumPy类型
+        if 'sql_result' in result and 'data' in result['sql_result']:
+            # 将NumPy类型转换为Python原生类型
+            for item in result['sql_result']['data']:
+                for key, value in item.items():
+                    if isinstance(value, np.integer):
+                        item[key] = int(value)
+                    elif isinstance(value, np.floating):
+                        item[key] = float(value)
+                    elif isinstance(value, np.ndarray):
+                        item[key] = value.tolist()
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="SQL重新查询成功",
+            data=result
+        )
+    except KeyError as e:
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"SQL重新查询失败：缺少必要的参数 - {str(e)}"
+        )
+    except Exception as e:
+        logger.exception("发生异常")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"SQL重新查询失败：{str(e)}"
+        )
