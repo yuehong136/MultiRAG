@@ -28,6 +28,23 @@ class LLMSQLGenerator:
         self.db = db
         self.user_id = user_id
 
+    def _clean_sql(self, sql: str) -> str:
+        """
+        清理SQL查询，移除分号后的所有内容。
+
+        参数:
+            sql: 原始SQL查询字符串
+
+        返回:
+            清理后的SQL查询字符串
+        """
+        # 查找第一个分号的位置
+        semicolon_pos = sql.find(';')
+        if semicolon_pos > -1:
+            # 如果分号后有内容，只保留分号前的部分和分号
+            return sql[:semicolon_pos + 1]
+        return sql
+
     def _extract_sql_from_response(self, response: str) -> Tuple[Optional[str], bool]:
         """
         从LLM响应中提取SQL查询。
@@ -43,7 +60,9 @@ class LLMSQLGenerator:
 
         if sql_match:
             sql_str = sql_match.group(1).strip()
-            return sql_str, True
+            # 清理SQL，移除分号后的注释
+            cleaned_sql = self._clean_sql(sql_str)
+            return cleaned_sql, True
         else:
             logger.warning("Failed to extract SQL from LLM response")
             return response, False
