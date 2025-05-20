@@ -1,7 +1,8 @@
 import logging
 import json
+import math
 import re
-import copy
+from collections import defaultdict
 
 from core.nlp import rag_tokenizer, term_weight, synonym
 from core.utils.doc_store_conn import MatchTextExpr
@@ -200,9 +201,9 @@ class MilvusQueryer:
             d = {}
             if isinstance(tks, str):
                 tks = tks.split()
-            for t, c in self.tw.weights(tks, preprocess=False):
-                if t not in d:
-                    d[t] = 0
+            d = defaultdict(int)
+            wts = self.tw.weights(tks, preprocess=False)
+            for i, (t, c) in enumerate(wts):
                 d[t] += c
             return d
 
@@ -218,11 +219,11 @@ class MilvusQueryer:
         s = 1e-9
         for k, v in qtwt.items():
             if k in dtwt:
-                s += v  # * dtwt[k]
+                s += v * dtwt[k]
         q = 1e-9
         for k, v in qtwt.items():
-            q += v
-        return s / q
+            q += v * v
+        return math.sqrt(3. * (s / q / math.log10( len(dtwt.keys()) + 512 )))
 
     def paragraph(self, content_tks: str, keywords=None, keywords_topn=30):
         if keywords is None:

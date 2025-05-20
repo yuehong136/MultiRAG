@@ -12,11 +12,12 @@ import logging
 import os
 import re
 import time
+import uuid
 from uuid import uuid4
 from datetime import datetime
-from pymilvus import MilvusClient
+from pymilvus import MilvusClient, Function
 from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
-from pymilvus.client.types import ExceptionsMessage, LoadState
+from pymilvus.client.types import ExceptionsMessage, LoadState, FunctionType
 from pymilvus.client.utils import is_vector_type, get_params
 from pymilvus.exceptions import (
     DataTypeNotMatchException,
@@ -986,6 +987,8 @@ class MilvusConnection(DocStoreConnection):
     def getFields(self, res, fields: list[str]) -> dict[str, dict]:
         """获取指定字段的值，兼容不同版本的Milvus"""
         result = {}
+        # 初始化distance为空列表
+        result["distance"] = []
 
         # 获取结果列表
         if isinstance(res, tuple):
@@ -1067,6 +1070,8 @@ class MilvusConnection(DocStoreConnection):
             # 添加到结果字典，使用主键作为键
             if row_dict:
                 result[doc_id] = row_dict
+                if "distance" in item:
+                    result["distance"].append(item["distance"])
 
         return result
 
@@ -1655,8 +1660,8 @@ class MilvusConnection(DocStoreConnection):
 
     def hybrid_search(
             self,
-            collection_name: str,
-            reqs: list,  # List[AnnSearchRequest]
+            collection_name: str | list[str],
+            reqs: list,  # list[AnnSearchRequest]
             ranker,  # BaseRanker
             limit: int = 10,
             output_fields: list[str] | None = None,
@@ -1664,46 +1669,103 @@ class MilvusConnection(DocStoreConnection):
             partition_names: list[str] | None = None,
             **kwargs,
     ) -> list[list[dict]]:
-        """执行多向量混合搜索并进行重排序。
+        # 1. 标准成列表
+        collections = [collection_name] if isinstance(collection_name, str) else collection_name
 
-        Args:
-            collection_name: 集合名称
-            reqs: 向量搜索请求列表
-            ranker: 用于重排结果的排序器
-            limit: 返回结果的最大数量
-            output_fields: 要返回的字段列表
-            timeout: 超时时间
-            partition_names: 要搜索的分区名称列表
-            **kwargs: 额外参数
-
-        Returns:
-            list[list[dict]]: 搜索结果的嵌套列表
-        """
         conn = self._get_connection()
-        try:
-            res = conn.hybrid_search(
-                collection_name,
-                reqs,
-                ranker,
-                limit=limit,
-                partition_names=partition_names,
-                output_fields=output_fields,
-                timeout=timeout,
-                **kwargs,
-            )
-        except Exception as ex:
-            logger.error(f"混合搜索集合失败: {collection_name}")
-            raise ex from ex
+        all_hits = []
+        costs = []
 
-        ret = []
-        for hits in res:
-            ret.append([hit.to_dict() for hit in hits])
+        # 2. 针对每个 collection 一次性跑所有 reqs
+        for coll in collections:
+            try:
+                res = conn.hybrid_search(
+                    coll,
+                    reqs,
+                    ranker,
+                    limit=limit,
+                    partition_names=partition_names,
+                    output_fields=output_fields,
+                    timeout=timeout,
+                    **kwargs,
+                )
+            except Exception as ex:
+                logger.error(f"混合搜索集合失败: {coll}", exc_info=True)
+                continue
 
-        # 支持官方版本返回额外信息的特性
-        from pymilvus.client.types import construct_cost_extra
-        if hasattr(res, "cost"):
-            return type("ExtraList", (list,), {"extra": construct_cost_extra(res.cost)})(ret)
-        return ret
+            # 扁平化：res 是 SearchResult，可迭代出每个 req 对应的 Hits 列表
+            for hits in res:
+                all_hits.extend(hits)
+
+            # 收集 cost
+            if hasattr(res, "cost"):
+                costs.append(res.cost)
+
+        # 3. 全局按 distance 降序（distance 越大越靠前）排序，取前 limit 【因为目前用的COSINE作为索引 ｜ 对于余弦相似度（COSINE），距离值越大表示相似度越高。余弦相似度的值范围在[-1, 1]之间1】
+        all_hits.sort(key=lambda h: h.distance, reverse=True)
+        top_hits = all_hits[:limit]
+        result = [h.to_dict() for h in top_hits]
+
+        # 4. 如果有 cost，就把它们打包到 result 的 .extra 属性
+        if costs:
+            from pymilvus.client.types import construct_cost_extra
+            extras = [construct_cost_extra(c) for c in costs]
+            extra_val = extras[0] if len(extras) == 1 else extras
+            return type("ExtraList", (list,), {"extra": extra_val})(result)
+
+        return result
+
+    # def hybrid_search(
+    #         self,
+    #         collection_name: str | list,
+    #         reqs: list,  # List[AnnSearchRequest]
+    #         ranker,  # BaseRanker
+    #         limit: int = 10,
+    #         output_fields: list[str] | None = None,
+    #         timeout: float | None = None,
+    #         partition_names: list[str] | None = None,
+    #         **kwargs,
+    # ) -> list[list[dict]]:
+    #     """执行多向量混合搜索并进行重排序。
+    #
+    #     Args:
+    #         collection_name: 集合名称
+    #         reqs: 向量搜索请求列表
+    #         ranker: 用于重排结果的排序器
+    #         limit: 返回结果的最大数量
+    #         output_fields: 要返回的字段列表
+    #         timeout: 超时时间
+    #         partition_names: 要搜索的分区名称列表
+    #         **kwargs: 额外参数
+    #
+    #     Returns:
+    #         list[list[dict]]: 搜索结果的嵌套列表
+    #     """
+    #     conn = self._get_connection()
+    #     try:
+    #         res = conn.hybrid_search(
+    #             collection_name[0],
+    #             reqs,
+    #             ranker,
+    #             limit=limit,
+    #             partition_names=partition_names,
+    #             output_fields=output_fields,
+    #             timeout=timeout,
+    #             **kwargs,
+    #         )
+    #     except Exception as ex:
+    #         logger.error(f"混合搜索集合失败: {collection_name}")
+    #         raise ex from ex
+    #
+    #     ret = []
+    #     for hits in res:
+    #         ret.append([hit.to_dict() for hit in hits])
+    #
+    #     # 支持官方版本返回额外信息的特性
+    #     from pymilvus.client.types import construct_cost_extra
+    #     if hasattr(res, "cost"):
+    #         return type("ExtraList", (list,), {"extra": construct_cost_extra(res.cost)})(ret)
+    #     return ret
 
     def upsert(
             self,
@@ -1805,55 +1867,132 @@ class MilvusConnection(DocStoreConnection):
             anns_field: str | None = None,
             **kwargs,
     ) -> list[list[dict]]:
-        """执行向量相似度搜索。
+        # 1. 标准化 collection 列表
+        collections = [collection_name] if isinstance(collection_name, str) else collection_name
 
-        Args:
-            collection_name: 集合名称
-            data: 要搜索的向量/向量组
-            filter: 用于筛选的表达式
-            limit: 每次搜索返回的最大结果数
-            output_fields: 要返回的字段列表
-            search_params: 搜索参数
-            timeout: 超时时间
-            partition_names: 要搜索的分区名称列表
-            anns_field: 向量字段名称
-            **kwargs: 额外参数
-
-        Returns:
-            list[list[dict]]: 搜索结果的嵌套列表
-        """
         conn = self._get_connection()
-        try:
-            res = conn.search(
-                collection_name,
-                data,
-                anns_field or "",
-                search_params or {},
-                expression=filter,
-                limit=limit,
-                output_fields=output_fields,
-                partition_names=partition_names,
-                expr_params=kwargs.pop("filter_params", {}),
-                timeout=timeout,
-                **kwargs,
-            )
-        except Exception as ex:
-            logger.error(f"搜索集合失败: {collection_name}")
-            raise ex from ex
+        all_hits = []
+        costs = []
+        recalls = []
 
-        ret = []
-        for hits in res:
-            query_result = []
-            for hit in hits:
-                query_result.append(hit.to_dict())
-            ret.append(query_result)
+        # 先取出一次性参数
+        expr_params = kwargs.pop("filter_params", {})
 
-        # 支持官方版本返回额外信息的特性
-        from pymilvus.client.types import construct_cost_extra
-        if hasattr(res, "cost"):
-            return type("ExtraList", (list,),
-                        {"extra": construct_cost_extra(res.cost), "recalls": getattr(res, "recalls", None)})(ret)
-        return ret
+        # 2. 每个 collection 单次调用 search
+        for coll in collections:
+            try:
+                res = conn.search(
+                    coll,
+                    data,
+                    anns_field or "",
+                    search_params or {},
+                    expression=filter,
+                    limit=limit,
+                    output_fields=output_fields,
+                    partition_names=partition_names,
+                    expr_params=expr_params,
+                    timeout=timeout,
+                    **kwargs,
+                )
+            except Exception as ex:
+                logger.error(f"搜索集合失败: {coll}", exc_info=True)
+                continue
+
+            # 扁平化：res 对每条 query 都是一份 hits 列表
+            for hits in res:
+                all_hits.extend(hits)
+
+            # 收集 cost & recalls
+            if hasattr(res, "cost"):
+                costs.append(res.cost)
+            if hasattr(res, "recalls"):
+                recalls.append(res.recalls)
+
+        # 3. 全局排序 & 截取
+        all_hits.sort(key=lambda h: h.distance, reverse=True)
+        top_hits = all_hits[:limit]
+        result = [h.to_dict() for h in top_hits]
+
+        # 4. 挂 extra / recalls
+        if costs or recalls:
+            extra = None
+            if costs:
+                from pymilvus.client.types import construct_cost_extra
+                extras = [construct_cost_extra(c) for c in costs]
+                extra = extras[0] if len(extras) == 1 else extras
+            recalls_val = None
+            if recalls:
+                recalls_val = recalls[0] if len(recalls) == 1 else recalls
+            return type(
+                "ExtraList",
+                (list,),
+                {"extra": extra, "recalls": recalls_val}
+            )(result)
+
+        return result
+
+    # def search_by_milvus(
+    #         self,
+    #         collection_name: str,
+    #         data: list[list] | list,
+    #         filter: str = "",
+    #         limit: int = 10,
+    #         output_fields: list[str] | None = None,
+    #         search_params: dict | None = None,
+    #         timeout: float | None = None,
+    #         partition_names: list[str] | None = None,
+    #         anns_field: str | None = None,
+    #         **kwargs,
+    # ) -> list[list[dict]]:
+    #     """执行向量相似度搜索。
+    #
+    #     Args:
+    #         collection_name: 集合名称
+    #         data: 要搜索的向量/向量组
+    #         filter: 用于筛选的表达式
+    #         limit: 每次搜索返回的最大结果数
+    #         output_fields: 要返回的字段列表
+    #         search_params: 搜索参数
+    #         timeout: 超时时间
+    #         partition_names: 要搜索的分区名称列表
+    #         anns_field: 向量字段名称
+    #         **kwargs: 额外参数
+    #
+    #     Returns:
+    #         list[list[dict]]: 搜索结果的嵌套列表
+    #     """
+    #     conn = self._get_connection()
+    #     try:
+    #         res = conn.search(
+    #             collection_name,
+    #             data,
+    #             anns_field or "",
+    #             search_params or {},
+    #             expression=filter,
+    #             limit=limit,
+    #             output_fields=output_fields,
+    #             partition_names=partition_names,
+    #             expr_params=kwargs.pop("filter_params", {}),
+    #             timeout=timeout,
+    #             **kwargs,
+    #         )
+    #     except Exception as ex:
+    #         logger.error(f"搜索集合失败: {collection_name}")
+    #         raise ex from ex
+    #
+    #     ret = []
+    #     for hits in res:
+    #         query_result = []
+    #         for hit in hits:
+    #             query_result.append(hit.to_dict())
+    #         ret.append(query_result)
+    #
+    #     # 支持官方版本返回额外信息的特性
+    #     from pymilvus.client.types import construct_cost_extra
+    #     if hasattr(res, "cost"):
+    #         return type("ExtraList", (list,),
+    #                     {"extra": construct_cost_extra(res.cost), "recalls": getattr(res, "recalls", None)})(ret)
+    #     return ret
 
     def query(
             self,
@@ -2288,9 +2427,30 @@ class MilvusConnection(DocStoreConnection):
                 elif mapping_type == "VARCHAR":
                     max_length = value.get("mapping", {}).get("max_length", 256)
                     is_primary = value.get("mapping", {}).get("is_primary", False)
-                    fields.append(FieldSchema(name=match, dtype=DataType.VARCHAR,
-                                              max_length=max_length, is_primary=is_primary,
-                                              nullable=not is_primary))
+
+                    nullable_value = not is_primary  # 默认行为：主键不可空
+                    # 默认关闭所有字段的分析器
+                    enable_analyzer = False
+                    # 如果启用混合检索且字段名为content_with_weight，则启用analyzer
+                    if match == "content_with_weight":
+                        nullable_value = False
+                        enable_analyzer = True  # 启用分析器
+                        fields.append(FieldSchema(
+                            name=match,
+                            dtype=DataType.VARCHAR,
+                            max_length=max_length,
+                            is_primary=is_primary,
+                            nullable=nullable_value,
+                            enable_analyzer=enable_analyzer
+                        ))
+                    else:
+                        fields.append(FieldSchema(
+                            name=match,
+                            dtype=DataType.VARCHAR,
+                            max_length=max_length,
+                            is_primary=is_primary,
+                            nullable=nullable_value,
+                        ))
                 elif mapping_type == "FLOAT":
                     fields.append(FieldSchema(name=match, dtype=DataType.FLOAT, nullable=True))
                 elif mapping_type == "INT64":
@@ -2317,10 +2477,21 @@ class MilvusConnection(DocStoreConnection):
             if re.match(r'q_\d+_vec', vector_field):
                 fields.append(FieldSchema(name=vector_field, dtype=DataType.FLOAT_VECTOR, dim=dim))
                 # logger.info(f"添加特定维度向量字段: {vector_field}, 维度: {dim}")
+        fields.append(FieldSchema(
+            name="sparse_vector",
+            dtype=DataType.SPARSE_FLOAT_VECTOR
+        ))
+        # 创建BM25函数
+        bm25_function = Function(
+            name=f"bm25_function_{str(uuid.uuid4())[:8]}",
+            function_type=FunctionType.BM25,
+            input_field_names=["content_with_weight"],  # 输入字段为text_field_name
+            output_field_names="sparse_vector"  # 输出稀疏向量字段
+        )
 
         # 创建集合模式
-        schema = CollectionSchema(fields=fields, description="Created from mapping file", enable_dynamic_field=True)
-
+        schema = CollectionSchema(fields=fields, description="根据mapping.json创建，当前版本支持混合检索", enable_dynamic_field=True)
+        schema.add_function(bm25_function)
         # 创建集合
         self.create_collection(collection_name, schema=schema)
         logger.info(f"成功创建集合: {collection_name} 包含字段: {[field.name for field in fields]}")
@@ -2328,13 +2499,6 @@ class MilvusConnection(DocStoreConnection):
         # 处理索引相关的逻辑
         for field in fields:
             if field.dtype == DataType.FLOAT_VECTOR:
-                # index_params = {
-                #     "field_name": field.name,
-                #     "index_type": "",
-                #     "params": {"nlist": 128},
-                #     "index_name": field.name,
-                #     "metric_type": "COSINE"
-                # }
                 index_params = IndexParams()
                 index_params.add_index(
                     field.name,
@@ -2358,7 +2522,38 @@ class MilvusConnection(DocStoreConnection):
                         collection_name,
                         index_params,
                     )
-
+            # 为稀疏向量创建索引 - 使用最新推荐的SPARSE_INVERTED_INDEX
+            elif field.dtype == DataType.SPARSE_FLOAT_VECTOR:
+                sparse_index_params = IndexParams()
+                # 按照新文档的建议，使用SPARSE_INVERTED_INDEX索引类型
+                sparse_index_params.add_index(
+                    field.name,
+                    "SPARSE_INVERTED_INDEX",  # 使用新推荐的索引类型
+                    field.name,
+                    metric_type="BM25", # IP 或 BM25
+                    params={
+                        # 使用DAAT_WAND算法代替已弃用的SPARSE_WAND
+                        "inverted_index_algo": "DAAT_WAND", # DAAT_MAXSCORE (默认)：适合多、长topk, DAAT_WAND:适合少、短topk, TAAT_NAIVE：不推荐
+                        # 配置BM25参数
+                        "bm25_k1": 1.5,  # 控制术语频率饱和度，范围[1.2, 2.0]
+                        "bm25_b": 0.75  # 控制文档长度归一化，范围[0, 1]
+                    }
+                )
+                try:
+                    self.create_index(collection_name, sparse_index_params)
+                    logger.info(
+                        "稀疏索引创建成功 | 集合：%s | 字段：%s | 索引配置：%s",
+                        collection_name,
+                        field.name,
+                        sparse_index_params,
+                    )
+                except Exception:
+                    logger.exception(
+                        "稀疏索引创建失败 | 集合：%s | 字段：%s | 索引配置：%s",
+                        collection_name,
+                        field.name,
+                        sparse_index_params,
+                    )
         # 加载集合
         try:
             self.load_collection(collection_name)

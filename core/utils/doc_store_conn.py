@@ -263,7 +263,7 @@ class DocStoreConnection(ABC):
     @abstractmethod
     def search_by_milvus(
             self,
-            collection_name: str,
+            collection_name: str | list,
             data: list[list] | list,
             filter: str = "",
             limit: int = 10,

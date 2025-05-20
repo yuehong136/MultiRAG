@@ -9,13 +9,14 @@
 import datetime
 import json
 import logging
+from typing import Literal, Annotated, Any
 
 import numpy as np
 import xxhash
 import re
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, Discriminator, model_validator
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db
@@ -76,18 +77,78 @@ class CreateChunkRequest(BaseModel):
     important_kwd: list[str] | None = None
 
 
+class SparseSearchMode(BaseModel):
+    type: Literal["sparse"] = "sparse"
+
+
+class DenseSearchMode(BaseModel):
+    type: Literal["dense"] = "dense"
+
+
+class HybridSearchMode(BaseModel):
+    type: Literal["hybrid"] = "hybrid"
+    weight_dense: float = Field(default=0.7, ge=0.0, le=1.0)
+    weight_sparse: float = Field(default=0.3, ge=0.0, le=1.0)
+
+    @model_validator(mode='after')
+    def validate_weights(self) -> 'HybridSearchMode':
+        """确保权重和为1，如果不是则自动调整"""
+        total = self.weight_dense + self.weight_sparse
+        if abs(total - 1.0) > 0.001:
+            # 自动归一化权重
+            self.weight_dense = self.weight_dense / total
+            self.weight_sparse = self.weight_sparse / total
+        return self
+
+
+class FusionSearchMode(BaseModel):
+    type: Literal["fusion"] = "fusion"
+    weights: str = Field(default="0.05,0.95")
+
+    @model_validator(mode='after')
+    def validate_weights_format(self) -> 'FusionSearchMode':
+        """验证weights格式"""
+        try:
+            parts = self.weights.split(',')
+            if len(parts) != 2:
+                raise ValueError("weights must contain exactly two comma-separated values")
+            float(parts[0].strip())
+            float(parts[1].strip())
+        except (ValueError, AttributeError):
+            raise ValueError("weights must be in format 'float,float' (e.g., '0.05,0.95')")
+        return self
+
+
+# 使用 Discriminator 的高效版本
+SearchModeType = Annotated[
+    SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode,
+    Discriminator('type')
+]
+
+
 class RetrievalTestRequest(BaseModel):
     kb_ids: list[str]
     question: str
-    page: int | None = 1
-    size: int | None = 30
-    doc_ids: list[str] | None
-    similarity_threshold: float | None = 0.0
-    vector_similarity_weight: float | None = 0.3
-    use_kg: bool | None = False
-    top_k: int | None = 1024
+    page: int = 1
+    size: int = 30
+    doc_ids: list[str] | None = None
+    similarity_threshold: float = 0.0
+    vector_similarity_weight: float = 0.3
+    use_kg: bool = False
+    top_k: int = 1024
     rerank_id: str | None = None
-    keyword: bool | None = False
+    highlight: bool = False
+    keyword: bool = False
+    search_mode: SearchModeType | None = None
+
+    def get_search_mode_dict(self) -> dict[str, Any] | None:
+        """将搜索模式转换为字典格式供底层函数使用"""
+        if self.search_mode is None:
+            return None
+
+        mode_data = self.search_mode.model_dump()
+        mode_type = mode_data.pop('type')
+        return {mode_type: mode_data}
 
 
 @router.post('/list', summary="列出文档块")
@@ -991,33 +1052,195 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
 @router.post('/retrieval_test', summary="检索测试")
 def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    检索测试
+    检索测试接口
 
-    该接口用于执行检索测试，返回检索结果。
+    该接口用于测试不同类型的检索策略，支持多种搜索模式，包括向量检索、全文检索、混合检索和融合检索。
 
-    参数:
-    - request: RetrievalTestRequest对象，包含检索参数
-        - kb_ids: 知识库的唯一标识符
-        - question: 检索问题
-        - page: 页码，默认值为1
-        - size: 每页的结果数，默认值为30
-        - doc_ids: 文档ID列表，默认值为空列表
-        - similarity_threshold: 相似度阈值，默认值为0.2
-        - vector_similarity_weight: 向量相似度权重，默认值为0.3
-        - top_k: 最大检索条目数，默认值为1024
-        - rerank_id: 重新排序的ID，默认值为空字符串
-        - keyword: 是否进行关键字提取，默认值为False
-    - db: 数据库会话对象
-    - user: 当前用户对象
+    ## 请求参数
 
-    返回:
-    - 成功时返回包含检索结果的JSON结果
-    - 失败时返回错误信息
+    ### 基础参数
+    - **kb_ids**: 知识库ID列表，必填。指定要在哪些知识库中进行检索
+    - **question**: 检索问题，必填。用户输入的查询文本
+    - **page**: 页码，默认为1。用于分页返回结果
+    - **size**: 每页返回的结果数量，默认为30
+    - **doc_ids**: 文档ID列表，可选。限制只在指定的文档中检索
+    - **similarity_threshold**: 相似度阈值，默认为0.0。低于此阈值的结果将被过滤
+    - **vector_similarity_weight**: 向量相似度权重，默认为0.3。用于重新排序阶段的权重调整
+    - **use_kg**: 是否使用知识图谱，默认为False。启用后会结合知识图谱进行检索
+    - **top_k**: 最大召回数量，默认为1024。初始检索阶段返回的最大结果数
+    - **rerank_id**: 重排序模型ID，可选。用于对初始检索结果进行重新排序
+    - **highlight**: 是否高亮显示匹配文本，默认为False
+    - **keyword**: 是否进行关键词提取增强，默认为False。启用后会自动提取问题关键词
+
+    ### 搜索模式 (search_mode)
+    搜索模式决定了使用哪种检索策略，支持以下四种类型：
+
+    #### 1. 稀疏检索 (Sparse Search)「也叫全文检索」
+    ```json
+    {
+        "type": "sparse"
+    }
+    ```
+    - **描述**: 基于关键词和词频的传统全文检索
+    - **适用场景**:
+      - 专业术语查询
+      - 特定代码、型号或标识符搜索
+      - 需要精确关键词匹配的场景
+    - **特点**: 快速、精确匹配，但不理解语义关系
+
+    #### 2. 密集检索 (Dense Search)「暂时不启用，传惨不报错」
+    ```json
+    {
+        "type": "dense"
+    }
+    ```
+    - **描述**: 基于向量嵌入的语义检索
+    - **适用场景**:
+      - 概念性问题查询
+      - 同义词和相关概念搜索
+      - 需要理解语义关系的场景
+    - **特点**: 理解语义，但可能错过精确关键词匹配
+
+    #### 3. 混合检索 (Hybrid Search)
+    ```json
+    {
+        "type": "hybrid",
+        "weight_dense": 0.7,
+        "weight_sparse": 0.3
+    }
+    ```
+    - **描述**: 结合稀疏检索和密集检索的优势
+    - **参数**:
+      - `weight_dense`: 向量检索权重 (0.0-1.0)，默认0.7
+      - `weight_sparse`: 全文检索权重 (0.0-1.0)，默认0.3
+      - 权重和会自动归一化为1.0
+    - **权重推荐**:
+      - `[0.8, 0.2]`: 偏向语义理解 (概念性问题)
+      - `[0.7, 0.3]`: 平衡配置 (通用推荐)
+      - `[0.4, 0.6]`: 偏向关键词匹配 (专业术语)
+      - `[0.2, 0.8]`: 强调精确匹配 (代码、API等)
+
+    #### 4. 向量融合检索 (Fusion Search)「默认检索模式」
+    ```json
+    {
+        "type": "fusion",
+        "weights": "0.05,0.95"
+    }
+    ```
+    - **描述**: 传统的检索融合策略
+    - **参数**:
+      - `weights`: "文本权重,向量权重" 格式的字符串，默认"0.05,0.95"
+    - **特点**: 如果不指定search_mode，将使用此模式作为默认值
+
+    ## 返回结果
+
+    成功时返回JSON格式结果：
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "total": 100,
+            "chunks": [
+                {
+                    "chunk_id": "chunk_123",
+                    "text": "检索到的文本内容",
+                    "doc_id": "doc_456",
+                    "docnm_kwd": "文档名称",
+                    "kb_id": "kb_789",
+                    "similarity": 0.85,
+                    "vector_similarity": 0.82,
+                    "term_similarity": 0.88,
+                    "highlight": "高亮显示的内容",
+                    "positions": [...]
+                }
+            ],
+            "doc_aggs": [
+                {
+                    "doc_name": "文档1",
+                    "doc_id": "doc_456",
+                    "count": 5
+                }
+            ],
+            "labels": {...}
+        }
+    }
+    ```
+
+    ## 使用示例
+
+    ### 基础检索
+    ```json
+    {
+        "kb_ids": ["kb_123"],
+        "question": "什么是机器学习？"
+    }
+    ```
+
+    ### 混合检索（概念性查询）
+    ```json
+    {
+        "kb_ids": ["kb_123"],
+        "question": "深度学习的原理是什么？",
+        "search_mode": {
+            "type": "hybrid",
+            "weight_dense": 0.8,
+            "weight_sparse": 0.2
+        }
+    }
+    ```
+
+    ### 精确匹配查询
+    ```json
+    {
+        "kb_ids": ["kb_123"],
+        "question": "getUserInfo API参数",
+        "search_mode": {
+            "type": "hybrid",
+            "weight_dense": 0.3,
+            "weight_sparse": 0.7
+        }
+    }
+    ```
+
+    ### 高级配置
+    ```json
+    {
+        "kb_ids": ["kb_123"],
+        "question": "如何优化模型性能？",
+        "page": 1,
+        "size": 20,
+        "similarity_threshold": 0.1,
+        "vector_similarity_weight": 0.7,
+        "use_kg": true,
+        "rerank_id": "rerank_model_123",
+        "highlight": true,
+        "keyword": true,
+        "search_mode": {
+            "type": "hybrid",
+            "weight_dense": 0.75,
+            "weight_sparse": 0.25
+        }
+    }
+    ```
+
+    ## 错误处理
+
+    - **权限错误**: 只有知识库的所有者才能进行检索测试
+    - **知识库不存在**: 指定的知识库ID无效
+    - **无结果**: 未找到匹配的内容块
+    - **参数错误**: 搜索模式参数格式错误
+
+    ## 性能优化建议
+
+    1. **合理设置top_k**: 过大会影响性能，过小可能遗漏相关结果
+    2. **调整相似度阈值**: 根据业务需求设置合适的similarity_threshold
+    3. **选择合适的搜索模式**: 根据查询类型选择最优的检索策略
+    4. **使用重排序**: 对于对质量要求高的场景，建议使用rerank_id
     """
-    req = request.model_dump()
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
-        for kid in req["kb_ids"]:
+        for kid in request.kb_ids:
             for tenant in tenants:
                 if KnowledgebaseService.query(
                         db, tenant_id=tenant.tenant_id, id=kid):
@@ -1034,37 +1257,25 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
 
         rerank_mdl = None
-        if req.get("rerank_id"):
-            rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
+        if request.rerank_id:
+            rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=request.rerank_id)
 
-        question = req["question"]
-        if req.get("keyword", False):
+        question = request.question
+        if request.keyword:
             chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
         filter_exp = ""
         labels = label_question(db, question, [kb])
 
-        # 在embd_mdl定义后添加以下代码以获取向量维度
-        sample_vec, _ = embd_mdl.encode(["测试文本"])
-        vector_dim = None
-        if isinstance(sample_vec, np.ndarray) and sample_vec.ndim > 1:
-            vector_dim = sample_vec.shape[1]
-        elif isinstance(sample_vec, list) and len(sample_vec) > 0:
-            if isinstance(sample_vec[0], np.ndarray) or isinstance(sample_vec[0], list):
-                vector_dim = len(sample_vec[0])
-            elif isinstance(sample_vec[0], (float, np.float32, np.float64)):
-                vector_dim = len(sample_vec)
-
-        # 如果获取到了向量维度，可以在过滤条件中包含这个信息
-        if vector_dim:
-            logging.info(f"检索使用向量维度: {vector_dim}")
+        # 使用实例方法获取搜索模式
+        search_mode_dict = request.get_search_mode_dict()
 
         # 当调用retrieval函数时，传递维度信息
-        ranks = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], req["page"],
-                               req["size"], req["similarity_threshold"], req["vector_similarity_weight"],
-                               req["top_k"], req["doc_ids"], rerank_mdl=rerank_mdl, highlight=req.get("highlight"),
-                               rank_feature=labels)
-        if req["use_kg"]:
+        ranks = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
+                               request.size, request.similarity_threshold, request.vector_similarity_weight,
+                               request.top_k, request.doc_ids, rerank_mdl=rerank_mdl, highlight=request.highlight,
+                               rank_feature=labels, search_mode=search_mode_dict)
+        if request.use_kg:
             ck = settings.kg_retrievaler.retrieval(question,
                                                    kb.tenant_id,
                                                    [kb.name],

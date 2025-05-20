@@ -13,8 +13,8 @@ import trio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from typing import Generator
+from pydantic import BaseModel, Field, model_validator, Discriminator
+from typing import Generator, Literal, Annotated, Any
 
 from api.db.db_models import APIToken, get_db
 from api.db.services.conversation_service import ConversationService, structure_answer
@@ -107,6 +107,53 @@ class AskAboutRequest(BaseModel):
     kb_ids: list[str]
     """知识库ID列表"""
 
+class SparseSearchMode(BaseModel):
+    type: Literal["sparse"] = "sparse"
+
+
+class DenseSearchMode(BaseModel):
+    type: Literal["dense"] = "dense"
+
+
+class HybridSearchMode(BaseModel):
+    type: Literal["hybrid"] = "hybrid"
+    weight_dense: float = Field(default=0.7, ge=0.0, le=1.0)
+    weight_sparse: float = Field(default=0.3, ge=0.0, le=1.0)
+
+    @model_validator(mode='after')
+    def validate_weights(self) -> 'HybridSearchMode':
+        """确保权重和为1，如果不是则自动调整"""
+        total = self.weight_dense + self.weight_sparse
+        if abs(total - 1.0) > 0.001:
+            # 自动归一化权重
+            self.weight_dense = self.weight_dense / total
+            self.weight_sparse = self.weight_sparse / total
+        return self
+
+
+class FusionSearchMode(BaseModel):
+    type: Literal["fusion"] = "fusion"
+    weights: str = Field(default="0.05,0.95")
+
+    @model_validator(mode='after')
+    def validate_weights_format(self) -> 'FusionSearchMode':
+        """验证weights格式"""
+        try:
+            parts = self.weights.split(',')
+            if len(parts) != 2:
+                raise ValueError("weights must contain exactly two comma-separated values")
+            float(parts[0].strip())
+            float(parts[1].strip())
+        except (ValueError, AttributeError):
+            raise ValueError("weights must be in format 'float,float' (e.g., '0.05,0.95')")
+        return self
+
+
+# 使用 Discriminator 的高效版本
+SearchModeType = Annotated[
+    SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode,
+    Discriminator('type')
+]
 
 class MindmapRequest(BaseModel):
     question: str
@@ -115,6 +162,17 @@ class MindmapRequest(BaseModel):
     kb_ids: list[str]
     """知识库ID列表"""
 
+    search_mode: SearchModeType | None = None
+    """检索模式"""
+
+    def get_search_mode_dict(self) -> dict[str, Any] | None:
+        """将搜索模式转换为字典格式供底层函数使用"""
+        if self.search_mode is None:
+            return None
+
+        mode_data = self.search_mode.model_dump()
+        mode_type = mode_data.pop('type')
+        return {mode_type: mode_data}
 
 class RelatedQuestionsRequest(BaseModel):
     question: str
@@ -757,7 +815,10 @@ def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends
     chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name])
-    ranks = settings.retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3, aggs=False, rank_feature=label_question(db, req["question"], [kb]))
+
+    search_mode_dict = request.get_search_mode_dict()
+
+    ranks = settings.retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3, aggs=False, rank_feature=label_question(db, req["question"], [kb]), search_mode=search_mode_dict)
     mindmap = MindMapExtractor(chat_mdl)
     mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
     mind_map = mind_map.output

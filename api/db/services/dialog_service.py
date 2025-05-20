@@ -247,11 +247,10 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
         knowledges = []
         if prompt_config.get("reasoning", False):
-            # for think in reasoning(kbinfos, " ".join(questions), chat_mdl, embd_mdl, dialog.tenant_id, kb_names, prompt_config, MAX_SEARCH_LIMIT=3):
             reasoner = DeepResearcher(
                 chat_mdl,
                 prompt_config,
-                partial(retriever.retrieval, filter_exp="", embd_mdl=embd_mdl, tenant_id=dialog.tenant_id, kb_names=kb_names, page=1, page_size=dialog.top_n, similarity_threshold=0.2, vector_similarity_weight=0.3)
+                partial(retriever.retrieval, filter_exp="", embd_mdl=embd_mdl, tenant_id=dialog.tenant_id, kb_names=kb_names, page=1, page_size=dialog.top_n, similarity_threshold=0.2, vector_similarity_weight=0.3, search_mode=dialog.search_mode)
             )
 
             for think in reasoner.thinking(kbinfos, " ".join(questions)):
@@ -275,7 +274,8 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                 top=1024,
                 aggs=False,
                 rerank_mdl=rerank_mdl,
-                rank_feature=label_question(db, " ".join(questions), kbs)
+                rank_feature=label_question(db, " ".join(questions), kbs),
+                search_mode=dialog.search_mode
             )
             if prompt_config.get("tavily_api_key"):
                 tav = Tavily(prompt_config["tavily_api_key"])
@@ -590,11 +590,11 @@ def ask(db: Session, question, kb_ids, tenant_id):
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT)
     max_tokens = chat_mdl.max_length
-    tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+    tenant_ids = list([kb.tenant_id for kb in kbs])
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
-    kbinfos = retriever.retrieval(question, filter_exp, embd_mdl, tenant_ids, kb_names, 1, 12, 0.1, 0.3, aggs=False, rank_feature=label_question(db, question, kbs))
+    kbinfos = retriever.retrieval(question, filter_exp, embd_mdl, tenant_ids, kb_names, 1, 12, 0.1, 0.3, aggs=False, rank_feature=label_question(db, question, kbs), search_mode=None) #todo 无法传递应用里的配置，所以只能使用一种默认检索模式
     knowledges = kb_prompt(kbinfos, max_tokens)
     prompt = """
     Role: You're a smart assistant. Your name is Miss R.

@@ -57,7 +57,8 @@ class KnowledgeBaseSearchComponent(BaseComponent):
                                                  top=self.top_k,
                                                  aggs=False,
                                                  rerank_mdl=rerank_mdl,
-                                                 rank_feature=label_question(self.db, " ".join(query), kbs)
+                                                 rank_feature=label_question(self.db, " ".join(query), kbs),
+                                                 search_mode=None
                                                  )
 
         if not kbinfos["chunks"]:
@@ -94,7 +95,9 @@ class KnowledgeBaseSearchComponent(BaseComponent):
                                                  1 - self.keywords_similarity_weight,
                                                  top=self.top_k,
                                                  aggs=False,
-                                                 rerank_mdl=rerank_mdl)
+                                                 rerank_mdl=rerank_mdl,
+                                                 search_mode=None
+                                                 )
 
         if not kbinfos["chunks"]:
             if self.empty_response and self.empty_response.strip():

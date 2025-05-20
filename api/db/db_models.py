@@ -480,6 +480,8 @@ class Dialog(BaseModel):
                       doc="it needs to insert reference index into answer or not")
     rerank_id = Column(String(128), index=False, nullable=True, doc="default rerank model ID")
     kb_ids = Column(JSONB, index=False, nullable=False, default=[])
+    search_mode = Column(JSONB, index=False, nullable=True,
+                          doc="search mode configuration: hybrid, sparse, dense, or fusion")
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
