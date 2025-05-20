@@ -480,6 +480,16 @@ class WholeProcessRequest(BaseModel):
         title="请求ID",
         description="请求ID",
     )
+    dataset_id_list: List[str] = Field(
+        [],
+        title="数据集ID列表",
+        description="数据集ID列表",
+    )
+    llm_name: str = Field(
+        "gpt-4",
+        title="LLM模型名称",
+        description="用于将自然语言转换为SQL的LLM模型名称",
+    )
 
 
 @router.post("/whole-process", response_model=ResponseSchema, summary="执行从自然语言到查询结果的全流程处理")
@@ -494,8 +504,11 @@ async def execute_whole_process(
         service: NL2SQLService = Depends(get_nl2sql_service)
 ):
     """执行从自然语言到查询结果的全流程处理，包括自然语言转SQL、执行查询等步骤"""
+    logging.info(f"whole-process请求体：{body}")
+
     try:
-        await service.whole_process(user_question=body.user_question, request_id=body.request_id)
+        await service.whole_process(user_question=body.user_question, request_id=body.request_id,
+                                    dataset_id_list=body.dataset_id_list, llm_name=body.llm_name)
 
         # 构建响应数据
         response_data = {}

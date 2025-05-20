@@ -296,18 +296,12 @@ class NL2SQLService:
 
         return sql, semantic_layer_struct
 
-    async def whole_process(self, user_question: str, request_id: str):
+    async def whole_process(self, user_question: str, request_id: str, dataset_id_list: List[str], llm_name: str):
         """
         全流程都在AI平台上完成
         """
-        # 主要的LLM模型名称，用于NL2SQL和ECharts生成
-        main_llm_name = "豆包1.5pro256k"
-        # 用于SQL模板化的LLM模型名称
-        templating_llm_name = "豆包1.5lite"  # 原代码中硬编码为此值
 
-        dataset_id_list = ["35799132679879680"]
-
-        sql, semantic_layer_struct = await self.nl2sql_for_whole_process(user_question, main_llm_name, dataset_id_list,
+        sql, semantic_layer_struct = await self.nl2sql_for_whole_process(user_question, llm_name, dataset_id_list,
                                                                          request_id)
         await send_event(request_id, {"message": "正在查询数据"}, "message")
         result = execute_sql_and_format_result(sql=sql, db_config={})  # 假设此函数足够快或已优化
@@ -324,13 +318,13 @@ class NL2SQLService:
         # 为每个包含其自身后续逻辑的流程创建任务
         sql_templating_task = asyncio.create_task(
             self._handle_sql_templating_flow(
-                user_question, sql, semantic_layer_struct, request_id, main_llm_name
+                user_question, sql, semantic_layer_struct, request_id, llm_name
             )
         )
 
         echarts_generation_task = asyncio.create_task(
             self._handle_echarts_generation_flow(
-                user_question, sql, column_and_type, sample_data, main_llm_name, request_id
+                user_question, sql, column_and_type, sample_data, llm_name, request_id
             )
         )
 
@@ -358,7 +352,9 @@ class NL2SQLService:
             parameters = sql_templating_result["parameters"]
             await send_event(request_id, {"message": "SQL模板生成完成"}, "message")
             await send_event(request_id, {"message": "SQL模板", "data": sql_template}, "data")
+            logger.info(f"SQL模板：{sql_template}")
             await send_event(request_id, {"message": "参数列表", "data": parameters}, "data")
+            logger.info(f"参数列表：{parameters}")
         except Exception as e:
             logger.error(f"Error in SQL templating flow: {e}", exc_info=True)
             await send_event(request_id, {"message": f"SQL模板生成失败: {e}"}, "error")
@@ -374,6 +370,7 @@ class NL2SQLService:
                                                                                    sample_data, llm_name)
             await send_event(request_id, {"message": "ECharts配置代码生成完成"}, "message")
             await send_event(request_id, {"message": "ECharts配置代码", "data": echarts_js_code}, "data")
+            logger.info(f"ECharts配置代码：{echarts_js_code}")
         except Exception as e:
             logger.error(f"Error in ECharts generation flow: {e}", exc_info=True)
             await send_event(request_id, {"message": f"ECharts配置代码生成失败: {e}"}, "error")
