@@ -16,9 +16,8 @@ import xxhash
 from pymilvus import MilvusException
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func, asc
-
-from api.db import FileType, TaskStatus, StatusEnum
+from sqlalchemy import func, asc, and_, or_
+from api.db import FileType, TaskStatus, StatusEnum, UserTenantRole
 from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, db_connection
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -368,18 +367,30 @@ class DocumentService(CommonService):
 
     @classmethod
     def accessible4deletion(cls, db: Session, doc_id, user_id):
-        # 使用 SQLAlchemy 查询文档是否可删除
-        docs = db.query(cls.model.id).join(
-            Knowledgebase, cls.model.kb_id == Knowledgebase.id
-        ).filter(
-            cls.model.id == doc_id,
-            Knowledgebase.created_by == user_id
-        ).limit(1).all()
+        # 构造查询：join Knowledgebase，再 join UserTenant
+        q = (
+            db.query(cls.model.id)
+            .join(Knowledgebase, cls.model.kb_id == Knowledgebase.id)
+            .join(
+                UserTenant,
+                and_(
+                    UserTenant.tenant_id == Knowledgebase.created_by,
+                    UserTenant.user_id == user_id
+                )
+            )
+            .filter(
+                cls.model.id == doc_id,
+                UserTenant.status == StatusEnum.VALID.value,
+                or_(
+                    UserTenant.role == UserTenantRole.NORMAL,
+                    UserTenant.role == UserTenantRole.OWNER
+                )
+            )
+        )
 
-        # 如果没有找到文档则返回 False
-        if not docs:
-            return False
-        return True
+        # 只取一条，存在即可删除
+        exists = q.first()
+        return exists is not None
 
     @classmethod
     def get_embd_id(cls, db: Session, doc_id: str):
