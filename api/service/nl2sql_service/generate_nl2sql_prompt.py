@@ -109,7 +109,7 @@ def process_business_datasets(
 
         metrics_output = []
         for metric in metrics:
-            if dataset_id in metric.get("datasetWid"):
+            if dataset_id in metric.get("dataset_wid"):
                 metric_output = {}
                 metric_output["id"] = metric.get("metricId")
                 metric_output["name"] = metric.get("metricName")
