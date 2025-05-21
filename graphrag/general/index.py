@@ -194,7 +194,7 @@ async def merge_subgraph(
         embedding_model,
         callback,
 ):
-    graphrag_task_lock = RedisDistributedLock("graphrag_task", lock_value=doc_id, timeout=600)
+    graphrag_task_lock = RedisDistributedLock(f"graphrag_task_{kb_id}", lock_value=doc_id, timeout=600)
     while True:
         if graphrag_task_lock.acquire():
             break
@@ -234,10 +234,11 @@ async def resolve_entities(
     embed_bdl,
     callback,
 ):
-    graphrag_task_lock = RedisDistributedLock("graphrag_task", lock_value=doc_id, timeout=600)
+    graphrag_task_lock = RedisDistributedLock(f"graphrag_task_{kb_id}", lock_value=doc_id, timeout=600)
     while True:
         if graphrag_task_lock.acquire():
             break
+        callback(msg=f"resolve_entities {doc_id} is waiting graphrag_task_lock")
         await trio.sleep(10)
 
     start = trio.current_time()
@@ -264,10 +265,11 @@ async def extract_community(
     embed_bdl,
     callback,
 ):
-    graphrag_task_lock = RedisDistributedLock("graphrag_task", lock_value=doc_id, timeout=600)
+    graphrag_task_lock = RedisDistributedLock(f"graphrag_task_{kb_id}", lock_value=doc_id, timeout=600)
     while True:
         if graphrag_task_lock.acquire():
             break
+        callback(msg=f"extract_community {doc_id} is waiting graphrag_task_lock")
         await trio.sleep(10)
 
     start = trio.current_time()
