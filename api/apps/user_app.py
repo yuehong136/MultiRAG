@@ -514,7 +514,7 @@ async def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
     - 成功时返回包含租户信息的JSON结果
     """
     try:
-        tenants = TenantService.get_info_by(db, user.id)[0]
+        tenants = TenantService.get_info_by(db, user.id)
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
         return get_json_result(data=tenants[0])
