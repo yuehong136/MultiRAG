@@ -198,7 +198,7 @@ class Dealer:
             return list(kwds)
 
         def _build_result(results):
-            total = len(results) if hasattr(results, "__len__") else self.dataStore.getTotal(results)
+            total = self.dataStore.getTotal(results)
             keywords = _process_keywords(keywords_raw)
             ids = self.dataStore.getChunkIds(results)
             highlight_rst = self.dataStore.getHighlight(results, keywords, "content_with_weight")
