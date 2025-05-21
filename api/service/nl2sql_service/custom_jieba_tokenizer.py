@@ -59,7 +59,7 @@ async def custom_tokenize_with_semantic_words(text: str, dataset_id_list: List[s
         stopwords_path: 停用词文件路径，默认为None，此时使用代码所在目录下的stopwords.txt
 
     返回:
-        分词后的词列表（已去除停用词）
+        分词后的词列表（已去除停用词和重复词）
     """
     # 1. 创建一个独立的Tokenizer实例
     tokenizer = jieba.Tokenizer()
@@ -188,6 +188,18 @@ async def custom_tokenize_with_semantic_words(text: str, dataset_id_list: List[s
                 logger.info(f"最终结果中自定义词表命中的词: {final_custom_matches}")
             else:
                 logger.info(f"最终结果中自定义词表命中的词(前20个): {final_custom_matches[:20]}...")
+
+    # 6. 去除重复词
+    original_count = len(words)
+    words = list(set(words))
+    duplicates_removed = original_count - len(words)
+
+    logger.info(f"去重过滤: 移除了 {duplicates_removed} 个重复词")
+    logger.info(f"最终分词结果(去重后): {len(words)} 个词")
+    if len(words) <= 20:  # 如果词数量较少，则全部打印
+        logger.info(f"最终去重结果: {words}")
+    else:  # 否则只打印部分
+        logger.info(f"最终去重结果(前20个): {words[:20]}...")
 
     return words
 
