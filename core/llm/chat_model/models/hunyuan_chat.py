@@ -72,28 +72,20 @@ class HunyuanChat(Base):
             **_gen_conf,
         }
         req.from_json_string(json.dumps(params))
-
-        accumulated_response = ""
+        ans = ""
         total_tokens = 0
-
         try:
             response = self.client.ChatCompletions(req)
             for resp in response:
                 resp = json.loads(resp["data"])
                 if not resp["Choices"] or not resp["Choices"][0]["Delta"]["Content"]:
                     continue
-
-                # 获取新的token
-                new_content = resp["Choices"][0]["Delta"]["Content"]
+                ans = resp["Choices"][0]["Delta"]["Content"]
                 total_tokens += 1
 
-                # 累积响应
-                accumulated_response += new_content
-
-                # 返回目前累积的完整响应
-                yield accumulated_response
+                yield ans
 
         except TencentCloudSDKException as e:
-            yield accumulated_response + "\n**ERROR**: " + str(e)
+            yield ans + "\n**ERROR**: " + str(e)
 
         yield total_tokens

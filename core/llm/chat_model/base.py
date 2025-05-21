@@ -30,16 +30,16 @@ LENGTH_NOTIFICATION_EN = "...\nThe answer is truncated by your chosen LLM due to
 
 class Base(ABC):
     def __init__(self, key, model_name, base_url):
-        timeout = int(os.environ.get('LM_TIMEOUT_SECONDS', 600))
+        timeout = int(os.environ.get("LM_TIMEOUT_SECONDS", 600))
         self.client = OpenAI(api_key=key, base_url=base_url, timeout=timeout)
         self.model_name = model_name
         # Configure retry parameters
-        self.max_retries = int(os.environ.get('LLM_MAX_RETRIES', 5))
-        self.base_delay = float(os.environ.get('LLM_BASE_DELAY', 2.0))
+        self.max_retries = int(os.environ.get("LLM_MAX_RETRIES", 5))
+        self.base_delay = float(os.environ.get("LLM_BASE_DELAY", 2.0))
 
     def _get_delay(self, attempt):
         """Calculate retry delay time"""
-        return self.base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+        return self.base_delay * (2**attempt) + random.uniform(0, 0.5)
 
     def _classify_error(self, error):
         """Classify error based on error message content"""
@@ -75,10 +75,7 @@ class Base(ABC):
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries):
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=history,
-                    **gen_conf)
+                response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf)
 
                 if any([not response.choices, not response.choices[0].message,
                         not response.choices[0].message.content]):
@@ -116,25 +113,23 @@ class Base(ABC):
             del gen_conf["max_tokens"]
         ans = ""
         total_tokens = 0
+        reasoning_start = False
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=history,
-                stream=True,
-                **gen_conf
-            )
+            response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, **gen_conf)
             for resp in response:
                 if not resp.choices:
                     continue
                 if not resp.choices[0].delta.content:
                     resp.choices[0].delta.content = ""
                 if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
-                    if ans.find("<think>") < 0:
-                        ans += "<think>"
-                    ans = ans.replace("</think>", "")
+                    ans = ""
+                    if not reasoning_start:
+                        reasoning_start = True
+                        ans = "<think>"
                     ans += resp.choices[0].delta.reasoning_content + "</think>"
                 else:
-                    ans += resp.choices[0].delta.content
+                    reasoning_start = False
+                    ans = resp.choices[0].delta.content
 
                 tol = self.total_token_count(resp)
                 if not tol:

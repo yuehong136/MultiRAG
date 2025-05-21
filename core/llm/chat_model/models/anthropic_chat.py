@@ -33,11 +33,7 @@ class AnthropicChat(Base):
             ).to_dict()
             ans = response["content"][0]["text"]
             if response["stop_reason"] == "max_tokens":
-                ans += (
-                    "...\nFor the content length reason, it stopped, continue?"
-                    if is_english([ans])
-                    else "······\n由于长度的原因，回答被截断了，要继续吗？"
-                )
+                ans += "...\nFor the content length reason, it stopped, continue?" if is_english([ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
             return (
                 ans,
                 response["usage"]["input_tokens"] + response["usage"]["output_tokens"],
@@ -58,6 +54,7 @@ class AnthropicChat(Base):
 
         ans = ""
         total_tokens = 0
+        reasoning_start = False
         try:
             response = self.client.messages.create(
                 model=self.model_name,
@@ -67,15 +64,17 @@ class AnthropicChat(Base):
                 **gen_conf,
             )
             for res in response:
-                if res.type == 'content_block_delta':
+                if res.type == "content_block_delta":
                     if res.delta.type == "thinking_delta" and res.delta.thinking:
-                        if ans.find("<think>") < 0:
-                            ans += "<think>"
-                        ans = ans.replace("</think>", "")
+                        ans = ""
+                        if not reasoning_start:
+                            reasoning_start = True
+                            ans = "<think>"
                         ans += res.delta.thinking + "</think>"
                     else:
+                        reasoning_start = False
                         text = res.delta.text
-                        ans += text
+                        ans = text
                         total_tokens += num_tokens_from_string(text)
                     yield ans
         except Exception as e:

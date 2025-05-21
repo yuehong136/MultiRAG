@@ -18,6 +18,7 @@ from core.llm.chat_model.base import Base, LENGTH_NOTIFICATION_CN, LENGTH_NOTIFI
 class QWenChat(Base):
     def __init__(self, key, model_name=Generation.Models.qwen_turbo, **kwargs):
         import dashscope
+
         dashscope.api_key = key
         self.model_name = model_name
         if self.is_reasoning_model(self.model_name):
@@ -29,22 +30,18 @@ class QWenChat(Base):
         if self.is_reasoning_model(self.model_name):
             return super().chat(system, history, gen_conf)
 
-        stream_flag = str(os.environ.get('QWEN_CHAT_BY_STREAM', 'true')).lower() == 'true'
+        stream_flag = str(os.environ.get("QWEN_CHAT_BY_STREAM", "true")).lower() == "true"
         if not stream_flag:
             from http import HTTPStatus
+
             if system:
                 history.insert(0, {"role": "system", "content": system})
 
-            response = Generation.call(
-                self.model_name,
-                messages=history,
-                result_format='message',
-                **gen_conf
-            )
+            response = Generation.call(self.model_name, messages=history, result_format="message", **gen_conf)
             ans = ""
             tk_count = 0
             if response.status_code == HTTPStatus.OK:
-                ans += response.output.choices[0]['message']['content']
+                ans += response.output.choices[0]["message"]["content"]
                 tk_count += self.total_token_count(response)
                 if response.output.choices[0].get("finish_reason", "") == "length":
                     if is_chinese([ans]):
@@ -63,8 +60,9 @@ class QWenChat(Base):
             else:
                 return "".join(result_list[:-1]), result_list[-1]
 
-    def _chat_streamly(self, system, history, gen_conf, incremental_output=False):
+    def _chat_streamly(self, system, history, gen_conf, incremental_output=True):
         from http import HTTPStatus
+
         if system:
             history.insert(0, {"role": "system", "content": system})
         if "max_tokens" in gen_conf:
@@ -72,17 +70,10 @@ class QWenChat(Base):
         ans = ""
         tk_count = 0
         try:
-            response = Generation.call(
-                self.model_name,
-                messages=history,
-                result_format='message',
-                stream=True,
-                incremental_output=incremental_output,
-                **gen_conf
-            )
+            response = Generation.call(self.model_name, messages=history, result_format="message", stream=True, incremental_output=incremental_output, **gen_conf)
             for resp in response:
                 if resp.status_code == HTTPStatus.OK:
-                    ans = resp.output.choices[0]['message']['content']
+                    ans = resp.output.choices[0]["message"]["content"]
                     tk_count = self.total_token_count(resp)
                     if resp.output.choices[0].get("finish_reason", "") == "length":
                         if is_chinese([ans]):
@@ -91,8 +82,11 @@ class QWenChat(Base):
                             ans += LENGTH_NOTIFICATION_EN
                     yield ans
                 else:
-                    yield ans + "\n**ERROR**: " + resp.message if not re.search(r" (key|quota)",
-                                                                                str(resp.message).lower()) else "Out of credit. Please set the API key in **settings > Model providers.**"
+                    yield (
+                        ans + "\n**ERROR**: " + resp.message
+                        if not re.search(r" (key|quota)", str(resp.message).lower())
+                        else "Out of credit. Please set the API key in **settings > Model providers.**"
+                    )
         except Exception as e:
             yield ans + "\n**ERROR**: " + str(e)
 
@@ -108,7 +102,9 @@ class QWenChat(Base):
 
     @staticmethod
     def is_reasoning_model(model_name: str) -> bool:
-        return any([
-            model_name.lower().find("deepseek") >= 0,
-            model_name.lower().find("qwq") >= 0 and model_name.lower() != 'qwq-32b-preview',
-        ])
+        return any(
+            [
+                model_name.lower().find("deepseek") >= 0,
+                model_name.lower().find("qwq") >= 0 and model_name.lower() != "qwq-32b-preview",
+            ]
+        )

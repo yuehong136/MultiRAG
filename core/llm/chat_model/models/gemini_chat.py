@@ -4,11 +4,11 @@ from core.llm.chat_model.base import Base
 class GeminiChat(Base):
 
     def __init__(self, key, model_name, base_url=None):
-        from google.generativeai import client, GenerativeModel
+        from google.generativeai import GenerativeModel, client
 
         client.configure(api_key=key)
         _client = client.get_default_generative_client()
-        self.model_name = 'models/' + model_name
+        self.model_name = "models/" + model_name
         self.model = GenerativeModel(model_name=self.model_name)
         self.model._client = _client
 
@@ -21,17 +21,15 @@ class GeminiChat(Base):
             if k not in ["temperature", "top_p", "max_tokens"]:
                 del gen_conf[k]
         for item in history:
-            if 'role' in item and item['role'] == 'assistant':
-                item['role'] = 'model'
-            if 'role' in item and item['role'] == 'system':
-                item['role'] = 'user'
-            if 'content' in item:
-                item['parts'] = item.pop('content')
+            if "role" in item and item["role"] == "assistant":
+                item["role"] = "model"
+            if "role" in item and item["role"] == "system":
+                item["role"] = "user"
+            if "content" in item:
+                item["parts"] = item.pop("content")
 
         try:
-            response = self.model.generate_content(
-                history,
-                generation_config=gen_conf)
+            response = self.model.generate_content(history, generation_config=gen_conf)
             ans = response.text
             return ans, response.usage_metadata.total_token_count
         except Exception as e:
@@ -46,17 +44,15 @@ class GeminiChat(Base):
             if k not in ["temperature", "top_p", "max_tokens"]:
                 del gen_conf[k]
         for item in history:
-            if 'role' in item and item['role'] == 'assistant':
-                item['role'] = 'model'
-            if 'content' in item:
-                item['parts'] = item.pop('content')
+            if "role" in item and item["role"] == "assistant":
+                item["role"] = "model"
+            if "content" in item:
+                item["parts"] = item.pop("content")
         ans = ""
         try:
-            response = self.model.generate_content(
-                history,
-                generation_config=gen_conf, stream=True)
+            response = self.model.generate_content(history, generation_config=gen_conf, stream=True)
             for resp in response:
-                ans += resp.text
+                ans = resp.text
                 yield ans
 
             yield response._chunks[-1].usage_metadata.total_token_count

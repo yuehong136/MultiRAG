@@ -28,11 +28,7 @@ class ZhipuChat(Base):
         if "frequency_penalty" in gen_conf:
             del gen_conf["frequency_penalty"]
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=history,
-                **gen_conf
-            )
+            response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf)
             ans = response.choices[0].message.content.strip()
             if response.choices[0].finish_reason == "length":
                 if is_chinese(ans):
@@ -55,17 +51,12 @@ class ZhipuChat(Base):
         ans = ""
         tk_count = 0
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=history,
-                stream=True,
-                **gen_conf
-            )
+            response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, **gen_conf)
             for resp in response:
                 if not resp.choices[0].delta.content and resp.choices[0].finish_reason != 'stop':
                     continue
                 delta = resp.choices[0].delta.content
-                ans += delta
+                ans = delta
                 if resp.choices[0].finish_reason == "length":
                     if is_chinese(ans):
                         ans += LENGTH_NOTIFICATION_CN

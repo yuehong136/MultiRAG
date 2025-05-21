@@ -5,7 +5,7 @@ from core.nlp import is_chinese
 
 
 class GroqChat(Base):
-    def __init__(self, key, model_name, base_url=''):
+    def __init__(self, key, model_name, base_url=""):
         self.client = Groq(api_key=key)
         self.model_name = model_name
 
@@ -17,11 +17,7 @@ class GroqChat(Base):
                 del gen_conf[k]
         ans = ""
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=history,
-                **gen_conf
-            )
+            response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf)
             ans = response.choices[0].message.content
             if response.choices[0].finish_reason == "length":
                 if is_chinese(ans):
@@ -41,16 +37,11 @@ class GroqChat(Base):
         ans = ""
         total_tokens = 0
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=history,
-                stream=True,
-                **gen_conf
-            )
+            response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, **gen_conf)
             for resp in response:
                 if not resp.choices or not resp.choices[0].delta.content:
                     continue
-                ans += resp.choices[0].delta.content
+                ans = resp.choices[0].delta.content
                 total_tokens += 1
                 if resp.choices[0].finish_reason == "length":
                     if is_chinese(ans):

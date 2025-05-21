@@ -24,9 +24,7 @@ class OllamaChat:
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
         try:
-            options = {
-                "num_ctx": 32768
-            }
+            options = {"num_ctx": 32768}
             if "temperature" in gen_conf:
                 options["temperature"] = gen_conf["temperature"]
             if "max_tokens" in gen_conf:
@@ -38,12 +36,7 @@ class OllamaChat:
             if "frequency_penalty" in gen_conf:
                 options["frequency_penalty"] = gen_conf["frequency_penalty"]
 
-            response = self.client.chat(
-                model=self.model_name,
-                messages=history,
-                options=options,
-                keep_alive=-1
-            )
+            response = self.client.chat(model=self.model_name, messages=history, options=options, keep_alive=-1)
             ans = response["message"]["content"].strip()
             return ans, response.get("eval_count", 0) + response.get("prompt_eval_count", 0)
         except Exception as e:
@@ -68,17 +61,11 @@ class OllamaChat:
 
         ans = ""
         try:
-            response = self.client.chat(
-                model=self.model_name,
-                messages=history,
-                stream=True,
-                options=options,
-                keep_alive=-1
-            )
+            response = self.client.chat(model=self.model_name, messages=history, stream=True, options=options, keep_alive=-1)
             for resp in response:
                 if resp["done"]:
                     yield resp.get("prompt_eval_count", 0) + resp.get("eval_count", 0)
-                ans += resp["message"]["content"]
+                ans = resp["message"]["content"]
                 yield ans
         except Exception as e:
             yield ans + "\n**ERROR**: " + str(e)
