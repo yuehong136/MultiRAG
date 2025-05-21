@@ -96,9 +96,15 @@ class MilvusConnection(DocStoreConnection):
             logger.error(msg)
             raise Exception(msg)
 
+    def field_keyword(self, field_name: str):
+        # The "docnm_kwd" field is always a string, not list.
+        if field_name == "source_id" or (field_name.endswith("_kwd") and field_name != "docnm_kwd"):
+            return True
+        return False
+
     """
-        数据库操作
-        """
+    数据库操作
+    """
 
     def dbType(self) -> str:
         return "milvus"

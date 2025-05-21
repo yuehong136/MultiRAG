@@ -164,7 +164,8 @@ dependencies = [
     "torch>=2.5.0,<3.0.0",
     "transformers>=4.35.0,<5.0.0",
     "sse-starlette>=2.2.1",
-    "langfuse>=2.60.0"
+    "langfuse>=2.60.0",
+    "debugpy>=1.8.13",
 ]
 
 [tool.uv]

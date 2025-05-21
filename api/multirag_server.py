@@ -43,6 +43,8 @@ from core.utils.redis_conn import RedisDistributedLock
 
 stop_event = threading.Event()
 
+MultiRAG_DEBUGPY_LISTEN = int(os.environ.get('MultiRAG_DEBUGPY_LISTEN', "0"))
+
 def update_progress():
     """
     定期更新文档服务进度
@@ -100,6 +102,12 @@ if __name__ == '__main__':
     show_configs()
     settings.init_settings()
     print_rag_settings()
+
+    if MultiRAG_DEBUGPY_LISTEN > 0:
+        logging.info(f"debugpy listen on {MultiRAG_DEBUGPY_LISTEN}")
+        import debugpy
+
+        debugpy.listen(("0.0.0.0", MultiRAG_DEBUGPY_LISTEN))
 
     # 初始化数据库
     init_web_db()
