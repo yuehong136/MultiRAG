@@ -28,6 +28,7 @@ from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.models.ollama_cv import OllamaCV
 from core.llm.cv_model.models.openai_api_cv import OpenAI_APICV
 from core.llm.cv_model.models.qwen_cv import QWenCV
+from core.llm.cv_model.models.siliconflow_cv import SILICONFLOWCV
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.cohere_embed import CoHereEmbed
@@ -99,7 +100,8 @@ CvModel = {
     'Gemini':GeminiCV,
     "OpenAI-API-Compatible": OpenAI_APICV,
     "VLLM": OpenAI_APICV,
-    "Anthropic": AnthropicCV
+    "Anthropic": AnthropicCV,
+    "SILICONFLOW": SILICONFLOWCV,
 }
 
 
