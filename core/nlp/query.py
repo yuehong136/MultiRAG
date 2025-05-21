@@ -198,7 +198,6 @@ class MilvusQueryer:
 
     def token_similarity(self, atks, btkss):
         def toDict(tks):
-            d = {}
             if isinstance(tks, str):
                 tks = tks.split()
             d = defaultdict(int)

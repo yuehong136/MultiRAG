@@ -903,7 +903,8 @@ class Dealer:
                 rank_fea.append(nor/np.sqrt(denor)/q_denor)
         return np.array(rank_fea)*10. + pageranks
 
-    def rerank(self, sres, query, tkweight=0.3, vtweight=0.7, cfield="content_ltks",
+    def rerank(self, sres, query, tkweight=0.3,
+               vtweight=0.7, cfield="content_ltks",
                rank_feature: dict | None = None
                ):
         """
