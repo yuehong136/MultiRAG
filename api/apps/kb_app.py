@@ -400,3 +400,18 @@ def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(mana
             filtered_edges = [o for o in obj["graph"]["edges"] if o["source"] != o["target"] and o["source"] in node_id_set and o["target"] in node_id_set]
             obj["graph"]["edges"] = sorted(filtered_edges, key=lambda x: x.get("weight", 0), reverse=True)[:128]
     return get_json_result(data=obj)
+
+
+@router.delete('/<kb_id>/knowledge_graph', summary="删除知识图谱")
+def delete_knowledge_graph(kb_id, db: Session = Depends(get_db), user=Depends(manager)):
+    if not KnowledgebaseService.accessible(db, kb_id, user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
+        )
+    kb = KnowledgebaseService.get_by_id(db, kb_id)
+
+    settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id, [kb.name]), kb_id)
+
+    return get_json_result(data=True)
