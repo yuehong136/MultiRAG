@@ -136,21 +136,3 @@ class MultiRAGMinio:
                 logging.warning(f"Bucket {bucket} does not exist.")
         except Exception:
             logging.exception(f"Failed to delete bucket {bucket}.")
-
-MINIO = MultiRAGMinio()
-
-if __name__ == "__main__":
-    conn = MultiRAGMinio()
-    fnm = r"E:\Project\python\study\RAG\assets\multirag.jpg"
-    from PIL import Image
-
-    img = Image.open(fnm)
-    # 将图像从RGBA转换为RGB
-    if img.mode == 'RGBA':
-        img = img.convert('RGB')
-    buff = BytesIO()
-    img.save(buff, format='JPEG')
-    print(conn.put("test-dxl", "multirag.jpg", buff.getvalue()))
-    bts = conn.get("test-dxl", "multirag.jpg")
-    img = Image.open(BytesIO(bts))
-    img.save("multirag.jpg")
