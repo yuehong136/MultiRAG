@@ -309,6 +309,7 @@ class LLM(BaseModel):
     fid = Column(String(128), index=True, nullable=False, doc="LLM factory id")
     max_tokens = Column(BigInteger, index=False, nullable=False, default=0)
     tags = Column(String(255), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, Chat, 32k...")
+    is_tools = Column(Boolean, index=True, nullable=False, default=False, doc="support tools")
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
