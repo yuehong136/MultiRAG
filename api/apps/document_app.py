@@ -624,32 +624,11 @@ def change_parser(
         # 检查是否需要更新解析器ID
         if doc.parser_id.lower() == req["parser_id"].lower():
             # 如果parser_id未变更，则根据是否包含parser_config进行处理
-            if "parser_config" in req and req["parser_config"] == doc.parser_config:
-                return construct_json_result(data=True)
+            if "parser_config" in req:
+                if req["parser_config"] == doc.parser_config:
+                    return construct_json_result(data=True)
             else:
                 return construct_json_result(data=True)
-            # # 如果parser_id未变更，则根据是否包含parser_config进行处理
-            # # if "parser_config" in req and req["parser_config"] == doc.parser_config:
-            # #     return construct_json_result(data=True)
-            # def convert_to_dict(obj):
-            #     """
-            #     将一个对象转换为字典。
-            #     如果是自定义对象，使用对象的 __dict__ 属性来获取属性值。
-            #     """
-            #     if isinstance(obj, dict):
-            #         return obj
-            #     elif hasattr(obj, "__dict__"):
-            #         return {key: convert_to_dict(value) for key, value in obj.__dict__.items()}
-            #     else:
-            #         return obj
-            #
-            # # 转换后进行比较
-            # if "parser_config" in req and convert_to_dict(doc.parser_config) == req["parser_config"]:
-            #     return construct_json_result(data=True)
-            # else:
-            #     # return construct_json_result(data=True)
-            #     pass  # 继续往下执行后续代码
-
         # 检查文档类型是否支持
         if doc.type == FileType.VISUAL or re.search(r"\.(ppt|pptx|pages)$", doc.name):
             return construct_json_result(data=False, message="Not supported yet!", code=settings.RetCode.ARGUMENT_ERROR)

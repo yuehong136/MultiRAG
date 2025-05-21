@@ -200,7 +200,7 @@ class DocumentService(CommonService):
         return query.all()
 
     @classmethod
-    def increment_chunk_num(cls, db: Session, doc_id: str, kb_id: str, token_num: int, chunk_num: int, duration: int):
+    def increment_chunk_num(cls, db: Session, doc_id, kb_id, token_num, chunk_num, duration):
         """
         更新文档和知识库的片段数量、令牌数量和处理时长。
 

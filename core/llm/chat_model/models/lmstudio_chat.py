@@ -1,7 +1,7 @@
 import os
 
-from api.db.db_models import Base
 from openai import OpenAI
+from core.llm.chat_model.base import Base
 
 
 class LmStudioChat(Base):
