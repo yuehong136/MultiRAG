@@ -164,8 +164,7 @@ class Base(ABC):
             try:
                 response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf)
 
-                if any([not response.choices, not response.choices[0].message,
-                        not response.choices[0].message.content]):
+                if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
                     return "", 0
                 ans = response.choices[0].message.content.strip()
                 if response.choices[0].finish_reason == "length":
@@ -175,17 +174,16 @@ class Base(ABC):
                         ans += LENGTH_NOTIFICATION_EN
                 return ans, self.total_token_count(response)
             except Exception as e:
+                logging.exception("chat_model.Base.chat got exception")
                 # Classify the error
                 error_code = self._classify_error(e)
 
                 # Check if it's a rate limit error or server error and not the last attempt
-                should_retry = (
-                                           error_code == ERROR_RATE_LIMIT or error_code == ERROR_SERVER) and attempt < self.max_retries - 1
+                should_retry = (error_code == ERROR_RATE_LIMIT or error_code == ERROR_SERVER) and attempt < self.max_retries - 1
 
                 if should_retry:
                     delay = self._get_delay(attempt)
-                    logging.warning(
-                        f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
+                    logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
                     time.sleep(delay)
                 else:
                     # For non-rate limit errors or the last attempt, return an error message
