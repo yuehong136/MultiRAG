@@ -193,7 +193,8 @@ class DocumentService(CommonService):
             cls.model.progress < 1,
             cls.model.progress > 0
         )
-        return query.all()
+        rows = query.all()
+        return [dict(row._mapping) for row in rows]
 
     @classmethod
     def increment_chunk_num(cls, db: Session, doc_id, kb_id, token_num, chunk_num, duration):
@@ -500,7 +501,7 @@ class DocumentService(CommonService):
         for d in docs:
             try:
                 # 从元组中提取文档ID
-                doc_id = d[0] if isinstance(d, tuple) else d.id
+                doc_id = d[0] if isinstance(d, tuple) else d["id"]
                 tsks = db.query(Task).filter_by(doc_id=doc_id).order_by(Task.create_time).all()
                 if not tsks:
                     continue
@@ -511,12 +512,6 @@ class DocumentService(CommonService):
                 has_raptor = False
                 has_graphrag = False
                 doc = DocumentService.get_by_id(db, doc_id)
-                # 如果文档是元组，提取实际对象
-                if isinstance(doc, tuple):
-                    doc = doc[1] if len(doc) > 1 else None
-                    if not doc:
-                        continue
-
                 status = doc.run  # TaskStatus.RUNNING.value
                 priority = 0
 
@@ -542,10 +537,10 @@ class DocumentService(CommonService):
                     prg = -1
                     status = TaskStatus.FAIL.value
                 elif finished:
-                    if d.parser_config.get("raptor", {}).get("use_raptor") and not has_raptor:
+                    if d["parser_config"].get("raptor", {}).get("use_raptor") and not has_raptor:
                         queue_raptor_o_graphrag_tasks(db, d, "raptor", priority)
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
-                    elif d.parser_config.get("graphrag", {}).get("use_graphrag") and not has_graphrag:
+                    elif d["parser_config"].get("graphrag", {}).get("use_graphrag") and not has_graphrag:
                         queue_raptor_o_graphrag_tasks(db, d, "graphrag", priority)
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
                     else:
@@ -553,14 +548,14 @@ class DocumentService(CommonService):
 
                 msg = "\n".join(sorted(msg))
                 info = {
-                    "process_duration": datetime.timestamp(datetime.now()) - d.process_begin_at.timestamp(),
+                    "process_duration": datetime.timestamp(datetime.now()) - d["process_begin_at"].timestamp(),
                     "run": status
                 }
                 if prg != 0:
                     info["progress"] = prg
                 if msg:
                     info["progress_msg"] = msg
-                cls.update_by_id(db, d.id, info)
+                cls.update_by_id(db, d["id"], info)
             except Exception as e:
                 if str(e).find("'0'") < 0:
                     logging.exception("fetch task exception")

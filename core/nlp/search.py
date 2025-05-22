@@ -1200,9 +1200,13 @@ class Dealer:
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         for p in range(offset, max_count, bs):
-            milvus_res = self.dataStore.search(fields, [], condition, [], OrderByExpr(), p, bs, index_name(tenant_id, [kb.kb_name]),
+            milvus_res = self.dataStore.search(fields, [], condition, [], OrderByExpr(), p, bs, index_name(tenant_id, [kb.name]),
                                            kb_ids)
             dict_chunks = self.dataStore.getFields(milvus_res, fields)
+            # 直接删除系统字段
+            system_fields = ['distance']
+            for field in system_fields:
+                dict_chunks.pop(field, None)  # 使用pop(key, None)避免KeyError
             for id, doc in dict_chunks.items():
                 doc["id"] = id
             if dict_chunks:
