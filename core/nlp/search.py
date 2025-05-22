@@ -1071,7 +1071,7 @@ class Dealer:
         idxnms = index_name(tenant_id, kb_names)
 
         sres = self.search(req, idxnms, kb_names, embd_mdl, rank_feature=rank_feature)
-        ranks["total"] = sres.total
+        # ranks["total"] = sres.total
 
         # if not sres.ids:
         #     return ranks
@@ -1102,6 +1102,10 @@ class Dealer:
         else:
             vector_column = "vector"
         zero_vector = [0.0] * dim
+
+        sim_np = np.array(sim)
+        filtered_count = (sim_np >= similarity_threshold).sum()
+        ranks["total"] = int(filtered_count) # Convert from np.int64 to Python int otherwise JSON serializable error
         for i in idx:
             if sim[i] < similarity_threshold:
                 break
