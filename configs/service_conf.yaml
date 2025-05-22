@@ -52,6 +52,11 @@ s3:
   access_key: 'access_key'
   secret_key: 'secret_key'
   region: 'region'
+  endpoint_url: 'endpoint_url'
+  bucket: 'bucket'
+  prefix_path: 'prefix_path'
+  signature_version: 'v4'
+  addressing_style: 'path'
 
 oss:
   access_key: 'access_key'
@@ -96,7 +101,7 @@ redis:
 
 user_default_llm:
   factory: 'ZHIPU-AI'
-  api_key: '7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv'
+  api_key: '622531847aa342ad9da7e62b83930d56.mV8uJ8BoWMa8lfra'
   base_url: ''
   default_models:
     chat_model: 'glm-4-airx'
