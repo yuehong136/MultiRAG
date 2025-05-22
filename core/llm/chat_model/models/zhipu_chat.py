@@ -15,6 +15,7 @@ class ZhipuChat(Base):
     client: ZhipuAI = field(init=False)
 
     def __post_init__(self):
+        super().__init__(self.key, self.model_name, base_url=self.base_url)
         self.client = ZhipuAI(api_key=self.key)
         # print(f"ZhipuAI client initialized with key: {self.key}")
 

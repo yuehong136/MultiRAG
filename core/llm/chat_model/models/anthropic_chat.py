@@ -5,6 +5,8 @@ from core.utils import num_tokens_from_string
 
 class AnthropicChat(Base):
     def __init__(self, key, model_name, base_url=None):
+        super().__init__(key, model_name, base_url=None)
+
         import anthropic
 
         self.client = anthropic.Anthropic(api_key=key)

@@ -5,6 +5,8 @@ from core.utils import num_tokens_from_string
 
 class CoHereChat(Base):
     def __init__(self, key, model_name, base_url=""):
+        super().__init__(key, model_name, base_url=None)
+
         from cohere import Client
 
         self.client = Client(api_key=key)

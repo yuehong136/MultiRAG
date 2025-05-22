@@ -6,6 +6,8 @@ from core.nlp import is_chinese
 
 class GroqChat(Base):
     def __init__(self, key, model_name, base_url=""):
+        super().__init__(key, model_name, base_url=None)
+
         self.client = Groq(api_key=key)
         self.model_name = model_name
 

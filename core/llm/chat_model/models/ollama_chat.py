@@ -5,6 +5,8 @@ from core.llm.chat_model.base import Base
 
 class OllamaChat(Base):
     def __init__(self, key, model_name, **kwargs):
+        super().__init__(key, model_name, base_url=None)
+
         self.client = Client(host=kwargs["base_url"]) if not key or key == "x" else Client(host=kwargs["base_url"], headers={"Authorization": f"Bearer {key}"})
         self.model_name = model_name
 
@@ -17,9 +19,7 @@ class OllamaChat(Base):
             # Calculate context size
             ctx_size = self._calculate_dynamic_ctx(history)
 
-            options = {
-                "num_ctx": ctx_size
-            }
+            options = {"num_ctx": ctx_size}
             if "temperature" in gen_conf:
                 options["temperature"] = gen_conf["temperature"]
             if "max_tokens" in gen_conf:
@@ -46,9 +46,7 @@ class OllamaChat(Base):
         try:
             # Calculate context size
             ctx_size = self._calculate_dynamic_ctx(history)
-            options = {
-                "num_ctx": ctx_size
-            }
+            options = {"num_ctx": ctx_size}
             if "temperature" in gen_conf:
                 options["temperature"] = gen_conf["temperature"]
             if "max_tokens" in gen_conf:
@@ -62,8 +60,7 @@ class OllamaChat(Base):
 
             ans = ""
             try:
-                response = self.client.chat(model=self.model_name, messages=history, stream=True, options=options,
-                                            keep_alive=10)
+                response = self.client.chat(model=self.model_name, messages=history, stream=True, options=options, keep_alive=10)
                 for resp in response:
                     if resp["done"]:
                         token_count = resp.get("prompt_eval_count", 0) + resp.get("eval_count", 0)

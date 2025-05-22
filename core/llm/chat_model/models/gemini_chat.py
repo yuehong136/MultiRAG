@@ -4,6 +4,8 @@ from core.llm.chat_model.base import Base
 class GeminiChat(Base):
 
     def __init__(self, key, model_name, base_url=None):
+        super().__init__(key, model_name, base_url=None)
+
         from google.generativeai import GenerativeModel, client
 
         client.configure(api_key=key)

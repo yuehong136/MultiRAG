@@ -5,6 +5,8 @@ from core.llm.chat_model.base import Base
 
 class HunyuanChat(Base):
     def __init__(self, key, model_name, base_url=None):
+        super().__init__(key, model_name, base_url=None)
+
         from tencentcloud.common import credential
         from tencentcloud.hunyuan.v20230901 import hunyuan_client
 
