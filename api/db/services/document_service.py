@@ -153,18 +153,14 @@ class DocumentService(CommonService):
                 )
             # todo 待测试【docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
             # docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id, [kb.name]), doc.kb_id)
-            # docStoreConn.update(
-            #     {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "community_report"],
-            #      "source_id": doc.id},
-            #     {"remove": {"source_id": doc.id}},
-            #     search.index_name(tenant_id, [kb.name]), doc.kb_id)
+            # docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc.id},
+            #                              {"remove": {"source_id": doc.id}},
+            #                              search.index_name(tenant_id, [kb.name]), doc.kb_id)
             # docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
             #                              {"removed_kwd": "Y"},
             #                              search.index_name(tenant_id, [kb.name]), doc.kb_id)
-            # docStoreConn.delete(
-            #     {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "community_report"],
-            #      "must_not": {"exists": "source_id"}},
-            #     search.index_name(tenant_id, [kb.name]), doc.kb_id)
+            # docStoreConn.delete({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
+            #                              search.index_name(tenant_id, [kb.name]), doc.kb_id)
         except MilvusException as e:
             return e
         return cls.delete_by_id(db, doc.id)
