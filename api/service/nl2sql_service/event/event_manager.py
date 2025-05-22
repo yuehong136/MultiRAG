@@ -2,6 +2,22 @@ from typing import Dict, List, Callable, Any
 import asyncio
 from datetime import datetime
 import json
+import numpy as np
+
+
+class NumpyEncoder(json.JSONEncoder):
+    """
+    自定义JSON编码器，用于处理NumPy类型的序列化
+    """
+
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 
 
 class EventManager:
@@ -69,7 +85,8 @@ class EventManager:
             "timestamp": datetime.utcnow().isoformat()
         }
 
-        serialized_data = json.dumps(event_data)
+        # 使用自定义编码器处理NumPy类型
+        serialized_data = json.dumps(event_data, cls=NumpyEncoder)
 
         async with self._lock:
             if event_id in self._subscribers:
