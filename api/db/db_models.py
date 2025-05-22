@@ -756,7 +756,7 @@ def init_database_tables():
 
     # 获取现有表列表
     inspector = sa_inspect(engine)
-    existing_tables = inspector.get_table_names(schema=schema_name)
+    existing_tables = set(inspector.get_table_names(schema=schema_name))  # 使用 set 提高查找效率
     members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
     table_objs = []
     create_failed_list = []
@@ -764,19 +764,37 @@ def init_database_tables():
     for name, obj in members:
         if obj != BaseModel and issubclass(obj, BaseModel):
             table_objs.append(obj)
-            # logging.info(f"Start creating table {obj.__name__} in schema {schema_name}")
-            try:
-                # 检查表是否存在并创建表
-                if obj.__tablename__ not in existing_tables:
+            table_name = obj.__tablename__
+
+            # 检查表是否存在
+            if table_name not in existing_tables:
+                logging.info(f"Table {table_name} does not exist, creating...")
+                try:
+                    # 使用更安全的方式创建表
+                    # checkfirst=True 确保 SQLAlchemy 再次检查表是否存在
                     obj.__table__.create(bind=engine, checkfirst=True)
-                    logging.info(f"Successfully created table: {obj.__name__}")
-            except OperationalError as e:
-                logging.exception(f"Error creating table {obj.__name__}: {e}")
-                create_failed_list.append(obj.__name__)
+                    logging.info(f"Successfully created table: {table_name}")
+
+                    # 更新已存在的表列表，避免后续重复检查
+                    existing_tables.add(table_name)
+
+                except OperationalError as e:
+                    logging.exception(f"Error creating table {table_name}: {e}")
+                    create_failed_list.append(table_name)
+                except Exception as e:
+                    # 捕获其他可能的异常
+                    logging.exception(f"Unexpected error creating table {table_name}: {e}")
+                    create_failed_list.append(table_name)
+            else:
+                logging.debug(f"Table {table_name} already exists, skipping creation")
 
     if create_failed_list:
-        logging.error(f"Failed to create tables: {create_failed_list}")
-        raise Exception(f"Failed to create tables: {create_failed_list}")
+        error_msg = f"Failed to create tables: {create_failed_list}"
+        logging.error(error_msg)
+        raise Exception(error_msg)
+
+    logging.info("Database table initialization completed successfully")
+    return "Success"
 
 def upgrade_database_tables():
     logging.info("开始执行数据库结构升级...")
