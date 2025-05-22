@@ -1,3 +1,6 @@
+#
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+#
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 #  You may obtain a copy of the License at
@@ -59,7 +62,7 @@ def init_in_out(args):
             fp.close()
             images.append(Image.open(io.BytesIO(binary)).convert('RGB'))
             outputs.append(os.path.split(fnm)[-1])
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
 
     if os.path.isdir(args.inputs):
@@ -68,6 +71,16 @@ def init_in_out(args):
     else:
         images_and_outputs(args.inputs)
 
-    for i in range(len(outputs)): outputs[i] = os.path.join(args.output_dir, outputs[i])
+    for i in range(len(outputs)):
+        outputs[i] = os.path.join(args.output_dir, outputs[i])
 
     return images, outputs
+
+
+__all__ = [
+    "OCR",
+    "Recognizer",
+    "LayoutRecognizer",
+    "TableStructureRecognizer",
+    "init_in_out",
+]
