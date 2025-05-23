@@ -234,19 +234,19 @@ class NL2SQLService:
         使用LLM转换自然语言查询为SQL
         """
         # 1. 获得查询意图
-        await send_event(request_id, {"message": "正在分析问题查询类型"}, "message")
+        await send_event(request_id, {"message": "分析问题意图", "action": "start"}, "message")
         intents = await self.analyze_query_intent(query_text, llm_name)
-        await send_event(request_id, {"message": "分析问题查询类型完成"}, "message")
-        await send_event(request_id, {"message": "查询类型", "data": intents}, "data")
+        await send_event(request_id, {"message": "分析问题意图", "action": "complete"}, "message")
+        await send_event(request_id, {"message": "问题意图", "data": intents}, "data")
         # 2. 重写查询
         # rewritten_queries = await self.query_rewriter.rewrite_query(query_text, llm_name)
         # 3. 分词
-        await send_event(request_id, {"message": "分词问题"}, "message")
+        await send_event(request_id, {"message": "分词", "action": "start"}, "message")
         segmented_words = await custom_tokenize_with_semantic_words(text=query_text, dataset_id_list=dataset_id_list)
-        await send_event(request_id, {"message": "分词完成"}, "message")
+        await send_event(request_id, {"message": "分词", "action": "complete"}, "message")
         await send_event(request_id, {"message": "分词结果", "data": segmented_words}, "data")
         # 4. 将分词到语义层结构化数据中进行检索得到相关数据
-        await send_event(request_id, {"message": "获取维度信息"}, "message")
+        await send_event(request_id, {"message": "获取维度信息", "action": "start"}, "message")
         # 4.1 根据分词关键字获得维度列表
         dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(
             keyword=segmented_words,
@@ -259,23 +259,23 @@ class NL2SQLService:
         unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
         dimension_values = await self.semantic_api_client.get_dimension_values_async(dimension_ids=unique_dimensions)
         dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=unique_dimensions)
-        await send_event(request_id, {"message": "获取维度信息完成"}, "message")
+        await send_event(request_id, {"message": "获取维度信息", "action": "complete"}, "message")
         await send_event(request_id, {"message": "维度信息", "data": dimensions}, "data")
         # 4.4 根据分词关键字获得指标列表
-        await send_event(request_id, {"message": "获取指标信息"}, "message")
+        await send_event(request_id, {"message": "获取指标信息", "action": "start"}, "message")
         metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
             keyword=segmented_words,
             dataset_ids=dataset_id_list)
-        await send_event(request_id, {"message": "获取指标信息完成"}, "message")
+        await send_event(request_id, {"message": "获取指标信息", "action": "complete"}, "message")
         await send_event(request_id, {"message": "指标信息", "data": metrics}, "data")
 
         # 4.5 从维度和指标中提取所有modelId并去重，获得模型ID列表
         model_ids = self._extract_unique_model_ids(dimensions, metrics)
 
         # 4.6 查询模型详情和关联关系
-        await send_event(request_id, {"message": "获取模型信息"}, "message")
+        await send_event(request_id, {"message": "获取模型信息", "action": "start"}, "message")
         model_details = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
-        await send_event(request_id, {"message": "获取模型信息完成"}, "message")
+        await send_event(request_id, {"message": "获取模型信息", "action": "complete"}, "message")
         await send_event(request_id, {"message": "模型信息", "data": model_details}, "data")
         model_relations = await self.semantic_api_client.get_model_relationships_async(model_ids=model_ids)
 
@@ -289,10 +289,10 @@ class NL2SQLService:
                               model_relations=model_relations, business_term_rows=business_term_rows)
         prompt, semantic_layer_struct = generate_nl2sql_prompt(user_question=query_text, query_intents=intents,
                                                                semantic_layer=semantic_layer)
-        await send_event(request_id, {"message": "正在生成SQL"}, "message")
+        await send_event(request_id, {"message": "生成SQL", "action": "start"}, "message")
         sql = await self.llm_sql_generator.generate_sql(prompt=prompt, llm_name=llm_name)
-        await send_event(request_id, {"message": "SQL生成完成"}, "message")
-        await send_event(request_id, {"message": "SQL生成结果", "data": sql}, "data")
+        await send_event(request_id, {"message": "生成SQL", "action": "complete"}, "message")
+        await send_event(request_id, {"message": "SQL", "data": sql}, "data")
 
         return sql, semantic_layer_struct
 
@@ -303,9 +303,9 @@ class NL2SQLService:
 
         sql, semantic_layer_struct = await self.nl2sql_for_whole_process(user_question, llm_name, dataset_id_list,
                                                                          request_id)
-        await send_event(request_id, {"message": "正在查询数据"}, "message")
+        await send_event(request_id, {"message": "查询数据", "action": "start"}, "message")
         result = execute_sql_and_format_result(sql=sql, db_config={})  # 假设此函数足够快或已优化
-        await send_event(request_id, {"message": "数据查询完成"}, "message")
+        await send_event(request_id, {"message": "查询数据", "action": "complete"}, "message")
         await send_event(request_id, {"message": "数据查询结果", "data": result}, "data")
 
         column_and_type = result['column_and_type']
@@ -345,16 +345,16 @@ class NL2SQLService:
                                           semantic_layer_struct: Dict[str, Any],
                                           request_id: str, llm_name: str):
         """处理SQL模板化并发送相关事件"""
-        await send_event(request_id, {"message": "正在生成SQL模板"}, "message")
+        await send_event(request_id, {"message": "生成SQL模板", "action": "start"}, "message")
         try:
             sql_templating_result = await self.sql_templating(user_question, llm_name, sql, semantic_layer_struct)
             sql_template = sql_templating_result["sql_template"]
             parameters = sql_templating_result["parameters"]
-            await send_event(request_id, {"message": "SQL模板生成完成"}, "message")
+            await send_event(request_id, {"message": "生成SQL模板", "action": "complete"}, "message")
             await send_event(request_id, {"message": "SQL模板", "data": sql_template}, "data")
             logger.info(f"SQL模板：{sql_template}")
-            await send_event(request_id, {"message": "参数列表", "data": parameters}, "data")
-            logger.info(f"参数列表：{parameters}")
+            await send_event(request_id, {"message": "过滤条件", "data": parameters}, "data")
+            logger.info(f"过滤条件：{parameters}")
         except Exception as e:
             logger.error(f"Error in SQL templating flow: {e}", exc_info=True)
             await send_event(request_id, {"message": f"SQL模板生成失败: {e}"}, "error")
@@ -364,11 +364,11 @@ class NL2SQLService:
                                               column_and_type, sample_data,
                                               llm_name: str, request_id: str):
         """处理ECharts配置生成并发送相关事件"""
-        await send_event(request_id, {"message": "正在生成ECharts配置代码"}, "message")
+        await send_event(request_id, {"message": "生成ECharts配置代码", "action": "start"}, "message")
         try:
             echarts_js_code = await self.echarts_generator.generate_echarts_config(user_question, sql, column_and_type,
                                                                                    sample_data, llm_name)
-            await send_event(request_id, {"message": "ECharts配置代码生成完成"}, "message")
+            await send_event(request_id, {"message": "生成ECharts配置代码", "action": "complete"}, "message")
             await send_event(request_id, {"message": "ECharts配置代码", "data": echarts_js_code}, "data")
             logger.info(f"ECharts配置代码：{echarts_js_code}")
         except Exception as e:
