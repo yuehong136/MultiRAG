@@ -10,6 +10,8 @@ import asyncio
 import logging
 import json
 import os
+import re
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -100,6 +102,50 @@ class SuggestionRequest(BaseModel):
     messages: list[dict]  # 当前对话上下文
     gen_conf: dict[str, Any] = None # 大模型的配置信息
     num: int = Field(3)  # 返回建议的条数
+
+
+class CandidateForm(BaseModel):
+    form_id: int
+    name: str
+    description: str | None = ""
+
+
+class RecognizeIntentRequest(BaseModel):
+    user_text: str = Field(..., max_length=900, description="用户的自然语言输入")
+    candidate_forms: list[CandidateForm] = Field(
+        ..., description="候选表单列表，建议 ≤ 10 个"
+    )
+    llm_name: str = Field(..., description="用于意图识别的对话模型名称")
+    gen_conf: dict[str, Any] = Field(
+        default_factory=lambda: {"temperature": 0.0},
+        description="可选的大模型生成参数"
+    )
+
+
+class RecognizeIntentResponse(BaseModel):
+    intent_id: int
+    confidence: float
+
+
+class FieldMeta(BaseModel):
+    field_id: int
+    name: str
+    type: str                            # "text" | "enum" | "datetime"
+    required: bool = False
+    options: list[str] | None = None  # 仅 enum 时有效
+    description: str | None = None    # 给 LLM 的说明，可带示例
+
+class FillFieldsRequest(BaseModel):
+    user_text: str = Field(..., max_length=900, description="用户的自然语言输入")
+    fields: list[FieldMeta]
+    llm_name: str = Field(..., description="调用的对话模型名称")
+    gen_conf: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0.0})
+    retry: bool = Field(default=True, description="是否允许内部再追问一次")
+
+class FillFieldsResponse(BaseModel):
+    field_values: dict[str, Any]
+    missing: list[str]
+    invalid: dict[str, str]
 
 
 router = APIRouter()
@@ -1488,3 +1534,206 @@ def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_d
     logging.info("生成的用户输入建议: %s", suggestions)
 
     return get_json_result(data=suggestions)
+
+
+@router.post(
+    "/recognize_intent",
+    summary="表单意图识别",
+    response_description="返回匹配到的表单 ID 及置信度",
+    response_model=RecognizeIntentResponse
+)
+def recognize_intent(
+    request: RecognizeIntentRequest,
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    ### 功能
+    - 根据 `user_text` 在 `candidate_forms` 中找到**最合适**的表单。
+    - 仅返回 `intent_id`（表单 ID）和 `confidence`。
+
+    ### 请求示例
+    ```json
+    {
+      "user_text": "我想明天上午请半天病假",
+      "candidate_forms": [
+        { "form_id": 1, "name": "请假申请表", "description": "员工请假使用" },
+        { "form_id": 2, "name": "报销单",   "description": "差旅费报销" }
+      ],
+      "llm_name": "gpt-4o-mini",
+      "gen_conf": { "temperature": 0 }
+    }
+    ```
+    """
+    req = request.model_dump()
+
+    # 1) 获取租户 & 模型信息（与你现有 chat_service 相同逻辑）
+    tenants = TenantService.get_info_by(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+
+    my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
+
+    def get_llm_type(model_name: str, rows):
+        for r in rows:
+            if r[4] == model_name:
+                return r[-3]  # 倒数第三个元素是 llm_type
+        return None
+
+    llm_type = get_llm_type(req["llm_name"], my_llms)
+    if llm_type != LLMType.CHAT.value:
+        raise HTTPException(status_code=400, detail="指定模型不是对话模型，或未找到")
+
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+
+    # 2) 组 Prompt（few-shot + 指令，完全内存化）
+    forms: list[dict] = req["candidate_forms"]
+    form_lines = [
+        f"{f['form_id']} | {f['name']} — {f.get('description', '')}" for f in forms
+    ]
+    prompt = (
+        "Role: 你是企业工作流中的 **表单意图识别助手**。\n"
+        "Task: 从候选表单中挑选最符合用户需求的一张，**只输出对应的 form_id 数字**，不要包含多余文字。\n"
+        "Candidates:\n"
+        + "\n".join(form_lines)
+        + "\nUSER: "
+        + req["user_text"]
+        + "\nAnswer:"
+    )
+
+    # 3) 调 LLM
+    answer = chat_mdl.chat(
+        system=prompt,
+        history=[{"role": "user", "content": ""}],   # 空 user 消息 → 模型直接输出结果
+        gen_conf=req["gen_conf"]
+    )
+
+    # 4) 解析结果（取首个数字；无则兜底为候选列表第 0 个）
+    m = re.search(r"\d+", answer)
+    if m:
+        intent_id = int(m.group())
+        confidence = 1.0
+    else:
+        intent_id = forms[0]["form_id"]
+        confidence = 0.5
+
+    return get_json_result(
+        data={"intent_id": intent_id, "confidence": confidence}
+    )
+
+
+@router.post(
+    "/fill_fields",
+    summary="表单字段填充",
+    response_model=FillFieldsResponse
+)
+def fill_fields(
+    req: FillFieldsRequest,
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    1) 用 LLM 粗填 JSON
+    2) 后端解析 & 校验
+    3) 如缺失必填且 retry=True，则内部追问一次
+    4) 返回 field_values + missing + invalid
+    """
+    # —— 租户 & 模型准备（同 chat_service）
+    tenants = TenantService.get_info_by(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+    my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
+    llm_type = next((r[-3] for r in my_llms if r[4] == req.llm_name), None)
+    if llm_type != LLMType.CHAT.value:
+        raise HTTPException(status_code=400, detail="指定模型不是对话模型，或未找到")
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req.llm_name)
+
+    def call_llm(prompt: str) -> str:
+        return chat_mdl.chat(
+            system=prompt,
+            history=[{"role": "user", "content": ""}],
+            gen_conf=req.gen_conf
+        )
+
+    def build_prompt(user_text: str, fields: list[FieldMeta]) -> str:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        lines = []
+        for f in fields:
+            desc = f.description or ""
+            # 如果是 datetime 且描述中有“默认填当前时间”，将“当前时间”替换为具体值
+            if f.type == "datetime" and "默认填当前时间" in desc:
+                # 将描述里“当前时间”或“默认填当前时间”替换为 now_str
+                desc = desc.replace("默认填当前时间", f"默认填当前时间（即 {now_str}）")
+            lines.append(f"{f.name} ({f.type})：{desc}")
+        prompt = (
+                "请根据下列字段含义，从用户输入中抽取对应的值，未提及的必填字段请按提示填充。\n\n"
+                + "\n".join(lines)
+                + f"\n\n用户输入：{user_text}\n"
+                  '请只输出 JSON，例如 {"字段1":"值1","字段2":"值2",…}'
+        )
+        return prompt
+
+    def parse_and_validate(raw: str, fields: list[FieldMeta]) -> dict[str, Any]:
+        # 解析 JSON
+        try:
+            # 尝试提取首个 {...} 结构
+            m = re.search(r"\{.*\}", raw, re.S)
+            obj = json.loads(m.group()) if m else {}
+        except Exception:
+            obj = {}
+        values: dict[str, Any] = {}
+        missing = []
+        invalid: dict[str,str] = {}
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        for f in fields:
+            v = obj.get(f.name)
+            # 缺失
+            if v is None:
+                if f.required:
+                    if f.type == "datetime" and "当前时间" in (f.description or ""):
+                        values[f.name] = now
+                    else:
+                        missing.append(f.name)
+                        continue
+                else:
+                    values[f.name] = "" if f.type=="text" else None
+                    continue
+            # 校验类型
+            if f.type == "enum":
+                if f.options and v not in f.options:
+                    invalid[f.name] = "不在可选项内"
+                else:
+                    values[f.name] = v
+            elif f.type == "datetime":
+                if not re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", str(v)):
+                    invalid[f.name] = "格式错误，需 YYYY-MM-DD HH:mm"
+                else:
+                    values[f.name] = v
+            else:  # text or others
+                values[f.name] = v
+        return {"values": values, "missing": missing, "invalid": invalid}
+
+    # —— 阶段一
+    prompt1 = build_prompt(req.user_text, req.fields)
+    raw1 = call_llm(prompt1)
+    res1 = parse_and_validate(raw1, req.fields)
+
+    # —— 阶段二：内部追问（仅一次）
+    if res1["missing"] and req.retry:
+        # 构造追问 Prompt
+        missed = ",".join(res1["missing"])
+        prompt2 = (
+            f"请补全字段：{missed}，按之前格式再输出完整 JSON，不要多余文字。"
+        )
+        raw2 = call_llm(prompt2)
+        res2 = parse_and_validate(raw2, req.fields)
+        final = res2
+    else:
+        final = res1
+
+    return get_json_result(data={
+        "field_values": final["values"],
+        "missing": final["missing"],
+        "invalid": final["invalid"]
+    })
