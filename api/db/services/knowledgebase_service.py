@@ -8,7 +8,7 @@
 """
 from datetime import datetime
 
-from sqlalchemy import func
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 from api.db import StatusEnum, TenantPermission
 from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document
@@ -405,3 +405,42 @@ class KnowledgebaseService(CommonService):
         result = db.execute(update_stmt)
         db.commit()
         return result.rowcount > 0
+
+    @classmethod
+    def update_document_number_in_init(cls, db: Session, kb_id, doc_num):
+        """
+        Only use this function when init system
+
+        Args:
+            db: 数据库会话对象
+            kb_id: 知识库ID
+            doc_num: 要设置的文档数量
+        """
+        # 先检查知识库是否存在
+        kb = cls.get_by_id(db, kb_id)
+        if not kb:
+            return
+
+        try:
+            # 使用SQLAlchemy的update语句直接更新doc_num字段
+            # 这样可以避免触发自动更新的时间戳字段
+
+            update_stmt = update(cls.model).where(
+                cls.model.id == kb_id
+            ).values(
+                doc_num=doc_num
+            )
+
+            result = db.execute(update_stmt)
+            db.commit()
+
+            # 检查是否实际更新了记录
+            if result.rowcount == 0:
+                # 相当于Peewee中的"no data to save!"情况
+                pass  # that's OK
+
+        except Exception as e:
+            db.rollback()
+            # 如果确实需要处理特定的"no data to save"类似情况
+            # 可以在这里添加相应的逻辑
+            raise e
