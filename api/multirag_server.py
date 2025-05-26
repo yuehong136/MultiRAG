@@ -63,6 +63,7 @@ def update_progress():
         except Exception:
             logging.exception("update_progress exception")
         finally:
+            redis_lock.release()
             if db:
                 db.close()
 
