@@ -12,6 +12,7 @@ from datetime import datetime
 from fastapi import HTTPException
 from sqlalchemy.exc import NoResultFound, IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 # from passlib.context import CryptContext
 import bcrypt
 
@@ -209,6 +210,18 @@ class UserTenantService(CommonService):
     model = UserTenant
 
     @classmethod
+    def filter_by_id(cls, db: Session, user_tenant_id: str):
+        """根据user_tenant_id查找有效的UserTenant记录"""
+        try:
+            user_tenant = db.query(cls.model).filter(
+                cls.model.id == user_tenant_id,
+                cls.model.status == StatusEnum.VALID.value
+            ).one()
+            return user_tenant
+        except NoResultFound:
+            return None
+
+    @classmethod
     def save(cls, db: Session, **kwargs):
         if "id" not in kwargs:
             kwargs["id"] = get_uuid()
@@ -226,6 +239,7 @@ class UserTenantService(CommonService):
     def get_by_tenant_id(cls, db: Session, tenant_id):
         query = (
             db.query(
+                cls.model.id,
                 cls.model.user_id,
                 cls.model.status,
                 cls.model.role,
@@ -301,3 +315,24 @@ class UserTenantService(CommonService):
         ]
 
         return tenant_list
+
+    @classmethod
+    def get_num_members(cls, db: Session, user_id: str):
+        """获取指定租户的成员数量"""
+        cnt_members = db.query(func.count(cls.model.id)).filter(
+            cls.model.tenant_id == user_id
+        ).scalar()
+        return cnt_members
+
+    @classmethod
+    def filter_by_tenant_and_user_id(cls, db: Session, tenant_id: str, user_id: str):
+        """根据tenant_id和user_id查找有效的UserTenant记录"""
+        try:
+            user_tenant = db.query(cls.model).filter(
+                cls.model.tenant_id == tenant_id,
+                cls.model.status == StatusEnum.VALID.value,
+                cls.model.user_id == user_id
+            ).first()
+            return user_tenant
+        except NoResultFound:
+            return None

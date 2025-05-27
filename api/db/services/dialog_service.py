@@ -18,8 +18,7 @@ from timeit import default_timer as timer
 from langfuse import Langfuse
 
 from agentic_reasoning import DeepResearcher
-import datetime
-from datetime import timedelta
+from datetime import datetime
 from sqlalchemy import asc
 from sqlalchemy.orm import Session
 
@@ -30,6 +29,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMService, TenantLLMService, LLMBundle
 from api import settings
+from api.utils import current_timestamp, datetime_format
 from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
 from core.nlp import extract_between
@@ -41,6 +41,73 @@ from core.utils.tavily_conn import Tavily
 
 class DialogService(CommonService):
     model = Dialog
+
+    @classmethod
+    def save(cls, db: Session, **kwargs):
+        """Save a new record to database.
+
+        This method creates a new record in the database with the provided field values,
+        forcing an insert operation rather than an update.
+
+        Args:
+            db (Session): Database session.
+            **kwargs: Record field values as keyword arguments.
+
+        Returns:
+            Model instance: The created record object.
+        """
+        # # 添加创建时间字段
+        # kwargs["create_time"] = current_timestamp()
+        # kwargs["create_date"] = datetime_format(datetime.now())
+        # kwargs["update_time"] = current_timestamp()
+        # kwargs["update_date"] = datetime_format(datetime.now())
+
+        # 创建新的实例
+        sample_obj = cls.model(**kwargs)
+
+        # 添加到数据库会话并提交
+        db.add(sample_obj)
+        db.commit()
+        db.refresh(sample_obj)
+
+        return sample_obj
+
+    @classmethod
+    def update_many_by_id(cls, db: Session, data_list):
+        """Update multiple records by their IDs.
+
+        This method updates multiple records in the database, identified by their IDs.
+        It automatically updates the update_time and update_date fields for each record.
+
+        Args:
+            db (Session): Database session.
+            data_list (list): List of dictionaries containing record data to update.
+                             Each dictionary must include an 'id' field.
+        """
+        try:
+            for data in data_list:
+                if 'id' not in data:
+                    raise ValueError("Each data item must include an 'id' field")
+
+                # 自动添加更新时间字段
+                data["update_time"] = current_timestamp()
+                data["update_date"] = datetime_format(datetime.now())
+
+                # 获取要更新的记录ID
+                record_id = data.pop('id')
+
+                # 执行更新
+                db.query(cls.model).filter(
+                    cls.model.id == record_id
+                ).update(data, synchronize_session=False)
+
+            # 提交所有更改
+            db.commit()
+
+        except Exception as e:
+            # 如果出现错误，回滚事务
+            db.rollback()
+            raise e
 
     @classmethod
     def get_list(cls, db: Session, tenant_id, page_number, items_per_page, orderby, desc, id, name):
