@@ -450,11 +450,10 @@ def rm(
                                              code=settings.RetCode.ARGUMENT_ERROR)
 
             f2d = File2DocumentService.get_by_document_id(db, doc_id)
-            FileService.filter_delete(db, [db_models.File.source_type == FileSource.KNOWLEDGEBASE,
-                                           db_models.File.id == f2d[0].file_id])
+            deleted_file_count = FileService.filter_delete(db, [db_models.File.source_type == FileSource.KNOWLEDGEBASE, db_models.File.id == f2d[0].file_id])
             File2DocumentService.delete_by_document_id(db, doc_id)
-
-            STORAGE_IMPL.rm(b, n)
+            if deleted_file_count > 0:
+                STORAGE_IMPL.rm(b, n)
         except Exception as e:
             errors += str(e)
 
