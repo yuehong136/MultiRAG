@@ -67,6 +67,10 @@ class RenameTagRequest(BaseModel):
     to_tag: str
 
 
+class ListKbsRequest(BaseModel):
+    owner_ids: list[str] | None = []
+
+
 
 @router.post('/create', summary="创建知识库", response_description="成功创建知识库")
 def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
@@ -213,15 +217,60 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.get('/list', summary="列出知识库", response_description="成功列出知识库")
-def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_time", desc: bool = True, keywords: str = "",
-             db: Session = Depends(get_db), user=Depends(manager)):
+# @router.get('/list', summary="列出知识库", response_description="成功列出知识库")
+# def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_time", desc: bool = True, keywords: str = "",
+#              db: Session = Depends(get_db), user=Depends(manager)):
+#     page_number = int(page)
+#     items_per_page = int(page_size)
+#     try:
+#         tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
+#         kbs, total = KnowledgebaseService.get_by_tenant_ids(
+#             db, [m["tenant_id"] for m in tenants], user.id, page_number, items_per_page, orderby, desc, keywords)
+#         return get_json_result(data={"kbs": kbs, "total": total})
+#     except Exception as e:
+#         return server_error_response(e)
+
+@router.post('/list', summary="列出知识库", response_description="成功列出知识库")
+def list_kbs(
+        request_body: ListKbsRequest,
+        page: int = 0,
+        page_size: int = 0,
+        orderby: str = "create_time",
+        desc: bool = True,
+        keywords: str = "",
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
     page_number = int(page)
     items_per_page = int(page_size)
+    owner_ids = request_body.owner_ids or []
+
     try:
-        tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
-        kbs, total = KnowledgebaseService.get_by_tenant_ids(
-            db, [m["tenant_id"] for m in tenants], user.id, page_number, items_per_page, orderby, desc, keywords)
+        if not owner_ids:
+            # 原有逻辑：获取用户加入的租户
+            tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
+            tenants = [m["tenant_id"] for m in tenants]
+            kbs, total = KnowledgebaseService.get_by_tenant_ids(
+                db, tenants, user.id, page_number, items_per_page, orderby, desc, keywords)
+        else:
+            # 新逻辑：使用指定的owner_ids
+            tenants = owner_ids
+            # 先获取所有数据（page=0, page_size=0）
+            kbs, total = KnowledgebaseService.get_by_tenant_ids(
+                db, tenants, user.id, 0, 0, orderby, desc, keywords)
+
+            # 过滤出指定租户的知识库
+            kbs = [kb for kb in kbs if kb["tenant_id"] in tenants]
+
+            # 计算总数（在分页前）
+            total = len(kbs)
+
+            # 手动处理分页
+            if page_number and items_per_page:
+                start_idx = (page_number - 1) * items_per_page
+                end_idx = page_number * items_per_page
+                kbs = kbs[start_idx:end_idx]
+
         return get_json_result(data={"kbs": kbs, "total": total})
     except Exception as e:
         return server_error_response(e)

@@ -76,6 +76,7 @@ class KnowledgebaseService(CommonService):
             cls.model.name,
             cls.model.language,
             cls.model.description,
+            cls.model.tenant_id,
             cls.model.permission,
             cls.model.doc_num,
             cls.model.token_num,
@@ -107,8 +108,11 @@ class KnowledgebaseService(CommonService):
         # 获取总记录数
         total = query.count()
 
-        # 分页查询
-        kbs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
+        # 条件分页 - 只有当page_number和items_per_page都有值时才进行分页
+        if page_number and items_per_page:
+            kbs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
+        else:
+            kbs = query.all()
 
         # 将结果转换为字典列表
         result = []
@@ -119,15 +123,16 @@ class KnowledgebaseService(CommonService):
                 'name': kb[2],
                 'language': kb[3],
                 'description': kb[4],
-                'permission': kb[5],
-                'doc_num': kb[6],
-                'token_num': kb[7],
-                'chunk_num': kb[8],
-                'parser_id': kb[9],
-                'embd_id': kb[10],
-                'nickname': kb[11],
-                'tenant_avatar': kb[12],
-                'update_time': kb[13],
+                'tenant_id': kb[5],
+                'permission': kb[6],
+                'doc_num': kb[7],
+                'token_num': kb[8],
+                'chunk_num': kb[9],
+                'parser_id': kb[10],
+                'embd_id': kb[11],
+                'nickname': kb[12],
+                'tenant_avatar': kb[13],
+                'update_time': kb[14],
             }
             result.append(kb_dict)
 
