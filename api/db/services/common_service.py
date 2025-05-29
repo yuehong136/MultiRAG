@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Type, Generic, TypeVar
 
-from sqlalchemy import Row, desc, asc
+from sqlalchemy import Row, desc, asc, text
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from sqlalchemy.exc import NoResultFound, IntegrityError
@@ -155,6 +155,22 @@ class CommonService(Generic[ModelType]):
     @classmethod
     def update_by_id(cls, db: Session, pid: str, data: dict[str, Any]) -> int:
         try:
+            # 数据库连接健康检查和重连逻辑
+            try:
+                # 尝试执行一个简单的查询来检查连接是否可用
+                db.execute(text("SELECT 1"))
+            except Exception:
+                # 如果连接不可用，尝试回滚并刷新连接
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                try:
+                    # 刷新连接池中的连接
+                    db.connection().invalidate()
+                except Exception:
+                    pass
+
             now = cls.current_timestamp()
             now_datetime = cls.current_datetime()
             data["update_time"] = now
