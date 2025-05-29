@@ -148,7 +148,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         if req_data["parser_id"] == "tag" and os.environ.get('DOC_ENGINE', "milvus") == "infinity":
             return get_json_result(
                 data=False,
-                retmsg='The chunk method Tag has not been supported by Infinity yet.',
+                retmsg='The chunking method Tag has not been supported by Infinity yet.',
                 retcode=settings.RetCode.OPERATING_ERROR
             )
 
