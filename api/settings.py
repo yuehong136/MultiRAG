@@ -7,7 +7,7 @@ from core.nlp import search
 from graphrag import search as kg_search
 # from core.utils.milvus_conn import MILVUS_CONNECTION
 import core.utils.milvus_conn
-# import core.utils.infinity_conn
+# import core.utils.infinity_conn, opensearch_coon
 # from api.utils import get_base_config, decrypt_database_config
 from api.utils import get_base_config
 from api.constants import MULTI_RAG_SERVICE_NAME
@@ -128,9 +128,12 @@ def init_settings():
 
     global DOC_ENGINE, docStoreConn, retrievaler, kg_retrievaler
     DOC_ENGINE = os.environ.get('DOC_ENGINE', "milvus")
+    # DOC_ENGINE = os.environ.get('DOC_ENGINE', "opensearch")
     lower_case_doc_engine = DOC_ENGINE.lower()
     if lower_case_doc_engine == "milvus":
         docStoreConn = core.utils.milvus_conn.MilvusConnection()
+    elif lower_case_doc_engine == "opensearch":
+        docStoreConn = core.utils.opensearch_coon.OSConnection()
     elif lower_case_doc_engine == "infinity":
         docStoreConn = core.utils.infinity_conn.InfinityConnection()
     else:

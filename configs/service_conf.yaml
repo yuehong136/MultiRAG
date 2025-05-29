@@ -86,6 +86,11 @@ es:
   # Elasticsearch服务的密码
   password: ''
 
+os:
+  hosts: 'http://localhost:1201'
+  username: 'admin'
+  password: 'infini_rag_flow_OS_01'
+
 infinity:
   uri: 'infinity:23817'
   db_name: 'default_db'
