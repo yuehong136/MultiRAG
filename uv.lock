@@ -2786,6 +2786,26 @@ wheels = [
 ]
 
 [[package]]
+name = "mcp"
+version = "1.9.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx" },
+    { name = "httpx-sse" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "python-multipart" },
+    { name = "sse-starlette" },
+    { name = "starlette" },
+    { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/e7/bc/54aec2c334698cc575ca3b3481eed627125fb66544152fa1af927b1a495c/mcp-1.9.1.tar.gz", hash = "sha256:19879cd6dde3d763297617242888c2f695a95dfa854386a6a68676a646ce75e4" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/a6/c0/4ac795585a22a0a2d09cd2b1187b0252d2afcdebd01e10a68bbac4d34890/mcp-1.9.1-py3-none-any.whl", hash = "sha256:2900ded8ffafc3c8a7bfcfe8bc5204037e988e753ec398f371663e6a06ecd9a9" },
+]
+
+[[package]]
 name = "mdurl"
 version = "0.1.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -3027,6 +3047,7 @@ dependencies = [
     { name = "langfuse" },
     { name = "markdown" },
     { name = "markdown-to-json" },
+    { name = "mcp" },
     { name = "mini-racer" },
     { name = "minio" },
     { name = "mistralai" },
@@ -3177,6 +3198,7 @@ requires-dist = [
     { name = "markdown", specifier = "==3.6" },
     { name = "markdown-to-json", specifier = "==2.1.1" },
     { name = "markdown-to-json", specifier = ">=2.1.1" },
+    { name = "mcp", specifier = ">=1.6.0" },
     { name = "mini-racer", specifier = ">=0.12.4,<0.13.0" },
     { name = "minio", specifier = "==7.2.4" },
     { name = "mistralai", specifier = "==0.4.2" },

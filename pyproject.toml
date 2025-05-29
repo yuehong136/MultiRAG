@@ -1,6 +1,6 @@
 [project]
 name = "multirag"
-version = "0.2.4"
+version = "0.4.1"
 description = "基于RAG、Agent、Workflow体系赋能LLM应用"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -166,6 +166,7 @@ dependencies = [
     "sse-starlette>=2.2.1",
     "langfuse>=2.60.0",
     "debugpy>=1.8.13",
+    "mcp>=1.6.0",
 ]
 
 [tool.uv]
