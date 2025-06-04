@@ -129,7 +129,7 @@ def search_pages_path(pages_dir):
 # 定义一个函数，用于注册页面模块到FastAPI应用中
 def register_page(page_path):
     path = f'{page_path}'
-    page_name = page_path.stem.rstrip('_api') if "_api" in path else page_path.stem.rstrip('_app')
+    page_name = page_path.stem.removesuffix('_api') if "_api" in path else page_path.stem.removesuffix('_app')
     module_name = '.'.join(page_path.parts[page_path.parts.index('api'):-1] + (page_name,))
 
     spec = spec_from_file_location(module_name, page_path)
