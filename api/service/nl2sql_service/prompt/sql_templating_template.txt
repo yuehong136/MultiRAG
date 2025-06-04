@@ -28,36 +28,56 @@ $semantic_layer
 
 1.  **识别可参数化元素**:
     *   **维度筛选条件**: 分析 `WHERE` 子句，识别出基于语义层`dimensions`的筛选条件。关注其具体值。
-    *   **时间条件**: 识别基于时间维度的筛选条件，包括绝对日期/时间、相对日期/时间（如“最近7天”应能被参数化为起止日期或相对单位）。
+    *   **时间条件**: 识别基于时间维度的筛选条件，包括绝对日期/时间、相对日期/时间（如"最近7天"应能被参数化为起止日期或相对单位）。
     *   **分页参数**: 识别SQL中的 `LIMIT` 和 `OFFSET` (或对应数据库类型的分页子句)。
     *   **(可选高级) 分组维度**: 如果SQL中存在 `GROUP BY` 子句，且用户问题暗示了可能的分组变化，可以考虑将分组字段参数化。
     *   **(可选高级) 排序条件**: 识别 `ORDER BY` 子句中的排序字段和排序方向。
 
-2.  **生成SQL模板**:
-    *   将已识别的可参数化元素替换为清晰、唯一的占位符。推荐使用双大括号包裹，例如 `{{placeholder_name}}`。
-    *   确保SQL模板在占位符被替换后仍然是有效的SQL。
+2.  **生成SQL模板 - 占位符格式要求**:
+    *   将已识别的可参数化元素替换为清晰、唯一的占位符。**必须使用双大括号包裹，例如 `{{placeholder_name}}`**。
+    *   **重要：占位符周围不要添加任何引号或其他字符**。例如：
+        - ✅ 正确：`WHERE department_name = {{department_filter}}`
+        - ❌ 错误：`WHERE department_name = '{{department_filter}}'`
+        - ❌ 错误：`WHERE department_name = "{{department_filter}}"`
+    *   **引号、数据类型转换等格式化工作将由后续的参数填充函数处理**，模板中只需要纯净的占位符。
+    *   确保SQL模板在占位符被正确的值替换后仍然是有效的SQL。
 
-3.  **生成参数描述JSON**:
+3.  **占位符替换规则**:
+    *   **字符串值**: `'具体值'` → `{{placeholder_name}}`
+    *   **数字值**: `123` → `{{placeholder_name}}`
+    *   **日期值**: `'2024-01-01'` → `{{placeholder_name}}`
+    *   **布尔值**: `TRUE` → `{{placeholder_name}}`
+
+    **示例转换:**
+    ```sql
+    -- 原始SQL
+    WHERE department_name = '计算机学院' AND teacher_count > 10 AND created_date >= '2024-01-01'
+
+    -- 模板SQL（正确）
+    WHERE department_name = {{department_filter}} AND teacher_count > {{min_count}} AND created_date >= {{start_date}}
+    ```
+
+4.  **生成参数描述JSON**:
     *   为每个占位符在JSON中创建一个对应的参数对象。
-    *   JSON对象应包含以下关键信息（详见下方“输出格式”中的`parameters`数组结构定义）：
+    *   JSON对象应包含以下关键信息（详见下方"输出格式"中的`parameters`数组结构定义）：
         *   `name`: 占位符的名称 (与SQL模板中一致)。
         *   `type`: 参数类型 (例如: `DIMENSION_FILTER`, `TIME_RANGE_START`, `TIME_RANGE_END`, `RELATIVE_TIME_UNIT`, `RELATIVE_TIME_VALUE`, `PAGINATION_LIMIT`, `PAGINATION_OFFSET`, `GROUP_BY_DIMENSION`, `SORT_FIELD`, `SORT_DIRECTION`)。
         *   `description`: 对参数的简短描述，说明其作用。
         *   `semantic_info`: 关联的语义层信息。
             *   对于维度筛选：包含`dimension_id`, `dimension_name`。
             *   对于时间参数：关联的时间维度信息。
-        *   `original_value`: 该参数在**输入信息2 (已生成的SQL占位符)**中的原始值。如果原始SQL没有该参数（如默认分页），则使用默认值或留空。
+        *   `original_value`: 该参数在**输入信息2 (已生成的SQL)**中的原始值（不包含引号）。如果原始SQL没有该参数（如默认分页），则使用默认值或留空。
         *   `data_type`: 参数值的预期数据类型 (例如: `string`, `integer`, `date`, `enum`)，参考语义层字段类型。
         *   `possible_values_source` (主要用于维度筛选): 指示从哪里获取该参数的可选值列表。例如：`"DIMENSION_ID:<dimension_id>"` 表示从指定ID的维度获取`possibleValues`；或者直接提供一个小的枚举列表 `["value1", "value2"]`。
         *   `ui_hint`: 对前端展示该参数控件的建议 (例如: `dropdown`, `text_input`, `date_picker`, `number_input`, `hidden`)。
 
-4.  **语义层关联**: 所有识别出的参数（尤其是维度和时间）必须尽可能准确地关联到**输入信息3 (语义层信息JSON占位符)**中的具体元素（如维度ID、字段名等）。
+5.  **语义层关联**: 所有识别出的参数（尤其是维度和时间）必须尽可能准确地关联到**输入信息3 (语义层信息JSON)**中的具体元素（如维度ID、字段名等）。
 
-5.  **原始意图保留**: 模板化不应改变原始SQL的核心查询意图。
+6.  **原始意图保留**: 模板化不应改变原始SQL的核心查询意图。
 
-6.  **占位符命名**: 占位符名称应具有描述性，例如 `{{department_name_filter}}`, `{{title_filter}}`, `{{limit_val}}`, `{{offset_val}}`。
+7.  **占位符命名**: 占位符名称应具有描述性，例如 `{{department_name_filter}}`, `{{title_filter}}`, `{{limit_val}}`, `{{offset_val}}`。
 
-7.  **处理无参数情况**: 如果分析后认为原始SQL没有任何适合参数化的部分，SQL模板即为原始SQL，`parameters` 数组为空。
+8.  **处理无参数情况**: 如果分析后认为原始SQL没有任何适合参数化的部分，SQL模板即为原始SQL，`parameters` 数组为空。
 
 ## 分析与生成步骤 (Chain-of-Thought)
 
@@ -70,9 +90,9 @@ $semantic_layer
     *   **LIMIT/OFFSET (或等效)**: 检查分页参数。
     *   **GROUP BY / ORDER BY**: (可选高级) 检查这些子句中的字段。
 3.  **关联语义信息**: 对每个识别的参数点，在语义层中找到对应的维度/指标/字段，记录其ID、名称、类型和可能的取值范围。
-4.  **设计占位符**: 为每个参数点设计一个清晰的占位符。
-5.  **构建SQL模板**: 将原始SQL中的具体值替换为设计的占位符。
-6.  **构建JSON参数对象**: 为每个占位符填充详细的元数据，包括其名称、类型、描述、语义关联、原始值、数据类型、可选值来源和UI提示。
+4.  **设计占位符**: 为每个参数点设计一个清晰的占位符，**确保占位符不包含引号**。
+5.  **构建SQL模板**: 将原始SQL中的具体值（包括其周围的引号）完整替换为设计的占位符（不带引号）。
+6.  **构建JSON参数对象**: 为每个占位符填充详细的元数据，包括其名称、类型、描述、语义关联、原始值（不含引号）、数据类型、可选值来源和UI提示。
 7.  **验证一致性**: 确保SQL模板中的占位符与JSON对象中的`name`字段完全对应。
 
 ## 输出格式
@@ -81,7 +101,7 @@ $semantic_layer
 
 ```json
 {
-  "sql_template": "[生成的带占位符的SQL模板字符串]",
+  "sql_template": "[生成的带占位符的SQL模板字符串，占位符周围不包含引号]",
   "parameters": [
     {
       "name": "placeholder_name_1",
@@ -94,7 +114,7 @@ $semantic_layer
         "metric_name": "[对应指标的名称]"
         // ... 其他相关语义信息
       },
-      "original_value": "[参数在原始SQL中的值，或默认值]", // 例如 "计算机学院", 10, "2024-01-01"
+      "original_value": "[参数在原始SQL中的值（不含引号），或默认值]", // 例如 "计算机学院", 10, "2024-01-01"
       "data_type": "string | integer | date | boolean | enum", // 字段/参数的数据类型
       "possible_values_source": "[可选值来源，例如 'DIMENSION_ID:36093203355146240' 或 'ENUM:M,F' 或 'RANGE:1-100']", // 告诉前端如何获取可选值
       "ui_hint": "dropdown | text_input | date_picker | number_input | slider | hidden | radio_group | checkbox_group" // 前端控件建议
@@ -106,3 +126,10 @@ $semantic_layer
   ]
 }
 ```
+
+## 重要提醒
+
+**再次强调占位符格式要求：**
+- 占位符必须是纯净的 `{{placeholder_name}}` 格式
+- 不要在占位符周围添加引号、括号或其他字符
+- 数据类型格式化（如添加引号）将由后续的参数填充函数根据 `data_type` 字段自动处理
