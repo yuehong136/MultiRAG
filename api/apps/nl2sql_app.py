@@ -599,6 +599,7 @@ async def re_query(
         service: NL2SQLService = Depends(get_nl2sql_service)
 ):
     """根据用户选择的参数值填充SQL模板并执行查询"""
+    logger.info(f"收到查询请求：{body}")
     try:
         # 调用服务填充SQL模板并执行查询
         result = await service.re_query(

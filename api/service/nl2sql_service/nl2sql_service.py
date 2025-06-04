@@ -16,7 +16,6 @@ from api.service.nl2sql_service.generate_nl2sql_prompt import generate_nl2sql_pr
 from api.service.nl2sql_service.llm_sql_generator import LLMSQLGenerator
 from api.service.nl2sql_service.llm_sql_templating import LLMSQLTemplating
 from api.service.nl2sql_service.pg_query_formatter import execute_sql_and_format_result
-from api.service.nl2sql_service.query_data_from_zt_by_sql import query_data_from_zt_by_sql
 from api.service.nl2sql_service.query_intent_analyzer import QueryIntentAnalyzer
 from api.service.nl2sql_service.query_rewriter import QueryRewriter
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
@@ -305,18 +304,12 @@ class NL2SQLService:
         sql, semantic_layer_struct = await self.nl2sql_for_whole_process(user_question, llm_name, dataset_id_list,
                                                                          request_id)
         await send_event(request_id, {"message": "查询数据", "action": "start"}, "message")
-        result = await query_data_from_zt_by_sql(sql=sql)  # 假设此函数足够快或已优化
+        result = execute_sql_and_format_result(sql=sql, db_config={})  # 假设此函数足够快或已优化
         await send_event(request_id, {"message": "查询数据", "action": "complete"}, "message")
-        await send_event(request_id, {"message": "数据查询结果", "data": {
-            "column_and_type": result['columnMetaDataList'],
-            "sql_result": {
-                "columns": result['columns'],
-                "data": result['data']
-            }
-        }}, "data")
+        await send_event(request_id, {"message": "数据查询结果", "data": result}, "data")
 
-        column_and_type = result['columnMetaDataList']
-        data = result['data']
+        column_and_type = result['column_and_type']
+        data = result['sql_result']['data']
         sample_data = data[:5]
 
         # --- 开始独立的并发流程 ---
@@ -389,14 +382,8 @@ class NL2SQLService:
         根据用户选择的值填充SQL模板。
         """
         sql = fill_sql_template(templated_sql, parameter_definitions, user_selected_values)
-        result = await query_data_from_zt_by_sql(sql=sql)
-        return {
-            "column_and_type": result['columnMetaDataList'],
-            "sql_result": {
-                "columns": result['columns'],
-                "data": result['data']
-            }
-        }
+        result = execute_sql_and_format_result(sql=sql, db_config={})
+        return result
 
 
 def get_nl2sql_service(db: Session = Depends(get_db), user=Depends(manager)) -> NL2SQLService:
