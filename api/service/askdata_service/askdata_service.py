@@ -9,6 +9,7 @@ from api.apps import manager
 from api.db.db_models import get_db
 from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLGenerator
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
+from api.service.askdata_service.sql_parser import SQLParser
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.event.event_utils import send_event
 from api.service.nl2sql_service.query_intent_analyzer import QueryIntentAnalyzer
@@ -52,8 +53,8 @@ class AskdataService:
         """
         return await self.query_intent_analyzer.get_query_intents_with_descriptions(query_text, llm_name)
 
-    async def generate_semantic_layer(self, query_text: str, dataset_id_list: List[str]):
-        segmented_words = await custom_tokenize_with_semantic_words(text=query_text, dataset_id_list=dataset_id_list)
+    async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str]):
+        segmented_words = await custom_tokenize_with_semantic_words(text=user_query, dataset_id_list=dataset_id_list)
         # 1. 将分词到语义层结构化数据中进行检索得到相关数据
         # 2. 根据分词关键字获得维度列表
         dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(
@@ -93,19 +94,14 @@ class AskdataService:
 
         return processed_semantic_layer
 
-    async def nlq_to_initial_sql(self, query_text: str, llm_name: str, semantic_layer: Dict[str, Any]):
-        # 生成并验证SQL
-        sql, is_valid, message = await self.nlq_to_initial_sql_generator.generate_and_validate_sql(
-            user_query=query_text,
-            semantic_layer=semantic_layer,
-            llm_name=llm_name
-        )
-        if is_valid:
-            logger.info(f"验证通过: {message}")
-            return sql
-        else:
-            logger.error(f"验证失败: {message}")
-            return None
+    async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any]):
+        result = await self.nlq_to_initial_sql_generator.generate_sql_query_with_models(user_query, semantic_layer,
+                                                                                        llm_name)
+        if result:
+            sql = result['sql']
+            used_models = result['usedModels']
+
+        return sql, used_models
 
     def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> List[str]:
         """

@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from api.db.db_models import get_db
 from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
+from api.service.askdata_service.pg_query_formatter import execute_sql_and_format_result
+from api.service.askdata_service.sql_parser import SQLParser
 
 from api.service.nl2sql_service.event.event_handlers import create_sse_response
 from api.service.nl2sql_service.event.event_utils import send_event
@@ -57,7 +59,7 @@ async def health_check():
 
 class NLQToInitialSQLRequest(BaseModel):
     """自然语言转初始SQL请求的基础模型"""
-    query_text: str = Field(
+    user_query: str = Field(
         ...,
         title="查询文本",
         description="用户提出的自然语言查询文本",
@@ -99,22 +101,27 @@ async def nlq_to_initial_sql(
     try:
         # 生成语义层
         semantic_layer = await service.generate_semantic_layer(
-            query_text=body.query_text,
+            user_query=body.user_query,
             dataset_id_list=body.dataset_id_list
         )
 
         # 转换为SQL
-        sql_result = await service.nlq_to_initial_sql(
-            query_text=body.query_text,
+        sql, used_models = await service.nlq_to_initial_sql(
+            user_query=body.user_query,
             llm_name=body.llm_name,
             semantic_layer=semantic_layer
         )
 
-        if sql_result:
+        table_config = await service.generate_table_config(sql)
+
+        # 执行查询
+        result = execute_sql_and_format_result(sql=sql, db_config={})
+
+        if sql:
             return ResponseSchema(
                 status=StatusEnum.SUCCESS,
                 message="生成初始SQL成功",
-                data={"sql": sql_result}
+                data={"sql": sql, "result": result}
             )
         else:
             return ResponseSchema(

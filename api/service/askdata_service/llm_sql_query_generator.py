@@ -4,7 +4,7 @@ import os
 import re
 import logging
 from datetime import date
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,8 @@ class NLQToInitialSQLGenerator:
     SQL_PATTERN = re.compile(r'```sql\s*([\s\S]*?)```')
     # 备用SQL模式，匹配单独的SQL代码块
     SQL_PATTERN_ALT = re.compile(r'```\s*(SELECT[\s\S]*?)```', re.IGNORECASE)
+    # JSON模式，匹配JSON代码块
+    JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None, database_type: str = "PostgreSQL"):
         """
@@ -68,9 +70,107 @@ class NLQToInitialSQLGenerator:
 
         return sql
 
-    def _extract_sql_from_response(self, response: str) -> Tuple[Optional[str], bool]:
+    def _extract_json_from_response(self, response: str) -> Tuple[Optional[Dict], bool]:
         """
-        从LLM响应中提取SQL查询
+        从LLM响应中提取JSON数据
+
+        参数:
+            response: LLM返回的原始响应文本
+
+        返回:
+            (extracted_json, success_flag): 提取的JSON数据和成功标志的元组
+        """
+        if not response:
+            logger.warning("LLM响应为空")
+            return None, False
+
+        # 尝试从```json代码块中提取
+        json_match = self.JSON_PATTERN.search(response)
+        if json_match:
+            json_str = json_match.group(1).strip()
+            try:
+                json_data = json.loads(json_str)
+                logger.info("成功从json代码块中提取JSON")
+                return json_data, True
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON解析失败: {e}")
+
+        # 尝试直接解析整个响应为JSON
+        try:
+            response_stripped = response.strip()
+            # 移除可能的markdown标记
+            if response_stripped.startswith('```') and response_stripped.endswith('```'):
+                lines = response_stripped.split('\n')
+                if len(lines) >= 3:
+                    json_str = '\n'.join(lines[1:-1])
+                else:
+                    json_str = response_stripped
+            else:
+                json_str = response_stripped
+
+            json_data = json.loads(json_str)
+            logger.info("成功直接解析JSON响应")
+            return json_data, True
+        except json.JSONDecodeError:
+            pass
+
+        # 尝试查找看起来像JSON的部分
+        # 寻找以{开头，以}结尾的文本块
+        json_pattern = re.compile(r'\{[\s\S]*\}')
+        matches = json_pattern.findall(response)
+
+        for match in matches:
+            try:
+                json_data = json.loads(match)
+                logger.info("使用正则表达式成功提取JSON")
+                return json_data, True
+            except json.JSONDecodeError:
+                continue
+
+        logger.warning("无法从LLM响应中提取有效的JSON数据")
+        return None, False
+
+    def _extract_sql_and_models_from_response(self, response: str) -> Tuple[Optional[str], Optional[List[str]], bool]:
+        """
+        从LLM响应中提取SQL查询和使用的模型
+
+        参数:
+            response: LLM返回的原始响应文本
+
+        返回:
+            (extracted_sql, used_models, success_flag): 提取的SQL查询、使用的模型列表和成功标志的元组
+        """
+        if not response:
+            logger.warning("LLM响应为空")
+            return None, None, False
+
+        # 首先尝试提取JSON格式的响应
+        json_data, json_success = self._extract_json_from_response(response)
+
+        if json_success and json_data:
+            # 检查JSON是否包含必要的字段
+            if isinstance(json_data, dict) and 'sql' in json_data:
+                sql = json_data.get('sql', '').strip()
+                used_models = json_data.get('usedModels', [])
+
+                if sql:
+                    cleaned_sql = self._clean_sql(sql)
+                    logger.info("成功从JSON响应中提取SQL和模型信息")
+                    return cleaned_sql, used_models, True
+
+        # 如果JSON提取失败，回退到原来的SQL提取方法（向后兼容）
+        sql, sql_success = self._extract_sql_from_response_legacy(response)
+
+        if sql_success and sql:
+            logger.info("使用传统方法成功提取SQL，但无模型信息")
+            return sql, [], True
+
+        logger.warning("无法从LLM响应中提取SQL查询")
+        return None, None, False
+
+    def _extract_sql_from_response_legacy(self, response: str) -> Tuple[Optional[str], bool]:
+        """
+        使用传统方法从LLM响应中提取SQL查询（向后兼容）
 
         参数:
             response: LLM返回的原始响应文本
@@ -190,7 +290,7 @@ class NLQToInitialSQLGenerator:
 
     async def generate_sql_query(self, user_query: str, semantic_layer: Dict[str, Any], llm_name: str) -> Optional[str]:
         """
-        根据用户问题和语义层信息生成SQL查询
+        根据用户问题和语义层信息生成SQL查询（向后兼容的方法）
 
         参数:
             user_query: 用户的自然语言查询问题
@@ -199,6 +299,23 @@ class NLQToInitialSQLGenerator:
 
         返回:
             生成的SQL查询字符串，如果生成失败则返回None
+        """
+        result = await self.generate_sql_query_with_models(user_query, semantic_layer, llm_name)
+        return result['sql'] if result else None
+
+    async def generate_sql_query_with_models(self, user_query: str, semantic_layer: Dict[str, Any], llm_name: str) -> \
+            Optional[Dict[str, Any]]:
+        """
+        根据用户问题和语义层信息生成SQL查询，包含使用的模型信息
+
+        参数:
+            user_query: 用户的自然语言查询问题
+            semantic_layer: 语义层信息，包含数据模型、业务数据集等
+            llm_name: 用于生成的LLM模型名称
+
+        返回:
+            包含sql和usedModels的字典，如果生成失败则返回None
+            格式: {"sql": "SELECT ...", "usedModels": ["模型1", "模型2"]}
         """
         try:
             # 初始化LLM模型
@@ -239,12 +356,15 @@ class NLQToInitialSQLGenerator:
                 gen_conf=gen_conf
             )
 
-            # 提取SQL查询
-            sql_query, success = self._extract_sql_from_response(response)
+            # 提取SQL查询和模型信息
+            sql_query, used_models, success = self._extract_sql_and_models_from_response(response)
 
             if success and sql_query:
                 logger.info("SQL查询生成成功")
-                return sql_query
+                return {
+                    "sql": sql_query,
+                    "usedModels": used_models or []
+                }
             else:
                 logger.warning("无法从LLM响应中提取有效的SQL查询")
                 # 记录原始响应以便调试
@@ -291,7 +411,7 @@ class NLQToInitialSQLGenerator:
     async def generate_and_validate_sql(self, user_query: str, semantic_layer, llm_name: str) -> Tuple[
         Optional[str], bool, str]:
         """
-        生成SQL查询并进行基本验证
+        生成SQL查询并进行基本验证（向后兼容的方法）
 
         参数:
             user_query: 用户的自然语言查询问题
@@ -314,3 +434,34 @@ class NLQToInitialSQLGenerator:
             return sql_query, True, "SQL查询生成并验证成功"
         else:
             return sql_query, False, f"SQL语法验证失败: {validation_message}"
+
+    async def generate_and_validate_sql_with_models(self, user_query: str, semantic_layer, llm_name: str) -> Tuple[
+        Optional[Dict[str, Any]], bool, str]:
+        """
+        生成SQL查询并进行基本验证，包含使用的模型信息
+
+        参数:
+            user_query: 用户的自然语言查询问题
+            semantic_layer: 语义层信息
+            llm_name: LLM模型名称
+
+        返回:
+            (result_dict, is_valid, message): 包含SQL和模型信息的字典、验证结果和消息的元组
+        """
+        # 生成SQL查询和模型信息
+        result = await self.generate_sql_query_with_models(user_query, semantic_layer, llm_name)
+
+        if result is None:
+            return None, False, "SQL查询生成失败"
+
+        sql_query = result.get('sql')
+        if not sql_query:
+            return None, False, "SQL查询为空"
+
+        # 验证SQL语法
+        is_valid, validation_message = self.validate_sql_syntax(sql_query)
+
+        if is_valid:
+            return result, True, "SQL查询生成并验证成功"
+        else:
+            return result, False, f"SQL语法验证失败: {validation_message}"
