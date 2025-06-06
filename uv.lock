@@ -931,7 +931,7 @@ wheels = [
 
 [[package]]
 name = "dashscope"
-version = "1.20.11"
+version = "1.23.3"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -939,7 +939,7 @@ dependencies = [
     { name = "websocket-client" },
 ]
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/25/21/0ddfa1aae7f45b3039d10d61ede77dedfc70d24ff946e7d0ecb92e9a2c85/dashscope-1.20.11-py3-none-any.whl", hash = "sha256:7367802c5ae136c6c1f4f8a16f9aba628e97adefae8afdebce6bbf518d0065d1" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/58/91/ab7719b9b689a9bfaa8c9b7d9b72aa3501534c6d8eaec547beb812d742e9/dashscope-1.23.3-py3-none-any.whl", hash = "sha256:011717456e8aa25df9b402c8ad4af478a6cd079a902099403fd7fb3cfd0b0535" },
 ]
 
 [[package]]
@@ -2983,7 +2983,7 @@ wheels = [
 
 [[package]]
 name = "multirag"
-version = "0.2.4"
+version = "0.4.1"
 source = { virtual = "." }
 dependencies = [
     { name = "akshare" },
@@ -3154,7 +3154,7 @@ requires-dist = [
     { name = "cn2an", specifier = "==0.5.22" },
     { name = "cohere", specifier = "==5.6.2" },
     { name = "crawl4ai", specifier = "==0.3.8" },
-    { name = "dashscope", specifier = "==1.20.11" },
+    { name = "dashscope", specifier = ">1.20.11" },
     { name = "datrie", specifier = "==0.8.2" },
     { name = "debugpy", specifier = ">=1.8.13" },
     { name = "deepl", specifier = "==1.18.0" },

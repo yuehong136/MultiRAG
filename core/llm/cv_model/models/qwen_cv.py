@@ -70,7 +70,7 @@ class QWenCV(Base):
 
     def chat_prompt(self, text, b64):
         return [
-            {"image": f"data:image/jpeg;base64,{b64}"},
+            {"image": f"{b64}"},
             {"text": text},
         ]
 
@@ -103,7 +103,10 @@ class QWenCV(Base):
 
         for his in history:
             if his["role"] == "user":
-                his["content"] = self.chat_prompt(his["content"], image)
+                if image:
+                    his["content"] = self.chat_prompt(his["content"], image)
+                else:
+                    his["content"] = self.chat_onlytext(his["content"])
         response = MultiModalConversation.call(model=self.model_name, messages=history,
                                                temperature=gen_conf.get("temperature", 0.3),
                                                top_p=gen_conf.get("top_p", 0.7))
@@ -129,7 +132,10 @@ class QWenCV(Base):
 
         for his in history:
             if his["role"] == "user":
-                his["content"] = self.chat_prompt(his["content"], image)
+                if image:
+                    his["content"] = self.chat_prompt(his["content"], image)
+                else:
+                    his["content"] = self.chat_onlytext(his["content"])
 
         ans = ""
         tk_count = 0
@@ -140,7 +146,7 @@ class QWenCV(Base):
                                                    stream=True)
             for resp in response:
                 if resp.status_code == HTTPStatus.OK:
-                    ans = resp.output.choices[0]['message']['content']
+                    ans = resp.output.choices[0]['message']['content'][0]["text"]
                     tk_count = resp.usage.total_tokens
                     if resp.output.choices[0].get("finish_reason", "") == "length":
                         ans += "...\nFor the content length reason, it stopped, continue?" if is_english(
