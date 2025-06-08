@@ -10,6 +10,7 @@ class SQLParser:
     def __init__(self, sql):
         self.sql = sql
         self.parsed = sqlparse.parse(sql)[0]
+        self._table_alias_map = {}  # 存储表别名到表名的映射
 
     def _is_subselect(self, token):
         """检查是否是子查询"""
@@ -55,6 +56,48 @@ class SQLParser:
 
         return tables
 
+    def _build_table_alias_map(self):
+        """构建表别名到表名的映射"""
+        self._table_alias_map = {}
+
+        # 从FROM子句获取表和别名
+        from_tables = self.extract_from_tables()
+        for table_info in from_tables:
+            parts = table_info.split()
+            if len(parts) >= 2:
+                # 表名 别名 的格式
+                table_name = parts[0]
+                alias = parts[1]
+                self._table_alias_map[alias] = table_name
+            else:
+                # 没有别名的情况，表名即是别名
+                self._table_alias_map[table_info] = table_info
+
+        # 从JOIN子句获取表和别名
+        join_info = self.extract_join_info()
+        for join in join_info:
+            table_info = join['table']
+            parts = table_info.split()
+            if len(parts) >= 2:
+                table_name = parts[0]
+                alias = parts[1]
+                self._table_alias_map[alias] = table_name
+            else:
+                self._table_alias_map[table_info] = table_info
+
+    def extract_table_alias_mapping(self):
+        """提取表和表别名的映射关系
+
+        Returns:
+            dict: 表别名到表名的映射字典，格式为 {别名: 表名}
+                 如果表没有别名，则 {表名: 表名}
+        """
+        # 确保映射已构建
+        self._build_table_alias_map()
+
+        # 返回映射关系的副本，避免外部修改
+        return self._table_alias_map.copy()
+
     def extract_select_columns(self):
         """提取SELECT列"""
         columns = []
@@ -82,6 +125,40 @@ class SQLParser:
                             columns.append(col_str)
 
         return columns
+
+    def extract_select_columns_with_full_names(self):
+        """提取SELECT列并转换为完整的表名.列名格式"""
+        # 首先构建表别名映射
+        self._build_table_alias_map()
+
+        # 获取原始的select列
+        columns = self.extract_select_columns()
+
+        # 转换为完整列名
+        full_columns = []
+        for col in columns:
+            # 检查是否已经包含点号（已经是完整格式）
+            if '.' in col:
+                # 分离别名和列名
+                parts = col.split('.', 1)
+                if len(parts) == 2:
+                    alias = parts[0]
+                    column_name = parts[1]
+
+                    # 查找别名对应的表名
+                    if alias in self._table_alias_map:
+                        full_name = f"{self._table_alias_map[alias]}.{column_name}"
+                        full_columns.append(full_name)
+                    else:
+                        # 如果找不到别名映射，保持原样
+                        full_columns.append(col)
+                else:
+                    full_columns.append(col)
+            else:
+                # 没有表前缀的列，保持原样
+                full_columns.append(col)
+
+        return full_columns
 
     def extract_from_tables(self):
         """提取FROM表"""
@@ -293,29 +370,15 @@ class SQLParser:
                 for j, sub_token in enumerate(token.tokens):
                     print(f"  Sub-token {j}: {repr(str(sub_token).strip())} | Type: {sub_token.ttype}")
         print("-" * 80)
-        """提取LIMIT值"""
-        limit_value = None
-        limit_seen = False
-
-        for token in self.parsed.tokens:
-            if limit_seen:
-                if token.ttype is None and not token.is_whitespace:
-                    try:
-                        limit_value = int(str(token).strip())
-                        break
-                    except ValueError:
-                        pass
-            elif token.ttype is Keyword and token.value.upper() == 'LIMIT':
-                limit_seen = True
-
-        return limit_value
 
     def parse_all(self):
         """解析SQL的所有部分"""
         return {
             'select_columns': self.extract_select_columns(),
+            'select_columns_full': self.extract_select_columns_with_full_names(),  # 完整列名
             'from_tables': self.extract_from_tables(),
             'join_info': self.extract_join_info(),
+            'table_alias_mapping': self.extract_table_alias_mapping(),  # 新增：表别名映射
             'where_conditions': self.extract_where_conditions(),
             'group_by_fields': self.extract_group_by_fields(),
             'order_by_fields': self.extract_order_by_fields(),
@@ -329,8 +392,13 @@ def format_sql_parts(parts):
     print("-" * 50)
 
     if parts['select_columns']:
-        print("SELECT 列：")
+        print("SELECT 列（原始）：")
         for col in parts['select_columns']:
+            print(f"  - {col}")
+
+    if parts.get('select_columns_full'):
+        print("\nSELECT 列（完整表名）：")
+        for col in parts['select_columns_full']:
             print(f"  - {col}")
 
     if parts['from_tables']:
@@ -344,6 +412,15 @@ def format_sql_parts(parts):
             print(f"  - {join['type']} {join['table']}")
             if join['condition']:
                 print(f"    ON {join['condition']}")
+
+    # 新增：显示表别名映射关系
+    if parts.get('table_alias_mapping'):
+        print("\n表别名映射关系：")
+        for alias, table_name in parts['table_alias_mapping'].items():
+            if alias == table_name:
+                print(f"  - {table_name} (无别名)")
+            else:
+                print(f"  - {alias} -> {table_name}")
 
     if parts['where_conditions']:
         print("\nWHERE 条件：")
@@ -365,97 +442,27 @@ def format_sql_parts(parts):
 
 # 使用示例
 if __name__ == "__main__":
-    # 测试SQL语句
-    test_sqls = [
-        """
-        SELECT id, name, age, department
-        FROM employees
-        WHERE age > 25 AND department = 'IT'
-        GROUP BY department, age
-        ORDER BY age DESC, name ASC
-        LIMIT 10
-        """,
+    # 测试你提供的SQL
+    test_sql = """SELECT teacher_id, name, title, d.department_name 
+    FROM gx_test_teachers  
+    LEFT JOIN gx_test_departments d ON department_id = d.department_id 
+    WHERE d.department_name = '计算机科学与技术学院' AND title = '副教授';"""
 
-        """
-        SELECT COUNT(*) as total, AVG(salary) as avg_salary
-        FROM employees e
-        WHERE e.hire_date > '2020-01-01'
-        GROUP BY e.department
-        ORDER BY total DESC
-        LIMIT 5
-        """,
+    print("测试SQL:")
+    print(test_sql.strip())
+    print("=" * 60)
 
-        """
-        SELECT *
-        FROM users, orders
-        WHERE users.id = orders.user_id
-        ORDER BY orders.created_at
-        """,
+    parser = SQLParser(test_sql)
+    parts = parser.parse_all()
+    format_sql_parts(parts)
 
-        """
-        SELECT DISTINCT customer_name, SUM(amount) as total_amount
-        FROM sales
-        WHERE date BETWEEN '2023-01-01' AND '2023-12-31'
-        GROUP BY customer_name
-        HAVING SUM(amount) > 1000
-        ORDER BY total_amount DESC
-        LIMIT 20
-        """,
+    print("\n" * 2)
+    print("解析结果字典：")
+    print(parts)
 
-        # 新增JOIN测试用例
-        """
-        SELECT e.name, e.salary, d.department_name
-        FROM employees e
-        INNER JOIN departments d ON e.department_id = d.id
-        WHERE e.salary > 50000
-        ORDER BY e.salary DESC
-        """,
-
-        """
-        SELECT o.order_id, o.order_date, c.customer_name, p.product_name, oi.quantity
-        FROM orders o
-        LEFT JOIN customers c ON o.customer_id = c.id
-        LEFT JOIN order_items oi ON o.order_id = oi.order_id
-        INNER JOIN products p ON oi.product_id = p.id
-        WHERE o.order_date >= '2023-01-01'
-        ORDER BY o.order_date DESC
-        LIMIT 100
-        """,
-
-        """
-        SELECT e1.name as employee_name, e2.name as manager_name
-        FROM employees e1
-        LEFT JOIN employees e2 ON e1.manager_id = e2.employee_id
-        WHERE e1.department = 'Sales'
-        """,
-
-        """
-        SELECT s.store_name, p.product_name, i.quantity
-        FROM stores s
-        CROSS JOIN products p
-        LEFT JOIN inventory i ON s.store_id = i.store_id AND p.product_id = i.product_id
-        ORDER BY s.store_name, p.product_name
-        """,
-
-        """
-        SELECT DISTINCT c.country, COUNT(o.order_id) as order_count
-        FROM customers c
-        RIGHT JOIN orders o ON c.customer_id = o.customer_id
-        WHERE o.status = 'completed'
-        GROUP BY c.country
-        HAVING COUNT(o.order_id) > 10
-        ORDER BY order_count DESC
-        """
-    ]
-
-    for i, sql in enumerate(test_sqls, 1):
-        print(f"\n{'=' * 60}")
-        print(f"测试SQL {i}:")
-        print(sql.strip())
-        print(f"{'=' * 60}")
-
-        # 添加调试输出
-        parser = SQLParser(sql)
-        # parser.debug_tokens()  # 取消注释以查看token详情
-        parts = parser.parse_all()
-        format_sql_parts(parts)
+    print("\n" + "=" * 60)
+    print("单独测试表别名映射功能：")
+    alias_mapping = parser.extract_table_alias_mapping()
+    print("表别名映射字典：")
+    for alias, table in alias_mapping.items():
+        print(f"  '{alias}' -> '{table}'")
