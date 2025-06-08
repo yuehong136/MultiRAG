@@ -1,4 +1,4 @@
-# !/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
@@ -86,7 +86,10 @@ class SemanticApiClient:
             "get_business_term_info": "/api/drm/semanticOpenApi/getBusinessTermInfo",
             "get_model_detail": "/api/drm/semanticOpenApi/getModelDetail",
             "get_dimension_info_by_id": "/api/drm/semanticOpenApi/getDimensionInfoById",
-            "get_dimension_values": "/api/drm/semanticOpenApi/getDimensionValues"
+            "get_dimension_values": "/api/drm/semanticOpenApi/getDimensionValues",
+            "get_model_relationships": "/api/drm/semanticOpenApi/getModelRelationships",
+            "get_dataset_detail": "/api/drm/semanticOpenApi/getDatasetDetail",
+            "get_model_inds_and_dims": "/api/drm/semanticOpenApi/getModelIndsAndDimsByModelId",
         }
 
         # 设置请求头
@@ -1956,5 +1959,63 @@ class SemanticApiClient:
         except Exception as e:
             # 其他异常封装为ApiRequestError后抛出
             error_msg = f"获取维度值过程中出错: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
+
+    async def get_model_inds_and_dims_by_model_id_async(
+            self,
+            model_id: str
+    ) -> Optional[Dict]:
+        """
+        异步获取单个模型的指标和维度信息。
+
+        Args:
+            model_id: 单个模型ID。
+
+        Returns:
+            Optional[Dict]: 包含模型指标和维度信息的字典，如果失败则返回 None。
+
+        Raises:
+            ApiRequestError: 请求过程中的错误。
+            ApiResponseError: API响应业务状态码不为0。
+            ApiNetworkError: 网络连接错误。
+        """
+        logger.info(f"\n=== 根据模型ID {model_id} 获取指标和维度信息 ===")
+
+        if not model_id:
+            logger.warning("模型ID不能为空。")
+            return None
+
+        try:
+            # 直接发起对单个模型ID的请求
+            result = await self._make_async_request(
+                "POST",
+                self.api_paths["get_model_inds_and_dims"],
+                data={"modelId": model_id}
+            )
+
+            # 获取数据部分
+            model_data = result.get("data")
+
+            if model_data and isinstance(model_data, dict):
+                # 添加原始请求的模型ID，以便跟踪
+                model_data["requested_model_id"] = model_id
+
+                metrics_count = len(model_data.get('metrics', []))
+                dims_count = len(model_data.get('dimensions', []))
+                logger.info(f"模型ID {model_id} 返回了 {metrics_count} 个指标和 {dims_count} 个维度。")
+
+                return model_data
+            else:
+                logger.warning(f"模型ID {model_id} 未返回有效数据或数据格式不正确。")
+                return None
+
+        except SemanticApiError as e:
+            # 捕获已封装的API异常并记录
+            logger.error(f"获取模型ID {model_id} 的指标和维度时出错: {e}")
+            raise  # 重新抛出，让调用者处理
+        except Exception as e:
+            # 捕获其他所有异常
+            error_msg = f"获取模型 {model_id} 的指标和维度时发生意外错误: {str(e)}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
