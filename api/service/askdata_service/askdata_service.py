@@ -92,7 +92,7 @@ class AskdataService:
 
         processed_semantic_layer = process_semantic_layer(semantic_layer_original)
 
-        return processed_semantic_layer
+        return processed_semantic_layer, model_ids
 
     async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any]):
         result = await self.nlq_to_initial_sql_generator.generate_sql_query_with_models(user_query, semantic_layer,
@@ -102,6 +102,63 @@ class AskdataService:
             used_models = result['usedModels']
 
         return sql, used_models
+
+    async def generate_table_config(self, sql: str, dataset_id_list: List[str], model_ids: List[str],
+                                    used_models: List[str]):
+        # 解析sql，与语义层进行对应
+        parser = SQLParser(sql)
+        parts = parser.parse_all()
+
+        # 获得涉及的模型的详情, 并获取其indsAndDims
+        used_model_detail_dict = {}
+        used_table_detail_dict = {}
+        model_detail_list = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
+        for model_detail in model_detail_list:
+            if model_detail.get('modelName') in used_models:
+                model_detail['indsAndDims'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
+                    model_id=model_detail["modelId"])
+                used_model_detail_dict[model_detail["modelName"]] = model_detail
+                used_table_detail_dict[model_detail["tableName"]] = model_detail
+
+        selected_columns = []  # [{"semantic_name": “xxx", "column_name": "xxx", "semantic_type": "xxx"}]
+        for column in parts["select_columns_full"]:
+            table = column.split(".")[0]
+            field = column.split(".")[1]
+            # 使用table找到used_model_detail_dict中对应的model_detail，并进一步找到indAndDim
+            if table in used_table_detail_dict.keys():
+                model_detail = used_table_detail_dict[table]
+                is_matched = False
+                for metric in model_detail["indsAndDims"]["metrics"]:
+                    if metric["expression"] == field:
+                        selected_columns.append({"semantic_name": metric["metricName"], "column": column,
+                                                 "semantic_type": "metric"})
+                        is_matched = True
+                        break
+                if is_matched:
+                    continue
+
+                for dimension in model_detail["indsAndDims"]["dimensions"]:
+                    if dimension["dimensionEnName"] == field:
+                        selected_columns.append(
+                            {"semantic_name": dimension["dimensionName"], "column": column,
+                             "semantic_type": "dimension"})
+                        is_matched = True
+                        break
+                if is_matched:
+                    continue
+
+                selected_columns.append({"semantic_name": "未知", "column": column,
+                                         "semantic_type": "未知"})
+                continue
+
+            else:
+                selected_columns.append({"semantic_name": "未知", "column": column,
+                                         "semantic_type": "未知"})
+
+        return {
+            "columns": selected_columns,
+        }
+        pass
 
     def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> List[str]:
         """
