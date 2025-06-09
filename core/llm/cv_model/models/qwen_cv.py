@@ -114,7 +114,7 @@ class QWenCV(Base):
         ans = ""
         tk_count = 0
         if response.status_code == HTTPStatus.OK:
-            ans += response.output.choices[0]['message']['content'][0]["text"]
+            ans = response.output.choices[0]['message']['content'][0]["text"]
             tk_count += response.usage.total_tokens
             if response.output.choices[0].get("finish_reason", "") == "length":
                 ans += "...\nFor the content length reason, it stopped, continue?" if is_english(

@@ -515,5 +515,9 @@ class LLMBundle:
             if txt.endswith("</think>"):
                 ans = ans.rstrip("</think>")
 
-            ans += txt
+            if type(self.mdl).__name__ == "QWenCV":
+                ans = txt
+            else:
+                ans += txt
+
             yield ans
