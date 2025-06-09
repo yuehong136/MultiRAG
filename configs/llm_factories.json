@@ -3188,6 +3188,12 @@
                     "is_tools": true
                 },
                 {
+                    "llm_name": "ernie-4.5-turbo-vl-32k",
+                    "tags": "LLM,IMAGE2TEXT,32k",
+                    "max_tokens": 32768,
+                    "mdl_type": "image2text"
+                },
+                {
                     "llm_name": "ernie-4.0-8k-latest",
                     "tags": "LLM,CHAT,8k",
                     "max_tokens": 2048,

@@ -24,6 +24,7 @@ from core.llm.chat_model.models.xinference_chat import XinferenceChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.cv_model.models.anthropic_cv import AnthropicCV
 from core.llm.cv_model.models.azuregptv4 import AzureGptV4
+from core.llm.cv_model.models.baiduyiyan_cv import BaiduYiyanCV
 from core.llm.cv_model.models.gemini_cv import GeminiCV
 from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.models.ollama_cv import OllamaCV
@@ -103,6 +104,7 @@ CvModel = {
     "VLLM": OpenAI_APICV,
     "Anthropic": AnthropicCV,
     "SILICONFLOW": SILICONFLOWCV,
+    "BaiduYiyan": BaiduYiyanCV,
 }
 
 
