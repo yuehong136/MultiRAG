@@ -32,7 +32,10 @@ class Base(ABC):
         try:
             for his in history:
                 if his["role"] == "user":
-                    his["content"] = self.chat_prompt(his["content"], image)
+                    if image:
+                       his["content"] = self.chat_prompt(his["content"], image)
+                    else:
+                        his["content"] = self.chat_onlytext(his["content"])
 
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -53,7 +56,10 @@ class Base(ABC):
         try:
             for his in history:
                 if his["role"] == "user":
-                    his["content"] = self.chat_prompt(his["content"], image)
+                    if image:
+                       his["content"] = self.chat_prompt(his["content"], image)
+                    else:
+                        his["content"] = self.chat_onlytext(his["content"])
 
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -66,7 +72,7 @@ class Base(ABC):
                 if not resp.choices or not resp.choices[0].delta.content:
                     continue
                 delta = resp.choices[0].delta.content
-                ans += delta
+                ans = delta
                 if resp.choices[0].finish_reason == "length":
                     ans += "...\nFor the content length reason, it stopped, continue?" if is_english([ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
                 if resp.choices[0].finish_reason == "stop":
@@ -134,7 +140,8 @@ class Base(ABC):
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/jpeg;base64,{b64}",
+                    # "url": f"data:image/jpeg;base64,{b64}",
+                    "url": f"{b64}",
                 },
             },
             {
