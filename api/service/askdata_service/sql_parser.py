@@ -85,6 +85,56 @@ class SQLParser:
             else:
                 self._table_alias_map[table_info] = table_info
 
+    def _convert_field_to_full_name(self, field):
+        """
+        将字段转换为完整的表名.字段名格式
+
+        Args:
+            field (str): 字段名，可能是 alias.column 或 column 格式
+
+        Returns:
+            str: 完整的表名.字段名格式
+        """
+        # 确保表别名映射已构建
+        if not self._table_alias_map:
+            self._build_table_alias_map()
+
+        # 如果字段包含点号，说明是别名.字段名或表名.字段名格式
+        if '.' in field:
+            parts = field.split('.', 1)
+            if len(parts) == 2:
+                alias_or_table = parts[0]
+                column_name = parts[1]
+
+                # 查找别名对应的表名
+                if alias_or_table in self._table_alias_map:
+                    table_name = self._table_alias_map[alias_or_table]
+                    return f"{table_name}.{column_name}"
+                else:
+                    # 如果找不到别名映射，可能已经是表名.字段名格式，保持原样
+                    return field
+        else:
+            # 如果字段不包含点号，需要确定属于哪个表
+            # 策略：优先使用主表（FROM子句中的第一个表）
+            if self._table_alias_map:
+                # 获取主表（FROM子句中的第一个表）
+                from_tables = self.extract_from_tables()
+                if from_tables:
+                    # 获取第一个表的实际表名
+                    main_table_info = from_tables[0]
+                    parts = main_table_info.split()
+                    main_table_name = parts[0]  # 取表名部分
+                    return f"{main_table_name}.{field}"
+                else:
+                    # 如果没有FROM表，使用映射中的第一个表
+                    first_table = list(self._table_alias_map.values())[0]
+                    return f"{first_table}.{field}"
+            else:
+                # 如果没有表信息，返回原字段
+                return field
+
+        return field
+
     def extract_table_alias_mapping(self):
         """提取表和表别名的映射关系
 
@@ -245,14 +295,18 @@ class SQLParser:
         1. 默认所有条件都是以AND连接
         2. 以AND为分隔符，提取出字段、操作符和值
         3. 如果存在OR，则返回整个WHERE条件（不进行细化拆分）
+        4. 将字段转换为完整的表名.字段名格式
 
         Returns:
             dict: 包含以下结构的字典
                 - 'has_or': bool, 是否包含OR操作符
                 - 'raw_condition': str, 原始WHERE条件
                 - 'parsed_conditions': list, 解析后的条件列表（仅当has_or=False时）
-                  每个条件包含: {'field': str, 'operator': str, 'value': str}
+                  每个条件包含: {'field': str, 'operator': str, 'value': str, 'full_field': str}
         """
+        # 确保表别名映射已构建
+        self._build_table_alias_map()
+
         where_condition = self.extract_where_conditions()
 
         if not where_condition:
@@ -292,13 +346,13 @@ class SQLParser:
 
     def _parse_single_condition(self, condition):
         """
-        解析单个条件，提取字段、操作符和值
+        解析单个条件，提取字段、操作符和值，并将字段转换为完整格式
 
         Args:
             condition (str): 单个条件字符串
 
         Returns:
-            dict: {'field': str, 'operator': str, 'value': str} 或 None
+            dict: {'field': str, 'operator': str, 'value': str, 'full_field': str} 或 None
         """
         condition = condition.strip()
 
@@ -325,8 +379,10 @@ class SQLParser:
                 match = re.search(pattern, condition, re.IGNORECASE)
                 if match:
                     field = condition[:match.start()].strip()
+                    full_field = self._convert_field_to_full_name(field)
                     return {
                         'field': field,
+                        'full_field': full_field,
                         'operator': op,
                         'value': special_value
                     }
@@ -338,6 +394,9 @@ class SQLParser:
                     field = condition[:match.start()].strip()
                     value = condition[match.end():].strip()
 
+                    # 转换字段为完整格式
+                    full_field = self._convert_field_to_full_name(field)
+
                     # 移除值两端的引号（如果有的话）
                     if value:
                         if (value.startswith("'") and value.endswith("'")) or \
@@ -346,6 +405,7 @@ class SQLParser:
 
                     return {
                         'field': field,
+                        'full_field': full_field,
                         'operator': op,
                         'value': value
                     }
@@ -543,7 +603,7 @@ def format_sql_parts(parts):
         print("\nWHERE 条件（原始）：")
         print(f"  {parts['where_conditions']}")
 
-    # 新增：显示详细WHERE条件解析
+    # 修改：显示详细WHERE条件解析，包含完整字段名
     if parts.get('where_conditions_detailed'):
         where_detail = parts['where_conditions_detailed']
         print("\nWHERE 条件（详细解析）：")
@@ -558,7 +618,8 @@ def format_sql_parts(parts):
                     value_str = 'NULL'
                 else:
                     value_str = f"'{condition['value']}'"
-                print(f"    {i}. 字段: {condition['field']}")
+                print(f"    {i}. 原始字段: {condition['field']}")
+                print(f"       完整字段: {condition['full_field']}")
                 print(f"       操作符: {condition['operator']}")
                 print(f"       值: {value_str}")
         else:
@@ -586,7 +647,7 @@ if __name__ == "__main__":
     LEFT JOIN gx_test_departments d ON department_id = d.department_id 
     WHERE d.department_name = '计算机科学与技术学院' AND title = '副教授';"""
 
-    print("测试SQL 1 (AND条件):")
+    print("测试SQL 1 (带别名的WHERE条件):")
     print(test_sql1.strip())
     print("=" * 60)
 
@@ -611,11 +672,12 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 80 + "\n")
 
-    # 测试复杂条件的SQL
-    test_sql3 = """SELECT * FROM users 
-    WHERE age >= 18 AND status = 'active' AND name LIKE 'John%' AND email IS NOT NULL;"""
+    # 测试复杂条件的SQL，包含别名和非别名字段混合
+    test_sql3 = """SELECT u.id, u.name, p.title FROM users u 
+    LEFT JOIN profiles p ON u.id = p.user_id
+    WHERE u.age >= 18 AND status = 'active' AND p.title LIKE 'Senior%' AND u.email IS NOT NULL;"""
 
-    print("测试SQL 3 (复杂AND条件):")
+    print("测试SQL 3 (混合别名和非别名字段的WHERE条件):")
     print(test_sql3.strip())
     print("=" * 60)
 
@@ -625,22 +687,36 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 80 + "\n")
 
+    # 测试多表但无别名的情况
+    test_sql4 = """SELECT * FROM orders, customers 
+    WHERE orders.customer_id = customers.id AND status = 'pending' AND amount > 100;"""
+
+    print("测试SQL 4 (多表无别名):")
+    print(test_sql4.strip())
+    print("=" * 60)
+
+    parser4 = SQLParser(test_sql4)
+    parts4 = parser4.parse_all()
+    format_sql_parts(parts4)
+
+    print("\n" + "=" * 80 + "\n")
+
     # 单独测试WHERE条件详细解析功能
-    print("单独测试WHERE条件详细解析功能：")
+    print("单独测试WHERE条件详细解析功能（字段完整名称转换）：")
     print("-" * 50)
 
     test_conditions = [
-        "name = 'John' AND age > 25",
-        "status IN ('active', 'pending') AND created_date >= '2023-01-01'",
-        "title = '教授' OR title = '副教授'",
-        "email IS NOT NULL AND phone IS NULL"
+        ("SELECT * FROM users u WHERE u.name = 'John' AND age > 25", "带别名和无别名混合"),
+        ("SELECT * FROM users u JOIN profiles p ON u.id = p.user_id WHERE u.status = 'active' AND p.verified = 1",
+         "多表JOIN带别名"),
+        ("SELECT * FROM products WHERE category_id = 1 AND price > 100", "单表无别名"),
+        ("SELECT * FROM orders o WHERE o.total >= 500 OR o.status = 'urgent'", "OR条件（不解析）")
     ]
 
-    for i, condition in enumerate(test_conditions, 1):
-        print(f"\n条件 {i}: {condition}")
-        # 创建临时SQL来测试
-        temp_sql = f"SELECT * FROM test WHERE {condition}"
-        temp_parser = SQLParser(temp_sql)
+    for i, (sql, desc) in enumerate(test_conditions, 1):
+        print(f"\n条件 {i} ({desc}):")
+        print(f"SQL: {sql}")
+        temp_parser = SQLParser(sql)
         where_detail = temp_parser.extract_where_conditions_detailed()
 
         if where_detail['has_or']:
@@ -648,9 +724,8 @@ if __name__ == "__main__":
         else:
             print(f"  → 解析出 {len(where_detail['parsed_conditions'])} 个条件：")
             for j, cond in enumerate(where_detail['parsed_conditions'], 1):
-                # 对于NULL值，不加引号；对于其他字符串值，加引号
                 if cond['value'] == 'NULL':
                     value_str = 'NULL'
                 else:
                     value_str = f"'{cond['value']}'"
-                print(f"    {j}. {cond['field']} {cond['operator']} {value_str}")
+                print(f"    {j}. {cond['field']} → {cond['full_field']} {cond['operator']} {value_str}")
