@@ -109,17 +109,20 @@ class AskdataService:
         parser = SQLParser(sql)
         parts = parser.parse_all()
 
-        # 获得涉及的模型的详情, 并获取其indsAndDims
+        # 获得涉及的模型的详情, 并获取其对应indsAndDims
         used_model_detail_dict = {}
         used_table_detail_dict = {}
+        model_list = []
         model_detail_list = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
         for model_detail in model_detail_list:
             if model_detail.get('modelName') in used_models:
                 model_detail['indsAndDims'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
                     model_id=model_detail["modelId"])
+                model_list.append(model_detail)
                 used_model_detail_dict[model_detail["modelName"]] = model_detail
                 used_table_detail_dict[model_detail["tableName"]] = model_detail
 
+        # 根据sql的select列，获得列对应的维度和指标
         selected_columns = []  # [{"semantic_name": “xxx", "column_name": "xxx", "semantic_type": "xxx"}]
         for column in parts["select_columns_full"]:
             table = column.split(".")[0]
@@ -129,26 +132,26 @@ class AskdataService:
                 model_detail = used_table_detail_dict[table]
                 is_matched = False
                 for metric in model_detail["indsAndDims"]["metrics"]:
-                    if metric["expression"] == field:
+                    if metric["expression"].lower() == field.lower():
                         selected_columns.append({"semantic_name": metric["metricName"], "column": column,
-                                                 "semantic_type": "metric"})
+                                                 "semantic_type": "metric", "from_model": model_detail['modelId']})
                         is_matched = True
                         break
                 if is_matched:
                     continue
 
                 for dimension in model_detail["indsAndDims"]["dimensions"]:
-                    if dimension["dimensionEnName"] == field:
+                    if dimension["dimensionEnName"].lower() == field.lower():
                         selected_columns.append(
                             {"semantic_name": dimension["dimensionName"], "column": column,
-                             "semantic_type": "dimension"})
+                             "semantic_type": "dimension", "from_model": model_detail['modelId']})
                         is_matched = True
                         break
                 if is_matched:
                     continue
 
                 selected_columns.append({"semantic_name": "未知", "column": column,
-                                         "semantic_type": "未知"})
+                                         "semantic_type": "未知", "from_model": model_detail['modelId']})
                 continue
 
             else:
@@ -157,6 +160,7 @@ class AskdataService:
 
         return {
             "columns": selected_columns,
+            "models": model_list
         }
         pass
 
