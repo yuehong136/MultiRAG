@@ -237,6 +237,122 @@ class SQLParser:
 
         return None
 
+    def extract_where_conditions_detailed(self):
+        """
+        提取WHERE条件的详细结构
+
+        规则：
+        1. 默认所有条件都是以AND连接
+        2. 以AND为分隔符，提取出字段、操作符和值
+        3. 如果存在OR，则返回整个WHERE条件（不进行细化拆分）
+
+        Returns:
+            dict: 包含以下结构的字典
+                - 'has_or': bool, 是否包含OR操作符
+                - 'raw_condition': str, 原始WHERE条件
+                - 'parsed_conditions': list, 解析后的条件列表（仅当has_or=False时）
+                  每个条件包含: {'field': str, 'operator': str, 'value': str}
+        """
+        where_condition = self.extract_where_conditions()
+
+        if not where_condition:
+            return {
+                'has_or': False,
+                'raw_condition': None,
+                'parsed_conditions': []
+            }
+
+        # 检查是否包含OR（忽略大小写）
+        has_or = bool(re.search(r'\bOR\b', where_condition, re.IGNORECASE))
+
+        result = {
+            'has_or': has_or,
+            'raw_condition': where_condition,
+            'parsed_conditions': []
+        }
+
+        # 如果包含OR，直接返回原始条件，不进行细化解析
+        if has_or:
+            return result
+
+        # 解析AND连接的条件
+        # 先简单按AND分割（注意处理大小写）
+        and_conditions = re.split(r'\s+AND\s+', where_condition, flags=re.IGNORECASE)
+
+        for condition in and_conditions:
+            condition = condition.strip()
+            if not condition:
+                continue
+
+            parsed_condition = self._parse_single_condition(condition)
+            if parsed_condition:
+                result['parsed_conditions'].append(parsed_condition)
+
+        return result
+
+    def _parse_single_condition(self, condition):
+        """
+        解析单个条件，提取字段、操作符和值
+
+        Args:
+            condition (str): 单个条件字符串
+
+        Returns:
+            dict: {'field': str, 'operator': str, 'value': str} 或 None
+        """
+        condition = condition.strip()
+
+        # 定义各种操作符的正则模式（按优先级排序，长的在前）
+        operators = [
+            (r'\s+IS\s+NOT\s+NULL\b', 'IS NOT', 'NULL'),  # 特殊处理：IS NOT NULL
+            (r'\s+IS\s+NULL\b', 'IS', 'NULL'),  # 特殊处理：IS NULL
+            (r'\s+NOT\s+LIKE\s+', 'NOT LIKE'),
+            (r'\s+NOT\s+IN\s+', 'NOT IN'),
+            (r'\s+LIKE\s+', 'LIKE'),
+            (r'\s+IN\s+', 'IN'),
+            (r'\s*>=\s*', '>='),
+            (r'\s*<=\s*', '<='),
+            (r'\s*!=\s*', '!='),
+            (r'\s*<>\s*', '<>'),
+            (r'\s*=\s*', '='),
+            (r'\s*>\s*', '>'),
+            (r'\s*<\s*', '<'),
+        ]
+
+        for operator_info in operators:
+            if len(operator_info) == 3:  # 特殊处理的NULL情况
+                pattern, op, special_value = operator_info
+                match = re.search(pattern, condition, re.IGNORECASE)
+                if match:
+                    field = condition[:match.start()].strip()
+                    return {
+                        'field': field,
+                        'operator': op,
+                        'value': special_value
+                    }
+            else:  # 普通操作符
+                pattern, op = operator_info
+                match = re.search(pattern, condition, re.IGNORECASE)
+                if match:
+                    # 分割字段和值
+                    field = condition[:match.start()].strip()
+                    value = condition[match.end():].strip()
+
+                    # 移除值两端的引号（如果有的话）
+                    if value:
+                        if (value.startswith("'") and value.endswith("'")) or \
+                                (value.startswith('"') and value.endswith('"')):
+                            value = value[1:-1]
+
+                    return {
+                        'field': field,
+                        'operator': op,
+                        'value': value
+                    }
+
+        # 如果没有匹配到任何操作符，返回None
+        return None
+
     def _extract_group_by_part(self):
         """提取GROUP BY到下一个主要子句之间的部分"""
         group_part = []
@@ -380,6 +496,7 @@ class SQLParser:
             'join_info': self.extract_join_info(),
             'table_alias_mapping': self.extract_table_alias_mapping(),  # 新增：表别名映射
             'where_conditions': self.extract_where_conditions(),
+            'where_conditions_detailed': self.extract_where_conditions_detailed(),  # 新增：详细WHERE条件解析
             'group_by_fields': self.extract_group_by_fields(),
             'order_by_fields': self.extract_order_by_fields(),
             'limit': self.extract_limit()
@@ -423,8 +540,29 @@ def format_sql_parts(parts):
                 print(f"  - {alias} -> {table_name}")
 
     if parts['where_conditions']:
-        print("\nWHERE 条件：")
+        print("\nWHERE 条件（原始）：")
         print(f"  {parts['where_conditions']}")
+
+    # 新增：显示详细WHERE条件解析
+    if parts.get('where_conditions_detailed'):
+        where_detail = parts['where_conditions_detailed']
+        print("\nWHERE 条件（详细解析）：")
+        if where_detail['has_or']:
+            print("  包含OR操作符，返回原始条件：")
+            print(f"  {where_detail['raw_condition']}")
+        elif where_detail['parsed_conditions']:
+            print("  解析后的条件：")
+            for i, condition in enumerate(where_detail['parsed_conditions'], 1):
+                # 对于NULL值，不加引号；对于其他字符串值，加引号
+                if condition['value'] == 'NULL':
+                    value_str = 'NULL'
+                else:
+                    value_str = f"'{condition['value']}'"
+                print(f"    {i}. 字段: {condition['field']}")
+                print(f"       操作符: {condition['operator']}")
+                print(f"       值: {value_str}")
+        else:
+            print("  无WHERE条件")
 
     if parts['group_by_fields']:
         print("\nGROUP BY 字段：")
@@ -440,29 +578,79 @@ def format_sql_parts(parts):
         print(f"\nLIMIT 限制：{parts['limit']}")
 
 
-# 使用示例
+# 使用示例和测试
 if __name__ == "__main__":
-    # 测试你提供的SQL
-    test_sql = """SELECT teacher_id, name, title, d.department_name 
+    # 测试原始SQL
+    test_sql1 = """SELECT teacher_id, name, title, d.department_name 
     FROM gx_test_teachers  
     LEFT JOIN gx_test_departments d ON department_id = d.department_id 
     WHERE d.department_name = '计算机科学与技术学院' AND title = '副教授';"""
 
-    print("测试SQL:")
-    print(test_sql.strip())
+    print("测试SQL 1 (AND条件):")
+    print(test_sql1.strip())
     print("=" * 60)
 
-    parser = SQLParser(test_sql)
-    parts = parser.parse_all()
-    format_sql_parts(parts)
+    parser1 = SQLParser(test_sql1)
+    parts1 = parser1.parse_all()
+    format_sql_parts(parts1)
 
-    print("\n" * 2)
-    print("解析结果字典：")
-    print(parts)
+    print("\n" + "=" * 80 + "\n")
 
-    print("\n" + "=" * 60)
-    print("单独测试表别名映射功能：")
-    alias_mapping = parser.extract_table_alias_mapping()
-    print("表别名映射字典：")
-    for alias, table in alias_mapping.items():
-        print(f"  '{alias}' -> '{table}'")
+    # 测试包含OR的SQL
+    test_sql2 = """SELECT teacher_id, name, title 
+    FROM gx_test_teachers 
+    WHERE title = '教授' OR title = '副教授';"""
+
+    print("测试SQL 2 (OR条件):")
+    print(test_sql2.strip())
+    print("=" * 60)
+
+    parser2 = SQLParser(test_sql2)
+    parts2 = parser2.parse_all()
+    format_sql_parts(parts2)
+
+    print("\n" + "=" * 80 + "\n")
+
+    # 测试复杂条件的SQL
+    test_sql3 = """SELECT * FROM users 
+    WHERE age >= 18 AND status = 'active' AND name LIKE 'John%' AND email IS NOT NULL;"""
+
+    print("测试SQL 3 (复杂AND条件):")
+    print(test_sql3.strip())
+    print("=" * 60)
+
+    parser3 = SQLParser(test_sql3)
+    parts3 = parser3.parse_all()
+    format_sql_parts(parts3)
+
+    print("\n" + "=" * 80 + "\n")
+
+    # 单独测试WHERE条件详细解析功能
+    print("单独测试WHERE条件详细解析功能：")
+    print("-" * 50)
+
+    test_conditions = [
+        "name = 'John' AND age > 25",
+        "status IN ('active', 'pending') AND created_date >= '2023-01-01'",
+        "title = '教授' OR title = '副教授'",
+        "email IS NOT NULL AND phone IS NULL"
+    ]
+
+    for i, condition in enumerate(test_conditions, 1):
+        print(f"\n条件 {i}: {condition}")
+        # 创建临时SQL来测试
+        temp_sql = f"SELECT * FROM test WHERE {condition}"
+        temp_parser = SQLParser(temp_sql)
+        where_detail = temp_parser.extract_where_conditions_detailed()
+
+        if where_detail['has_or']:
+            print("  → 包含OR，返回原始条件")
+        else:
+            print(f"  → 解析出 {len(where_detail['parsed_conditions'])} 个条件：")
+            for j, cond in enumerate(where_detail['parsed_conditions'], 1):
+                # 对于NULL值，不加引号；对于其他字符串值，加引号
+                if cond['value'] == 'NULL':
+                    value_str = 'NULL'
+                else:
+                    value_str = f"'{cond['value']}'"
+                print(f"    {j}. {cond['field']} {cond['operator']} {value_str}")
