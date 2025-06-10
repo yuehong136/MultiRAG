@@ -515,6 +515,91 @@ class SQLParser:
 
         return fields
 
+    def extract_order_by_fields_with_full_names(self):
+        """提取ORDER BY字段并转换为完整的表名.字段名格式"""
+        # 确保表别名映射已构建
+        self._build_table_alias_map()
+
+        # 获取原始的order by字段
+        order_fields = self.extract_order_by_fields()
+
+        # 转换为完整字段名
+        full_order_fields = []
+
+        for field_expr in order_fields:
+            # 分离字段名和排序方向（ASC/DESC）
+            # 使用正则表达式匹配最后的ASC或DESC
+            match = re.match(r'^(.+?)\s+(ASC|DESC)\s*$', field_expr, re.IGNORECASE)
+
+            if match:
+                field = match.group(1).strip()
+                direction = match.group(2).upper()
+            else:
+                # 没有明确的排序方向，默认为ASC
+                field = field_expr.strip()
+                direction = None
+
+            # 转换字段为完整格式
+            full_field = self._convert_field_to_full_name(field)
+
+            # 重新组合字段和排序方向
+            if direction:
+                full_field_expr = f"{full_field} {direction}"
+            else:
+                full_field_expr = full_field
+
+            full_order_fields.append(full_field_expr)
+
+        return full_order_fields
+
+    def extract_order_by_fields_detailed(self):
+        """
+        提取ORDER BY字段的详细结构
+
+        将字段和排序方向分开存储，如果没有指定排序方向，默认为ASC
+
+        Returns:
+            list: 解析后的ORDER BY字段列表，每个元素包含：
+                {
+                    'field': str,           # 原始字段名
+                    'full_field': str,      # 完整的表名.字段名格式
+                    'direction': str        # 排序方向 'ASC' 或 'DESC'
+                }
+        """
+        # 确保表别名映射已构建
+        self._build_table_alias_map()
+
+        # 获取原始的order by字段
+        order_fields = self.extract_order_by_fields()
+
+        # 解析每个字段
+        detailed_order_fields = []
+
+        for field_expr in order_fields:
+            # 分离字段名和排序方向（ASC/DESC）
+            # 使用正则表达式匹配最后的ASC或DESC
+            match = re.match(r'^(.+?)\s+(ASC|DESC)\s*$', field_expr, re.IGNORECASE)
+
+            if match:
+                field = match.group(1).strip()
+                direction = match.group(2).upper()
+            else:
+                # 没有明确的排序方向，默认为ASC
+                field = field_expr.strip()
+                direction = 'ASC'
+
+            # 转换字段为完整格式
+            full_field = self._convert_field_to_full_name(field)
+
+            # 构建详细信息
+            detailed_order_fields.append({
+                'field': field,
+                'full_field': full_field,
+                'direction': direction
+            })
+
+        return detailed_order_fields
+
     def extract_limit(self):
         """提取LIMIT值"""
         limit_value = None
@@ -554,11 +639,13 @@ class SQLParser:
             'select_columns_full': self.extract_select_columns_with_full_names(),  # 完整列名
             'from_tables': self.extract_from_tables(),
             'join_info': self.extract_join_info(),
-            'table_alias_mapping': self.extract_table_alias_mapping(),  # 新增：表别名映射
+            'table_alias_mapping': self.extract_table_alias_mapping(),  # 表别名映射
             'where_conditions': self.extract_where_conditions(),
-            'where_conditions_detailed': self.extract_where_conditions_detailed(),  # 新增：详细WHERE条件解析
+            'where_conditions_detailed': self.extract_where_conditions_detailed(),  # 详细WHERE条件解析
             'group_by_fields': self.extract_group_by_fields(),
             'order_by_fields': self.extract_order_by_fields(),
+            'order_by_fields_full': self.extract_order_by_fields_with_full_names(),  # 完整ORDER BY字段
+            'order_by_fields_detailed': self.extract_order_by_fields_detailed(),  # 新增：详细ORDER BY解析
             'limit': self.extract_limit()
         }
 
@@ -590,7 +677,7 @@ def format_sql_parts(parts):
             if join['condition']:
                 print(f"    ON {join['condition']}")
 
-    # 新增：显示表别名映射关系
+    # 显示表别名映射关系
     if parts.get('table_alias_mapping'):
         print("\n表别名映射关系：")
         for alias, table_name in parts['table_alias_mapping'].items():
@@ -603,7 +690,7 @@ def format_sql_parts(parts):
         print("\nWHERE 条件（原始）：")
         print(f"  {parts['where_conditions']}")
 
-    # 修改：显示详细WHERE条件解析，包含完整字段名
+    # 显示详细WHERE条件解析，包含完整字段名
     if parts.get('where_conditions_detailed'):
         where_detail = parts['where_conditions_detailed']
         print("\nWHERE 条件（详细解析）：")
@@ -631,9 +718,23 @@ def format_sql_parts(parts):
             print(f"  - {field}")
 
     if parts['order_by_fields']:
-        print("\nORDER BY 排序：")
+        print("\nORDER BY 排序（原始）：")
         for field in parts['order_by_fields']:
             print(f"  - {field}")
+
+    # 新增：显示完整的ORDER BY字段
+    if parts.get('order_by_fields_full'):
+        print("\nORDER BY 排序（完整表名）：")
+        for field in parts['order_by_fields_full']:
+            print(f"  - {field}")
+
+    # 新增：显示详细的ORDER BY解析结果
+    if parts.get('order_by_fields_detailed'):
+        print("\nORDER BY 排序（详细解析）：")
+        for i, order_info in enumerate(parts['order_by_fields_detailed'], 1):
+            print(f"  {i}. 原始字段: {order_info['field']}")
+            print(f"     完整字段: {order_info['full_field']}")
+            print(f"     排序方向: {order_info['direction']}")
 
     if parts['limit'] is not None:
         print(f"\nLIMIT 限制：{parts['limit']}")
@@ -645,9 +746,10 @@ if __name__ == "__main__":
     test_sql1 = """SELECT teacher_id, name, title, d.department_name 
     FROM gx_test_teachers  
     LEFT JOIN gx_test_departments d ON department_id = d.department_id 
-    WHERE d.department_name = '计算机科学与技术学院' AND title = '副教授';"""
+    WHERE d.department_name = '计算机科学与技术学院' AND title = '副教授'
+    ORDER BY d.department_name ASC, teacher_id DESC;"""
 
-    print("测试SQL 1 (带别名的WHERE条件):")
+    print("测试SQL 1 (带别名的ORDER BY条件):")
     print(test_sql1.strip())
     print("=" * 60)
 
@@ -657,12 +759,14 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 80 + "\n")
 
-    # 测试包含OR的SQL
-    test_sql2 = """SELECT teacher_id, name, title 
-    FROM gx_test_teachers 
-    WHERE title = '教授' OR title = '副教授';"""
+    # 测试包含复杂ORDER BY的SQL
+    test_sql2 = """SELECT u.id, u.name, p.title 
+    FROM users u
+    JOIN profiles p ON u.id = p.user_id
+    WHERE u.status = 'active' 
+    ORDER BY u.created_at DESC, p.priority ASC, name;"""
 
-    print("测试SQL 2 (OR条件):")
+    print("测试SQL 2 (复杂ORDER BY，混合别名和非别名):")
     print(test_sql2.strip())
     print("=" * 60)
 
@@ -672,12 +776,13 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 80 + "\n")
 
-    # 测试复杂条件的SQL，包含别名和非别名字段混合
-    test_sql3 = """SELECT u.id, u.name, p.title FROM users u 
-    LEFT JOIN profiles p ON u.id = p.user_id
-    WHERE u.age >= 18 AND status = 'active' AND p.title LIKE 'Senior%' AND u.email IS NOT NULL;"""
+    # 测试无别名的ORDER BY
+    test_sql3 = """SELECT id, name, email 
+    FROM users 
+    WHERE status = 'active'
+    ORDER BY created_at DESC, name ASC;"""
 
-    print("测试SQL 3 (混合别名和非别名字段的WHERE条件):")
+    print("测试SQL 3 (无别名的ORDER BY):")
     print(test_sql3.strip())
     print("=" * 60)
 
@@ -689,9 +794,10 @@ if __name__ == "__main__":
 
     # 测试多表但无别名的情况
     test_sql4 = """SELECT * FROM orders, customers 
-    WHERE orders.customer_id = customers.id AND status = 'pending' AND amount > 100;"""
+    WHERE orders.customer_id = customers.id AND status = 'pending' 
+    ORDER BY orders.total DESC, customers.name;"""
 
-    print("测试SQL 4 (多表无别名):")
+    print("测试SQL 4 (多表无别名，ORDER BY已包含表名):")
     print(test_sql4.strip())
     print("=" * 60)
 
@@ -701,7 +807,43 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 80 + "\n")
 
-    # 单独测试WHERE条件详细解析功能
+    # 单独测试ORDER BY字段详细解析功能
+    print("单独测试ORDER BY字段详细解析功能（字段完整名称转换）：")
+    print("-" * 50)
+
+    test_order_cases = [
+        ("SELECT * FROM users u ORDER BY u.name ASC, age DESC", "带别名和无别名混合"),
+        ("SELECT * FROM users u JOIN profiles p ON u.id = p.user_id ORDER BY u.created_at, p.priority DESC",
+         "多表JOIN带别名"),
+        ("SELECT * FROM products ORDER BY category_id, price DESC", "单表无别名"),
+        ("SELECT * FROM orders o ORDER BY o.total DESC", "单表带别名"),
+        ("SELECT * FROM users u ORDER BY u.name, u.email ASC, created_at DESC", "混合情况"),
+        ("SELECT * FROM users ORDER BY name", "无排序方向（默认ASC）")
+    ]
+
+    for i, (sql, desc) in enumerate(test_order_cases, 1):
+        print(f"\nORDER BY测试 {i} ({desc}):")
+        print(f"SQL: {sql}")
+        temp_parser = SQLParser(sql)
+        order_fields = temp_parser.extract_order_by_fields()
+        order_fields_full = temp_parser.extract_order_by_fields_with_full_names()
+        order_fields_detailed = temp_parser.extract_order_by_fields_detailed()
+
+        print(f"  → 原始ORDER BY字段：")
+        for field in order_fields:
+            print(f"    - {field}")
+
+        print(f"  → 完整ORDER BY字段：")
+        for field in order_fields_full:
+            print(f"    - {field}")
+
+        print(f"  → 详细ORDER BY解析：")
+        for j, detail in enumerate(order_fields_detailed, 1):
+            print(f"    {j}. 字段: {detail['field']} → {detail['full_field']}, 方向: {detail['direction']}")
+
+    print("\n" + "=" * 80 + "\n")
+
+    # 原始的WHERE条件测试保留
     print("单独测试WHERE条件详细解析功能（字段完整名称转换）：")
     print("-" * 50)
 
