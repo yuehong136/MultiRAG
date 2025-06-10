@@ -191,10 +191,50 @@ class AskdataService:
                     filter_list.append({"semantic_name": "未知", "field": full_field,
                                         "op": operator, "from_model": None})
 
+        order_by_list = []
+        if parts['order_by_fields']:
+            for order_info in parts['order_by_fields_detailed']:
+                full_field = order_info['full_field']
+                table = full_field.split('.')[0]
+                field = full_field.split('.')[1]
+                direction = order_info['direction']
+                # 使用table找到used_model_detail_dict中对应的model_detail，并返回
+                if table in used_table_detail_dict.keys():
+                    model_detail = used_table_detail_dict[table]
+                    is_matched = False
+                    for metric in model_detail["indsAndDims"]["metrics"]:
+                        if metric["expression"].lower() == field.lower():
+                            order_by_list.append(
+                                {"semantic_name": metric["metricName"], "field": full_field, "direction": direction,
+                                 "from_model": model_detail['modelId']})
+                            is_matched = True
+                            break
+                    if is_matched:
+                        continue
+
+                    for dimension in model_detail["indsAndDims"]["dimensions"]:
+                        if dimension["dimensionEnName"].lower() == field.lower():
+                            order_by_list.append(
+                                {"semantic_name": dimension["dimensionName"], "field": full_field,
+                                 "direction": direction,
+                                 "from_model": model_detail['modelId']})
+                            is_matched = True
+                            break
+                    if is_matched:
+                        continue
+
+                    order_by_list.append({"semantic_name": "未知", "field": full_field, "direction": direction,
+                                          "from_model": model_detail['modelId']})
+                    continue
+                else:
+                    order_by_list.append({"semantic_name": "未知", "field": full_field, "direction": direction,
+                                          "from_model": None})
+
         return {
             "columns": selected_columns,
             "models": model_list,
-            "filters": filter_list
+            "filters": filter_list,
+            "order_by": order_by_list
         }
 
     def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> List[str]:
