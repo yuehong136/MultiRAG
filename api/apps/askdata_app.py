@@ -10,10 +10,8 @@ from api.db.db_models import get_db
 from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
 from api.service.askdata_service.pg_query_formatter import execute_sql_and_format_result
-from api.service.askdata_service.sql_parser import SQLParser
 
 from api.service.nl2sql_service.event.event_handlers import create_sse_response
-from api.service.nl2sql_service.event.event_utils import send_event
 
 router = APIRouter()
 
@@ -74,33 +72,33 @@ class NLQToInitialSQLRequest(BaseModel):
         title="LLM模型名称",
         description="用于将自然语言转换为SQL的LLM模型名称",
     )
+    conversation_id: str = Field(
+        None,
+        title="conversation_id",
+        description="conversation_id",
+    )
+    request_id: str = Field(
+        None,
+        title="request_id",
+        description="request_id",
+    )
 
 
-@router.post("/nlq-to-initial-sql", response_model=ResponseSchema, summary="将自然语言查询转换为初始SQL")
-async def nlq_to_initial_sql(
+@router.post("/nlq-to-query-result", response_model=ResponseSchema)
+async def nlq_to_query_result(
         body: NLQToInitialSQLRequest = Body(
             ...,
-            title="自然语言转SQL请求",
-            description="需要转换为SQL的自然语言查询"
+            title="涵盖了SQL生成、表格配置、查询执行的全过程",
+            description="涵盖了SQL生成、表格配置、查询执行的全过程"
         ),
         db: Session = Depends(get_db), user=Depends(manager),
         service: AskdataService = Depends(get_askdata_service)
 ):
-    """
-    将自然语言查询转换为初始SQL语句
-
-    该接口会：
-    1. 生成语义层数据
-    2. 使用LLM将自然语言查询转换为SQL
-    3. 验证生成的SQL语句
-
-    返回生成的SQL语句或错误信息
-    """
-    logging.info(f"nlq-to-initial-sql请求体：{body}")
+    logging.info(f"nlq-to-query-result请求体：{body}")
 
     try:
         # 生成语义层
-        semantic_layer = await service.generate_semantic_layer(
+        semantic_layer, model_ids = await service.generate_semantic_layer(
             user_query=body.user_query,
             dataset_id_list=body.dataset_id_list
         )
@@ -112,7 +110,8 @@ async def nlq_to_initial_sql(
             semantic_layer=semantic_layer
         )
 
-        table_config = await service.generate_table_config(sql)
+        table_config = await service.generate_table_config(sql, body.dataset_id_list, model_ids=model_ids,
+                                                           used_models=used_models)
 
         # 执行查询
         result = execute_sql_and_format_result(sql=sql, db_config={})
@@ -121,7 +120,7 @@ async def nlq_to_initial_sql(
             return ResponseSchema(
                 status=StatusEnum.SUCCESS,
                 message="生成初始SQL成功",
-                data={"sql": sql, "result": result}
+                data={"sql": sql, "result": result, "table_config": table_config}
             )
         else:
             return ResponseSchema(
