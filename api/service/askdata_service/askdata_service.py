@@ -156,13 +156,46 @@ class AskdataService:
 
             else:
                 selected_columns.append({"semantic_name": "未知", "column": column,
-                                         "semantic_type": "未知"})
+                                         "semantic_type": "未知", "from_model": None})
+
+        filter_list = []
+        if parts['where_conditions_detailed']['has_or']:
+            filter_list.append(parts['where_conditions_detailed']['raw_condition'])
+        else:
+            for conditions in parts['where_conditions_detailed']['parsed_conditions']:
+                full_field = conditions['full_field']
+                operator = conditions['operator']
+                value = conditions['value']
+                table = full_field.split('.')[0]
+                field = full_field.split('.')[1]
+                # 使用table找到used_model_detail_dict中对应的model_detail，并进一步找到indAndDim
+                if table in used_table_detail_dict.keys():
+                    model_detail = used_table_detail_dict[table]
+                    is_matched = False
+
+                    for dimension in model_detail["indsAndDims"]["dimensions"]:
+                        if dimension["dimensionEnName"].lower() == field.lower():
+                            filter_list.append(
+                                {"semantic_name": dimension["dimensionName"], "field": full_field,
+                                 "op": operator, "value": value})
+                            is_matched = True
+                            break
+                    if is_matched:
+                        continue
+
+                    filter_list.append({"semantic_name": "未知", "field": full_field,
+                                        "op": operator, "from_model": model_detail['modelId']})
+                    continue
+
+                else:
+                    filter_list.append({"semantic_name": "未知", "field": full_field,
+                                        "op": operator, "from_model": None})
 
         return {
             "columns": selected_columns,
-            "models": model_list
+            "models": model_list,
+            "filters": filter_list
         }
-        pass
 
     def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> List[str]:
         """
