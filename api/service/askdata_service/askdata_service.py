@@ -1,6 +1,8 @@
 import os
 import logging
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional, Tuple
+from dataclasses import dataclass
+from enum import Enum
 
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
@@ -17,6 +19,179 @@ from api.service.nl2sql_service.query_rewriter import QueryRewriter
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 
 logger = logging.getLogger(__name__)
+
+
+class SemanticType(Enum):
+    """语义类型枚举"""
+    METRIC = "metric"
+    DIMENSION = "dimension"
+    UNKNOWN = "未知"
+
+
+@dataclass
+class SemanticField:
+    """语义字段数据类"""
+    semantic_name: str
+    column: str
+    semantic_type: str
+    from_model: Optional[str] = None
+
+    @classmethod
+    def unknown(cls, column: str, from_model: Optional[str] = None):
+        """创建未知字段"""
+        return cls(
+            semantic_name=SemanticType.UNKNOWN.value,
+            column=column,
+            semantic_type=SemanticType.UNKNOWN.value,
+            from_model=from_model
+        )
+
+
+@dataclass
+class FilterCondition:
+    """过滤条件数据类"""
+    semantic_name: str
+    field: str
+    op: str
+    value: str
+    from_model: Optional[str] = None
+
+
+@dataclass
+class OrderByField:
+    """排序字段数据类"""
+    semantic_name: str
+    field: str
+    direction: str
+    from_model: Optional[str] = None
+
+
+class FieldMapper:
+    """字段映射器，负责将SQL字段映射到语义层"""
+
+    def __init__(self, used_table_detail_dict: Dict[str, Any]):
+        self.used_table_detail_dict = used_table_detail_dict
+
+    def map_to_semantic_field(self, table: str, field: str, column: str) -> SemanticField:
+        """将表字段映射到语义字段"""
+        if table not in self.used_table_detail_dict:
+            return SemanticField.unknown(column)
+
+        model_detail = self.used_table_detail_dict[table]
+        model_id = model_detail['modelId']
+
+        # 先检查指标
+        semantic_field = self._find_in_metrics(field, column, model_detail, model_id)
+        if semantic_field:
+            return semantic_field
+
+        # 再检查维度
+        semantic_field = self._find_in_dimensions(field, column, model_detail, model_id)
+        if semantic_field:
+            return semantic_field
+
+        # 未找到匹配
+        return SemanticField.unknown(column, model_id)
+
+    def _find_in_metrics(self, field: str, column: str, model_detail: Dict, model_id: str) -> Optional[SemanticField]:
+        """在指标中查找匹配的字段"""
+        for metric in model_detail["indsAndDims"]["metrics"]:
+            if metric["expression"].lower() == field.lower():
+                return SemanticField(
+                    semantic_name=metric["metricName"],
+                    column=column,
+                    semantic_type=SemanticType.METRIC.value,
+                    from_model=model_id
+                )
+        return None
+
+    def _find_in_dimensions(self, field: str, column: str, model_detail: Dict, model_id: str) -> Optional[
+        SemanticField]:
+        """在维度中查找匹配的字段"""
+        for dimension in model_detail["indsAndDims"]["dimensions"]:
+            if dimension["dimensionEnName"].lower() == field.lower():
+                return SemanticField(
+                    semantic_name=dimension["dimensionName"],
+                    column=column,
+                    semantic_type=SemanticType.DIMENSION.value,
+                    from_model=model_id
+                )
+        return None
+
+    def map_to_filter_condition(self, table: str, field: str, full_field: str,
+                                operator: str, value: str) -> FilterCondition:
+        """将表字段映射到过滤条件"""
+        if table not in self.used_table_detail_dict:
+            return FilterCondition(
+                semantic_name=SemanticType.UNKNOWN.value,
+                field=full_field,
+                op=operator,
+                value=value,
+                from_model=None
+            )
+
+        model_detail = self.used_table_detail_dict[table]
+        model_id = model_detail['modelId']
+
+        # 只在维度中查找（过滤条件通常是维度）
+        for dimension in model_detail["indsAndDims"]["dimensions"]:
+            if dimension["dimensionEnName"].lower() == field.lower():
+                return FilterCondition(
+                    semantic_name=dimension["dimensionName"],
+                    field=full_field,
+                    op=operator,
+                    value=value,
+                    from_model=model_id
+                )
+
+        return FilterCondition(
+            semantic_name=SemanticType.UNKNOWN.value,
+            field=full_field,
+            op=operator,
+            value=value,
+            from_model=model_id
+        )
+
+    def map_to_order_by_field(self, table: str, field: str, full_field: str,
+                              direction: str) -> OrderByField:
+        """将表字段映射到排序字段"""
+        if table not in self.used_table_detail_dict:
+            return OrderByField(
+                semantic_name=SemanticType.UNKNOWN.value,
+                field=full_field,
+                direction=direction,
+                from_model=None
+            )
+
+        model_detail = self.used_table_detail_dict[table]
+        model_id = model_detail['modelId']
+
+        # 先检查指标
+        for metric in model_detail["indsAndDims"]["metrics"]:
+            if metric["expression"].lower() == field.lower():
+                return OrderByField(
+                    semantic_name=metric["metricName"],
+                    field=full_field,
+                    direction=direction,
+                    from_model=model_id
+                )
+
+        # 再检查维度
+        for dimension in model_detail["indsAndDims"]["dimensions"]:
+            if dimension["dimensionEnName"].lower() == field.lower():
+                return OrderByField(
+                    semantic_name=dimension["dimensionName"],
+                    field=full_field,
+                    direction=direction,
+                    from_model=model_id
+                )
+
+        return OrderByField(
+            semantic_name=SemanticType.UNKNOWN.value,
+            field=full_field,
+            direction=direction,
+            from_model=model_id
+        )
 
 
 class AskdataService:
@@ -103,139 +278,163 @@ class AskdataService:
 
         return sql, used_models
 
-    async def generate_table_config(self, sql: str, dataset_id_list: List[str], model_ids: List[str],
-                                    used_models: List[str]):
-        # 解析sql，与语义层进行对应
+    async def generate_table_config(self, sql: str, dataset_id_list: List[str],
+                                    model_ids: List[str], used_models: List[str]) -> Dict[str, Any]:
+        """
+        生成表配置信息，将SQL解析结果映射到语义层
+
+        Args:
+            sql: SQL查询语句
+            dataset_id_list: 数据集ID列表
+            model_ids: 模型ID列表
+            used_models: 使用的模型名称列表
+
+        Returns:
+            包含列、模型、过滤条件和排序信息的配置字典
+        """
+        # 1. 解析SQL
         parser = SQLParser(sql)
         parts = parser.parse_all()
 
-        # 获得涉及的模型的详情, 并获取其对应indsAndDims
+        # 2. 构建使用的模型和表的详情字典
+        used_model_detail_dict, used_table_detail_dict, model_list = await self._build_model_details(
+            model_ids, used_models
+        )
+
+        # 3. 创建字段映射器
+        field_mapper = FieldMapper(used_table_detail_dict)
+
+        # 4. 处理SELECT列
+        selected_columns = self._process_select_columns(parts["select_columns_full"], field_mapper)
+
+        # 5. 处理WHERE条件
+        filter_list = self._process_where_conditions(parts['where_conditions_detailed'], field_mapper)
+
+        # 6. 处理ORDER BY字段
+        order_by_list = self._process_order_by_fields(parts['order_by_fields_detailed'], field_mapper)
+
+        return {
+            "columns": [self._serialize_semantic_field(field) for field in selected_columns],
+            "models": model_list,
+            "filters": [self._serialize_filter_condition(cond) for cond in filter_list],
+            "order_by": [self._serialize_order_by_field(field) for field in order_by_list]
+        }
+
+    async def _build_model_details(self, model_ids: List[str],
+                                   used_models: List[str]) -> Tuple[Dict, Dict, List]:
+        """构建模型详情字典"""
         used_model_detail_dict = {}
         used_table_detail_dict = {}
         model_list = []
+
         model_detail_list = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
+
         for model_detail in model_detail_list:
             if model_detail.get('modelName') in used_models:
+                # 获取模型的指标和维度信息
                 model_detail['indsAndDims'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
-                    model_id=model_detail["modelId"])
+                    model_id=model_detail["modelId"]
+                )
                 model_list.append(model_detail)
                 used_model_detail_dict[model_detail["modelName"]] = model_detail
                 used_table_detail_dict[model_detail["tableName"]] = model_detail
 
-        # 根据sql的select列，获得列对应的维度和指标
-        selected_columns = []  # [{"semantic_name": “xxx", "column_name": "xxx", "semantic_type": "xxx"}]
-        for column in parts["select_columns_full"]:
-            table = column.split(".")[0]
-            field = column.split(".")[1]
-            # 使用table找到used_model_detail_dict中对应的model_detail，并进一步找到indAndDim
-            if table in used_table_detail_dict.keys():
-                model_detail = used_table_detail_dict[table]
-                is_matched = False
-                for metric in model_detail["indsAndDims"]["metrics"]:
-                    if metric["expression"].lower() == field.lower():
-                        selected_columns.append({"semantic_name": metric["metricName"], "column": column,
-                                                 "semantic_type": "metric", "from_model": model_detail['modelId']})
-                        is_matched = True
-                        break
-                if is_matched:
-                    continue
+        return used_model_detail_dict, used_table_detail_dict, model_list
 
-                for dimension in model_detail["indsAndDims"]["dimensions"]:
-                    if dimension["dimensionEnName"].lower() == field.lower():
-                        selected_columns.append(
-                            {"semantic_name": dimension["dimensionName"], "column": column,
-                             "semantic_type": "dimension", "from_model": model_detail['modelId']})
-                        is_matched = True
-                        break
-                if is_matched:
-                    continue
+    def _process_select_columns(self, columns: List[str],
+                                field_mapper: FieldMapper) -> List[SemanticField]:
+        """处理SELECT列"""
+        selected_columns = []
 
-                selected_columns.append({"semantic_name": "未知", "column": column,
-                                         "semantic_type": "未知", "from_model": model_detail['modelId']})
-                continue
+        for column in columns:
+            table, field = self._split_column(column)
+            semantic_field = field_mapper.map_to_semantic_field(table, field, column)
+            selected_columns.append(semantic_field)
 
-            else:
-                selected_columns.append({"semantic_name": "未知", "column": column,
-                                         "semantic_type": "未知", "from_model": None})
+        return selected_columns
 
+    def _process_where_conditions(self, where_conditions: Dict,
+                                  field_mapper: FieldMapper) -> List[FilterCondition]:
+        """处理WHERE条件"""
         filter_list = []
-        if parts['where_conditions_detailed']['has_or']:
-            filter_list.append(parts['where_conditions_detailed']['raw_condition'])
+
+        if where_conditions['has_or']:
+            # 如果包含OR，返回原始条件
+            filter_list.append(FilterCondition(
+                semantic_name="复杂条件",
+                field=where_conditions['raw_condition'],
+                op="",
+                value="",
+                from_model=None
+            ))
         else:
-            for conditions in parts['where_conditions_detailed']['parsed_conditions']:
-                full_field = conditions['full_field']
-                operator = conditions['operator']
-                value = conditions['value']
-                table = full_field.split('.')[0]
-                field = full_field.split('.')[1]
-                # 使用table找到used_model_detail_dict中对应的model_detail，并进一步找到indAndDim
-                if table in used_table_detail_dict.keys():
-                    model_detail = used_table_detail_dict[table]
-                    is_matched = False
+            # 处理AND连接的条件
+            for condition in where_conditions['parsed_conditions']:
+                full_field = condition['full_field']
+                table, field = self._split_column(full_field)
 
-                    for dimension in model_detail["indsAndDims"]["dimensions"]:
-                        if dimension["dimensionEnName"].lower() == field.lower():
-                            filter_list.append(
-                                {"semantic_name": dimension["dimensionName"], "field": full_field,
-                                 "op": operator, "value": value})
-                            is_matched = True
-                            break
-                    if is_matched:
-                        continue
+                filter_condition = field_mapper.map_to_filter_condition(
+                    table, field, full_field,
+                    condition['operator'], condition['value']
+                )
+                filter_list.append(filter_condition)
 
-                    filter_list.append({"semantic_name": "未知", "field": full_field,
-                                        "op": operator, "from_model": model_detail['modelId']})
-                    continue
+        return filter_list
 
-                else:
-                    filter_list.append({"semantic_name": "未知", "field": full_field,
-                                        "op": operator, "from_model": None})
-
+    def _process_order_by_fields(self, order_by_fields: List[Dict],
+                                 field_mapper: FieldMapper) -> List[OrderByField]:
+        """处理ORDER BY字段"""
         order_by_list = []
-        if parts['order_by_fields']:
-            for order_info in parts['order_by_fields_detailed']:
-                full_field = order_info['full_field']
-                table = full_field.split('.')[0]
-                field = full_field.split('.')[1]
-                direction = order_info['direction']
-                # 使用table找到used_model_detail_dict中对应的model_detail，并返回
-                if table in used_table_detail_dict.keys():
-                    model_detail = used_table_detail_dict[table]
-                    is_matched = False
-                    for metric in model_detail["indsAndDims"]["metrics"]:
-                        if metric["expression"].lower() == field.lower():
-                            order_by_list.append(
-                                {"semantic_name": metric["metricName"], "field": full_field, "direction": direction,
-                                 "from_model": model_detail['modelId']})
-                            is_matched = True
-                            break
-                    if is_matched:
-                        continue
 
-                    for dimension in model_detail["indsAndDims"]["dimensions"]:
-                        if dimension["dimensionEnName"].lower() == field.lower():
-                            order_by_list.append(
-                                {"semantic_name": dimension["dimensionName"], "field": full_field,
-                                 "direction": direction,
-                                 "from_model": model_detail['modelId']})
-                            is_matched = True
-                            break
-                    if is_matched:
-                        continue
+        for order_info in order_by_fields:
+            full_field = order_info['full_field']
+            table, field = self._split_column(full_field)
 
-                    order_by_list.append({"semantic_name": "未知", "field": full_field, "direction": direction,
-                                          "from_model": model_detail['modelId']})
-                    continue
-                else:
-                    order_by_list.append({"semantic_name": "未知", "field": full_field, "direction": direction,
-                                          "from_model": None})
+            order_by_field = field_mapper.map_to_order_by_field(
+                table, field, full_field, order_info['direction']
+            )
+            order_by_list.append(order_by_field)
 
+        return order_by_list
+
+    def _split_column(self, column: str) -> Tuple[str, str]:
+        """分割列名为表名和字段名"""
+        parts = column.split('.')
+        if len(parts) == 2:
+            return parts[0], parts[1]
+        return "", column
+
+    def _serialize_semantic_field(self, field: SemanticField) -> Dict[str, Any]:
+        """序列化语义字段"""
         return {
-            "columns": selected_columns,
-            "models": model_list,
-            "filters": filter_list,
-            "order_by": order_by_list
+            "semantic_name": field.semantic_name,
+            "column": field.column,
+            "semantic_type": field.semantic_type,
+            "from_model": field.from_model
         }
+
+    def _serialize_filter_condition(self, condition: FilterCondition) -> Dict[str, Any]:
+        """序列化过滤条件"""
+        result = {
+            "semantic_name": condition.semantic_name,
+            "field": condition.field,
+            "op": condition.op,
+            "value": condition.value
+        }
+        if condition.from_model:
+            result["from_model"] = condition.from_model
+        return result
+
+    def _serialize_order_by_field(self, field: OrderByField) -> Dict[str, Any]:
+        """序列化排序字段"""
+        result = {
+            "semantic_name": field.semantic_name,
+            "field": field.field,
+            "direction": field.direction
+        }
+        if field.from_model:
+            result["from_model"] = field.from_model
+        return result
 
     def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> List[str]:
         """
