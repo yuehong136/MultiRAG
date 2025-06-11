@@ -80,20 +80,14 @@ async def get_sql_and_table_config(
     logging.info(f"get-sql-and-table-config请求体：{body}")
 
     try:
-        # 生成语义层
-        semantic_layer, model_ids = await service.generate_semantic_layer(
-            user_query=body.user_query,
-            dataset_id_list=body.dataset_id_list
-        )
-
-        # 转换为SQL
         sql, used_models = await service.nlq_to_initial_sql(
             user_query=body.user_query,
             llm_name=body.llm_name,
-            semantic_layer=semantic_layer
+            semantic_layer=body.semantic_layer['processed_semantic_layer']
         )
 
-        table_config = await service.generate_table_config(sql, body.dataset_id_list, model_ids=model_ids,
+        table_config = await service.generate_table_config(sql, body.dataset_id_list,
+                                                           model_ids=body.semantic_layer['model_ids'],
                                                            used_models=used_models)
 
         # 执行查询
