@@ -63,6 +63,7 @@ def process_business_datasets(
                 dimension_output["name"] = dimension.get("dimensionName")
                 dimension_output["field"] = dimension.get("dimensionEnName")
                 dimension_output["fromModel"] = dimension.get("modelName")
+                dimension_output["fromModelId"] = dimension.get("modelId")
                 dimension_output["comment"] = dimension.get("description")
                 dimension_output["synonyms"] = dimension.get("synonyms")
                 dimension_output["possibleValues"] = dimension_values[dimension_id]
@@ -81,6 +82,7 @@ def process_business_datasets(
                 metric_output["calculationFormula"] = metric.get("expression")
                 metric_output["formatting"] = metric.get("formatting")
                 metric_output["fromModel"] = metric.get("modelName")
+                metric_output["fromModelId"] = metric.get("modelId")
                 metrics_output.append(metric_output)
         business_dataset["metrics"] = metrics_output
 

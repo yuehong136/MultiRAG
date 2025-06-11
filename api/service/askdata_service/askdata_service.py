@@ -1,5 +1,6 @@
 import os
 import logging
+import uuid
 from typing import Any, List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
@@ -36,6 +37,8 @@ class SemanticField:
     column: str
     semantic_type: str
     from_model: Optional[str] = None
+    metric: Optional[str] = None
+    dimension: Optional[str] = None
 
     @classmethod
     def unknown(cls, column: str, from_model: Optional[str] = None):
@@ -44,7 +47,9 @@ class SemanticField:
             semantic_name=SemanticType.UNKNOWN.value,
             column=column,
             semantic_type=SemanticType.UNKNOWN.value,
-            from_model=from_model
+            from_model=from_model,
+            metric=None,
+            dimension=None
         )
 
 
@@ -73,50 +78,42 @@ class FieldMapper:
     def __init__(self, used_table_detail_dict: Dict[str, Any]):
         self.used_table_detail_dict = used_table_detail_dict
 
-    def map_to_semantic_field(self, table: str, field: str, column: str) -> SemanticField:
+    def map_to_semantic_field(self, table: str, field: str, sql_column: str):
         """将表字段映射到语义字段"""
         if table not in self.used_table_detail_dict:
-            return SemanticField.unknown(column)
+            return SemanticField.unknown(sql_column)
 
         model_detail = self.used_table_detail_dict[table]
         model_id = model_detail['modelId']
 
         # 先检查指标
-        semantic_field = self._find_in_metrics(field, column, model_detail, model_id)
+        semantic_field = self._find_in_metrics(field, sql_column, model_detail, model_id)
         if semantic_field:
-            return semantic_field
+            return {"is_semantic_field": True, "semantic_type": "metric", "semantic_field": semantic_field,
+                    "id": semantic_field["metricId"]}
 
         # 再检查维度
-        semantic_field = self._find_in_dimensions(field, column, model_detail, model_id)
+        semantic_field = self._find_in_dimensions(field, sql_column, model_detail, model_id)
         if semantic_field:
-            return semantic_field
+            return {"is_semantic_field": True, "semantic_type": "dimension", "semantic_field": semantic_field,
+                    "id": semantic_field["dimensionId"]}
 
         # 未找到匹配
-        return SemanticField.unknown(column, model_id)
+        return {"is_semantic_field": False, "sql_column": sql_column, "semantic_field": semantic_field,
+                "id": uuid.uuid4()}
 
-    def _find_in_metrics(self, field: str, column: str, model_detail: Dict, model_id: str) -> Optional[SemanticField]:
+    def _find_in_metrics(self, field: str, sql_column: str, model_detail: Dict, model_id: str):
         """在指标中查找匹配的字段"""
-        for metric in model_detail["indsAndDims"]["metrics"]:
-            if metric["expression"].lower() == field.lower():
-                return SemanticField(
-                    semantic_name=metric["metricName"],
-                    column=column,
-                    semantic_type=SemanticType.METRIC.value,
-                    from_model=model_id
-                )
+        for metric in model_detail["dimsAndMetrics"]["metrics"]:
+            if metric["expression"].lower() == sql_column.lower():
+                return metric
         return None
 
-    def _find_in_dimensions(self, field: str, column: str, model_detail: Dict, model_id: str) -> Optional[
-        SemanticField]:
+    def _find_in_dimensions(self, field: str, column: str, model_detail: Dict, model_id: str):
         """在维度中查找匹配的字段"""
-        for dimension in model_detail["indsAndDims"]["dimensions"]:
+        for dimension in model_detail["dimsAndMetrics"]["dimensions"]:
             if dimension["dimensionEnName"].lower() == field.lower():
-                return SemanticField(
-                    semantic_name=dimension["dimensionName"],
-                    column=column,
-                    semantic_type=SemanticType.DIMENSION.value,
-                    from_model=model_id
-                )
+                return dimension
         return None
 
     def map_to_filter_condition(self, table: str, field: str, full_field: str,
@@ -135,7 +132,7 @@ class FieldMapper:
         model_id = model_detail['modelId']
 
         # 只在维度中查找（过滤条件通常是维度）
-        for dimension in model_detail["indsAndDims"]["dimensions"]:
+        for dimension in model_detail["dimsAndMetrics"]["dimensions"]:
             if dimension["dimensionEnName"].lower() == field.lower():
                 return FilterCondition(
                     semantic_name=dimension["dimensionName"],
@@ -168,7 +165,7 @@ class FieldMapper:
         model_id = model_detail['modelId']
 
         # 先检查指标
-        for metric in model_detail["indsAndDims"]["metrics"]:
+        for metric in model_detail["dimsAndMetrics"]["metrics"]:
             if metric["expression"].lower() == field.lower():
                 return OrderByField(
                     semantic_name=metric["metricName"],
@@ -178,7 +175,7 @@ class FieldMapper:
                 )
 
         # 再检查维度
-        for dimension in model_detail["indsAndDims"]["dimensions"]:
+        for dimension in model_detail["dimsAndMetrics"]["dimensions"]:
             if dimension["dimensionEnName"].lower() == field.lower():
                 return OrderByField(
                     semantic_name=dimension["dimensionName"],
@@ -325,6 +322,43 @@ class AskdataService:
 
         # 4. 处理SELECT列
         selected_columns = self._process_select_columns(parts["select_columns_full"], field_mapper)
+        metric_ids_in_selected_columns = [
+            col["semantic_field"]["metricId"]
+            for col in selected_columns
+            if col.get("is_semantic_field")
+               and col.get("semantic_type") == "metric"
+               and col.get("semantic_field")
+               and "metricId" in col["semantic_field"]
+        ]
+
+        dimension_ids_in_selected_columns = [
+            col["semantic_field"]["dimensionId"]
+            for col in selected_columns
+            if col.get("is_semantic_field")
+               and col.get("semantic_type") == "dimension"
+               and col.get("semantic_field")
+               and "dimensionId" in col["semantic_field"]
+        ]
+        all_semantic_fields = []
+        for model in model_list:
+            for metric in model["dimsAndMetrics"]["metrics"]:
+                # 如果有括号则是聚合，不允许使用
+                if metric["expression"].lower().find("(") == -1:
+                    all_semantic_fields.append(
+                        {"is_allow_use": True, "semantic_type": "metric", "semantic_field": metric,
+                         "id": metric["metricId"]})
+                else:
+                    all_semantic_fields.append(
+                        {"is_allow_use": False, "semantic_field": metric, "id": metric["metricId"]})
+            for dimension in model["dimsAndMetrics"]["dimensions"]:
+                all_semantic_fields.append(
+                    {"is_allow_use": True, "semantic_type": "dimension", "semantic_field": dimension,
+                     "id": dimension["dimensionId"]})
+
+        columns = {
+            "selected_columns": selected_columns,
+            "all_semantic_fields": all_semantic_fields
+        }
 
         # 5. 处理WHERE条件
         filter_list = self._process_where_conditions(parts['where_conditions_detailed'], field_mapper)
@@ -333,20 +367,18 @@ class AskdataService:
         order_by_list = self._process_order_by_fields(parts['order_by_fields_detailed'], field_mapper)
 
         return {
-            "columns": [self._serialize_semantic_field(field) for field in selected_columns],
+            "columns": columns,
             "models": model_list,
             "filters": [self._serialize_filter_condition(cond) for cond in filter_list],
             "order_by": [self._serialize_order_by_field(field) for field in order_by_list]
         }
 
-    # 新增的插入历史记录方法
     async def add_ask_data_history(self, conversation_id: str, ask_id: str, data: str):
         """
         添加一条问数历史记录
         """
         return self.history_service.add_history(self.db, conversation_id, ask_id, data, self.user.id)
 
-    # 新增的查询历史记录方法
     async def get_ask_data_history(self, conversation_id: str) -> list[dict]:
         """
         根据对话ID获取问数历史记录
@@ -365,7 +397,8 @@ class AskdataService:
         for model_detail in model_detail_list:
             if model_detail.get('modelName') in used_models:
                 # 获取模型的指标和维度信息
-                model_detail['indsAndDims'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
+                model_detail[
+                    'dimsAndMetrics'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
                     model_id=model_detail["modelId"]
                 )
                 model_list.append(model_detail)
@@ -374,15 +407,14 @@ class AskdataService:
 
         return used_model_detail_dict, used_table_detail_dict, model_list
 
-    def _process_select_columns(self, columns: List[str],
-                                field_mapper: FieldMapper) -> List[SemanticField]:
+    def _process_select_columns(self, sql_columns: List[str],
+                                field_mapper: FieldMapper):
         """处理SELECT列"""
         selected_columns = []
 
-        for column in columns:
-            table, field = self._split_column(column)
-            semantic_field = field_mapper.map_to_semantic_field(table, field, column)
-            selected_columns.append(semantic_field)
+        for sql_column in sql_columns:
+            table, field = self._split_column(sql_column)
+            selected_columns.append(field_mapper.map_to_semantic_field(table, field, sql_column))
 
         return selected_columns
 
@@ -443,7 +475,9 @@ class AskdataService:
             "semantic_name": field.semantic_name,
             "column": field.column,
             "semantic_type": field.semantic_type,
-            "from_model": field.from_model
+            "from_model": field.from_model,
+            "metric_id": field.metric_id,
+            "dimension_id": field.dimension_id
         }
 
     def _serialize_filter_condition(self, condition: FilterCondition) -> Dict[str, Any]:
