@@ -1,17 +1,19 @@
 import logging
+import uuid
 from enum import Enum
-from typing import List, Any
+from http.client import HTTPException
+from typing import List, Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, Body
+from fastapi import APIRouter, Depends, Body, BackgroundTasks
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db
 from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
+from api.service.askdata_service.async_llm_service import AsyncLLMService
+from api.service.askdata_service.event.event_handlers import create_sse_response
 from api.service.askdata_service.pg_query_formatter import execute_sql_and_format_result
-
-from api.service.nl2sql_service.event.event_handlers import create_sse_response
 
 router = APIRouter()
 
@@ -153,3 +155,135 @@ async def subscribe_to_event(request: Request, event_id: str):
         StreamingResponse: SSE流响应
     """
     return create_sse_response(request, event_id)
+
+
+class AnalyzeUserQueryRequest(BaseModel):
+    conversation_id: str = Field(..., description="会话ID")
+    request_id: str = Field(..., description="请求ID")
+    user_query: str = Field(..., description="用户查询")
+    llm_name: Optional[str] = Field(default=None, description="指定使用的模型名称")
+    dataset_id_list: List[str] = Field(
+        [],
+        title="数据集ID列表",
+        description="数据集ID列表",
+    )
+    semantic_layer: Dict[str, Any] = Field(
+        ...,
+        title="语义层",
+        description="语义层",
+    )
+
+
+class AnalyzeUserQueryResponse(BaseModel):
+    event_id: str = Field(..., description="事件ID，用于监听流式输出")
+    subscribe_url: str = Field(..., description="SSE订阅地址")
+    chat_status: str = Field(default="started", description="聊天状态")
+
+
+async def analyze_user_query_background_task(
+        event_id: str,
+        request: AnalyzeUserQueryRequest,
+        db: Session,
+        user
+) -> None:
+    """
+    处理流式聊天的后台任务
+
+    Args:
+        event_id: 事件ID
+        request: 聊天请求
+        db: 数据库会话
+    """
+    try:
+        # 创建异步LLM服务
+        llm_service = AsyncLLMService(db)
+
+        # 转换消息格式
+        history = [{"role": "user", "content": "写一个500字的笑话"}]
+
+        gen_conf = {
+            "temperature": 0.7,
+            "max_tokens": 2000,
+        }
+
+        # 执行流式聊天
+        await llm_service.chat_stream_async(
+            event_id=event_id,
+            tenant_id=user.id,
+            history=history,
+            gen_conf=gen_conf,
+            llm_name=request.llm_name
+        )
+
+    except Exception as e:
+        logger.exception(f"Background chat task failed for event_id {event_id}: {e}")
+        # 发送错误事件
+        try:
+            from api.service.nl2sql_service.event.event_manager import event_manager
+            await event_manager.publish(
+                event_id=event_id,
+                data={
+                    "message": f"后台任务失败: {str(e)}",
+                    "error": str(e),
+                    "status": "task_error"
+                },
+                event_type="chat_error"
+            )
+        except Exception as publish_error:
+            logger.error(f"Failed to send error event for {event_id}: {publish_error}")
+
+
+@router.post("/analyze-user-query-streaming/{custom_event_id}", response_model=ResponseSchema,
+             summary="使用自定义事件ID启动流式聊天")
+async def analyze_user_query_streaming(
+        custom_event_id: str,
+        background_tasks: BackgroundTasks,
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        body: AnalyzeUserQueryRequest = Body(
+            ...,
+            title="流式输出对于用户问题的分析",
+            description="流式输出对于用户问题的分析"
+        )
+) -> ResponseSchema:
+    """
+    使用自定义事件ID启动流式聊天
+
+    Args:
+        custom_event_id: 自定义的事件ID
+        body: 聊天请求参数
+        background_tasks: FastAPI后台任务
+        db: 数据库会话
+        user: 当前用户
+
+    Returns:
+        ResponseSchema: 包含事件ID和监听地址的响应
+    """
+    logger.info(f"使用自定义事件ID {custom_event_id} 启动流式聊天：{body}")
+
+    try:
+        # 添加后台任务
+        background_tasks.add_task(
+            analyze_user_query_background_task,
+            custom_event_id,
+            body,
+            db,
+            user
+        )
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="聊天请求已提交，请监听事件流获取实时结果",
+            data=AnalyzeUserQueryResponse(
+                event_id=custom_event_id,
+                subscribe_url=f"/events/{custom_event_id}",
+                chat_status="started"
+            )
+        )
+
+    except Exception as e:
+        logger.exception("使用自定义事件ID启动流式聊天失败")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"启动聊天失败：{str(e)}"
+        )
