@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from datetime import datetime
 
 from fastapi import Request, Response, HTTPException
@@ -8,10 +9,13 @@ from typing import AsyncGenerator
 
 from api.service.askdata_service.event.event_manager import event_manager
 
+logger = logging.getLogger(__name__)
+
 
 async def event_generator(request: Request, event_id: str) -> AsyncGenerator[bytes, None]:
     """
-    事件生成器，用于生成SSE事件流
+    事件生成器，用于生成SSE事件流。
+    在接收到 'stream_end' 事件后会自动关闭连接。
 
     Args:
         request: FastAPI请求对象
@@ -26,7 +30,7 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
     # 订阅事件队列
     queue = await event_manager.subscribe(event_id)
 
-    # 发送初始连接成功消息（使用统一的格式）
+    # 发送初始连接成功消息
     await event_manager.publish(
         event_id=event_id,
         data={"status": "connected"},
@@ -34,23 +38,35 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
     )
 
     try:
-        # 持续监听队列，直到客户端断开连接
         while True:
-            # 检查客户端是否已经断开连接
             if await request.is_disconnected():
+                logger.warning(f"Client disconnected for event_id: {event_id}")
                 break
 
             try:
                 # 等待新数据，带超时
                 data = await asyncio.wait_for(queue.get(), timeout=1.0)
-                # 直接将数据作为SSE消息发送
+
+                # 1. 总是先将消息发送给客户端
                 message = f"data: {data}\n\n"
                 yield message.encode('utf-8')
+
+                # 2. 检查这是否是结束信号
+                try:
+                    event_data = json.loads(data)
+                    if event_data.get("event_type") == "stream_end":
+                        logger.info(f"Stream for event_id {event_id} ended. Closing server-side connection.")
+                        break  # 退出循环，关闭连接
+                except (json.JSONDecodeError, AttributeError):
+                    # 如果数据不是有效的JSON或没有event_type，忽略即可
+                    pass
+
             except asyncio.TimeoutError:
                 # 超时后发送心跳包，保持连接活跃
                 yield b": heartbeat\n\n"
             except Exception as e:
                 # 发生错误，发送错误消息并中断连接
+                logger.error(f"Error in event generator for {event_id}: {e}")
                 error_data = {
                     "event_id": event_id,
                     "event_type": "error",
@@ -62,18 +78,9 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
                 break
     finally:
         # 确保在函数结束时取消订阅，防止内存泄漏
+        logger.info(f"Unsubscribing and cleaning up for event_id: {event_id}")
+        # 注意：这里的 queue.put 是 callback
         await event_manager.unsubscribe(event_id, queue.put)
-
-        # 可选：发送断开连接消息
-        try:
-            await event_manager.publish(
-                event_id=event_id,
-                data={"status": "disconnected"},
-                event_type="connection"
-            )
-        except:
-            # 忽略断开连接时的错误
-            pass
 
 
 def create_sse_response(request: Request, event_id: str) -> StreamingResponse:

@@ -180,6 +180,16 @@ class AsyncLLMService:
                             },
                             "chat_result"
                         )
+
+                        # --- [修改] 开始 ---
+                        # 发送一个专门的结束事件，以通知服务器关闭连接
+                        await self.send_event(
+                            event_id,
+                            {"message": "Stream finished, closing connection."},
+                            "stream_end"
+                        )
+                        # --- [修改] 结束 ---
+
                         break
 
                     elif chunk_type == 'error':
