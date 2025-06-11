@@ -57,38 +57,19 @@ async def health_check():
         )
 
 
-class NLQToInitialSQLRequest(BaseModel):
+class GetSqlAndTableConfigReq(BaseModel):
     """自然语言转初始SQL请求的基础模型"""
-    user_query: str = Field(
-        ...,
-        title="查询文本",
-        description="用户提出的自然语言查询文本",
-    )
-    dataset_id_list: List[str] = Field(
-        [],
-        title="数据集ID列表",
-        description="数据集ID列表",
-    )
-    llm_name: str = Field(
-        "gpt-4",
-        title="LLM模型名称",
-        description="用于将自然语言转换为SQL的LLM模型名称",
-    )
-    conversation_id: str = Field(
-        None,
-        title="conversation_id",
-        description="conversation_id",
-    )
-    request_id: str = Field(
-        None,
-        title="request_id",
-        description="request_id",
-    )
+    user_query: str = Field(..., title="查询文本", description="用户提出的自然语言查询文本")
+    dataset_id_list: List[str] = Field([], title="数据集ID列表", description="数据集ID列表")
+    llm_name: str = Field("gpt-4", title="LLM模型名称", description="用于将自然语言转换为SQL的LLM模型名称")
+    conversation_id: str = Field(None, title="conversation_id", description="conversation_id")
+    ask_id: str = Field(None, title="ask_id", description="用户的提问ID")
+    semantic_layer: Dict[str, Any] = Field({}, title="语义层", description="语义层")
 
 
-@router.post("/nlq-to-query-result", response_model=ResponseSchema)
-async def nlq_to_query_result(
-        body: NLQToInitialSQLRequest = Body(
+@router.post("/get-sql-and-table-config", response_model=ResponseSchema)
+async def get_sql_and_table_config(
+        body: GetSqlAndTableConfigReq = Body(
             ...,
             title="涵盖了SQL生成、表格配置、查询执行的全过程",
             description="涵盖了SQL生成、表格配置、查询执行的全过程"
@@ -96,7 +77,7 @@ async def nlq_to_query_result(
         db: Session = Depends(get_db), user=Depends(manager),
         service: AskdataService = Depends(get_askdata_service)
 ):
-    logging.info(f"nlq-to-query-result请求体：{body}")
+    logging.info(f"get-sql-and-table-config请求体：{body}")
 
     try:
         # 生成语义层
@@ -159,19 +140,11 @@ async def subscribe_to_event(request: Request, event_id: str):
 
 class AnalyzeUserQueryRequest(BaseModel):
     conversation_id: str = Field(..., description="会话ID")
-    request_id: str = Field(..., description="请求ID")
+    ask_id: str = Field(..., description="用户的提问ID")
     user_query: str = Field(..., description="用户查询")
     llm_name: Optional[str] = Field(default=None, description="指定使用的模型名称")
-    dataset_id_list: List[str] = Field(
-        [],
-        title="数据集ID列表",
-        description="数据集ID列表",
-    )
-    semantic_layer: Dict[str, Any] = Field(
-        ...,
-        title="语义层",
-        description="语义层",
-    )
+    dataset_id_list: List[str] = Field([], title="数据集ID列表", description="数据集ID列表")
+    semantic_layer: Dict[str, Any] = Field(..., title="语义层", description="语义层")
 
 
 class AnalyzeUserQueryResponse(BaseModel):
@@ -291,6 +264,7 @@ async def analyze_user_query_streaming(
 
 class SemanticLayerRequest(BaseModel):
     conversation_id: str = Field(..., description="会话ID")
+    ask_id: str = Field(..., description="用户的提问ID")
     user_query: str = Field(..., description="用户查询")
     dataset_id_list: List[str] = Field(
         [],
@@ -318,7 +292,7 @@ async def get_semantic_layer_streaming(
         processed_semantic_layer, model_ids = await service.generate_semantic_layer(user_query=body.user_query,
                                                                                     dataset_id_list=body.dataset_id_list,
                                                                                     conversation_id=body.conversation_id,
-                                                                                    request_id=custom_event_id)
+                                                                                    event_id=custom_event_id)
 
         return ResponseSchema(
             status=StatusEnum.SUCCESS,

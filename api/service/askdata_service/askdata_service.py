@@ -228,20 +228,20 @@ class AskdataService:
         """
         return await self.query_intent_analyzer.get_query_intents_with_descriptions(query_text, llm_name)
 
-    async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str], conversation_id: Optional[str],
-                                      request_id: Optional[str]):
-        await send_event(request_id, {"message": "分词", "action": "start"}, "message")
+    async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str], conversation_id: Optional[str] = None,
+                                      event_id: Optional[str] = None):
+        await send_event(event_id, {"message": "分词", "action": "start"}, "message")
         segmented_words = await custom_tokenize_with_semantic_words(text=user_query, dataset_id_list=dataset_id_list)
-        await send_event(request_id, {"message": "分词", "action": "complete"}, "message")
-        await send_event(request_id, {"message": "分词结果", "data": segmented_words}, "data")
+        await send_event(event_id, {"message": "分词", "action": "complete"}, "message")
+        await send_event(event_id, {"message": "分词结果", "data": segmented_words}, "data")
 
-        await send_event(request_id, {"message": "获取维度信息", "action": "start"}, "message")
+        await send_event(event_id, {"message": "获取维度信息", "action": "start"}, "message")
         # 1. 将分词到语义层结构化数据中进行检索得到相关数据
         # 2. 根据分词关键字获得维度列表
         dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(
             keyword=segmented_words,
             dataset_ids=dataset_id_list)
-        await send_event(request_id, {"message": "获取维度信息", "action": "complete"}, "message")
+        await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
         # 3. 分词关键字作为维度值关键字获得获得维度列表
         dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
             keyword=segmented_words,
@@ -250,26 +250,26 @@ class AskdataService:
         unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
         dimension_values = await self.semantic_api_client.get_dimension_values_async(dimension_ids=unique_dimensions)
         dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=unique_dimensions)
-        await send_event(request_id, {"message": "获取维度信息", "action": "complete"}, "message")
-        await send_event(request_id, {"message": "维度信息", "data": dimensions}, "data")
+        await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
+        await send_event(event_id, {"message": "维度信息", "data": dimensions}, "data")
         # 5. 根据分词关键字获得指标列表
-        await send_event(request_id, {"message": "获取指标信息", "action": "start"}, "message")
+        await send_event(event_id, {"message": "获取指标信息", "action": "start"}, "message")
         metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
             keyword=segmented_words,
             dataset_ids=dataset_id_list)
-        await send_event(request_id, {"message": "获取指标信息", "action": "complete"}, "message")
-        await send_event(request_id, {"message": "指标信息", "data": metrics}, "data")
+        await send_event(event_id, {"message": "获取指标信息", "action": "complete"}, "message")
+        await send_event(event_id, {"message": "指标信息", "data": metrics}, "data")
 
         # 6. 从维度和指标中提取所有modelId并去重，获得模型ID列表
         model_ids = self._extract_unique_model_ids(dimensions, metrics)
 
         # 7. 查询模型详情和关联关系
-        await send_event(request_id, {"message": "获取模型信息", "action": "start"}, "message")
+        await send_event(event_id, {"message": "获取模型信息", "action": "start"}, "message")
         model_details = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
-        await send_event(request_id, {"message": "获取模型信息", "action": "complete"}, "message")
-        await send_event(request_id, {"message": "模型信息", "data": model_details}, "data")
+        await send_event(event_id, {"message": "获取模型信息", "action": "complete"}, "message")
+        await send_event(event_id, {"message": "模型信息", "data": model_details}, "data")
         model_relations = await self.semantic_api_client.get_model_relationships_async(model_ids=model_ids)
-        await send_event(request_id, {}, "stream_end")
+        await send_event(event_id, {}, "stream_end")
         # 8. 查询业务术语
         dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list)
         domain_ids = self._extract_unique_domain_ids(dataset_details)
