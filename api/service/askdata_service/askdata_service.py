@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
+from api.db.services.ask_data_history_service import AskDataHistoryService
 from api.service.askdata_service.event.event_utils import send_event
 from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLGenerator
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
@@ -208,6 +209,8 @@ class AskdataService:
         self.nlq_to_initial_sql_generator = NLQToInitialSQLGenerator(db, user.id, self.prompt_dir)
 
         self.semantic_api_client = SemanticApiClient()
+        # 初始化历史记录服务
+        self.history_service = AskDataHistoryService()
 
     async def rewrite_query(self, query_text: str, llm_name: str) -> List[str]:
         """
@@ -228,7 +231,8 @@ class AskdataService:
         """
         return await self.query_intent_analyzer.get_query_intents_with_descriptions(query_text, llm_name)
 
-    async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str], conversation_id: Optional[str] = None,
+    async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
+                                      conversation_id: Optional[str] = None,
                                       event_id: Optional[str] = None):
         await send_event(event_id, {"message": "分词", "action": "start"}, "message")
         segmented_words = await custom_tokenize_with_semantic_words(text=user_query, dataset_id_list=dataset_id_list)
@@ -334,6 +338,20 @@ class AskdataService:
             "filters": [self._serialize_filter_condition(cond) for cond in filter_list],
             "order_by": [self._serialize_order_by_field(field) for field in order_by_list]
         }
+
+    # 新增的插入历史记录方法
+    async def add_ask_data_history(self, conversation_id: str, ask_id: str, data: str):
+        """
+        添加一条问数历史记录
+        """
+        return self.history_service.add_history(self.db, conversation_id, ask_id, data, self.user.id)
+
+    # 新增的查询历史记录方法
+    async def get_ask_data_history(self, conversation_id: str) -> list[dict]:
+        """
+        根据对话ID获取问数历史记录
+        """
+        return self.history_service.get_history_by_conversation_id(self.db, conversation_id)
 
     async def _build_model_details(self, model_ids: List[str],
                                    used_models: List[str]) -> Tuple[Dict, Dict, List]:

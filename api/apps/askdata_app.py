@@ -300,3 +300,60 @@ async def get_semantic_layer_streaming(
             status=StatusEnum.ERROR,
             message=f"启动聊天失败：{str(e)}"
         )
+
+# --- 新增接口 ---
+
+class AddHistoryRequest(BaseModel):
+    conversation_id: str = Field(..., description="会话ID")
+    ask_id: str = Field(..., description="询问ID")
+    data: str = Field(..., description="历史记录内容, 可以是JSON字符串")
+
+
+@router.post("/add-history", response_model=ResponseSchema, summary="新增历史记录")
+async def add_history(
+    body: AddHistoryRequest,
+    service: AskdataService = Depends(get_askdata_service)
+):
+    """
+    新增一条问数历史记录。
+    """
+    try:
+        result = await service.add_ask_data_history(
+            conversation_id=body.conversation_id,
+            ask_id=body.ask_id,
+            data=body.data
+        )
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="历史记录添加成功",
+            data={"history_id": result.id}
+        )
+    except Exception as e:
+        logger.exception("新增历史记录失败")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"新增历史记录失败: {e}"
+        )
+
+
+@router.get("/get-history/{conversation_id}", response_model=ResponseSchema, summary="查询历史记录")
+async def get_history(
+    conversation_id: str,
+    service: AskdataService = Depends(get_askdata_service)
+):
+    """
+    根据对话ID查询相关的历史记录。
+    """
+    try:
+        history_records = await service.get_ask_data_history(conversation_id)
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="历史记录查询成功",
+            data=history_records
+        )
+    except Exception as e:
+        logger.exception(f"查询历史记录失败 (conversation_id: {conversation_id})")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"查询历史记录失败: {e}"
+        )
