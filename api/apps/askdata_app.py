@@ -287,3 +287,48 @@ async def analyze_user_query_streaming(
             status=StatusEnum.ERROR,
             message=f"启动聊天失败：{str(e)}"
         )
+
+
+class SemanticLayerRequest(BaseModel):
+    conversation_id: str = Field(..., description="会话ID")
+    user_query: str = Field(..., description="用户查询")
+    dataset_id_list: List[str] = Field(
+        [],
+        title="数据集ID列表",
+        description="数据集ID列表",
+    )
+
+
+@router.post("/get-semantic-layer-streaming/{custom_event_id}", response_model=ResponseSchema,
+             summary="获得语义层信息")
+async def get_semantic_layer_streaming(
+        custom_event_id: str,
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        body: SemanticLayerRequest = Body(
+            ...,
+            title="获得语义层信息",
+            description="获得语义层信息"
+        ),
+        service: AskdataService = Depends(get_askdata_service)
+) -> ResponseSchema:
+    logger.info(f"使用自定义事件ID {custom_event_id} 获得语义层信息，参数：{body}")
+
+    try:
+        processed_semantic_layer, model_ids = await service.generate_semantic_layer(user_query=body.user_query,
+                                                                                    dataset_id_list=body.dataset_id_list,
+                                                                                    conversation_id=body.conversation_id,
+                                                                                    request_id=custom_event_id)
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="获得语义层信息成功",
+            data={"processed_semantic_layer": processed_semantic_layer, "model_ids": model_ids}
+        )
+
+    except Exception as e:
+        logger.exception("使用自定义事件ID启动流式聊天失败")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"启动聊天失败：{str(e)}"
+        )
