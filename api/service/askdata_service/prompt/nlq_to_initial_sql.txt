@@ -51,9 +51,16 @@
 
 4.  **输出格式：**
     *   **严格以JSON格式输出，不包含任何解释、注释或markdown标记。**
-    *   **JSON对象必须包含以下两个键：**
-        *   `"sql"`: (字符串类型) 包含你生成的完整SQL查询语句。
+    *   **JSON对象必须包含以下键：**
+        *   `"sql"`: (字符串类型) 包含你生成的完整、可执行的SQL查询语句。
         *   `"usedModels"`: (字符串数组类型) 包含该SQL查询中实际使用到的所有模型的名称。模型的名称来源于输入信息`dataModels`中的`name`字段。你需要分析生成的SQL，从`FROM`和`JOIN`子句中识别出所有用到的表，然后将这些表映射回它们在`dataModels`中对应的模型`name`，并形成一个列表。
+        *   `"sqlComponents"`: (对象类型) 包含分解后的SQL查询的各个组成部分。每个部分都是一个字符串，**包含完整的子句关键字**。如果某个部分不存在于最终的SQL中，则其对应的值应为空字符串 `""`。
+            *   `"select"`: 完整的 `SELECT` 子句 (例如: `"SELECT t1.teacher_id, t1.name, t2.class_hours"`)。
+            *   `"from"`: 完整的 `FROM` 和 `JOIN` 子句 (例如: `"FROM gx_test_teachers AS t1 JOIN gx_test_classes AS t2 ON t1.teacher_id = t2.teacher_id"`)。
+            *   `"where"`: 完整的 `WHERE` 子句 (例如: `"WHERE t1.department = '计算机科学与技术学院'"`).
+            *   `"groupBy"`: 完整的 `GROUP BY` 子句 (例如: `"GROUP BY t1.teacher_id, t1.name"`)。
+            *   `"orderBy"`: 完整的 `ORDER BY` 子句 (例如: `"ORDER BY t2.class_hours DESC"`)。
+            *   `"limit"`: 完整的 `LIMIT` 子句 (例如: `"LIMIT 10"`)。
 
 ---
 
@@ -71,6 +78,6 @@ $semantic_layer
 
 ---
 
-**请根据以上信息生成一个包含SQL查询和所用模型的JSON对象：**
+**请根据以上信息生成一个包含SQL查询、所用模型及SQL各组成部分的JSON对象：**
 ```json
 ```

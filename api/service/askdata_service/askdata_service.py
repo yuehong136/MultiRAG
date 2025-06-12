@@ -14,8 +14,6 @@ from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLG
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
-from api.service.nl2sql_service.query_intent_analyzer import QueryIntentAnalyzer
-from api.service.nl2sql_service.query_rewriter import QueryRewriter
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
 
@@ -27,8 +25,6 @@ class AskdataService:
         self.db = db
         self.user = user
         self.prompt_dir = os.path.join(os.path.dirname(__file__), "prompt")
-        self.query_rewriter = QueryRewriter(db, user.id, self.prompt_dir)
-        self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
         self.nlq_to_initial_sql_generator = NLQToInitialSQLGenerator(db, user.id, self.prompt_dir)
         self.semantic_api_client = SemanticApiClient()
         self.history_service = AskDataHistoryService()
@@ -43,7 +39,6 @@ class AskdataService:
         await send_event(event_id, {"message": "分词", "action": "complete"}, "message")
         await send_event(event_id, {"message": "分词结果", "data": segmented_words}, "data")
 
-        # 此处省略了详细的事件发送代码，与原版保持一致
         dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(
             keyword=segmented_words, dataset_ids=dataset_id_list)
         dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
@@ -84,23 +79,35 @@ class AskdataService:
         await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
                                             llm_name=llm_name)
 
-    async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any]):
-        """从自然语言生成初始SQL。"""
-        result = await self.nlq_to_initial_sql_generator.generate_sql_query_with_models(user_query, semantic_layer,
-                                                                                        llm_name)
-        sql, used_models = (result['sql'], result['usedModels']) if result else (None, None)
-        return sql, used_models
+    async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any]) -> Optional[
+        Dict[str, Any]]:
+        """
+        从自然语言生成初始SQL，返回包含组件的完整字典。
+        """
+        logger.info(f"开始为查询 '{user_query}' 生成初始SQL。")
+        # 调用更新后的方法
+        result = await self.nlq_to_initial_sql_generator.generate_sql_query_with_components(
+            user_query, semantic_layer, llm_name
+        )
+
+        if not result:
+            logger.warning("NLQ to Initial SQL 生成失败，返回 None。")
+            return None
+
+        logger.info(f"成功生成SQL: {result.get('sql')}")
+        return result
 
     async def generate_table_config(self, sql: str, dataset_id_list: List[str],
-                                    model_ids: List[str], used_models: List[str]) -> Dict[str, Any]:
+                                    model_ids: List[str], used_models: List[str],
+                                    sql_components: Dict[str, Any]):
         """
         生成表配置信息。
         将逻辑委托给 TableConfigGenerator。
         """
         return await self.table_config_generator.generate(
-            sql=sql,
             model_ids=model_ids,
-            used_models=used_models
+            used_models=used_models,
+            sql_components=sql_components
         )
 
     async def add_ask_data_history(self, conversation_id: str, ask_id: str, data: str):

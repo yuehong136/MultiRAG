@@ -30,33 +30,6 @@ class ResponseSchema(BaseModel):
     data: Any | None = None
 
 
-# ... (health, GetSqlAndTableConfigReq, get_sql_and_table_config 等路由保持不变) ...
-
-@router.get("/health", response_model=ResponseSchema, summary="健康检查接口")
-async def health_check():
-    """
-    健康检查接口，无需任何输入参数
-
-    返回服务状态信息
-    """
-    try:
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="服务运行正常",
-            data={
-                "service": "nl2sql-service",
-                "status": "healthy",
-                "timestamp": "2024-06-04T00:00:00Z"
-            }
-        )
-    except Exception as e:
-        logger.exception("健康检查发生异常")
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"健康检查失败：{str(e)}"
-        )
-
-
 class GetSqlAndTableConfigReq(BaseModel):
     """自然语言转初始SQL请求的基础模型"""
     user_query: str = Field(..., title="查询文本", description="用户提出的自然语言查询文本")
@@ -80,36 +53,57 @@ async def get_sql_and_table_config(
     logging.info(f"get-sql-and-table-config请求体：{body}")
 
     try:
-        sql, used_models = await service.nlq_to_initial_sql(
+        # 1. 调用Service层获取包含SQL及其组件的完整结果
+        sql_generation_result = await service.nlq_to_initial_sql(
             user_query=body.user_query,
             llm_name=body.llm_name,
-            semantic_layer=body.semantic_layer['processed_semantic_layer']
+            semantic_layer=body.semantic_layer.get('processed_semantic_layer', {})
         )
 
-        table_config = await service.generate_table_config(sql, body.dataset_id_list,
-                                                           model_ids=body.semantic_layer['model_ids'],
-                                                           used_models=used_models)
+        if not sql_generation_result or not sql_generation_result.get("sql"):
+            logger.error("未能从Service层获取有效的SQL生成结果。")
+            return ResponseSchema(
+                status=StatusEnum.ERROR,
+                message="SQL生成失败或LLM返回格式不正确"
+            )
+
+        sql = sql_generation_result["sql"]
+        used_models = sql_generation_result["usedModels"]
+        sql_components = sql_generation_result["sqlComponents"]
+
+        # 2. 生成表格配置
+        model_table_alias_mapping_list, table_config = await service.generate_table_config(
+            sql=sql,
+            dataset_id_list=body.dataset_id_list,
+            model_ids=body.semantic_layer.get('model_ids', []),
+            used_models=used_models,
+            sql_components=sql_components
+        )
 
         # 执行查询
         result = execute_sql_and_format_result(sql=sql, db_config={})
 
-        if sql:
-            return ResponseSchema(
-                status=StatusEnum.SUCCESS,
-                message="生成初始SQL成功",
-                data={"sql": sql, "result": result, "table_config": table_config}
-            )
-        else:
-            return ResponseSchema(
-                status=StatusEnum.ERROR,
-                message="SQL生成失败或验证未通过"
-            )
+        # 4. 构建返回给前端的数据结构
+        # 将sql_generation_result中的所有内容都包含进去
+        response_data = {
+            "sql": sql,
+            "result": result,
+            "table_config": table_config,
+            "base_from": sql_components["from"],
+            "model_table_alias_mapping_list": model_table_alias_mapping_list
+        }
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="生成初始SQL及配置成功",
+            data=response_data
+        )
 
     except Exception as e:
-        logger.exception("nlq-to-initial-sql发生异常")
+        logger.exception("get-sql-and-table-config 发生异常")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"生成初始SQL失败：{str(e)}"
+            message=f"处理请求失败：{str(e)}"
         )
 
 
