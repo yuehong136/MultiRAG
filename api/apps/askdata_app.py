@@ -1,17 +1,15 @@
 import logging
-import uuid
 from enum import Enum
-from http.client import HTTPException
 from typing import List, Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, Body, BackgroundTasks
+from fastapi import APIRouter, Depends, Body, BackgroundTasks, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from fastapi.responses import StreamingResponse
 
 from api.db.db_models import get_db
 from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
-from api.service.askdata_service.async_llm_service import AsyncLLMService
 from api.service.askdata_service.event.event_handlers import create_sse_response
 from api.service.askdata_service.pg_query_formatter import execute_sql_and_format_result
 
@@ -31,6 +29,8 @@ class ResponseSchema(BaseModel):
     message: str | None = None
     data: Any | None = None
 
+
+# ... (health, GetSqlAndTableConfigReq, get_sql_and_table_config 等路由保持不变) ...
 
 @router.get("/health", response_model=ResponseSchema, summary="健康检查接口")
 async def health_check():
@@ -113,10 +113,6 @@ async def get_sql_and_table_config(
         )
 
 
-from fastapi import Request
-from fastapi.responses import StreamingResponse
-
-
 @router.get("/events/{event_id}")
 async def subscribe_to_event(request: Request, event_id: str):
     """
@@ -154,37 +150,22 @@ async def analyze_user_query_background_task(
         user
 ) -> None:
     """
-    处理流式聊天的后台任务
-
-    Args:
-        event_id: 事件ID
-        request: 聊天请求
-        db: 数据库会话
+    通过将逻辑委托给服务层来处理流式聊天的后台任务。
     """
     try:
-        # 创建异步LLM服务
-        llm_service = AsyncLLMService(db)
+        service = get_askdata_service(db, user)
 
-        # 转换消息格式
-        history = [{"role": "user", "content": "写一个500字的笑话"}]
-
-        gen_conf = {
-            "temperature": 0.7,
-            "max_tokens": 2000,
-        }
-
-        # 执行流式聊天
-        await llm_service.chat_stream_async(
+        await service.analyze_user_query_stream(
             event_id=event_id,
-            tenant_id=user.id,
-            history=history,
-            gen_conf=gen_conf,
-            llm_name=request.llm_name
+            user_query=request.user_query,
+            semantic_layer=request.semantic_layer["processed_semantic_layer"],
+            llm_name=request.llm_name,
+            tenant_id=user.id
         )
 
     except Exception as e:
-        logger.exception(f"Background chat task failed for event_id {event_id}: {e}")
-        # 发送错误事件
+        logger.exception(f"后台聊天任务失败，event_id {event_id}: {e}")
+        # 错误报告逻辑保留在此处，因为它是一个横切关注点（发布到事件管理器）
         try:
             from api.service.nl2sql_service.event.event_manager import event_manager
             await event_manager.publish(
@@ -197,7 +178,7 @@ async def analyze_user_query_background_task(
                 event_type="chat_error"
             )
         except Exception as publish_error:
-            logger.error(f"Failed to send error event for {event_id}: {publish_error}")
+            logger.error(f"为 {event_id} 发送错误事件失败: {publish_error}")
 
 
 @router.post("/analyze-user-query-streaming/{custom_event_id}", response_model=ResponseSchema,
@@ -215,21 +196,11 @@ async def analyze_user_query_streaming(
 ) -> ResponseSchema:
     """
     使用自定义事件ID启动流式聊天
-
-    Args:
-        custom_event_id: 自定义的事件ID
-        body: 聊天请求参数
-        background_tasks: FastAPI后台任务
-        db: 数据库会话
-        user: 当前用户
-
-    Returns:
-        ResponseSchema: 包含事件ID和监听地址的响应
     """
     logger.info(f"使用自定义事件ID {custom_event_id} 启动流式聊天：{body}")
 
     try:
-        # 添加后台任务
+        # 添加后台任务，调用重构后的后台任务函数
         background_tasks.add_task(
             analyze_user_query_background_task,
             custom_event_id,
@@ -301,7 +272,6 @@ async def get_semantic_layer_streaming(
             message=f"启动聊天失败：{str(e)}"
         )
 
-# --- 新增接口 ---
 
 class AddHistoryRequest(BaseModel):
     conversation_id: str = Field(..., description="会话ID")
@@ -311,8 +281,8 @@ class AddHistoryRequest(BaseModel):
 
 @router.post("/add-history", response_model=ResponseSchema, summary="新增历史记录")
 async def add_history(
-    body: AddHistoryRequest,
-    service: AskdataService = Depends(get_askdata_service)
+        body: AddHistoryRequest,
+        service: AskdataService = Depends(get_askdata_service)
 ):
     """
     新增一条问数历史记录。
@@ -338,8 +308,8 @@ async def add_history(
 
 @router.get("/get-history/{conversation_id}", response_model=ResponseSchema, summary="查询历史记录")
 async def get_history(
-    conversation_id: str,
-    service: AskdataService = Depends(get_askdata_service)
+        conversation_id: str,
+        service: AskdataService = Depends(get_askdata_service)
 ):
     """
     根据对话ID查询相关的历史记录。

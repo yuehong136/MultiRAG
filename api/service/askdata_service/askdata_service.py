@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.ask_data_history_service import AskDataHistoryService
+from api.service.askdata_service.async_llm_service import AsyncLLMService
 from api.service.askdata_service.event.event_utils import send_event
 from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLGenerator
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
@@ -17,6 +18,7 @@ from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_wi
 from api.service.nl2sql_service.query_intent_analyzer import QueryIntentAnalyzer
 from api.service.nl2sql_service.query_rewriter import QueryRewriter
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
+from api.utils.prompt_template_util import PromptTemplateUtil
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,7 @@ logger = logging.getLogger(__name__)
 class FieldMapper:
     """字段映射器，负责将SQL字段映射到语义层"""
 
+    # ... (FieldMapper 类代码保持不变)
     def __init__(self, used_table_detail_dict: Dict[str, Any]):
         self.used_table_detail_dict = used_table_detail_dict
 
@@ -260,6 +263,47 @@ class AskdataService:
         processed_semantic_layer = process_semantic_layer(semantic_layer_original)
 
         return processed_semantic_layer, model_ids
+
+    async def analyze_user_query_stream(
+            self,
+            event_id: str,
+            user_query: str,
+            semantic_layer: Dict[str, Any],
+            llm_name: Optional[str],
+            tenant_id: str
+    ):
+        """
+        分析用户问题并流式返回结果。
+        该方法封装了加载prompt、调用LLM和处理流式响应的逻辑。
+        """
+        # 1. 创建异步LLM服务实例
+        # 注意：AsyncLLMService 是一个轻量级类，在这里实例化是合适的
+        llm_service = AsyncLLMService(self.db)
+
+        # 2. 使用 Service 中定义的 prompt_dir 来加载模板，解决了路径问题
+        template_path = os.path.join(self.prompt_dir, "analyze_user_query.txt")
+        prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
+        prompt = PromptTemplateUtil.fill_template(
+            prompt_template,
+            {"user_query": user_query, "semantic_layer": semantic_layer}
+        )
+
+        history = [{"role": "user", "content": prompt}]
+
+        gen_conf = {
+            "temperature": 0.7,
+            "max_tokens": 2000,
+        }
+
+        # 3. 执行流式调用
+        # 异常将在调用此方法的上层（即 background_task）中被捕获和处理
+        await llm_service.chat_stream_async(
+            event_id=event_id,
+            tenant_id=tenant_id,
+            history=history,
+            gen_conf=gen_conf,
+            llm_name=llm_name
+        )
 
     async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any]):
         result = await self.nlq_to_initial_sql_generator.generate_sql_query_with_models(user_query, semantic_layer,
