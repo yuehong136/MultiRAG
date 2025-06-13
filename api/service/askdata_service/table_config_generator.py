@@ -229,13 +229,14 @@ class TableConfigGenerator:
         for order_info in order_by_fields:
             is_matched_semantic_field = False
             alias, column_name = self._split_column(order_info['field'])
+            direction = order_info['direction']
             table_name = table_alias_mapping[alias]
             table_detail = used_table_detail_dict[table_name]
             for metric in table_detail['dimsAndMetrics']['metrics']:
                 if metric['expression'].lower() == column_name.lower():
                     order_by_columns.append(
                         {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
-                         "metric_name": metric["metricName"]}
+                         "metric_name": metric["metricName"], "direction": direction}
                     )
                     is_matched_semantic_field = True
                     break
@@ -245,14 +246,15 @@ class TableConfigGenerator:
                 if dim['dimensionEnName'].lower() == column_name.lower():
                     order_by_columns.append(
                         {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
-                         "dimension_name": dim["dimensionName"]}
+                         "dimension_name": dim["dimensionName"], "direction": direction}
                     )
                     is_matched_semantic_field = True
                     break
             if is_matched_semantic_field:
                 continue
             order_by_columns.append(
-                {"is_semantic_field": False, "sql_column": order_info['field'], "id": str(uuid.uuid4())})
+                {"is_semantic_field": False, "sql_column": order_info['field'], "id": str(uuid.uuid4()),
+                 "direction": direction})
 
         return order_by_columns
 
