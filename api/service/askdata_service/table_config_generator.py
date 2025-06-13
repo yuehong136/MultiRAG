@@ -225,7 +225,8 @@ class TableConfigGenerator:
             if is_matched_semantic_field:
                 continue
             filter_columns.append(
-                {"is_semantic_field": False, "sql_column": cond, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
+                {"is_semantic_field": False, "sql_column": cond["field"],"operator": operator, "value": value,
+                 "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
 
         return filter_columns
 
