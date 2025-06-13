@@ -163,7 +163,7 @@ class TableConfigGenerator:
                     if dim['dimensionEnName'].lower() == column_name.lower():
                         selected_columns.append(
                             {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
-                             "dimension_name": dim["dimensionName"]}
+                             "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4())}
                         )
                         is_matched_semantic_field = True
                         break
@@ -173,13 +173,14 @@ class TableConfigGenerator:
                     if metric['expression'].lower() == column_name.lower():
                         selected_columns.append(
                             {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
-                             "metric_name": metric["metricName"]}
+                             "metric_name": metric["metricName"], "wid": str(uuid.uuid4())}
                         )
                         is_matched_semantic_field = True
                         break
                 if is_matched_semantic_field:
                     continue
-                selected_columns.append({"is_semantic_field": False, "sql_column": col, "id": str(uuid.uuid4())})
+                selected_columns.append(
+                    {"is_semantic_field": False, "sql_column": col, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
         return selected_columns
 
     def _process_where_conditions(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[
@@ -190,7 +191,8 @@ class TableConfigGenerator:
         if where_conditions.get('has_or'):
             raw = where_conditions['raw_condition']
             return [{"is_semantic_field": False, "is_complex_condition": True, "raw_condition": raw, "field": raw,
-                     "operator": "", "value": "", "from_model": None, "id": str(uuid.uuid4())}]
+                     "operator": "", "value": "", "from_model": None, "id": str(uuid.uuid4()),
+                     "wid": str(uuid.uuid4())}]
 
         filter_columns = []
         for cond in where_conditions.get('parsed_conditions', []):
@@ -204,7 +206,8 @@ class TableConfigGenerator:
                 if dim['dimensionEnName'].lower() == column_name.lower():
                     filter_columns.append(
                         {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
-                         "dimension_name": dim["dimensionName"], "operator": operator, "value": value}
+                         "dimension_name": dim["dimensionName"], "operator": operator, "value": value,
+                         "wid": str(uuid.uuid4())}
                     )
                     is_matched_semantic_field = True
                     break
@@ -214,13 +217,15 @@ class TableConfigGenerator:
                 if metric['expression'].lower() == column_name.lower():
                     filter_columns.append(
                         {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
-                         "metric_name": metric["metricName"], "operator": operator, "value": value}
+                         "metric_name": metric["metricName"], "operator": operator, "value": value,
+                         "wid": str(uuid.uuid4())}
                     )
                     is_matched_semantic_field = True
                     break
             if is_matched_semantic_field:
                 continue
-            filter_columns.append({"is_semantic_field": False, "sql_column": cond, "id": str(uuid.uuid4())})
+            filter_columns.append(
+                {"is_semantic_field": False, "sql_column": cond, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
 
         return filter_columns
 
@@ -240,7 +245,7 @@ class TableConfigGenerator:
                 if metric['expression'].lower() == column_name.lower():
                     order_by_columns.append(
                         {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
-                         "metric_name": metric["metricName"], "direction": direction}
+                         "metric_name": metric["metricName"], "direction": direction, "wid": str(uuid.uuid4())}
                     )
                     is_matched_semantic_field = True
                     break
@@ -250,7 +255,7 @@ class TableConfigGenerator:
                 if dim['dimensionEnName'].lower() == column_name.lower():
                     order_by_columns.append(
                         {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
-                         "dimension_name": dim["dimensionName"], "direction": direction}
+                         "dimension_name": dim["dimensionName"], "direction": direction, "wid": str(uuid.uuid4())}
                     )
                     is_matched_semantic_field = True
                     break
@@ -258,7 +263,7 @@ class TableConfigGenerator:
                 continue
             order_by_columns.append(
                 {"is_semantic_field": False, "sql_column": order_info['field'], "id": str(uuid.uuid4()),
-                 "direction": direction})
+                 "direction": direction, "wid": str(uuid.uuid4())})
 
         return order_by_columns
 
