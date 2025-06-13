@@ -1604,7 +1604,7 @@ def recognize_intent(
     # 3) 调 LLM
     answer = chat_mdl.chat(
         system=prompt,
-        history=[{"role": "user", "content": ""}],   # 空 user 消息 → 模型直接输出结果
+        history=[{"role": "user", "content": "请根据要求返回规定的格式"}],   # 空 user 消息 → 模型直接输出结果
         gen_conf=req["gen_conf"]
     )
 
@@ -1651,7 +1651,7 @@ def fill_fields(
     def call_llm(prompt: str) -> str:
         return chat_mdl.chat(
             system=prompt,
-            history=[{"role": "user", "content": ""}],
+            history=[{"role": "user", "content": "请按照要求输出"}],
             gen_conf=req.gen_conf
         )
 
