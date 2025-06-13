@@ -192,13 +192,15 @@ class TableConfigGenerator:
         for cond in where_conditions.get('parsed_conditions', []):
             is_matched_semantic_field = False
             alias, column_name = self._split_column(cond['field'])
+            operator = cond['operator']
+            value = cond['value']
             table_name = table_alias_mapping[alias]
             table_detail = used_table_detail_dict[table_name]
             for dim in table_detail['dimsAndMetrics']['dimensions']:
                 if dim['dimensionEnName'].lower() == column_name.lower():
                     filter_columns.append(
                         {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
-                         "dimension_name": dim["dimensionName"]}
+                         "dimension_name": dim["dimensionName"], "operator": operator, "value": value}
                     )
                     is_matched_semantic_field = True
                     break
@@ -208,7 +210,7 @@ class TableConfigGenerator:
                 if metric['expression'].lower() == column_name.lower():
                     filter_columns.append(
                         {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
-                         "metric_name": metric["metricName"]}
+                         "metric_name": metric["metricName"], "operator": operator, "value": value}
                     )
                     is_matched_semantic_field = True
                     break
