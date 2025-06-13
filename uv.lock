@@ -3154,7 +3154,7 @@ requires-dist = [
     { name = "cn2an", specifier = "==0.5.22" },
     { name = "cohere", specifier = "==5.6.2" },
     { name = "crawl4ai", specifier = "==0.3.8" },
-    { name = "dashscope", specifier = ">1.20.11" },
+    { name = "dashscope", specifier = "==1.23.3" },
     { name = "datrie", specifier = "==0.8.2" },
     { name = "debugpy", specifier = ">=1.8.13" },
     { name = "deepl", specifier = "==1.18.0" },
@@ -3229,7 +3229,7 @@ requires-dist = [
     { name = "pyexcel", specifier = ">=0.7.0" },
     { name = "pyexcel-xlsx", specifier = ">=0.6.0" },
     { name = "pyicu", specifier = ">=2.13.1,<3.0.0" },
-    { name = "pymilvus", specifier = ">=2.4.5" },
+    { name = "pymilvus", specifier = ">2.5.6" },
     { name = "pymysql", specifier = ">=1.1.1,<2.0.0" },
     { name = "pyodbc", specifier = ">=5.2.0,<6.0.0" },
     { name = "pypdf", specifier = ">=5.0.0,<6.0.0" },
@@ -4337,7 +4337,7 @@ crypto = [
 
 [[package]]
 name = "pymilvus"
-version = "2.5.6"
+version = "2.5.11"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "grpcio" },
@@ -4348,9 +4348,9 @@ dependencies = [
     { name = "setuptools" },
     { name = "ujson" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/43/02/85ce4bc154d5f75e466d92e8112f09f67534fe82aaedf7dd22c6cb70433d/pymilvus-2.5.6.tar.gz", hash = "sha256:2bea0b03ed9ac3daadb1b2df8e38aa5c8f4aabd00b23a4999abb4adaebf54f59" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/e4/d9/3a76b1f5014a20efcfe1bb0aa46423d9cf1df5ab2ce8b1479248b943692a/pymilvus-2.5.11.tar.gz", hash = "sha256:cb1c291c659da73c58f2f5c2bd5bcbb87feb76f720afd72b9e7ace813d384c83" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/06/4f/169ffe72bc628bf89be7770f2ef60f90fd73588c6ceb25d47f1bb00ade02/pymilvus-2.5.6-py3-none-any.whl", hash = "sha256:19796f328278974f04632a1531e602070614f6ab0865cc97e27755f622e50a6d" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/e7/2c/a9f2c2daff511e127616a4294e597bf4c7626d49865f62865432698c7ba9/pymilvus-2.5.11-py3-none-any.whl", hash = "sha256:20417ea0f364cd8e9d3783b432ad25c32cff8f3ceb40cdfdf54f8bbcf052cd7e" },
 ]
 
 [[package]]
