@@ -1,5 +1,5 @@
 import uuid
-from typing import Any, List, Dict, Tuple
+from typing import Any, List, Dict, Tuple, Optional
 
 from api.service.askdata_service.sql_components_parser import SQLComponentsParser
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
@@ -56,7 +56,8 @@ class TableConfigGenerator:
         # 7. 处理ORDER BY字段
         order_by_fields = self._process_order_by_fields(parts, used_table_detail_dict)
 
-        # 8. 构建返回结果
+        limit = self._process_limit(parts)
+
         return model_table_alias_mapping_list, {
             "columns": {
                 "selected_columns": selected_columns,
@@ -70,6 +71,7 @@ class TableConfigGenerator:
                 "order_by_fields": order_by_fields,
                 "available_fields": semantic_fields_info["sortable_fields"]
             },
+            "limit": limit,
             "all_semantic_fields": semantic_fields_info["all_fields"]
         }
 
@@ -257,6 +259,13 @@ class TableConfigGenerator:
                  "direction": direction})
 
         return order_by_columns
+
+    def _process_limit(self, parts: Dict[str, Any]) -> Optional[int]:
+        """处理LIMIT字段"""
+        limit = parts['limit']
+        if not limit:
+            return None
+        return int(limit)
 
     def _split_column(self, column: str) -> Tuple[str, str]:
         """将 'table.field' 格式的列名分割为 (table, field)"""
