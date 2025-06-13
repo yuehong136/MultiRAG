@@ -27,7 +27,7 @@ from pymilvus.exceptions import (
     PrimaryKeyException,
     ServerVersionIncompatibleException,
 )
-from pymilvus.milvus_client.index import IndexParams
+from pymilvus.milvus_client.index import IndexParams, IndexParam
 from pymilvus.orm import utility
 from pymilvus.orm.collection import CollectionSchema, FieldSchema
 from pymilvus.orm.connections import connections
@@ -1007,8 +1007,6 @@ class MilvusConnection(DocStoreConnection):
 
         # 处理每一个结果项
         for item in results:
-            if not isinstance(item, dict):
-                continue
 
             # 兼容低版本使用'id'和高版本使用'pk'的情况
             doc_id = None
@@ -1578,18 +1576,52 @@ class MilvusConnection(DocStoreConnection):
             timeout: float | None = None,
             **kwargs,
     ):
-        for index_param in index_params:
-            self._create_index(collection_name, index_param, timeout=timeout, **kwargs)
+        """
+            index_params 可为：
+              • IndexParams  (官方 list-like 容器)
+              • IndexParam   (单个官方对象)
+              • dict         (你自己手写的)
+              • list[dict]   (你自己手写的一组)
+            """
+        # -------- IndexParams ---------
+        if isinstance(index_params, IndexParams):
+            for ip in index_params:  # ip 是 IndexParam
+                self._create_index(collection_name, ip, timeout=timeout, **kwargs)
+            return
+
+        # -------- IndexParam ----------
+        if isinstance(index_params, IndexParam):
+            self._create_index(collection_name, index_params, timeout=timeout, **kwargs)
+            return
+
+        # -------- list[dict] ----------
+        if isinstance(index_params, (list, tuple)):
+            for ip in index_params:
+                self._create_index(collection_name, ip, timeout=timeout, **kwargs)
+            return
+
+        # -------- 单个 dict ------------
+        self._create_index(collection_name, index_params, timeout=timeout, **kwargs)
 
     def _create_index(
-            self, collection_name: str, index_param: dict, timeout: float | None = None, **kwargs
+            self, collection_name: str, index_param, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         try:
-            params = index_param.pop("params", {})
-            field_name = index_param.pop("field_name", "")
-            index_name = index_param.pop("index_name", "")
-            params.update(index_param)
+            # ---------- A. 官方 IndexParam ----------
+            if isinstance(index_param, IndexParam):
+                field_name = index_param.field_name
+                index_name = index_param.index_name or field_name
+                # 这里才是真正的 nlist / metric_type / index_type / M / efConstruction ...
+                params = index_param.get_index_configs()
+
+            # ---------- B. 你自己写的 dict ----------
+            else:
+                field_name = index_param.get("field_name")
+                index_name = index_param.get("index_name", field_name)
+                # 删掉两个无关键，剩下的全部给 Milvus
+                params = {k: v for k, v in index_param.items() if k not in ("field_name", "index_name")}
+
             conn.create_index(
                 collection_name,
                 field_name,
@@ -1602,38 +1634,6 @@ class MilvusConnection(DocStoreConnection):
         except Exception as ex:
             logger.error("Failed to create an index on collection: %s", collection_name)
             raise ex from ex
-
-    # def create_index(
-    #         self,
-    #         collection_name: str,
-    #         index_params: IndexParams,
-    #         timeout: float | None = None,
-    #         **kwargs,
-    # ):
-    #     for index_param in index_params:
-    #         self._create_index(collection_name, index_param, timeout=timeout, **kwargs)
-    #
-    # def _create_index(
-    #         self, collection_name: str, index_param: Dict, timeout: float | None = None, **kwargs
-    # ):
-    #     conn = self._get_connection()
-    #     try:
-    #         params = index_param.pop("params", {})
-    #         field_name = index_param.pop("field_name", "")
-    #         index_name = index_param.pop("index_name", "")
-    #         params.update(index_param)
-    #         conn.create_index(
-    #             collection_name,
-    #             field_name,
-    #             params,
-    #             timeout=timeout,
-    #             index_name=index_name,
-    #             **kwargs,
-    #         )
-    #         logging.debug("Successfully created an index on collection: %s", collection_name)
-    #     except Exception as ex:
-    #         logging.error("Failed to create an index on collection: %s", collection_name)
-    #         raise ex from ex
 
     def insert(
             self,
@@ -1720,58 +1720,6 @@ class MilvusConnection(DocStoreConnection):
             return type("ExtraList", (list,), {"extra": extra_val})(result)
 
         return result
-
-    # def hybrid_search(
-    #         self,
-    #         collection_name: str | list,
-    #         reqs: list,  # List[AnnSearchRequest]
-    #         ranker,  # BaseRanker
-    #         limit: int = 10,
-    #         output_fields: list[str] | None = None,
-    #         timeout: float | None = None,
-    #         partition_names: list[str] | None = None,
-    #         **kwargs,
-    # ) -> list[list[dict]]:
-    #     """执行多向量混合搜索并进行重排序。
-    #
-    #     Args:
-    #         collection_name: 集合名称
-    #         reqs: 向量搜索请求列表
-    #         ranker: 用于重排结果的排序器
-    #         limit: 返回结果的最大数量
-    #         output_fields: 要返回的字段列表
-    #         timeout: 超时时间
-    #         partition_names: 要搜索的分区名称列表
-    #         **kwargs: 额外参数
-    #
-    #     Returns:
-    #         list[list[dict]]: 搜索结果的嵌套列表
-    #     """
-    #     conn = self._get_connection()
-    #     try:
-    #         res = conn.hybrid_search(
-    #             collection_name[0],
-    #             reqs,
-    #             ranker,
-    #             limit=limit,
-    #             partition_names=partition_names,
-    #             output_fields=output_fields,
-    #             timeout=timeout,
-    #             **kwargs,
-    #         )
-    #     except Exception as ex:
-    #         logger.error(f"混合搜索集合失败: {collection_name}")
-    #         raise ex from ex
-    #
-    #     ret = []
-    #     for hits in res:
-    #         ret.append([hit.to_dict() for hit in hits])
-    #
-    #     # 支持官方版本返回额外信息的特性
-    #     from pymilvus.client.types import construct_cost_extra
-    #     if hasattr(res, "cost"):
-    #         return type("ExtraList", (list,), {"extra": construct_cost_extra(res.cost)})(ret)
-    #     return ret
 
     def upsert(
             self,
@@ -1936,69 +1884,6 @@ class MilvusConnection(DocStoreConnection):
             )(result)
 
         return result
-
-    # def search_by_milvus(
-    #         self,
-    #         collection_name: str,
-    #         data: list[list] | list,
-    #         filter: str = "",
-    #         limit: int = 10,
-    #         output_fields: list[str] | None = None,
-    #         search_params: dict | None = None,
-    #         timeout: float | None = None,
-    #         partition_names: list[str] | None = None,
-    #         anns_field: str | None = None,
-    #         **kwargs,
-    # ) -> list[list[dict]]:
-    #     """执行向量相似度搜索。
-    #
-    #     Args:
-    #         collection_name: 集合名称
-    #         data: 要搜索的向量/向量组
-    #         filter: 用于筛选的表达式
-    #         limit: 每次搜索返回的最大结果数
-    #         output_fields: 要返回的字段列表
-    #         search_params: 搜索参数
-    #         timeout: 超时时间
-    #         partition_names: 要搜索的分区名称列表
-    #         anns_field: 向量字段名称
-    #         **kwargs: 额外参数
-    #
-    #     Returns:
-    #         list[list[dict]]: 搜索结果的嵌套列表
-    #     """
-    #     conn = self._get_connection()
-    #     try:
-    #         res = conn.search(
-    #             collection_name,
-    #             data,
-    #             anns_field or "",
-    #             search_params or {},
-    #             expression=filter,
-    #             limit=limit,
-    #             output_fields=output_fields,
-    #             partition_names=partition_names,
-    #             expr_params=kwargs.pop("filter_params", {}),
-    #             timeout=timeout,
-    #             **kwargs,
-    #         )
-    #     except Exception as ex:
-    #         logger.error(f"搜索集合失败: {collection_name}")
-    #         raise ex from ex
-    #
-    #     ret = []
-    #     for hits in res:
-    #         query_result = []
-    #         for hit in hits:
-    #             query_result.append(hit.to_dict())
-    #         ret.append(query_result)
-    #
-    #     # 支持官方版本返回额外信息的特性
-    #     from pymilvus.client.types import construct_cost_extra
-    #     if hasattr(res, "cost"):
-    #         return type("ExtraList", (list,),
-    #                     {"extra": construct_cost_extra(res.cost), "recalls": getattr(res, "recalls", None)})(ret)
-    #     return ret
 
     def query(
             self,
@@ -2441,13 +2326,18 @@ class MilvusConnection(DocStoreConnection):
                     if match == "content_with_weight":
                         nullable_value = False
                         enable_analyzer = True  # 启用分析器
+                        analyzer_params = {
+                            "type": "chinese",
+                        }
+
                         fields.append(FieldSchema(
                             name=match,
                             dtype=DataType.VARCHAR,
                             max_length=max_length,
                             is_primary=is_primary,
                             nullable=nullable_value,
-                            enable_analyzer=enable_analyzer
+                            analyzer_params=analyzer_params,
+                            enable_analyzer = enable_analyzer
                         ))
                     else:
                         fields.append(FieldSchema(
