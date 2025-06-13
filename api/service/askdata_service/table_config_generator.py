@@ -113,16 +113,17 @@ class TableConfigGenerator:
             model_name = model["modelName"]
 
             for metric in model["dimsAndMetrics"]["metrics"]:
+                # 如果表达式中包含括号，则认为是聚合表达式，由于当前是为明细表服务，不可用于值展示、过滤、排序
                 is_agg = "(" in metric["expression"].lower()
                 available_fields.append(
                     {"is_allow_use": not is_agg, "semantic_type": "metric", "id": metric["metricId"],
                      "metric_name": metric["metricName"]})
-                if not is_agg:
-                    filterable_fields.append(
-                        {"semantic_type": "metric", "id": metric["metricId"], "from_model": model_name,
-                         "from_model_id": model_id, "metric_name": metric["metricName"]})
-                    sortable_fields.append({"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"],
-                                            "from_model": model_id, "metric_name": metric["metricName"]})
+                filterable_fields.append(
+                    {"is_allow_use": not is_agg, "semantic_type": "metric", "id": metric["metricId"],
+                     "from_model": model_name,
+                     "from_model_id": model_id, "metric_name": metric["metricName"]})
+                sortable_fields.append({"is_allow_use": not is_agg, "semantic_type": "metric", "id": metric["metricId"],
+                                        "from_model": model_id, "metric_name": metric["metricName"]})
                 all_fields.append({"semantic_type": "metric", "semantic_field": metric, "id": metric["metricId"],
                                    "from_model": model_name, "from_model_id": model_id})
 
@@ -132,7 +133,8 @@ class TableConfigGenerator:
                 available_fields.append({"is_allow_use": True, "semantic_type": "dimension", "id": dim_id,
                                          "dimension_name": dim["dimensionName"]})
                 filterable_fields.append(
-                    {"semantic_type": "dimension", "id": dim_id, "from_model": model_name, "from_model_id": model_id,
+                    {"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_name,
+                     "from_model_id": model_id,
                      "dimension_name": dim["dimensionName"]})
                 sortable_fields.append(
                     {"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_id,
