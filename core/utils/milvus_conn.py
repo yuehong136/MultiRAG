@@ -13,12 +13,16 @@ import os
 import re
 import time
 import uuid
+from typing import Any
 from uuid import uuid4
 from datetime import datetime
 from pymilvus import MilvusClient, Function
 from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
-from pymilvus.client.types import ExceptionsMessage, LoadState, FunctionType
+from pymilvus.client.types import ExceptionsMessage, LoadState, FunctionType, OmitZeroDict, ResourceGroupConfig, \
+    ReplicaInfo
 from pymilvus.client.utils import is_vector_type, get_params
+from pymilvus.client.abstract import AnnSearchRequest, BaseRanker
+from pymilvus.client.search_iterator import SearchIteratorV2
 from pymilvus.exceptions import (
     DataTypeNotMatchException,
     ErrorCode,
@@ -31,6 +35,8 @@ from pymilvus.milvus_client.index import IndexParams, IndexParam
 from pymilvus.orm import utility
 from pymilvus.orm.collection import CollectionSchema, FieldSchema
 from pymilvus.orm.connections import connections
+from pymilvus.orm.constants import FIELDS, METRIC_TYPE, TYPE, UNLIMITED
+from pymilvus.orm.iterator import QueryIterator, SearchIterator
 from pymilvus.orm.types import DataType
 from pymilvus import __version__
 
@@ -54,6 +60,21 @@ logger = logging.getLogger('multirag.milvus_conn')
 ATTEMPT_TIME = 2
 
 
+def validate_param(
+    param_name: str, param: Any, expected_type: type | tuple[type, ...]
+) -> None:
+    if param is None:
+        msg = f"missing required argument: [{param_name}]"
+        raise ParamError(message=msg)
+
+    if not isinstance(param, expected_type):
+        msg = (
+            f"wrong type of argument [{param_name}], "
+            f"expected type: [{expected_type.__name__}], "
+            f"got type: [{type(param).__name__}]"
+        )
+        raise ParamError(message=msg)
+
 # logger.info("Milvus version: " + str(__version__))
 
 @singleton
@@ -65,9 +86,9 @@ class MilvusConnection(DocStoreConnection):
         db_name = settings.MILVUS.get("db_name", "")
         token = settings.MILVUS.get("token", "")
         timeout = settings.MILVUS.get("timeout", None)
-
+        kwargs = settings.MILVUS.get("kwargs", {})
         self._using = self._create_connection(
-            uri, user, password, db_name, token, timeout=timeout
+            uri, user, password, db_name, token, timeout=timeout, **kwargs
         )
         self.is_self_hosted = bool(utility.get_server_type(using=self._using) == "milvus")
         logger.info(f"使用 Milvus {uri} 作为文档存储引擎")
@@ -1488,18 +1509,18 @@ class MilvusConnection(DocStoreConnection):
     """
 
     def create_collection(
-            self,
-            collection_name: str,
-            dimension: int | None = None,
-            primary_field_name: str = "id",
-            id_type: str = "int",
-            vector_field_name: str = "vector",
-            metric_type: str = "COSINE",
-            auto_id: bool = False,
-            timeout: float | None = None,
-            schema: CollectionSchema | None = None,
-            index_params: IndexParams | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        dimension: int | None = None,
+        primary_field_name: str = "id",
+        id_type: str = "int",
+        vector_field_name: str = "vector",
+        metric_type: str = "COSINE",
+        auto_id: bool = False,
+        timeout: float | None = None,
+        schema: CollectionSchema | None = None,
+        index_params: IndexParams | None = None,
+        **kwargs,
     ):
         if schema is None:
             return self._fast_create_collection(
@@ -1519,16 +1540,16 @@ class MilvusConnection(DocStoreConnection):
         )
 
     def _fast_create_collection(
-            self,
-            collection_name: str,
-            dimension: int,
-            primary_field_name: str = "id",
-            id_type: DataType | str = DataType.INT64,
-            vector_field_name: str = "vector",
-            metric_type: str = "COSINE",
-            auto_id: bool = False,
-            timeout: float | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        dimension: int,
+        primary_field_name: str = "id",
+        id_type: DataType | str = DataType.INT64,
+        vector_field_name: str = "vector",
+        metric_type: str = "COSINE",
+        auto_id: bool = False,
+        timeout: float | None = None,
+        **kwargs,
     ):
         if dimension is None:
             msg = "missing required argument: 'dimension'"
@@ -1550,8 +1571,7 @@ class MilvusConnection(DocStoreConnection):
             pk_args["max_length"] = kwargs["max_length"]
 
         schema.add_field(primary_field_name, pk_data_type, is_primary=True, **pk_args)
-        vector_type = DataType.FLOAT_VECTOR
-        schema.add_field(vector_field_name, vector_type, dim=dimension)
+        schema.add_field(vector_field_name, DataType.FLOAT_VECTOR, dim=dimension)
         schema.verify()
 
         conn = self._get_connection()
@@ -1565,16 +1585,16 @@ class MilvusConnection(DocStoreConnection):
             raise ex from ex
 
         index_params = IndexParams()
-        index_params.add_index(vector_field_name, "", "", metric_type=metric_type)
+        index_params.add_index(vector_field_name, index_type="AUTOINDEX", metric_type=metric_type)
         self.create_index(collection_name, index_params, timeout=timeout)
         self.load_collection(collection_name, timeout=timeout)
 
     def create_index(
-            self,
-            collection_name: str,
-            index_params: IndexParams | dict,
-            timeout: float | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        index_params: IndexParams | dict,
+        timeout: float | None = None,
+        **kwargs,
     ):
         """
             index_params 可为：
@@ -1604,7 +1624,7 @@ class MilvusConnection(DocStoreConnection):
         self._create_index(collection_name, index_params, timeout=timeout, **kwargs)
 
     def _create_index(
-            self, collection_name: str, index_param, timeout: float | None = None, **kwargs
+        self, collection_name: str, index_param, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         try:
@@ -1636,12 +1656,12 @@ class MilvusConnection(DocStoreConnection):
             raise ex from ex
 
     def insert(
-            self,
-            collection_name: str,
-            data: dict | list[dict],
-            timeout: float | None = None,
-            partition_name: str | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        data: dict | list[dict],
+        timeout: float | None = None,
+        partition_name: str | None = None,
+        **kwargs,
     ) -> dict:
         if isinstance(data, dict):
             data = [data]
@@ -1656,24 +1676,31 @@ class MilvusConnection(DocStoreConnection):
             return {"insert_count": 0, "ids": []}
 
         conn = self._get_connection()
+        # Insert into the collection.
         try:
             res = conn.insert_rows(
                 collection_name, data, partition_name=partition_name, timeout=timeout
             )
         except Exception as ex:
             raise ex from ex
-        return {"insert_count": res.insert_count, "ids": res.primary_keys}
+        return OmitZeroDict(
+            {
+                "insert_count": res.insert_count,
+                "ids": res.primary_keys,
+                "cost": res.cost,
+            }
+        )
 
     def hybrid_search(
-            self,
-            collection_name: str | list[str],
-            reqs: list,  # list[AnnSearchRequest]
-            ranker,  # BaseRanker
-            limit: int = 10,
-            output_fields: list[str] | None = None,
-            timeout: float | None = None,
-            partition_names: list[str] | None = None,
-            **kwargs,
+        self,
+        collection_name: str | list[str],
+        reqs: list[AnnSearchRequest],
+        ranker: BaseRanker,
+        limit: int = 10,
+        output_fields: list[str] | None = None,
+        timeout: float | None = None,
+        partition_names: list[str] | None = None,
+        **kwargs,
     ) -> list[list[dict]]:
         # 1. 标准成列表
         collections = [collection_name] if isinstance(collection_name, str) else collection_name
@@ -1722,12 +1749,12 @@ class MilvusConnection(DocStoreConnection):
         return result
 
     def upsert(
-            self,
-            collection_name: str,
-            data: dict | list[dict],
-            timeout: float | None = None,
-            partition_name: str | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        data: dict | list[dict],
+        timeout: float | None = None,
+        partition_name: str | None = None,
+        **kwargs,
     ) -> dict:
         """更新或插入数据到集合中。
 
@@ -1754,6 +1781,7 @@ class MilvusConnection(DocStoreConnection):
             return {"upsert_count": 0}
 
         conn = self._get_connection()
+        # Upsert into the collection.
         try:
             res = conn.upsert_rows(
                 collection_name, data, partition_name=partition_name, timeout=timeout, **kwargs
@@ -1761,7 +1789,12 @@ class MilvusConnection(DocStoreConnection):
         except Exception as ex:
             raise ex from ex
 
-        return {"upsert_count": res.upsert_count, "cost": getattr(res, "cost", None)}
+        return OmitZeroDict(
+            {
+                "upsert_count": res.upsert_count,
+                "cost": res.cost,
+            }
+        )
 
     def bulk_upsert_to_milvus(self, collection_name, docs):
         # 获取集合的schema
@@ -1809,17 +1842,17 @@ class MilvusConnection(DocStoreConnection):
     # milvus_conn.bulk_upsert_to_milvus("your_collection_name", docs)
 
     def search_by_milvus(
-            self,
-            collection_name: str,
-            data: list[list] | list,
-            filter: str = "",
-            limit: int = 10,
-            output_fields: list[str] | None = None,
-            search_params: dict | None = None,
-            timeout: float | None = None,
-            partition_names: list[str] | None = None,
-            anns_field: str | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        data: list[list] | list,
+        filter: str = "",
+        limit: int = 10,
+        output_fields: list[str] | None = None,
+        search_params: dict | None = None,
+        timeout: float | None = None,
+        partition_names: list[str] | None = None,
+        anns_field: str | None = None,
+        **kwargs,
     ) -> list[list[dict]]:
         # 1. 标准化 collection 列表
         collections = [collection_name] if isinstance(collection_name, str) else collection_name
@@ -1886,14 +1919,14 @@ class MilvusConnection(DocStoreConnection):
         return result
 
     def query(
-            self,
-            collection_name: str,
-            filter: str = "",
-            output_fields: list[str] | None = None,
-            timeout: float | None = None,
-            ids: list | str | int | None = None,
-            partition_names: list[str] | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        filter: str = "",
+        output_fields: list[str] | None = None,
+        timeout: float | None = None,
+        ids: list | str | int | None = None,
+        partition_names: list[str] | None = None,
+        **kwargs,
     ) -> list[dict]:
         if filter and not isinstance(filter, str):
             raise DataTypeNotMatchException(message=ExceptionsMessage.ExprType % type(filter))
@@ -1905,20 +1938,17 @@ class MilvusConnection(DocStoreConnection):
             ids = [ids]
 
         conn = self._get_connection()
-        try:
-            schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
-        except Exception as ex:
-            logger.error("Failed to describe collection: %s", collection_name)
-            raise ex from ex
 
         if ids:
+            try:
+                schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
+            except Exception as ex:
+                logger.error("Failed to describe collection: %s", collection_name)
+                raise ex from ex
             filter = self._pack_pks_expr(schema_dict, ids)
 
         if not output_fields:
             output_fields = ["*"]
-            vec_field_name = self._get_vector_field_name(schema_dict)
-            if vec_field_name:
-                output_fields.append(vec_field_name)
 
         try:
             res = conn.query(
@@ -1927,6 +1957,7 @@ class MilvusConnection(DocStoreConnection):
                 output_fields=output_fields,
                 partition_names=partition_names,
                 timeout=timeout,
+                expr_params=kwargs.pop("filter_params", {}),
                 **kwargs,
             )
         except Exception as ex:
@@ -1935,21 +1966,56 @@ class MilvusConnection(DocStoreConnection):
 
         return res
 
-    def search_iterator(
-            self,
-            collection_name: str,
-            data: list[list] | list,
-            batch_size: int = 1000,
-            filter: str = None,
-            limit: int = None,  # 使用默认的UNLIMITED
-            output_fields: list[str] | None = None,
-            search_params: dict | None = None,
-            timeout: float | None = None,
-            partition_names: list[str] | None = None,
-            anns_field: str | None = None,
-            round_decimal: int = -1,
-            **kwargs,
+    def query_iterator(
+        self,
+        collection_name: str,
+        batch_size: int | None = 1000,
+        limit: int | None = UNLIMITED,
+        filter: str | None = "",
+        output_fields: list[str] | None = None,
+        partition_names: list[str] | None = None,
+        timeout: float | None = None,
+        **kwargs,
     ):
+        if filter is not None and not isinstance(filter, str):
+            raise DataTypeNotMatchException(message=ExceptionsMessage.ExprType % type(filter))
+
+        conn = self._get_connection()
+        # set up schema for iterator
+        try:
+            schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
+        except Exception as ex:
+            logger.error("Failed to describe collection: %s", collection_name)
+            raise ex from ex
+
+        return QueryIterator(
+            connection=conn,
+            collection_name=collection_name,
+            batch_size=batch_size,
+            limit=limit,
+            expr=filter,
+            output_fields=output_fields,
+            partition_names=partition_names,
+            schema=schema_dict,
+            timeout=timeout,
+            **kwargs,
+        )
+
+    def search_iterator(
+        self,
+        collection_name: str,
+        data: list[list] | list,
+        batch_size: int = 1000,
+        filter: str = None,
+        limit: int | None = UNLIMITED,
+        output_fields: list[str] | None = None,
+        search_params: dict | None = None,
+        timeout: float | None = None,
+        partition_names: list[str] | None = None,
+        anns_field: str | None = None,
+        round_decimal: int = -1,
+        **kwargs,
+    ) -> SearchIteratorV2 | SearchIterator:
         """创建一个迭代器，用于批量搜索向量。
 
         Args:
@@ -1971,9 +2037,8 @@ class MilvusConnection(DocStoreConnection):
         """
         conn = self._get_connection()
 
-        # 尝试使用SearchIteratorV2
+        # compatibility logic, change this when support get version from server
         try:
-            from pymilvus.client.search_iterator import SearchIteratorV2
             return SearchIteratorV2(
                 connection=conn,
                 collection_name=collection_name,
@@ -1989,61 +2054,52 @@ class MilvusConnection(DocStoreConnection):
                 round_decimal=round_decimal,
                 **kwargs,
             )
+        except ServerVersionIncompatibleException:
+            # for compatibility, return search_iterator V1
+            logger.warning(ExceptionsMessage.SearchIteratorV2FallbackWarning)
         except Exception as ex:
-            from pymilvus.exceptions import ServerVersionIncompatibleException
-            if isinstance(ex, ServerVersionIncompatibleException):
-                logger.warning("SearchIteratorV2不受支持，回退到SearchIteratorV1")
-            else:
-                raise ex from ex
+            raise ex from ex
 
-        # 回退到SearchIteratorV1
-        from pymilvus.orm.iterator import SearchIterator
-        from pymilvus.orm.constants import UNLIMITED, METRIC_TYPE
-
+        # following is the old code for search_iterator V1
         if filter is not None and not isinstance(filter, str):
             raise DataTypeNotMatchException(message=ExceptionsMessage.ExprType % type(filter))
 
-        # 设置迭代器的schema
+        # set up schema for iterator
         try:
             schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
         except Exception as ex:
-            logger.error(f"获取集合描述失败: {collection_name}")
+            logger.error("Failed to describe collection: %s", collection_name)
             raise ex from ex
-
-        # 如果未提供anns_field，尝试自动确定
+        # if anns_field is not provided
+        # if only one vector field, use to search
+        # if multiple vector fields, raise exception and abort
         if anns_field is None or anns_field == "":
             vec_field = None
-            fields = schema_dict["fields"]
+            fields = schema_dict[FIELDS]
             vec_field_count = 0
-
             for field in fields:
-                if is_vector_type(field["type"]):
+                if is_vector_type(field[TYPE]):
                     vec_field_count += 1
                     vec_field = field
-
             if vec_field is None:
                 raise MilvusException(
                     code=ErrorCode.UNEXPECTED_ERROR,
-                    message="集合中应至少有一个向量字段",
+                    message="there should be at least one vector field in milvus collection",
                 )
-
             if vec_field_count > 1:
                 raise MilvusException(
                     code=ErrorCode.UNEXPECTED_ERROR,
-                    message="当有多个向量字段时必须指定anns_field",
+                    message="must specify anns_field when there are more than one vector field",
                 )
-
             anns_field = vec_field["name"]
             if anns_field is None or anns_field == "":
                 raise MilvusException(
                     code=ErrorCode.UNEXPECTED_ERROR,
-                    message=f"无法获取搜索迭代器的anns_field名称，得到:{anns_field}",
+                    message=f"cannot get anns_field name for search iterator, got:{anns_field}",
                 )
-
-        # 设置搜索参数中的度量类型
+        # set up metrics type for search_iterator which is mandatory
         if search_params is None:
             search_params = {}
-
         if METRIC_TYPE not in search_params:
             indexes = conn.list_indexes(collection_name)
             for index in indexes:
@@ -2052,19 +2108,15 @@ class MilvusConnection(DocStoreConnection):
                     for param in params:
                         if param.key == METRIC_TYPE:
                             search_params[METRIC_TYPE] = param.value
-
         if METRIC_TYPE not in search_params:
             raise MilvusException(
-                ParamError, f"无法为anns_field设置度量类型:{anns_field}"
+                ParamError, f"Cannot set up metrics type for anns_field:{anns_field}"
             )
 
         search_params["params"] = get_params(search_params)
 
-        if limit is None:
-            limit = UNLIMITED
-
         return SearchIterator(
-            connection=conn,
+            connection=self._get_connection(),
             collection_name=collection_name,
             data=data,
             ann_field=anns_field,
@@ -2097,16 +2149,13 @@ class MilvusConnection(DocStoreConnection):
     #
     #     conn = self._get_connection()
     #     try:
-    #         schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
+    #         schema_dict, _ = conn._get_schema_from_cache_or_remote(collection_name, timeout=timeout)
     #     except Exception as ex:
-    #         logging.error("Failed to describe collection: %s", collection_name)
+    #         logger.error("Failed to describe collection: %s", collection_name)
     #         raise ex from ex
     #
     #     if not output_fields:
     #         output_fields = ["*"]
-    #         vec_field_name = self._get_vector_field_name(schema_dict)
-    #         if vec_field_name:
-    #             output_fields.append(vec_field_name)
     #
     #     expr = self._pack_pks_expr(schema_dict, ids)
     #     try:
@@ -2119,19 +2168,19 @@ class MilvusConnection(DocStoreConnection):
     #             **kwargs,
     #         )
     #     except Exception as ex:
-    #         logging.error("Failed to get collection: %s", collection_name)
+    #         logger.error("Failed to get collection: %s", collection_name)
     #         raise ex from ex
     #
     #     return res
 
     def delete(
-            self,
-            collection_name: str,
-            ids: list | str | int | None = None,
-            timeout: float | None = None,
-            filter: str | None = None,
-            partition_name: str | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        ids: list | str | int | None = None,
+        timeout: float | None = None,
+        filter: str | None = None,
+        partition_name: str | None = None,
+        **kwargs,
     ) -> dict:
         """删除集合中的数据。
 
@@ -2152,7 +2201,7 @@ class MilvusConnection(DocStoreConnection):
 
         for pk in pks:
             if not isinstance(pk, (int, str)):
-                msg = f"pks参数类型错误，期望list、int或str，得到'{type(pk).__name__}'"
+                msg = f"wrong type of argument pks, expect list, int or str, got '{type(pk).__name__}'"
                 raise TypeError(msg)
 
         if ids is not None:
@@ -2161,32 +2210,30 @@ class MilvusConnection(DocStoreConnection):
             elif isinstance(ids, list):
                 for id in ids:
                     if not isinstance(id, (int, str)):
-                        msg = f"ids参数类型错误，期望list、int或str，得到'{type(id).__name__}'"
+                        msg = f"wrong type of argument ids, expect list, int or str, got '{type(id).__name__}'"
                         raise TypeError(msg)
                 pks.extend(ids)
             else:
-                msg = f"ids参数类型错误，期望list、int或str，得到'{type(ids).__name__}'"
+                msg = f"wrong type of argument ids, expect list, int or str, got '{type(ids).__name__}'"
                 raise TypeError(msg)
 
-        # 验证filter和ids参数的冲突情况
-        if filter and ids is not None:
-            from pymilvus.exceptions import ParamError
-            from pymilvus.client.types import ExceptionsMessage
+        # validate ambiguous delete filter param before describe collection rpc
+        if filter and len(pks) > 0:
             raise ParamError(message=ExceptionsMessage.AmbiguousDeleteFilterParam)
 
         expr = ""
         conn = self._get_connection()
         if len(pks) > 0:
             try:
-                schema_dict = conn.describe_collection(collection_name, timeout=timeout, **kwargs)
+                schema_dict, _ = conn._get_schema_from_cache_or_remote(
+                    collection_name, timeout=timeout
+                )
             except Exception as ex:
-                logger.error(f"获取集合描述失败: {collection_name}")
+                logger.error("Failed to describe collection: %s", collection_name)
                 raise ex from ex
             expr = self._pack_pks_expr(schema_dict, pks)
         else:
             if not isinstance(filter, str):
-                from pymilvus.exceptions import DataTypeNotMatchException
-                from pymilvus.client.types import ExceptionsMessage
                 raise DataTypeNotMatchException(message=ExceptionsMessage.ExprType % type(filter))
             expr = filter
 
@@ -2203,14 +2250,14 @@ class MilvusConnection(DocStoreConnection):
             if res.primary_keys:
                 ret_pks.extend(res.primary_keys)
         except Exception as ex:
-            logger.error(f"删除集合中的主键失败: {collection_name}")
+            logger.error("Failed to delete primary keys in collection: %s", collection_name)
             raise ex from ex
 
-        # 兼容返回主键的情况
+        # compatible with deletions that returns primary keys
         if ret_pks:
             return ret_pks
 
-        return {"delete_count": res.delete_count, "cost": getattr(res, "cost", None)}
+        return OmitZeroDict({"delete_count": res.delete_count, "cost": res.cost})
 
     def get_collection_stats(self, collection_name: str, timeout: float | None = None) -> dict:
         conn = self._get_connection()
@@ -2236,22 +2283,37 @@ class MilvusConnection(DocStoreConnection):
         conn = self._get_connection()
         conn.drop_collection(collection_name, timeout=timeout, **kwargs)
 
+    def rename_collection(
+        self,
+        old_name: str,
+        new_name: str,
+        target_db: str | None = "",
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        conn = self._get_connection()
+        conn.rename_collections(old_name, new_name, target_db, timeout=timeout, **kwargs)
+
     @classmethod
     def create_schema(cls, **kwargs):
-        kwargs["check_fields"] = False
+        kwargs["check_fields"] = False  # do not check fields for now
         return CollectionSchema([], **kwargs)
 
     @classmethod
-    def prepare_index_params(cls, field_name: str = "", **kwargs):
-        return IndexParams(field_name, **kwargs)
+    def prepare_index_params(cls, field_name: str = "", **kwargs) -> IndexParams:
+        index_params = IndexParams()
+        if field_name:
+            validate_param("field_name", field_name, str)
+            index_params.add_index(field_name, **kwargs)
+        return index_params
 
     def _create_collection_with_schema(
-            self,
-            collection_name: str,
-            schema: CollectionSchema,
-            index_params: IndexParams | None = None,
-            timeout: float | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        schema: CollectionSchema,
+        index_params: IndexParams | None = None,
+        timeout: float | None = None,
+        **kwargs,
     ):
         schema.verify()
 
@@ -2268,7 +2330,6 @@ class MilvusConnection(DocStoreConnection):
         if index_params:
             self.create_index(collection_name, index_params, timeout=timeout)
             self.load_collection(collection_name, timeout=timeout)
-
 
     def create_collection_with_mapping(self, collection_name, mapping, auto_dimensions=None):
         """
@@ -2515,10 +2576,9 @@ class MilvusConnection(DocStoreConnection):
 
 
     def close(self):
-        connections.disconnect(self._using)
+        connections.remove_connection(self._using)
 
     def _get_connection(self):
-        """获取连接处理器"""
         return connections._fetch_handler(self._using)
 
     """
@@ -2526,19 +2586,19 @@ class MilvusConnection(DocStoreConnection):
     """
 
     def _create_connection(
-            self,
-            uri: str,
-            user: str = "",
-            password: str = "",
-            db_name: str = "",
-            token: str = "",
-            timeout: float | None = None,
-            **kwargs,
+        self,
+        uri: str,
+        user: str = "",
+        password: str = "",
+        db_name: str = "",
+        token: str = "",
+        **kwargs,
     ) -> str:
-        """创建到 Milvus 服务器的连接"""
-        using = uuid4().hex
+        """Create the connection to the Milvus server."""
+        # TODO: Implement reuse with new uri style
+        using = kwargs.pop("alias", None) or uuid4().hex
         try:
-            connections.connect(using, user, password, db_name, token, uri=uri, timeout=timeout, **kwargs)
+            connections.connect(using, user, password, db_name, token, uri=uri, **kwargs)
         except Exception as ex:
             logger.error(f"创建新连接失败 {using}: {str(ex)}")
             raise ex from ex
@@ -2558,30 +2618,32 @@ class MilvusConnection(DocStoreConnection):
 
         return {}
 
-    def _get_vector_field_name(self, schema_dict: dict):
-        fields = schema_dict.get("fields", [])
-        if not fields:
-            return {}
-
-        for field_dict in fields:
-            if field_dict.get("type", None) == DataType.FLOAT_VECTOR:
-                return field_dict.get("name", "")
-        return ""
+    # def _get_vector_field_name(self, schema_dict: dict):
+    #     fields = schema_dict.get("fields", [])
+    #     if not fields:
+    #         return {}
+    #
+    #     for field_dict in fields:
+    #         if field_dict.get("type", None) == DataType.FLOAT_VECTOR:
+    #             return field_dict.get("name", "")
+    #     return ""
 
     def _pack_pks_expr(self, schema_dict: dict, pks: list) -> str:
         primary_field = self._extract_primary_field(schema_dict)
         pk_field_name = primary_field["name"]
         data_type = primary_field["type"]
 
+        # Varchar pks need double quotes around the values
         if data_type == DataType.VARCHAR:
             ids = ["'" + str(entry) + "'" for entry in pks]
-            expr = f"""{pk_field_name} in [{','.join(ids)}]"""
+            expr = f"""{pk_field_name} in [{",".join(ids)}]"""
         else:
             ids = [str(entry) for entry in pks]
             expr = f"{pk_field_name} in [{','.join(ids)}]"
         return expr
 
     def load_collection(self, collection_name: str, timeout: float | None = None, **kwargs):
+        """Loads the collection."""
         conn = self._get_connection()
         try:
             conn.load_collection(collection_name, timeout=timeout, **kwargs)
@@ -2598,11 +2660,11 @@ class MilvusConnection(DocStoreConnection):
             raise ex from ex
 
     def get_load_state(
-            self,
-            collection_name: str,
-            partition_name: str | None = "",
-            timeout: float | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        partition_name: str | None = "",
+        timeout: float | None = None,
+        **kwargs,
     ) -> dict:
         conn = self._get_connection()
         partition_names = None
@@ -2637,47 +2699,113 @@ class MilvusConnection(DocStoreConnection):
         return index_name_list
 
     def drop_index(
-            self, collection_name: str, index_name: str, timeout: float | None = None, **kwargs
+        self, collection_name: str, index_name: str, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         conn.drop_index(collection_name, "", index_name, timeout=timeout, **kwargs)
 
     def describe_index(
-            self, collection_name: str, index_name: str, timeout: float | None = None, **kwargs
+        self, collection_name: str, index_name: str, timeout: float | None = None, **kwargs
     ) -> dict:
         conn = self._get_connection()
         return conn.describe_index(collection_name, index_name, timeout=timeout, **kwargs)
 
+    def alter_index_properties(
+        self,
+        collection_name: str,
+        index_name: str,
+        properties: dict,
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        conn = self._get_connection()
+        conn.alter_index_properties(
+            collection_name, index_name, properties=properties, timeout=timeout, **kwargs
+        )
+
+    def drop_index_properties(
+        self,
+        collection_name: str,
+        index_name: str,
+        property_keys: list[str],
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        conn = self._get_connection()
+        conn.drop_index_properties(
+            collection_name, index_name, property_keys=property_keys, timeout=timeout, **kwargs
+        )
+
+    def alter_collection_properties(
+        self, collection_name: str, properties: dict, timeout: float | None = None, **kwargs
+    ):
+        conn = self._get_connection()
+        conn.alter_collection_properties(
+            collection_name,
+            properties=properties,
+            timeout=timeout,
+            **kwargs,
+        )
+
+    def drop_collection_properties(
+        self,
+        collection_name: str,
+        property_keys: list[str],
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        conn = self._get_connection()
+        conn.drop_collection_properties(
+            collection_name, property_keys=property_keys, timeout=timeout, **kwargs
+        )
+
+    def alter_collection_field(
+        self,
+        collection_name: str,
+        field_name: str,
+        field_params: dict,
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        conn = self._get_connection()
+        conn.alter_collection_field_properties(
+            collection_name,
+            field_name=field_name,
+            field_params=field_params,
+            timeout=timeout,
+            **kwargs,
+        )
+
     def create_partition(
-            self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
+        self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         conn.create_partition(collection_name, partition_name, timeout=timeout, **kwargs)
 
     def drop_partition(
-            self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
+        self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         conn.drop_partition(collection_name, partition_name, timeout=timeout, **kwargs)
 
     def has_partition(
-            self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
+        self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
     ) -> bool:
         conn = self._get_connection()
         return conn.has_partition(collection_name, partition_name, timeout=timeout, **kwargs)
 
     def list_partitions(
-            self, collection_name: str, timeout: float | None = None, **kwargs
+        self, collection_name: str, timeout: float | None = None, **kwargs
     ) -> list[str]:
         conn = self._get_connection()
         return conn.list_partitions(collection_name, timeout=timeout, **kwargs)
 
     def load_partitions(
-            self,
-            collection_name: str,
-            partition_names: str | list[str],
-            timeout: float | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        partition_names: str | list[str],
+        timeout: float | None = None,
+        **kwargs,
     ):
         if isinstance(partition_names, str):
             partition_names = [partition_names]
@@ -2686,11 +2814,11 @@ class MilvusConnection(DocStoreConnection):
         conn.load_partitions(collection_name, partition_names, timeout=timeout, **kwargs)
 
     def release_partitions(
-            self,
-            collection_name: str,
-            partition_names: str | list[str],
-            timeout: float | None = None,
-            **kwargs,
+        self,
+        collection_name: str,
+        partition_names: str | list[str],
+        timeout: float | None = None,
+        **kwargs,
     ):
         if isinstance(partition_names, str):
             partition_names = [partition_names]
@@ -2698,7 +2826,7 @@ class MilvusConnection(DocStoreConnection):
         conn.release_partitions(collection_name, partition_names, timeout=timeout, **kwargs)
 
     def get_partition_stats(
-            self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
+        self, collection_name: str, partition_name: str, timeout: float | None = None, **kwargs
     ) -> dict:
         conn = self._get_connection()
         if not isinstance(partition_name, str):
@@ -2719,13 +2847,13 @@ class MilvusConnection(DocStoreConnection):
         return conn.delete_user(user_name, timeout=timeout, **kwargs)
 
     def update_password(
-            self,
-            user_name: str,
-            old_password: str,
-            new_password: str,
-            reset_connection: bool | None = False,
-            timeout: float | None = None,
-            **kwargs,
+        self,
+        user_name: str,
+        old_password: str,
+        new_password: str,
+        reset_connection: bool | None = False,
+        timeout: float | None = None,
+        **kwargs,
     ):
         conn = self._get_connection()
         conn.update_password(user_name, old_password, new_password, timeout=timeout, **kwargs)
@@ -2753,7 +2881,7 @@ class MilvusConnection(DocStoreConnection):
         conn.add_user_to_role(user_name, role_name, timeout=timeout, **kwargs)
 
     def revoke_role(
-            self, user_name: str, role_name: str, timeout: float | None = None, **kwargs
+        self, user_name: str, role_name: str, timeout: float | None = None, **kwargs
     ):
         conn = self._get_connection()
         conn.remove_user_from_role(user_name, role_name, timeout=timeout, **kwargs)
@@ -2762,13 +2890,13 @@ class MilvusConnection(DocStoreConnection):
         conn = self._get_connection()
         conn.create_role(role_name, timeout=timeout, **kwargs)
 
-    def drop_role(self, role_name: str, timeout: float | None = None, **kwargs):
+    def drop_role(
+        self, role_name: str, force_drop: bool = False, timeout: float | None = None, **kwargs
+    ):
         conn = self._get_connection()
-        conn.drop_role(role_name, timeout=timeout, **kwargs)
+        conn.drop_role(role_name, force_drop=force_drop, timeout=timeout, **kwargs)
 
-    def describe_role(
-            self, role_name: str, timeout: float | None = None, **kwargs
-    ) -> list[dict]:
+    def describe_role(self, role_name: str, timeout: float | None = None, **kwargs) -> dict:
         conn = self._get_connection()
         db_name = kwargs.pop("db_name", "")
         try:
@@ -2791,14 +2919,14 @@ class MilvusConnection(DocStoreConnection):
         return [g.role_name for g in groups]
 
     def grant_privilege(
-            self,
-            role_name: str,
-            object_type: str,
-            privilege: str,
-            object_name: str,
-            db_name: str | None = "",
-            timeout: float | None = None,
-            **kwargs,
+        self,
+        role_name: str,
+        object_type: str,
+        privilege: str,
+        object_name: str,
+        db_name: str | None = "",
+        timeout: float | None = None,
+        **kwargs,
     ):
         conn = self._get_connection()
         conn.grant_privilege(
@@ -2806,18 +2934,86 @@ class MilvusConnection(DocStoreConnection):
         )
 
     def revoke_privilege(
-            self,
-            role_name: str,
-            object_type: str,
-            privilege: str,
-            object_name: str,
-            db_name: str | None = "",
-            timeout: float | None = None,
-            **kwargs,
+        self,
+        role_name: str,
+        object_type: str,
+        privilege: str,
+        object_name: str,
+        db_name: str | None = "",
+        timeout: float | None = None,
+        **kwargs,
     ):
         conn = self._get_connection()
         conn.revoke_privilege(
             role_name, object_type, object_name, privilege, db_name, timeout=timeout, **kwargs
+        )
+
+    def grant_privilege_v2(
+        self,
+        role_name: str,
+        privilege: str,
+        collection_name: str,
+        db_name: str | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        """Grant a privilege or a privilege group to a role.
+
+        Args:
+            role_name (``str``): The name of the role.
+            privilege (``str``): The privilege or privilege group to grant.
+            collection_name (``str``): The name of the collection.
+            db_name (``str``, optional): The name of the database. It will use default database
+                if not specified.
+            timeout (``float``, optional): An optional duration of time in seconds to allow
+                for the RPC. When timeout is set to None, client waits until server response
+                or error occur.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        conn.grant_privilege_v2(
+            role_name,
+            privilege,
+            collection_name,
+            db_name=db_name,
+            timeout=timeout,
+            **kwargs,
+        )
+
+    def revoke_privilege_v2(
+        self,
+        role_name: str,
+        privilege: str,
+        collection_name: str,
+        db_name: str | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        """Revoke a privilege or a privilege group from a role.
+
+        Args:
+            role_name (``str``): The name of the role.
+            privilege (``str``): The privilege or privilege group to revoke.
+            collection_name (``str``): The name of the collection.
+            db_name (``str``, optional): The name of the database. It will use default database
+                if not specified.
+            timeout (``float``, optional): An optional duration of time in seconds to allow
+                for the RPC. When timeout is set to None, client waits until server response
+                or error occur.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        conn.revoke_privilege_v2(
+            role_name,
+            privilege,
+            collection_name,
+            db_name=db_name,
+            timeout=timeout,
+            **kwargs,
         )
 
     def create_alias(
@@ -2846,10 +3042,393 @@ class MilvusConnection(DocStoreConnection):
         conn = self._get_connection()
         return conn.list_aliases(collection_name, timeout=timeout, **kwargs)
 
+    # deprecated same to use_database
     def using_database(self, db_name: str, **kwargs):
         conn = self._get_connection()
         conn.reset_db_name(db_name)
 
+    def use_database(self, db_name: str, **kwargs):
+        conn = self._get_connection()
+        conn.reset_db_name(db_name)
 
-# Create a singleton instance of MilvusConnection
-# MILVUS_CONNECTION = MilvusConnection()
+    def create_database(
+            self,
+            db_name: str,
+            properties: dict | None = None,
+            timeout: float | None = None,
+            **kwargs,
+    ):
+        conn = self._get_connection()
+        conn.create_database(db_name=db_name, properties=properties, timeout=timeout, **kwargs)
+
+    def drop_database(self, db_name: str, **kwargs):
+        conn = self._get_connection()
+        conn.drop_database(db_name, **kwargs)
+
+    def list_databases(self, timeout: float | None = None, **kwargs) -> list[str]:
+        conn = self._get_connection()
+        return conn.list_database(timeout=timeout, **kwargs)
+
+    def describe_database(self, db_name: str, **kwargs) -> dict:
+        conn = self._get_connection()
+        return conn.describe_database(db_name, **kwargs)
+
+    def alter_database_properties(self, db_name: str, properties: dict, **kwargs):
+        conn = self._get_connection()
+        conn.alter_database(db_name, properties, **kwargs)
+
+    def drop_database_properties(self, db_name: str, property_keys: list[str], **kwargs):
+        conn = self._get_connection()
+        conn.drop_database_properties(db_name, property_keys, **kwargs)
+
+    def flush(
+        self,
+        collection_name: str,
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        """Seal all segments in the collection. Inserts after flushing will be written into
+            new segments.
+
+        Args:
+            collection_name(``string``): The name of collection.
+            timeout (float): an optional duration of time in seconds to allow for the RPCs.
+                If timeout is not set, the client keeps waiting until the server
+                responds or an error occurs.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        conn.flush([collection_name], timeout=timeout, **kwargs)
+
+    def compact(
+        self,
+        collection_name: str,
+        is_clustering: bool | None = False,
+        timeout: float | None = None,
+        **kwargs,
+    ) -> int:
+        """Compact merge the small segments in a collection
+
+        Args:
+            timeout (``float``, optional): An optional duration of time in seconds to allow
+                for the RPC. When timeout is set to None, client waits until server response
+                or error occur.
+
+            is_clustering (``bool``, optional): Option to trigger clustering compaction.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+
+        Returns:
+            int: An integer represents the server's compaction job. You can use this job ID
+            for subsequent state inquiries.
+        """
+        conn = self._get_connection()
+        return conn.compact(collection_name, is_clustering=is_clustering, timeout=timeout, **kwargs)
+
+    def get_compaction_state(
+        self,
+        job_id: int,
+        timeout: float | None = None,
+        **kwargs,
+    ) -> str:
+        """Get the state of compaction job
+
+        Args:
+            timeout (``float``, optional): An optional duration of time in seconds to allow
+                for the RPC. When timeout is set to None, client waits until server response
+                or error occur.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+
+        Returns:
+            str: the state of this compaction job. Possible values are "UndefiedState", "Executing"
+            and "Completed".
+        """
+        conn = self._get_connection()
+        result = conn.get_compaction_state(job_id, timeout=timeout, **kwargs)
+        return result.state_name
+
+    def get_server_version(
+        self,
+        timeout: float | None = None,
+        **kwargs,
+    ) -> str:
+        """Get the running server's version
+
+        Args:
+            timeout (``float``, optional): A duration of time in seconds to allow for the RPC.
+                If timeout is set to None, the client keeps waiting until the server
+                responds or an error occurs.
+
+        Returns:
+            str: A string represent the server's version.
+
+        Raises:
+            MilvusException: If anything goes wrong
+        """
+        conn = self._get_connection()
+        return conn.get_server_version(timeout=timeout, **kwargs)
+
+    def create_privilege_group(
+        self,
+        group_name: str,
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        """Create a new privilege group.
+
+        Args:
+            group_name (``str``): The name of the privilege group.
+            timeout (``float``, optional): An optional duration of time in seconds to allow
+                for the RPC. When timeout is set to None, client waits until server response
+                or error occur.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        conn.create_privilege_group(group_name, timeout=timeout, **kwargs)
+
+    def drop_privilege_group(
+        self,
+        group_name: str,
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        """Drop a privilege group.
+
+        Args:
+            group_name (``str``): The name of the privilege group.
+            timeout (``float``, optional): An optional duration of time in seconds to allow
+                for the RPC. When timeout is set to None, client waits until server response
+                or error occur.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        conn.drop_privilege_group(group_name, timeout=timeout, **kwargs)
+
+    def list_privilege_groups(
+        self,
+        timeout: float | None = None,
+        **kwargs,
+    ) -> list[dict[str, str]]:
+        """List all privilege groups.
+
+        Args:
+            timeout (``float``, optional): An optional duration of time in seconds to allow
+                for the RPC. When timeout is set to None, client waits until server response
+                or error occur.
+
+        Returns:
+            List[Dict[str, str]]: A list of privilege groups.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        try:
+            res = conn.list_privilege_groups(timeout=timeout, **kwargs)
+        except Exception as ex:
+            logger.exception("Failed to list privilege groups.")
+            raise ex from ex
+        ret = []
+        for g in res.groups:
+            ret.append({"privilege_group": g.privilege_group, "privileges": g.privileges})
+        return ret
+
+    def add_privileges_to_group(
+        self,
+        group_name: str,
+        privileges: list[str],
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        """Add privileges to a privilege group.
+
+        Args:
+            group_name (``str``): The name of the privilege group.
+            privileges (``List[str]``): A list of privileges to be added to the group.
+                Privileges should be the same type in a group otherwise it will raise an exception.
+            timeout (``float``, optional): An optional duration of time in seconds to allow
+                for the RPC. When timeout is set to None, client waits until server response
+                or error occur.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        conn.add_privileges_to_group(group_name, privileges, timeout=timeout, **kwargs)
+
+    def remove_privileges_from_group(
+        self,
+        group_name: str,
+        privileges: list[str],
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        """Remove privileges from a privilege group.
+
+        Args:
+            group_name (``str``): The name of the privilege group.
+            privileges (``List[str]``): A list of privileges to be removed from the group.
+            timeout (``float``, optional): An optional duration of time in seconds to allow
+                for the RPC. When timeout is set to None, client waits until server response
+                or error occur.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        conn.remove_privileges_from_group(group_name, privileges, timeout=timeout, **kwargs)
+
+    def create_resource_group(self, name: str, timeout: float | None = None, **kwargs):
+        """Create a resource group
+            It will success whether or not the resource group exists.
+
+        Args:
+            name: The name of the resource group.
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        return conn.create_resource_group(name, timeout, **kwargs)
+
+    def update_resource_groups(
+        self,
+        configs: dict[str, ResourceGroupConfig],
+        timeout: float | None = None,
+    ):
+        """Update resource groups.
+            This function updates the resource groups based on the provided configurations.
+
+        Args:
+            configs: A mapping of resource group names to their configurations.
+            timeout: The timeout value in seconds. Defaults to None.
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        return conn.update_resource_groups(configs, timeout)
+
+    def drop_resource_group(
+        self,
+        name: str,
+        timeout: float | None = None,
+    ):
+        """Drop a resource group
+            It will success if the resource group is existed and empty, otherwise fail.
+
+        Args:
+            name: The name of the resource group.
+            timeout: The timeout value in seconds. Defaults to None.
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        return conn.drop_resource_group(name, timeout)
+
+    def describe_resource_group(self, name: str, timeout: float | None = None):
+        """Drop a resource group
+            It will success if the resource group is existed and empty, otherwise fail.
+
+        Args:
+            name: The name of the resource group.
+            timeout: The timeout value in seconds. Defaults to None.
+        Returns:
+            ResourceGroupInfo: The detail info of the resource group.
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        return conn.describe_resource_group(name, timeout)
+
+    def list_resource_groups(self, timeout: float | None = None):
+        """list all resource group names
+
+        Args:
+            timeout: The timeout value in seconds. Defaults to None.
+        Returns:
+            list[str]: all resource group names
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        return conn.list_resource_groups(timeout)
+
+    def transfer_replica(
+        self,
+        source_group: str,
+        target_group: str,
+        collection_name: str,
+        num_replicas: int,
+        timeout: float | None = None,
+    ):
+        """transfer num_replica from source resource group to target resource group
+
+        Args:
+            source_group: source resource group name
+            target_group: target resource group name
+            collection_name: collection name which replica belong to
+            num_replicas: transfer replica num
+            timeout: The timeout value in seconds. Defaults to None.
+
+        Raises:
+            MilvusException: If anything goes wrong.
+        """
+        conn = self._get_connection()
+        return conn.transfer_replica(
+            source_group, target_group, collection_name, num_replicas, timeout
+        )
+
+    def describe_replica(
+        self, collection_name: str, timeout: float | None = None, **kwargs
+    ) -> list[ReplicaInfo]:
+        """Get the current loaded replica information
+
+        Args:
+            collection_name (``str``): The name of the given collection.
+            timeout (``float``, optional): An optional duration of time in seconds to allow
+                for the RPC. When timeout is set to None, client waits until server response
+                or error occur.
+        Returns:
+            List[ReplicaInfo]: All the replica information.
+        """
+        conn = self._get_connection()
+        return conn.describe_replica(collection_name, timeout=timeout, **kwargs)
+
+    def run_analyzer(
+        self,
+        texts: str | list[str],
+        analyzer_params: str | dict | None = None,
+        with_hash: bool = False,
+        with_detail: bool = False,
+        collection_name: str | None = None,
+        field_name: str | None = None,
+        analyzer_names: str | list[str] | None = None,
+        timeout: float | None = None,
+    ):
+        """Run analyzer. Return result tokens of analysis.
+        Args:
+            text(``str``,``List[str]``): The input text (string or string list).
+            analyzer_params(``str``,``Dict``,``None``): The parameters of analyzer.
+            timeout(``float``, optional): The timeout value in seconds. Defaults to None.
+        Returns:
+                (``List[str]``,``List[List[str]]``): The result tokens of analysis.
+        """
+
+        return self._get_connection().run_analyzer(
+            texts,
+            analyzer_params=analyzer_params,
+            with_hash=with_hash,
+            with_detail=with_detail,
+            collection_name=collection_name,
+            field_name=field_name,
+            analyzer_names=analyzer_names,
+            timeout=timeout,
+        )

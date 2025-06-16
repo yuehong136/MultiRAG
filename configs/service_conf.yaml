@@ -76,7 +76,7 @@ milvus:
   db_name: ''
   token: ''
   timeout: null
-
+  kwargs: {}
 
 es:
   # Elasticsearch服务的主机地址
@@ -94,7 +94,6 @@ os:
 infinity:
   uri: 'infinity:23817'
   db_name: 'default_db'
-
 
 redis:
   # Redis数据库的编号
@@ -160,4 +159,3 @@ script_scheduler:
   host: localhost
 #  host: xxx.xxx.xxx.xxx
   port: 8124
-
