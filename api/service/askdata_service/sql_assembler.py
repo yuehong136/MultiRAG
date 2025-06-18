@@ -378,6 +378,12 @@ class FlexibleSQLAssembler:
         self.offset_count = None
         return self
 
+    def build_sql_for_jdbc(self) -> Tuple[str, List[Any]]:
+        """构建JDBC格式的SQL语句（使用?作为占位符）"""
+        sql, params = self.build_sql()
+        jdbc_sql = sql.replace('%s', '?')
+        return jdbc_sql, params
+
 
 # 使用示例
 if __name__ == "__main__":
@@ -411,7 +417,7 @@ if __name__ == "__main__":
                      .add_filter('u.dept_id', FilterOperator.IN, dept_ids)  # 自动生成多个占位符
                      .add_filter('u.role', FilterOperator.IN, user_roles)  # 字符串列表
                      .add_filter('u.status', FilterOperator.NOT_IN, ['deleted', 'banned'])  # NOT IN
-                     .build_sql())
+                     .build_sql_for_jdbc())
 
     print(f"SQL: {sql2}")
     print(f"参数: {params2}")
@@ -441,7 +447,6 @@ if __name__ == "__main__":
     sql4, params4 = (assembler
                      .add_column('u.name')
                      .add_column('u.salary')
-    .add_parameterized_where()
                      .add_filter('u.dept_id', FilterOperator.IN, selected_depts)  # 动态部门
                      .add_filter('u.status', FilterOperator.EQUALS, 'active')  # 固定状态
                      .add_raw_where("u.role IN ('admin', 'manager')")  # 固定角色限制
