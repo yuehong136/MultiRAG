@@ -29,11 +29,25 @@ class FilterOperator(Enum):
     IS_NOT_NULL = "IS NOT NULL"
     BETWEEN = "BETWEEN"
 
+    @classmethod
+    def from_value(cls, value: str):
+        for op in cls:
+            if op.value == value:
+                return op
+        raise ValueError(f"'{value}' 不是有效的 FilterOperator 值。")
+
 
 class OrderDirection(Enum):
     """排序方向枚举"""
     ASC = "ASC"
     DESC = "DESC"
+
+    @classmethod
+    def from_value(cls, value: str):
+        for direction in cls:
+            if direction.value == value:
+                return direction
+        raise ValueError(f"'{value}' 不是有效的 OrderDirection 值。")
 
 
 class DatabaseDialect:
