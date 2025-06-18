@@ -12,6 +12,8 @@ from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
 from api.service.askdata_service.event.event_handlers import create_sse_response
 from api.service.askdata_service.pg_query_formatter import execute_sql_and_format_result
+from api.service.nl2sql_service import query_data_from_zt_by_sql
+from api.service.nl2sql_service.query_data_from_zt_by_sql import query_data_with_params
 
 router = APIRouter()
 
@@ -320,4 +322,48 @@ async def get_history(
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"查询历史记录失败: {e}"
+        )
+
+
+class ReQueryRequest(BaseModel):
+    conversation_id: str = Field(..., description="会话ID")
+    ask_id: str = Field(..., description="用户的提问ID")
+    chart_type: str = Field(..., description="图表类型")
+    table_config: Dict[str, Any] = Field(..., description="表配置"),
+    base_from: str = Field(..., description="基础的FROM子句"),
+    model_table_alias_mapping_list: List[Dict[str, Any]] = Field(..., description="模型表别名映射列表"),
+
+
+@router.post("/re-query", response_model=ResponseSchema,
+             summary="获得语义层信息")
+async def re_query(
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        body: ReQueryRequest = Body(
+            ...,
+            title="获得语义层信息",
+            description="获得语义层信息"
+        ),
+        service: AskdataService = Depends(get_askdata_service)
+) -> ResponseSchema:
+    logger.info(f"chart_type: {body.chart_type}\n table_config: {body.table_config}")
+
+    try:
+        sql, params = await service.generate_requery_sql(body.chart_type, body.table_config, base_from=body.base_from,
+                                                         model_table_alias_mapping_list=body.model_table_alias_mapping_list)
+
+        # TODO dataset_id 暂时写死，按理说是从大模型生成SQL时得到的，只允许有一个dataset_id
+        result = await query_data_with_params(sql, 35799132679879680, params)
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="生成re-query SQL成功",
+            data={"result": result}
+        )
+
+    except Exception as e:
+        logger.exception("生成re-query SQL失败")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"生成re-query SQL失败：{str(e)}"
         )

@@ -1,5 +1,6 @@
 import os
 import logging
+from enum import Enum
 from typing import Any, List, Dict, Optional, Tuple
 
 from fastapi.params import Depends
@@ -12,6 +13,7 @@ from api.service.askdata_service.async_llm_service import AsyncLLMService
 from api.service.askdata_service.event.event_utils import send_event
 from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLGenerator
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
+from api.service.askdata_service.sql_assembler import FlexibleSQLAssembler, FilterOperator, OrderDirection
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
@@ -160,7 +162,86 @@ class AskdataService:
         """从数据集详情列表中提取所有domainId并去重。"""
         return list(set(d.get('domainId') for d in dataset_details if d.get('domainId')))
 
+    async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], base_from: str,
+                                   model_table_alias_mapping_list: List[Dict[str, Any]]):
+        """生成重新查询的SQL语句。"""
+        from_sentence = ""
+        if base_from.lower().startswith("from"):
+            from_sentence = base_from.split("FROM")[1]
+        else:
+            from_sentence = base_from
+        assembler = FlexibleSQLAssembler(from_sentence)
+        all_semantic_fields = table_config["all_semantic_fields"]
+        for column in table_config["columns"]:
+            column_name = ""
+            if column["is_semantic_field"]:
+                semantic_field = self._find_semantic_field(column["id"], all_semantic_fields)
+                table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                     model_table_alias_mapping_list)
+                column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+            else:
+                column_name = column["sql_column"]
+            assembler.add_column(column_name)
+
+        for filter in table_config["filters"]:
+            if filter["is_semantic_field"]:
+                semantic_field = self._find_semantic_field(filter["id"], all_semantic_fields)
+                table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                     model_table_alias_mapping_list)
+                column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                operator = filter["operator"]
+                value = filter["value"]
+                assembler.add_filter(column_name, FilterOperator.from_value(operator), value)
+            else:
+                raw_condition = filter["raw_condition"]
+                assembler.add_raw_where(raw_condition)
+
+        for order_by in table_config["order_by"]:
+            if order_by["is_semantic_field"]:
+                semantic_field = self._find_semantic_field(order_by["id"], all_semantic_fields)
+                table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                     model_table_alias_mapping_list)
+                column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                direction = order_by["direction"]
+                assembler.add_order_by(column_name, OrderDirection.from_value(direction))
+            else:
+                assembler.add_order_by(order_by["sql_column"], order_by["direction"])
+
+        limit = table_config["limit"]
+        if limit:
+            assembler.set_limit(limit)
+
+        return assembler.build_sql_for_jdbc()
+
+    def _find_semantic_field(self, semantic_id: str, all_semantic_fields: List[Dict[str, Any]]) -> Optional[
+        Dict[str, Any]]:
+        """根据语义字段ID查找语义字段信息"""
+        for field in all_semantic_fields:
+            if field["id"] == semantic_id:
+                semantic_name = field['semantic_field']['dimensionEnName'] if field['semantic_type'] == 'dimension' else \
+                    field['semantic_field']['expression']
+                return {"id": semantic_id, "semantic_type": field["semantic_type"],
+                        "semantic_field_name": semantic_name, "from_model_id": field["from_model_id"]}
+
+        return None
+
+    def _find_table_alias(self, model_id: str, table_alias_mapping_list: List[Dict[str, Any]]) -> Optional[str]:
+        """根据模型ID查找表别名"""
+        for mapping in table_alias_mapping_list:
+            if mapping["modelId"] == model_id:
+                return mapping["alias"]
+
+        return None
+
 
 def get_askdata_service(db: Session = Depends(get_db), user=Depends(manager)) -> AskdataService:
     """通过依赖注入获取AskdataService实例。"""
     return AskdataService(db, user)
+
+
+class ChartType(Enum):
+    TABLE_ROW_RECORDS = "table-row"
+    TABLE_AGGREGATE = "table-aggregate"
+    PIVOT_TABLE = "PivotTable"
+    PIE_CHART = "PieChart"
+    LINE_CHART = "LineChart"
