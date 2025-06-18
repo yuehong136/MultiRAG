@@ -4,6 +4,15 @@ from enum import Enum
 from abc import ABC, abstractmethod
 
 
+class DatabaseType(Enum):
+    """数据库类型枚举"""
+    MYSQL = "mysql"
+    POSTGRESQL = "postgresql"
+    SQLITE = "sqlite"
+    SQL_SERVER = "sql_server"
+    ORACLE = "oracle"
+
+
 class FilterOperator(Enum):
     """过滤操作符枚举"""
     EQUALS = "="
@@ -27,11 +36,50 @@ class OrderDirection(Enum):
     DESC = "DESC"
 
 
+class DatabaseDialect:
+    """数据库方言类 - 处理不同数据库的语法差异"""
+
+    @staticmethod
+    def get_identifier_quote(db_type: DatabaseType) -> Tuple[str, str]:
+        """获取标识符引用符号"""
+        quote_map = {
+            DatabaseType.MYSQL: ('`', '`'),
+            DatabaseType.POSTGRESQL: ('"', '"'),
+            DatabaseType.SQLITE: ('"', '"'),
+            DatabaseType.SQL_SERVER: ('[', ']'),
+            DatabaseType.ORACLE: ('"', '"')
+        }
+        return quote_map.get(db_type, ('`', '`'))
+
+    @staticmethod
+    def escape_identifier(identifier: str, db_type: DatabaseType) -> str:
+        """根据数据库类型转义标识符"""
+        if not identifier or identifier.strip() == '':
+            return identifier
+
+        # 清理标识符，移除多余空格
+        identifier = identifier.strip()
+
+        left_quote, right_quote = DatabaseDialect.get_identifier_quote(db_type)
+
+        # 处理复合标识符（如 table.column）
+        if '.' in identifier:
+            parts = identifier.split('.')
+            escaped_parts = []
+            for part in parts:
+                part = part.strip()
+                if part:  # 确保不是空字符串
+                    escaped_parts.append(f'{left_quote}{part}{right_quote}')
+            return '.'.join(escaped_parts)
+        else:
+            return f'{left_quote}{identifier}{right_quote}'
+
+
 class SQLFragment(ABC):
     """SQL片段抽象基类"""
 
     @abstractmethod
-    def to_sql(self) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
         """转换为SQL字符串和参数列表"""
         pass
 
@@ -45,31 +93,26 @@ class FilterCondition(SQLFragment):
         self.value = value
         self.value2 = value2
 
-    def to_sql(self) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
         """转换为SQL条件和参数"""
+        escaped_field = DatabaseDialect.escape_identifier(self.field, db_type)
+
         if self.operator in [FilterOperator.IS_NULL, FilterOperator.IS_NOT_NULL]:
-            return f"{self._escape_identifier(self.field)} {self.operator.value}", []
+            return f"{escaped_field} {self.operator.value}", []
 
         elif self.operator == FilterOperator.BETWEEN:
-            return f"{self._escape_identifier(self.field)} BETWEEN %s AND %s", [self.value, self.value2]
+            return f"{escaped_field} BETWEEN %s AND %s", [self.value, self.value2]
 
         elif self.operator in [FilterOperator.IN, FilterOperator.NOT_IN]:
             if isinstance(self.value, (list, tuple)):
                 placeholders = ','.join(['%s'] * len(self.value))
-                return f"{self._escape_identifier(self.field)} {self.operator.value} ({placeholders})", list(self.value)
+                return f"{escaped_field} {self.operator.value} ({placeholders})", list(self.value)
             else:
                 placeholders = '%s'
-                return f"{self._escape_identifier(self.field)} {self.operator.value} ({placeholders})", [self.value]
+                return f"{escaped_field} {self.operator.value} ({placeholders})", [self.value]
 
         else:
-            return f"{self._escape_identifier(self.field)} {self.operator.value} %s", [self.value]
-
-    def _escape_identifier(self, identifier: str) -> str:
-        """转义标识符"""
-        if '.' in identifier:
-            parts = identifier.split('.')
-            return '.'.join([f'`{part}`' for part in parts])
-        return f'`{identifier}`'
+            return f"{escaped_field} {self.operator.value} %s", [self.value]
 
 
 class RawSQLFragment(SQLFragment):
@@ -118,7 +161,7 @@ class RawSQLFragment(SQLFragment):
             if re.search(pattern, sql_upper):
                 raise ValueError(f"检测到潜在危险的SQL操作: {pattern}")
 
-    def to_sql(self) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
         """转换为SQL字符串和参数列表"""
         return self.sql_content, self.parameters
 
@@ -137,7 +180,7 @@ class DynamicSQLFragment(SQLFragment):
         self.sql_template = sql_template
         self.dynamic_values = dynamic_values or {}
 
-    def to_sql(self) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
         """转换为SQL字符串和参数列表"""
         try:
             # 使用format进行变量替换
@@ -154,21 +197,24 @@ class OrderByClause(SQLFragment):
         self.field = field
         self.direction = direction
 
-    def to_sql(self) -> Tuple[str, List[Any]]:
-        return f"`{self.field}` {self.direction.value}", []
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
+        escaped_field = DatabaseDialect.escape_identifier(self.field, db_type)
+        return f"{escaped_field} {self.direction.value}", []
 
 
 class FlexibleSQLAssembler:
     """灵活的SQL组装器 - 支持多种自定义方式"""
 
-    def __init__(self, base_from_clause: str):
+    def __init__(self, base_from_clause: str, db_type: DatabaseType = DatabaseType.POSTGRESQL):
         """
         初始化SQL组装器
 
         Args:
             base_from_clause: 基础的FROM子句
+            db_type: 数据库类型
         """
         self.base_from_clause = base_from_clause.strip()
+        self.db_type = db_type
         self.select_parts: List[SQLFragment] = []  # 统一处理SELECT的各个部分
         self.where_conditions: List[SQLFragment] = []  # 统一处理WHERE条件
         self.order_by_parts: List[SQLFragment] = []  # 统一处理ORDER BY
@@ -176,10 +222,17 @@ class FlexibleSQLAssembler:
         self.offset_count: Optional[int] = None
         self.additional_clauses: Dict[str, str] = {}  # 其他自定义子句
 
+    def set_database_type(self, db_type: DatabaseType) -> 'FlexibleSQLAssembler':
+        """设置数据库类型"""
+        self.db_type = db_type
+        return self
+
     # ============ SELECT相关方法 ============
     def add_column(self, column: str) -> 'FlexibleSQLAssembler':
         """添加普通列"""
-        raw_fragment = RawSQLFragment(f"`{column}`")
+        # 使用DatabaseDialect来正确转义标识符
+        escaped_column = DatabaseDialect.escape_identifier(column, self.db_type)
+        raw_fragment = RawSQLFragment(escaped_column)
         self.select_parts.append(raw_fragment)
         return self
 
@@ -192,7 +245,8 @@ class FlexibleSQLAssembler:
             alias: 列别名
         """
         if alias:
-            sql_expression = f"({sql_expression}) AS `{alias}`"
+            escaped_alias = DatabaseDialect.escape_identifier(alias, self.db_type)
+            sql_expression = f"({sql_expression}) AS {escaped_alias}"
 
         raw_fragment = RawSQLFragment(sql_expression)
         self.select_parts.append(raw_fragment)
@@ -209,7 +263,8 @@ class FlexibleSQLAssembler:
             alias: 列别名
         """
         if alias:
-            sql_template = f"({sql_template}) AS `{alias}`"
+            escaped_alias = DatabaseDialect.escape_identifier(alias, self.db_type)
+            sql_template = f"({sql_template}) AS {escaped_alias}"
 
         raw_fragment = RawSQLFragment(sql_template, parameters)
         self.select_parts.append(raw_fragment)
@@ -226,7 +281,8 @@ class FlexibleSQLAssembler:
             alias: 列别名
         """
         if alias:
-            sql_template = f"({sql_template}) AS `{alias}`"
+            escaped_alias = DatabaseDialect.escape_identifier(alias, self.db_type)
+            sql_template = f"({sql_template}) AS {escaped_alias}"
 
         dynamic_fragment = DynamicSQLFragment(sql_template, dynamic_values)
         self.select_parts.append(dynamic_fragment)
@@ -307,7 +363,7 @@ class FlexibleSQLAssembler:
         if self.select_parts:
             select_expressions = []
             for part in self.select_parts:
-                part_sql, part_params = part.to_sql()
+                part_sql, part_params = part.to_sql(self.db_type)
                 select_expressions.append(part_sql)
                 all_params.extend(part_params)
             select_clause = "SELECT " + ", ".join(select_expressions)
@@ -326,7 +382,7 @@ class FlexibleSQLAssembler:
         if self.where_conditions:
             where_expressions = []
             for condition in self.where_conditions:
-                condition_sql, condition_params = condition.to_sql()
+                condition_sql, condition_params = condition.to_sql(self.db_type)
                 where_expressions.append(condition_sql)
                 all_params.extend(condition_params)
             where_clause = "WHERE " + " AND ".join(where_expressions)
@@ -336,7 +392,7 @@ class FlexibleSQLAssembler:
         if self.order_by_parts:
             order_expressions = []
             for part in self.order_by_parts:
-                part_sql, part_params = part.to_sql()
+                part_sql, part_params = part.to_sql(self.db_type)
                 order_expressions.append(part_sql)
                 all_params.extend(part_params)
             order_by_clause = "ORDER BY " + ", ".join(order_expressions)
@@ -368,6 +424,12 @@ class FlexibleSQLAssembler:
         final_sql = " ".join(sql_parts)
         return final_sql, all_params
 
+    def build_sql_for_jdbc(self) -> Tuple[str, List[Any]]:
+        """构建JDBC格式的SQL语句（使用?作为占位符）"""
+        sql, params = self.build_sql()
+        jdbc_sql = sql.replace('%s', '?')
+        return jdbc_sql, params
+
     def clear_all(self) -> 'FlexibleSQLAssembler':
         """清空所有设置"""
         self.select_parts.clear()
@@ -378,12 +440,43 @@ class FlexibleSQLAssembler:
         self.offset_count = None
         return self
 
-    def build_sql_for_jdbc(self) -> Tuple[str, List[Any]]:
-        """构建JDBC格式的SQL语句（使用?作为占位符）"""
-        sql, params = self.build_sql()
-        jdbc_sql = sql.replace('%s', '?')
-        return jdbc_sql, params
 
+# 使用示例
+if __name__ == "__main__":
+    # PostgreSQL示例
+    print("=== PostgreSQL示例 ===")
+    pg_assembler = FlexibleSQLAssembler(
+        "gx_test_teachers AS t1 LEFT JOIN gx_test_departments AS t2 ON t1.department_id = t2.department_id",
+        DatabaseType.POSTGRESQL
+    )
+
+    pg_assembler.add_column("t1.teacher_id") \
+        .add_column("t1.name") \
+        .add_column("t1.title") \
+        .add_filter("t2.department_name", FilterOperator.EQUALS, "计算机科学与技术学院") \
+        .add_raw_where("(t1.title = '副教授' OR t1.title = '讲师')")
+
+    pg_sql, pg_params = pg_assembler.build_sql_for_jdbc()
+    print(f"PostgreSQL SQL: {pg_sql}")
+    print(f"参数: {pg_params}")
+    print()
+
+    # MySQL示例
+    print("=== MySQL示例 ===")
+    mysql_assembler = FlexibleSQLAssembler(
+        "gx_test_teachers AS t1 LEFT JOIN gx_test_departments AS t2 ON t1.department_id = t2.department_id",
+        DatabaseType.MYSQL
+    )
+
+    mysql_assembler.add_column("t1.teacher_id") \
+        .add_column("t1.name") \
+        .add_column("t1.title") \
+        .add_filter("t2.department_name", FilterOperator.EQUALS, "计算机科学与技术学院") \
+        .add_raw_where("(t1.title = '副教授' OR t1.title = '讲师')")
+
+    mysql_sql, mysql_params = mysql_assembler.build_sql_for_jdbc()
+    print(f"MySQL SQL: {mysql_sql}")
+    print(f"参数: {mysql_params}")
 
 # 使用示例
 if __name__ == "__main__":
