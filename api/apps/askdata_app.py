@@ -71,6 +71,9 @@ async def get_sql_and_table_config(
         used_models = sql_generation_result["usedModels"]
         sql_components = sql_generation_result["sqlComponents"]
 
+        # 执行查询
+        result = execute_sql_and_format_result(sql=sql, db_config={})
+
         # 2. 生成表格配置
         model_table_alias_mapping_list, table_config = await service.generate_table_config(
             sql=sql,
@@ -79,9 +82,6 @@ async def get_sql_and_table_config(
             used_models=used_models,
             sql_components=sql_components
         )
-
-        # 执行查询
-        result = execute_sql_and_format_result(sql=sql, db_config={})
 
         # 4. 构建返回给前端的数据结构
         # 将sql_generation_result中的所有内容都包含进去
