@@ -112,7 +112,8 @@ class NLQToInitialSQLGenerator:
         }
 
     async def generate_sql_query_with_components(self, user_query: str, semantic_layer: Dict[str, Any],
-                                                 llm_name: str) -> Optional[Dict[str, Any]]:
+                                                 llm_name: str, recommended_chart: str) -> \
+            Optional[Dict[str, Any]]:
         """
         根据用户问题和语义层信息生成SQL查询，包含分解后的组件和使用的模型信息。
 
@@ -125,10 +126,17 @@ class NLQToInitialSQLGenerator:
             包含sql, usedModels, 和 sqlComponents 的字典, 如果生成失败则返回None
         """
         try:
+
             llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
-            prompt_template = PromptTemplateUtil.load_template_from_file(
-                os.path.join(self.prompt_dir, "nlq_to_initial_sql.txt")
-            )
+            prompt_template = None
+            if recommended_chart == "明细表":
+                prompt_template = PromptTemplateUtil.load_template_from_file(
+                    os.path.join(self.prompt_dir, "nlq_to_initial_sql.txt")
+                )
+            elif recommended_chart == "聚合表":
+                prompt_template = PromptTemplateUtil.load_template_from_file(
+                    os.path.join(self.prompt_dir, "nlq_to_initial_sql_table-aggr.txt")
+                )
             semantic_layer_str = json.dumps(semantic_layer, ensure_ascii=False, indent=2)
 
             prompt = PromptTemplateUtil.fill_template(
@@ -195,21 +203,21 @@ class NLQToInitialSQLGenerator:
 
         return True, "SQL语法验证通过"
 
-    async def generate_and_validate_sql_with_components(self, user_query: str, semantic_layer, llm_name: str) -> Tuple[
-        Optional[Dict[str, Any]], bool, str]:
-        """
-        生成并验证SQL（包含组件和模型信息）。
-        """
-        result = await self.generate_sql_query_with_components(user_query, semantic_layer, llm_name)
-
-        if not result:
-            return None, False, "SQL查询生成失败或LLM响应格式错误"
-
-        sql_query = result.get('sql')
-        if not sql_query:
-            return result, False, "生成的SQL查询为空"
-
-        is_valid, validation_message = self.validate_sql_syntax(sql_query)
-        message = "SQL查询生成并验证成功" if is_valid else f"SQL语法验证失败: {validation_message}"
-
-        return result, is_valid, message
+    # async def generate_and_validate_sql_with_components(self, user_query: str, semantic_layer, llm_name: str) -> Tuple[
+    #     Optional[Dict[str, Any]], bool, str]:
+    #     """
+    #     生成并验证SQL（包含组件和模型信息）。
+    #     """
+    #     result = await self.generate_sql_query_with_components(user_query, semantic_layer, llm_name)
+    #
+    #     if not result:
+    #         return None, False, "SQL查询生成失败或LLM响应格式错误"
+    #
+    #     sql_query = result.get('sql')
+    #     if not sql_query:
+    #         return result, False, "生成的SQL查询为空"
+    #
+    #     is_valid, validation_message = self.validate_sql_syntax(sql_query)
+    #     message = "SQL查询生成并验证成功" if is_valid else f"SQL语法验证失败: {validation_message}"
+    #
+    #     return result, is_valid, message

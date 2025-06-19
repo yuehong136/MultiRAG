@@ -58,7 +58,8 @@ async def get_sql_and_table_config(
         sql_generation_result = await service.nlq_to_initial_sql(
             user_query=body.user_query,
             llm_name=body.llm_name,
-            semantic_layer=body.semantic_layer.get('processed_semantic_layer', {})
+            semantic_layer=body.semantic_layer.get('processed_semantic_layer', {}),
+            recommended_chart=body.semantic_layer.get('recommended_chart'),
         )
 
         if not sql_generation_result or not sql_generation_result.get("sql"):
@@ -81,7 +82,8 @@ async def get_sql_and_table_config(
             dataset_id_list=body.dataset_id_list,
             model_ids=body.semantic_layer.get('model_ids', []),
             used_models=used_models,
-            sql_components=sql_components
+            sql_components=sql_components,
+            recommended_chart=body.semantic_layer.get('recommended_chart')
         )
 
         # 4. 构建返回给前端的数据结构
@@ -90,7 +92,7 @@ async def get_sql_and_table_config(
             "sql": sql,
             "result": result,
             "table_config": table_config,
-            "base_from": sql_components["from"],
+            "sql_components": sql_components,
             "model_table_alias_mapping_list": model_table_alias_mapping_list
         }
 

@@ -14,7 +14,7 @@ class TableConfigGenerator:
         self.semantic_api_client = semantic_api_client
 
     async def generate(self, model_ids: List[str], used_models: List[str],
-                       sql_components: Dict[str, Any]):
+                       sql_components: Dict[str, Any], recommended_chart: str):
         """
         生成表配置信息，将SQL解析结果映射到语义层。
 
@@ -22,6 +22,7 @@ class TableConfigGenerator:
             model_ids: 所有相关的模型ID列表
             used_models: SQL中实际使用的模型名称列表
             sql_components: SQL句子成分
+            recommended_chart: 推荐的图表类型
 
         Returns:
             包含列、过滤器和排序信息的配置字典
@@ -44,36 +45,97 @@ class TableConfigGenerator:
             model_table_alias_mapping_list.append(
                 {"modelId": model["modelId"], "table": model["tableName"], "alias": alias})
 
-        # 4. 一次性构建所有语义字段信息
-        semantic_fields_info = await self._build_semantic_fields_info(model_list)
+        if recommended_chart == "明细表":
+            # 4. 一次性构建所有语义字段信息
+            semantic_fields_info = await self._build_semantic_fields_info(model_list)
 
-        # 5. 处理SELECT列
-        selected_columns = self._process_select_columns(parts, used_table_detail_dict)
+            # 5. 处理SELECT列
+            selected_columns = self._process_select_columns(parts, used_table_detail_dict)
 
-        # 6. 处理WHERE条件
-        filter_conditions = self._process_where_conditions(parts, used_table_detail_dict)
+            # 6. 处理WHERE条件
+            filter_conditions = self._process_where_conditions(parts, used_table_detail_dict)
 
-        # 7. 处理ORDER BY字段
-        order_by_fields = self._process_order_by_fields(parts, used_table_detail_dict)
+            # 7. 处理ORDER BY字段
+            order_by_fields = self._process_order_by_fields(parts, used_table_detail_dict)
 
-        limit = self._process_limit(parts)
+            limit = self._process_limit(parts)
 
-        return model_table_alias_mapping_list, {
-            "columns": {
-                "selected_columns": selected_columns,
-                "available_fields": semantic_fields_info["available_fields"]
-            },
-            "filters": {
-                "filter_conditions": filter_conditions,
-                "available_fields": semantic_fields_info["filterable_fields"]
-            },
-            "order_by": {
-                "order_by_fields": order_by_fields,
-                "available_fields": semantic_fields_info["sortable_fields"]
-            },
-            "limit": limit,
-            "all_semantic_fields": semantic_fields_info["all_fields"]
-        }
+            return model_table_alias_mapping_list, {
+                "chart_type": "table-row",
+                "columns": {
+                    "selected_columns": selected_columns,
+                    "available_fields": semantic_fields_info["available_fields"]
+                },
+                "filters": {
+                    "filter_conditions": filter_conditions,
+                    "available_fields": semantic_fields_info["filterable_fields"]
+                },
+                "order_by": {
+                    "order_by_fields": order_by_fields,
+                    "available_fields": semantic_fields_info["sortable_fields"]
+                },
+                "limit": limit,
+                "all_semantic_fields": semantic_fields_info["all_fields"]
+            }
+        elif recommended_chart == "聚合表":
+            # 4. 一次性构建所有语义字段信息
+            semantic_fields_info = await self._build_semantic_fields_info_for_aggr(model_list)
+
+            # 5. 处理维度，维度是group by中的内容
+            selected_dimensions = self._build_selected_dimensions(parts)
+
+            # 6. 处理指标，指标其实就是select_columns字段减去group by字段
+            selected_metrics = self._build_selected_metrics(parts)
+
+            order_by_fields = self._process_order_by_fields(parts, used_table_detail_dict)
+
+            limit = self._process_limit(parts)
+
+            return model_table_alias_mapping_list, {
+                "chart_type": "table-aggr",
+                "dimensions": {
+                    "selected_dimensions": selected_dimensions,
+                    "available_dimensions": semantic_fields_info["available_dimensions"]
+                },
+                "metrics": {
+                    "selected_metrics": selected_metrics,
+                    "available_metrics": semantic_fields_info["available_metrics"]
+                },
+                "order_by": {
+                    "order_by_fields": order_by_fields,
+                    "available_fields": semantic_fields_info["sortable_fields"]
+                },
+                "limit": limit,
+                "all_semantic_fields": semantic_fields_info["all_fields"]
+            }
+
+    def _build_selected_dimensions(self, parts: Dict[str, Any]) -> List[Dict]:
+        """构建group by维度字典"""
+        group_by_dimensions = []
+        for group_by in parts["group_by"]:
+            group_by_dimensions.append({
+                "is_semantic_field": False,
+                "sql_column": group_by,
+                "id": str(uuid.uuid4()),
+                "wid": str(uuid.uuid4()),
+                "nanoId": str(uuid.uuid4())
+            })
+        return group_by_dimensions
+
+    def _build_selected_metrics(self, parts: Dict[str, Any]) -> List[Dict]:
+        selected_metrics = []
+        selected_columns = parts["select_columns"]
+        group_by = parts['group_by']
+        metrics = list(set(selected_columns) - set(group_by))
+        for metric in metrics:
+            selected_metrics.append({
+                "is_semantic_field": False,
+                "sql_column": metric,
+                "id": str(uuid.uuid4()),
+                "wid": str(uuid.uuid4()),
+                "nanoId": str(uuid.uuid4())
+            })
+        return selected_metrics
 
     async def _build_model_details(self, model_ids: List[str],
                                    used_models: List[str]) -> Tuple[Dict, Dict, List]:
@@ -145,6 +207,56 @@ class TableConfigGenerator:
 
         return {
             "available_fields": available_fields, "filterable_fields": filterable_fields,
+            "sortable_fields": sortable_fields, "all_fields": all_fields
+        }
+
+    async def _build_semantic_fields_info_for_aggr(self, model_list: List[Dict]) -> Dict[str, List]:
+        """一次性构建所有语义字段信息，避免重复遍历"""
+        available_dimensions, available_metrics, sortable_fields, all_fields = [], [], [], []
+        all_dimension_ids = [
+            dim['dimensionId'] for model in model_list for dim in model["dimsAndMetrics"]["dimensions"]
+        ]
+
+        dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
+            dimension_ids=all_dimension_ids
+        ) if all_dimension_ids else {}
+
+        for model in model_list:
+            model_id = model["modelId"]
+            model_name = model["modelName"]
+
+            for metric in model["dimsAndMetrics"]["metrics"]:
+                available_metrics.append(
+                    {"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"],
+                     "from_model": model_name,
+                     "from_model_id": model_id, "metric_name": metric["metricName"], "wid": str(uuid.uuid4())})
+                available_metrics.append(
+                    {"is_allow_use": True, "semantic_type": "measure", "id": metric["metricId"],
+                     "from_model": model_name,
+                     "from_model_id": model_id, "metric_name": metric["metricName"], "wid": str(uuid.uuid4())})
+                sortable_fields.append({"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"],
+                                        "from_model": model_id, "metric_name": metric["metricName"]})
+                all_fields.append({"semantic_type": "metric", "semantic_field": metric, "id": metric["metricId"],
+                                   "from_model": model_name, "from_model_id": model_id})
+
+            for dim in model["dimsAndMetrics"]["dimensions"]:
+                dim_id = dim["dimensionId"]
+                dim['possibleValues'] = dimensions_value_dict.get(dim_id, [])
+                available_dimensions.append({"is_allow_use": True, "semantic_type": "dimension", "id": dim_id,
+                                             "dimension_name": dim["dimensionName"]})
+                available_metrics.append(
+                    {"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_name,
+                     "from_model_id": model_id,
+                     "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4())})
+                sortable_fields.append(
+                    {"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_id,
+                     "dimension_name": dim["dimensionName"]})
+                all_fields.append(
+                    {"semantic_type": "dimension", "semantic_field": dim, "id": dim_id, "from_model": model_name,
+                     "from_model_id": model_id})
+
+        return {
+            "available_dimensions": available_dimensions, "available_metrics": available_metrics,
             "sortable_fields": sortable_fields, "all_fields": all_fields
         }
 
@@ -225,7 +337,7 @@ class TableConfigGenerator:
             if is_matched_semantic_field:
                 continue
             filter_columns.append(
-                {"is_semantic_field": False, "sql_column": cond["field"],"operator": operator, "value": value,
+                {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value,
                  "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
 
         return filter_columns

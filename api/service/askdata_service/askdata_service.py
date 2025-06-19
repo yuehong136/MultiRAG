@@ -116,7 +116,8 @@ class AskdataService:
         await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
                                             llm_name=llm_name)
 
-    async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any]) -> Optional[
+    async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any],
+                                 recommended_chart: str) -> Optional[
         Dict[str, Any]]:
         """
         从自然语言生成初始SQL，返回包含组件的完整字典。
@@ -124,7 +125,7 @@ class AskdataService:
         logger.info(f"开始为查询 '{user_query}' 生成初始SQL。")
         # 调用更新后的方法
         result = await self.nlq_to_initial_sql_generator.generate_sql_query_with_components(
-            user_query, semantic_layer, llm_name
+            user_query, semantic_layer, llm_name, recommended_chart
         )
 
         if not result:
@@ -136,7 +137,7 @@ class AskdataService:
 
     async def generate_table_config(self, sql: str, dataset_id_list: List[str],
                                     model_ids: List[str], used_models: List[str],
-                                    sql_components: Dict[str, Any]):
+                                    sql_components: Dict[str, Any], recommended_chart: str):
         """
         生成表配置信息。
         将逻辑委托给 TableConfigGenerator。
@@ -144,7 +145,8 @@ class AskdataService:
         return await self.table_config_generator.generate(
             model_ids=model_ids,
             used_models=used_models,
-            sql_components=sql_components
+            sql_components=sql_components,
+            recommended_chart=recommended_chart
         )
 
     async def add_ask_data_history(self, conversation_id: str, ask_id: str, data: str):
