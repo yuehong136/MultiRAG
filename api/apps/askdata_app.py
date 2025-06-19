@@ -12,7 +12,6 @@ from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
 from api.service.askdata_service.event.event_handlers import create_sse_response
 from api.service.askdata_service.pg_query_formatter import execute_sql_and_format_result
-from api.service.nl2sql_service import query_data_from_zt_by_sql
 from api.service.nl2sql_service.query_data_from_zt_by_sql import query_data_with_params
 
 router = APIRouter()
@@ -156,7 +155,9 @@ async def analyze_user_query_background_task(
             user_query=request.user_query,
             semantic_layer=request.semantic_layer["processed_semantic_layer"],
             llm_name=request.llm_name,
-            tenant_id=user.id
+            tenant_id=user.id,
+            recommended_chart=request.semantic_layer["recommended_chart"],
+            recommendation_reason=request.semantic_layer["recommendation_reason"]
         )
 
     except Exception as e:

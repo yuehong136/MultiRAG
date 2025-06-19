@@ -100,14 +100,16 @@ class AskdataService:
 
     async def analyze_user_query_stream(
             self, event_id: str, user_query: str, semantic_layer: Dict[str, Any],
-            llm_name: Optional[str], tenant_id: str
+            llm_name: Optional[str], tenant_id: str, recommended_chart: str, recommendation_reason: str
     ):
         """分析用户问题并流式返回结果。"""
         llm_service = AsyncLLMService(self.db)
         template_path = os.path.join(self.prompt_dir, "analyze_user_query.txt")
         prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
         prompt = PromptTemplateUtil.fill_template(prompt_template,
-                                                  {"user_query": user_query, "semantic_layer": semantic_layer})
+                                                  {"user_query": user_query, "semantic_layer": semantic_layer,
+                                                   "recommended_chart": recommended_chart,
+                                                   "recommendation_reason": recommendation_reason})
         history = [{"role": "user", "content": prompt}]
         gen_conf = {"temperature": 0.7, "max_tokens": 2000}
 
