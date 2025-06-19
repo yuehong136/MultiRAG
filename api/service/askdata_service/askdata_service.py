@@ -1,7 +1,7 @@
 import os
 import logging
 from enum import Enum
-from typing import Any, List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional
 
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
@@ -13,6 +13,7 @@ from api.service.askdata_service.async_llm_service import AsyncLLMService
 from api.service.askdata_service.event.event_utils import send_event
 from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLGenerator
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
+from api.service.askdata_service.query_intent import QueryIntentAnalyzer
 from api.service.askdata_service.sql_assembler import FlexibleSQLAssembler, FilterOperator, OrderDirection
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
@@ -31,9 +32,10 @@ class AskdataService:
         self.semantic_api_client = SemanticApiClient()
         self.history_service = AskDataHistoryService()
         self.table_config_generator = TableConfigGenerator(self.semantic_api_client)
+        self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
-                                      conversation_id: Optional[str] = None,
+                                      conversation_id: Optional[str] = None, llm_name: str = None,
                                       event_id: Optional[str] = None):
         await send_event(event_id, {"message": "分词", "action": "start"}, "message")
         segmented_words = await custom_tokenize_with_semantic_words(text=user_query, dataset_id_list=dataset_id_list)
@@ -87,7 +89,14 @@ class AskdataService:
 
         processed_semantic_layer = process_semantic_layer(semantic_layer_original)
 
-        return processed_semantic_layer, model_ids
+        recommended_chart, recommendation_reason = await self.query_intent_analyzer.recommend_chart_with_reason(
+            user_question=user_query,
+            supported_charts_list=["明细表", "聚合表"],
+            semantic_layer_info=processed_semantic_layer,
+            llm_name=llm_name
+        )
+
+        return processed_semantic_layer, model_ids, recommended_chart, recommendation_reason
 
     async def analyze_user_query_stream(
             self, event_id: str, user_query: str, semantic_layer: Dict[str, Any],

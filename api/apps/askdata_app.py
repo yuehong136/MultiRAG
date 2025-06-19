@@ -227,6 +227,7 @@ class SemanticLayerRequest(BaseModel):
     conversation_id: str = Field(..., description="会话ID")
     ask_id: str = Field(..., description="用户的提问ID")
     user_query: str = Field(..., description="用户查询")
+    llm_name: str = Field("", title="LLM模型名称", description="")
     dataset_id_list: List[str] = Field(
         [],
         title="数据集ID列表",
@@ -250,15 +251,19 @@ async def get_semantic_layer_streaming(
     logger.info(f"使用自定义事件ID {custom_event_id} 获得语义层信息，参数：{body}")
 
     try:
-        processed_semantic_layer, model_ids = await service.generate_semantic_layer(user_query=body.user_query,
-                                                                                    dataset_id_list=body.dataset_id_list,
-                                                                                    conversation_id=body.conversation_id,
-                                                                                    event_id=custom_event_id)
+        processed_semantic_layer, model_ids, recommended_chart, recommendation_reason = await service.generate_semantic_layer(
+            user_query=body.user_query,
+            dataset_id_list=body.dataset_id_list,
+            conversation_id=body.conversation_id,
+            event_id=custom_event_id,
+            llm_name=body.llm_name)
 
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
             message="获得语义层信息成功",
-            data={"processed_semantic_layer": processed_semantic_layer, "model_ids": model_ids}
+            data={"processed_semantic_layer": processed_semantic_layer, "model_ids": model_ids,
+                  "recommended_chart": recommended_chart,
+                  "recommendation_reason": recommendation_reason}
         )
 
     except Exception as e:
