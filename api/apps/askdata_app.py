@@ -354,6 +354,7 @@ class ReQueryRequest(BaseModel):
     table_config: Dict[str, Any] = Field(..., description="表配置"),
     sql_components: Dict[str, Any] = Field(..., description="SQL组件"),
     model_table_alias_mapping_list: List[Dict[str, Any]] = Field(..., description="模型表别名映射列表"),
+    dataset_id: str = Field(..., description="数据集ID")
 
 
 @router.post("/re-query", response_model=ResponseSchema,
@@ -371,16 +372,16 @@ async def re_query(
     logger.info(f"chart_type: {body.chart_type}\n table_config: {body.table_config}")
 
     try:
-        sql, params = await service.generate_requery_sql(body.chart_type, body.table_config, sql_components=body.sql_components,
+        sql, params = await service.generate_requery_sql(body.chart_type, body.table_config,
+                                                         sql_components=body.sql_components,
                                                          model_table_alias_mapping_list=body.model_table_alias_mapping_list)
 
-        # TODO dataset_id 暂时写死，按理说是从大模型生成SQL时得到的，只允许有一个dataset_id
-        result = await query_data_with_params(sql, 35799132679879680, params)
+        result = await query_data_with_params(sql, int(body.dataset_id), params)
 
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
             message="生成re-query SQL成功",
-            data={"result": result}
+            data={"result": result["data"]}
         )
 
     except Exception as e:
