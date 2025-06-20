@@ -36,6 +36,9 @@ json字段解释：
 recommended_chart: 推荐的图表类型
 recommendation_reason: 推荐理由
 
+**通用信息：**
+*   **当前日期**: `$current_date`
+
 ---
 
 **输出要求**

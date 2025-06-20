@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import date
 from enum import Enum
 from typing import Any, List, Dict, Optional
 
@@ -111,9 +112,10 @@ class AskdataService:
         prompt = PromptTemplateUtil.fill_template(prompt_template,
                                                   {"user_query": user_query, "semantic_layer": semantic_layer,
                                                    "recommended_chart": recommended_chart,
-                                                   "recommendation_reason": recommendation_reason})
+                                                   "recommendation_reason": recommendation_reason,
+                                                   "current_date": date.today().strftime("%Y-%m-%d")})
         history = [{"role": "user", "content": prompt}]
-        gen_conf = {"temperature": 0.7, "max_tokens": 2000}
+        gen_conf = {"temperature": 0.7, "max_tokens": 2048}
 
         await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
                                             llm_name=llm_name)
