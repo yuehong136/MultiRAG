@@ -111,7 +111,16 @@ async def query_data_with_params(sql: str, dataset_wid: int, sql_params: List[An
                 # 检查请求是否成功
                 if response.status == 200:
                     result = await response.json()
-                    return result["data"]
+                    if result["code"] == "-1":
+                        return {
+                            "status": "error",
+                            "message": result["msg"]
+                        }
+                    else:
+                        return {
+                            "status": "success",
+                            "data": result["data"]
+                        }
                 else:
                     error_text = await response.text()
                     return {
@@ -130,13 +139,13 @@ async def query_data_with_params(sql: str, dataset_wid: int, sql_params: List[An
 # 使用示例
 async def main():
     # 示例1：普通查询
-    print("=== 示例1：普通查询 ===")
-    query = """
--- [查询意图为按部门分组统计教师数量。主要内容是从教师信息表和高校部门信息表获取数据，按部门名称分组统计每个部门的教师人数。无时间范围，因非明细数据查询不涉及分页。]\nSELECT d.department_name, COUNT(t.teacher_id) AS teacher_count\nFROM gx_test_teachers t -- 教师信息表，别名为t\nLEFT JOIN gx_test_departments d -- 高校部门信息表，别名为d\nON t.department_id = d.department_id\nGROUP BY d.department_name;
-    """
-
-    response1 = await query_data_from_zt_by_sql(query)
-    print(json.dumps(response1, indent=2, ensure_ascii=False))
+    #     print("=== 示例1：普通查询 ===")
+    #     query = """
+    # -- [查询意图为按部门分组统计教师数量。主要内容是从教师信息表和高校部门信息表获取数据，按部门名称分组统计每个部门的教师人数。无时间范围，因非明细数据查询不涉及分页。]\nSELECT d.department_name, COUNT(t.teacher_id) AS teacher_count\nFROM gx_test_teachers t -- 教师信息表，别名为t\nLEFT JOIN gx_test_departments d -- 高校部门信息表，别名为d\nON t.department_id = d.department_id\nGROUP BY d.department_name;
+    #     """
+    #
+    #     response1 = await query_data_from_zt_by_sql(query)
+    #     print(json.dumps(response1, indent=2, ensure_ascii=False))
 
     # 示例2：参数化查询
     print("\n=== 示例2：参数化查询 ===")
@@ -148,8 +157,11 @@ ORDER BY "t1"."gender" ASC"""
     dataset_wid = 35799132679879680
     sql_params = ["计算机科学与技术学院"]
 
-    response2 = await query_data_with_params(param_sql, dataset_wid, sql_params)
-    print(json.dumps(response2, indent=2, ensure_ascii=False))
+    try:
+        response2 = await query_data_with_params(param_sql, dataset_wid, sql_params)
+        print(json.dumps(response2, indent=2, ensure_ascii=False))
+    except Exception as e:
+        print(f"发生错误: {e}")
 
 
 # 如果直接执行此文件则运行示例
