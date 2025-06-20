@@ -2,7 +2,7 @@ import os
 import logging
 from datetime import date
 from enum import Enum
-from typing import Any, List, Dict, Optional
+from typing import Any, List, Dict, Optional, Tuple, Set
 
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
@@ -139,19 +139,67 @@ class AskdataService:
         logger.info(f"成功生成SQL: {result.get('sql')}")
         return result
 
-    async def generate_table_config(self, sql: str, dataset_id_list: List[str],
-                                    model_ids: List[str], used_models: List[str],
+    async def generate_table_config(self,
+                                    used_table_detail_dict: Dict[str, Dict], model_list: List[Dict],
                                     sql_components: Dict[str, Any], recommended_chart: str):
         """
         生成表配置信息。
         将逻辑委托给 TableConfigGenerator。
         """
         return await self.table_config_generator.generate(
-            model_ids=model_ids,
-            used_models=used_models,
+            used_table_detail_dict=used_table_detail_dict,
+            model_list=model_list,
             sql_components=sql_components,
             recommended_chart=recommended_chart
         )
+
+    async def build_model_details(self, model_ids: List[str],
+                                  used_models: List[str]) -> Tuple[Dict, Dict, List, Set]:
+        """构建模型详情字典"""
+        used_model_detail_dict = {}
+        used_table_detail_dict = {}
+        model_list = []
+
+        model_detail_list = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
+
+        model_in_dataset_dict: Dict[str, List[str]] = {}
+
+        for model_detail in model_detail_list:
+            if model_detail.get('modelName') in used_models:
+                # 获取模型的指标和维度信息
+                model_detail[
+                    'dimsAndMetrics'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
+                    model_id=model_detail["modelId"]
+                )
+                model_list.append(model_detail)
+                used_model_detail_dict[model_detail["modelName"]] = model_detail
+                used_table_detail_dict[model_detail["tableName"]] = model_detail
+                used_in_dataset_id_list = []
+                for dataset in model_detail["usedInDatasets"]:
+                    used_in_dataset_id_list.append(dataset["datasetId"])
+                model_in_dataset_dict[model_detail["modelId"]] = used_in_dataset_id_list
+
+        intersection_dataset_ids = self._get_intersection_of_all_lists(model_in_dataset_dict)
+        if len(intersection_dataset_ids) > 1:
+            logger.error(f"模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
+            logger.error(f"model_ids: {model_ids}, used_models: {used_models}")
+            raise Exception("模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
+
+        return used_model_detail_dict, used_table_detail_dict, model_list, intersection_dataset_ids
+
+    def _get_intersection_of_all_lists(self, data_dict):
+        """获取字典中所有列表的交集"""
+        if not data_dict:
+            return set()
+
+        # 将第一个列表转为集合作为初始交集
+        result = set(next(iter(data_dict.values())))
+
+        # 与其他所有列表取交集
+        for lst in data_dict.values():
+            result = result.intersection(set(lst))
+
+        return result
 
     async def add_ask_data_history(self, conversation_id: str, ask_id: str, data: str):
         """添加一条问数历史记录。"""

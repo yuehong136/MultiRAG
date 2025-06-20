@@ -1,8 +1,9 @@
 import uuid
-from typing import Any, List, Dict, Tuple, Optional
+from typing import Any, List, Dict, Tuple, Optional, Set
 
 from api.service.askdata_service.sql_components_parser import SQLComponentsParser
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
+from api.work_flow_api import logger
 
 
 class TableConfigGenerator:
@@ -13,14 +14,14 @@ class TableConfigGenerator:
     def __init__(self, semantic_api_client: SemanticApiClient):
         self.semantic_api_client = semantic_api_client
 
-    async def generate(self, model_ids: List[str], used_models: List[str],
+    async def generate(self, used_table_detail_dict: Dict[str, Dict], model_list: List[Dict],
                        sql_components: Dict[str, Any], recommended_chart: str):
         """
         生成表配置信息，将SQL解析结果映射到语义层。
 
         Args:
-            model_ids: 所有相关的模型ID列表
-            used_models: SQL中实际使用的模型名称列表
+            used_table_detail_dict: 使用的表的详情字典
+            model_list: 所有相关的模型信息列表
             sql_components: SQL句子成分
             recommended_chart: 推荐的图表类型
 
@@ -29,11 +30,6 @@ class TableConfigGenerator:
         """
         # 1. 解析SQL
         parts = SQLComponentsParser(sql_components).parse_all()
-
-        # 2. 构建使用的模型和表的详情字典
-        _, used_table_detail_dict, model_list = await self._build_model_details(
-            model_ids, used_models
-        )
 
         model_table_alias_mapping_list = []
         for model in model_list:
@@ -136,28 +132,6 @@ class TableConfigGenerator:
                 "nanoId": str(uuid.uuid4())
             })
         return selected_metrics
-
-    async def _build_model_details(self, model_ids: List[str],
-                                   used_models: List[str]) -> Tuple[Dict, Dict, List]:
-        """构建模型详情字典"""
-        used_model_detail_dict = {}
-        used_table_detail_dict = {}
-        model_list = []
-
-        model_detail_list = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
-
-        for model_detail in model_detail_list:
-            if model_detail.get('modelName') in used_models:
-                # 获取模型的指标和维度信息
-                model_detail[
-                    'dimsAndMetrics'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
-                    model_id=model_detail["modelId"]
-                )
-                model_list.append(model_detail)
-                used_model_detail_dict[model_detail["modelName"]] = model_detail
-                used_table_detail_dict[model_detail["tableName"]] = model_detail
-
-        return used_model_detail_dict, used_table_detail_dict, model_list
 
     async def _build_semantic_fields_info(self, model_list: List[Dict]) -> Dict[str, List]:
         """一次性构建所有语义字段信息，避免重复遍历"""
@@ -309,6 +283,13 @@ class TableConfigGenerator:
         filter_columns = []
         for cond in where_conditions.get('parsed_conditions', []):
             is_matched_semantic_field = False
+            if "(" in cond['field']:
+                # 如果字段中包含了括号，则认为是复杂条件
+                filter_columns.append(
+                    {"is_semantic_field": False, "is_complex_condition": True, "raw_condition": cond['field'],
+                     "operator": "", "value": "", "from_model": None, "id": str(uuid.uuid4()),
+                     "wid": str(uuid.uuid4())})
+                continue
             alias, column_name = self._split_column(cond['field'])
             operator = cond['operator']
             value = cond['value']

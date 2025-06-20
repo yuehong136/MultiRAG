@@ -11,7 +11,6 @@ from api.db.db_models import get_db
 from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
 from api.service.askdata_service.event.event_handlers import create_sse_response
-from api.service.askdata_service.pg_query_formatter import execute_sql_and_format_result
 from api.service.nl2sql_service.query_data_from_zt_by_sql import query_data_with_params
 
 router = APIRouter()
@@ -73,15 +72,29 @@ async def get_sql_and_table_config(
         used_models = sql_generation_result["usedModels"]
         sql_components = sql_generation_result["sqlComponents"]
 
+        # 构建使用到的模型和表的详情字典
+        _, used_table_detail_dict, model_list, intersection_dataset_ids = await service.build_model_details(
+            model_ids=body.semantic_layer.get('model_ids', []),
+            used_models=used_models)
+
+        if len(intersection_dataset_ids) > 1:
+            logger.error(f"模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
+            logger.error(f"model_ids: {body.semantic_layer.get('model_ids', [])}, used_models: {used_models}")
+            raise Exception("模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
+
         # 执行查询
-        result = execute_sql_and_format_result(sql=sql, db_config={})
+        result = await query_data_with_params(sql, list(intersection_dataset_ids)[0], [])
+        if result["status"] == "error":
+            logger.error(f"查询数据失败: {result['message']}")
+            return ResponseSchema(
+                status=StatusEnum.ERROR,
+                message=f"查询数据失败: {result['message']}"
+            )
 
         # 2. 生成表格配置
         model_table_alias_mapping_list, table_config = await service.generate_table_config(
-            sql=sql,
-            dataset_id_list=body.dataset_id_list,
-            model_ids=body.semantic_layer.get('model_ids', []),
-            used_models=used_models,
+            used_table_detail_dict=used_table_detail_dict,
+            model_list=model_list,
             sql_components=sql_components,
             recommended_chart=body.semantic_layer.get('recommended_chart')
         )
@@ -90,10 +103,11 @@ async def get_sql_and_table_config(
         # 将sql_generation_result中的所有内容都包含进去
         response_data = {
             "sql": sql,
-            "result": result,
+            "result": result["data"],
             "table_config": table_config,
             "sql_components": sql_components,
-            "model_table_alias_mapping_list": model_table_alias_mapping_list
+            "model_table_alias_mapping_list": model_table_alias_mapping_list,
+            "dataset_id": list(intersection_dataset_ids)[0]
         }
 
         return ResponseSchema(
