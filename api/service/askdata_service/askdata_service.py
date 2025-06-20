@@ -15,6 +15,8 @@ from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLG
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
 from api.service.askdata_service.query_intent import QueryIntentAnalyzer
 from api.service.askdata_service.sql_assembler import FlexibleSQLAssembler, FilterOperator, OrderDirection
+
+from api.service.askdata_service.sql_metric_exp_rewriter import SQLFieldAliasProcessor
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
@@ -175,9 +177,10 @@ class AskdataService:
         """从数据集详情列表中提取所有domainId并去重。"""
         return list(set(d.get('domainId') for d in dataset_details if d.get('domainId')))
 
-    async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], base_from: str,
+    async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], sql_components: Dict[str, Any],
                                    model_table_alias_mapping_list: List[Dict[str, Any]]):
         """生成重新查询的SQL语句。"""
+        base_from = sql_components["from"]
         from_sentence = ""
         if base_from.lower().startswith("from"):
             from_sentence = base_from.split("FROM")[1]
@@ -185,46 +188,91 @@ class AskdataService:
             from_sentence = base_from
         assembler = FlexibleSQLAssembler(from_sentence)
         all_semantic_fields = table_config["all_semantic_fields"]
-        for column in table_config["columns"]:
-            column_name = ""
-            if column["is_semantic_field"]:
-                semantic_field = self._find_semantic_field(column["id"], all_semantic_fields)
-                table_alias = self._find_table_alias(semantic_field["from_model_id"],
-                                                     model_table_alias_mapping_list)
-                column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
-            else:
-                column_name = column["sql_column"]
-            assembler.add_column(column_name)
 
-        for filter in table_config["filters"]:
-            if filter["is_semantic_field"]:
-                semantic_field = self._find_semantic_field(filter["id"], all_semantic_fields)
-                table_alias = self._find_table_alias(semantic_field["from_model_id"],
-                                                     model_table_alias_mapping_list)
-                column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
-                operator = filter["operator"]
-                value = filter["value"]
-                assembler.add_filter(column_name, FilterOperator.from_value(operator), value)
-            else:
-                raw_condition = filter["raw_condition"]
-                assembler.add_raw_where(raw_condition)
+        if chart_type == "table-row":
+            for column in table_config["columns"]:
+                column_name = ""
+                if column["is_semantic_field"]:
+                    semantic_field = self._find_semantic_field(column["id"], all_semantic_fields)
+                    table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                         model_table_alias_mapping_list)
+                    column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                else:
+                    column_name = column["sql_column"]
+                assembler.add_column(column_name)
 
-        for order_by in table_config["order_by"]:
-            if order_by["is_semantic_field"]:
-                semantic_field = self._find_semantic_field(order_by["id"], all_semantic_fields)
-                table_alias = self._find_table_alias(semantic_field["from_model_id"],
-                                                     model_table_alias_mapping_list)
-                column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
-                direction = order_by["direction"]
-                assembler.add_order_by(column_name, OrderDirection.from_value(direction))
-            else:
-                assembler.add_order_by(order_by["sql_column"], order_by["direction"])
+            for filter in table_config["filters"]:
+                if filter["is_semantic_field"]:
+                    semantic_field = self._find_semantic_field(filter["id"], all_semantic_fields)
+                    table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                         model_table_alias_mapping_list)
+                    column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                    operator = filter["operator"]
+                    value = filter["value"]
+                    assembler.add_filter(column_name, FilterOperator.from_value(operator), value)
+                else:
+                    raw_condition = filter["raw_condition"]
+                    assembler.add_raw_where(raw_condition)
 
-        limit = table_config["limit"]
-        if limit:
-            assembler.set_limit(limit)
+            for order_by in table_config["order_by"]:
+                if order_by["is_semantic_field"]:
+                    semantic_field = self._find_semantic_field(order_by["id"], all_semantic_fields)
+                    table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                         model_table_alias_mapping_list)
+                    column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                    direction = order_by["direction"]
+                    assembler.add_order_by(column_name, OrderDirection.from_value(direction))
+                else:
+                    assembler.add_order_by(order_by["sql_column"], order_by["direction"])
 
-        return assembler.build_sql_for_jdbc()
+            limit = table_config["limit"]
+            if limit:
+                assembler.set_limit(limit)
+
+            return assembler.build_sql_for_jdbc()
+        elif chart_type == "table-aggr":
+            for dimension in table_config["dimensions"]:
+                if dimension["is_semantic_field"]:
+                    semantic_field = self._find_semantic_field(dimension["id"], all_semantic_fields)
+                    table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                         model_table_alias_mapping_list)
+                    column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                    assembler.add_column(column_name)
+                    assembler.add_group_by(column_name)
+                else:
+                    assembler.add_column(dimension["sql_column"])
+                    assembler.add_group_by(dimension["sql_column"])
+
+            for metric in table_config["metrics"]:
+                if metric["is_semantic_field"]:
+                    semantic_field = self._find_semantic_field(metric["id"], all_semantic_fields)
+                    table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                         model_table_alias_mapping_list)
+                    if metric["semantic_type"] == "measure" or metric["semantic_type"] == "dimension":
+                        column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                        aggr_type = metric["type"]
+                        if aggr_type == "COUNT_DISTINCT":
+                            assembler.add_raw_column(f"COUNT(DISTINCT {column_name})",
+                                                     f"COUNT(DISTINCT {semantic_field['semantic_field_name']})")
+                        else:
+                            assembler.add_raw_column(f"{aggr_type}({column_name})",
+                                                     f"{aggr_type}({semantic_field['semantic_field_name']})")
+                    elif metric["semantic_type"] == "metric":
+                        expression = semantic_field["field_detail"]["expression"]
+                        processor = SQLFieldAliasProcessor()
+                        new_expression = processor.add_table_alias_to_expression(expression, table_alias)
+                        assembler.add_raw_column(new_expression)
+
+            if len(sql_components["where"]) > 0:
+                assembler.add_raw_where(sql_components["where"])
+            if len(sql_components["having"]) > 0:
+                assembler.add_raw_having(sql_components["having"])
+            if len(sql_components["orderBy"]) > 0:
+                assembler.add_raw_order_by(sql_components["orderBy"])
+            if len(sql_components["limit"]) > 0:
+                assembler.set_limit(int(sql_components["limit"]))
+
+            return assembler.build_sql_for_jdbc()
 
     def _find_semantic_field(self, semantic_id: str, all_semantic_fields: List[Dict[str, Any]]) -> Optional[
         Dict[str, Any]]:
@@ -234,7 +282,8 @@ class AskdataService:
                 semantic_name = field['semantic_field']['dimensionEnName'] if field['semantic_type'] == 'dimension' else \
                     field['semantic_field']['expression']
                 return {"id": semantic_id, "semantic_type": field["semantic_type"],
-                        "semantic_field_name": semantic_name, "from_model_id": field["from_model_id"]}
+                        "semantic_field_name": semantic_name, "from_model_id": field["from_model_id"],
+                        "field_detail": field["semantic_field"]}
 
         return None
 

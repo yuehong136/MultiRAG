@@ -216,6 +216,55 @@ class OrderByClause(SQLFragment):
         return f"{escaped_field} {self.direction.value}", []
 
 
+class GroupByClause(SQLFragment):
+    """分组子句类"""
+
+    def __init__(self, field: str):
+        self.field = field
+
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
+        escaped_field = DatabaseDialect.escape_identifier(self.field, db_type)
+        return escaped_field, []
+
+
+class HavingCondition(SQLFragment):
+    """HAVING条件类 - 支持聚合函数的条件"""
+
+    def __init__(self, aggregate_expression: str, operator: FilterOperator, value: Any = None, value2: Any = None):
+        """
+        初始化HAVING条件
+
+        Args:
+            aggregate_expression: 聚合表达式，如 "COUNT(*)", "SUM(amount)"
+            operator: 操作符
+            value: 值
+            value2: 第二个值（用于BETWEEN）
+        """
+        self.aggregate_expression = aggregate_expression
+        self.operator = operator
+        self.value = value
+        self.value2 = value2
+
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
+        """转换为SQL条件和参数"""
+        if self.operator in [FilterOperator.IS_NULL, FilterOperator.IS_NOT_NULL]:
+            return f"{self.aggregate_expression} {self.operator.value}", []
+
+        elif self.operator == FilterOperator.BETWEEN:
+            return f"{self.aggregate_expression} BETWEEN %s AND %s", [self.value, self.value2]
+
+        elif self.operator in [FilterOperator.IN, FilterOperator.NOT_IN]:
+            if isinstance(self.value, (list, tuple)):
+                placeholders = ','.join(['%s'] * len(self.value))
+                return f"{self.aggregate_expression} {self.operator.value} ({placeholders})", list(self.value)
+            else:
+                placeholders = '%s'
+                return f"{self.aggregate_expression} {self.operator.value} ({placeholders})", [self.value]
+
+        else:
+            return f"{self.aggregate_expression} {self.operator.value} %s", [self.value]
+
+
 class FlexibleSQLAssembler:
     """灵活的SQL组装器 - 支持多种自定义方式"""
 
@@ -231,6 +280,8 @@ class FlexibleSQLAssembler:
         self.db_type = db_type
         self.select_parts: List[SQLFragment] = []  # 统一处理SELECT的各个部分
         self.where_conditions: List[SQLFragment] = []  # 统一处理WHERE条件
+        self.group_by_parts: List[SQLFragment] = []  # GROUP BY部分
+        self.having_conditions: List[SQLFragment] = []  # HAVING条件
         self.order_by_parts: List[SQLFragment] = []  # 统一处理ORDER BY
         self.limit_count: Optional[int] = None
         self.offset_count: Optional[int] = None
@@ -333,6 +384,69 @@ class FlexibleSQLAssembler:
         self.where_conditions.append(raw_fragment)
         return self
 
+    # ============ GROUP BY相关方法 ============
+    def add_group_by(self, field: str) -> 'FlexibleSQLAssembler':
+        """添加标准分组字段"""
+        group_clause = GroupByClause(field)
+        self.group_by_parts.append(group_clause)
+        return self
+
+    def add_raw_group_by(self, sql_expression: str) -> 'FlexibleSQLAssembler':
+        """
+        添加原始GROUP BY表达式
+
+        Args:
+            sql_expression: 分组表达式，如 "DATE(created_at)" 或 "YEAR(birth_date), MONTH(birth_date)"
+        """
+        raw_fragment = RawSQLFragment(sql_expression)
+        self.group_by_parts.append(raw_fragment)
+        return self
+
+    def add_multiple_group_by(self, fields: List[str]) -> 'FlexibleSQLAssembler':
+        """批量添加分组字段"""
+        for field in fields:
+            self.add_group_by(field)
+        return self
+
+    # ============ HAVING相关方法 ============
+    def add_having(self, aggregate_expression: str, operator: FilterOperator, value: Any = None,
+                   value2: Any = None) -> 'FlexibleSQLAssembler':
+        """
+        添加标准HAVING条件
+
+        Args:
+            aggregate_expression: 聚合表达式，如 "COUNT(*)", "SUM(amount)"
+            operator: 操作符
+            value: 值
+            value2: 第二个值（用于BETWEEN）
+        """
+        having_condition = HavingCondition(aggregate_expression, operator, value, value2)
+        self.having_conditions.append(having_condition)
+        return self
+
+    def add_raw_having(self, sql_condition: str) -> 'FlexibleSQLAssembler':
+        """
+        添加原始HAVING条件
+
+        Args:
+            sql_condition: 完整的HAVING条件，如 "COUNT(*) > 5 AND SUM(amount) < 1000"
+        """
+        raw_fragment = RawSQLFragment(sql_condition)
+        self.having_conditions.append(raw_fragment)
+        return self
+
+    def add_parameterized_having(self, sql_template: str, parameters: List[Any]) -> 'FlexibleSQLAssembler':
+        """
+        添加带参数的HAVING条件
+
+        Args:
+            sql_template: 带参数占位符的条件模板
+            parameters: 参数列表
+        """
+        raw_fragment = RawSQLFragment(sql_template, parameters)
+        self.having_conditions.append(raw_fragment)
+        return self
+
     # ============ ORDER BY相关方法 ============
     def add_order_by(self, field: str, direction: OrderDirection = OrderDirection.ASC) -> 'FlexibleSQLAssembler':
         """添加标准排序"""
@@ -363,7 +477,7 @@ class FlexibleSQLAssembler:
         添加其他自定义子句
 
         Args:
-            clause_name: 子句名称，如 'additional_joins', 'having'
+            clause_name: 子句名称，如 'additional_joins'
             sql_content: SQL内容
         """
         self.additional_clauses[clause_name] = sql_content
@@ -401,6 +515,26 @@ class FlexibleSQLAssembler:
                 all_params.extend(condition_params)
             where_clause = "WHERE " + " AND ".join(where_expressions)
 
+        # 构建GROUP BY子句
+        group_by_clause = ""
+        if self.group_by_parts:
+            group_expressions = []
+            for part in self.group_by_parts:
+                part_sql, part_params = part.to_sql(self.db_type)
+                group_expressions.append(part_sql)
+                all_params.extend(part_params)
+            group_by_clause = "GROUP BY " + ", ".join(group_expressions)
+
+        # 构建HAVING子句
+        having_clause = ""
+        if self.having_conditions:
+            having_expressions = []
+            for condition in self.having_conditions:
+                condition_sql, condition_params = condition.to_sql(self.db_type)
+                having_expressions.append(condition_sql)
+                all_params.extend(condition_params)
+            having_clause = "HAVING " + " AND ".join(having_expressions)
+
         # 构建ORDER BY子句
         order_by_clause = ""
         if self.order_by_parts:
@@ -410,11 +544,6 @@ class FlexibleSQLAssembler:
                 order_expressions.append(part_sql)
                 all_params.extend(part_params)
             order_by_clause = "ORDER BY " + ", ".join(order_expressions)
-
-        # 构建HAVING子句（如果有）
-        having_clause = ""
-        if 'having' in self.additional_clauses:
-            having_clause = f"HAVING {self.additional_clauses['having']}"
 
         # 构建LIMIT子句
         limit_clause = ""
@@ -428,6 +557,8 @@ class FlexibleSQLAssembler:
         sql_parts = [select_clause, from_clause]
         if where_clause:
             sql_parts.append(where_clause)
+        if group_by_clause:
+            sql_parts.append(group_by_clause)
         if having_clause:
             sql_parts.append(having_clause)
         if order_by_clause:
@@ -448,6 +579,8 @@ class FlexibleSQLAssembler:
         """清空所有设置"""
         self.select_parts.clear()
         self.where_conditions.clear()
+        self.group_by_parts.clear()
+        self.having_conditions.clear()
         self.order_by_parts.clear()
         self.additional_clauses.clear()
         self.limit_count = None
@@ -457,132 +590,105 @@ class FlexibleSQLAssembler:
 
 # 使用示例
 if __name__ == "__main__":
-    # PostgreSQL示例
-    print("=== PostgreSQL示例 ===")
-    pg_assembler = FlexibleSQLAssembler(
-        "gx_test_teachers AS t1 LEFT JOIN gx_test_departments AS t2 ON t1.department_id = t2.department_id",
-        DatabaseType.POSTGRESQL
-    )
-
-    pg_assembler.add_column("t1.teacher_id") \
-        .add_column("t1.name") \
-        .add_column("t1.title") \
-        .add_filter("t2.department_name", FilterOperator.EQUALS, "计算机科学与技术学院") \
-        .add_raw_where("(t1.title = '副教授' OR t1.title = '讲师')")
-
-    pg_sql, pg_params = pg_assembler.build_sql_for_jdbc()
-    print(f"PostgreSQL SQL: {pg_sql}")
-    print(f"参数: {pg_params}")
-    print()
-
-    # MySQL示例
-    print("=== MySQL示例 ===")
-    mysql_assembler = FlexibleSQLAssembler(
-        "gx_test_teachers AS t1 LEFT JOIN gx_test_departments AS t2 ON t1.department_id = t2.department_id",
+    # 示例1：基本的GROUP BY和HAVING使用
+    print("=== 示例1：基本的GROUP BY和HAVING ===")
+    assembler = FlexibleSQLAssembler(
+        "orders o INNER JOIN customers c ON o.customer_id = c.id",
         DatabaseType.MYSQL
     )
 
-    mysql_assembler.add_column("t1.teacher_id") \
-        .add_column("t1.name") \
-        .add_column("t1.title") \
-        .add_filter("t2.department_name", FilterOperator.EQUALS, "计算机科学与技术学院") \
-        .add_raw_where("(t1.title = '副教授' OR t1.title = '讲师')")
-
-    mysql_sql, mysql_params = mysql_assembler.build_sql_for_jdbc()
-    print(f"MySQL SQL: {mysql_sql}")
-    print(f"参数: {mysql_params}")
-
-# 使用示例
-if __name__ == "__main__":
-    # 创建灵活的SQL组装器
-    assembler = FlexibleSQLAssembler("users u LEFT JOIN departments d ON u.dept_id = d.id")
-
-    print("=== 示例1：用户直接写完整SQL表达式 ===")
     sql1, params1 = (assembler
-                     .add_column('u.name')
-                     .add_column('u.email')
-                     # 用户直接写完整的SQL表达式
-                     .add_raw_column("COUNT(CASE WHEN o.status = 'completed' THEN 1 END)", 'completed_orders')
-                     .add_raw_column("TIMESTAMPDIFF(YEAR, u.birth_date, CURDATE())", 'age')
-                     .add_clause('additional_joins', 'LEFT JOIN orders o ON u.id = o.user_id')
+                     .add_column("c.country")
+                     .add_raw_column("COUNT(*)", "order_count")
+                     .add_raw_column("SUM(o.total_amount)", "total_revenue")
+                     .add_filter("o.status", FilterOperator.EQUALS, "completed")
+                     .add_group_by("c.country")
+                     .add_having("COUNT(*)", FilterOperator.GREATER_THAN, 10)
+                     .add_having("SUM(o.total_amount)", FilterOperator.GREATER_THAN, 50000)
+                     .add_order_by("total_revenue", OrderDirection.DESC)
                      .build_sql())
 
     print(f"SQL: {sql1}")
     print(f"参数: {params1}")
     print()
 
-    print("=== 示例2：IN操作符的各种处理方式 ===")
+    # 示例2：复杂的GROUP BY（按表达式分组）
+    print("=== 示例2：按表达式分组 ===")
     assembler.clear_all()
 
-    # 方式1：标准IN操作（推荐用于动态值）
-    dept_ids = [1, 2, 3, 4]  # 来自用户选择或配置
-    user_roles = ['admin', 'manager', 'lead']  # 来自权限配置
-
     sql2, params2 = (assembler
-                     .add_column('u.name')
-                     .add_column('d.dept_name')
-                     .add_filter('u.dept_id', FilterOperator.IN, dept_ids)  # 自动生成多个占位符
-                     .add_filter('u.role', FilterOperator.IN, user_roles)  # 字符串列表
-                     .add_filter('u.status', FilterOperator.NOT_IN, ['deleted', 'banned'])  # NOT IN
-                     .build_sql_for_jdbc())
+                     .add_raw_column("YEAR(o.created_at)", "order_year")
+                     .add_raw_column("MONTH(o.created_at)", "order_month")
+                     .add_raw_column("COUNT(*)", "monthly_orders")
+                     .add_raw_column("AVG(o.total_amount)", "avg_order_value")
+                     .add_filter("o.created_at", FilterOperator.GREATER_EQUAL, "2023-01-01")
+                     .add_raw_group_by("YEAR(o.created_at), MONTH(o.created_at)")
+                     .add_having("COUNT(*)", FilterOperator.GREATER_THAN, 100)
+                     .add_order_by("order_year", OrderDirection.DESC)
+                     .add_order_by("order_month", OrderDirection.DESC)
+                     .build_sql())
 
     print(f"SQL: {sql2}")
     print(f"参数: {params2}")
     print()
 
-    print("=== 示例3：用户自定义IN条件 ===")
+    # 示例3：多字段分组
+    print("=== 示例3：多字段分组 ===")
     assembler.clear_all()
 
-    # 方式2：用户直接写IN语句（适合固定值）
     sql3, params3 = (assembler
-                     .add_column('u.name')
-                     .add_raw_where("u.dept_id IN (1, 2, 3)")  # 用户直接写
-                     .add_raw_where("u.role IN ('admin', 'manager')")  # 固定角色
-                     .add_raw_where("u.id NOT IN (SELECT blocked_user_id FROM blocked_users)")  # 子查询
+                     .add_column("c.country")
+                     .add_column("c.city")
+                     .add_column("o.product_category")
+                     .add_raw_column("COUNT(DISTINCT o.customer_id)", "unique_customers")
+                     .add_raw_column("SUM(o.quantity)", "total_quantity")
+                     .add_multiple_group_by(["c.country", "c.city", "o.product_category"])
+                     .add_having("SUM(o.quantity)", FilterOperator.BETWEEN, 100, 1000)
                      .build_sql())
 
     print(f"SQL: {sql3}")
     print(f"参数: {params3}")
     print()
 
-    print("=== 示例4：混合IN操作和其他条件 ===")
+    # 示例4：参数化的HAVING条件
+    print("=== 示例4：参数化的HAVING条件 ===")
     assembler.clear_all()
 
-    # 场景：部分条件来自用户选择，部分来自系统规则
-    selected_depts = [10, 20, 30]  # 用户在界面上选择的部门
+    min_orders = 5
+    min_revenue = 10000
+    max_revenue = 100000
 
     sql4, params4 = (assembler
-                     .add_column('u.name')
-                     .add_column('u.salary')
-                     .add_filter('u.dept_id', FilterOperator.IN, selected_depts)  # 动态部门
-                     .add_filter('u.status', FilterOperator.EQUALS, 'active')  # 固定状态
-                     .add_raw_where("u.role IN ('admin', 'manager')")  # 固定角色限制
-                     .add_raw_where("u.hire_date >= '2020-01-01'")  # 固定日期限制
+                     .add_column("c.customer_id")
+                     .add_column("c.customer_name")
+                     .add_raw_column("COUNT(o.order_id)", "total_orders")
+                     .add_raw_column("SUM(o.total_amount)", "lifetime_value")
+                     .add_group_by("c.customer_id")
+                     .add_group_by("c.customer_name")
+                     .add_parameterized_having(
+        "COUNT(o.order_id) >= %s AND SUM(o.total_amount) BETWEEN %s AND %s",
+        [min_orders, min_revenue, max_revenue]
+    )
+                     .add_order_by("lifetime_value", OrderDirection.DESC)
+                     .set_limit(10)
                      .build_sql())
 
     print(f"SQL: {sql4}")
     print(f"参数: {params4}")
     print()
 
-    print("=== 示例5：复杂IN场景 - 参数化子查询 ===")
+    # 示例5：原始HAVING条件
+    print("=== 示例5：复杂的原始HAVING条件 ===")
     assembler.clear_all()
 
-    # 高级场景：IN中包含参数化子查询
-    current_year = 2024
-    min_order_count = 5
-
     sql5, params5 = (assembler
-                     .add_column('u.name')
-                     .add_column('u.email')
-                     .add_parameterized_where(
-        """u.id IN (
-            SELECT user_id 
-            FROM orders 
-            WHERE YEAR(created_at) = %s 
-            GROUP BY user_id 
-            HAVING COUNT(*) >= %s
-        )""",
-        [current_year, min_order_count]
+                     .add_column("o.product_id")
+                     .add_raw_column("COUNT(*)", "sale_count")
+                     .add_raw_column("AVG(o.unit_price)", "avg_price")
+                     .add_raw_column("STDDEV(o.unit_price)", "price_variance")
+                     .add_group_by("o.product_id")
+                     .add_raw_having(
+        "COUNT(*) > 20 AND (AVG(o.unit_price) > 100 OR STDDEV(o.unit_price) < 10)"
     )
                      .build_sql())
 
@@ -590,45 +696,72 @@ if __name__ == "__main__":
     print(f"参数: {params5}")
     print()
 
-    print("=== 示例6：单值IN的处理 ===")
+    # 示例6：带ROLLUP的GROUP BY（MySQL特性）
+    print("=== 示例6：带ROLLUP的GROUP BY ===")
     assembler.clear_all()
 
-    # 测试单个值的IN操作
-    single_dept = 5
-
     sql6, params6 = (assembler
-                     .add_column('u.name')
-                     .add_filter('u.dept_id', FilterOperator.IN, single_dept)  # 单个值
-                     .add_filter('u.role', FilterOperator.IN, ['admin'])  # 单元素列表
+                     .add_column("c.region")
+                     .add_column("c.country")
+                     .add_raw_column("SUM(o.total_amount)", "total_sales")
+                     .add_raw_column("COUNT(DISTINCT o.customer_id)", "customer_count")
+                     .add_raw_group_by("c.region, c.country WITH ROLLUP")
                      .build_sql())
 
     print(f"SQL: {sql6}")
     print(f"参数: {params6}")
     print()
 
-    print("=== 示例7：空列表IN的边界情况处理 ===")
+    # 示例7：综合示例 - 销售分析报表
+    print("=== 示例7：综合销售分析报表 ===")
     assembler.clear_all()
 
-    try:
-        # 演示空列表的处理（实际使用中应该在业务层面处理）
-        empty_list = []
-        if empty_list:  # 业务层检查
-            assembler.add_filter('u.dept_id', FilterOperator.IN, empty_list)
-        else:
-            # 空列表时的替代处理
-            assembler.add_raw_where("1 = 0")  # 或者其他业务逻辑
+    current_year = 2024
 
-        sql7, params7 = assembler.add_column('u.name').build_sql()
-        print(f"SQL: {sql7}")
-        print(f"参数: {params7}")
+    sql7, params7 = (assembler
+                     .add_raw_column("DATE_FORMAT(o.created_at, '%Y-%m')", "month")
+                     .add_column("p.category")
+                     .add_raw_column("COUNT(DISTINCT o.order_id)", "order_count")
+                     .add_raw_column("COUNT(DISTINCT o.customer_id)", "customer_count")
+                     .add_raw_column("SUM(o.quantity)", "units_sold")
+                     .add_raw_column("SUM(o.total_amount)", "revenue")
+                     .add_raw_column("AVG(o.total_amount)", "avg_order_value")
+                     .add_raw_column("SUM(o.total_amount) / COUNT(DISTINCT o.customer_id)", "revenue_per_customer")
+                     .add_clause("additional_joins", "INNER JOIN products p ON o.product_id = p.id")
+                     .add_parameterized_where("YEAR(o.created_at) = %s", [current_year])
+                     .add_filter("o.status", FilterOperator.IN, ["completed", "shipped"])
+                     .add_raw_group_by("DATE_FORMAT(o.created_at, '%Y-%m'), p.category")
+                     .add_having("SUM(o.total_amount)", FilterOperator.GREATER_THAN, 10000)
+                     .add_raw_having("COUNT(DISTINCT o.customer_id) >= 50")
+                     .add_raw_order_by("DATE_FORMAT(o.created_at, '%Y-%m')")
+                     .add_order_by("revenue", OrderDirection.DESC)
+                     .build_sql())
 
-    except Exception as e:
-        print(f"处理空列表时的错误: {e}")
-
+    print(f"SQL: {sql7}")
+    print(f"参数: {params7}")
     print()
 
-    print("=== 总结：IN操作的最佳实践 ===")
-    print("1. 动态值列表 -> 使用 add_filter() + FilterOperator.IN")
-    print("2. 固定值列表 -> 使用 add_raw_where() 直接写SQL")
-    print("3. 复杂子查询 -> 使用 add_parameterized_where()")
-    print("4. 空列表检查 -> 在业务层面提前处理")
+    # 示例8：HAVING中使用IN操作符
+    print("=== 示例8：HAVING中使用IN操作符 ===")
+    assembler.clear_all()
+
+    target_counts = [10, 20, 30, 40, 50]
+
+    sql8, params8 = (assembler
+                     .add_column("c.customer_id")
+                     .add_raw_column("COUNT(o.order_id)", "order_count")
+                     .add_group_by("c.customer_id")
+                     .add_having("COUNT(o.order_id)", FilterOperator.IN, target_counts)
+                     .build_sql_for_jdbc())  # 使用JDBC格式
+
+    print(f"JDBC SQL: {sql8}")
+    print(f"参数: {params8}")
+    print()
+
+    print("=== 总结：GROUP BY和HAVING的使用方式 ===")
+    print("1. 标准分组 -> 使用 add_group_by()")
+    print("2. 表达式分组 -> 使用 add_raw_group_by()")
+    print("3. 多字段分组 -> 使用 add_multiple_group_by()")
+    print("4. 标准HAVING -> 使用 add_having()")
+    print("5. 复杂HAVING -> 使用 add_raw_having()")
+    print("6. 参数化HAVING -> 使用 add_parameterized_having()")

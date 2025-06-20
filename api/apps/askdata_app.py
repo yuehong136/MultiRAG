@@ -338,7 +338,7 @@ class ReQueryRequest(BaseModel):
     ask_id: str = Field(..., description="用户的提问ID")
     chart_type: str = Field(..., description="图表类型")
     table_config: Dict[str, Any] = Field(..., description="表配置"),
-    base_from: str = Field(..., description="基础的FROM子句"),
+    sql_components: Dict[str, Any] = Field(..., description="SQL组件"),
     model_table_alias_mapping_list: List[Dict[str, Any]] = Field(..., description="模型表别名映射列表"),
 
 
@@ -357,7 +357,7 @@ async def re_query(
     logger.info(f"chart_type: {body.chart_type}\n table_config: {body.table_config}")
 
     try:
-        sql, params = await service.generate_requery_sql(body.chart_type, body.table_config, base_from=body.base_from,
+        sql, params = await service.generate_requery_sql(body.chart_type, body.table_config, sql_components=body.sql_components,
                                                          model_table_alias_mapping_list=body.model_table_alias_mapping_list)
 
         # TODO dataset_id 暂时写死，按理说是从大模型生成SQL时得到的，只允许有一个dataset_id
