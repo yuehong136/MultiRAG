@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any, List, Dict, Optional, Tuple, Set
 
 from fastapi.params import Depends
+from setuptools.command.alias import alias
 from sqlalchemy.orm import Session
 
 from api.apps import manager
@@ -298,15 +299,18 @@ class AskdataService:
                     semantic_field = self._find_semantic_field(metric["id"], all_semantic_fields)
                     table_alias = self._find_table_alias(semantic_field["from_model_id"],
                                                          model_table_alias_mapping_list)
+                    model_name = self._find_model_name(semantic_field["from_model_id"], model_table_alias_mapping_list)
                     if metric["semantic_type"] == "measure" or metric["semantic_type"] == "dimension":
-                        column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                        column_name = f"{table_alias}.{semantic_field['field_detail']['metricEnName']}"
                         aggr_type = metric["type"]
                         if aggr_type == "COUNT_DISTINCT":
+                            alias = f"COUNT_DISTINCT_{model_name}_{{semantic_field['field_detail']['metricEnName']}}"
                             assembler.add_raw_column(f"COUNT(DISTINCT {column_name})",
-                                                     f"COUNT(DISTINCT {semantic_field['semantic_field_name']})")
+                                                     alias)
                         else:
+                            alias = f"{aggr_type}_{model_name}_{semantic_field['field_detail']['metricEnName']}"
                             assembler.add_raw_column(f"{aggr_type}({column_name})",
-                                                     f"{aggr_type}({semantic_field['semantic_field_name']})")
+                                                     alias)
                     elif metric["semantic_type"] == "metric":
                         expression = semantic_field["field_detail"]["expression"]
                         processor = SQLFieldAliasProcessor()
@@ -346,6 +350,12 @@ class AskdataService:
                 return mapping["alias"]
 
         return None
+
+    def _find_model_name(self, model_id: str, table_alias_mapping_list: List[Dict[str, Any]]) -> Optional[str]:
+        """根据模型ID查找模型名称"""
+        for mapping in table_alias_mapping_list:
+            if mapping["modelId"] == model_id:
+                return mapping["modelName"]
 
 
 def get_askdata_service(db: Session = Depends(get_db), user=Depends(manager)) -> AskdataService:

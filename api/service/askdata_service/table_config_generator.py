@@ -39,7 +39,7 @@ class TableConfigGenerator:
                     alias = alias_and_table["alias"]
                     break
             model_table_alias_mapping_list.append(
-                {"modelId": model["modelId"], "table": model["tableName"], "alias": alias})
+                {"modelId": model["modelId"], "table": model["tableName"], "alias": alias, "modelName": model["modelName"]})
 
         if recommended_chart == "明细表":
             # 4. 一次性构建所有语义字段信息
