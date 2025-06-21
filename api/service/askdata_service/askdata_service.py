@@ -312,6 +312,8 @@ class AskdataService:
                         processor = SQLFieldAliasProcessor()
                         new_expression = processor.add_table_alias_to_expression(expression, table_alias)
                         assembler.add_raw_column(new_expression)
+                else:
+                    assembler.add_raw_column(metric["sql_column"])
 
             if len(sql_components["where"]) > 0:
                 assembler.add_raw_where(sql_components["where"])
