@@ -38,7 +38,7 @@ class DeleteByOwnerTypeRequest(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "type": "MODEL",
                 "id": "model_12345"
@@ -60,7 +60,7 @@ class DeleteByElementTypeRequest(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "element_type": "METRIC",
                 "id": "12345"
@@ -107,7 +107,8 @@ class TextItemBase(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        protected_namespaces = ()
+        json_schema_extra = {
             "example": {
                 "text": "这是一个数据集描述的示例文本，该数据集包含了2010-2020年的气象数据。",
                 "type": "DATASET_DESC",
@@ -127,7 +128,7 @@ class BatchTextItem(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "items": [
                     {
@@ -195,7 +196,8 @@ class SearchVectorsRequest(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        protected_namespaces = ()
+        json_schema_extra = {
             "example": {
                 "query_text": "气象数据分析",
                 "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",

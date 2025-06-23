@@ -372,6 +372,9 @@ class ReQueryRequest(BaseModel):
     model_table_alias_mapping_list: List[Dict[str, Any]] = Field(..., description="模型表别名映射列表"),
     dataset_id: str = Field(..., description="数据集ID")
 
+    class Config:
+        protected_namespaces = ()
+
 
 @router.post("/re-query", response_model=ResponseSchema,
              summary="获得语义层信息")

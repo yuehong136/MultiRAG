@@ -54,7 +54,7 @@ class QueryRewriteRequest(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "query_text": "显示上个季度的销售数据",
                 "llm_name": "gpt-4",
@@ -149,7 +149,7 @@ class NL2SQLRequest(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "query_text": "查询销售额最高的前10个产品",
                 "llm_name": "gpt-4",
