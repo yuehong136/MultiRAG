@@ -163,6 +163,11 @@ class NLQToInitialSQLGenerator:
                 gen_conf=gen_conf
             )
 
+            logger.info(f"智能问数-LLM-生成SQL")
+            logger.info(f"prompt:{prompt}")
+            logger.info(f"gen_conf:{gen_conf}")
+            logger.info(f"response:{response}")
+
             json_response = self._extract_llm_response_json(response)
             if not json_response:
                 logger.error(f"无法从LLM的响应中提取JSON。原始响应: {response}")

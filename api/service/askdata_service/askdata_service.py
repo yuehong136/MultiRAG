@@ -100,6 +100,8 @@ class AskdataService:
             llm_name=llm_name
         )
 
+        logger.info(f"recommended_chart: {recommended_chart}, recommendation_reason: {recommendation_reason}")
+
         return processed_semantic_layer, model_ids, recommended_chart, recommendation_reason
 
     async def analyze_user_query_stream(

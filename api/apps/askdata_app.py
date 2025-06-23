@@ -61,6 +61,14 @@ async def get_sql_and_table_config(
             recommended_chart=body.semantic_layer.get('recommended_chart'),
         )
 
+        sql = sql_generation_result["sql"]
+        used_models = sql_generation_result["usedModels"]
+        sql_components = sql_generation_result["sqlComponents"]
+
+        logger.info(f"sql:{sql}")
+        logger.info(f"used_models:{used_models}")
+        logger.info(f"sql_components:{sql_components}")
+
         if not sql_generation_result or not sql_generation_result.get("sql"):
             logger.error("未能从Service层获取有效的SQL生成结果。")
             return ResponseSchema(
@@ -98,6 +106,9 @@ async def get_sql_and_table_config(
             sql_components=sql_components,
             recommended_chart=body.semantic_layer.get('recommended_chart')
         )
+
+        logger.info(f"model_table_alias_mapping_list:{model_table_alias_mapping_list}")
+        logger.info(f"table_config:{table_config}")
 
         # 4. 构建返回给前端的数据结构
         # 将sql_generation_result中的所有内容都包含进去
@@ -275,6 +286,11 @@ async def get_semantic_layer_streaming(
             event_id=custom_event_id,
             llm_name=body.llm_name)
 
+        logger.info(f"processed_semantic_layer:{processed_semantic_layer}")
+        logger.info(f"model_ids:{model_ids}")
+        logger.info(f"recommended_chart:{recommended_chart}")
+        logger.info(f"recommendation_reason:{recommendation_reason}")
+
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
             message="获得语义层信息成功",
@@ -284,7 +300,7 @@ async def get_semantic_layer_streaming(
         )
 
     except Exception as e:
-        logger.exception("使用自定义事件ID启动流式聊天失败")
+        logger.exception("获得语义层信息失败")
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"启动聊天失败：{str(e)}"
@@ -369,12 +385,15 @@ async def re_query(
         ),
         service: AskdataService = Depends(get_askdata_service)
 ) -> ResponseSchema:
-    logger.info(f"chart_type: {body.chart_type}\n table_config: {body.table_config}")
+    logger.info(f"re-query chart_type: {body.chart_type}\n table_config: {body.table_config}")
 
     try:
         sql, params = await service.generate_requery_sql(body.chart_type, body.table_config,
                                                          sql_components=body.sql_components,
                                                          model_table_alias_mapping_list=body.model_table_alias_mapping_list)
+
+        logger.info(f"sql:{sql}")
+        logger.info(f"params:{params}")
 
         result = await query_data_with_params(sql, int(body.dataset_id), params)
 
