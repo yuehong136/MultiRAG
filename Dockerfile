@@ -47,6 +47,7 @@ RUN apt update && apt -y install ca-certificates && \
     make && \
     make install PREFIX=/usr/local/redis && \
     mkdir -p /etc/redis  && \
+    mkdir /mirror && \
     cp redis.conf /etc/redis/redis.conf && \
     cd .. && \
     rm -rf redis-7.4.3 redis-7.4.3.tar.gz && \
@@ -60,15 +61,17 @@ RUN apt update && apt -y install ca-certificates && \
     # 清理apt缓存和安装包
     apt clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/*
-
+#将本地/mirror下的所有文件复制到容器中/mirror
+COPY mirror/ /mirror/
 
 ENV PYTHONDONTWRITEBYTECODE=1 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 ENV PATH=/root/.local/bin:$PATH
 
 #安装python
 RUN mkdir -p /etc/uv && \
-    echo 'python-install-mirror = "http://maven.datav.com/repository/static/indygreg/python-build-standalone/"' > /etc/uv/uv.toml && \
-    uv python install 3.12
+    echo 'python-install-mirror = "file:///mirror"' > /etc/uv/uv.toml && \
+    uv python install 3.12.11 && \
+    rm -rf /mirror  # 安装后删除
 
 # 使用mount绑定挂载模型文件并根据条件复制到目标位置
 RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co,target=/huggingface.co \
