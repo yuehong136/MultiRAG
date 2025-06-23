@@ -644,6 +644,31 @@ class WritingChapterContent(BaseModel):
         }
 
 
+class AskDataHistory(BaseModel):
+    __tablename__ = "t_ai_ask_data_history"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    conversation_id = Column(String(32), index=True, nullable=False, doc="conversation_id")
+    ask_id = Column(String(32), index=True, nullable=False, doc="ask_id")
+    user_id = Column(String(32), index=True, nullable=True, doc="user_id")
+    data = Column(Text, index=False, nullable=False, doc="data")
+    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+
+    def to_dict(self):
+        """序列化方法"""
+        return {
+            "id": self.id,
+            "conversation_id": self.conversation_id,
+            "ask_id": self.ask_id,
+            "user_id": self.user_id,
+            "data": self.data,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+
 '''
 拥有权限，采用这种方式
 '''
