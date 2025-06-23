@@ -168,6 +168,7 @@ dependencies = [
     "debugpy>=1.8.13",
     "mcp>=1.6.0",
 #    "opensearch-py==2.7.1"
+    "jieba>=0.42.1"
 ]
 
 [tool.uv]
