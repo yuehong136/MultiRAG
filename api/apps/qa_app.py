@@ -187,6 +187,19 @@ class RAGAnswerResponse(BaseModel):
     confidence: float = Field(..., description="回答置信度")
 
 
+class DeleteTemplateRequest(BaseModel):
+    """删除QA模板请求"""
+    qa_ids: str | list[str] = Field(..., description="要删除的QA模板ID，可以是单个ID或ID列表")
+
+
+class DeleteTemplateResponse(BaseModel):
+    """删除QA模板响应"""
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="操作结果信息")
+    deleted_count: int | None = Field(None, description="删除的记录数量")
+    failed_qa_ids: list[str] | None = Field(None, description="删除失败的qa_id列表")
+
+
 # ================================
 # API接口实现
 # ================================
@@ -283,6 +296,80 @@ def clear_templates(
 
     except Exception as e:
         logger.error(f"Error in clear_templates: {e}")
+        return server_error_response(e)
+
+
+@router.post("/delete_template", summary="删除QA模板", response_description="根据qa_id删除指定的QA模板（支持单个或批量）")
+def delete_template(
+        request: DeleteTemplateRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    根据qa_id删除指定的QA模板（支持单个或批量删除）
+
+    **功能描述:**
+    - 删除当前租户中指定qa_id的QA模板记录
+    - 支持单个qa_id或qa_id列表进行批量删除
+    - 会删除该模板的所有相关记录（标准问法和同义句）
+    - 只影响当前租户的数据
+
+    **参数说明:**
+    - qa_ids: 要删除的QA模板ID，可以是：
+      - 单个字符串：删除一个模板
+      - 字符串列表：批量删除多个模板
+
+    **返回值:**
+    - success: 操作是否成功（批量删除时，只要有一个成功就为true）
+    - message: 操作结果信息
+    - deleted_count: 删除的总记录数量
+    - failed_qa_ids: 删除失败的qa_id列表（仅批量删除时）
+
+    **使用示例:**
+    ```json
+    // 删除单个模板
+    {"qa_ids": "template_001"}
+    
+    // 批量删除多个模板
+    {"qa_ids": ["template_001", "template_002", "template_003"]}
+    ```
+
+    **注意事项:**
+    - 删除操作不可逆，请谨慎使用
+    - 只能删除当前租户下的模板
+    - 批量删除时，部分成功也会返回成功状态
+    - 如果qa_id不存在，会在failed_qa_ids中返回
+    """
+    try:
+        tenant_id = get_user_tenant_id(db, user.id)
+
+        # 处理qa_ids参数，统一转换为列表
+        if isinstance(request.qa_ids, str):
+            if not request.qa_ids.strip():
+                return get_data_error_result(retmsg="qa_ids不能为空")
+            qa_ids_list = [request.qa_ids.strip()]
+        elif isinstance(request.qa_ids, list):
+            if not request.qa_ids:
+                return get_data_error_result(retmsg="qa_ids列表不能为空")
+            qa_ids_list = [qa_id.strip() for qa_id in request.qa_ids if qa_id.strip()]
+            if not qa_ids_list:
+                return get_data_error_result(retmsg="qa_ids列表中没有有效的ID")
+        else:
+            return get_data_error_result(retmsg="qa_ids必须是字符串或字符串列表")
+
+        # 调用删除服务
+        result = template_storage.delete_templates_by_qa_ids(
+            qa_ids=qa_ids_list,
+            tenant_id=tenant_id
+        )
+
+        if result["success"]:
+            return get_json_result(data=result)
+        else:
+            return get_data_error_result(retmsg=result["message"])
+
+    except Exception as e:
+        logger.error(f"Error in delete_template: {e}")
         return server_error_response(e)
 
 
@@ -653,7 +740,8 @@ def get_system_info(
             "supported_operations": {
                 "template_management": [
                     "POST /store_templates - 存储QA模板",
-                    "POST /clear_templates - 清空模板"
+                    "POST /clear_templates - 清空所有模板",
+                    "POST /delete_template - 删除指定模板（支持单个或批量）"
                 ],
                 "query_interpretation": [
                     "POST /interpret_stateless - 无状态查询解释（支持多轮）",

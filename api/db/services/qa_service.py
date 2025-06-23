@@ -20,7 +20,7 @@ from core.utils import get_float
 logger = logging.getLogger(__name__)
 
 # 固定的QA模板集合名称
-QA_TEMPLATE_COLLECTION = "bl_qa_template1"
+QA_TEMPLATE_COLLECTION = "bl_qa_template"
 
 # ================================
 # 1. 模板存储服务
@@ -38,13 +38,16 @@ class QATemplateStorageService:
             if settings.docStoreConn.has_collection(self.collection_name):
                 return True, "集合已存在"
 
+            analyzer_params = {
+                "type": "chinese",
+            }
             # 定义字段schema
             fields = [
                 # 主键字段
                 FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=100, is_primary=True),
                 # QA模板字段
                 FieldSchema(name="qa_id", dtype=DataType.VARCHAR, max_length=200),
-                FieldSchema(name="question_canonical", dtype=DataType.VARCHAR, max_length=2000, enable_analyzer=True),
+                FieldSchema(name="question_canonical", dtype=DataType.VARCHAR, max_length=2000, enable_analyzer=True, analyzer_params=analyzer_params),
                 FieldSchema(name="paraphrases", dtype=DataType.VARCHAR, max_length=8000),  # JSON字符串存储
                 FieldSchema(name="needed_params", dtype=DataType.VARCHAR, max_length=2000),  # JSON字符串存储
                 FieldSchema(name="sql_template", dtype=DataType.VARCHAR, max_length=8000),
@@ -231,6 +234,86 @@ class QATemplateStorageService:
             return {
                 "success": False,
                 "message": f"清空模板失败: {str(e)}"
+            }
+
+    def delete_template_by_qa_id(self, qa_id: str, tenant_id: str) -> dict[str, Any]:
+        """根据qa_id删除指定模板（单个）"""
+        return self.delete_templates_by_qa_ids([qa_id], tenant_id)
+
+    def delete_templates_by_qa_ids(self, qa_ids: list[str], tenant_id: str) -> dict[str, Any]:
+        """根据qa_id列表批量删除模板"""
+        try:
+            # 检查集合是否存在
+            if not settings.docStoreConn.has_collection(self.collection_name):
+                return {
+                    "success": False,
+                    "message": f"QA模板集合 {self.collection_name} 不存在"
+                }
+
+            if not qa_ids:
+                return {
+                    "success": False,
+                    "message": "qa_ids列表不能为空"
+                }
+
+            total_deleted = 0
+            failed_qa_ids = []
+            success_qa_ids = []
+
+            for qa_id in qa_ids:
+                try:
+                    # 构建删除条件：匹配指定租户和qa_id的所有记录
+                    delete_expr = f'tenant_id == "{tenant_id}" && qa_id == "{qa_id}"'
+                    
+                    # 先查询要删除的记录数量
+                    query_results = settings.docStoreConn.query(
+                        collection_name=self.collection_name,
+                        filter=delete_expr,
+                        output_fields=["id"]
+                    )
+                    
+                    if not query_results:
+                        logger.warning(f"未找到租户 {tenant_id} 中 qa_id 为 {qa_id} 的模板")
+                        failed_qa_ids.append(qa_id)
+                        continue
+
+                    # 执行删除操作
+                    delete_result = settings.docStoreConn.delete(
+                        collection_name=self.collection_name,
+                        filter=delete_expr
+                    )
+
+                    logger.info(f"删除QA模板 {qa_id} 结果: {delete_result}")
+                    total_deleted += len(query_results)
+                    success_qa_ids.append(qa_id)
+
+                except Exception as e:
+                    logger.error(f"删除QA模板 {qa_id} 失败: {e}")
+                    failed_qa_ids.append(qa_id)
+
+            # 生成结果消息
+            if failed_qa_ids:
+                if success_qa_ids:
+                    message = f"部分删除成功：成功删除 {len(success_qa_ids)} 个模板，失败 {len(failed_qa_ids)} 个"
+                else:
+                    message = f"所有模板删除失败，共 {len(failed_qa_ids)} 个"
+            else:
+                message = f"成功删除 {len(success_qa_ids)} 个模板"
+
+            return {
+                "success": len(success_qa_ids) > 0,
+                "message": message,
+                "deleted_count": total_deleted,
+                "failed_qa_ids": failed_qa_ids if failed_qa_ids else None,
+                "success_qa_ids": success_qa_ids
+            }
+
+        except Exception as e:
+            logger.error(f"批量删除QA模板失败: {e}")
+            return {
+                "success": False,
+                "message": f"批量删除模板失败: {str(e)}",
+                "failed_qa_ids": qa_ids
             }
 
 # ================================
