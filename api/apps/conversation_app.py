@@ -94,10 +94,16 @@ class TTSRequest(BaseModel):
     text: str
     """文本内容"""
 
+    llm_name: str | None = None
+    """TTS模型名称，可选参数，如果提供则优先使用此模型，否则使用租户默认TTS模型"""
+
 
 class ASRRequest(BaseModel):
     audio_file_path: str
     """MP3音频文件的地址"""
+
+    llm_name: str | None = None
+    """ASR模型名称，可选参数，如果提供则优先使用此模型，否则使用租户默认ASR模型"""
 
 
 class AskAboutRequest(BaseModel):
@@ -500,8 +506,9 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
     该接口用于将输入的文本内容转换为语音，并以音频流的方式返回。
 
     参数:
-    - request: TTSRequest对象，包含要转换的文本内容
+    - request: TTSRequest对象，包含要转换的文本内容和可选的TTS模型名称
         - text: str 要转换为语音的文本内容
+        - llm_name: Optional[str] TTS模型名称，如果提供则优先使用此模型
 
     返回:
     - 成功时返回包含音频流的响应
@@ -509,26 +516,32 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
 
     逻辑说明:
     - 首先，根据用户ID获取租户信息。如果租户信息不存在，返回404错误。
-    - 获取用户的默认TTS模型ID，并验证其是否存在。
+    - 优先使用请求中的llm_name参数作为TTS模型，如果没有提供则使用租户默认TTS模型ID。
     - 使用该模型将文本逐段转化为语音流，并逐段返回。
     - 若在转换过程中出现错误，则返回错误信息。
 
     注意事项:
     - 文本内容不应为空。
+    - 如果没有提供llm_name且租户未设置默认TTS模型，将返回错误。
     - 返回结果为MPEG音频流，可供下载或直接播放。
     """
     req = request.model_dump()
     text = req.get("text")
+    llm_name = req.get("llm_name")
 
     tenants = TenantService.get_info_by(db, user.id)
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
 
-    tts_id = tenants[0].get("tts_id")
-    if not tts_id:
-        raise HTTPException(status_code=400, detail="No default TTS model is set")
+    # 优先使用传递的llm_name，如果没有则使用租户默认的tts_id
+    if llm_name:
+        tts_model_name = llm_name
+    else:
+        tts_model_name = tenants[0].get("tts_id")
+        if not tts_model_name:
+            raise HTTPException(status_code=400, detail="No default TTS model is set and no llm_name provided")
 
-    tts_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.TTS, tts_id)
+    tts_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.TTS, tts_model_name)
 
     def stream_audio() -> Generator[bytes, None, None]:
         try:
@@ -568,35 +581,42 @@ def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager
     该接口用于将输入的音频文件转换为文本。
 
     参数:
-    - request: ASRRequest对象，包含音频文件的路径
+    - request: ASRRequest对象，包含音频文件的路径和可选的ASR模型名称
         - audio_file_path: str 音频文件的路径
+        - llm_name: Optional[str] ASR模型名称，如果提供则优先使用此模型
 
     返回:
     - 成功时返回包含识别文本的JSON结果
     - 失败时返回错误信息
 
     逻辑说明:
-    - 根据用户ID获取租户信息，确保租户存在并获取默认ASR模型ID。
+    - 根据用户ID获取租户信息，确保租户存在。
+    - 优先使用请求中的llm_name参数作为ASR模型，如果没有提供则使用租户默认ASR模型ID。
     - 使用该ASR模型处理音频文件，返回识别的文本。
     - 若在处理过程中出现错误，则返回错误信息。
 
     注意事项:
     - 音频文件路径应为有效路径。
-    - 确保租户已配置默认ASR模型，否则将返回错误信息。
+    - 如果没有提供llm_name且租户未设置默认ASR模型，将返回错误。
     """
     req = request.model_dump()
     audio_file_path = req.get("audio_file_path")
+    llm_name = req.get("llm_name")
 
     # 获取用户信息和语音识别模型的信息
     tenants = TenantService.get_info_by(db, user.id)
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
 
-    asr_id = tenants[0].get("asr_id")
-    if not asr_id:
-        raise HTTPException(status_code=400, detail="No default ASR model is set")
+    # 优先使用传递的llm_name，如果没有则使用租户默认的asr_id
+    if llm_name:
+        asr_model_name = llm_name
+    else:
+        asr_model_name = tenants[0].get("asr_id")
+        if not asr_model_name:
+            raise HTTPException(status_code=400, detail="No default ASR model is set and no llm_name provided")
 
-    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_id)
+    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_model_name)
 
     # 调用 ASR 语音识别函数
     transcription_result = asr_mdl.transcription(audio=audio_file_path)
@@ -607,7 +627,7 @@ def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager
 
 
 @router.post('/asr_upload', summary="语音识别上传", response_description="成功识别语音")
-def asr_upload(file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(manager)):
+def asr_upload(file: UploadFile = File(...), llm_name: str | None = None, db: Session = Depends(get_db), user=Depends(manager)):
     """
     语音识别上传
 
@@ -615,6 +635,7 @@ def asr_upload(file: UploadFile = File(...), db: Session = Depends(get_db), user
 
     参数:
     - file: UploadFile 上传的音频文件
+    - llm_name: Optional[str] ASR模型名称，如果提供则优先使用此模型（作为查询参数传递）
 
     返回:
     - 成功时返回包含识别文本的JSON结果
@@ -622,12 +643,13 @@ def asr_upload(file: UploadFile = File(...), db: Session = Depends(get_db), user
 
     逻辑说明:
     - 将上传的音频文件保存到临时路径，并验证用户和模型信息。
-    - 使用默认ASR模型识别音频文件内容，并将识别结果返回。
+    - 优先使用传递的llm_name参数作为ASR模型，如果没有提供则使用租户默认ASR模型ID。
+    - 使用该ASR模型识别音频文件内容，并将识别结果返回。
     - 若在处理过程中出现错误，则返回错误信息。
 
     注意事项:
     - 确保上传文件格式为有效的音频格式（如mp3）。
-    - 确保租户已配置默认ASR模型，否则将返回错误信息。
+    - 如果没有提供llm_name且租户未设置默认ASR模型，将返回错误。
     """
     # 将上传的 MP3 文件保存到临时文件
     import tempfile
@@ -640,11 +662,15 @@ def asr_upload(file: UploadFile = File(...), db: Session = Depends(get_db), user
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
 
-    asr_id = tenants[0].get("asr_id")
-    if not asr_id:
-        raise HTTPException(status_code=400, detail="No default ASR model is set")
+    # 优先使用传递的llm_name，如果没有则使用租户默认的asr_id
+    if llm_name:
+        asr_model_name = llm_name
+    else:
+        asr_model_name = tenants[0].get("asr_id")
+        if not asr_model_name:
+            raise HTTPException(status_code=400, detail="No default ASR model is set and no llm_name provided")
 
-    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_id)
+    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_model_name)
 
     # 调用 ASR 语音识别函数
     transcription_result = asr_mdl.transcription(audio=audio_file_path)
