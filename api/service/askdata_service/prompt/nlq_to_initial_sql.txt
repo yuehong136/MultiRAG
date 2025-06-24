@@ -35,10 +35,11 @@
         *   **扩展维度：** 为了支持后续探索，可以包含与问题上下文紧密相关的一些额外描述性维度。例如，如果问题关注“教师”，则可以一并选择出“教师职称”、“教师专业方向”等（前提是这些维度在提供的 `businessDatasets` 中且与问题实体相关）。
         *   **避免聚合函数：** 通常情况下，在 `SELECT` 子句中避免使用 `SUM()`, `AVG()`, `COUNT()`, `MAX()`, `MIN()` 等聚合函数，除非指标本身就是这样定义的且无法拆解。
     *   **FROM 和 JOIN 子句：**
-        *   为所有引用的表设置别名：为所有在 `FROM` 和 `JOIN` 子句中引用的表都指定一个简洁、易于理解的别名（例如 `t1`, `t2`）。即使查询只涉及一张表，也必须为其设置别名。这有助于保持查询的清晰度和一致性。例如，使用 `FROM gx_test_teachers AS t1` 而不是 `FROM gx_test_teachers`。
-        *   根据SELECT和WHERE子句中涉及的字段，确定需要哪些 `dataModels` (物理表)。
-        *   使用 `relationships` 信息构建必要的 `JOIN` 操作。注意 `joinType`。
-    *   **WHERE 子句：**
+        *   根据SELECT、WHERE和GROUP BY子句中涉及的字段，确定需要哪些 `dataModels`。
+        *   **核心表名引用：对于确定的每个 `dataModel`，在SQL的 `FROM` 或 `JOIN` 子句中，必须使用其 `table` 属性值作为物理表名 (例如，如果一个 `dataModel` 是 `{ "name": "教师信息表", "table": "gx_test_teachers", ... }`，则在SQL中应使用 `gx_test_teachers`)。绝不能在SQL的 `FROM` 或 `JOIN` 子句中使用 `dataModels` 的 `name` 属性（模型名）作为表名。**
+        *   为所有引用的物理表（即 `dataModels.table` 的值）设置别名：为所有在 `FROM` 和 `JOIN` 子句中引用的表都指定一个简洁、易于理解的别名（例如 `t1`, `t2`）。即使查询只涉及一张表，也必须为其设置别名。
+        *   使用 `relationships` 信息构建必要的 `JOIN` 操作。注意 `joinType`。`JOIN` 条件中的表名同样遵循上述物理表名引用规则，并使用其对应的别名。字段名应直接使用 `dataModels.fields.name` 中定义的名称。
+   *   **WHERE 子句：**
         *   将用户问题中的筛选条件转换为SQL的WHERE条件。
         *   利用 `businessDatasets.dimensions.possibleValues` 和 `businessTerms` 进行值匹配。**再次强调：根据用户输入和同义词匹配到 `possibleValues` 中的条目后，在SQL条件中使用该条目的 `value` 属性进行比较。** 例如，如果用户说“计算机学院”，且 `possibleValues` 中有 `{"synonyms": ["计科院", "计算机学院"], "value": "计算机科学与技术学院"}`，则WHERE条件应为 `field_name = '计算机科学与技术学院'`。
     *   **GROUP BY 子句：**

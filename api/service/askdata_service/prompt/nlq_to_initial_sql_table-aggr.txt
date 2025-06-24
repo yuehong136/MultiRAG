@@ -37,9 +37,10 @@
         *   **分组维度：** 如果存在分组聚合，`SELECT` 子句中还应包含 `GROUP BY` 子句中列出的维度字段。
         *   **避免返回不必要的明细列：** 除非维度是聚合的分组依据，否则不应选择与聚合结果无关的明细列。
     *   **FROM 和 JOIN 子句：**
-        *   为所有引用的表设置别名：为所有在 `FROM` 和 `JOIN` 子句中引用的表都指定一个简洁、易于理解的别名（例如 `t1`, `t2`）。即使查询只涉及一张表，也必须为其设置别名。
-        *   根据SELECT、WHERE和GROUP BY子句中涉及的字段，确定需要哪些 `dataModels` (物理表)。
-        *   使用 `relationships` 信息构建必要的 `JOIN` 操作。注意 `joinType`。
+        *   根据SELECT、WHERE和GROUP BY子句中涉及的字段，确定需要哪些 `dataModels`。
+        *   **核心表名引用：对于确定的每个 `dataModel`，在SQL的 `FROM` 或 `JOIN` 子句中，必须使用其 `table` 属性值作为物理表名 (例如，如果一个 `dataModel` 是 `{ "name": "教师信息表", "table": "gx_test_teachers", ... }`，则在SQL中应使用 `gx_test_teachers`)。绝不能在SQL的 `FROM` 或 `JOIN` 子句中使用 `dataModels` 的 `name` 属性（模型名）作为表名。**
+        *   为所有引用的物理表（即 `dataModels.table` 的值）设置别名：为所有在 `FROM` 和 `JOIN` 子句中引用的表都指定一个简洁、易于理解的别名（例如 `t1`, `t2`）。即使查询只涉及一张表，也必须为其设置别名。
+        *   使用 `relationships` 信息构建必要的 `JOIN` 操作。注意 `joinType`。`JOIN` 条件中的表名同样遵循上述物理表名引用规则，并使用其对应的别名。字段名应直接使用 `dataModels.fields.name` 中定义的名称。
     *   **WHERE 子句：**
         *   将用户问题中的筛选条件转换为SQL的WHERE条件，这些条件在聚合计算之前应用。
         *   利用 `businessDatasets.dimensions.possibleValues` 和 `businessTerms` 进行值匹配。**再次强调：根据用户输入和同义词匹配到 `possibleValues` 中的条目后，在SQL条件中使用该条目的 `value` 属性进行比较。**
