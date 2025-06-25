@@ -3,9 +3,9 @@ import logging
 from datetime import date
 from enum import Enum
 from typing import Any, List, Dict, Optional, Tuple, Set
+from collections import Counter
 
 from fastapi.params import Depends
-from setuptools.command.alias import alias
 from sqlalchemy.orm import Session
 
 from api.apps import manager
@@ -91,7 +91,11 @@ class AskdataService:
                                        metrics=metrics, model_details=model_details,
                                        model_relations=model_relations, business_term_rows=business_term_rows)
 
+        logger.info(f"semantic_layer_original: {semantic_layer_original}")
+
         processed_semantic_layer = process_semantic_layer(semantic_layer_original)
+
+        logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
 
         recommended_chart, recommendation_reason = await self.query_intent_analyzer.recommend_chart_with_reason(
             user_question=user_query,
@@ -164,6 +168,7 @@ class AskdataService:
         model_list = []
 
         model_detail_list = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
+        logger.info(f"model_detail_list: {model_detail_list}")
 
         model_in_dataset_dict: Dict[str, List[str]] = {}
 
@@ -182,7 +187,13 @@ class AskdataService:
                     used_in_dataset_id_list.append(dataset["datasetId"])
                 model_in_dataset_dict[model_detail["modelId"]] = used_in_dataset_id_list
 
+        logger.info(f"model_in_dataset_dict: {model_in_dataset_dict}")
+
         intersection_dataset_ids = self._get_intersection_of_all_lists(model_in_dataset_dict)
+        if len(intersection_dataset_ids) == 0:
+            logger.error(f"模型中没有使用任何数据集，可能导致无法生成正确的SQL。")
+            logger.error(f"model_ids: {model_ids}, used_models: {used_models}")
+            raise Exception("模型中没有使用任何数据集，可能导致无法生成正确的SQL。")
         if len(intersection_dataset_ids) > 1:
             logger.error(f"模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
             logger.error(f"model_ids: {model_ids}, used_models: {used_models}")
@@ -191,18 +202,41 @@ class AskdataService:
         return used_model_detail_dict, used_table_detail_dict, model_list, intersection_dataset_ids
 
     def _get_intersection_of_all_lists(self, data_dict):
-        """获取字典中所有列表的交集"""
+        """获取字典中所有列表的交集，如果没有交集则返回出现次数最多的值"""
         if not data_dict:
             return set()
 
-        # 将第一个列表转为集合作为初始交集
-        result = set(next(iter(data_dict.values())))
+        # 过滤掉空列表
+        non_empty_lists = [lst for lst in data_dict.values() if lst]
 
-        # 与其他所有列表取交集
-        for lst in data_dict.values():
+        if not non_empty_lists:
+            return set()
+
+        # 将第一个非空列表转为集合作为初始交集
+        result = set(non_empty_lists[0])
+
+        # 与其他所有非空列表取交集
+        for lst in non_empty_lists[1:]:
             result = result.intersection(set(lst))
 
-        return result
+        # 如果有交集，直接返回
+        if result:
+            return result
+
+        # 如果没有交集，统计所有元素出现次数，返回出现次数最多的值
+        all_elements = []
+        for lst in non_empty_lists:
+            all_elements.extend(lst)
+
+        if not all_elements:
+            return set()
+
+        # 使用Counter统计出现次数
+        counter = Counter(all_elements)
+        # 获取出现次数最多的元素
+        most_common_element = counter.most_common(1)[0][0]
+
+        return {most_common_element}
 
     async def add_ask_data_history(self, conversation_id: str, ask_id: str, data: str):
         """添加一条问数历史记录。"""

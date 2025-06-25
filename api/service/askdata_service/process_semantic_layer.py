@@ -56,6 +56,8 @@ def process_business_datasets(
 
         dimensions_output = []
         for dimension in dimensions:
+            if not dimension.get("dataset_wid"):
+                continue
             dimension_id = dimension.get("dimensionId")
             if dataset_id in dimension.get("dataset_wid"):
                 dimension_output = {}
@@ -72,6 +74,8 @@ def process_business_datasets(
 
         metrics_output = []
         for metric in metrics:
+            if not metric.get("dataset_wid"):
+                continue
             if dataset_id in metric.get("dataset_wid"):
                 metric_output = {}
                 metric_output["id"] = metric.get("metricId")
