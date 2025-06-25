@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,7 @@ from api.db import UserTenantRole, FileType
 from api.utils import get_uuid, get_format_time, download_img, current_timestamp, datetime_format
 from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, construct_response, get_data_error_result
+from api.apps.auth import get_auth_client
 
 router = APIRouter()
 
@@ -261,6 +263,129 @@ async def log_out(db: Session = Depends(get_db), user=Depends(manager)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+
+@router.get("/login/{channel}", summary="OAuth登录入口")
+async def oauth_login(channel: str):
+    """
+    OAuth登录入口
+
+    该接口用于启动指定渠道的OAuth登录流程。
+
+    参数:
+    - channel: str OAuth渠道名称（如github、feishu等）
+
+    返回:
+    - 重定向到OAuth授权页面
+    """
+    try:
+        channel_config = settings.OAUTH_CONFIG.get(channel)
+        if not channel_config:
+            raise HTTPException(status_code=400, detail=f"Invalid channel name: {channel}")
+        
+        auth_cli = get_auth_client(channel_config)
+        auth_url = auth_cli.get_authorization_url()
+        
+        return RedirectResponse(url=auth_url)
+    except Exception as e:
+        logging.exception(e)
+        raise HTTPException(status_code=500, detail=f"OAuth login error: {str(e)}")
+
+
+@router.get("/oauth/callback/{channel}", summary="OAuth回调处理")
+async def oauth_callback(channel: str, code: str, db: Session = Depends(get_db)):
+    """
+    OAuth回调处理
+
+    该接口用于处理各种OAuth/OIDC渠道的回调，动态处理不同渠道的认证流程。
+
+    参数:
+    - channel: str OAuth渠道名称
+    - code: str 从OAuth提供商获取的授权码
+
+    返回:
+    - 成功时重定向到主页并携带认证信息
+    - 失败时重定向到错误页面
+    """
+    try:
+        channel_config = settings.OAUTH_CONFIG.get(channel)
+        if not channel_config:
+            return RedirectResponse(url=f"/?error=invalid_channel_{channel}")
+        
+        auth_cli = get_auth_client(channel_config)
+
+        # 获取授权码
+        if not code:
+            return RedirectResponse(url="/?error=missing_code")
+
+        # 用授权码换取访问令牌
+        token_info = auth_cli.exchange_code_for_token(code)
+        access_token = token_info.get("access_token")
+        if not access_token:
+            return RedirectResponse(url="/?error=token_failed")
+
+        id_token = token_info.get("id_token")
+
+        # 获取用户信息
+        user_info = auth_cli.fetch_user_info(access_token, id_token=id_token)
+        if not user_info.email:
+            return RedirectResponse(url="/?error=email_missing")
+
+        # 登录或注册
+        users = UserService.query(db, email=user_info.email)
+        user_id = get_uuid()
+        
+        if not users:
+            try:
+                try:
+                    avatar = download_img(user_info.avatar_url)
+                except Exception as e:
+                    logging.exception(e)
+                    avatar = ""
+
+                users = user_register(
+                    db,
+                    user_id,
+                    {
+                        "access_token": access_token,
+                        "email": user_info.email,
+                        "avatar": avatar,
+                        "nickname": user_info.nickname,
+                        "login_channel": channel,
+                        "last_login_time": get_format_time(),
+                        "is_superuser": False,
+                    },
+                )
+
+                if not users:
+                    raise Exception(f"Failed to register {user_info.email}")
+                if len(users) > 1:
+                    raise Exception(f"Same email: {user_info.email} exists!")
+
+                # 尝试登录
+                user = users[0]
+                # 注意：这里需要根据实际的认证机制来设置用户session
+                return RedirectResponse(url=f"/?auth_success=true&user_id={user.id}")
+
+            except Exception as e:
+                rollback_user_registration(db, user_id)
+                logging.exception(e)
+                return RedirectResponse(url=f"/?error={str(e)}")
+
+        # 用户已存在，尝试登录
+        user = users[0]
+        user.access_token = get_uuid()
+        user.update_time = current_timestamp()
+        user.update_date = datetime_format(datetime.now())
+        db.add(user)
+        db.commit()
+        
+        # 注意：这里需要根据实际的认证机制来设置用户session
+        return RedirectResponse(url=f"/?auth_success=true&user_id={user.id}")
+        
+    except Exception as e:
+        logging.exception(e)
+        return RedirectResponse(url=f"/?error={str(e)}")
 
 
 @router.post("/setting", summary="设置用户信息")
