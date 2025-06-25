@@ -296,6 +296,8 @@ class AskdataService:
                     column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
                     operator = filter["operator"]
                     value = filter["value"]
+                    if "int" in filter['semantic_field']['dataType']:
+                        value = int(value)
                     assembler.add_filter(column_name, FilterOperator.from_value(operator), value)
                 else:
                     raw_condition = filter["raw_condition"]
