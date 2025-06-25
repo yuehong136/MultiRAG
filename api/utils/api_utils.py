@@ -307,6 +307,10 @@ def get_error_data_result(retcode=settings.RetCode.DATA_ERROR,
     return JSONResponse(content=jsonable_encoder(response))
 
 
+def get_error_argument_result(message="Invalid arguments"):
+    return get_result(retcode=settings.RetCode.ARGUMENT_ERROR, retmsg=message)
+
+
 def generate_confirmation_token(tenant_id: str) -> str:
     serializer = URLSafeTimedSerializer(tenant_id)
     return "multirag-" + serializer.dumps(get_uuid(), salt=tenant_id)[2:34]
