@@ -1,6 +1,5 @@
 import logging
 import json
-import math
 import re
 from collections import defaultdict
 
@@ -218,11 +217,11 @@ class MilvusQueryer:
         s = 1e-9
         for k, v in qtwt.items():
             if k in dtwt:
-                s += v * dtwt[k]
+                s += v  # * dtwt[k]
         q = 1e-9
         for k, v in qtwt.items():
-            q += v * v
-        return math.sqrt(3. * (s / q / math.log10( len(dtwt.keys()) + 512 )))
+            q += v  # * v
+        return s / q  # math.sqrt(3. * (s / q / math.log10( len(dtwt.keys()) + 512 )))
 
     def paragraph(self, content_tks: str, keywords=None, keywords_topn=30):
         if keywords is None:
