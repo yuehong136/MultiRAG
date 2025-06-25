@@ -307,9 +307,9 @@ def get_error_data_result(retcode=settings.RetCode.DATA_ERROR,
     return JSONResponse(content=jsonable_encoder(response))
 
 
-def generate_confirmation_token(tenent_id: str) -> str:
-    serializer = URLSafeTimedSerializer(tenent_id)
-    return "multirag-" + serializer.dumps(get_uuid(), salt=tenent_id)[2:34]
+def generate_confirmation_token(tenant_id: str) -> str:
+    serializer = URLSafeTimedSerializer(tenant_id)
+    return "multirag-" + serializer.dumps(get_uuid(), salt=tenant_id)[2:34]
 
 
 def valid(permission, valid_permission, language, valid_language, chunk_method, valid_chunk_method):
