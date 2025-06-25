@@ -497,6 +497,7 @@ def rm(
     pf_id = root_folder["id"]
     FileService.init_knowledgebase_docs(db, pf_id, user.id)
     errors = ""
+    kb_table_num_map = {}
     for doc_id in doc_ids:
         try:
             doc = DocumentService.get_by_id(db, doc_id)
@@ -505,6 +506,10 @@ def rm(
             tenant_id = DocumentService.get_tenant_id(db, doc_id)
             if not tenant_id:
                 return construct_json_result(data=False, message="Tenant not found!", code=settings.RetCode.ARGUMENT_ERROR)
+
+            # 在删除文档前先保存需要的属性
+            doc_parser = doc.parser_id
+            kb_id = doc.kb_id
 
             b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
 
@@ -521,6 +526,15 @@ def rm(
             File2DocumentService.delete_by_document_id(db, doc_id)
             if deleted_file_count > 0:
                 STORAGE_IMPL.rm(b, n)
+
+            # 使用之前保存的属性值，而不是访问已删除的对象
+            if doc_parser == ParserType.TABLE:
+                if kb_id not in kb_table_num_map:
+                    counts = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="", run_status=[TaskStatus.DONE], types=[])
+                    kb_table_num_map[kb_id] = counts
+                kb_table_num_map[kb_id] -= 1
+                if kb_table_num_map[kb_id] <= 0:
+                    KnowledgebaseService.delete_field_map(db, kb_id)
         except Exception as e:
             errors += str(e)
 
@@ -547,6 +561,7 @@ def run(
             )
 
     try:
+        kb_table_num_map = {}
         for id in req["doc_ids"]:
             info = {"run": str(req["run"]), "progress": 0}
             if str(req["run"]) == TaskStatus.RUNNING.value and req.get("delete", False):
@@ -580,6 +595,17 @@ def run(
             if str(req["run"]) == TaskStatus.RUNNING.value:
                 doc = DocumentService.get_by_id(db, id).to_dict()
                 doc["tenant_id"] = tenant_id
+
+                doc_parser = doc.get("parser_id", ParserType.NAIVE)
+                if doc_parser == ParserType.TABLE:
+                    kb_id = doc.get("kb_id")
+                    if not kb_id:
+                        continue
+                    if kb_id not in kb_table_num_map:
+                        count = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="", run_status=[TaskStatus.DONE], types=[])
+                        kb_table_num_map[kb_id] = count
+                        if kb_table_num_map[kb_id] <=0:
+                            KnowledgebaseService.delete_field_map(db, kb_id)
                 bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])
                 queue_tasks(db, doc, bucket, name, 0)
         return construct_json_result(data=True)

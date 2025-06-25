@@ -103,6 +103,37 @@ class DocumentService(CommonService):
         return [doc.to_dict() for doc in docs], count
 
     @classmethod
+    def count_by_kb_id(cls, db: Session, kb_id: str, keywords: str | None = None,
+                       run_status: list | None = None, types: list | None = None) -> int:
+        """
+        根据知识库ID统计文档数量。
+
+        参数:
+        - db: 数据库会话对象，用于执行数据库查询操作。
+        - kb_id: 知识库ID。
+        - keywords: 可选的关键词，用于按文档名称进行模糊匹配。
+        - run_status: 可选的运行状态列表，用于筛选特定运行状态的文档。
+        - types: 可选的文档类型列表，用于筛选特定类型的文档。
+
+        返回:
+        - 符合条件的文档数量。
+        """
+        query = db.query(cls.model).filter_by(kb_id=kb_id)
+
+        if keywords:
+            query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
+
+        if run_status:
+            query = query.filter(cls.model.run.in_(run_status))
+
+        if types:
+            query = query.filter(cls.model.type.in_(types))
+
+        count = query.count()
+
+        return count
+
+    @classmethod
     def get_by_doc_id(cls, db: Session, doc_id: str) -> dict | None:
         """
         通过文档ID获取文档信息。
@@ -151,6 +182,8 @@ class DocumentService(CommonService):
 
     @classmethod
     def remove_document(cls, db: Session, doc: Document, tenant_id: str):
+        # 在删除文档前先保存需要的属性
+        doc_id = doc.id
         cls.clear_chunk_num(db, doc.id)
         document = DocumentService.get_by_doc_id(db, doc.id)
         kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
@@ -162,24 +195,25 @@ class DocumentService(CommonService):
             if docStoreConn.has_collection(collection_name):
                 docStoreConn.delete(
                     collection_name=collection_name,
-                    filter=f"doc_id == '{doc.id}'"
+                    filter=f"doc_id == '{doc_id}'"
                 )
             # todo 待测试【docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
+            # kb_id = document["kb_id"]  # 使用从数据库重新获取的kb_id
             # graph_source = docStoreConn.getFields(
-            #     docStoreConn.search(["source_id"], [], {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [doc.kb_id]), ["source_id"]
+            #     docStoreConn.search(["source_id"], [], {"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [kb_id]), ["source_id"]
             # )
-            # if len(graph_source) > 0 and doc.id in list(graph_source.values())[0]["source_id"]:
-            #     docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc.id},
-            #                                 {"remove": {"source_id": doc.id}},
-            #                                 search.index_name(tenant_id, [kb.name]), doc.kb_id)
-            #     docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
+            # if len(graph_source) > 0 and doc_id in list(graph_source.values())[0]["source_id"]:
+            #     docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc_id},
+            #                                 {"remove": {"source_id": doc_id}},
+            #                                 search.index_name(tenant_id, [kb.name]), kb_id)
+            #     docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]},
             #                                 {"removed_kwd": "Y"},
-            #                                 search.index_name(tenant_id, [kb.name]), doc.kb_id)
-            #     docStoreConn.delete({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
-            #                                 search.index_name(tenant_id, [kb.name]), doc.kb_id)
+            #                                 search.index_name(tenant_id, [kb.name]), kb_id)
+            #     docStoreConn.delete({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
+            #                                 search.index_name(tenant_id, [kb.name]), kb_id)
         except MilvusException as e:
             return e
-        return cls.delete_by_id(db, doc.id)
+        return cls.delete_by_id(db, doc_id)
 
     @classmethod
     def get_newly_uploaded(cls, db: Session):

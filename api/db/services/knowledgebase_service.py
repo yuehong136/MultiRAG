@@ -267,6 +267,24 @@ class KnowledgebaseService(CommonService):
         cls.update_by_id(db, id, {"parser_config": kb.parser_config})
 
     @classmethod
+    def delete_field_map(cls, db: Session, id: str):
+        """
+        删除知识库的字段映射配置。
+
+        :param db: 数据库会话对象。
+        :param id: 知识库ID。
+        """
+        # 根据ID获取知识库实例
+        kb = cls.get_by_id(db, id)
+        if not kb:
+            raise LookupError(f"knowledgebase({id}) not found.")
+
+        # 从parser_config中删除field_map字段
+        kb.parser_config.pop("field_map", None)
+        # 更新知识库的解析配置
+        cls.update_by_id(db, id, {"parser_config": kb.parser_config})
+
+    @classmethod
     def get_field_map(cls, db: Session, ids):
         """
         根据知识库ID列表获取字段映射配置。
