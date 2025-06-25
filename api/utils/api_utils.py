@@ -307,9 +307,13 @@ def get_error_data_result(retcode=settings.RetCode.DATA_ERROR,
     return JSONResponse(content=jsonable_encoder(response))
 
 
-def generate_confirmation_token(tenent_id: str) -> str:
-    serializer = URLSafeTimedSerializer(tenent_id)
-    return "multirag-" + serializer.dumps(get_uuid(), salt=tenent_id)[2:34]
+def get_error_argument_result(message="Invalid arguments"):
+    return get_result(retcode=settings.RetCode.ARGUMENT_ERROR, retmsg=message)
+
+
+def generate_confirmation_token(tenant_id: str) -> str:
+    serializer = URLSafeTimedSerializer(tenant_id)
+    return "multirag-" + serializer.dumps(get_uuid(), salt=tenant_id)[2:34]
 
 
 def valid(permission, valid_permission, language, valid_language, chunk_method, valid_chunk_method):
@@ -332,22 +336,20 @@ def get_parser_config(chunk_method, parser_config):
     if not chunk_method:
         chunk_method = "naive"
     key_mapping = {
-        "naive": {"chunk_token_num": 128, "delimiter": "\\n!?;。；！？", "html4excel": False, "layout_recognize": "DeepDOC",
-                  "raptor": {"use_raptor": False}},
+        "naive": {"chunk_token_num": 128, "delimiter": r"\n", "html4excel": False, "layout_recognize": "DeepDOC", "raptor": {"use_raptor": False}},
         "qa": {"raptor": {"use_raptor": False}},
+        "tag": None,
         "resume": None,
         "manual": {"raptor": {"use_raptor": False}},
-        "tag": None,
         "table": None,
         "paper": {"raptor": {"use_raptor": False}},
         "book": {"raptor": {"use_raptor": False}},
         "laws": {"raptor": {"use_raptor": False}},
         "presentation": {"raptor": {"use_raptor": False}},
         "one": None,
-        "knowledge_graph": {"chunk_token_num": 8192, "delimiter": "\\n!?;。；！？",
-                            "entity_types": ["organization", "person", "location", "event", "time"]},
+        "knowledge_graph": {"chunk_token_num": 8192, "delimiter": r"\n", "entity_types": ["organization", "person", "location", "event", "time"]},
         "email": None,
-        "picture": None
+        "picture": None,
     }
     parser_config = key_mapping[chunk_method]
     return parser_config

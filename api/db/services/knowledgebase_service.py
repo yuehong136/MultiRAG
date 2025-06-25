@@ -44,7 +44,8 @@ class KnowledgebaseService(CommonService):
         kb = kbs[0]
 
         # Get all documents in the knowledge base
-        docs, _ = DocumentService.get_by_kb_id(db, kb_id, 1, 1000, "create_time", True, "")
+        # docs, _ = DocumentService.get_by_kb_id(db, kb_id, 1, 1000, "create_time", True, "")
+        docs, _ = DocumentService.get_by_kb_id(db, kb_id, 1, 1000, "create_time", True, "", [], [])
 
         # Check parsing status of each document
         for doc in docs:
@@ -216,7 +217,9 @@ class KnowledgebaseService(CommonService):
             cls.model.chunk_num,
             cls.model.parser_id,
             cls.model.parser_config,
-            cls.model.pagerank
+            cls.model.pagerank,
+            cls.model.create_time,
+            cls.model.update_time
         ]
         # 根据ID和状态查询知识库信息，并关联租户信息
         query = db.query(*fields).join(Tenant, (Tenant.id == cls.model.tenant_id)).filter(

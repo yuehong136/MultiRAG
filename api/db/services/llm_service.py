@@ -102,16 +102,15 @@ class TenantLLMService(CommonService):
         else:
             raise ValueError("LLM type error")
 
-        # logging.info(f"Debug: Fetching model instance for tenant_id={tenant_id}, mdlnm={mdlnm}")
-
         model_config = cls.get_api_key(db, tenant_id, mdlnm)
-        # print("model_config:", model_config)
-
         mdlnm, fid = TenantLLMService.split_model_name_and_factory(mdlnm)
-
+        if not model_config:  # for some cases seems fid mismatch
+            model_config = cls.get_api_key(db, tenant_id, mdlnm)
         if model_config:
             model_config = model_config.to_dict()
             llm = LLMService.query(db, llm_name=mdlnm) if not fid else LLMService.query(db, llm_name=mdlnm, fid=fid)
+            if not llm and fid: # for some cases seems fid mismatch
+                llm = LLMService.query(db, llm_name=mdlnm)
             if llm:
                 model_config["is_tools"] = llm[0].is_tools
         else:

@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from urllib.parse import quote
 
 from api.constants import IMG_BASE64_PREFIX
-from api.db import FileType, TaskStatus, ParserType, FileSource, db_models
+from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, ParserType, FileSource, db_models
 # from api.db.database import get_db
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
@@ -57,6 +57,11 @@ class WebCrawlRequest(BaseModel):
 class CreateDocumentRequest(BaseModel):
     name: str = Field(..., description="文件名")
     kb_id: str = Field(..., description="知识库ID")
+
+
+class DocumentFilter(BaseModel):
+    run_status: list[str] | None = []
+    types: list[str] | None = []
 
 
 class ChangeStatusRequest(BaseModel):
@@ -286,6 +291,66 @@ def list_docs(
         return construct_error_response(e)
 
 
+@router.post("/list", summary="列出文档", response_description="成功列出文档")  # 改为 POST
+def list_docs(
+        filter_params: DocumentFilter,  # JSON body 参数
+        kb_id: str,
+        keywords: str = "",
+        page: int = 0,  # 默认0表示不分页
+        page_size: int = 0,  # 默认0表示不分页
+        orderby: str = "create_time",
+        desc: bool = True,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    if not kb_id:
+        return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
+
+    tenants = UserTenantService.query(db, user_id=user.id)
+    for tenant in tenants:
+        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
+            break
+    else:
+        return get_json_result(
+            data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+            retcode=settings.RetCode.OPERATING_ERROR)
+
+    # 验证 run_status 参数
+    run_status = filter_params.run_status
+    if run_status:
+        invalid_status = {s for s in run_status if s not in VALID_TASK_STATUS}
+        if invalid_status:
+            return construct_json_result(
+                data=False,
+                message=f"Invalid filter run status conditions: {', '.join(invalid_status)}",
+                code=settings.RetCode.ARGUMENT_ERROR
+            )
+
+    # 验证 types 参数
+    types = filter_params.types
+    if types:
+        invalid_types = {t for t in types if t not in VALID_FILE_TYPES}
+        if invalid_types:
+            return construct_json_result(
+                data=False,
+                message=f"Invalid filter conditions: {', '.join(invalid_types)} type{'s' if len(invalid_types) > 1 else ''}",
+                code=settings.RetCode.ARGUMENT_ERROR
+            )
+
+    try:
+        docs, tol = DocumentService.get_by_kb_id(
+            db, kb_id, page, page_size, orderby, desc, keywords, run_status, types
+        )
+        docs = [convert_datetime_to_str(d) for d in docs]
+
+        for doc_item in docs:
+            if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
+                doc_item['thumbnail'] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
+
+        return construct_json_result(data={"total": tol, "docs": docs})
+    except Exception as e:
+        return construct_error_response(e)
+
 @router.post('/infos', summary="获取文档信息", response_description="成功获取文档信息")
 def docinfos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)):
     for doc_id in doc_ids:
@@ -450,7 +515,9 @@ def rm(
                                              code=settings.RetCode.ARGUMENT_ERROR)
 
             f2d = File2DocumentService.get_by_document_id(db, doc_id)
-            deleted_file_count = FileService.filter_delete(db, [db_models.File.source_type == FileSource.KNOWLEDGEBASE, db_models.File.id == f2d[0].file_id])
+            deleted_file_count = 0
+            if f2d:
+                deleted_file_count = FileService.filter_delete(db, [db_models.File.source_type == FileSource.KNOWLEDGEBASE, db_models.File.id == f2d[0].file_id])
             File2DocumentService.delete_by_document_id(db, doc_id)
             if deleted_file_count > 0:
                 STORAGE_IMPL.rm(b, n)
