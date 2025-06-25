@@ -278,14 +278,76 @@ class FlexibleSQLAssembler:
         """
         self.base_from_clause = base_from_clause.strip()
         self.db_type = db_type
-        self.select_parts: List[SQLFragment] = []  # 统一处理SELECT的各个部分
-        self.where_conditions: List[SQLFragment] = []  # 统一处理WHERE条件
-        self.group_by_parts: List[SQLFragment] = []  # GROUP BY部分
-        self.having_conditions: List[SQLFragment] = []  # HAVING条件
-        self.order_by_parts: List[SQLFragment] = []  # 统一处理ORDER BY
+        self.select_parts: List[SQLFragment] = []
+        self.where_conditions: List[SQLFragment] = []
+        self.group_by_parts: List[SQLFragment] = []
+        self.having_conditions: List[SQLFragment] = []
+        self.order_by_parts: List[SQLFragment] = []
         self.limit_count: Optional[int] = None
         self.offset_count: Optional[int] = None
-        self.additional_clauses: Dict[str, str] = {}  # 其他自定义子句
+        self.additional_clauses: Dict[str, str] = {}
+
+    @staticmethod
+    def _clean_sql_clause(sql_input: str, clause_keywords: List[str],
+                          clause_name: str = "条件") -> Tuple[str, bool]:
+        """
+        清理SQL子句，移除不必要的关键字
+
+        Args:
+            sql_input: 用户输入的SQL
+            clause_keywords: 要检查和移除的关键字列表
+            clause_name: 子句名称，用于日志
+
+        Returns:
+            (清理后的SQL, 是否进行了清理)
+        """
+        if not sql_input or not sql_input.strip():
+            return sql_input, False
+
+        cleaned_sql = sql_input.strip()
+        was_cleaned = False
+
+        # 检查是否以任何关键字开头（忽略大小写）
+        for keyword in clause_keywords:
+            pattern = rf'^\s*{re.escape(keyword)}\s+'
+            if re.match(pattern, cleaned_sql, re.IGNORECASE):
+                # 移除关键字
+                cleaned_sql = re.sub(pattern, '', cleaned_sql, flags=re.IGNORECASE).strip()
+                was_cleaned = True
+                print(f"警告: 已自动移除{clause_name}中的 '{keyword}' 关键字")
+                break
+
+        return cleaned_sql, was_cleaned
+
+    @staticmethod
+    def _validate_condition_content(sql_content: str, clause_name: str = "条件") -> str:
+        """
+        验证条件内容的有效性
+
+        Args:
+            sql_content: SQL条件内容
+            clause_name: 子句名称
+
+        Returns:
+            验证后的SQL内容
+
+        Raises:
+            ValueError: 如果内容无效
+        """
+        if not sql_content or not sql_content.strip():
+            raise ValueError(f"{clause_name}内容不能为空")
+
+        cleaned_content = sql_content.strip()
+
+        # 检查是否只包含关键字（没有实际条件）
+        if not cleaned_content:
+            raise ValueError(f"{clause_name}必须包含实际的条件内容")
+
+        # 基本的语法检查
+        if cleaned_content.count('(') != cleaned_content.count(')'):
+            raise ValueError(f"{clause_name}中的括号不匹配")
+
+        return cleaned_content
 
     def set_database_type(self, db_type: DatabaseType) -> 'FlexibleSQLAssembler':
         """设置数据库类型"""
@@ -361,15 +423,40 @@ class FlexibleSQLAssembler:
         self.where_conditions.append(condition)
         return self
 
-    def add_raw_where(self, sql_condition: str) -> 'FlexibleSQLAssembler':
+    def add_raw_where(self, sql_condition: str, validate: bool = True) -> 'FlexibleSQLAssembler':
         """
-        添加原始WHERE条件
+        添加原始WHERE条件（增强版）
 
         Args:
-            sql_condition: 完整的WHERE条件，如 "u.created_at >= '2023-01-01'"
+            sql_condition: WHERE条件，支持以下格式：
+                         - "u.created_at >= '2023-01-01'"  (推荐)
+                         - "WHERE u.created_at >= '2023-01-01'"  (会自动清理)
+            validate: 是否进行内容验证
         """
-        raw_fragment = RawSQLFragment(sql_condition)
-        self.where_conditions.append(raw_fragment)
+        try:
+            # 清理可能的WHERE关键字
+            cleaned_condition, was_cleaned = self._clean_sql_clause(
+                sql_condition,
+                ['WHERE'],
+                'WHERE条件'
+            )
+
+            # 验证条件内容
+            if validate:
+                cleaned_condition = self._validate_condition_content(
+                    cleaned_condition,
+                    'WHERE条件'
+                )
+
+            if was_cleaned:
+                print(f"处理后的WHERE条件: {cleaned_condition}")
+
+            raw_fragment = RawSQLFragment(cleaned_condition)
+            self.where_conditions.append(raw_fragment)
+
+        except ValueError as e:
+            raise ValueError(f"WHERE条件添加失败: {e}")
+
         return self
 
     def add_parameterized_where(self, sql_template: str, parameters: List[Any]) -> 'FlexibleSQLAssembler':
@@ -391,16 +478,72 @@ class FlexibleSQLAssembler:
         self.group_by_parts.append(group_clause)
         return self
 
-    def add_raw_group_by(self, sql_expression: str) -> 'FlexibleSQLAssembler':
+    def add_raw_group_by(self, sql_expression: str, validate: bool = True) -> 'FlexibleSQLAssembler':
         """
-        添加原始GROUP BY表达式
+        添加原始GROUP BY表达式（增强版）
 
         Args:
-            sql_expression: 分组表达式，如 "DATE(created_at)" 或 "YEAR(birth_date), MONTH(birth_date)"
+            sql_expression: 分组表达式，支持以下格式：
+                           - "DATE(created_at)"  (推荐)
+                           - "GROUP BY DATE(created_at)"  (会自动清理)
+            validate: 是否进行内容验证
         """
-        raw_fragment = RawSQLFragment(sql_expression)
-        self.group_by_parts.append(raw_fragment)
+        try:
+            # 清理可能的GROUP BY关键字
+            cleaned_expression, was_cleaned = self._clean_sql_clause(
+                sql_expression,
+                ['GROUP BY'],
+                'GROUP BY表达式'
+            )
+
+            # 验证表达式内容
+            if validate:
+                cleaned_expression = self._validate_condition_content(
+                    cleaned_expression,
+                    'GROUP BY表达式'
+                )
+
+            if was_cleaned:
+                print(f"处理后的GROUP BY表达式: {cleaned_expression}")
+
+            raw_fragment = RawSQLFragment(cleaned_expression)
+            self.group_by_parts.append(raw_fragment)
+
+        except ValueError as e:
+            raise ValueError(f"GROUP BY表达式添加失败: {e}")
+
         return self
+
+    # 添加便捷方法，支持多种输入方式
+    def add_where_condition(self, condition: Union[str, FilterCondition]) -> 'FlexibleSQLAssembler':
+        """
+        智能添加WHERE条件，支持字符串和FilterCondition对象
+
+        Args:
+            condition: 可以是字符串条件或FilterCondition对象
+        """
+        if isinstance(condition, str):
+            return self.add_raw_where(condition)
+        elif isinstance(condition, FilterCondition):
+            self.where_conditions.append(condition)
+            return self
+        else:
+            raise ValueError("条件必须是字符串或FilterCondition对象")
+
+    def add_having_condition(self, condition: Union[str, HavingCondition]) -> 'FlexibleSQLAssembler':
+        """
+        智能添加HAVING条件，支持字符串和HavingCondition对象
+
+        Args:
+            condition: 可以是字符串条件或HavingCondition对象
+        """
+        if isinstance(condition, str):
+            return self.add_raw_having(condition)
+        elif isinstance(condition, HavingCondition):
+            self.having_conditions.append(condition)
+            return self
+        else:
+            raise ValueError("条件必须是字符串或HavingCondition对象")
 
     def add_multiple_group_by(self, fields: List[str]) -> 'FlexibleSQLAssembler':
         """批量添加分组字段"""
@@ -424,15 +567,40 @@ class FlexibleSQLAssembler:
         self.having_conditions.append(having_condition)
         return self
 
-    def add_raw_having(self, sql_condition: str) -> 'FlexibleSQLAssembler':
+    def add_raw_having(self, sql_condition: str, validate: bool = True) -> 'FlexibleSQLAssembler':
         """
-        添加原始HAVING条件
+        添加原始HAVING条件（增强版）
 
         Args:
-            sql_condition: 完整的HAVING条件，如 "COUNT(*) > 5 AND SUM(amount) < 1000"
+            sql_condition: HAVING条件，支持以下格式：
+                          - "COUNT(*) > 5"  (推荐)
+                          - "HAVING COUNT(*) > 5"  (会自动清理)
+            validate: 是否进行内容验证
         """
-        raw_fragment = RawSQLFragment(sql_condition)
-        self.having_conditions.append(raw_fragment)
+        try:
+            # 清理可能的HAVING关键字
+            cleaned_condition, was_cleaned = self._clean_sql_clause(
+                sql_condition,
+                ['HAVING'],
+                'HAVING条件'
+            )
+
+            # 验证条件内容
+            if validate:
+                cleaned_condition = self._validate_condition_content(
+                    cleaned_condition,
+                    'HAVING条件'
+                )
+
+            if was_cleaned:
+                print(f"处理后的HAVING条件: {cleaned_condition}")
+
+            raw_fragment = RawSQLFragment(cleaned_condition)
+            self.having_conditions.append(raw_fragment)
+
+        except ValueError as e:
+            raise ValueError(f"HAVING条件添加失败: {e}")
+
         return self
 
     def add_parameterized_having(self, sql_template: str, parameters: List[Any]) -> 'FlexibleSQLAssembler':
@@ -454,15 +622,40 @@ class FlexibleSQLAssembler:
         self.order_by_parts.append(order_clause)
         return self
 
-    def add_raw_order_by(self, sql_expression: str) -> 'FlexibleSQLAssembler':
+    def add_raw_order_by(self, sql_expression: str, validate: bool = True) -> 'FlexibleSQLAssembler':
         """
-        添加原始ORDER BY表达式
+        添加原始ORDER BY表达式（增强版）
 
         Args:
-            sql_expression: 排序表达式，如 "FIELD(status, 'active', 'pending', 'inactive')"
+            sql_expression: 排序表达式，支持以下格式：
+                           - "FIELD(status, 'active', 'pending', 'inactive')"  (推荐)
+                           - "ORDER BY FIELD(status, 'active', 'pending', 'inactive')"  (会自动清理)
+            validate: 是否进行内容验证
         """
-        raw_fragment = RawSQLFragment(sql_expression)
-        self.order_by_parts.append(raw_fragment)
+        try:
+            # 清理可能的ORDER BY关键字
+            cleaned_expression, was_cleaned = self._clean_sql_clause(
+                sql_expression,
+                ['ORDER BY'],
+                'ORDER BY表达式'
+            )
+
+            # 验证表达式内容
+            if validate:
+                cleaned_expression = self._validate_condition_content(
+                    cleaned_expression,
+                    'ORDER BY表达式'
+                )
+
+            if was_cleaned:
+                print(f"处理后的ORDER BY表达式: {cleaned_expression}")
+
+            raw_fragment = RawSQLFragment(cleaned_expression)
+            self.order_by_parts.append(raw_fragment)
+
+        except ValueError as e:
+            raise ValueError(f"ORDER BY表达式添加失败: {e}")
+
         return self
 
     # ============ 其他方法 ============
@@ -765,3 +958,83 @@ if __name__ == "__main__":
     print("4. 标准HAVING -> 使用 add_having()")
     print("5. 复杂HAVING -> 使用 add_raw_having()")
     print("6. 参数化HAVING -> 使用 add_parameterized_having()")
+
+    print("=== 测试增强的raw方法 ===")
+
+    assembler = FlexibleSQLAssembler("users u", DatabaseType.MYSQL)
+
+    # 测试1: 用户误传入WHERE关键字
+    print("\n测试1: 误传入WHERE关键字")
+    try:
+        assembler.add_raw_where("WHERE u.age > 18")
+        assembler.add_raw_where("u.status = 'active'")  # 正确格式
+        sql, params = assembler.build_sql()
+        print(f"生成的SQL: {sql}")
+    except ValueError as e:
+        print(f"错误: {e}")
+
+    assembler.clear_all()
+
+    # 测试2: 用户误传入HAVING关键字
+    print("\n测试2: 误传入HAVING关键字")
+    try:
+        assembler.add_raw_column("COUNT(*)", "user_count")
+        assembler.add_group_by("u.department")
+        assembler.add_raw_having("HAVING COUNT(*) > 5")  # 会被清理
+        assembler.add_raw_having("SUM(u.salary) > 100000")  # 正确格式
+        sql, params = assembler.build_sql()
+        print(f"生成的SQL: {sql}")
+    except ValueError as e:
+        print(f"错误: {e}")
+
+    assembler.clear_all()
+
+    # 测试3: 用户传入空条件
+    print("\n测试3: 传入空条件")
+    try:
+        assembler.add_raw_where("")
+    except ValueError as e:
+        print(f"预期错误: {e}")
+
+    # 测试4: 用户传入只有关键字的条件
+    print("\n测试4: 传入只有关键字的条件")
+    try:
+        assembler.add_raw_where("WHERE")
+    except ValueError as e:
+        print(f"预期错误: {e}")
+
+    # 测试5: 测试ORDER BY和GROUP BY的清理
+    print("\n测试5: ORDER BY和GROUP BY关键字清理")
+    assembler.clear_all()
+    try:
+        assembler.add_raw_group_by("GROUP BY DATE(u.created_at)")
+        assembler.add_raw_order_by("ORDER BY u.name ASC")
+        assembler.add_raw_column("COUNT(*)", "count")
+        sql, params = assembler.build_sql()
+        print(f"生成的SQL: {sql}")
+    except ValueError as e:
+        print(f"错误: {e}")
+
+    # 测试6: 智能条件添加方法
+    print("\n测试6: 智能条件添加")
+    assembler.clear_all()
+    try:
+        # 使用字符串
+        assembler.add_where_condition("u.age > 18")
+        # 使用FilterCondition对象
+        condition = FilterCondition("u.status", FilterOperator.EQUALS, "active")
+        assembler.add_where_condition(condition)
+
+        sql, params = assembler.build_sql()
+        print(f"生成的SQL: {sql}")
+        print(f"参数: {params}")
+    except ValueError as e:
+        print(f"错误: {e}")
+
+    print("\n=== 改进总结 ===")
+    print("1. 自动检测并移除用户误传入的关键字（WHERE、HAVING、ORDER BY、GROUP BY）")
+    print("2. 提供友好的警告信息，告知用户已进行自动清理")
+    print("3. 增加内容验证，确保条件不为空且语法基本正确")
+    print("4. 提供可选的验证开关，允许用户跳过验证")
+    print("5. 添加智能条件添加方法，支持多种输入类型")
+    print("6. 增强错误处理，提供更详细的错误信息")
