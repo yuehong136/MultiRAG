@@ -217,16 +217,209 @@ class QATemplateStorageService:
                 "message": f"存储模板失败: {str(e)}"
             }
 
+    def store_templates_v2(
+            self,
+            db: Session,
+            templates: list[dict[str, Any]],
+            tenant_id: str
+    ) -> dict[str, Any]:
+        """存储QA模板V2到Milvus - 支持类型化参数"""
+        try:
+            # 获取嵌入模型
+            embedding_model = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value)
+
+            # 准备要向量化的文本
+            texts_to_embed = []
+            for template in templates:
+                # 收集标准问法
+                texts_to_embed.append(template['question_canonical'])
+
+            # 批量向量化
+            embeddings, _ = embedding_model.encode(texts_to_embed)
+
+            # 确保集合存在（需要支持额外的字段）
+            success, message = self._ensure_collection_v2_exists(len(embeddings[0]))
+            if not success:
+                return {"success": False, "message": message}
+
+            # 准备插入数据
+            insert_data = []
+            embedding_idx = 0
+            current_timestamp = datetime.now().timestamp()
+
+            for template in templates:
+                # 为标准问法创建记录
+                canonical_embedding = embeddings[embedding_idx]
+                embedding_idx += 1
+
+                record = {
+                    "id": f"{tenant_id}_{template['qa_id']}_canonical",
+                    "qa_id": template['qa_id'],
+                    "question_canonical": template['question_canonical'],
+                    "paraphrases": json.dumps(template.get('paraphrases', []), ensure_ascii=False),
+                    "needed_params": json.dumps(template['needed_params'], ensure_ascii=False),
+                    "needed_params_typed": template.get('needed_params_typed', '[]'),  # V2新增字段
+                    "sql_template": template['sql_template'],
+                    "rule_id": str(template['rule_id']) if template.get('rule_id') is not None else "",
+                    "tenant_id": tenant_id,
+                    "vector": canonical_embedding.tolist(),
+                    "create_timestamp": current_timestamp,
+                    "update_timestamp": current_timestamp,
+                    "template_version": "v2"  # V2版本标记
+                }
+                insert_data.append(record)
+
+            # 使用docStoreConn的insert方法
+            doc_store_result = settings.docStoreConn.insert(self.collection_name, insert_data)
+
+            # 检查 insert_count 是否与本批次长度一致
+            if doc_store_result.get("insert_count", 0) != len(insert_data):
+                error_message = (
+                    f"Insert count mismatch: expected {len(insert_data)}, "
+                    f"got {doc_store_result.get('insert_count', 0)}."
+                )
+                raise Exception(error_message)
+
+            return {
+                "success": True,
+                "message": f"成功存储 {len(templates)} 个QA模板V2（支持类型化参数）",
+                "template_count": len(templates),
+                "record_count": len(insert_data),
+                "version": "v2"
+            }
+
+        except Exception as e:
+            logger.error(f"存储QA模板V2失败: {e}")
+            return {
+                "success": False,
+                "message": f"存储模板V2失败: {str(e)}"
+            }
+
+    def _ensure_collection_v2_exists(self, dim):
+        """创建V2集合"""
+
+        # 确保使用正确的集合名称（避免重复添加后缀）
+        base_collection_name = QA_TEMPLATE_COLLECTION
+        v2_collection_name = f"{base_collection_name}_v2"
+
+        self.collection_name = v2_collection_name
+        try:
+            # 首先检查集合是否已存在
+            if settings.docStoreConn.has_collection(self.collection_name):
+                return True, f"V2集合 {self.collection_name} 已存在"
+            analyzer_params = {
+                "type": "chinese",
+            }
+            # 定义字段schema（包含V2新增字段）
+            fields = [
+                # 主键字段
+                FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=100, is_primary=True),
+                # QA模板字段
+                FieldSchema(name="qa_id", dtype=DataType.VARCHAR, max_length=200),
+                FieldSchema(name="question_canonical", dtype=DataType.VARCHAR, max_length=2000, enable_analyzer=True, analyzer_params=analyzer_params),
+                FieldSchema(name="paraphrases", dtype=DataType.VARCHAR, max_length=8000),  # JSON字符串存储
+                FieldSchema(name="needed_params", dtype=DataType.VARCHAR, max_length=2000),  # JSON字符串存储（V1兼容）
+                FieldSchema(name="needed_params_typed", dtype=DataType.VARCHAR, max_length=4000),  # V2类型化参数信息
+                FieldSchema(name="sql_template", dtype=DataType.VARCHAR, max_length=8000),
+                FieldSchema(name="rule_id", dtype=DataType.VARCHAR, max_length=200),
+                FieldSchema(name="tenant_id", dtype=DataType.VARCHAR, max_length=100),
+                FieldSchema(name="template_version", dtype=DataType.VARCHAR, max_length=10),  # V2版本标记
+                # 向量字段
+                FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=dim),  # 密集向量
+                FieldSchema(name="sparse_vector", dtype=DataType.SPARSE_FLOAT_VECTOR),  # 稀疏向量(BM25)
+                # 时间戳字段
+                FieldSchema(name="create_timestamp", dtype=DataType.FLOAT),
+                FieldSchema(name="update_timestamp", dtype=DataType.FLOAT),
+            ]
+
+            # 创建BM25函数
+            bm25_function_name = f"bm25_function_{str(uuid.uuid4())[:8]}"
+            bm25_function = Function(
+                name=bm25_function_name,
+                function_type=FunctionType.BM25,
+                input_field_names=["question_canonical"],
+                output_field_names="sparse_vector"
+            )
+
+            # 创建集合架构
+            description = f"QA模板V2集合（支持类型化参数和混合检索）- 创建于 {datetime.now().isoformat()}"
+            schema = CollectionSchema(
+                fields=fields,
+                description=description,
+                enable_dynamic_field=True
+            )
+            schema.add_function(bm25_function)
+
+            # 创建集合
+            conn = settings.docStoreConn._get_connection()
+            conn.create_collection(
+                self.collection_name,
+                schema,
+                consistency_level=DEFAULT_CONSISTENCY_LEVEL
+            )
+
+            # 为密集向量创建索引
+            dense_index_params = {
+                "metric_type": "COSINE",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": 128}
+            }
+            conn.create_index(self.collection_name, "vector", dense_index_params)
+
+            # 为稀疏向量创建索引
+            sparse_index_params = {
+                "metric_type": "BM25",
+                "index_type": "SPARSE_INVERTED_INDEX",
+                "params": {
+                    "inverted_index_algo": "DAAT_WAND",
+                    "bm25_k1": 1.5,
+                    "bm25_b": 0.75
+                }
+            }
+            conn.create_index(self.collection_name, "sparse_vector", sparse_index_params)
+
+            # 加载集合
+            conn.load_collection(self.collection_name)
+
+            logger.info(f"QA模板V2集合 {self.collection_name} 创建成功")
+            return True, f"QA模板V2集合 {self.collection_name} 创建成功"
+
+        except Exception as e:
+            logger.error(f"创建QA模板V2集合失败: {e}")
+            return False, f"创建V2集合失败: {str(e)}"
+
     def clear_tenant_templates(self, tenant_id: str) -> dict[str, Any]:
         """清空指定租户的所有QA模板"""
         try:
             conn = settings.docStoreConn._get_connection()
-            if conn.has_collection(self.collection_name):
-                conn.drop_collection(self.collection_name)
+            
+            # 检查并清空V1和V2集合
+            base_collection_name = QA_TEMPLATE_COLLECTION
+            v2_collection_name = f"{base_collection_name}_v2"
+            
+            cleared_collections = []
+            
+            # 清空V2集合
+            if conn.has_collection(v2_collection_name):
+                conn.drop_collection(v2_collection_name)
+                cleared_collections.append(f"{v2_collection_name} (V2)")
+                
+            # 清空V1集合
+            if conn.has_collection(base_collection_name):
+                conn.drop_collection(base_collection_name)
+                cleared_collections.append(f"{base_collection_name} (V1)")
 
+            if cleared_collections:
                 return {
                     "success": True,
-                    "message": f"成功清空租户 {tenant_id} 的QA模板"
+                    "message": f"成功清空租户 {tenant_id} 的QA模板",
+                    "cleared_collections": cleared_collections
+                }
+            else:
+                return {
+                    "success": True,
+                    "message": f"租户 {tenant_id} 没有找到QA模板集合",
+                    "cleared_collections": []
                 }
 
         except Exception as e:
@@ -243,11 +436,14 @@ class QATemplateStorageService:
     def delete_templates_by_qa_ids(self, qa_ids: list[str], tenant_id: str) -> dict[str, Any]:
         """根据qa_id列表批量删除模板"""
         try:
-            # 检查集合是否存在
-            if not settings.docStoreConn.has_collection(self.collection_name):
+            # 获取可用的集合名称
+            matcher = QATemplateMatchingService()
+            collection_name, collection_version = matcher._get_available_collection()
+            
+            if not collection_name:
                 return {
                     "success": False,
-                    "message": f"QA模板集合 {self.collection_name} 不存在"
+                    "message": "未找到可用的QA模板集合"
                 }
 
             if not qa_ids:
@@ -267,7 +463,7 @@ class QATemplateStorageService:
                     
                     # 先查询要删除的记录数量
                     query_results = settings.docStoreConn.query(
-                        collection_name=self.collection_name,
+                        collection_name=collection_name,
                         filter=delete_expr,
                         output_fields=["id"]
                     )
@@ -279,7 +475,7 @@ class QATemplateStorageService:
 
                     # 执行删除操作
                     delete_result = settings.docStoreConn.delete(
-                        collection_name=self.collection_name,
+                        collection_name=collection_name,
                         filter=delete_expr
                     )
 
@@ -305,7 +501,8 @@ class QATemplateStorageService:
                 "message": message,
                 "deleted_count": total_deleted,
                 "failed_qa_ids": failed_qa_ids if failed_qa_ids else None,
-                "success_qa_ids": success_qa_ids
+                "success_qa_ids": success_qa_ids,
+                "collection_used": f"{collection_name} ({collection_version})"
             }
 
         except Exception as e:
@@ -316,6 +513,8 @@ class QATemplateStorageService:
                 "failed_qa_ids": qa_ids
             }
 
+
+
 # ================================
 # 2. 模板匹配服务
 # ================================
@@ -324,7 +523,18 @@ class QATemplateMatchingService:
     """QA模板匹配服务 - 从Milvus中检索匹配的模板"""
 
     def __init__(self):
-        self.collection_name = QA_TEMPLATE_COLLECTION
+        self.base_collection_name = QA_TEMPLATE_COLLECTION
+        self.v1_collection_name = QA_TEMPLATE_COLLECTION
+        self.v2_collection_name = f"{QA_TEMPLATE_COLLECTION}_v2"
+
+    def _get_available_collection(self):
+        """获取可用的集合名称，优先使用V2集合"""
+        if settings.docStoreConn.has_collection(self.v2_collection_name):
+            return self.v2_collection_name, "v2"
+        elif settings.docStoreConn.has_collection(self.v1_collection_name):
+            return self.v1_collection_name, "v1"
+        else:
+            return None, None
 
     def find_best_template(
             self,
@@ -338,28 +548,39 @@ class QATemplateMatchingService:
         """
         从Milvus中检索最匹配的QA模板
         使用混合检索（密集向量 + BM25稀疏向量）
+        自动检测和使用V1或V2集合
         """
         try:
-            # 检查集合是否存在
-            if not settings.docStoreConn.has_collection(self.collection_name):
-                logger.error(f"QA模板集合 {self.collection_name} 不存在")
+            # 获取可用的集合
+            collection_name, collection_version = self._get_available_collection()
+            if not collection_name:
+                logger.error("未找到可用的QA模板集合")
                 return None
+
+            logger.info(f"使用集合: {collection_name} (版本: {collection_version})")
 
             # 获取嵌入模型并向量化用户查询
             embedding_model = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value)
             query_embeddings, _ = embedding_model.encode_queries(user_query)
             query_vector = [get_float(v) for v in query_embeddings]
-            vector_dim = len(query_vector)
 
-            vector_column_name = f"q_{vector_dim}_vec"
-            filters = ""
-            output_fields = ["qa_id", "question_canonical", "paraphrases", "needed_params", "sql_template", "rule_id"]
+            # 设置输出字段（根据集合版本）
+            if collection_version == "v2":
+                output_fields = [
+                    "qa_id", "question_canonical", "paraphrases", "needed_params", 
+                    "needed_params_typed", "sql_template", "rule_id", "template_version"
+                ]
+            else:
+                output_fields = [
+                    "qa_id", "question_canonical", "paraphrases", "needed_params", 
+                    "sql_template", "rule_id"
+                ]
 
+            filters = f'tenant_id == "{tenant_id}"'  # 添加租户过滤
 
             dense_req = AnnSearchRequest(
                 data=[query_vector],
                 anns_field="vector",
-                # anns_field=vector_column_name,
                 param={"metric_type": "COSINE", "params": {"nprobe": 10}},
                 limit=top_k,
                 expr=filters,
@@ -374,7 +595,7 @@ class QATemplateMatchingService:
             ranker = WeightedRanker(hybrid_weight, 1 - hybrid_weight)
 
             results = settings.docStoreConn.hybrid_search(
-                collection_name=self.collection_name,
+                collection_name=collection_name,
                 reqs=[dense_req, sparse_req],
                 ranker=ranker,
                 limit=top_k,
@@ -419,6 +640,16 @@ class QATemplateMatchingService:
                 logger.warning(f"解析needed_params JSON失败: {e}")
                 needed_params = []
 
+            # 解析V2类型化参数（如果存在）
+            typed_params = None
+            if collection_version == "v2":
+                try:
+                    typed_params_str = entity.get('needed_params_typed', '[]')
+                    typed_params = json.loads(typed_params_str) if typed_params_str else []
+                except json.JSONDecodeError as e:
+                    logger.warning(f"解析needed_params_typed JSON失败: {e}")
+                    typed_params = []
+
             # 构建返回结果
             best_match = {
                 'qa_id': entity.get('qa_id'),
@@ -429,10 +660,15 @@ class QATemplateMatchingService:
                 'rule_id': entity.get('rule_id') if entity.get('rule_id') else None,
                 'similarity': similarity,
                 'matched_text': entity.get('question_canonical'),
-                'match_score': best_result.get('distance', 1.0),  # 保留原始距离分数
+                'match_score': best_result.get('distance', 1.0),
+                'collection_version': collection_version,  # 标记使用的集合版本
             }
 
-            logger.info(f"找到最佳匹配模板: qa_id={best_match['qa_id']}, similarity={similarity:.4f}")
+            # 如果是V2模板，添加类型化参数信息
+            if collection_version == "v2" and typed_params:
+                best_match['needed_params_typed'] = typed_params
+
+            logger.info(f"找到最佳匹配模板: qa_id={best_match['qa_id']}, similarity={similarity:.4f}, version={collection_version}")
             return best_match
 
         except Exception as e:
@@ -467,6 +703,31 @@ class StatelessSlotExtractionService:
 请返回JSON格式：{{"field1": "value1", "field2": "value2", ...}}
 只返回JSON，不要包含其他文字。"""
 
+        # 支持类型化参数的单轮对话提示模板
+        self.typed_single_round_prompt = """你是智能参数抽取器，请从用户查询中抽取参数值，并按照指定的数据类型输出。
+
+需要抽取的参数：
+{typed_params_info}
+
+当前系统日期：{system_date}
+数据库表结构信息：
+{table_schemas}
+
+用户查询：{user_query}
+
+请从查询中抽取对应的参数值，注意数据类型要求：
+- string: 输出字符串值，如 "张三"
+- integer: 输出整数值，如 25
+- float: 输出浮点数值，如 85.5
+- boolean: 输出布尔值，如 true 或 false
+- date: 输出日期字符串，格式为 "YYYY-MM-DD"，如 "2024-01-15"
+- 如果某个字段在用户问题中没有明确提及，请返回 null
+- 对于时间相关字段，可以根据系统日期进行推断
+- 教师姓名可能需要转换为教师ID，请根据表结构信息判断
+
+请返回JSON格式，确保数据类型正确：{{"param1": value1, "param2": "value2", "param3": 123, ...}}
+只返回JSON，不要包含其他文字。"""
+
         # 多轮对话提示模板
         self.multi_round_prompt = """你是智能参数抽取器，请从多轮对话中抽取和合并参数。
 
@@ -487,6 +748,35 @@ class StatelessSlotExtractionService:
 请重点关注最新的用户输入，将其与已有参数合并。对于用户刚提供的信息，请尝试匹配到对应的缺失参数字段。
 
 请返回完整的参数对象JSON：{{"field1": "value1", "field2": "value2", ...}}
+只返回JSON，不要包含其他文字。"""
+
+        # 支持类型化参数的多轮对话提示模板
+        self.typed_multi_round_prompt = """你是智能参数抽取器，请从多轮对话中抽取和合并参数，并按照指定的数据类型输出。
+
+需要抽取的参数：
+{typed_params_info}
+
+当前系统日期：{system_date}
+数据库表结构信息：
+{table_schemas}
+
+完整对话历史：
+{conversation_history}
+
+已有参数：
+{existing_params}
+
+还缺失的参数：
+{missing_params}
+
+请重点关注最新的用户输入，将其与已有参数合并，注意数据类型要求：
+- string: 输出字符串值，如 "张三"
+- integer: 输出整数值，如 25
+- float: 输出浮点数值，如 85.5
+- boolean: 输出布尔值，如 true 或 false
+- date: 输出日期字符串，格式为 "YYYY-MM-DD"，如 "2024-01-15"
+
+请返回完整的参数对象JSON，确保数据类型正确：{{"param1": value1, "param2": "value2", ...}}
 只返回JSON，不要包含其他文字。"""
 
     def extract_slots(
@@ -651,6 +941,285 @@ class StatelessSlotExtractionService:
                 "raw_response": ""
             }
 
+    def extract_slots_typed(
+        self,
+        db: Session,
+        user_query: str,
+        typed_params: list[dict[str, Any]],  # [{"name": "teacher_id", "data_type": "string", "description": "教师ID", "required": True}, ...]
+        table_schemas: list[dict[str, Any]],
+        system_date: str,
+        tenant_id: str,
+        llm_name: str | None = None
+    ) -> dict[str, Any]:
+        """类型化单轮槽位抽取 - 支持数据类型"""
+        try:
+            # 准备表结构信息
+            schema_info = ""
+            for schema in table_schemas:
+                schema_info += f"表 {schema['table_name']}:\n"
+                for col in schema['columns']:
+                    schema_info += f"  - {col['name']} ({col['type']}): {col.get('description', '')}\n"
+
+            # 准备类型化参数信息
+            typed_params_info = ""
+            param_names = []
+            for param in typed_params:
+                param_name = param.get("name", "")
+                param_type = param.get("data_type", "string")
+                param_desc = param.get("description", "")
+                required = param.get("required", True)
+                
+                param_names.append(param_name)
+                typed_params_info += f"- {param_name} ({param_type}): {param_desc}"
+                if not required:
+                    typed_params_info += " [可选]"
+                typed_params_info += "\n"
+
+            # 构建提示词
+            prompt = self.typed_single_round_prompt.format(
+                typed_params_info=typed_params_info.strip(),
+                system_date=system_date,
+                table_schemas=schema_info,
+                user_query=user_query
+            )
+
+            # 调用LLM
+            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+
+            response = chat_model.chat(
+                system=prompt,
+                history=[{"role": "user", "content": "请按照要求输出"}],
+                gen_conf={"temperature": 0.1, "max_tokens": 500}
+            )
+
+            # 解析JSON结果
+            try:
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    extracted_params = json.loads(json_match.group())
+                else:
+                    extracted_params = json.loads(response)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse typed LLM response as JSON: {response}")
+                extracted_params = {}
+
+            # 验证和转换数据类型
+            validated_params = {}
+            missing_params = []
+
+            for param in typed_params:
+                param_name = param.get("name")
+                param_type = param.get("data_type", "string")
+                required = param.get("required", True)
+                
+                if param_name not in extracted_params or extracted_params[param_name] is None:
+                    if required:
+                        missing_params.append(param_name)
+                    continue
+                
+                raw_value = extracted_params[param_name]
+                
+                # 类型验证和转换
+                try:
+                    validated_value = self._validate_and_convert_type(raw_value, param_type)
+                    validated_params[param_name] = validated_value
+                except ValueError as e:
+                    logger.warning(f"Type conversion failed for {param_name}: {e}")
+                    if required:
+                        missing_params.append(param_name)
+
+            return {
+                "extracted_params": validated_params,
+                "missing_params": missing_params,
+                "confidence": 0.8 if len(missing_params) == 0 else 0.5,
+                "raw_response": response
+            }
+
+        except Exception as e:
+            logger.error(f"Error extracting typed slots: {e}")
+            return {
+                "extracted_params": {},
+                "missing_params": param_names,
+                "confidence": 0.0,
+                "raw_response": ""
+            }
+
+    def _validate_and_convert_type(self, value: Any, data_type: str) -> Any:
+        """验证和转换数据类型"""
+        if value is None:
+            return None
+            
+        data_type = data_type.lower()
+        
+        if data_type == "string":
+            return str(value)
+        elif data_type == "integer":
+            if isinstance(value, int):
+                return value
+            elif isinstance(value, str) and value.isdigit():
+                return int(value)
+            elif isinstance(value, float) and value.is_integer():
+                return int(value)
+            else:
+                raise ValueError(f"Cannot convert {value} to integer")
+        elif data_type == "float":
+            if isinstance(value, (int, float)):
+                return float(value)
+            elif isinstance(value, str):
+                return float(value)
+            else:
+                raise ValueError(f"Cannot convert {value} to float")
+        elif data_type == "boolean":
+            if isinstance(value, bool):
+                return value
+            elif isinstance(value, str):
+                if value.lower() in ["true", "1", "yes", "是"]:
+                    return True
+                elif value.lower() in ["false", "0", "no", "否"]:
+                    return False
+                else:
+                    raise ValueError(f"Cannot convert {value} to boolean")
+            elif isinstance(value, (int, float)):
+                return bool(value)
+            else:
+                raise ValueError(f"Cannot convert {value} to boolean")
+        elif data_type == "date":
+            if isinstance(value, str):
+                # 简单日期格式验证
+                import re
+                if re.match(r'^\d{4}-\d{2}-\d{2}$', value):
+                    return value
+                else:
+                    raise ValueError(f"Date format should be YYYY-MM-DD, got {value}")
+            else:
+                raise ValueError(f"Date should be string, got {type(value)}")
+        else:
+            # 默认转换为字符串
+            return str(value)
+
+    def extract_and_merge_slots_typed(
+        self,
+        db: Session,
+        dialog_context: dict[str, Any],
+        table_schemas: list[dict[str, Any]],
+        system_date: str,
+        tenant_id: str,
+        llm_name: str | None = None
+    ) -> dict[str, Any]:
+        """V2类型化多轮对话槽位抽取和合并"""
+        try:
+            if not dialog_context.get("matched_template"):
+                raise ValueError("No matched template in dialog context")
+
+            template = dialog_context["matched_template"]
+            typed_params = template.get("needed_params_typed", [])
+            if not typed_params:
+                # 如果没有类型化参数，回退到V1方法
+                logger.warning("V2模板缺少类型化参数信息，回退到V1方法")
+                return self.extract_and_merge_slots(db, dialog_context, table_schemas, system_date, tenant_id, llm_name)
+
+            existing_params = dialog_context.get("accumulated_params", {})
+            param_names = [param.get("name") for param in typed_params if param.get("name")]
+            missing_params = dialog_context.get("missing_params", param_names)
+
+            # 构建对话历史
+            conversation_history = ""
+            rounds = dialog_context.get("rounds", [])
+            for round_info in rounds:
+                user_input = round_info.get("user_input", round_info.get("user_query", ""))
+                conversation_history += f"轮次{round_info['round_id']}: {user_input}\n"
+
+            # 准备表结构信息
+            schema_info = ""
+            for schema in table_schemas:
+                schema_info += f"表 {schema['table_name']}:\n"
+                for col in schema['columns']:
+                    schema_info += f"  - {col['name']} ({col['type']}): {col.get('description', '')}\n"
+
+            # 准备类型化参数信息
+            typed_params_info = ""
+            for param in typed_params:
+                param_name = param.get("name", "")
+                param_type = param.get("data_type", "string")
+                param_desc = param.get("description", "")
+                required = param.get("required", True)
+                
+                typed_params_info += f"- {param_name} ({param_type}): {param_desc}"
+                if not required:
+                    typed_params_info += " [可选]"
+                typed_params_info += "\n"
+
+            # 构建提示词
+            prompt = self.typed_multi_round_prompt.format(
+                typed_params_info=typed_params_info.strip(),
+                system_date=system_date,
+                table_schemas=schema_info,
+                conversation_history=conversation_history.strip(),
+                existing_params=json.dumps(existing_params, ensure_ascii=False, indent=2),
+                missing_params=missing_params
+            )
+
+            # 调用LLM
+            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+
+            response = chat_model.chat(
+                system=prompt,
+                history=[{"role": "user", "content": "请按照要求输出参数"}],
+                gen_conf={"temperature": 0.1, "max_tokens": 500}
+            )
+
+            # 解析结果
+            try:
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    extracted_params = json.loads(json_match.group())
+                else:
+                    extracted_params = json.loads(response)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse typed multiturn LLM response: {response}")
+                extracted_params = existing_params  # 保持现有参数
+
+            # 验证和转换数据类型
+            validated_params = {}
+            new_missing_params = []
+
+            for param in typed_params:
+                param_name = param.get("name")
+                param_type = param.get("data_type", "string")
+                required = param.get("required", True)
+                
+                if param_name not in extracted_params or extracted_params[param_name] is None:
+                    if required:
+                        new_missing_params.append(param_name)
+                    continue
+                
+                raw_value = extracted_params[param_name]
+                
+                # 类型验证和转换
+                try:
+                    validated_value = self._validate_and_convert_type(raw_value, param_type)
+                    validated_params[param_name] = validated_value
+                except ValueError as e:
+                    logger.warning(f"Type conversion failed for {param_name}: {e}")
+                    if required:
+                        new_missing_params.append(param_name)
+
+            return {
+                "extracted_params": validated_params,
+                "missing_params": new_missing_params,
+                "confidence": 0.9 if len(new_missing_params) == 0 else 0.6,
+                "raw_response": response
+            }
+
+        except Exception as e:
+            logger.error(f"Error in typed multiturn slot extraction: {e}")
+            return {
+                "extracted_params": dialog_context.get("accumulated_params", {}),
+                "missing_params": dialog_context.get("missing_params", []),
+                "confidence": 0.0,
+                "raw_response": ""
+            }
+
 # ================================
 # 4. 追问服务
 # ================================
@@ -788,25 +1357,54 @@ class StatelessQAService:
             # 3. 参数抽取和合并
             if enable_slot_merge and len(context["rounds"]) > 1:
                 # 多轮对话：智能合并参数
-                slot_result = self.slot_extractor.extract_and_merge_slots(
-                    db=db,
-                    dialog_context=context,
-                    table_schemas=table_schemas,
-                    system_date=system_date or datetime.now().strftime("%Y-%m-%d"),
-                    tenant_id=tenant_id,
-                    llm_name=llm_name
-                )
+                if matched_template.get("collection_version") == "v2" and matched_template.get("needed_params_typed"):
+                    # 使用V2类型化参数抽取（多轮）
+                    logger.info("使用V2类型化多轮参数抽取")
+                    slot_result = self.slot_extractor.extract_and_merge_slots_typed(
+                        db=db,
+                        dialog_context=context,
+                        table_schemas=table_schemas,
+                        system_date=system_date or datetime.now().strftime("%Y-%m-%d"),
+                        tenant_id=tenant_id,
+                        llm_name=llm_name
+                    )
+                else:
+                    # 使用V1参数抽取（多轮）
+                    logger.info("使用V1多轮参数抽取")
+                    slot_result = self.slot_extractor.extract_and_merge_slots(
+                        db=db,
+                        dialog_context=context,
+                        table_schemas=table_schemas,
+                        system_date=system_date or datetime.now().strftime("%Y-%m-%d"),
+                        tenant_id=tenant_id,
+                        llm_name=llm_name
+                    )
             else:
                 # 单轮对话：直接抽取
-                slot_result = self.slot_extractor.extract_slots(
-                    db=db,
-                    user_query=current_input,
-                    needed_params=matched_template["needed_params"],
-                    table_schemas=table_schemas,
-                    system_date=system_date or datetime.now().strftime("%Y-%m-%d"),
-                    tenant_id=tenant_id,
-                    llm_name=llm_name
-                )
+                if matched_template.get("collection_version") == "v2" and matched_template.get("needed_params_typed"):
+                    # 使用V2类型化参数抽取（单轮）
+                    logger.info("使用V2类型化单轮参数抽取")
+                    slot_result = self.slot_extractor.extract_slots_typed(
+                        db=db,
+                        user_query=current_input,
+                        typed_params=matched_template["needed_params_typed"],
+                        table_schemas=table_schemas,
+                        system_date=system_date or datetime.now().strftime("%Y-%m-%d"),
+                        tenant_id=tenant_id,
+                        llm_name=llm_name
+                    )
+                else:
+                    # 使用V1参数抽取（单轮）
+                    logger.info("使用V1单轮参数抽取")
+                    slot_result = self.slot_extractor.extract_slots(
+                        db=db,
+                        user_query=current_input,
+                        needed_params=matched_template["needed_params"],
+                        table_schemas=table_schemas,
+                        system_date=system_date or datetime.now().strftime("%Y-%m-%d"),
+                        tenant_id=tenant_id,
+                        llm_name=llm_name
+                    )
 
             # 4. 更新上下文中的参数
             context["accumulated_params"].update(slot_result["extracted_params"])
