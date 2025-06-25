@@ -146,6 +146,20 @@ class AskdataService:
         logger.info(f"成功生成SQL: {result.get('sql')}")
         return result
 
+    async def fix_sql_query_with_components(self, original_sql: str, error_message: str,
+                                            semantic_layer: Dict[str, Any], llm_name: str) -> Optional[Dict[str, Any]]:
+        """
+        修复执行失败的SQL查询
+        """
+        result = await self.nlq_to_initial_sql_generator.fix_sql_query_with_components(
+            original_sql, error_message, semantic_layer, llm_name
+        )
+        if not result:
+            logger.warning("NLQ to Initial SQL 修复失败，返回 None。")
+            return None
+        logger.info(f"成功修复SQL: {result.get('sql')}")
+        return result
+
     async def generate_table_config(self,
                                     used_table_detail_dict: Dict[str, Dict], model_list: List[Dict],
                                     sql_components: Dict[str, Any], recommended_chart: str):

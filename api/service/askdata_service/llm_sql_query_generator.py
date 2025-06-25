@@ -226,3 +226,73 @@ class NLQToInitialSQLGenerator:
     #     message = "SQL查询生成并验证成功" if is_valid else f"SQL语法验证失败: {validation_message}"
     #
     #     return result, is_valid, message
+
+    async def fix_sql_query_with_components(self, original_sql: str, error_message: str,
+                                            semantic_layer: Dict[str, Any], llm_name: str) -> Optional[Dict[str, Any]]:
+        """
+        修复执行失败的SQL查询
+
+        参数:
+            original_sql: 执行失败的原始SQL
+            error_message: 数据库返回的错误信息
+            semantic_layer: 语义层信息
+            llm_name: 用于修复的LLM模型名称
+
+        返回:
+            包含修复后sql, usedModels, 和 sqlComponents 的字典, 如果修复失败则返回None
+        """
+        try:
+            llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+
+            prompt_template = PromptTemplateUtil.load_template_from_file(
+                os.path.join(self.prompt_dir, "sql_error_fix.txt")
+            )
+
+            semantic_layer_str = json.dumps(semantic_layer, ensure_ascii=False, indent=2)
+
+            prompt = PromptTemplateUtil.fill_template(
+                prompt_template,
+                {
+                    "original_sql": original_sql,
+                    "error_message": error_message,
+                    "semantic_layer": semantic_layer_str,
+                    "current_date": date.today().strftime("%Y-%m-%d"),
+                    "database_type": self.database_type
+                }
+            )
+
+            history = [{"role": "user", "content": prompt}]
+            gen_conf = {
+                "temperature": 0.1,  # 低温度以确保修复的准确性
+                "top_p": 0.9,
+                "max_tokens": 4096
+            }
+
+            response = await asyncio.to_thread(
+                llm_model_instance.chat,
+                system="你是一个专业的SQL修复专家。请根据错误信息和语义层信息修复SQL查询，输出JSON格式的结果。",
+                history=history,
+                gen_conf=gen_conf
+            )
+
+            logger.info(f"SQL修复-LLM响应")
+            logger.info(f"原始SQL: {original_sql}")
+            logger.info(f"错误信息: {error_message}")
+            logger.info(f"修复响应: {response}")
+
+            json_response = self._extract_llm_response_json(response)
+            if not json_response:
+                logger.error(f"无法从LLM的响应中提取JSON。原始响应: {response}")
+                return None
+
+            validated_data = self._parse_and_validate_llm_json(json_response)
+            if not validated_data:
+                logger.error(f"提取的JSON未能通过验证。原始JSON: {json_response}")
+                return None
+
+            logger.info("成功修复SQL查询。")
+            return validated_data
+
+        except Exception as e:
+            logger.error(f"修复SQL查询时出错: {e}", exc_info=True)
+            return None

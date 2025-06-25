@@ -94,10 +94,28 @@ async def get_sql_and_table_config(
         result = await query_data_with_params(sql, list(intersection_dataset_ids)[0], [])
         if result["status"] == "error":
             logger.error(f"查询数据失败: {result['message']}")
-            return ResponseSchema(
-                status=StatusEnum.ERROR,
-                message=f"查询数据失败: {result['message']}"
+            logger.info("尝试修复SQL查询")
+            # 尝试修复SQL查询
+            fix_result = await service.fix_sql_query_with_components(
+                original_sql=sql,
+                error_message=result["message"],
+                semantic_layer=body.semantic_layer.get('processed_semantic_layer', {}),
+                llm_name=body.llm_name
             )
+            new_result = await query_data_with_params(fix_result["sql"], list(intersection_dataset_ids)[0], [])
+            if new_result["status"] == "error":
+                logger.error(f"修复后查询数据失败: {new_result['message']}")
+                return ResponseSchema(
+                    status=StatusEnum.ERROR,
+                    message=f"查询数据失败: {new_result['message']}"
+                )
+            else:
+                logger.info(f"修复后查询数据成功: {new_result['data']}")
+                return ResponseSchema(
+                    status=StatusEnum.SUCCESS,
+                    message="查询数据成功",
+                    data=new_result["data"]
+                )
 
         # 2. 生成表格配置
         model_table_alias_mapping_list, table_config = await service.generate_table_config(
@@ -388,7 +406,7 @@ async def re_query(
         ),
         service: AskdataService = Depends(get_askdata_service)
 ) -> ResponseSchema:
-    logger.info(f"re-query chart_type: {body.chart_type}\n table_config: {body.table_config}")
+    logger.info(f"re-query chart_type: {body.chart_type}\n table_config: {body.table_config} \n sql_components: {body.sql_components} \n model_table_alias_mapping_list: {body.model_table_alias_mapping_list}")
 
     try:
         sql, params = await service.generate_requery_sql(body.chart_type, body.table_config,
