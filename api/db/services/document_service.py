@@ -74,10 +74,18 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,
-                     orderby: str, desc: bool, keywords: str | None = None) -> tuple[list[dict], int]:
+                     orderby: str, desc: bool, keywords: str | None = None,
+                     run_status: list | None = None, types: list | None = None) -> tuple[list[dict], int]:
         query = db.query(cls.model).filter_by(kb_id=kb_id)
+
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
+
+        if run_status:
+            query = query.filter(cls.model.run.in_(run_status))
+
+        if types:
+            query = query.filter(cls.model.type.in_(types))
 
         count = query.count()
 
@@ -86,7 +94,11 @@ class DocumentService(CommonService):
         else:
             query = query.order_by(getattr(cls.model, orderby).asc())
 
-        docs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
+        if page_number and items_per_page:
+            docs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
+        else:
+            docs = query.all()
+
         return [doc.to_dict() for doc in docs], count
 
     @classmethod
