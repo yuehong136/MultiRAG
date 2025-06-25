@@ -29,6 +29,7 @@ from core.nlp import search, rag_tokenizer
 from core import settings
 from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
+from core.utils.doc_store_conn import OrderByExpr
 
 
 class DocumentService(CommonService):
@@ -164,15 +165,18 @@ class DocumentService(CommonService):
                     filter=f"doc_id == '{doc.id}'"
                 )
             # todo 待测试【docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
-            # docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id, [kb.name]), doc.kb_id)
-            # docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc.id},
-            #                              {"remove": {"source_id": doc.id}},
-            #                              search.index_name(tenant_id, [kb.name]), doc.kb_id)
-            # docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
-            #                              {"removed_kwd": "Y"},
-            #                              search.index_name(tenant_id, [kb.name]), doc.kb_id)
-            # docStoreConn.delete({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
-            #                              search.index_name(tenant_id, [kb.name]), doc.kb_id)
+            # graph_source = docStoreConn.getFields(
+            #     docStoreConn.search(["source_id"], [], {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [doc.kb_id]), ["source_id"]
+            # )
+            # if len(graph_source) > 0 and doc.id in list(graph_source.values())[0]["source_id"]:
+            #     docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc.id},
+            #                                 {"remove": {"source_id": doc.id}},
+            #                                 search.index_name(tenant_id, [kb.name]), doc.kb_id)
+            #     docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
+            #                                 {"removed_kwd": "Y"},
+            #                                 search.index_name(tenant_id, [kb.name]), doc.kb_id)
+            #     docStoreConn.delete({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
+            #                                 search.index_name(tenant_id, [kb.name]), doc.kb_id)
         except MilvusException as e:
             return e
         return cls.delete_by_id(db, doc.id)
