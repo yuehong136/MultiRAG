@@ -149,6 +149,7 @@ def chat_solo(db, dialog, messages, stream=True):
     msg = [{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])} for m in messages if m["role"] != "system"]
     if stream:
         last_ans = ""
+        delta_ans = ""
         for ans in chat_mdl.chat_streamly(prompt_config.get("system", ""), msg, dialog.llm_setting):
             answer = ans
             delta_ans = ans[len(last_ans):]
@@ -157,6 +158,7 @@ def chat_solo(db, dialog, messages, stream=True):
             last_ans = answer
             yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "",
                    "created_at": time.time()}
+            delta_ans = ""
         if delta_ans:
             yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "",
                    "created_at": time.time()}
