@@ -22,7 +22,6 @@ import signal
 import sys
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 import threading
 import uuid
 
@@ -91,6 +90,10 @@ if __name__ == '__main__':
    / /|_/ /  / / / /  / /  / __/  / /  ______   / /_/ /  / /| |    / / __   
   / /  / /  / /_/ /  / /  / /_   / /  /_____/  / _, _/  / ___ |   / /_/ /   
  /_/  /_/   \__,_/  /_/   \__/  /_/           /_/ |_|  /_/  |_|   \____/    
+ 
+                        ╔╦╗ ┬ ┬ ┬  ┌┬┐ ┬ ┬─┐ ┌─┐ ╔═╗
+                        ║║║ │ │ │   │  │ ├┬┘ ├─┤ ║ ╦    【——v0.4.4——】  
+                        ╩ ╩ └─┘ ┴─┘ ┴  ┴ ┴└─ ┴ ┴ ╚═╝
 ============================================================================
                 """)
 
@@ -137,9 +140,8 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # 启动进度更新线程
-    thread = ThreadPoolExecutor(max_workers=1)
-    thread.submit(update_progress)
+    # 进度更新线程现在通过 FastAPI lifespan 事件启动
+    # 参见 api/apps/__init__.py 中的 lifespan 函数
 
     # 使用 uvicorn 启动 FastAPI 应用
     try:

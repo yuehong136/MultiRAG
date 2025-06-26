@@ -60,9 +60,18 @@ async def lifespan(app: FastAPI):
     # 启动时执行的代码
     await workflow_state_manager.start()
 
+    # 启动进度更新线程
+    from api.multirag_server import update_progress, stop_event
+    import threading
+    logging.info("Starting update_progress thread via lifespan")
+    update_progress_thread = threading.Thread(target=update_progress, daemon=True)
+    update_progress_thread.start()
+
     yield  # 这里暂停执行，等待应用程序运行
 
     # 关闭时执行的代码
+    logging.info("Shutting down update_progress thread")
+    stop_event.set()
     await workflow_state_manager.shutdown()
 
 
