@@ -369,6 +369,7 @@ async def rm(
                     STORAGE_IMPL.rm(file.parent_id, file.location)
                 FileService.delete_folder_by_pf_id(db, user.id, file_id)
             else:
+                STORAGE_IMPL.rm(file.parent_id, file.location)
                 if not FileService.delete(db, file):
                     return get_data_error_result(retmsg="Database error (File removal)!")
 
