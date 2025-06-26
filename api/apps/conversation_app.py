@@ -42,8 +42,30 @@ class SetConversationRequest(BaseModel):
 
     name: str | None = "New conversation"
     """会话的名称。"""
+    
+    is_new: bool | None = None
+    """是否为新建会话，可选参数。如果未提供，将根据conversation_id是否存在来判断。"""
 
-    # 其他可能的字段
+    @model_validator(mode='after')
+    def validate_conversation_logic(self) -> 'SetConversationRequest':
+        """验证会话创建/更新逻辑"""
+        # 如果没有指定is_new，根据conversation_id来判断
+        if self.is_new is None:
+            self.is_new = self.conversation_id is None
+        
+        # 如果是新建会话，必须提供dialog_id
+        if self.is_new and not self.dialog_id:
+            raise ValueError("dialog_id is required when creating a new conversation")
+        
+        # 如果是更新会话，必须提供conversation_id
+        if not self.is_new and not self.conversation_id:
+            raise ValueError("conversation_id is required when updating an existing conversation")
+            
+        # 限制名称长度
+        if self.name and len(self.name) > 255:
+            self.name = self.name[:255]
+            
+        return self
 
 
 class CompletionRequest(BaseModel):
@@ -200,6 +222,7 @@ async def set_conversation(request: SetConversationRequest, db: Session = Depend
         - conversation_id: 会话的唯一标识符，如果为空则表示创建新会话
         - dialog_id: 对话的唯一标识符
         - name: 会话的名称
+        - is_new: 是否为新建会话
 
     返回:
     - 成功时返回包含会话信息的JSON结果
@@ -207,8 +230,16 @@ async def set_conversation(request: SetConversationRequest, db: Session = Depend
     """
     req = request.model_dump()
     conv_id = req.get("conversation_id")
-    if conv_id:
+    is_new = req.get("is_new")
+    name = req.get("name", "New conversation")
+    
+    # 添加用户ID到请求数据中
+    req["user_id"] = user.id
+
+    if not is_new:
+        # 更新现有会话
         del req["conversation_id"]
+        del req["is_new"]
         try:
             if not ConversationService.update_by_id(db, conv_id, req):
                 return get_data_error_result(retmsg="Conversation not found!")
@@ -220,22 +251,27 @@ async def set_conversation(request: SetConversationRequest, db: Session = Depend
         except Exception as e:
             return server_error_response(e)
 
+    # 创建新会话
     try:
         dia = DialogService.get_by_id(db, req["dialog_id"])
         if not dia:
             return get_data_error_result(retmsg="Dialog not found")
+        
         conv = {
-            "id": get_uuid(),
+            "id": conv_id or get_uuid(),
             "dialog_id": req["dialog_id"],
-            "name": req.get("name", "New conversation"),
-            "message": [{"role": "assistant", "content": dia.prompt_config["prologue"]}]
+            "name": name,
+            "message": [{"role": "assistant", "content": dia.prompt_config["prologue"]}],
+            "user_id": user.id
         }
         ConversationService.save(db, **conv)
-        conv = ConversationService.get_by_id(db, conv["id"])
-        if not conv:
-            return get_data_error_result(retmsg="Fail to new a conversation!")
-        conv = conv.to_dict()
-        return get_json_result(data=conv)
+        
+        # 重新获取保存后的完整数据，确保向后兼容
+        saved_conv = ConversationService.get_by_id(db, conv["id"])
+        if not saved_conv:
+            return get_data_error_result(retmsg="Fail to create a conversation!")
+        
+        return get_json_result(data=saved_conv.to_dict())
     except Exception as e:
         return server_error_response(e)
 

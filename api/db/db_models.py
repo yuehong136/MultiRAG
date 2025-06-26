@@ -495,6 +495,7 @@ class Conversation(BaseModel):
     name = Column(String(255), index=True, nullable=True, doc="converastion name")
     message = Column(JSONB, index=False, nullable=True)
     reference = Column(JSONB, index=False, nullable=True, default=[])
+    user_id = Column(String(32), index=True, nullable=True, doc="user_id")
 
 
 class APIToken(BaseModel):
