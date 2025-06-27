@@ -116,12 +116,12 @@ user_default_llm:
 
 oauth:
   github:
-    # GitHub OAuth的客户端ID
+    type: github
+    icon: github
+    display_name: "Github"
     client_id: xxxxxxxxxxxxxxxxxxxxxxxxx
-    # GitHub OAuth的密钥
-    secret_key: xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    # GitHub OAuth的访问令牌URL
-    url: https://github.com/login/oauth/access_token
+    client_secret: xxxxxxxxxxxxxxxxxxxxxxxx
+    redirect_uri: https://your-app.com/v1/user/oauth/callback/github
   feishu:
     # 飞书OAuth的应用ID
     app_id: cli_xxxxxxxxxxxxxxxxxxx

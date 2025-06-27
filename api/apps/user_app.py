@@ -163,6 +163,8 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
 @router.get("/github_callback", summary="GitHub 回调")
 async def github_callback(code: str, db: Session = Depends(get_db)):
     """
+    **Deprecated**, Use `/oauth/callback/<channel>` instead.
+
     GitHub 回调
 
     该接口用于处理GitHub OAuth登录回调。
