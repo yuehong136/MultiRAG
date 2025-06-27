@@ -214,6 +214,27 @@ class CommonService(Generic[ModelType]):
             return 0
 
     @classmethod
+    def delete_by_ids(cls, db: Session, pids: list[Any]) -> int:
+        """
+        Delete multiple records by their IDs
+
+        Args:
+            db: Database session
+            pids: List of record IDs
+
+        Returns:
+            Number of records deleted
+        """
+        try:
+            deleted_count = db.query(cls.model).filter(cls.model.id.in_(pids)).delete(synchronize_session=False)
+            db.commit()  # 确保提交事务
+            return deleted_count
+        except Exception as e:
+            db.rollback()  # 回滚事务
+            print(f"Error occurred: {e}")
+            return 0
+
+    @classmethod
     def filter_update(cls, db: Session, filters: list[Any], update_data: dict[str, Any]):
         now = cls.current_timestamp()
         now_datetime = cls.current_datetime()

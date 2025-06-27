@@ -499,6 +499,25 @@ class DocumentService(CommonService):
         return query.id if query else None
 
     @classmethod
+    def get_doc_ids_by_doc_names(cls, db: Session, doc_names: list[str]) -> list[str]:
+        """
+        Get document IDs by document names
+
+        Args:
+            db: Database session
+            doc_names: List of document names
+
+        Returns:
+            List of document IDs
+        """
+        if not doc_names:
+            return []
+
+        query = db.query(cls.model.id).filter(cls.model.name.in_(doc_names))
+        results = query.all()
+        return [result.id for result in results]
+
+    @classmethod
     def get_thumbnails(cls, db: Session, doc_ids: list[str]):
         query = db.query(cls.model.id, cls.model.kb_id, cls.model.thumbnail).filter(cls.model.id.in_(doc_ids))
         return query.all()
