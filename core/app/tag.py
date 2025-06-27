@@ -132,7 +132,7 @@ def label_question(db, question, kbs):
         all_tags = get_tags_from_cache(tag_kb_ids)
         if not all_tags:
             all_tags = settings.retrievaler.all_tags_in_portion(db, kb.tenant_id, tag_kb_ids)
-            set_tags_to_cache(all_tags, tag_kb_ids)
+            set_tags_to_cache(tags=all_tags, kb_ids=tag_kb_ids)
         else:
             all_tags = json.loads(all_tags)
         tag_kbs = KnowledgebaseService.get_by_ids(db, tag_kb_ids)
