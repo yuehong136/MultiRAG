@@ -34,7 +34,8 @@ from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
 from core.nlp import extract_between
 from core.nlp.search import index_name
-from core.prompts import kb_prompt, message_fit_in, llm_id2llm_type, keyword_extraction, full_question, chunks_format, citation_prompt
+from core.prompts import kb_prompt, message_fit_in, llm_id2llm_type, keyword_extraction, full_question, chunks_format, \
+    citation_prompt, cross_languages
 from core.utils import rmSpace, num_tokens_from_string
 from core.utils.tavily_conn import Tavily
 
@@ -292,6 +293,9 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         questions = [full_question(db, dialog.tenant_id, dialog.llm_id, messages)]
     else:
         questions = questions[-1:]
+
+    if prompt_config.get("cross_languages"):
+        questions = [cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
 
     refine_question_ts = timer()
 

@@ -160,7 +160,7 @@ class DocumentService(CommonService):
         if types:
             query = query.filter(cls.model.type.in_(types))
 
-        return query.scalar() or 0
+        return int(query.scalar()) or 0
 
     @classmethod
     def get_by_doc_id(cls, db: Session, doc_id: str) -> dict | None:

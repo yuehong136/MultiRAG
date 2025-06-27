@@ -23,7 +23,7 @@ from api.db.db_models import get_db
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
-from core.prompts import keyword_extraction
+from core.prompts import keyword_extraction, cross_languages
 from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -140,6 +140,7 @@ class RetrievalTestRequest(BaseModel):
     highlight: bool = False
     keyword: bool = False
     search_mode: SearchModeType | None = None
+    cross_languages: list[str] | None = None
 
     def get_search_mode_dict(self) -> dict[str, Any] | None:
         """将搜索模式转换为字典格式供底层函数使用"""
@@ -401,6 +402,108 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
 
 @router.get('/get', summary="获取文档块")
 def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    ### GET `/get` 获取文档块详细信息接口
+
+    **功能描述**:
+    此接口用于根据文档块ID获取文档块的详细信息，包括内容、关键词、位置信息等，同时会过滤掉向量和分词等技术字段。
+
+    ---
+
+    ### 请求参数 (Query Parameters)
+
+    | 参数名     | 类型     | 必填 | 描述                    |
+    |------------|----------|------|-------------------------|
+    | `chunk_id` | `string` | 是   | 文档块的唯一标识符      |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    - **`Content-Type: application/json`**
+    - **示例**:
+        ```json
+        {
+            "retcode": 0,
+            "retmsg": "success",
+            "data": {
+                "chunk_id": "chunk_123",
+                "content_with_weight": "文档块的内容",
+                "doc_id": "doc_456",
+                "docnm_kwd": "文档名称",
+                "important_kwd": ["关键词1", "关键词2"],
+                "question_kwd": ["问题关键词"],
+                "img_id": "img_789",
+                "available_int": 1,
+                "positions": [[0.1, 0.2, 0.3, 0.4, 0.5]],
+                "create_time": "2024-01-01 12:00:00",
+                "kb_id": "kb_001"
+            }
+        }
+        ```
+
+    #### 错误响应
+    - **404: Tenant not found**
+        - 当用户没有关联的租户时返回此错误
+    - **404: Chunk not found**
+        - 当指定的文档块不存在时返回此错误
+
+    ---
+
+    ### 主要流程
+    1. 获取用户关联的所有租户信息
+    2. 遍历租户下的所有知识库，查找指定的文档块
+    3. 过滤技术字段（向量、分词等）
+    4. 转换NumPy数据类型为Python原生类型
+    5. 返回清理后的文档块信息
+
+    ---
+
+    ### 注意事项
+    - **字段过滤**: 自动过滤以下技术字段：
+      - `_vec$`: 向量字段
+      - `_sm_`: 细粒度分词字段
+      - `_tks`: 分词字段
+      - `_ltks`: 长分词字段
+      - `vector`: 标准向量字段
+    - **数据类型转换**: 自动将NumPy数据类型转换为JSON兼容的Python原生类型
+    - **权限控制**: 只能获取用户有权限访问的租户下的文档块
+
+    ---
+
+    ### 使用示例
+
+    #### 请求:
+    ```
+    GET /get?chunk_id=chunk_123456
+    ```
+
+    #### 成功响应:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "chunk_id": "chunk_123456",
+            "content_with_weight": "这是一个关于机器学习的文档块内容",
+            "doc_id": "doc_789",
+            "docnm_kwd": "机器学习入门.pdf",
+            "important_kwd": ["机器学习", "算法"],
+            "available_int": 1
+        }
+    }
+    ```
+
+    #### 错误响应:
+    ```json
+    {
+        "retcode": 404,
+        "retmsg": "Chunk not found!",
+        "data": false
+    }
+    ```
+    """
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
         if not tenants:
@@ -655,21 +758,71 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
 @router.post('/switch', summary="切换文档块状态")
 def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    切换文档块状态
+    ### POST `/switch` 切换文档块状态接口
 
-    该接口用于切换文档块的可用状态。
+    **功能描述**:
+    此接口用于批量切换指定文档中多个文档块的可用状态，支持启用或禁用文档块在检索中的可见性。
 
-    参数:
-    - request: SwitchChunkRequest对象，包含文档块ID和新状态
-        - doc_id: 文档的唯一标识符
-        - chunk_ids: 文档块的唯一标识符列表
-        - available_int: 新的可用状态
-    - db: 数据库会话对象
-    - user: 当前用户对象
+    ---
 
-    返回:
-    - 成功时返回包含操作结果的JSON结果
-    - 失败时返回错误信息
+    ### 请求体 (Request Body)
+
+    | 字段            | 类型           | 必填 | 描述                                                    |
+    |-----------------|----------------|------|---------------------------------------------------------|
+    | `doc_id`        | `string`       | 是   | 文档的唯一标识符                                        |
+    | `chunk_ids`     | `list[string]` | 是   | 要切换状态的文档块ID列表                                |
+    | `available_int` | `int`          | 是   | 新的可用状态 (1: 启用, 0: 禁用)                         |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    - **`Content-Type: application/json`**
+    - **示例**:
+        ```json
+        {
+            "retcode": 0,
+            "retmsg": "success",
+            "data": true
+        }
+        ```
+
+    #### 错误响应
+    - **404: Document not found**
+        - 当指定的文档不存在时返回此错误
+    - **400: Index updating failure**
+        - 当更新索引失败时返回此错误
+
+    ---
+
+    ### 主要流程
+    1. 验证文档存在性
+    2. 获取文档所属的知识库信息
+    3. 批量更新指定文档块的可用状态
+    4. 返回操作结果
+
+    ---
+
+    ### 使用示例
+
+    #### 启用文档块:
+    ```json
+    {
+        "doc_id": "doc_123",
+        "chunk_ids": ["chunk_001", "chunk_002"],
+        "available_int": 1
+    }
+    ```
+
+    #### 禁用文档块:
+    ```json
+    {
+        "doc_id": "doc_123",
+        "chunk_ids": ["chunk_003", "chunk_004"],
+        "available_int": 0
+    }
+    ```
     """
 
 
@@ -1071,6 +1224,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
     - **rerank_id**: 重排序模型ID，可选。用于对初始检索结果进行重新排序
     - **highlight**: 是否高亮显示匹配文本，默认为False
     - **keyword**: 是否进行关键词提取增强，默认为False。启用后会自动提取问题关键词
+    - **cross_languages**: 跨语言翻译列表，可选。指定要将问题翻译成的目标语言列表，如["English", "French"]
 
     ### 搜索模式 (search_mode)
     搜索模式决定了使用哪种检索策略，支持以下四种类型：
@@ -1224,6 +1378,20 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
     }
     ```
 
+    ### 跨语言检索
+    ```json
+    {
+        "kb_ids": ["kb_123"],
+        "question": "什么是机器学习？",
+        "cross_languages": ["English", "French"],
+        "search_mode": {
+            "type": "hybrid",
+            "weight_dense": 0.7,
+            "weight_sparse": 0.3
+        }
+    }
+    ```
+
     ## 错误处理
 
     - **权限错误**: 只有知识库的所有者才能进行检索测试
@@ -1254,13 +1422,16 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
         if not kb:
             return get_data_error_result(retmsg="Knowledgebase not found!")
 
+        question = request.question
+        if request.cross_languages:
+            from core.prompts import cross_languages
+            question = cross_languages(db, kb.tenant_id, None, question, request.cross_languages)
+
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
 
         rerank_mdl = None
         if request.rerank_id:
             rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=request.rerank_id)
-
-        question = request.question
         if request.keyword:
             chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
@@ -1296,8 +1467,117 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
         return server_error_response(e)
 
 
-@router.get('/knowledge_graph')
-def knowledge_graph(doc_id, db: Session = Depends(get_db), user=Depends(manager)):
+@router.get('/knowledge_graph', summary="获取知识图谱")
+def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    ### GET `/knowledge_graph` 获取文档知识图谱接口
+
+    **功能描述**:
+    此接口用于获取指定文档的知识图谱和思维导图数据，支持图形化展示文档中的实体关系和层次结构。
+
+    ---
+
+    ### 请求参数 (Query Parameters)
+
+    | 参数名   | 类型     | 必填 | 描述                    |
+    |----------|----------|------|-------------------------|
+    | `doc_id` | `string` | 是   | 文档的唯一标识符        |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    - **`Content-Type: application/json`**
+    - **示例**:
+        ```json
+        {
+            "retcode": 0,
+            "retmsg": "success",
+            "data": {
+                "graph": {
+                    "nodes": [
+                        {"id": "entity1", "label": "实体1", "type": "person"},
+                        {"id": "entity2", "label": "实体2", "type": "organization"}
+                    ],
+                    "edges": [
+                        {"source": "entity1", "target": "entity2", "relation": "works_for"}
+                    ]
+                },
+                "mind_map": {
+                    "id": "root",
+                    "label": "主题",
+                    "children": [
+                        {
+                            "id": "subtopic1",
+                            "label": "子主题1",
+                            "children": []
+                        }
+                    ]
+                }
+            }
+        }
+        ```
+
+    ---
+
+    ### 主要流程
+    1. 根据文档ID获取租户信息
+    2. 构建知识图谱搜索查询
+    3. 从索引中检索图谱和思维导图数据
+    4. 解析JSON格式的图谱内容
+    5. 处理思维导图节点重复问题
+    6. 返回结构化的图谱数据
+
+    ---
+
+    ### 注意事项
+    - **当前状态**: 此功能目前处于开发阶段，需要调整Milvus集合schema以支持knowledge_graph_kwd字段
+    - **数据格式**: 返回的图谱数据为JSON格式，包含节点和边的信息
+    - **重复处理**: 思维导图中的重复节点会自动添加序号标识
+    - **权限控制**: 只能访问用户有权限的文档
+
+    ---
+
+    ### 返回数据结构
+
+    #### 知识图谱 (graph)
+    - **nodes**: 实体节点数组
+      - `id`: 节点唯一标识
+      - `label`: 节点显示名称
+      - `type`: 节点类型（如person, organization等）
+    - **edges**: 关系边数组
+      - `source`: 源节点ID
+      - `target`: 目标节点ID
+      - `relation`: 关系类型
+
+    #### 思维导图 (mind_map)
+    - **层次结构**: 树形结构数据
+      - `id`: 节点唯一标识
+      - `label`: 节点显示名称
+      - `children`: 子节点数组
+
+    ---
+
+    ### 使用示例
+
+    #### 请求:
+    ```
+    GET /knowledge_graph?doc_id=doc_123456
+    ```
+
+    #### 成功响应:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "graph": {},
+            "mind_map": {}
+        }
+    }
+    ```
+    """
     req = {
         "doc_ids":[doc_id],
         "knowledge_graph_kwd": ["graph", "mind_map"]

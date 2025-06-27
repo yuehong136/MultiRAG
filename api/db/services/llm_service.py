@@ -338,7 +338,7 @@ class TenantLLMService(CommonService):
 #                 return
 #             yield txt
 class LLMBundle:
-    def __init__(self, db: Session, tenant_id: str, llm_type: str, llm_name: str = None, lang: str = "Chinese"):
+    def __init__(self, db: Session, tenant_id: str, llm_type: str, llm_name: str | None = None, lang: str = "Chinese"):
         self.db = db
         self.tenant_id = tenant_id
         self.llm_type = llm_type
