@@ -315,7 +315,7 @@ class FileService(CommonService):
                 if max_file_num_per_user > 0 and DocumentService.get_doc_count(db,
                                                                                kb.tenant_id) >= max_file_num_per_user:
                     raise RuntimeError("Exceed the maximum file number of a free user!")
-                if len(filename) >= 128:
+                if len(filename.encode("utf-8")) >= 128:
                     raise RuntimeError("Exceed the maximum length of file name!")
                 filename = duplicate_name(
                     lambda *args, **kwargs: DocumentService.query(db, *args, **kwargs),
