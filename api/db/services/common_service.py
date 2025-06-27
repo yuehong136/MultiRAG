@@ -154,33 +154,33 @@ class CommonService(Generic[ModelType]):
 
     @classmethod
     def update_by_id(cls, db: Session, pid: str, data: dict[str, Any]) -> int:
-        try:
-            # 数据库连接健康检查和重连逻辑
-            try:
-                # 尝试执行一个简单的查询来检查连接是否可用
-                db.execute(text("SELECT 1"))
-            except Exception:
-                # 如果连接不可用，尝试回滚并刷新连接
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
-                try:
-                    # 刷新连接池中的连接
-                    db.connection().invalidate()
-                except Exception:
-                    pass
+        # try:
+        #     # 数据库连接健康检查和重连逻辑
+        #     try:
+        #         # 尝试执行一个简单的查询来检查连接是否可用
+        #         db.execute(text("SELECT 1"))
+        #     except Exception:
+        #         # 如果连接不可用，尝试回滚并刷新连接
+        #         try:
+        #             db.rollback()
+        #         except Exception:
+        #             pass
+        #         try:
+        #             # 刷新连接池中的连接
+        #             db.connection().invalidate()
+        #         except Exception:
+        #             pass
 
-            now = cls.current_timestamp()
-            now_datetime = cls.current_datetime()
-            data["update_time"] = now
-            data["update_date"] = now_datetime
-            num = db.query(cls.model).filter(cls.model.id == pid).update(data)
-            db.commit()
-            return num
-        except Exception as e:
-            db.rollback()
-            raise
+        now = cls.current_timestamp()
+        now_datetime = cls.current_datetime()
+        data["update_time"] = now
+        data["update_date"] = now_datetime
+        num = db.query(cls.model).filter(cls.model.id == pid).update(data)
+        db.commit()
+        return num
+        # except Exception as e:
+        #     db.rollback()
+        #     raise
 
     @classmethod
     def get_by_id(cls, db: Session, pid: Any) -> ModelType | None:

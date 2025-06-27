@@ -170,20 +170,20 @@ class TenantLLMService(CommonService):
 
     @classmethod
     def increase_usage(cls, db: Session, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str | None = None):
-        # 检查数据库连接状态并在需要时重新连接
-        try:
-            # 尝试执行简单查询来测试连接
-            db.execute(text("SELECT 1"))
-        except Exception:
-            logging.warning("Database connection appears to be dead, attempting to reconnect...")
-            try:
-                # 回滚任何挂起的事务
-                db.rollback()
-                # 关闭当前连接
-                db.close()
-                # SQLAlchemy会在下次操作时自动重新连接
-            except Exception:
-                logging.exception("Failed to reset database connection")
+        # # 检查数据库连接状态并在需要时重新连接
+        # try:
+        #     # 尝试执行简单查询来测试连接
+        #     db.execute(text("SELECT 1"))
+        # except Exception:
+        #     logging.warning("Database connection appears to be dead, attempting to reconnect...")
+        #     try:
+        #         # 回滚任何挂起的事务
+        #         db.rollback()
+        #         # 关闭当前连接
+        #         db.close()
+        #         # SQLAlchemy会在下次操作时自动重新连接
+        #     except Exception:
+        #         logging.exception("Failed to reset database connection")
         tenant = TenantService.get_by_id(db, tenant_id)
         if not tenant:
             logging.error(f"Tenant not found: {tenant_id}")
