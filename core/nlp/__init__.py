@@ -33,6 +33,7 @@ all_codecs = [
     'windows-1257', 'windows-1258', 'latin-2'
 ]
 
+
 def find_codec(blob):
     detected = chardet.detect(blob[:1024])
     if detected['confidence'] > 0.5:
@@ -254,7 +255,7 @@ def tokenize_chunks(chunks, doc, eng, pdf_parser=None):
             except NotImplementedError:
                 pass
         else:
-            add_positions(d, [[ii]*5])
+            add_positions(d, [[ii] * 5])
         tokenize(d, ck, eng)
         res.append(d)
     return res
@@ -286,6 +287,7 @@ def tokenize_table(tbls, doc, eng, batch_size=10):
             d["content_with_weight"] = rows
             if img:
                 d["image"] = img
+                d["doc_type_kwd"] = "image"
             if poss:
                 add_positions(d, poss)
             res.append(d)
@@ -295,7 +297,9 @@ def tokenize_table(tbls, doc, eng, batch_size=10):
             d = copy.deepcopy(doc)
             r = de.join(rows[i:i + batch_size])
             tokenize(d, r, eng)
-            d["image"] = img
+            if img:
+                d["image"] = img
+                d["doc_type_kwd"] = "image"
             add_positions(d, poss)
             res.append(d)
     return res

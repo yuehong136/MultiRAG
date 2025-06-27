@@ -371,10 +371,6 @@ async def build_chunks(task, progress_callback, db: Session):
         except Exception:
             logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
             raise
-
-        d["img_id"] = "{}-{}".format(task["kb_id"], d["pk"])
-        del d["image"]
-        docs.append(d)
     async with trio.open_nursery() as nursery:
         for ck in cks:
             nursery.start_soon(upload_to_minio, doc, ck)
