@@ -45,15 +45,36 @@ DATABASE_URL = (
     f"{database_config.get('dbname', 'postgres')}"
 )
 
+
+def get_engine_config(db_config: dict) -> dict:
+    """将配置文件中的数据库配置映射到 SQLAlchemy 引擎配置"""
+    max_connections = db_config.get('max_connections', 100)
+    stale_timeout = db_config.get('stale_timeout', 30)
+
+    return {
+        'pool_size': max_connections,
+        'max_overflow': max_connections // 2,  # 或者你可以设置为固定值
+        'pool_timeout': stale_timeout,
+        'pool_recycle': stale_timeout * 100,  # 转换为秒，设置连接回收时间
+        'echo': False
+    }
+
+
+engine_config = get_engine_config(database_config)
 engine = create_engine(
     DATABASE_URL,
     client_encoding='utf8',
-    pool_size=database_config.get('pool_size', 20),
-    max_overflow=database_config.get('max_overflow', 20),
-    pool_timeout=database_config.get('pool_timeout', 30),
-    pool_recycle=database_config.get('pool_recycle', 1800),
-    echo=False
+    **engine_config
 )
+# engine = create_engine(
+#     DATABASE_URL,
+#     client_encoding='utf8',
+#     pool_size=database_config.get('pool_size', 20),
+#     max_overflow=database_config.get('max_overflow', 20),
+#     pool_timeout=database_config.get('pool_timeout', 30),
+#     pool_recycle=database_config.get('pool_recycle', 1800),
+#     echo=False
+# )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
