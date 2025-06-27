@@ -24,7 +24,7 @@ class UserInfo:
         self.username = username
         self.nickname = nickname
         self.avatar_url = avatar_url
-    
+
     def to_dict(self):
         return {key: value for key, value in self.__dict__.items()}
 
@@ -44,7 +44,6 @@ class OAuthClient:
 
         self.http_request_timeout = 7
 
-
     def get_authorization_url(self, state=None):
         """
         Generate the authorization URL for user login.
@@ -60,7 +59,6 @@ class OAuthClient:
             params["state"] = state
         authorization_url = f"{self.authorization_url}?{urllib.parse.urlencode(params)}"
         return authorization_url
-
 
     def exchange_code_for_token(self, code):
         """
@@ -85,7 +83,6 @@ class OAuthClient:
         except requests.exceptions.RequestException as e:
             raise ValueError(f"Failed to exchange authorization code for token: {e}")
 
-
     def fetch_user_info(self, access_token, **kwargs):
         """
         Fetch user information using access token.
@@ -98,7 +95,6 @@ class OAuthClient:
             return self.normalize_user_info(user_info)
         except requests.exceptions.RequestException as e:
             raise ValueError(f"Failed to fetch user info: {e}")
-
 
     def normalize_user_info(self, user_info):
         email = user_info.get("email")

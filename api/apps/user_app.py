@@ -7,11 +7,12 @@
 @desc: 用户管理接口
 """
 
+import json
 import logging
 import re
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -83,6 +84,35 @@ class UserUpdateRequest(BaseModel):
     status: str = Field(None, description="User status")
     is_superuser: bool = Field(None, description="Superuser flag")
     login_channel: str = Field(None, description="Login channel")
+
+
+@router.get("/login/channels", summary="获取登录渠道")
+async def get_login_channels():
+    """
+    获取所有支持的认证渠道
+
+    该接口用于获取系统支持的所有OAuth登录渠道信息。
+
+    返回:
+    - 成功时返回包含所有渠道信息的JSON结果
+    - 失败时返回错误信息
+    """
+    try:
+        channels = []
+        for channel, config in settings.OAUTH_CONFIG.items():
+            channels.append({
+                "channel": channel,
+                "display_name": config.get("display_name", channel.title()),
+                "icon": config.get("icon", "sso"),
+            })
+        return get_json_result(data=channels)
+    except Exception as e:
+        logging.exception(e)
+        return get_json_result(
+            data=[],
+            retmsg=f"Load channels failure, error: {str(e)}",
+            retcode=settings.RetCode.EXCEPTION_ERROR
+        )
 
 
 @router.post("/login", summary="登录")
@@ -160,28 +190,41 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
 
     userinfo = user_info_from_github(res["access_token"])
     user_id = get_uuid()
-    user = UserService.query(db, email=userinfo["email"])
-    if not user:
+    users = UserService.query(db, email=userinfo["email"])
+    if not users:
         try:
             avatar = download_img(userinfo["avatar_url"])
-            user = user_register(db, user_id, {
-                "access_token": res["access_token"],
+            users = user_register(db, user_id, {
+                "access_token": get_uuid(),
                 "email": userinfo["email"],
                 "avatar": avatar,
                 "nickname": userinfo["login"],
+                "login_channel": "github",
                 "last_login_time": get_format_time(),
                 "is_superuser": False,
             })
-            if not user:
+            if not users:
                 raise HTTPException(status_code=500, detail="Register user failure.")
-            access_token = manager.create_access_token(data={"sub": user.email})
-            return {"auth": access_token}
+            if len(users) > 1:
+                raise HTTPException(status_code=500, detail=f"Same email: {userinfo['email']} exists!")
+
+            user = users[0]
+            login_user(user)
+            db.add(user)
+            db.commit()
+            return RedirectResponse(url=f"/?auth={user.id}")
         except Exception as e:
             rollback_user_registration(db, user_id)
             logging.exception(e)
-            return HTTPException(status_code=500, detail=str(e))
-    access_token = manager.create_access_token(data={"sub": user.email})
-    return {"auth": access_token}
+            return RedirectResponse(url=f"/?error={str(e)}")
+
+    # User exists, try to log in
+    user = users[0]
+    user.access_token = get_uuid()
+    login_user(user)
+    db.add(user)
+    db.commit()
+    return RedirectResponse(url=f"/?auth={user.id}")
 
 
 @router.get("/feishu_callback", summary="飞书回调")
@@ -221,28 +264,41 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
 
     userinfo = user_info_from_feishu(res["data"]["access_token"])
     user_id = get_uuid()
-    user = UserService.query(db, email=userinfo["email"])
-    if not user:
+    users = UserService.query(db, email=userinfo["email"])
+    if not users:
         try:
             avatar = download_img(userinfo["avatar_url"])
-            user = user_register(db, user_id, {
-                "access_token": res["data"]["access_token"],
+            users = user_register(db, user_id, {
+                "access_token": get_uuid(),
                 "email": userinfo["email"],
                 "avatar": avatar,
                 "nickname": userinfo["en_name"],
+                "login_channel": "feishu",
                 "last_login_time": get_format_time(),
                 "is_superuser": False,
             })
-            if not user:
+            if not users:
                 raise HTTPException(status_code=500, detail="Register user failure.")
-            access_token = manager.create_access_token(data={"sub": user.email})
-            return {"auth": access_token}
+            if len(users) > 1:
+                raise HTTPException(status_code=500, detail=f"Same email: {userinfo['email']} exists!")
+
+            user = users[0]
+            login_user(user)
+            db.add(user)
+            db.commit()
+            return RedirectResponse(url=f"/?auth={user.id}")
         except Exception as e:
             rollback_user_registration(db, user_id)
             logging.exception(e)
-            return HTTPException(status_code=500, detail=str(e))
-    access_token = manager.create_access_token(data={"sub": user.email})
-    return {"auth": access_token}
+            return RedirectResponse(url=f"/?error={str(e)}")
+
+    # User exists, try to log in
+    user = users[0]
+    user.access_token = get_uuid()
+    login_user(user)
+    db.add(user)
+    db.commit()
+    return RedirectResponse(url=f"/?auth={user.id}")
 
 
 @router.get("/logout", summary="退出登录")
@@ -311,7 +367,7 @@ async def oauth_callback(channel: str, code: str, db: Session = Depends(get_db))
         channel_config = settings.OAUTH_CONFIG.get(channel)
         if not channel_config:
             return RedirectResponse(url=f"/?error=invalid_channel_{channel}")
-        
+
         auth_cli = get_auth_client(channel_config)
 
         # 获取授权码
@@ -334,7 +390,7 @@ async def oauth_callback(channel: str, code: str, db: Session = Depends(get_db))
         # 登录或注册
         users = UserService.query(db, email=user_info.email)
         user_id = get_uuid()
-        
+
         if not users:
             try:
                 try:
@@ -347,7 +403,7 @@ async def oauth_callback(channel: str, code: str, db: Session = Depends(get_db))
                     db,
                     user_id,
                     {
-                        "access_token": access_token,
+                        "access_token": get_uuid(),
                         "email": user_info.email,
                         "avatar": avatar,
                         "nickname": user_info.nickname,
@@ -364,8 +420,10 @@ async def oauth_callback(channel: str, code: str, db: Session = Depends(get_db))
 
                 # 尝试登录
                 user = users[0]
-                # 注意：这里需要根据实际的认证机制来设置用户session
-                return RedirectResponse(url=f"/?auth_success=true&user_id={user.id}")
+                login_user(user)
+                db.add(user)
+                db.commit()
+                return RedirectResponse(url=f"/?auth={user.id}")
 
             except Exception as e:
                 rollback_user_registration(db, user_id)
@@ -375,14 +433,12 @@ async def oauth_callback(channel: str, code: str, db: Session = Depends(get_db))
         # 用户已存在，尝试登录
         user = users[0]
         user.access_token = get_uuid()
-        user.update_time = current_timestamp()
-        user.update_date = datetime_format(datetime.now())
+        login_user(user)
         db.add(user)
         db.commit()
-        
-        # 注意：这里需要根据实际的认证机制来设置用户session
-        return RedirectResponse(url=f"/?auth_success=true&user_id={user.id}")
-        
+
+        return RedirectResponse(url=f"/?auth={user.id}")
+
     except Exception as e:
         logging.exception(e)
         return RedirectResponse(url=f"/?error={str(e)}")
@@ -469,6 +525,22 @@ async def user_profile(user=Depends(manager)):
     - 成功时返回包含用户信息的JSON结果
     """
     return get_json_result(data=user.to_dict())
+
+
+def login_user(user):
+    """
+    登录用户
+
+    该函数用于设置用户登录状态。
+
+    参数:
+    - user: User对象，要登录的用户
+    """
+    # 在FastAPI中，我们使用JWT token来管理用户会话
+    # 这里主要是更新用户的最后登录时间等信息
+    user.last_login_time = get_format_time()
+    user.update_time = current_timestamp()
+    user.update_date = datetime_format(datetime.now())
 
 
 def rollback_user_registration(db: Session, user_id: str):

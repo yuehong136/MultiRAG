@@ -17,12 +17,14 @@
 from .oauth import OAuthClient
 from .oidc import OIDCClient
 from .github import GithubOAuthClient
+from .feishu import FeishuOAuthClient
 
 
 CLIENT_TYPES = {
     "oauth2": OAuthClient,
     "oidc": OIDCClient,
-    "github": GithubOAuthClient
+    "github": GithubOAuthClient,
+    "feishu": FeishuOAuthClient
 }
 
 
@@ -31,6 +33,8 @@ def get_auth_client(config)->OAuthClient:
     if channel_type == "":
         if config.get("issuer"):
             channel_type = "oidc"
+        elif config.get("app_id"):  # Feishu specific
+            channel_type = "feishu"
         else:
             channel_type = "oauth2"
     client_class = CLIENT_TYPES.get(channel_type)
