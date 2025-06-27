@@ -134,6 +134,35 @@ class DocumentService(CommonService):
         return count
 
     @classmethod
+    def get_total_size_by_kb_id(cls, db: Session, kb_id: str, keywords: str | None = None,
+                               run_status: list | None = None, types: list | None = None) -> int:
+        """
+        根据知识库ID统计文档总大小。
+
+        参数:
+        - db: 数据库会话对象，用于执行数据库查询操作。
+        - kb_id: 知识库ID。
+        - keywords: 可选的关键词，用于按文档名称进行模糊匹配。
+        - run_status: 可选的运行状态列表，用于筛选特定运行状态的文档。
+        - types: 可选的文档类型列表，用于筛选特定类型的文档。
+
+        返回:
+        - 符合条件的文档总大小（字节）。
+        """
+        query = db.query(func.coalesce(func.sum(cls.model.size), 0)).filter_by(kb_id=kb_id)
+
+        if keywords:
+            query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
+
+        if run_status:
+            query = query.filter(cls.model.run.in_(run_status))
+
+        if types:
+            query = query.filter(cls.model.type.in_(types))
+
+        return query.scalar() or 0
+
+    @classmethod
     def get_by_doc_id(cls, db: Session, doc_id: str) -> dict | None:
         """
         通过文档ID获取文档信息。
