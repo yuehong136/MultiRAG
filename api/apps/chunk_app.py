@@ -983,6 +983,7 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
 }
 ```
     """
+    from core.utils.storage_factory import STORAGE_IMPL
     req = request.model_dump()
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
@@ -997,6 +998,9 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
         deleted_chunk_ids = req["chunk_ids"]
         chunk_number = len(deleted_chunk_ids)
         DocumentService.decrement_chunk_num(db, doc.id, doc.kb_id, 1, chunk_number, 0)
+        for cid in deleted_chunk_ids:
+            if STORAGE_IMPL.obj_exist(doc.kb_id, cid):
+                STORAGE_IMPL.rm(doc.kb_id, cid)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
