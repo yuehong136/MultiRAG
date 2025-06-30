@@ -333,7 +333,7 @@ class AskdataService:
                 assembler.set_limit(limit)
 
             return assembler.build_sql_for_jdbc()
-        elif chart_type == "table-aggr":
+        elif chart_type == "table-aggr" or chart_type == "bar" or chart_type == "pie" or chart_type == "line" or chart_type == "area" or chart_type == "matrix" or chart_type == "bubble":
             for dimension in table_config["dimensions"]:
                 if dimension["is_semantic_field"]:
                     semantic_field = self._find_semantic_field(dimension["id"], all_semantic_fields)
