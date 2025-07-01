@@ -74,7 +74,7 @@ class QATemplateV2(BaseModel):
     question_canonical: str = Field(..., description="标准问法")
     paraphrases: list[str] = Field(default=[], description="同义句列表")
     needed_params_v2: list[QAParamDefinition] = Field(..., description="带类型的参数定义列表")
-    sql_template: str = Field(..., description="SQL模板，使用命名参数")
+    sql_template: list[str] = Field(..., description="SQL模板列表，支持多个SQL模板，使用命名参数")
     rule_id: str | None = Field(None, description="评分规则ID，可为空")
     
     # 向后兼容
@@ -142,7 +142,7 @@ class StatelessInterpretResponse(BaseModel):
 
     # 核心结果
     qa_id: str | None = Field(None, description="匹配的QA模板ID")
-    sql_template: str | None = Field(None, description="SQL模板")
+    sql_template: list[str] | str | None = Field(None, description="SQL模板（V2为数组格式，V1为字符串格式）")
     complete_params: dict[str, Any] = Field(default_factory=dict, description="完整参数")
     rule_id: str | None = Field(None, description="评分规则ID")
 
@@ -437,6 +437,10 @@ def interpret_stateless(
     2. 后续调用：传入上次返回的updated_context作为dialog_context
     3. 调用端自行决定何时开始新对话（不传context即可）
 
+    **返回格式说明:**
+    - sql_template: V2模板返回数组格式，V1模板返回字符串格式
+    - 支持多个SQL模板，便于业务端根据场景选择合适的SQL
+
     **优势:**
     - 服务端简单，易于扩展和维护
     - 调用端灵活，可以实现复杂的业务逻辑
@@ -542,10 +546,11 @@ def store_templates_v2(
         user=Depends(manager)
 ):
     """
-    存储QA模板V2到Milvus（支持类型化参数定义）
+    存储QA模板V2到Milvus（支持类型化参数定义和多SQL模板）
 
     **新功能:**
     - 支持带数据类型的参数定义
+    - 支持多个SQL模板（sql_template为数组格式）
     - 自动类型验证和转换
     - 向后兼容现有API
 
@@ -553,11 +558,16 @@ def store_templates_v2(
     ```json
     {
         "name": "teacher_age",
-        "data_type": "integer", 
+        "data_type": "integer",
         "description": "教师年龄",
         "required": true
     }
     ```
+
+    **SQL模板格式:**
+    - 支持传入多个SQL模板，用于不同的查询场景
+    - 每个模板都使用相同的命名参数
+    - 系统会根据业务逻辑选择合适的模板执行
 
     **支持的数据类型:**
     - string: 字符串类型
@@ -830,7 +840,10 @@ def get_system_info(
                             "required": False
                         }
                     ],
-                    "sql_template": "SELECT * FROM teacher_performance WHERE teacher_id = {{teacher_id}} AND year = {{year}}",
+                    "sql_template": [
+                        "SELECT * FROM teacher_performance WHERE teacher_id = {{teacher_id}} AND year = {{year}}",
+                        "SELECT teacher_id, performance_score, evaluation_date FROM teacher_performance WHERE teacher_id = {{teacher_id}} AND year = {{year}} ORDER BY evaluation_date DESC"
+                    ],
                     "rule_id": "rule_001"
                 }
             },

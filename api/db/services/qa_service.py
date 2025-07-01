@@ -252,6 +252,14 @@ class QATemplateStorageService:
                 canonical_embedding = embeddings[embedding_idx]
                 embedding_idx += 1
 
+                # 处理 sql_template：如果是数组则序列化为JSON，如果是字符串则保持兼容性
+                sql_template_value = template['sql_template']
+                if isinstance(sql_template_value, list):
+                    sql_template_json = json.dumps(sql_template_value, ensure_ascii=False)
+                else:
+                    # 向后兼容：如果传入的是字符串，转换为单元素数组
+                    sql_template_json = json.dumps([sql_template_value], ensure_ascii=False)
+
                 record = {
                     "id": f"{tenant_id}_{template['qa_id']}_canonical",
                     "qa_id": template['qa_id'],
@@ -259,7 +267,7 @@ class QATemplateStorageService:
                     "paraphrases": json.dumps(template.get('paraphrases', []), ensure_ascii=False),
                     "needed_params": json.dumps(template['needed_params'], ensure_ascii=False),
                     "needed_params_typed": template.get('needed_params_typed', '[]'),  # V2新增字段
-                    "sql_template": template['sql_template'],
+                    "sql_template": sql_template_json,  # 存储为JSON字符串
                     "rule_id": str(template['rule_id']) if template.get('rule_id') is not None else "",
                     "tenant_id": tenant_id,
                     "vector": canonical_embedding.tolist(),
@@ -650,13 +658,31 @@ class QATemplateMatchingService:
                     logger.warning(f"解析needed_params_typed JSON失败: {e}")
                     typed_params = []
 
+            # 解析 sql_template（V2版本存储为JSON数组）
+            sql_template_value = entity.get('sql_template')
+            if collection_version == "v2":
+                try:
+                    # V2版本：尝试解析为JSON数组
+                    if isinstance(sql_template_value, str) and sql_template_value.startswith('['):
+                        sql_template = json.loads(sql_template_value)
+                    else:
+                        # 向后兼容：如果不是JSON数组格式，转换为单元素数组
+                        sql_template = [sql_template_value] if sql_template_value else []
+                except json.JSONDecodeError as e:
+                    logger.warning(f"解析sql_template JSON失败: {e}")
+                    # 降级处理：转换为单元素数组
+                    sql_template = [sql_template_value] if sql_template_value else []
+            else:
+                # V1版本：保持原有字符串格式
+                sql_template = sql_template_value
+
             # 构建返回结果
             best_match = {
                 'qa_id': entity.get('qa_id'),
                 'question_canonical': entity.get('question_canonical'),
                 'paraphrases': paraphrases,
                 'needed_params': needed_params,
-                'sql_template': entity.get('sql_template'),
+                'sql_template': sql_template,
                 'rule_id': entity.get('rule_id') if entity.get('rule_id') else None,
                 'similarity': similarity,
                 'matched_text': entity.get('question_canonical'),
