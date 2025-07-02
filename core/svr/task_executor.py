@@ -342,33 +342,31 @@ async def build_chunks(task, progress_callback, db: Session):
     #         el += timer() - st
     async def upload_to_minio(document, chunk):
         try:
-            async with minio_limiter:
-                d = copy.deepcopy(document)
-                d.update(chunk)
-                d["pk"] = xxhash.xxh64(
-                    (chunk["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
-                d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
-                d["create_timestamp_flt"] = datetime.now().timestamp()
-                d["page_num_int"] = d.get("page_num_int", [])
-                d["position_int"] = d.get("position_int", [])
-                d["top_int"] = d.get("top_int", [])
-                if not d.get("image"):
-                    _ = d.pop("image", None)
-                    d["img_id"] = ""
-                    docs.append(d)
-                    return
-
-                output_buffer = BytesIO()
-                if isinstance(d["image"], bytes):
-                    output_buffer = BytesIO(d["image"])
-                else:
-                    d["image"].save(output_buffer, format='JPEG')
-                await trio.to_thread.run_sync(
-                    lambda: STORAGE_IMPL.put(task["kb_id"], d["pk"], output_buffer.getvalue()))
-
-                d["img_id"] = "{}-{}".format(task["kb_id"], d["pk"])
-                del d["image"]
+            d = copy.deepcopy(document)
+            d.update(chunk)
+            d["pk"] = xxhash.xxh64(
+                (chunk["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
+            d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
+            d["create_timestamp_flt"] = datetime.now().timestamp()
+            d["page_num_int"] = d.get("page_num_int", [])
+            d["position_int"] = d.get("position_int", [])
+            d["top_int"] = d.get("top_int", [])
+            if not d.get("image"):
+                _ = d.pop("image", None)
+                d["img_id"] = ""
                 docs.append(d)
+                return
+
+            output_buffer = BytesIO()
+            if isinstance(d["image"], bytes):
+                output_buffer = BytesIO(d["image"])
+            else:
+                d["image"].save(output_buffer, format='JPEG')
+            async with minio_limiter:
+                await trio.to_thread.run_sync(lambda: STORAGE_IMPL.put(task["kb_id"], d["pk"], output_buffer.getvalue()))
+            d["img_id"] = "{}-{}".format(task["kb_id"], d["pk"])
+            del d["image"]
+            docs.append(d)
         except Exception:
             logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
             raise
