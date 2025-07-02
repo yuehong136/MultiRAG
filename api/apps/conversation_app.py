@@ -232,7 +232,10 @@ async def set_conversation(request: SetConversationRequest, db: Session = Depend
     conv_id = req.get("conversation_id")
     is_new = req.get("is_new")
     name = req.get("name", "New conversation")
-    
+
+    if len(name) > 255:
+        name = name[0:255]
+
     # 添加用户ID到请求数据中
     req["user_id"] = user.id
 
