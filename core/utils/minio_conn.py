@@ -118,7 +118,7 @@ class MultiRAGMinio:
                 time.sleep(1)
         return
 
-    def delete_bucket(self, bucket):
+    def remove_bucket(self, bucket):
         """
         Deletes a bucket from MinIO.
 

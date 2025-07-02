@@ -331,7 +331,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
             db, [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kb_name])
 
         # 删除 MinIO 存储桶
-        STORAGE_IMPL.delete_bucket(kb_id)
+        STORAGE_IMPL.remove_bucket(kb_id)
 
         # 删除知识库本身，如果失败则返回错误信息
         if not KnowledgebaseService.delete_by_id(db, req_data["kb_id"]):
