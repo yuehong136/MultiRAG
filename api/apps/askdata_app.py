@@ -417,6 +417,12 @@ async def re_query(
         logger.info(f"params:{params}")
 
         result = await query_data_with_params(sql, int(body.dataset_id), params)
+        if result["status"] == "error":
+            logger.error(f"查询数据失败: {result['message']}")
+            return ResponseSchema(
+                status=StatusEnum.ERROR,
+                message=f"查询数据失败: {result['message']}"
+            )
 
         return ResponseSchema(
             status=StatusEnum.SUCCESS,

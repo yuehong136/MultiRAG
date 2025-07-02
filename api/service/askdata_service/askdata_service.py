@@ -20,6 +20,7 @@ from api.service.askdata_service.sql_assembler import FlexibleSQLAssembler, Filt
 
 from api.service.askdata_service.sql_metric_exp_rewriter import SQLFieldAliasProcessor
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
+from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
@@ -310,6 +311,8 @@ class AskdataService:
                     column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
                     operator = filter["operator"]
                     value = filter["value"]
+                    if operator == "IN":
+                        value = parse_sql_in_values(value)
                     if "int" in filter['semantic_field']['dataType']:
                         value = int(value)
                     assembler.add_filter(column_name, FilterOperator.from_value(operator), value)
@@ -371,12 +374,46 @@ class AskdataService:
                 else:
                     assembler.add_raw_column(metric["sql_column"])
 
-            if len(sql_components["where"]) > 0:
-                assembler.add_raw_where(sql_components["where"])
-            if len(sql_components["having"]) > 0:
-                assembler.add_raw_having(sql_components["having"])
-            if len(sql_components["orderBy"]) > 0:
-                assembler.add_raw_order_by(sql_components["orderBy"])
+            for where_condition in table_config.get("where_conditions", []):
+                if where_condition["is_semantic_field"]:
+                    semantic_field = self._find_semantic_field(where_condition["id"], all_semantic_fields)
+                    column_name = where_condition['original_sql_component']['field']
+                    operator = where_condition["operator"]
+                    value = where_condition["value"]
+                    if operator == "IN":
+                        value = parse_sql_in_values(value)
+                    if "int" in where_condition['semantic_field']['dataType']:
+                        value = int(value)
+                    assembler.add_filter(column_name, FilterOperator.from_value(operator), value)
+                else:
+                    assembler.add_raw_where(where_condition["sql_column"])
+
+            for having_condition in table_config.get("having_conditions", []):
+                if having_condition["is_semantic_field"]:
+                    semantic_field = self._find_semantic_field(having_condition["id"], all_semantic_fields)
+                    column_name = having_condition['original_sql_component']['field']
+                    operator = having_condition["operator"]
+                    value = having_condition["value"]
+                    if operator == "IN":
+                        value = parse_sql_in_values(value)
+                    elif column_name.startswith("COUNT(") or column_name.startswith("SUM(") or column_name.startswith(
+                            "AVG(") or column_name.startswith("MAX(") or column_name.startswith("MIN("):
+                        value = int(value)
+                    assembler.add_having(column_name, FilterOperator.from_value(operator), value)
+                else:
+                    assembler.add_raw_having(having_condition["sql_column"])
+
+            for order_by in table_config.get("order_by", []):
+                if order_by["is_semantic_field"]:
+                    semantic_field = self._find_semantic_field(order_by["id"], all_semantic_fields)
+                    table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                         model_table_alias_mapping_list)
+                    column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                    direction = order_by["direction"]
+                    assembler.add_order_by(column_name, OrderDirection.from_value(direction))
+                else:
+                    assembler.add_order_by(order_by["sql_column"], order_by["direction"])
+
             if len(sql_components["limit"]) > 0:
                 assembler.set_limit(int(sql_components["limit"]))
 
