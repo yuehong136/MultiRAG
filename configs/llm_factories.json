@@ -609,7 +609,7 @@
         {
             "name": "Youdao",
             "logo": "",
-            "tags": "LLM,TEXT EMBEDDING,SPEECH2TEXT,MODERATION",
+            "tags": "TEXT EMBEDDING",
             "status": "1",
             "llm": [
                 {
@@ -3236,6 +3236,20 @@
             "tags": "LLM",
             "status": "1",
             "llm": [
+                {
+                    "llm_name": "claude-opus-4-20250514",
+                    "tags": "LLM,IMAGE2TEXT,200k",
+                    "max_tokens": 204800,
+                    "mdl_type": "image2text",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "claude-sonnet-4-20250514",
+                    "tags": "LLM,IMAGE2TEXT,200k",
+                    "max_tokens": 204800,
+                    "mdl_type": "image2text",
+                    "is_tools": true
+                },
                 {
                     "llm_name": "claude-3-7-sonnet-20250219",
                     "tags": "LLM,IMAGE2TEXT,200k",
