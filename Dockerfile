@@ -34,7 +34,7 @@ RUN apt update && apt -y install ca-certificates && \
     apt update && apt install -y --no-install-recommends \
     lsb-release curl gpg libgl1-mesa-glx libdatrie-dev default-jdk vim net-tools less gcc \
     build-essential libglib2.0-0 libglx-mesa0 pkg-config libicu-dev libatk-bridge2.0-0 \
-    libpython3-dev libjemalloc-dev nginx \
+    libpython3-dev libjemalloc-dev nginx ghostscript \
     libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus  python3-pip pipx tcl-dev pkg-config && \
     # 安装uv
     pip3 config set global.index-url https://mirrors.aliyun.com/pypi/simple && \
