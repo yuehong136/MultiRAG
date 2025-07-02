@@ -390,6 +390,9 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         # 使用提供的配置或默认配置
         prompt_config = request.prompt_config or default_prompt_config
 
+        if not request.kb_ids and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config['system']:
+            return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no knowledge base/Tavily used here.")
+
         # 验证系统提示中是否包含所有必需参数
         for p in prompt_config["parameters"]:
             if p["optional"]:
