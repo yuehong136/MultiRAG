@@ -6,9 +6,8 @@
 @date：2024/7/30 18:00
 @desc:
 """
-import logging
 from api.utils.log_utils import initRootLogger
-import os
+from plugin import GlobalPluginManager
 initRootLogger("multirag_server")
 # initRootLogger("multirag_server")
 # for module in ["pdfminer"]:
@@ -18,6 +17,9 @@ initRootLogger("multirag_server")
 #     module_logger = logging.getLogger(module)
 #     module_logger.handlers.clear()
 #     module_logger.propagate = True
+
+import logging
+import os
 import signal
 import sys
 import time
@@ -136,6 +138,8 @@ if __name__ == '__main__':
 
     RuntimeConfig.init_env()  # 初始化环境变量
     RuntimeConfig.init_config(JOB_SERVER_HOST=settings.HOST_IP, HTTP_PORT=settings.HOST_PORT)  # 初始化配置
+
+    GlobalPluginManager.load_plugins()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
