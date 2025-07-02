@@ -34,6 +34,13 @@ sdk/python/multirag.egg-info/
 sdk/python/build/
 sdk/python/dist/
 sdk/python/multirag_sdk.egg-info/
+
+# Exclude dep files
+libssl*.deb
+tika-server*.jar*
+cl100k_base.tiktoken
+chrome*
+
 huggingface.co/
 core/llm/embedding_model/models
 *.jar
