@@ -630,8 +630,24 @@ def user_register(db: Session, user_id: str, user: dict):
             "llm_name": llm.llm_name,
             "mdl_type": llm.mdl_type,
             "api_key": settings.API_KEY,
-            "api_base": settings.LLM_BASE_URL
+            "api_base": settings.LLM_BASE_URL,
+            "max_tokens": llm.max_tokens if llm.max_tokens else 8192,
         })
+
+    if settings.LIGHTEN != 1:
+        for buildin_embedding_model in settings.BUILTIN_EMBEDDING_MODELS:
+            mdlnm, fid = TenantLLMService.split_model_name_and_factory(buildin_embedding_model)
+            tenant_llm.append(
+                {
+                    "tenant_id": user_id,
+                    "llm_factory": fid,
+                    "llm_name": mdlnm,
+                    "mdl_type": "embedding",
+                    "api_key": "",
+                    "api_base": "",
+                    "max_tokens": 1024 if buildin_embedding_model == "BAAI/bge-large-zh-v1.5@BAAI" else 512,
+                }
+            )
 
     try:
         if not UserService.save(db, **user):

@@ -70,7 +70,8 @@ def init_settings():
     LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
     LLM = get_base_config("user_default_llm", {})
     LLM_DEFAULT_MODELS = LLM.get("default_models", {})
-    LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
+    # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
+    LLM_FACTORY = LLM.get("factory")
     LLM_BASE_URL = LLM.get("base_url")
     try:
         REGISTER_ENABLED = int(os.environ.get("REGISTER_ENABLED", "1"))
