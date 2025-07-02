@@ -324,7 +324,7 @@ async def log_out(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.get("/login/{channel}", summary="OAuth登录入口")
-async def oauth_login(channel: str):
+async def oauth_login(channel: str, request: Request):
     """
     OAuth登录入口
 
@@ -340,10 +340,15 @@ async def oauth_login(channel: str):
         channel_config = settings.OAUTH_CONFIG.get(channel)
         if not channel_config:
             raise HTTPException(status_code=400, detail=f"Invalid channel name: {channel}")
-        
+
         auth_cli = get_auth_client(channel_config)
-        auth_url = auth_cli.get_authorization_url()
-        
+
+        # 生成状态参数并存储到session
+        state = get_uuid()
+        request.session["oauth_state"] = state
+
+        auth_url = auth_cli.get_authorization_url(state)
+
         return RedirectResponse(url=auth_url)
     except Exception as e:
         logging.exception(e)
@@ -351,7 +356,7 @@ async def oauth_login(channel: str):
 
 
 @router.get("/oauth/callback/{channel}", summary="OAuth回调处理")
-async def oauth_callback(channel: str, code: str, db: Session = Depends(get_db)):
+async def oauth_callback(channel: str, code: str, state: str = None, request: Request = None, db: Session = Depends(get_db)):
     """
     OAuth回调处理
 
@@ -360,6 +365,7 @@ async def oauth_callback(channel: str, code: str, db: Session = Depends(get_db))
     参数:
     - channel: str OAuth渠道名称
     - code: str 从OAuth提供商获取的授权码
+    - state: str 可选的状态参数，用于防止CSRF攻击
 
     返回:
     - 成功时重定向到主页并携带认证信息
@@ -369,6 +375,14 @@ async def oauth_callback(channel: str, code: str, db: Session = Depends(get_db))
         channel_config = settings.OAUTH_CONFIG.get(channel)
         if not channel_config:
             return RedirectResponse(url=f"/?error=invalid_channel_{channel}")
+
+        # 验证状态参数（如果提供了的话）
+        if state and request:
+            stored_state = request.session.get("oauth_state")
+            if not stored_state or stored_state != state:
+                return RedirectResponse(url="/?error=invalid_state")
+            # 验证成功后删除状态
+            request.session.pop("oauth_state", None)
 
         auth_cli = get_auth_client(channel_config)
 

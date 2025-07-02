@@ -19,7 +19,8 @@ from fastapi.responses import JSONResponse
 from fastapi_login import LoginManager
 from fastapi_login.exceptions import InvalidCredentialsException
 from fastapi.security import OAuth2PasswordRequestForm
-
+# 添加Session中间件用于OAuth状态管理
+from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db, SessionLocal
@@ -105,6 +106,9 @@ app.add_middleware(
     allow_headers=["*"],  # 允许所有请求头
 )
 settings.init_settings()
+
+# 添加Session中间件，使用项目的SECRET_KEY
+app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 
 # 初始化登录管理器，设置密钥和令牌URL
 manager = LoginManager(settings.SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))
