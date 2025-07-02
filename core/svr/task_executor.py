@@ -439,6 +439,10 @@ async def build_chunks(task, progress_callback, db: Session):
 
         docs_to_tag = []
         for d in docs:
+            task_canceled = TaskService.do_cancel(db, task["id"])
+            if task_canceled:
+                progress_callback(-1, msg="Task has been canceled.")
+                return
             if settings.retrievaler.tag_content(tenant_id, kb_ids, d, all_tags, topn_tags=topn_tags, S=S) and len(d[TAG_FLD]) > 0:
                 examples.append({"content": d["content_with_weight"], TAG_FLD: d[TAG_FLD]})
             else:
@@ -895,6 +899,11 @@ async def do_handle_task(db, task):
 
         # 若执行到此，说明插入成功，记录插入结果
         successful_inserts.append(doc_store_result)
+
+        task_canceled = TaskService.do_cancel(db, task_id)
+        if task_canceled:
+            progress_callback(-1, msg="Task has been canceled.")
+            return
 
         # 每插入 128 批，做一次进度回调（可自定义触发频率）
         if b % 128 == 0:
