@@ -816,10 +816,6 @@ async def do_handle_task(db, task):
         logging.info(progress_message)
         progress_callback(msg=progress_message)
 
-    # kb_id = DocumentService.get_by_doc_id(db, task_doc_id)["kb_id"]
-    # kb = KnowledgebaseService.get_by_id(db, kb_id)
-    # init_kb(task, kb.name)
-
     chunk_count = len(set([chunk["pk"] for chunk in chunks]))
     # 记录开始时间
     start_ts = timer()
@@ -834,6 +830,15 @@ async def do_handle_task(db, task):
     # 获取集合 schema，用于做数据类型转换
     schema = await get_schema(search.index_name_one(task_tenant_id, kb_name))
     collection_name = search.index_name_one(task_tenant_id, kb_name)
+
+    async def delete_image(kb_id, chunk_id):
+        try:
+            async with minio_limiter:
+                STORAGE_IMPL.delete(kb_id, chunk_id)
+        except Exception:
+            logging.exception("Deleting image of chunk {}/{}/{} got exception".format(task["location"], task["name"], chunk_id))
+            raise
+
     # 循环分批插入
     for b in range(0, chunk_count, milvus_bulk_size):
         # 取出本批次要插入的 chunks
@@ -855,8 +860,6 @@ async def do_handle_task(db, task):
                 collection_name=collection_name,
                 data=converted_batch
             ))
-            # 由于异常会在内部抛出，这里若能执行到此处，说明插入已成功
-            # doc_store_result 形如：{"insert_count": x, "ids": [...]}
 
             # 可选：检查 insert_count 是否与本批次长度一致
             # 如果你的需求是一定要完全插入成功才算成功，可以加如下校验：
@@ -900,14 +903,12 @@ async def do_handle_task(db, task):
 
         # 拼接本批次 chunk_ids 并更新到 TaskService
         # （需要你确保 chunk 内有 "id" 这个字段）
-        chunk_ids = [chunk["id"] for chunk in chunk_batch if "id" in chunk]
+        chunk_ids = [chunk["pk"] for chunk in chunk_batch]
         chunk_ids_str = " ".join(chunk_ids)
         try:
             TaskService.update_chunk_ids(db, task["id"], chunk_ids_str)
         except NoResultFound:
-            logging.warning(
-                f"do_handle_task update_chunk_ids failed since task {task['id']} is unknown."
-            )
+            logging.warning(f"do_handle_task update_chunk_ids failed since task {task['id']} is unknown.")
             # 如果 TaskService 中没有这个 task，则删除已插入数据并退出
             try:
                 if settings.docStoreConn.has_collection(collection_name):
@@ -919,7 +920,14 @@ async def do_handle_task(db, task):
                             ))
             except MilvusException as e:
                 return e
+            async with trio.open_nursery() as nursery:
+                for chunk_id in chunk_ids:
+                    nursery.start_soon(delete_image, task_dataset_id, chunk_id)
             return
+
+    logging.info("Indexing doc({}), page({}-{}), chunks({}), elapsed: {:.2f}".format(task_document_name, task_from_page,
+                                                                                     task_to_page, len(chunks),
+                                                                                     timer() - start_ts))
 
     # 分批插入循环结束后，统计总耗时
     insertion_total_time = timer() - start_ts
@@ -952,14 +960,7 @@ async def do_handle_task(db, task):
         return
 
     # 最后更新统计信息
-    DocumentService.increment_chunk_num(
-        db,
-        task_doc_id,
-        task_dataset_id,
-        token_count,
-        chunk_count,
-        0
-    )
+    DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
 
     # 做一次进度回调
     time_cost = timer() - start_ts
