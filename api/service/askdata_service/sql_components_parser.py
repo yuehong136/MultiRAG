@@ -16,6 +16,7 @@ class SQLComponentsParser:
                     'from': 'FROM ...',
                     'where': 'WHERE ...',
                     'groupBy': 'GROUP BY ...',
+                    'having': 'HAVING ...',
                     'orderBy': 'ORDER BY ...',
                     'limit': 'LIMIT ...'
                 }
@@ -146,6 +147,50 @@ class SQLComponentsParser:
 
         return result
 
+    def parse_having_conditions(self) -> Dict:
+        """
+        解析HAVING条件
+
+        Returns:
+            Dict: 包含以下结构：
+                - 'has_or': bool, 是否包含OR
+                - 'raw_condition': str, 原始条件
+                - 'parsed_conditions': List[Dict], 解析后的条件（仅当has_or=False时）
+        """
+        having_clause = self.components.get('having', '')
+        if not having_clause:
+            return {
+                'has_or': False,
+                'raw_condition': '',
+                'parsed_conditions': []
+            }
+
+        # 移除HAVING关键字
+        having_content = re.sub(r'^\s*HAVING\s+', '', having_clause, flags=re.IGNORECASE)
+
+        # 检查是否包含OR
+        has_or = bool(re.search(r'\bOR\b', having_content, re.IGNORECASE))
+
+        result = {
+            'has_or': has_or,
+            'raw_condition': having_content,
+            'parsed_conditions': []
+        }
+
+        # 如果包含OR，直接返回
+        if has_or:
+            return result
+
+        # 解析AND连接的条件
+        and_conditions = re.split(r'\s+AND\s+', having_content, flags=re.IGNORECASE)
+
+        for condition in and_conditions:
+            parsed = self._parse_single_condition(condition.strip())
+            if parsed:
+                result['parsed_conditions'].append(parsed)
+
+        return result
+
     def parse_order_by(self) -> List[Dict[str, str]]:
         """
         解析ORDER BY字段
@@ -226,8 +271,9 @@ class SQLComponentsParser:
             'from_tables': self.parse_from_tables(),
             'table_alias_mapping': self.get_table_alias_mapping(),
             'where_conditions': self.parse_where_conditions(),
-            'order_by': self.parse_order_by(),
             'group_by': self.parse_group_by(),
+            'having_conditions': self.parse_having_conditions(),
+            'order_by': self.parse_order_by(),
             'limit': self.parse_limit()
         }
 
@@ -287,7 +333,7 @@ class SQLComponentsParser:
         }
 
     def _parse_single_condition(self, condition: str) -> Optional[Dict[str, str]]:
-        """解析单个WHERE条件"""
+        """解析单个WHERE或HAVING条件"""
         condition = condition.strip()
         if not condition:
             return None
@@ -383,149 +429,155 @@ def format_parsed_components(parsed: Dict) -> None:
                     value_str = f"'{cond['value']}'"
                     print(f"   {i}. {cond['field']} {cond['operator']} {value_str}")
 
-    # ORDER BY
-    if parsed['order_by']:
-        print("\n5. ORDER BY：")
-        for i, order in enumerate(parsed['order_by'], 1):
-            print(f"   {i}. {order['field']} {order['direction']}")
-
     # GROUP BY
     if parsed['group_by']:
-        print("\n6. GROUP BY：")
+        print("\n5. GROUP BY：")
         for i, field in enumerate(parsed['group_by'], 1):
             print(f"   {i}. {field}")
 
+    # HAVING条件
+    having = parsed['having_conditions']
+    if having['raw_condition']:
+        print("\n6. HAVING条件：")
+        if having['has_or']:
+            print(f"   包含OR操作符，原始条件：")
+            print(f"   {having['raw_condition']}")
+        else:
+            print(f"   解析后的条件（AND连接）：")
+            for i, cond in enumerate(having['parsed_conditions'], 1):
+                if cond['value'] is None:  # NULL操作符没有值
+                    print(f"   {i}. {cond['field']} {cond['operator']}")
+                else:
+                    value_str = f"'{cond['value']}'"
+                    print(f"   {i}. {cond['field']} {cond['operator']} {value_str}")
+
+    # ORDER BY
+    if parsed['order_by']:
+        print("\n7. ORDER BY：")
+        for i, order in enumerate(parsed['order_by'], 1):
+            print(f"   {i}. {order['field']} {order['direction']}")
+
     # LIMIT
     if parsed['limit'] is not None:
-        print(f"\n7. LIMIT: {parsed['limit']}")
+        print(f"\n8. LIMIT: {parsed['limit']}")
 
 
 # 使用示例
 if __name__ == "__main__":
-    # 测试用例1：你提供的示例
+    # 测试用例1：包含HAVING子句的查询
     sql_components1 = {
-        'from': 'FROM gx_test_teachers AS t1 JOIN gx_test_teacher_performance AS t2 ON t1.teacher_id = t2.teacher_id JOIN gx_test_departments AS t3 ON t1.department_id = t3.department_id',
-        'groupBy': '',
-        'limit': '',
-        'orderBy': '',
-        'select': 'SELECT t1.teacher_id, t1.name, t2.total_score, t3.department_name, t2.evaluation_year',
-        'where': "WHERE t2.evaluation_year = 2023 AND t3.department_name = '计算机科学与技术学院' AND t2.total_score > 82"
+        'select': 'SELECT department_id, COUNT(*) as emp_count, AVG(salary) as avg_salary',
+        'from': 'FROM employees e JOIN departments d ON e.dept_id = d.id',
+        'where': 'WHERE e.status = "active" AND e.join_date > "2020-01-01"',
+        'groupBy': 'GROUP BY department_id',
+        'having': 'HAVING COUNT(*) > 5 AND AVG(salary) > 50000',
+        'orderBy': 'ORDER BY avg_salary DESC',
+        'limit': 'LIMIT 10'
     }
 
-    print("测试用例 1:")
+    print("测试用例 1 (包含HAVING子句):")
     print("-" * 60)
     parser1 = SQLComponentsParser(sql_components1)
     result1 = parser1.parse_all()
     format_parsed_components(result1)
 
-    # 测试用例2：包含ORDER BY, GROUP BY和LIMIT
+    # 测试用例2：HAVING子句包含OR条件
     sql_components2 = {
-        'select': 'SELECT department_id, COUNT(*) as teacher_count, AVG(salary) as avg_salary',
-        'from': 'FROM teachers t LEFT JOIN departments d ON t.dept_id = d.id',
-        'where': 'WHERE t.status = "active" AND d.location = "Beijing"',
-        'groupBy': 'GROUP BY department_id, d.name',
-        'orderBy': 'ORDER BY teacher_count DESC, avg_salary ASC',
-        'limit': 'LIMIT 10'
+        'select': 'SELECT category_id, SUM(revenue) as total_revenue, COUNT(*) as product_count',
+        'from': 'FROM products p',
+        'where': 'WHERE p.active = 1',
+        'groupBy': 'GROUP BY category_id',
+        'having': 'HAVING SUM(revenue) > 100000 OR COUNT(*) > 50 OR AVG(price) < 10',
+        'orderBy': 'ORDER BY total_revenue DESC',
+        'limit': ''
     }
 
-    print("\n\n测试用例 2:")
+    print("\n\n测试用例 2 (HAVING包含OR条件):")
     print("-" * 60)
     parser2 = SQLComponentsParser(sql_components2)
     result2 = parser2.parse_all()
     format_parsed_components(result2)
 
-    # 测试用例3：包含OR条件
+    # 测试用例3：复杂的HAVING条件（包含函数和多个条件）
     sql_components3 = {
-        'select': 'SELECT id, name, email',
-        'from': 'FROM users',
-        'where': 'WHERE status = "active" OR role = "admin" OR created_at > "2023-01-01"',
-        'groupBy': '',
-        'orderBy': 'ORDER BY created_at DESC',
-        'limit': 'LIMIT 50'
+        'select': 'SELECT store_id, YEAR(sale_date) as sale_year, SUM(amount) as total_sales, MAX(amount) as max_sale',
+        'from': 'FROM sales s INNER JOIN stores st ON s.store_id = st.id',
+        'where': 'WHERE st.region = "North" AND s.sale_date >= "2023-01-01"',
+        'groupBy': 'GROUP BY store_id, YEAR(sale_date)',
+        'having': 'HAVING SUM(amount) > 50000 AND MAX(amount) > 1000 AND COUNT(*) >= 100',
+        'orderBy': 'ORDER BY sale_year DESC, total_sales DESC',
+        'limit': 'LIMIT 20'
     }
 
-    print("\n\n测试用例 3 (包含OR条件):")
+    print("\n\n测试用例 3 (复杂HAVING条件):")
     print("-" * 60)
     parser3 = SQLComponentsParser(sql_components3)
     result3 = parser3.parse_all()
     format_parsed_components(result3)
 
-    # 测试用例4：复杂的表别名
+    # 测试用例4：HAVING子句中包含NULL条件
     sql_components4 = {
-        'select': 'SELECT o.order_id, c.customer_name, p.product_name, od.quantity',
-        'from': 'FROM orders o INNER JOIN customers c ON o.customer_id = c.id LEFT JOIN order_details od ON o.order_id = od.order_id JOIN products p ON od.product_id = p.id',
-        'where': 'WHERE o.order_date >= "2023-01-01" AND c.country = "China" AND od.quantity > 5',
-        'groupBy': '',
-        'orderBy': 'ORDER BY o.order_date DESC, c.customer_name',
+        'select': 'SELECT manager_id, COUNT(*) as employee_count, AVG(performance_score) as avg_performance',
+        'from': 'FROM employees e',
+        'where': 'WHERE e.department_id = 10',
+        'groupBy': 'GROUP BY manager_id',
+        'having': 'HAVING AVG(performance_score) IS NOT NULL AND COUNT(*) > 3',
+        'orderBy': 'ORDER BY avg_performance DESC',
         'limit': ''
     }
 
-    print("\n\n测试用例 4 (复杂JOIN):")
+    print("\n\n测试用例 4 (HAVING包含NULL条件):")
     print("-" * 60)
     parser4 = SQLComponentsParser(sql_components4)
     result4 = parser4.parse_all()
     format_parsed_components(result4)
 
-    # 测试用例5：包含IS NULL条件
+    # 测试用例5：没有HAVING子句的查询（向后兼容）
     sql_components5 = {
-        'select': 'SELECT u.id, u.name, u.email, u.phone',
-        'from': 'FROM users u LEFT JOIN profiles p ON u.id = p.user_id',
-        'where': 'WHERE u.deleted_at IS NULL AND p.avatar IS NOT NULL AND u.email_verified_at IS NOT NULL',
+        'from': 'FROM gx_test_teachers AS t1 JOIN gx_test_teacher_performance AS t2 ON t1.teacher_id = t2.teacher_id',
         'groupBy': '',
-        'orderBy': 'ORDER BY u.created_at DESC',
-        'limit': ''
+        'limit': '',
+        'orderBy': '',
+        'select': 'SELECT t1.teacher_id, t1.name, t2.total_score',
+        'where': "WHERE t2.evaluation_year = 2023 AND t2.total_score > 82"
     }
 
-    print("\n\n测试用例 5 (IS NULL / IS NOT NULL条件):")
+    print("\n\n测试用例 5 (没有HAVING子句，向后兼容):")
     print("-" * 60)
     parser5 = SQLComponentsParser(sql_components5)
     result5 = parser5.parse_all()
     format_parsed_components(result5)
 
-    # 测试用例6：混合NULL条件和普通条件
+    # 测试用例6：HAVING子句包含LIKE操作符
     sql_components6 = {
-        'select': 'SELECT t.teacher_id, t.name, t.department_id, t.hire_date',
-        'from': 'FROM teachers AS t',
-        'where': 'WHERE t.status = "active" AND t.resignation_date IS NULL AND t.department_id IS NOT NULL AND t.salary > 5000',
-        'groupBy': '',
-        'orderBy': 'ORDER BY t.hire_date ASC',
-        'limit': 'LIMIT 100'
+        'select': 'SELECT customer_name, GROUP_CONCAT(product_name) as products',
+        'from': 'FROM orders o JOIN customers c ON o.customer_id = c.id',
+        'where': 'WHERE o.order_date > "2023-01-01"',
+        'groupBy': 'GROUP BY customer_name',
+        'having': 'HAVING GROUP_CONCAT(product_name) LIKE "%laptop%" AND COUNT(*) > 2',
+        'orderBy': 'ORDER BY customer_name',
+        'limit': 'LIMIT 50'
     }
 
-    print("\n\n测试用例 6 (混合NULL条件和普通条件):")
+    print("\n\n测试用例 6 (HAVING包含LIKE操作符):")
     print("-" * 60)
     parser6 = SQLComponentsParser(sql_components6)
     result6 = parser6.parse_all()
     format_parsed_components(result6)
 
-    # 测试用例7：包含NULL条件和OR的复杂条件
+    # 测试用例7：HAVING子句包含IN操作符
     sql_components7 = {
-        'select': 'SELECT o.order_id, o.customer_id, o.total_amount',
-        'from': 'FROM orders o',
-        'where': 'WHERE o.status = "pending" AND (o.payment_date IS NULL OR o.refund_date IS NOT NULL) AND o.created_at > "2023-01-01"',
-        'groupBy': '',
-        'orderBy': 'ORDER BY o.created_at DESC',
+        'select': 'SELECT region, COUNT(DISTINCT customer_id) as customer_count',
+        'from': 'FROM sales s',
+        'where': 'WHERE s.year = 2023',
+        'groupBy': 'GROUP BY region',
+        'having': 'HAVING COUNT(DISTINCT customer_id) IN (100, 200, 300) AND SUM(amount) > 10000',
+        'orderBy': 'ORDER BY customer_count DESC',
         'limit': ''
     }
 
-    print("\n\n测试用例 7 (包含NULL条件和OR的复杂条件):")
+    print("\n\n测试用例 7 (HAVING包含IN操作符):")
     print("-" * 60)
     parser7 = SQLComponentsParser(sql_components7)
     result7 = parser7.parse_all()
     format_parsed_components(result7)
-
-    # 测试用例8：只有NULL条件
-    sql_components8 = {
-        'select': 'SELECT p.product_id, p.name, p.category_id',
-        'from': 'FROM products p',
-        'where': 'WHERE p.discontinued_at IS NULL AND p.category_id IS NOT NULL',
-        'groupBy': '',
-        'orderBy': '',
-        'limit': ''
-    }
-
-    print("\n\n测试用例 8 (只有NULL条件):")
-    print("-" * 60)
-    parser8 = SQLComponentsParser(sql_components8)
-    result8 = parser8.parse_all()
-    format_parsed_components(result8)
