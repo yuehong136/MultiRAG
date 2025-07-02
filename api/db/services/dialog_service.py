@@ -405,7 +405,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     if "max_tokens" in gen_conf:
         gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
 
-    def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: dict):
+    def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
         max_index = len(kbinfos["chunks"])
 
         def safe_add(i):
