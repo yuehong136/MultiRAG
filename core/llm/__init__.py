@@ -27,6 +27,7 @@ from core.llm.cv_model.models.azuregptv4 import AzureGptV4
 from core.llm.cv_model.models.baiduyiyan_cv import BaiduYiyanCV
 from core.llm.cv_model.models.gemini_cv import GeminiCV
 from core.llm.cv_model.models.gptv4 import GptV4
+from core.llm.cv_model.models.lmstudio_cv import LmStudioCV
 from core.llm.cv_model.models.ollama_cv import OllamaCV
 from core.llm.cv_model.models.openai_api_cv import OpenAI_APICV
 from core.llm.cv_model.models.qwen_cv import QWenCV
@@ -38,6 +39,8 @@ from core.llm.embedding_model.default_embedding import DefaultEmbedding
 from core.llm.embedding_model.gpustack_embed import GPUStackEmbed
 from core.llm.embedding_model.huggingface_embed import HuggingFaceEmbed
 from core.llm.embedding_model.jina_embed import JinaEmbed
+from core.llm.embedding_model.lmstudio_embed import LmStudioEmbed
+from core.llm.embedding_model.localai_embed import LocalAIEmbed
 from core.llm.embedding_model.ollama_embed import OllamaEmbed
 from core.llm.embedding_model.openai_api_embed import OpenAI_APIEmbed
 from core.llm.embedding_model.openai_embed import OpenAIEmbed
@@ -76,6 +79,7 @@ from core.llm.tts_model.models.xinferencetts import XinferenceTTS
 
 EmbeddingModel = {
     "Ollama": OllamaEmbed,
+    "LocalAI": LocalAIEmbed,
     "OpenAI": OpenAIEmbed,
     "Xinference": XinferenceEmbed,
     "Tongyi-Qianwen": QWenEmbed,
@@ -85,6 +89,7 @@ EmbeddingModel = {
     "Jina": JinaEmbed,
     "SILICONFLOW": SILICONFLOWEmbed,
     "BAAI": DefaultEmbedding,
+    "LM-Studio": LmStudioEmbed,
     "OpenAI-API-Compatible": OpenAI_APIEmbed,
     "VLLM": OpenAI_APIEmbed,
     "Cohere": CoHereEmbed,
@@ -105,6 +110,7 @@ CvModel = {
     "Anthropic": AnthropicCV,
     "SILICONFLOW": SILICONFLOWCV,
     "BaiduYiyan": BaiduYiyanCV,
+    "LM-Studio": LmStudioCV,
 }
 
 
