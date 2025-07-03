@@ -94,8 +94,8 @@ app = FastAPI(
         "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
     },
     openapi_tags=tags_metadata,
-    docs_url=None,
-    redoc_url=None,
+    # docs_url=None,
+    # redoc_url=None,
     lifespan=lifespan
 )
 # 添加处理CORS（跨域资源共享）的中间件

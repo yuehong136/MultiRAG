@@ -29,7 +29,7 @@ class CommonService(Generic[ModelType]):
         return datetime.now(timezone.utc)
 
     @classmethod
-    def query(cls, db: Session, cols: list[str] = None, reverse: bool | None = None, order_by: str | None = None,
+    def query(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None, order_by: str | None = None,
               **kwargs) -> list[ModelType] | list[Row]:
         """
        根据条件查询数据库中的记录。
@@ -67,7 +67,7 @@ class CommonService(Generic[ModelType]):
         return query.all()
 
     @classmethod
-    def get_all(cls, db: Session, cols: list[str] = None, reverse: bool | None = None, order_by: str = None) ->  list[ModelType] | list[Row]:
+    def get_all(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None, order_by: str | None = None) ->  list[ModelType] | list[Row]:
         query = db.query(cls.model)
         if cols:
             query = query.with_entities(*[getattr(cls.model, col) for col in cols])
@@ -196,7 +196,7 @@ class CommonService(Generic[ModelType]):
         )
 
     @classmethod
-    def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] = None) -> list[ModelType]:
+    def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] | None = None) -> list[ModelType]:
         query = db.query(cls.model).filter(cls.model.id.in_(pids))
         if cols:
             query = query.with_entities(*[getattr(cls.model, col) for col in cols])
@@ -256,8 +256,8 @@ class CommonService(Generic[ModelType]):
         return [tuple(tar_list[i:i + n]) for i in range(0, len(tar_list), n)]
 
     @classmethod
-    def filter_scope_list(cls, db: Session, in_key: str, in_filters_list: list[Any], filters: list = None,
-                          cols: list[str] = None) -> list[Row[tuple[Type[db_models.BaseModel]]]]:
+    def filter_scope_list(cls, db: Session, in_key: str, in_filters_list: list[Any], filters: list | None = None,
+                          cols: list[str] | None = None) -> list[Row[tuple[Type[db_models.BaseModel]]]]:
         in_filters_tuple_list = cls.cut_list(in_filters_list, 20)
         if not filters:
             filters = []

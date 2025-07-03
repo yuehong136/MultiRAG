@@ -45,7 +45,7 @@ class UserService(CommonService):
         return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
 
     @classmethod
-    def query(cls, db: Session, cols=None, reverse=None, order_by=None, **kwargs):
+    def query(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None, order_by: str | None = None, **kwargs):
         if 'access_token' in kwargs:
             access_token = kwargs['access_token']
 
