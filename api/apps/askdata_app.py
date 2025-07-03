@@ -50,7 +50,7 @@ async def get_sql_and_table_config(
         db: Session = Depends(get_db), user=Depends(manager),
         service: AskdataService = Depends(get_askdata_service)
 ):
-    logging.info(f"get-sql-and-table-config请求体：{body}")
+    logging.info(f"get-sql-and-table-config请求体：{body.model_dump_json()}")
 
     try:
         # 1. 调用Service层获取包含SQL及其组件的完整结果
@@ -406,7 +406,8 @@ async def re_query(
         ),
         service: AskdataService = Depends(get_askdata_service)
 ) -> ResponseSchema:
-    logger.info(f"re-query chart_type: {body.chart_type}\n table_config: {body.table_config} \n sql_components: {body.sql_components} \n model_table_alias_mapping_list: {body.model_table_alias_mapping_list}")
+    logger.info(
+        f"re-query chart_type: {body.chart_type}\n table_config: {body.table_config} \n sql_components: {body.sql_components} \n model_table_alias_mapping_list: {body.model_table_alias_mapping_list}")
 
     try:
         sql, params = await service.generate_requery_sql(body.chart_type, body.table_config,
@@ -417,6 +418,12 @@ async def re_query(
         logger.info(f"params:{params}")
 
         result = await query_data_with_params(sql, int(body.dataset_id), params)
+        if result["status"] == "error":
+            logger.error(f"查询数据失败: {result['message']}")
+            return ResponseSchema(
+                status=StatusEnum.ERROR,
+                message=f"查询数据失败: {result['message']}"
+            )
 
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
