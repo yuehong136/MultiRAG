@@ -264,12 +264,13 @@ def tokenize_chunks(chunks, doc, eng, pdf_parser=None):
 def tokenize_chunks_with_images(chunks, doc, eng, images):
     res = []
     # wrap up as es documents
-    for ck, image in zip(chunks, images):
+    for ii, (ck, image) in enumerate(zip(chunks, images)):
         if len(ck.strip()) == 0:
             continue
         logging.debug("-- {}".format(ck))
         d = copy.deepcopy(doc)
         d["image"] = image
+        add_positions(d, [[ii]*5])
         tokenize(d, ck, eng)
         res.append(d)
     return res
@@ -663,7 +664,7 @@ def get_delimiters(delimiters: str):
         s = t
     if s < len(delimiters):
         dels.extend(list(delimiters[s:]))
-        
+
     dels.sort(key=lambda x: -len(x))
     dels = [re.escape(d) for d in dels if d]
     dels = [d for d in dels if d]
