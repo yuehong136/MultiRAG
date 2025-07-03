@@ -201,6 +201,12 @@ class TableConfigGenerator:
             split_col = self._split_column(metric)
             if len(split_col) == 2:
                 alias, column_name = self._split_column(metric)
+                if column_name.lower() == "count(*)".lower():
+                    selected_metrics.append(
+                        {"is_semantic_field": False, "sql_column": metric, "id": str(uuid.uuid4()),
+                         "wid": str(uuid.uuid4()), "nanoId": str(uuid.uuid4()), "original_sql_component": metric}
+                    )
+                    continue
                 table_name = table_alias_mapping[alias]
                 table_detail = used_table_detail_dict[table_name]
                 for metric in table_detail['dimsAndMetrics']['metrics']:
