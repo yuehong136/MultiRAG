@@ -7,6 +7,7 @@
 @desc:
 """
 import hashlib
+import logging
 from datetime import datetime
 
 from fastapi import HTTPException
@@ -42,6 +43,29 @@ class UserService(CommonService):
     def verify_password(password: str, hashed_password: str) -> bool:
         # 验证密码
         return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+    @classmethod
+    def query(cls, db: Session, cols=None, reverse=None, order_by=None, **kwargs):
+        if 'access_token' in kwargs:
+            access_token = kwargs['access_token']
+
+            # Reject empty, None, or whitespace-only access tokens
+            if not access_token or not str(access_token).strip():
+                logging.warning("UserService.query: Rejecting empty access_token query")
+                return db.query(cls.model).filter(cls.model.id == "INVALID_EMPTY_TOKEN")  # Returns empty result
+
+            # Reject tokens that are too short (should be UUID, 32+ chars)
+            if len(str(access_token).strip()) < 32:
+                logging.warning(f"UserService.query: Rejecting short access_token query: {len(str(access_token))} chars")
+                return db.query(cls.model).filter(cls.model.id == "INVALID_SHORT_TOKEN")  # Returns empty result
+
+            # Reject tokens that start with "INVALID_" (from logout)
+            if str(access_token).startswith("INVALID_"):
+                logging.warning("UserService.query: Rejecting invalidated access_token")
+                return db.query(cls.model).filter(cls.model.id == "INVALID_LOGOUT_TOKEN")  # Returns empty result
+
+        # Call parent query method for valid requests
+        return super().query(db=db, cols=cols, reverse=reverse, order_by=order_by, **kwargs)
 
     @classmethod
     def filter_by_id(cls, db: Session, user_id: str):

@@ -1,5 +1,6 @@
 import json
 import os
+import secrets
 from datetime import date
 from enum import IntEnum, Enum
 
@@ -58,6 +59,26 @@ SANDBOX_HOST = None
 BUILTIN_EMBEDDING_MODELS = ["BAAI/bge-large-zh-v1.5@BAAI", "maidalun1020/bce-embedding-base_v1@Youdao"]
 
 
+def get_or_create_secret_key():
+    secret_key = os.environ.get("MULTI_RAG_SERVICE_NAME")
+    if secret_key and len(secret_key) >= 32:
+        return secret_key
+
+    # Check if there's a configured secret key
+    configured_key = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("secret_key")
+    if configured_key and configured_key != str(date.today()) and len(configured_key) >= 32:
+        return configured_key
+
+    # Generate a new secure key and warn about it
+    import logging
+    new_key = secrets.token_hex(32)
+    logging.warning(
+        "SECURITY WARNING: Using auto-generated SECRET_KEY. "
+        f"Generated key: {new_key}"
+    )
+    return new_key
+
+
 def init_settings():
     # global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, DATABASE_TYPE, DATABASE, FACTORY_LLM_INFOS, REGISTER_ENABLED
     # LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
@@ -111,6 +132,7 @@ def init_settings():
     HOST_IP = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("host", "127.0.0.1")
     HOST_PORT = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("http_port")
 
+    # SECRET_KEY = get_or_create_secret_key()
     SECRET_KEY = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("secret_key", str(date.today()))
 
     global AUTHENTICATION_CONF, CLIENT_AUTHENTICATION, HTTP_APP_KEY, GITHUB_OAUTH, FEISHU_OAUTH, OAUTH_CONFIG

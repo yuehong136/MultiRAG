@@ -24,9 +24,10 @@ from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db, SessionLocal
-# from api.db.database import get_db, SessionLocal
 from api.db.services import UserService
 from api import settings
+from api.utils import get_uuid, current_timestamp, datetime_format
+from datetime import datetime
 from errors.exceptions import AITranslateException
 from api.constants import API_VERSION
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
@@ -117,18 +118,33 @@ manager = LoginManager(settings.SECRET_KEY, token_url='/auth/token', default_exp
 # 定义一个函数，根据电子邮件加载用户
 @manager.user_loader()
 def load_user(email: str, db: Session = None):
+    """
+    简化的用户加载函数，主要依赖JWT token验证
+    数据库的access_token主要用于会话管理（如logout时失效）
+    """
     if db is None:
         db = SessionLocal()
         close_db = True
     else:
         close_db = False
 
-    user = UserService.query_user_onlywith_email(db, email)
+    try:
+        user = UserService.query_user_onlywith_email(db, email)
 
-    if close_db:
-        db.close()
+        # 如果找到用户，检查会话状态
+        if user:
+            # 检查用户是否被标记为登出状态
+            if user.access_token and user.access_token.startswith("INVALID_"):
+                logging.warning(f"User {user.email} has been logged out")
+                return None
 
-    return user
+        return user
+    except Exception as e:
+        logging.warning(f"load_user got exception {e}")
+        return None
+    finally:
+        if close_db:
+            db.close()
 
 
 # 定义一个函数，用于搜索API和应用页面的路径
@@ -240,11 +256,21 @@ async def login(data: OAuth2PasswordRequestForm = Depends(), db: Session = Depen
     if not user:
         raise InvalidCredentialsException
 
-    # 创建访问令牌，其中包含用户的电子邮件作为主题（sub）
-    access_token = manager.create_access_token(data={"sub": email})
+    # 统一按照Flask思路：更新数据库会话标识（用于load_user验证）
+    user.access_token = get_uuid()
+    user.update_time = current_timestamp()
+    user.update_date = datetime_format(datetime.now())
+    db.add(user)
 
-    # 返回包含访问令牌和令牌类型的响应
-    return {"access_token": access_token, "token_type": "bearer"}
+    try:
+        db.commit()
+        # 生成JWT令牌（用于API请求认证）
+        jwt_token = manager.create_access_token(data={"sub": email})
+        # 返回包含JWT令牌和令牌类型的响应
+        return {"access_token": jwt_token, "token_type": "bearer"}
+    except Exception as e:
+        db.rollback()
+        raise InvalidCredentialsException
 
 
 # 定义一个简单的根端点，返回一条消息

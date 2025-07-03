@@ -10,6 +10,7 @@
 import json
 import logging
 import re
+import secrets
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -142,6 +143,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     user = UserService.query_user(db, email, password)
     if user:
         response_data = user.to_dict()
+        # 更新数据库会话标识（用于load_user验证）
         user.access_token = get_uuid()
         user.update_time = current_timestamp()
         user.update_date = datetime_format(datetime.now())
@@ -149,8 +151,9 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         try:
             db.commit()
             msg = "Welcome back!"
-            access_token = manager.create_access_token(data={"sub": email})
-            return construct_response(data=response_data, auth=access_token, retmsg=msg)
+            # 生成JWT令牌（用于API请求认证）
+            jwt_token = manager.create_access_token(data={"sub": email})
+            return construct_response(data=response_data, auth=jwt_token, retmsg=msg)
         except Exception as e:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Login error: {str(e)}")
@@ -314,7 +317,7 @@ async def log_out(db: Session = Depends(get_db), user=Depends(manager)):
     - 成功时返回成功退出的JSON结果
     """
     try:
-        user.access_token = ""
+        user.access_token = f"INVALID_{secrets.token_hex(16)}"
         db.add(user)
         db.commit()
         return get_json_result(data=True)
@@ -684,8 +687,8 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
     if not settings.REGISTER_ENABLED:
         return get_json_result(
             data=False,
-            message="User registration is disabled!",
-            code=settings.RetCode.OPERATING_ERROR,
+            retmsg="User registration is disabled!",
+            retcode=settings.RetCode.OPERATING_ERROR,
         )
 
     req = request.model_dump()
