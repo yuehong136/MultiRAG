@@ -530,22 +530,22 @@ class OCR:
                     "core/res/deepdoc")
 
                 # Append muti-gpus task to the list
-                if PARALLEL_DEVICES is not None and PARALLEL_DEVICES > 0:
+                if PARALLEL_DEVICES > 0:
                     self.text_detector = []
                     self.text_recognizer = []
                     for device_id in range(PARALLEL_DEVICES):
                         self.text_detector.append(TextDetector(model_dir, device_id))
                         self.text_recognizer.append(TextRecognizer(model_dir, device_id))
                 else:
-                    self.text_detector = [TextDetector(model_dir, 0)]
-                    self.text_recognizer = [TextRecognizer(model_dir, 0)]
+                    self.text_detector = [TextDetector(model_dir)]
+                    self.text_recognizer = [TextRecognizer(model_dir)]
 
             except Exception:
                 model_dir = snapshot_download(repo_id="InfiniFlow/deepdoc",
                                               local_dir=os.path.join(get_project_base_directory(), "core/res/deepdoc"),
                                               local_dir_use_symlinks=False)
 
-                if PARALLEL_DEVICES is not None:
+                if PARALLEL_DEVICES > 0:
                     assert PARALLEL_DEVICES > 0, "Number of devices must be >= 1"
                     self.text_detector = []
                     self.text_recognizer = []
@@ -553,8 +553,8 @@ class OCR:
                         self.text_detector.append(TextDetector(model_dir, device_id))
                         self.text_recognizer.append(TextRecognizer(model_dir, device_id))
                 else:
-                    self.text_detector = [TextDetector(model_dir, 0)]
-                    self.text_recognizer = [TextRecognizer(model_dir, 0)]
+                    self.text_detector = [TextDetector(model_dir)]
+                    self.text_recognizer = [TextRecognizer(model_dir)]
 
         self.drop_score = 0.5
         self.crop_image_res_index = 0

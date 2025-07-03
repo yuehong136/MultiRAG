@@ -22,7 +22,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.utils import get_uuid
-from api.utils.file_utils import filename_type, thumbnail, thumbnail_img
+from api.utils.file_utils import filename_type, read_potential_broken_pdf, thumbnail_img
 from core.utils.storage_factory import STORAGE_IMPL
 
 
@@ -57,7 +57,7 @@ class FileService(CommonService):
         for file in res_files:
             if file["type"] == FileType.FOLDER.value:
                 file["size"] = cls.get_folder_size(db, file["id"])
-                file['kbs_info'] = []
+                file["kbs_info"] = []
                 # 检查该文件夹是否有子文件夹
                 children = db.query(cls.model).filter(
                     cls.model.tenant_id == tenant_id,
@@ -67,7 +67,7 @@ class FileService(CommonService):
 
                 file["has_child_folder"] = any(child.to_dict()["type"] == FileType.FOLDER.value for child in children)
             else:
-                file['kbs_info'] = cls.get_kb_id_by_file_id(db, file['id'])
+                file["kbs_info"] = cls.get_kb_id_by_file_id(db, file["id"])
 
         return res_files, count
 
@@ -312,10 +312,9 @@ class FileService(CommonService):
         for file_blob, filename in file_objs:  # 解包元组
             try:
                 max_file_num_per_user = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
-                if max_file_num_per_user > 0 and DocumentService.get_doc_count(db,
-                                                                               kb.tenant_id) >= max_file_num_per_user:
+                if max_file_num_per_user > 0 and DocumentService.get_doc_count(db, kb.tenant_id) >= max_file_num_per_user:
                     raise RuntimeError("Exceed the maximum file number of a free user!")
-                if len(filename) >= 128:
+                if len(filename.encode("utf-8")) >= 128:
                     raise RuntimeError("Exceed the maximum length of file name!")
                 filename = duplicate_name(
                     lambda *args, **kwargs: DocumentService.query(db, *args, **kwargs),
@@ -329,6 +328,11 @@ class FileService(CommonService):
                 location = filename
                 while STORAGE_IMPL.obj_exist(kb.id, location):
                     location += "_"
+
+                # 如果是PDF文件，尝试修复可能损坏的PDF
+                if filetype == FileType.PDF.value:
+                    file_blob = read_potential_broken_pdf(file_blob)
+
                 STORAGE_IMPL.put(kb.id, location, file_blob)
 
                 # # 根据 labels 是否有值来决定 id 的生成方式
@@ -340,9 +344,9 @@ class FileService(CommonService):
                 file_id = get_uuid()
 
                 img = thumbnail_img(filename, file_blob)
-                thumbnail_location = ''
+                thumbnail_location = ""
                 if img is not None:
-                    thumbnail_location = f'thumbnail_{file_id}.png'
+                    thumbnail_location = f"thumbnail_{file_id}.png"
                     STORAGE_IMPL.put(kb.id, thumbnail_location, img)
 
 
@@ -371,7 +375,7 @@ class FileService(CommonService):
 
     @staticmethod
     def parse_docs(file_data, user_id):
-        from core.app import presentation, picture, naive, audio, email
+        from core.app import audio, email, naive, picture, presentation
 
         def dummy(prog=None, msg=""):
             pass
@@ -397,10 +401,7 @@ class FileService(CommonService):
             }
             filetype = filename_type(filename)
             # 调用 chunk 方法并将文件内容传递进去
-            threads.append(
-                exe.submit(FACTORY.get(FileService.get_parser(filetype, filename, ""), naive).chunk, filename, blob,
-                           **kwargs)
-            )
+            threads.append(exe.submit(FACTORY.get(FileService.get_parser(filetype, filename, ""), naive).chunk, filename, blob, **kwargs))
 
         res = []
         for th in threads:

@@ -1,19 +1,18 @@
+import json
 import os
 from datetime import date
 from enum import IntEnum, Enum
-import json
+
 import core.utils
-from core.nlp import search
-from graphrag import search as kg_search
-# from core.utils.milvus_conn import MILVUS_CONNECTION
 import core.utils.milvus_conn
 # import core.utils.infinity_conn, opensearch_coon
-# from api.utils import get_base_config, decrypt_database_config
-from api.utils import get_base_config
 from api.constants import MULTI_RAG_SERVICE_NAME
+from api.utils import get_base_config
 from api.utils.file_utils import get_project_base_directory
+from core.nlp import search
+from graphrag import search as kg_search
 
-LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
+LIGHTEN = int(os.environ.get("LIGHTEN", "0"))
 
 LLM = None
 LLM_FACTORY = None
@@ -30,7 +29,7 @@ HOST_PORT = None
 SECRET_KEY = None
 FACTORY_LLM_INFOS = None
 
-# DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
+# DATABASE_TYPE = os.getenv("DB_TYPE", "postgresql")
 # DATABASE = decrypt_database_config(name=DATABASE_TYPE)
 
 # authentication
@@ -51,6 +50,14 @@ kg_retrievaler = None
 # user registration switch
 REGISTER_ENABLED = 1
 
+
+# sandbox-executor-manager
+SANDBOX_ENABLED = 0
+SANDBOX_HOST = None
+
+BUILTIN_EMBEDDING_MODELS = ["BAAI/bge-large-zh-v1.5@BAAI", "maidalun1020/bce-embedding-base_v1@Youdao"]
+
+
 def init_settings():
     # global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, DATABASE_TYPE, DATABASE, FACTORY_LLM_INFOS, REGISTER_ENABLED
     # LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
@@ -63,7 +70,8 @@ def init_settings():
     LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
     LLM = get_base_config("user_default_llm", {})
     LLM_DEFAULT_MODELS = LLM.get("default_models", {})
-    LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
+    # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
+    LLM_FACTORY = LLM.get("factory")
     LLM_BASE_URL = LLM.get("base_url")
     try:
         REGISTER_ENABLED = int(os.environ.get("REGISTER_ENABLED", "1"))
@@ -78,7 +86,7 @@ def init_settings():
 
     global CHAT_MDL, EMBEDDING_MDL, RERANK_MDL, ASR_MDL, IMAGE2TEXT_MDL
     if not LIGHTEN:
-        EMBEDDING_MDL = "BAAI/bge-large-zh-v1.5@BAAI"
+        EMBEDDING_MDL = BUILTIN_EMBEDDING_MODELS[0]
 
     if LLM_DEFAULT_MODELS:
         CHAT_MDL = LLM_DEFAULT_MODELS.get("chat_model", CHAT_MDL)
@@ -92,35 +100,25 @@ def init_settings():
         EMBEDDING_MDL = EMBEDDING_MDL + (f"@{LLM_FACTORY}" if "@" not in EMBEDDING_MDL and EMBEDDING_MDL != "" else "")
         RERANK_MDL = RERANK_MDL + (f"@{LLM_FACTORY}" if "@" not in RERANK_MDL and RERANK_MDL != "" else "")
         ASR_MDL = ASR_MDL + (f"@{LLM_FACTORY}" if "@" not in ASR_MDL and ASR_MDL != "" else "")
-        IMAGE2TEXT_MDL = IMAGE2TEXT_MDL + (
-            f"@{LLM_FACTORY}" if "@" not in IMAGE2TEXT_MDL and IMAGE2TEXT_MDL != "" else "")
+        IMAGE2TEXT_MDL = IMAGE2TEXT_MDL + (f"@{LLM_FACTORY}" if "@" not in IMAGE2TEXT_MDL and IMAGE2TEXT_MDL != "" else "")
 
     global API_KEY, PARSERS, HOST_IP, HOST_PORT, SECRET_KEY
     API_KEY = LLM.get("api_key", "")
     PARSERS = LLM.get(
-        "parsers",
-        "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag")
+        "parsers", "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"
+    )
 
     HOST_IP = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("host", "127.0.0.1")
     HOST_PORT = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("http_port")
 
-    SECRET_KEY = get_base_config(
-        MULTI_RAG_SERVICE_NAME,
-        {}).get("secret_key", str(date.today()))
-    # SECRET_KEY = get_base_config(
-    #     MULTI_RAG_SERVICE_NAME,
-    #     {}).get(
-    #         "secret_key",
-    #     "multirag_secret_key")
+    SECRET_KEY = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("secret_key", str(date.today()))
 
     global AUTHENTICATION_CONF, CLIENT_AUTHENTICATION, HTTP_APP_KEY, GITHUB_OAUTH, FEISHU_OAUTH, OAUTH_CONFIG
     # authentication
     AUTHENTICATION_CONF = get_base_config("authentication", {})
 
     # client
-    CLIENT_AUTHENTICATION = AUTHENTICATION_CONF.get(
-        "client", {}).get(
-        "switch", False)
+    CLIENT_AUTHENTICATION = AUTHENTICATION_CONF.get("client", {}).get("switch", False)
     HTTP_APP_KEY = AUTHENTICATION_CONF.get("client", {}).get("http_app_key")
     GITHUB_OAUTH = get_base_config("oauth", {}).get("github")
     FEISHU_OAUTH = get_base_config("oauth", {}).get("feishu")
@@ -128,7 +126,7 @@ def init_settings():
     OAUTH_CONFIG = get_base_config("oauth", {})
 
     global DOC_ENGINE, docStoreConn, retrievaler, kg_retrievaler
-    DOC_ENGINE = os.environ.get('DOC_ENGINE', "milvus")
+    DOC_ENGINE = os.environ.get("DOC_ENGINE", "milvus")
     # DOC_ENGINE = os.environ.get('DOC_ENGINE', "opensearch")
     lower_case_doc_engine = DOC_ENGINE.lower()
     if lower_case_doc_engine == "milvus":
@@ -143,8 +141,9 @@ def init_settings():
     retrievaler = search.Dealer(docStoreConn)
     kg_retrievaler = kg_search.KGSearch(docStoreConn)
 
-    # retrievaler = search.Dealer(MILVUS_CONNECTION)
-    # kg_retrievaler = kg_search.KGSearch(MILVUS_CONNECTION)
+    if int(os.environ.get("SANDBOX_ENABLED", "0")):
+        global SANDBOX_HOST
+        SANDBOX_HOST = os.environ.get("SANDBOX_HOST", "sandbox-executor-manager")
 
 
 class CustomEnum(Enum):

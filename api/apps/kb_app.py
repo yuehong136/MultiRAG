@@ -80,7 +80,7 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
         return get_data_error_result(retmsg="Dataset name must be string.")
     if dataset_name == "":
         return get_data_error_result(retmsg="Dataset name can't be empty.")
-    if len(dataset_name) >= DATASET_NAME_LIMIT:
+    if len(dataset_name.encode("utf-8")) >= DATASET_NAME_LIMIT:
         return get_data_error_result(
             retmsg=f"Dataset name length is {len(dataset_name)} which is large than {DATASET_NAME_LIMIT}")
     # 验证 Milvus 集合名逻辑
@@ -212,6 +212,7 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         kb = KnowledgebaseService.get_detail(db, kb_id)
         if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
+        kb["size"] = DocumentService.get_total_size_by_kb_id(db, kb_id=kb["id"],keywords="", run_status=[], types=[])
         return get_json_result(data=kb)
     except Exception as e:
         return server_error_response(e)
@@ -330,7 +331,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
             db, [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kb_name])
 
         # 删除 MinIO 存储桶
-        STORAGE_IMPL.delete_bucket(kb_id)
+        STORAGE_IMPL.remove_bucket(kb_id)
 
         # 删除知识库本身，如果失败则返回错误信息
         if not KnowledgebaseService.delete_by_id(db, req_data["kb_id"]):

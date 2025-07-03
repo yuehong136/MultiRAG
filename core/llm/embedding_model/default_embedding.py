@@ -10,6 +10,7 @@ from core.utils import num_tokens_from_string, truncate
 from core.llm.embedding_model.base import Base
 
 class DefaultEmbedding(Base):
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     _model = None
     _model_name = ""
     _model_lock = threading.Lock()

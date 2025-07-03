@@ -16,7 +16,7 @@
 
 import jwt
 import requests
-from .oauth import OAuthClient
+from .oauth import OAuthClient, UserInfo
 
 
 class OIDCClient(OAuthClient):
@@ -91,9 +91,16 @@ class OIDCClient(OAuthClient):
         user_info = {}
         if id_token:
             user_info = self.parse_id_token(id_token)
-        user_info.update(super().fetch_user_info(access_token).to_dict())
+
+        # Get user info from userinfo endpoint
+        oauth_user_info = super().fetch_user_info(access_token)
+        user_info.update(oauth_user_info.to_dict())
         return self.normalize_user_info(user_info)
 
 
     def normalize_user_info(self, user_info):
-        return super().normalize_user_info(user_info)
+        email = user_info.get("email")
+        username = user_info.get("preferred_username", user_info.get("username", str(email).split("@")[0] if email else ""))
+        nickname = user_info.get("name", user_info.get("nickname", username))
+        avatar_url = user_info.get("picture", user_info.get("avatar_url", ""))
+        return UserInfo(email=email, username=username, nickname=nickname, avatar_url=avatar_url)

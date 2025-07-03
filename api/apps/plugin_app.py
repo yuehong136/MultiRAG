@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from api.db.db_models import get_db
 from api.service.plugin_service.plugin_service import PluginService
 from api.service.script_scheduler_service.script_scheduler_service import ScriptSchedulerService
+from api.utils.api_utils import get_json_result
+from plugin import GlobalPluginManager
 
 router = APIRouter()
 
@@ -88,3 +90,11 @@ async def uninstall_dep(
         package_name=body.package_name
     )
     return ResponseSchema(message="卸载依赖成功", data=result)
+
+
+@router.get('/llm_tools', summary="获取LLM工具列表", response_description="成功获取LLM工具列表")
+def llm_tools(user=Depends(manager)):
+    tools = GlobalPluginManager.get_llm_tools()
+    tools_metadata = [t.get_metadata() for t in tools]
+
+    return get_json_result(data=tools_metadata)

@@ -55,12 +55,25 @@ class MilvusQueryer:
             txt = otxt
         return txt
 
+    @staticmethod
+    def add_space_between_eng_zh(txt):
+        # (ENG/ENG+NUM) + ZH
+        txt = re.sub(r'([A-Za-z]+[0-9]+)([\u4e00-\u9fa5]+)', r'\1 \2', txt)
+        # ENG + ZH
+        txt = re.sub(r'([A-Za-z])([\u4e00-\u9fa5]+)', r'\1 \2', txt)
+        # ZH + (ENG/ENG+NUM)
+        txt = re.sub(r'([\u4e00-\u9fa5]+)([A-Za-z]+[0-9]+)', r'\1 \2', txt)
+        txt = re.sub(r'([\u4e00-\u9fa5]+)([A-Za-z])', r'\1 \2', txt)
+        return txt
+
     def question(self, txt, tbl="qa", min_match: float = 0.6):
+        txt = MilvusQueryer.add_space_between_eng_zh(txt)
         txt = re.sub(
             r"[ :|\r\n\t,，。？?/`!！&^%%()\[\]{}<>]+",
             " ",
             rag_tokenizer.tradi2simp(rag_tokenizer.strQ2B(txt.lower())),
         ).strip()
+        otxt = txt
         txt = MilvusQueryer.rmWWW(txt)
 
         if not self.isChinese(txt):
@@ -180,6 +193,8 @@ class MilvusQueryer:
 
         if qs:
             query = " OR ".join([f"({t})" for t in qs if t])
+            if not query:
+                query = otxt
             return MatchTextExpr(
                 self.query_fields, query, 100, {"minimum_should_match": min_match}
             ), keywords

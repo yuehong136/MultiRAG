@@ -22,7 +22,7 @@ from timeit import default_timer as timer
 
 from docx import Document
 from docx.image.exceptions import InvalidImageStreamError, UnexpectedEndOfFileError, UnrecognizedImageError
-import markdown
+from markdown import markdown
 from PIL import Image
 from tika import parser
 
@@ -33,7 +33,6 @@ from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, Mark
 from deepdoc.parser.figure_parser import VisionFigureParser, vision_figure_parser_figure_data_wraper
 from deepdoc.parser.pdf_parser import PlainParser, VisionParser
 from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, tokenize_chunks, tokenize_chunks_with_images, tokenize_table
-from core.utils import num_tokens_from_string
 
 
 class Docx(DocxParser):
@@ -59,6 +58,9 @@ class Docx(DocxParser):
             logging.info("EOF was unexpectedly encountered while reading an image stream. Skipping image.")
             return None
         except InvalidImageStreamError:
+            logging.info("The recognized image stream appears to be corrupted. Skipping image.")
+            return None
+        except UnicodeDecodeError:
             logging.info("The recognized image stream appears to be corrupted. Skipping image.")
             return None
         try:
@@ -299,8 +301,7 @@ class Markdown(MarkdownParser):
             return []
 
         from bs4 import BeautifulSoup
-        md = markdown.Markdown()
-        html_content = md.convert(text)
+        html_content = markdown(text)
         soup = BeautifulSoup(html_content, 'html.parser')
         html_images = [img.get('src') for img in soup.find_all('img') if img.get('src')]
         return html_images
@@ -334,18 +335,13 @@ class Markdown(MarkdownParser):
         sections = []
         tbls = []
         for sec in remainder.split("\n"):
-            if num_tokens_from_string(sec) > 3 * self.chunk_token_num:
-                sections.append((sec[:int(len(sec) / 2)], ""))
-                sections.append((sec[int(len(sec) / 2):], ""))
+            if sec.strip().find("#") == 0:
+                sections.append((sec, ""))
+            elif sections and sections[-1][0].strip().find("#") == 0:
+                sec_, _ = sections.pop(-1)
+                sections.append((sec_ + "\n" + sec, ""))
             else:
-                if sec.strip().find("#") == 0:
-                    sections.append((sec, ""))
-                elif sections and sections[-1][0].strip().find("#") == 0:
-                    sec_, _ = sections.pop(-1)
-                    sections.append((sec_ + "\n" + sec, ""))
-                else:
-                    sections.append((sec, ""))
-
+                sections.append((sec, ""))
         for table in tables:
             tbls.append(((None, markdown(table, extensions=['markdown.extensions.tables'])), ""))
         return sections, tbls

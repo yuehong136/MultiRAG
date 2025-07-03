@@ -1,49 +1,84 @@
-from .user_service import UserService as UserService
-import pathlib
 import re
+from pathlib import PurePath
+
+from .user_service import UserService as UserService
 
 
-def duplicate_name(query_func, **kwargs):
+def split_name_counter(filename: str) -> tuple[str, int | None]:
     """
-    递归地查找并生成不重复的文件名。
+    Splits a filename into main part and counter (if present in parentheses).
 
-    该函数接受一个查询函数和一个关键字参数字典，用于查询数据库中是否存在相同的文件名。
-    如果存在相同的文件名，通过添加序号的方式生成一个新的不重复的文件名。
+    Args:
+        filename: Input filename string to be parsed
 
-    :param query_func: 用于查询数据库中是否存在相同文件名的函数。
-    :param kwargs: 包含文件名和其他可能的查询条件的关键字参数字典。
-    :return: 如果文件名已存在，则返回一个新的不重复的文件名；如果文件名不存在，则返回原文件名。
+    Returns:
+        A tuple containing:
+        - The main filename part (string)
+        - The counter from parentheses (integer) or None if no counter exists
     """
-    # 从关键字参数中提取文件名
-    fnm = kwargs["name"]
-    # 调用查询函数，根据关键字参数查询是否存在相同的文件名
-    objs = query_func(**kwargs)
-    # 如果查询结果为空，说明文件名不存在，直接返回原文件名
-    if not objs:
-        return fnm
+    pattern = re.compile(r"^(.*?)\((\d+)\)$")
 
-    # 获取文件名的后缀
-    ext = pathlib.Path(fnm).suffix  # .jpg
-    # 去除文件名的后缀，为添加序号做准备
-    nm = re.sub(r"%s$" % ext, "", fnm)
-    # 正则匹配文件名末尾是否已经包含序号
-    r = re.search(r"\(([0-9]+)\)$", nm)
-    # 初始化序号为0
-    c = 0
-    # 如果文件名末尾已经包含序号，则提取并转换为整数
-    if r:
-        c = int(r.group(1))
-        # 去除文件名末尾的序号
-        nm = re.sub(r"\([0-9]+\)$", "", nm)
-    # 序号加1，为新文件名添加序号
-    c += 1
-    # 生成新的文件名，格式为"原文件名(序号)"
-    nm = f"{nm}({c})"
-    # 如果原文件名有后缀，则将后缀添加到新文件名后面
-    if ext:
-        nm += f"{ext}"
+    match = pattern.search(filename)
+    if match:
+        main_part = match.group(1).rstrip()
+        bracket_part = match.group(2)
+        return main_part, int(bracket_part)
 
-    # 更新关键字参数中的文件名为新生成的文件名，用于递归调用
-    kwargs["name"] = nm
-    # 递归调用自身，检查新生成的文件名是否已存在，直到找到一个不重复的文件名
-    return duplicate_name(query_func, **kwargs)
+    return filename, None
+
+
+def duplicate_name(query_func, **kwargs) -> str:
+    """
+    Generates a unique filename by appending/incrementing a counter when duplicates exist.
+
+    Continuously checks for name availability using the provided query function,
+    automatically appending (1), (2), etc. until finding an available name or
+    reaching maximum retries.
+
+    Args:
+        query_func: Callable that accepts keyword arguments and returns:
+                  - True if name exists (should be modified)
+                  - False if name is available
+        **kwargs: Must contain 'name' key with original filename to check
+
+    Returns:
+        str: Available filename, either:
+            - Original name (if available)
+            - Modified name with counter (e.g., "file(1).txt")
+
+    Raises:
+        KeyError: If 'name' key not provided in kwargs
+        RuntimeError: If unable to generate unique name after maximum retries
+
+    Example:
+        >>> def name_exists(name): return name in existing_files
+        >>> duplicate_name(name_exists, name="document.pdf")
+        'document(1).pdf'  # If original exists
+    """
+    MAX_RETRIES = 1000
+
+    if "name" not in kwargs:
+        raise KeyError("Arguments must contain 'name' key")
+
+    original_name = kwargs["name"]
+    current_name = original_name
+    retries = 0
+
+    while retries < MAX_RETRIES:
+        if not query_func(**kwargs):
+            return current_name
+
+        path = PurePath(current_name)
+        stem = path.stem
+        suffix = path.suffix
+
+        main_part, counter = split_name_counter(stem)
+        counter = counter + 1 if counter else 1
+
+        new_name = f"{main_part}({counter}){suffix}"
+
+        kwargs["name"] = new_name
+        current_name = new_name
+        retries += 1
+
+    raise RuntimeError(f"Failed to generate unique name within {MAX_RETRIES} attempts. Original: {original_name}")

@@ -5,11 +5,13 @@
 import logging
 from datetime import datetime
 from typing import Any
+import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
+from api import settings
 from api.db.db_models import get_db
 from api.db.services.user_service import UserTenantService
 from api.db.services.qa_service import (
@@ -50,6 +52,13 @@ def get_user_tenant_id(db: Session, user_id: str) -> str:
 # Pydantic Schema 定义
 # ================================
 
+class QAParamDefinition(BaseModel):
+    """QA参数定义"""
+    name: str = Field(..., description="参数名称")
+    data_type: str = Field(default="string", description="数据类型：string, integer, float, boolean, date")
+    description: str | None = Field(None, description="参数描述")
+    required: bool = Field(default=True, description="是否必需")
+
 class QATemplate(BaseModel):
     """QA模板数据结构 - 保持不变"""
     qa_id: str = Field(..., description="唯一标识符")
@@ -58,6 +67,21 @@ class QATemplate(BaseModel):
     needed_params: list[str] = Field(..., description="需要的参数列表")
     sql_template: str = Field(..., description="SQL模板，使用命名参数")
     rule_id: str | None = Field(None, description="评分规则ID，可为空")
+
+class QATemplateV2(BaseModel):
+    """QA模板数据结构 - 支持带类型的参数定义"""
+    qa_id: str = Field(..., description="唯一标识符")
+    question_canonical: str = Field(..., description="标准问法")
+    paraphrases: list[str] = Field(default=[], description="同义句列表")
+    needed_params_v2: list[QAParamDefinition] = Field(..., description="带类型的参数定义列表")
+    sql_template: list[str] = Field(..., description="SQL模板列表，支持多个SQL模板，使用命名参数")
+    rule_id: str | None = Field(None, description="评分规则ID，可为空")
+    
+    # 向后兼容
+    @property
+    def needed_params(self) -> list[str]:
+        """向后兼容的参数名列表"""
+        return [param.name for param in self.needed_params_v2]
 
 class TableSchema(BaseModel):
     """数据库表结构信息 - 保持不变"""
@@ -118,7 +142,7 @@ class StatelessInterpretResponse(BaseModel):
 
     # 核心结果
     qa_id: str | None = Field(None, description="匹配的QA模板ID")
-    sql_template: str | None = Field(None, description="SQL模板")
+    sql_template: list[str] | str | None = Field(None, description="SQL模板（V2为数组格式，V1为字符串格式）")
     complete_params: dict[str, Any] = Field(default_factory=dict, description="完整参数")
     rule_id: str | None = Field(None, description="评分规则ID")
 
@@ -198,6 +222,26 @@ class DeleteTemplateResponse(BaseModel):
     message: str = Field(..., description="操作结果信息")
     deleted_count: int | None = Field(None, description="删除的记录数量")
     failed_qa_ids: list[str] | None = Field(None, description="删除失败的qa_id列表")
+
+
+class StoreTemplatesV2Request(BaseModel):
+    """存储QA模板V2请求 - 支持类型化参数"""
+    templates: list[QATemplateV2] = Field(..., description="QA模板V2列表")
+    clear_existing: bool = Field(default=False, description="是否清空现有模板")
+
+
+class CollectionStatusResponse(BaseModel):
+    """集合状态响应"""
+    v1_collection_exists: bool = Field(..., description="V1集合是否存在")
+    v2_collection_exists: bool = Field(..., description="V2集合是否存在")
+    v1_collection_name: str = Field(..., description="V1集合名称")
+    v2_collection_name: str = Field(..., description="V2集合名称")
+    current_active_collection: str | None = Field(None, description="当前活跃的集合")
+    collection_version: str | None = Field(None, description="当前使用的集合版本")
+    v1_record_count: int = Field(default=0, description="V1集合记录数量")
+    v2_record_count: int = Field(default=0, description="V2集合记录数量")
+    needs_migration: bool = Field(..., description="是否需要迁移")
+    migration_suggestions: list[str] = Field(default_factory=list, description="迁移建议")
 
 
 # ================================
@@ -393,6 +437,10 @@ def interpret_stateless(
     2. 后续调用：传入上次返回的updated_context作为dialog_context
     3. 调用端自行决定何时开始新对话（不传context即可）
 
+    **返回格式说明:**
+    - sql_template: V2模板返回数组格式，V1模板返回字符串格式
+    - 支持多个SQL模板，便于业务端根据场景选择合适的SQL
+
     **优势:**
     - 服务端简单，易于扩展和维护
     - 调用端灵活，可以实现复杂的业务逻辑
@@ -489,114 +537,83 @@ def quick_interpret(
     except Exception as e:
         logger.error(f"Error in quick_interpret: {e}")
         return server_error_response(e)
-#
-# @router.post("/interpret", summary="查询解释", response_description="解释用户查询并返回SQL模板或追问")
-# def interpret_query(
-#         request: InterpretRequest,
-#         db: Session = Depends(get_db),
-#         user=Depends(manager)
-# ):
-#     """
-#     主要查询解释接口，从Milvus中匹配模板并进行槽位抽取
-#
-#     **功能流程:**
-#     1. 使用混合检索（密集向量+BM25）从Milvus中找到最匹配的QA模板
-#     2. 使用LLM从用户查询中抽取所需参数
-#     3. 如果参数不完整，返回追问文案
-#     4. 如果参数完整，返回SQL模板、参数和rule_id
-#
-#     **参数说明:**
-#     - user_query: 用户查询文本
-#     - table_schemas: 数据库表结构信息，用于槽位抽取
-#     - system_date: 系统当前日期，用于时间推理
-#     - similarity_threshold: 模板匹配相似度阈值
-#     - hybrid_weight: 混合检索中密集向量的权重（0-1），稀疏向量权重为1-hybrid_weight
-#
-#     **返回值:**
-#     - 成功：status=OK, sql_template, params, rule_id
-#     - 需要追问：status=NEED_CLARIFY, missing_params, clarify_message
-#     - 失败：status=ERROR, message
-#
-#     **注意:**
-#     - 使用前需要先调用 /store_templates 存储QA模板
-#     - 混合检索结合了语义相似度和关键词匹配，提高匹配准确性
-#     - 支持自动时间推理和实体转换
-#     """
-#     try:
-#         tenant_id = get_user_tenant_id(db, user.id)
-#
-#         # 参数验证
-#         if not request.user_query.strip():
-#             return get_data_error_result(retmsg="用户查询不能为空")
-#
-#         # 设置默认系统日期
-#         if not request.system_date:
-#             request.system_date = datetime.now().strftime("%Y-%m-%d")
-#
-#         # 1. 从Milvus检索匹配的模板
-#         best_match = template_matcher.find_best_template(
-#             db=db,
-#             user_query=request.user_query,
-#             tenant_id=tenant_id,
-#             threshold=request.similarity_threshold,
-#             hybrid_weight=request.hybrid_weight
-#         )
-#
-#         if not best_match:
-#             return get_json_result(data=InterpretResponse(
-#                 status="ERROR",
-#                 message="未找到匹配的QA模板，请检查查询内容或先上传相关模板",
-#                 confidence=0.0
-#             ).model_dump())
-#
-#         # 2. 槽位抽取
-#         table_schemas_dict = [schema.model_dump() for schema in request.table_schemas]
-#
-#         slot_result = slot_extractor.extract_slots(
-#             db=db,
-#             user_query=request.user_query,
-#             needed_params=best_match['needed_params'],
-#             table_schemas=table_schemas_dict,
-#             system_date=request.system_date,
-#             tenant_id=tenant_id,
-#             llm_name=request.llm_name
-#         )
-#
-#         # 3. 检查是否需要追问
-#         if slot_result['missing_params']:
-#             clarify_message = clarification_generator.generate_clarification(
-#                 db=db,
-#                 user_query=request.user_query,
-#                 missing_params=slot_result['missing_params'],
-#                 table_schemas=table_schemas_dict,
-#                 tenant_id=tenant_id,
-#                 llm_name=request.llm_name
-#             )
-#
-#             return get_json_result(data=InterpretResponse(
-#                 status="NEED_CLARIFY",
-#                 qa_id=best_match['qa_id'],
-#                 missing_params=slot_result['missing_params'],
-#                 sql_template=best_match['sql_template'],
-#                 params=slot_result['extracted_params'],
-#                 clarify_message=clarify_message,
-#                 rule_id=best_match.get('rule_id'),  # 可能为空
-#                 confidence=slot_result['confidence']
-#             ).model_dump())
-#
-#         # 4. 返回完整结果
-#         return get_json_result(data=InterpretResponse(
-#             status="OK",
-#             qa_id=best_match['qa_id'],
-#             sql_template=best_match['sql_template'],
-#             params=slot_result['extracted_params'],
-#             rule_id=best_match.get('rule_id'),  # 可能为空
-#             confidence=slot_result['confidence']
-#         ).model_dump())
-#
-#     except Exception as e:
-#         logger.error(f"Error in interpret_query: {e}")
-#         return server_error_response(e)
+
+
+@router.post("/store_templates_v2", summary="存储QA模板V2", response_description="存储支持类型化参数的QA模板到Milvus")
+def store_templates_v2(
+        request: StoreTemplatesV2Request,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    存储QA模板V2到Milvus（支持类型化参数定义和多SQL模板）
+
+    **新功能:**
+    - 支持带数据类型的参数定义
+    - 支持多个SQL模板（sql_template为数组格式）
+    - 自动类型验证和转换
+    - 向后兼容现有API
+
+    **参数定义格式:**
+    ```json
+    {
+        "name": "teacher_age",
+        "data_type": "integer",
+        "description": "教师年龄",
+        "required": true
+    }
+    ```
+
+    **SQL模板格式:**
+    - 支持传入多个SQL模板，用于不同的查询场景
+    - 每个模板都使用相同的命名参数
+    - 系统会根据业务逻辑选择合适的模板执行
+
+    **支持的数据类型:**
+    - string: 字符串类型
+    - integer: 整数类型  
+    - float: 浮点数类型
+    - boolean: 布尔类型
+    - date: 日期类型 (YYYY-MM-DD格式)
+    """
+    try:
+        tenant_id = get_user_tenant_id(db, user.id)
+
+        # 参数验证
+        if not request.templates:
+            return get_data_error_result(retmsg="模板列表不能为空")
+
+        # 如果需要清空现有模板
+        if request.clear_existing:
+            clear_result = template_storage.clear_tenant_templates(tenant_id)
+            if not clear_result["success"]:
+                return get_data_error_result(retmsg=f"清空现有模板失败: {clear_result['message']}")
+
+        # 转换V2模板数据为兼容格式
+        templates_dict = []
+        for template in request.templates:
+            template_dict = template.model_dump()
+            # 转换为V1兼容格式，同时保留V2信息
+            template_dict["needed_params"] = [param["name"] for param in template_dict["needed_params_v2"]]
+            # 将类型化参数信息存储为JSON字符串
+            template_dict["needed_params_typed"] = json.dumps(template_dict["needed_params_v2"], ensure_ascii=False)
+            templates_dict.append(template_dict)
+
+        # 存储模板
+        result = template_storage.store_templates_v2(
+            db=db,
+            templates=templates_dict,
+            tenant_id=tenant_id
+        )
+
+        if result["success"]:
+            return get_json_result(data=result)
+        else:
+            return get_data_error_result(retmsg=result["message"])
+
+    except Exception as e:
+        logger.error(f"Error in store_templates_v2: {e}")
+        return server_error_response(e)
 
 
 @router.post("/calc_score", summary="计算评分", response_description="使用LLM根据规则和数据计算评分")
@@ -728,10 +745,12 @@ def get_system_info(
     """
     try:
         system_info = {
-            "version": "2.0.0-stateless",
+            "version": "2.1.0-stateless-typed",
             "features": {
                 "stateless_design": True,
                 "template_storage": True,
+                "template_storage_v2": True,
+                "typed_parameters": True,
                 "hybrid_search": True,
                 "multi_round_dialog": True,
                 "llm_scoring": True,
@@ -739,7 +758,8 @@ def get_system_info(
             },
             "supported_operations": {
                 "template_management": [
-                    "POST /store_templates - 存储QA模板",
+                    "POST /store_templates - 存储QA模板（V1兼容）",
+                    "POST /store_templates_v2 - 存储支持类型化参数的QA模板",
                     "POST /clear_templates - 清空所有模板",
                     "POST /delete_template - 删除指定模板（支持单个或批量）"
                 ],
@@ -750,7 +770,82 @@ def get_system_info(
                 "scoring_and_rag": [
                     "POST /calc_score - LLM评分计算",
                     "POST /rag_answer - RAG回答生成"
+                ],
+                "collection_management": [
+                    "GET /collection_status - 检查集合状态和迁移建议"
                 ]
+            },
+            "collection_changes": {
+                "description": "V2版本对Milvus集合结构进行了调整",
+                "changes": [
+                    "V1集合：bl_qa_template - 原有集合结构",
+                    "V2集合：bl_qa_template_v2 - 新增类型化参数支持",
+                    "系统自动检测并优先使用V2集合",
+                    "V1和V2集合可以共存，保证向后兼容"
+                ],
+                "new_fields": [
+                    "needed_params_typed - 类型化参数定义（JSON）",
+                    "template_version - 模板版本标记（v1/v2）"
+                ],
+                "migration_strategy": [
+                    "现有V1集合继续工作，无需立即迁移",
+                    "使用V2接口存储新模板时会自动创建V2集合",
+                    "查询接口自动选择最优集合（优先V2）",
+                    "使用 GET /collection_status 检查当前状态"
+                ]
+            },
+            "v2_new_features": {
+                "typed_parameters": {
+                    "description": "支持为QA模板参数指定数据类型",
+                    "supported_types": ["string", "integer", "float", "boolean", "date"],
+                    "benefits": [
+                        "LLM能更准确地输出正确类型的参数值",
+                        "自动类型验证和转换",
+                        "更好的参数处理精度"
+                    ]
+                },
+                "example_v2_template": {
+                    "qa_id": "teacher_query_001",
+                    "question_canonical": "查询教师考核数据",
+                    "paraphrases": ["教师考核情况", "老师绩效数据"],
+                    "needed_params_v2": [
+                        {
+                            "name": "teacher_id",
+                            "data_type": "string",
+                            "description": "教师ID",
+                            "required": True
+                        },
+                        {
+                            "name": "year",
+                            "data_type": "integer", 
+                            "description": "考核年度",
+                            "required": True
+                        },
+                        {
+                            "name": "score_threshold",
+                            "data_type": "float",
+                            "description": "分数阈值",
+                            "required": False
+                        },
+                        {
+                            "name": "is_active",
+                            "data_type": "boolean",
+                            "description": "是否在职",
+                            "required": False
+                        },
+                        {
+                            "name": "start_date",
+                            "data_type": "date",
+                            "description": "开始日期",
+                            "required": False
+                        }
+                    ],
+                    "sql_template": [
+                        "SELECT * FROM teacher_performance WHERE teacher_id = {{teacher_id}} AND year = {{year}}",
+                        "SELECT teacher_id, performance_score, evaluation_date FROM teacher_performance WHERE teacher_id = {{teacher_id}} AND year = {{year}} ORDER BY evaluation_date DESC"
+                    ],
+                    "rule_id": "rule_001"
+                }
             },
             "configuration": {
                 "similarity_threshold": {
@@ -765,16 +860,124 @@ def get_system_info(
                 }
             },
             "usage_tips": [
+                "使用V2模板获得更精确的参数类型控制",
                 "首次查询时不传dialog_context",
                 "多轮对话时传入上次返回的updated_context",
                 "调用端负责保存和管理对话状态",
                 "quick_interpret适用于简单单轮查询",
-                "interpret_stateless支持复杂多轮对话"
-            ]
+                "interpret_stateless支持复杂多轮对话",
+                "V2模板自动向后兼容V1接口"
+            ],
+            "migration_guide": {
+                "from_v1_to_v2": [
+                    "1. 将needed_params列表转换为needed_params_v2对象列表",
+                    "2. 为每个参数添加data_type字段",
+                    "3. 使用/store_templates_v2接口存储模板",
+                    "4. 现有的查询接口无需修改，自动支持类型化参数"
+                ]
+            }
         }
 
         return get_json_result(data=system_info)
 
     except Exception as e:
         logger.error(f"Error in get_system_info: {e}")
+        return server_error_response(e)
+
+
+@router.get("/collection_status", summary="检查集合状态", response_description="检查QA模板集合的V1/V2状态")
+def check_collection_status(
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    检查QA模板集合的状态
+    
+    **功能:**
+    - 检查V1和V2集合是否存在
+    - 统计各集合的记录数量
+    - 提供迁移建议
+    """
+    try:
+        tenant_id = get_user_tenant_id(db, user.id)
+        
+        from api.db.services.qa_service import QA_TEMPLATE_COLLECTION
+        
+        v1_collection = QA_TEMPLATE_COLLECTION
+        v2_collection = f"{QA_TEMPLATE_COLLECTION}_v2"
+        
+        # 检查集合存在性
+        v1_exists = settings.docStoreConn.has_collection(v1_collection)
+        v2_exists = settings.docStoreConn.has_collection(v2_collection)
+        
+        # 统计记录数量
+        v1_count = 0
+        v2_count = 0
+        
+        if v1_exists:
+            try:
+                v1_results = settings.docStoreConn.query(
+                    collection_name=v1_collection,
+                    filter=f'tenant_id == "{tenant_id}"',
+                    output_fields=["id"]
+                )
+                v1_count = len(v1_results) if v1_results else 0
+            except Exception as e:
+                logger.warning(f"无法统计V1集合记录数: {e}")
+        
+        if v2_exists:
+            try:
+                v2_results = settings.docStoreConn.query(
+                    collection_name=v2_collection,
+                    filter=f'tenant_id == "{tenant_id}"',
+                    output_fields=["id"]
+                )
+                v2_count = len(v2_results) if v2_results else 0
+            except Exception as e:
+                logger.warning(f"无法统计V2集合记录数: {e}")
+        
+        # 确定当前活跃的集合
+        current_active = None
+        collection_version = None
+        if v2_exists and v2_count > 0:
+            current_active = v2_collection
+            collection_version = "v2"
+        elif v1_exists and v1_count > 0:
+            current_active = v1_collection
+            collection_version = "v1"
+        
+        # 判断是否需要迁移
+        needs_migration = v1_exists and v1_count > 0 and (not v2_exists or v2_count == 0)
+        
+        # 生成迁移建议
+        suggestions = []
+        if not v1_exists and not v2_exists:
+            suggestions.append("当前没有任何QA模板集合，建议使用V2接口创建新模板")
+        elif v1_exists and v1_count > 0 and not v2_exists:
+            suggestions.append("检测到V1集合有数据，建议使用V2接口重新存储模板以获得类型化参数支持")
+        elif v1_exists and v2_exists and v1_count > 0 and v2_count == 0:
+            suggestions.append("V1和V2集合都存在，但V2集合为空，建议使用V2接口存储新模板")
+        elif v2_exists and v2_count > 0:
+            suggestions.append("V2集合已有数据，系统将优先使用V2集合，享受类型化参数功能")
+        
+        if v1_exists and v1_count > 0:
+            suggestions.append("V1集合数据仍然兼容，查询接口可以正常使用")
+        
+        result = CollectionStatusResponse(
+            v1_collection_exists=v1_exists,
+            v2_collection_exists=v2_exists,
+            v1_collection_name=v1_collection,
+            v2_collection_name=v2_collection,
+            current_active_collection=current_active,
+            collection_version=collection_version,
+            v1_record_count=v1_count,
+            v2_record_count=v2_count,
+            needs_migration=needs_migration,
+            migration_suggestions=suggestions
+        )
+        
+        return get_json_result(data=result.model_dump())
+        
+    except Exception as e:
+        logger.error(f"Error checking collection status: {e}")
         return server_error_response(e)

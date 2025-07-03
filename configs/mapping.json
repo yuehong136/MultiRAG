@@ -122,6 +122,15 @@
         }
       },
       {
+        "doc_type_kwd": {
+          "match": "doc_type_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
         "create_time_template": {
           "match": "create_time",
           "mapping": {

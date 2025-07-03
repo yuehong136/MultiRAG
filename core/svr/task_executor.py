@@ -93,8 +93,11 @@ CURRENT_TASKS = {}
 
 MAX_CONCURRENT_TASKS = int(os.environ.get('MAX_CONCURRENT_TASKS', "5"))
 MAX_CONCURRENT_CHUNK_BUILDERS = int(os.environ.get('MAX_CONCURRENT_CHUNK_BUILDERS', "1"))
+MAX_CONCURRENT_MINIO = int(os.environ.get('MAX_CONCURRENT_MINIO', '10'))
 task_limiter = trio.CapacityLimiter(MAX_CONCURRENT_TASKS)
 chunk_limiter = trio.CapacityLimiter(MAX_CONCURRENT_CHUNK_BUILDERS)
+minio_limiter = trio.CapacityLimiter(MAX_CONCURRENT_MINIO)
+kg_limiter = trio.CapacityLimiter(2)
 WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get('WORKER_HEARTBEAT_TIMEOUT', '120'))
 stop_event = threading.Event()
 
@@ -307,44 +310,72 @@ async def build_chunks(task, progress_callback, db: Session):
         doc["auth"] = task["auth"]
     if task.get("pagerank"):
         doc[PAGERANK_FLD] = int(task["pagerank"])
-    el = 0
-    for ck in cks:
-        d = copy.deepcopy(doc)
-        d.update(ck)
-        d["pk"] = xxhash.xxh64((ck["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
-        d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
-        d["create_timestamp_flt"] = datetime.now().timestamp()
-        d["page_num_int"] = d.get("page_num_int", [])
-        d["position_int"] = d.get("position_int", [])
-        d["top_int"] = d.get("top_int", [])
-        # if not d.get("image"):
-        #     docs.append(d)
-        #     continue
-        if "image" not in d:
-            docs.append(d)  # 如果 image 字段不存在，则直接添加到 docs
-            continue
-        elif d["image"] is None:
-            del d["image"]  # 如果 image 字段为空，则删除该条记录的image
-            docs.append(d)
-            continue
+    # el = 0
+    # for ck in cks:
+    #     d = copy.deepcopy(doc)
+    #     d.update(ck)
+    #     d["pk"] = xxhash.xxh64((ck["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
+    #     d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
+    #     d["create_timestamp_flt"] = datetime.now().timestamp()
+    #     d["page_num_int"] = d.get("page_num_int", [])
+    #     d["position_int"] = d.get("position_int", [])
+    #     d["top_int"] = d.get("top_int", [])
+    #     # if not d.get("image"):
+    #     #     docs.append(d)
+    #     #     continue
+    #     if "image" not in d:
+    #         docs.append(d)  # 如果 image 字段不存在，则直接添加到 docs
+    #         continue
+    #     elif d["image"] is None:
+    #         del d["image"]  # 如果 image 字段为空，则删除该条记录的image
+    #         docs.append(d)
+    #         continue
+    #     try:
+    #         output_buffer = BytesIO()
+    #         if isinstance(d["image"], bytes):
+    #             output_buffer = BytesIO(d["image"])
+    #         else:
+    #             d["image"].save(output_buffer, format='JPEG')
+    #
+    #         st = timer()
+    #         await trio.to_thread.run_sync(lambda: STORAGE_IMPL.put(task["kb_id"], d["pk"], output_buffer.getvalue()))
+    #         el += timer() - st
+    async def upload_to_minio(document, chunk):
         try:
+            d = copy.deepcopy(document)
+            d.update(chunk)
+            d["pk"] = xxhash.xxh64(
+                (chunk["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
+            d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
+            d["create_timestamp_flt"] = datetime.now().timestamp()
+            d["page_num_int"] = d.get("page_num_int", [])
+            d["position_int"] = d.get("position_int", [])
+            d["top_int"] = d.get("top_int", [])
+            if not d.get("image"):
+                _ = d.pop("image", None)
+                d["img_id"] = ""
+                docs.append(d)
+                return
+
             output_buffer = BytesIO()
             if isinstance(d["image"], bytes):
                 output_buffer = BytesIO(d["image"])
             else:
                 d["image"].save(output_buffer, format='JPEG')
-
-            st = timer()
-            await trio.to_thread.run_sync(lambda: STORAGE_IMPL.put(task["kb_id"], d["pk"], output_buffer.getvalue()))
-            el += timer() - st
+            async with minio_limiter:
+                await trio.to_thread.run_sync(lambda: STORAGE_IMPL.put(task["kb_id"], d["pk"], output_buffer.getvalue()))
+            d["img_id"] = "{}-{}".format(task["kb_id"], d["pk"])
+            del d["image"]
+            docs.append(d)
         except Exception:
             logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
             raise
+    async with trio.open_nursery() as nursery:
+        for ck in cks:
+            nursery.start_soon(upload_to_minio, doc, ck)
 
-        d["img_id"] = "{}-{}".format(task["kb_id"], d["pk"])
-        del d["image"]
-        docs.append(d)
-    logging.info("MINIO PUT({}):{}".format(task["name"], el))
+    el = timer() - st
+    logging.info("MINIO PUT({}) cost {:.3f} s".format(task["name"], el))
 
     if task["parser_config"].get("auto_keywords", 0):
         st = timer()
@@ -407,7 +438,11 @@ async def build_chunks(task, progress_callback, db: Session):
 
         docs_to_tag = []
         for d in docs:
-            if settings.retrievaler.tag_content(tenant_id, kb_ids, d, all_tags, topn_tags=topn_tags, S=S):
+            task_canceled = TaskService.do_cancel(db, task["id"])
+            if task_canceled:
+                progress_callback(-1, msg="Task has been canceled.")
+                return
+            if settings.retrievaler.tag_content(tenant_id, kb_ids, d, all_tags, topn_tags=topn_tags, S=S) and len(d[TAG_FLD]) > 0:
                 examples.append({"content": d["content_with_weight"], TAG_FLD: d[TAG_FLD]})
             else:
                 docs_to_tag.append(d)
@@ -745,17 +780,19 @@ async def do_handle_task(db, task):
         # bind LLM for raptor
         chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
         # run RAPTOR
-        chunks, token_count = await run_raptor(task, chat_model, embedding_model, vector_size, progress_callback)
+        async with kg_limiter:
+            chunks, token_count = await run_raptor(task, chat_model, embedding_model, vector_size, progress_callback)
     # Either using graphrag or Standard chunking methods
     elif task.get("task_type", "") == "graphrag":
-        graphrag_conf = task_parser_config.get("graphrag", {})
-        if not graphrag_conf.get("use_graphrag", False):
+        if not task_parser_config.get("graphrag", {}).get("use_graphrag", False):
             return
+        graphrag_conf = task["kb_parser_config"].get("graphrag", {})
         start_ts = timer()
         chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
         with_resolution = graphrag_conf.get("resolution", False)
         with_community = graphrag_conf.get("community", False)
-        await run_graphrag(task, task_language, with_resolution, with_community, chat_model, embedding_model, progress_callback)
+        async with kg_limiter:
+            await run_graphrag(task, task_language, with_resolution, with_community, chat_model, embedding_model, progress_callback)
         progress_callback(prog=1.0, msg="Knowledge Graph done ({:.2f}s)".format(timer() - start_ts))
         return
     else:
@@ -784,10 +821,6 @@ async def do_handle_task(db, task):
         logging.info(progress_message)
         progress_callback(msg=progress_message)
 
-    # kb_id = DocumentService.get_by_doc_id(db, task_doc_id)["kb_id"]
-    # kb = KnowledgebaseService.get_by_id(db, kb_id)
-    # init_kb(task, kb.name)
-
     chunk_count = len(set([chunk["pk"] for chunk in chunks]))
     # 记录开始时间
     start_ts = timer()
@@ -802,6 +835,15 @@ async def do_handle_task(db, task):
     # 获取集合 schema，用于做数据类型转换
     schema = await get_schema(search.index_name_one(task_tenant_id, kb_name))
     collection_name = search.index_name_one(task_tenant_id, kb_name)
+
+    async def delete_image(kb_id, chunk_id):
+        try:
+            async with minio_limiter:
+                STORAGE_IMPL.delete(kb_id, chunk_id)
+        except Exception:
+            logging.exception("Deleting image of chunk {}/{}/{} got exception".format(task["location"], task["name"], chunk_id))
+            raise
+
     # 循环分批插入
     for b in range(0, chunk_count, milvus_bulk_size):
         # 取出本批次要插入的 chunks
@@ -823,8 +865,6 @@ async def do_handle_task(db, task):
                 collection_name=collection_name,
                 data=converted_batch
             ))
-            # 由于异常会在内部抛出，这里若能执行到此处，说明插入已成功
-            # doc_store_result 形如：{"insert_count": x, "ids": [...]}
 
             # 可选：检查 insert_count 是否与本批次长度一致
             # 如果你的需求是一定要完全插入成功才算成功，可以加如下校验：
@@ -861,6 +901,11 @@ async def do_handle_task(db, task):
         # 若执行到此，说明插入成功，记录插入结果
         successful_inserts.append(doc_store_result)
 
+        task_canceled = TaskService.do_cancel(db, task_id)
+        if task_canceled:
+            progress_callback(-1, msg="Task has been canceled.")
+            return
+
         # 每插入 128 批，做一次进度回调（可自定义触发频率）
         if b % 128 == 0:
             progress = 0.8 + 0.1 * (b + 1) / chunk_count
@@ -868,14 +913,12 @@ async def do_handle_task(db, task):
 
         # 拼接本批次 chunk_ids 并更新到 TaskService
         # （需要你确保 chunk 内有 "id" 这个字段）
-        chunk_ids = [chunk["id"] for chunk in chunk_batch if "id" in chunk]
+        chunk_ids = [chunk["pk"] for chunk in chunk_batch]
         chunk_ids_str = " ".join(chunk_ids)
         try:
             TaskService.update_chunk_ids(db, task["id"], chunk_ids_str)
         except NoResultFound:
-            logging.warning(
-                f"do_handle_task update_chunk_ids failed since task {task['id']} is unknown."
-            )
+            logging.warning(f"do_handle_task update_chunk_ids failed since task {task['id']} is unknown.")
             # 如果 TaskService 中没有这个 task，则删除已插入数据并退出
             try:
                 if settings.docStoreConn.has_collection(collection_name):
@@ -887,7 +930,14 @@ async def do_handle_task(db, task):
                             ))
             except MilvusException as e:
                 return e
+            async with trio.open_nursery() as nursery:
+                for chunk_id in chunk_ids:
+                    nursery.start_soon(delete_image, task_dataset_id, chunk_id)
             return
+
+    logging.info("Indexing doc({}), page({}-{}), chunks({}), elapsed: {:.2f}".format(task_document_name, task_from_page,
+                                                                                     task_to_page, len(chunks),
+                                                                                     timer() - start_ts))
 
     # 分批插入循环结束后，统计总耗时
     insertion_total_time = timer() - start_ts
@@ -920,97 +970,16 @@ async def do_handle_task(db, task):
         return
 
     # 最后更新统计信息
-    DocumentService.increment_chunk_num(
-        db,
-        task_doc_id,
-        task_dataset_id,
-        token_count,
-        chunk_count,
-        0
-    )
+    DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
 
     # 做一次进度回调
     time_cost = timer() - start_ts
     task_time_cost = timer() - task_start_ts
     progress_callback(prog=1.0, msg="Indexing done ({:.2f}s). Task done ({:.2f}s)".format(time_cost, task_time_cost))
-    # logging.info(
-    #     "Chunk doc(%s), token(%s), chunks(%s), elapsed:%.2f",
-    #     task_id, token_count, len(chunks), time_cost
-    # )
     logging.info(
         "Chunk doc({}), page({}-{}), chunks({}), token({}), elapsed:{:.2f}".format(task_document_name, task_from_page,
                                                                                    task_to_page, len(chunks),
                                                                                    token_count, task_time_cost))
-
-    # start_ts = timer()
-    # doc_store_result = ""
-    # successful_inserts = []  # 用于记录成功插入的记录信息
-    # failed_inserts = []  # 可选：记录失败的记录（便于排查问题）
-    # # 获取集合的schema
-    # schema = get_schema(search.index_name_one(task_tenant_id, kb.name))
-    #
-    # # 逐条插入数据
-    # for chunk in chunks:
-    #     # 转换数据类型
-    #     converted_chunk = convert_data_types(chunk, schema)
-    #
-    #     try:
-    #         # 使用 Milvus 的插入方法插入数据
-    #         doc_store_result = settings.docStoreConn.insert(
-    #             collection_name=search.index_name_one(task_tenant_id, kb.name),
-    #             data=converted_chunk
-    #         )
-    #         successful_inserts.append(doc_store_result)  # 记录成功的插入结果
-    #     except Exception:
-    #         failed_inserts.append(chunk)  # 记录失败的记录
-    #         progress_callback(-1, f"Insert chunk error, detail info please check log file. Please also check Milvus status!")
-    #         collection_name = search.index_name_one(task_tenant_id, kb.name)
-    #         try:
-    #             if settings.docStoreConn.has_collection(collection_name):
-    #                 settings.docStoreConn.delete(
-    #                     collection_name=collection_name,
-    #                     filter=f"doc_id == '{{doc_id}}'".format(doc_id=task["doc_id"])
-    #                 )
-    #         except MilvusException as e:
-    #             return e
-    #         logging.exception("Insert error:")
-    #         logging.error("Data being inserted:", converted_chunk)
-    # # 结束时记录总耗时
-    # insertion_total_time = timer() - start_ts
-    #
-    # # 输出总的插入成功信息和统计
-    # if successful_inserts:
-    #     total_insert_count = sum(item["insert_count"] for item in successful_inserts)
-    #     logging.info(f"Total successful inserts into Milvus's {search.index_name_one(task_tenant_id, kb.name)}: {total_insert_count} ")
-    #     # logging.info(f"Milvus insert details: {successful_inserts}")
-    #
-    # # 输出总的 Insertion elapsed 时长
-    # logging.info(f"Total Insertion elapsed: {insertion_total_time:.2f}")
-    #
-    # if failed_inserts:
-    #     logging.warning(f"Failed inserts count: {len(failed_inserts)}")
-    #     logging.warning(f"Failed insert records: {failed_inserts}")
-    #
-    # if TaskService.do_cancel(db, task_id):
-    #     # 构建 Milvus 集合名称
-    #     collection_name = search.index_name_one(task_tenant_id, kb.name)
-    #     # 检查集合是否存在并删除 Milvus 中的数据
-    #     try:
-    #         if settings.docStoreConn.has_collection(collection_name):
-    #             settings.docStoreConn.delete(
-    #                 collection_name=collection_name,
-    #                 filter=f"doc_id == '{{doc_id}}'".format(doc_id=task_doc_id)
-    #             )
-    #     except MilvusException as e:
-    #         return e
-    #     return
-    #
-    # DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
-    #
-    # time_cost = timer() - start_ts
-    # progress_callback(prog=1.0, msg="Done ({:.2f}s)".format(time_cost))
-    # logging.info("Chunk doc({}), token({}), chunks({}), elapsed:{:.2f}".format(task_id, token_count, len(chunks), time_cost))
-
 
 async def handle_task():
     global DONE_TASKS, FAILED_TASKS
@@ -1135,6 +1104,11 @@ def recover_pending_tasks():
             redis_lock.release()
             stop_event.wait(60)
 
+async def task_manager():
+    global task_limiter
+    async with task_limiter:
+        await handle_task()
+
 
 async def main():
     logging.info(r"""
@@ -1166,8 +1140,8 @@ async def main():
     async with trio.open_nursery() as nursery:
         nursery.start_soon(report_status)
         while not stop_event.is_set():
-            async with task_limiter:
-                nursery.start_soon(handle_task)
+            nursery.start_soon(task_manager)
+            await trio.sleep(0.1)
     logging.error("BUG!!! You should not reach here!!!")
 
 if __name__ == "__main__":

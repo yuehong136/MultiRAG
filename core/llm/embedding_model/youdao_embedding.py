@@ -51,6 +51,9 @@ class YoudaoEmbed(Base):
         for t in texts:
             token_count += num_tokens_from_string(t)
         for i in range(0, len(texts), batch_size):
+            # 禁用tqdm进度条以避免BrokenPipeError
+            # encode_kwargs = {**kwargs, 'enable_tqdm': False}
+            # embds = YoudaoEmbed._client.encode(texts[i:i + batch_size], **encode_kwargs)
             embds = YoudaoEmbed._client.encode(texts[i:i + batch_size], **{**kwargs, **kwargs})
             res.extend(embds)
         return np.array(res), token_count
@@ -63,6 +66,9 @@ class YoudaoEmbed(Base):
         :param kwargs: 其他可选参数传递给 encode 方法。
         :return: 编码后的向量数组。
         """
+        # 禁用tqdm进度条以避免BrokenPipeError
+        # encode_kwargs = {**kwargs, 'enable_tqdm': False}
+        # embds = YoudaoEmbed._client.encode([text], **encode_kwargs)
         embds = YoudaoEmbed._client.encode([text], **{**kwargs, **kwargs})
         return np.array(embds[0]), num_tokens_from_string(text)
 

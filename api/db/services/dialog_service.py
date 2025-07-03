@@ -34,7 +34,8 @@ from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
 from core.nlp import extract_between
 from core.nlp.search import index_name
-from core.prompts import kb_prompt, message_fit_in, llm_id2llm_type, keyword_extraction, full_question, chunks_format, citation_prompt
+from core.prompts import kb_prompt, message_fit_in, llm_id2llm_type, keyword_extraction, full_question, chunks_format, \
+    citation_prompt, cross_languages
 from core.utils import rmSpace, num_tokens_from_string
 from core.utils.tavily_conn import Tavily
 
@@ -149,6 +150,7 @@ def chat_solo(db, dialog, messages, stream=True):
     msg = [{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])} for m in messages if m["role"] != "system"]
     if stream:
         last_ans = ""
+        delta_ans = ""
         for ans in chat_mdl.chat_streamly(prompt_config.get("system", ""), msg, dialog.llm_setting):
             answer = ans
             delta_ans = ans[len(last_ans):]
@@ -157,6 +159,7 @@ def chat_solo(db, dialog, messages, stream=True):
             last_ans = answer
             yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "",
                    "created_at": time.time()}
+            delta_ans = ""
         if delta_ans:
             yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "",
                    "created_at": time.time()}
@@ -291,6 +294,9 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     else:
         questions = questions[-1:]
 
+    if prompt_config.get("cross_languages"):
+        questions = [cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
+
     refine_question_ts = timer()
 
     # 如果存在重新排序模型，初始化重新排序模型
@@ -399,6 +405,39 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     if "max_tokens" in gen_conf:
         gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
 
+    def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
+        max_index = len(kbinfos["chunks"])
+
+        def safe_add(i):
+            if 0 <= i < max_index:
+                idx.add(i)
+                return True
+            return False
+
+        def find_and_replace(pattern, group_index=1, repl=lambda i: f"##{i}$$", flags=0):
+            nonlocal answer
+            for match in re.finditer(pattern, answer, flags=flags):
+                try:
+                    i = int(match.group(group_index))
+                    if safe_add(i):
+                        answer = answer.replace(match.group(0), repl(i))
+                except Exception:
+                    continue
+
+        find_and_replace(r"\(\s*ID:\s*(\d+)\s*\)")  # (ID: 12)
+        find_and_replace(r"ID[: ]+(\d+)")  # ID: 12, ID 12
+        find_and_replace(r"\$\$(\d+)\$\$")  # $$12$$
+        find_and_replace(r"\$\[(\d+)\]\$")  # $[12]$
+        find_and_replace(r"\$\$(\d+)\${2,}")  # $$12$$$$
+        find_and_replace(r"\$(\d+)\$")  # $12$
+        find_and_replace(r"(#{2,})(\d+)(\${2,})", group_index=2)  # 2+ # and 2+ $
+        find_and_replace(r"(#{2,})(\d+)(#{1,})", group_index=2)  # 2+ # and 1+ #
+        find_and_replace(r"##(\d+)#{2,}")  # ##12###
+        find_and_replace(r"【(\d+)】")  # 【12】
+        find_and_replace(r"ref\s*(\d+)", flags=re.IGNORECASE)  # ref12, ref 12, REF 12
+
+        return answer, idx
+
     def decorate_answer(answer):
         nonlocal prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_tracer
 
@@ -427,15 +466,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     if i < len(kbinfos["chunks"]):
                         idx.add(i)
 
-                # handle (ID: 1), ID: 2 etc.
-            for match in re.finditer(r"\(\s*ID:\s*(\d+)\s*\)|ID[: ]+\s*(\d+)", answer):
-                full_match = match.group(0)
-                id = match.group(1) or match.group(2)
-                if id:
-                    i = int(id)
-                    if i < len(kbinfos["chunks"]):
-                        idx.add(i)
-                    answer = answer.replace(full_match, f"##{i}$$")
+            answer, idx = repair_bad_citation_formats(answer, kbinfos, idx)
 
             idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
             recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]

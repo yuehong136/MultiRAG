@@ -17,16 +17,18 @@ from pymilvus import MilvusException
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, asc, and_, or_
+
+from api.constants import IMG_BASE64_PREFIX
 from api.db import FileType, TaskStatus, StatusEnum, UserTenantRole
 from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, db_connection
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils import current_timestamp, get_format_time, get_uuid
 from api.utils.db_utils import bulk_insert_into_db
-from api.settings import docStoreConn
+# from api.settings import docStoreConn
+from api import settings
 from core.settings import get_svr_queue_name
 from core.nlp import search, rag_tokenizer
-from core import settings
 from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.doc_store_conn import OrderByExpr
@@ -103,6 +105,66 @@ class DocumentService(CommonService):
         return [doc.to_dict() for doc in docs], count
 
     @classmethod
+    def count_by_kb_id(cls, db: Session, kb_id: str, keywords: str | None = None,
+                       run_status: list | None = None, types: list | None = None) -> int:
+        """
+        根据知识库ID统计文档数量。
+
+        参数:
+        - db: 数据库会话对象，用于执行数据库查询操作。
+        - kb_id: 知识库ID。
+        - keywords: 可选的关键词，用于按文档名称进行模糊匹配。
+        - run_status: 可选的运行状态列表，用于筛选特定运行状态的文档。
+        - types: 可选的文档类型列表，用于筛选特定类型的文档。
+
+        返回:
+        - 符合条件的文档数量。
+        """
+        query = db.query(cls.model).filter_by(kb_id=kb_id)
+
+        if keywords:
+            query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
+
+        if run_status:
+            query = query.filter(cls.model.run.in_(run_status))
+
+        if types:
+            query = query.filter(cls.model.type.in_(types))
+
+        count = query.count()
+
+        return count
+
+    @classmethod
+    def get_total_size_by_kb_id(cls, db: Session, kb_id: str, keywords: str | None = None,
+                               run_status: list | None = None, types: list | None = None) -> int:
+        """
+        根据知识库ID统计文档总大小。
+
+        参数:
+        - db: 数据库会话对象，用于执行数据库查询操作。
+        - kb_id: 知识库ID。
+        - keywords: 可选的关键词，用于按文档名称进行模糊匹配。
+        - run_status: 可选的运行状态列表，用于筛选特定运行状态的文档。
+        - types: 可选的文档类型列表，用于筛选特定类型的文档。
+
+        返回:
+        - 符合条件的文档总大小（字节）。
+        """
+        query = db.query(func.coalesce(func.sum(cls.model.size), 0)).filter_by(kb_id=kb_id)
+
+        if keywords:
+            query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
+
+        if run_status:
+            query = query.filter(cls.model.run.in_(run_status))
+
+        if types:
+            query = query.filter(cls.model.type.in_(types))
+
+        return int(query.scalar()) or 0
+
+    @classmethod
     def get_by_doc_id(cls, db: Session, doc_id: str) -> dict | None:
         """
         通过文档ID获取文档信息。
@@ -151,35 +213,58 @@ class DocumentService(CommonService):
 
     @classmethod
     def remove_document(cls, db: Session, doc: Document, tenant_id: str):
+        # 在删除文档前先保存需要的属性
+        doc_id = doc.id
         cls.clear_chunk_num(db, doc.id)
+
         document = DocumentService.get_by_doc_id(db, doc.id)
         kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
         # 构建 Milvus 集合名称
         collection_name = search.index_name_one(tenant_id, kb.name)
-        # 检查集合是否存在并删除 Milvus 中的数据
+
+        page = 0
+        page_size = 1000
+        all_chunk_ids = []
+        while True:
+            chunks = settings.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
+                                                  page * page_size, page_size, collection_name,
+                                                  [doc.kb_id])
+            chunk_ids = settings.docStoreConn.getChunkIds(chunks)
+            if not chunk_ids:
+                break
+            all_chunk_ids.extend(chunk_ids)
+            page += 1
+        for cid in all_chunk_ids:
+            if STORAGE_IMPL.obj_exist(doc.kb_id, cid):
+                STORAGE_IMPL.rm(doc.kb_id, cid)
+        if doc.thumbnail and not doc.thumbnail.startswith(IMG_BASE64_PREFIX):
+            if STORAGE_IMPL.obj_exist(doc.kb_id, doc.thumbnail):
+                STORAGE_IMPL.rm(doc.kb_id, doc.thumbnail)
 
         try:
-            if docStoreConn.has_collection(collection_name):
-                docStoreConn.delete(
+            # 检查集合是否存在并删除 Milvus 中的数据
+            if settings.docStoreConn.has_collection(collection_name):
+                settings.docStoreConn.delete(
                     collection_name=collection_name,
-                    filter=f"doc_id == '{doc.id}'"
+                    filter=f"doc_id == '{doc_id}'"
                 )
-            # todo 待测试【docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
-            # graph_source = docStoreConn.getFields(
-            #     docStoreConn.search(["source_id"], [], {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [doc.kb_id]), ["source_id"]
+            # todo 待测试【settings.docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
+            # kb_id = document["kb_id"]  # 使用从数据库重新获取的kb_id
+            # graph_source = settings.docStoreConn.getFields(
+            #     settings.docStoreConn.search(["source_id"], [], {"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [kb_id]), ["source_id"]
             # )
-            # if len(graph_source) > 0 and doc.id in list(graph_source.values())[0]["source_id"]:
-            #     docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc.id},
-            #                                 {"remove": {"source_id": doc.id}},
-            #                                 search.index_name(tenant_id, [kb.name]), doc.kb_id)
-            #     docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
+            # if len(graph_source) > 0 and doc_id in list(graph_source.values())[0]["source_id"]:
+            #     settings.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc_id},
+            #                                 {"remove": {"source_id": doc_id}},
+            #                                 search.index_name(tenant_id, [kb.name]), kb_id)
+            #     settings.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]},
             #                                 {"removed_kwd": "Y"},
-            #                                 search.index_name(tenant_id, [kb.name]), doc.kb_id)
-            #     docStoreConn.delete({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
-            #                                 search.index_name(tenant_id, [kb.name]), doc.kb_id)
+            #                                 search.index_name(tenant_id, [kb.name]), kb_id)
+            #     settings.docStoreConn.delete({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
+            #                                 search.index_name(tenant_id, [kb.name]), kb_id)
         except MilvusException as e:
             return e
-        return cls.delete_by_id(db, doc.id)
+        return cls.delete_by_id(db, doc_id)
 
     @classmethod
     def get_newly_uploaded(cls, db: Session):
@@ -463,6 +548,25 @@ class DocumentService(CommonService):
     def get_doc_id_by_doc_name(cls, db: Session, doc_name: str):
         query = db.query(cls.model.id).filter_by(name=doc_name).first()
         return query.id if query else None
+
+    @classmethod
+    def get_doc_ids_by_doc_names(cls, db: Session, doc_names: list[str]) -> list[str]:
+        """
+        Get document IDs by document names
+
+        Args:
+            db: Database session
+            doc_names: List of document names
+
+        Returns:
+            List of document IDs
+        """
+        if not doc_names:
+            return []
+
+        query = db.query(cls.model.id).filter(cls.model.name.in_(doc_names))
+        results = query.all()
+        return [result.id for result in results]
 
     @classmethod
     def get_thumbnails(cls, db: Session, doc_ids: list[str]):

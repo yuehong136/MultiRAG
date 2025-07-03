@@ -40,6 +40,14 @@ class ZhipuChat(Base):
         except Exception as e:
             return f"**ERROR**: {str(e)}", 0
 
+    def chat_with_tools(self, system: str, history: list, gen_conf: dict):
+        if "presence_penalty" in gen_conf:
+            del gen_conf["presence_penalty"]
+        if "frequency_penalty" in gen_conf:
+            del gen_conf["frequency_penalty"]
+
+        return super().chat_with_tools(system, history, gen_conf)
+
     def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
         if system:
             history.insert(0, {"role": "system", "content": system})
@@ -71,6 +79,16 @@ class ZhipuChat(Base):
             yield ans + "\n**ERROR**: " + str(e)
 
         yield tk_count
+
+    def chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict):
+        if "presence_penalty" in gen_conf:
+            del gen_conf["presence_penalty"]
+        if "frequency_penalty" in gen_conf:
+            del gen_conf["frequency_penalty"]
+
+        return super().chat_streamly_with_tools(system, history, gen_conf)
+
+
     async def achat_streamly(self, system, history, gen_conf):
         if system:
             history.insert(0, {"role": "system", "content": system})

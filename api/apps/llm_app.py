@@ -517,7 +517,7 @@ POST
             base_url=llm["api_base"]
         )
         try:
-            with open(os.path.join(get_project_base_directory(), "assets/imgs/logo.png"), "rb") as f:
+            with open(os.path.join(get_project_base_directory(), "configs/multirag.png"), "rb") as f:
                 m, tc = mdl.describe(f.read())
                 if not m and not tc:
                     raise Exception(m)

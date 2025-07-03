@@ -2,6 +2,8 @@ import json
 import os
 import random
 from abc import ABC
+from typing import Any, Protocol
+
 import openai
 from openai import OpenAI
 from core.nlp import is_chinese, is_english
@@ -27,6 +29,10 @@ ERROR_GENERIC = "GENERIC_ERROR"
 
 LENGTH_NOTIFICATION_CN = "······\n由于大模型的上下文窗口大小限制，回答已经被大模型截断。"
 LENGTH_NOTIFICATION_EN = "...\nThe answer is truncated by your chosen LLM due to its limitation on context length."
+
+
+class ToolCallSession(Protocol):
+    def tool_call(self, name: str, arguments: dict[str, Any]) -> str: ...
 
 
 class Base(ABC):
@@ -229,10 +235,8 @@ class Base(ABC):
 
                             if index not in final_tool_calls:
                                 final_tool_calls[index] = tool_call
-
-                            final_tool_calls[index].function.arguments += tool_call.function.arguments
-                        if resp.choices[0].finish_reason != "stop":
-                            continue
+                            else:
+                                final_tool_calls[index].function.arguments += tool_call.function.arguments
                     else:
                         if not resp.choices:
                             continue
@@ -254,58 +258,60 @@ class Base(ABC):
                         else:
                             total_tokens += tol
 
-                        finish_reason = resp.choices[0].finish_reason
-                        if finish_reason == "tool_calls" and final_tool_calls:
-                            for tool_call in final_tool_calls.values():
-                                name = tool_call.function.name
-                                try:
-                                    if name == "get_current_weather":
-                                        args = json.loads('{"location":"Shanghai"}')
-                                    else:
-                                        args = json.loads(tool_call.function.arguments)
-                                except Exception:
-                                    continue
-                                # args = json.loads(tool_call.function.arguments)
-                                tool_response = self.toolcall_session.tool_call(name, args)
-                                history.append(
-                                    {
-                                        "role": "assistant",
-                                        "refusal": "",
-                                        "content": "",
-                                        "audio": "",
-                                        "function_call": "",
-                                        "tool_calls": [
-                                            {
-                                                "index": tool_call.index,
-                                                "id": tool_call.id,
-                                                "function": tool_call.function,
-                                                "type": "function",
+                    finish_reason = resp.choices[0].finish_reason
+                    if finish_reason == "tool_calls" and final_tool_calls:
+                        for tool_call in final_tool_calls.values():
+                            name = tool_call.function.name
+                            try:
+                                args = json.loads(tool_call.function.arguments)
+                            except Exception as e:
+                                logging.exception(
+                                    msg=f"Wrong JSON argument format in LLM tool call response: {tool_call}")
+                                yield ans + "\n**ERROR**: " + str(e)
+                                finish_completion = True
+                                break
+
+                            tool_response = self.toolcall_session.tool_call(name, args)
+                            history.append(
+                                {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {
+                                            "index": tool_call.index,
+                                            "id": tool_call.id,
+                                            "function": {
+                                                "name": tool_call.function.name,
+                                                "arguments": tool_call.function.arguments,
                                             },
-                                        ],
-                                    }
-                                )
-                                # if tool_response.choices[0].finish_reason == "length":
-                                #     if is_chinese(ans):
-                                #         ans += LENGTH_NOTIFICATION_CN
-                                #     else:
-                                #         ans += LENGTH_NOTIFICATION_EN
-                                #     return ans, total_tokens + self.total_token_count(tool_response)
-                                history.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_response)})
-                            final_tool_calls = {}
-                            response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, tools=tools, **gen_conf)
-                            continue
-                        if finish_reason == "length":
-                            if is_chinese(ans):
-                                ans += LENGTH_NOTIFICATION_CN
-                            else:
-                                ans += LENGTH_NOTIFICATION_EN
-                            return ans, total_tokens + self.total_token_count(resp)
-                        if finish_reason == "stop":
-                            finish_completion = True
-                            yield ans
-                            break
-                        yield ans
+                                            "type": "function",
+                                        },
+                                    ],
+                                }
+                            )
+                            # if tool_response.choices[0].finish_reason == "length":
+                            #     if is_chinese(ans):
+                            #         ans += LENGTH_NOTIFICATION_CN
+                            #     else:
+                            #         ans += LENGTH_NOTIFICATION_EN
+                            #     return ans, total_tokens + self.total_token_count(tool_response)
+                            history.append(
+                                {"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_response)})
+                        final_tool_calls = {}
+                        response = self.client.chat.completions.create(model=self.model_name, messages=history,
+                                                                       stream=True, tools=tools, **gen_conf)
                         continue
+                    if finish_reason == "length":
+                        if is_chinese(ans):
+                            ans += LENGTH_NOTIFICATION_CN
+                        else:
+                            ans += LENGTH_NOTIFICATION_EN
+                        return ans, total_tokens
+                    if finish_reason == "stop":
+                        finish_completion = True
+                        yield ans
+                        break
+                    yield ans
+                    continue
 
         except openai.APIError as e:
             yield ans + "\n**ERROR**: " + str(e)
