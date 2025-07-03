@@ -663,6 +663,8 @@ def get_delimiters(delimiters: str):
         s = t
     if s < len(delimiters):
         dels.extend(list(delimiters[s:]))
+        
+    dels.sort(key=lambda x: -len(x))
     dels = [re.escape(d) for d in dels if d]
     dels = [d for d in dels if d]
     dels_pattern = "|".join(dels)
