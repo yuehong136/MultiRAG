@@ -13,7 +13,7 @@ import trio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, model_validator, Discriminator
+from pydantic import BaseModel, Field, model_validator, Discriminator, field_validator
 from typing import Generator, Literal, Annotated, Any
 
 from api.db.db_models import APIToken, get_db
@@ -42,9 +42,16 @@ class SetConversationRequest(BaseModel):
 
     name: str | None = "New conversation"
     """会话的名称。"""
-    
+
     is_new: bool | None = None
     """是否为新建会话，可选参数。如果未提供，将根据conversation_id是否存在来判断。"""
+
+    @field_validator('conversation_id', 'dialog_id', mode='before')
+    def blank_str_to_none(cls, v):
+        """把 '' 或 '   ' 这种空白字符串统一转成 None"""
+        if isinstance(v, str) and v.strip() == '':
+            return None
+        return v
 
     @model_validator(mode='after')
     def validate_conversation_logic(self) -> 'SetConversationRequest':
@@ -52,19 +59,19 @@ class SetConversationRequest(BaseModel):
         # 如果没有指定is_new，根据conversation_id来判断
         if self.is_new is None:
             self.is_new = self.conversation_id is None
-        
+
         # 如果是新建会话，必须提供dialog_id
         if self.is_new and not self.dialog_id:
             raise ValueError("dialog_id is required when creating a new conversation")
-        
+
         # 如果是更新会话，必须提供conversation_id
         if not self.is_new and not self.conversation_id:
             raise ValueError("conversation_id is required when updating an existing conversation")
-            
+
         # 限制名称长度
         if self.name and len(self.name) > 255:
             self.name = self.name[:255]
-            
+
         return self
 
 
