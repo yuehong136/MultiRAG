@@ -1828,3 +1828,659 @@ class RAGService:
                 "sources": [],
                 "confidence": 0.0
             }
+
+# 在RAGService类后面添加强化版的评分服务
+
+class LLMScoringServiceV2:
+    """LLM驱动的评分服务V2 - 强化正则提取能力"""
+
+    def __init__(self):
+        # V2强化版提示模板 - 更规范化的输出要求，专门优化处理表结构数据
+        self.prompt_template_v2 = """你是一个专业的教师考核评分助手。请根据提供的评分规则和数据，计算出准确的评分结果。
+
+评分规则：
+{rule_description}
+
+数据说明：
+提供的数据包含多个表的信息，每个表都有以下结构：
+- table: 表的元数据信息（表名、描述、字段结构）
+- data_details: 表中的具体数据记录
+
+数据内容：
+{data_json}
+
+上下文信息：
+{context_info}
+
+数据分析指导：
+1. 请仔细分析每个表的结构和用途（table_desc字段）
+2. 理解字段含义（column_desc字段）
+3. 根据具体数据记录（data_details）和评分规则进行计算
+4. 如果数据不足以支持精确计算，请明确说明并给出合理推断
+
+请严格按照以下格式输出评分结果（格式非常重要，请勿更改）：
+
+=== 最终评分结果 ===
+总得分：[数字]分
+评分状态：[完成/部分完成/数据不足/无法评分]
+数据完整性：[完整/部分/不足]
+
+=== 详细评分分析 ===
+1. 规则匹配：
+   - 匹配规则：[说明匹配到的具体规则条目]
+   - 计算依据：[详细的计算过程，包括数值来源]
+   - 数据映射：[说明如何从数据中提取计算所需的值]
+
+2. 分数计算：
+   - 基础得分：[数字]分 [计算过程]
+   - 调整因子：[如有调整，说明原因]
+   - 最终得分：[数字]分
+
+=== 数据汇总统计 ===
+- 涉及表数量：[数字]个
+- 总记录数：[数字]条
+- 关键指标提取：[列出从数据中提取的关键数值]
+- 数据质量评估：[评估数据是否充分支持评分]
+
+=== 改进建议 ===
+[基于评分结果和数据完整性给出的改进建议，如需要补充哪些数据等]
+
+重要要求：
+1. "总得分"后面必须紧跟具体的数字
+2. 数字必须是基于数据的准确计算结果
+3. 如果数据不足，请在"评分状态"中明确标注
+4. 详细说明数据到分数的映射过程
+5. 保持格式严格一致性
+6. 数字后面可以加"分"作为单位"""
+
+    def calculate_score_v2(
+            self,
+            db: Session,
+            rule_description: str,
+            data: list[dict[str, Any]],
+            context: dict[str, Any] | None = None,
+            tenant_id: str = "",
+            llm_name: str | None = None,
+            enable_multi_extraction: bool = True,
+            score_validation: bool = True,
+            expected_score_range: tuple[float, float] | None = None,
+            extraction_confidence_threshold: float = 0.8
+    ) -> dict[str, Any]:
+        """使用LLM计算评分 - V2强化版"""
+        try:
+            if not data:
+                return self._create_empty_data_response()
+
+            # 准备数据
+            data_json = json.dumps(data, ensure_ascii=False, indent=2)
+            context_info = json.dumps(context or {}, ensure_ascii=False, indent=2)
+
+            # 构建V2强化版提示词
+            prompt = self.prompt_template_v2.format(
+                rule_description=rule_description,
+                data_json=data_json,
+                context_info=context_info
+            )
+
+            # 调用LLM
+            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+
+            response = chat_model.chat(
+                system=prompt,
+                history=[{"role": "user", "content": "请严格按照格式要求进行评分"}],
+                gen_conf={"temperature": 0.1, "max_tokens": 2000}
+            )
+
+            # V2强化版响应解析
+            parsed_result = self._parse_score_response_v2(
+                response=response,
+                original_data=data,
+                enable_multi_extraction=enable_multi_extraction,
+                score_validation=score_validation,
+                expected_score_range=expected_score_range,
+                extraction_confidence_threshold=extraction_confidence_threshold
+            )
+
+            return parsed_result
+
+        except Exception as e:
+            logger.error(f"Error calculating score with LLM V2: {e}")
+            return self._create_error_response_v2(data, str(e))
+
+    def _parse_score_response_v2(
+            self, 
+            response: str, 
+            original_data: list[dict[str, Any]],
+            enable_multi_extraction: bool = True,
+            score_validation: bool = True,
+            expected_score_range: tuple[float, float] | None = None,
+            extraction_confidence_threshold: float = 0.8
+    ) -> dict[str, Any]:
+        """V2强化版响应解析"""
+        try:
+            extraction_results = []
+            extraction_methods = []
+            
+            # 策略1：优先从"总得分"部分提取 - 最高优先级
+            score_from_final = self._extract_score_from_final_section(response)
+            if score_from_final is not None:
+                extraction_results.append(score_from_final)
+                extraction_methods.append("final_section_primary")
+            
+            # 策略2：从分数计算部分提取"最终得分"
+            score_from_calculation = self._extract_score_from_calculation_section(response)
+            if score_from_calculation is not None:
+                extraction_results.append(score_from_calculation)
+                extraction_methods.append("calculation_section")
+            
+            if enable_multi_extraction:
+                # 策略3：增强版正则表达式提取
+                scores_from_regex = self._extract_scores_with_enhanced_regex(response)
+                extraction_results.extend(scores_from_regex)
+                extraction_methods.extend(["enhanced_regex"] * len(scores_from_regex))
+                
+                # 策略4：数字序列分析
+                scores_from_sequence = self._extract_scores_from_number_sequence(response)
+                extraction_results.extend(scores_from_sequence)
+                extraction_methods.extend(["number_sequence"] * len(scores_from_sequence))
+
+            # 去重并排序
+            unique_scores = list(dict.fromkeys(extraction_results))  # 保持顺序去重
+            
+            # 选择最佳分数
+            best_score, confidence, method = self._select_best_score(
+                unique_scores, 
+                extraction_methods,
+                expected_score_range,
+                score_validation
+            )
+            
+            # 验证结果
+            validation_results = self._validate_score(
+                best_score, 
+                expected_score_range, 
+                original_data,
+                response
+            ) if score_validation else {"validated": True, "warnings": []}
+
+            # 分段提取内容
+            sections = self._extract_sections_v2(response)
+
+            # 生成数据汇总
+            data_summary = self._generate_data_summary_v2(original_data)
+
+            # 计算提取置信度
+            extraction_confidence = min(confidence, 1.0) if best_score is not None else 0.0
+
+            return {
+                "score": best_score,
+                "score_text": sections.get("最终评分结果", "").strip(),
+                "analysis": sections.get("详细评分分析", "").strip(),
+                "suggestions": sections.get("改进建议", "").strip() or None,
+                "data_summary": data_summary,
+                "extraction_details": {
+                    "all_extracted_scores": unique_scores,
+                    "extraction_methods_used": list(set(extraction_methods)),
+                    "total_extraction_attempts": len(extraction_results)
+                },
+                "confidence": extraction_confidence,
+                "validation_results": validation_results,
+                "alternative_scores": unique_scores[1:] if len(unique_scores) > 1 else [],
+                "extraction_method": method,
+                "raw_response": response
+            }
+
+        except Exception as e:
+            logger.error(f"Error parsing score response V2: {e}")
+            return self._create_parse_error_response_v2(response, original_data, str(e))
+
+    def _extract_score_from_final_section(self, response: str) -> float | None:
+        """从最终评分结果部分提取分数 - 最高优先级"""
+        try:
+            # 查找最终评分结果部分
+            final_section_patterns = [
+                r'=== 最终评分结果 ===.*?总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分?',
+                r'总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                r'最终得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                r'评分结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分'
+            ]
+            
+            for pattern in final_section_patterns:
+                match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
+                if match:
+                    score = float(match.group(1))
+                    logger.info(f"从最终评分结果部分提取到分数: {score}")
+                    return score
+            
+            return None
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"从最终评分结果部分提取分数失败: {e}")
+            return None
+
+    def _extract_score_from_calculation_section(self, response: str) -> float | None:
+        """从分数计算部分提取最终得分"""
+        try:
+            calculation_patterns = [
+                r'最终得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                r'总计[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                r'合计得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分'
+            ]
+            
+            # 只在分数计算部分查找
+            calc_section_match = re.search(r'分数计算[：:]?(.*?)(?===|$)', response, re.DOTALL | re.IGNORECASE)
+            search_text = calc_section_match.group(1) if calc_section_match else response
+            
+            for pattern in calculation_patterns:
+                match = re.search(pattern, search_text, re.IGNORECASE)
+                if match:
+                    score = float(match.group(1))
+                    logger.info(f"从分数计算部分提取到分数: {score}")
+                    return score
+            
+            return None
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"从分数计算部分提取分数失败: {e}")
+            return None
+
+    def _extract_scores_with_enhanced_regex(self, response: str) -> list[float]:
+        """使用增强版正则表达式提取分数"""
+        scores = []
+        
+        # 增强版正则表达式模式 - 覆盖更多表达方式
+        enhanced_patterns = [
+            # 中文表达
+            r'得分[为是：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+            r'分数[为是：:]?\s*([0-9]+\.?[0-9]*)\s*分?',
+            r'评分[为是：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+            r'总分[为是：:]?\s*([0-9]+\.?[0-9]*)\s*分?',
+            r'([0-9]+\.?[0-9]*)\s*分(?![a-zA-Z])',  # 数字+分，但后面不跟字母
+            
+            # 英文表达
+            r'score[:\s]*([0-9]+\.?[0-9]*)',
+            r'points?[:\s]*([0-9]+\.?[0-9]*)',
+            r'total[:\s]*([0-9]+\.?[0-9]*)',
+            
+            # 计算表达式
+            r'=\s*([0-9]+\.?[0-9]*)\s*分?',
+            r'共计\s*([0-9]+\.?[0-9]*)\s*分?',
+            r'累计\s*([0-9]+\.?[0-9]*)\s*分?'
+        ]
+        
+        for pattern in enhanced_patterns:
+            matches = re.finditer(pattern, response, re.IGNORECASE)
+            for match in matches:
+                try:
+                    score = float(match.group(1))
+                    if score not in scores:  # 避免重复
+                        scores.append(score)
+                        logger.debug(f"增强正则提取到分数: {score} (模式: {pattern})")
+                except ValueError:
+                    continue
+        
+        return scores
+
+    def _extract_scores_from_number_sequence(self, response: str) -> list[float]:
+        """从数字序列中分析提取分数"""
+        scores = []
+        
+        # 查找所有数字
+        number_pattern = r'\b([0-9]+\.?[0-9]*)\b'
+        numbers = [float(m.group(1)) for m in re.finditer(number_pattern, response)]
+        
+        # 过滤合理的分数范围 (通常考核分数在0-100000之间)
+        reasonable_scores = [n for n in numbers if 0 <= n <= 100000]
+        
+        # 查找重复出现的数字（可能是最终答案）
+        from collections import Counter
+        number_counts = Counter(reasonable_scores)
+        
+        # 优先选择出现频率较高的数字
+        for number, count in number_counts.most_common():
+            if count >= 2 and number not in scores:  # 至少出现2次
+                scores.append(number)
+                logger.debug(f"数字序列分析提取到分数: {number} (出现{count}次)")
+        
+        return scores[:3]  # 最多返回3个候选分数
+
+    def _select_best_score(
+            self, 
+            scores: list[float], 
+            methods: list[str],
+            expected_range: tuple[float, float] | None = None,
+            validation_enabled: bool = True
+    ) -> tuple[float | None, float, str]:
+        """选择最佳分数"""
+        if not scores:
+            return None, 0.0, "no_extraction"
+        
+        # 方法优先级（越小优先级越高）
+        method_priority = {
+            "final_section_primary": 1,
+            "calculation_section": 2,
+            "enhanced_regex": 3,
+            "number_sequence": 4
+        }
+        
+        # 为每个分数计算置信度
+        score_confidences = []
+        for i, score in enumerate(scores):
+            method = methods[i] if i < len(methods) else "unknown"
+            
+            # 基础置信度（基于提取方法）
+            base_confidence = {
+                "final_section_primary": 0.95,
+                "calculation_section": 0.85,
+                "enhanced_regex": 0.7,
+                "number_sequence": 0.6
+            }.get(method, 0.5)
+            
+            # 范围验证加分
+            if expected_range and expected_range[0] <= score <= expected_range[1]:
+                base_confidence += 0.1
+            
+            # 合理性检查
+            if 0 <= score <= 100000:  # 合理的分数范围
+                base_confidence += 0.05
+            
+            score_confidences.append((score, base_confidence, method))
+        
+        # 按置信度排序，置信度相同时按方法优先级排序
+        score_confidences.sort(key=lambda x: (-x[1], method_priority.get(x[2], 99)))
+        
+        best_score, confidence, method = score_confidences[0]
+        
+        logger.info(f"选择最佳分数: {best_score} (置信度: {confidence:.2f}, 方法: {method})")
+        return best_score, confidence, method
+
+    def _validate_score(
+            self, 
+            score: float | None, 
+            expected_range: tuple[float, float] | None,
+            original_data: list[dict[str, Any]],
+            response: str
+    ) -> dict[str, Any]:
+        """验证分数的合理性"""
+        validation_result = {
+            "validated": True,
+            "warnings": [],
+            "errors": []
+        }
+        
+        if score is None:
+            validation_result["validated"] = False
+            validation_result["errors"].append("未能提取到有效分数")
+            return validation_result
+        
+        # 基本范围检查
+        if score < 0:
+            validation_result["warnings"].append(f"分数为负数: {score}")
+        elif score > 100000:
+            validation_result["warnings"].append(f"分数异常偏高: {score}")
+        
+        # 期望范围检查
+        if expected_range:
+            min_score, max_score = expected_range
+            if not (min_score <= score <= max_score):
+                validation_result["warnings"].append(
+                    f"分数 {score} 超出期望范围 [{min_score}, {max_score}]"
+                )
+        
+        # 数据一致性检查
+        data_count = len(original_data)
+        if data_count == 0 and score > 0:
+            validation_result["warnings"].append("数据为空但得分大于0")
+        
+        return validation_result
+
+    def _extract_sections_v2(self, response: str) -> dict[str, str]:
+        """V2版本的分段提取，支持新的格式"""
+        sections = {}
+        current_section = None
+        current_content = []
+
+        lines = response.split('\n')
+        for line in lines:
+            # 检查是否是V2格式的标题行
+            if line.startswith('=== ') and line.endswith(' ==='):
+                # 保存前一个部分
+                if current_section:
+                    sections[current_section] = '\n'.join(current_content).strip()
+
+                # 开始新部分
+                current_section = line[4:-4].strip()  # 去掉 "=== " 和 " ==="
+                current_content = []
+            elif line.startswith('## '):
+                # 兼容V1格式
+                if current_section:
+                    sections[current_section] = '\n'.join(current_content).strip()
+                current_section = line[3:].strip()
+                current_content = []
+            elif current_section:
+                current_content.append(line)
+
+        # 保存最后一个部分
+        if current_section:
+            sections[current_section] = '\n'.join(current_content).strip()
+
+        return sections
+
+    def _generate_data_summary_v2(self, data: list[dict[str, Any]]) -> dict[str, Any]:
+        """V2版本的数据汇总，增加更多统计信息，专门处理表结构数据"""
+        if not data:
+            return {"total_records": 0, "version": "v2"}
+
+        summary = {
+            "total_records": len(data),
+            "version": "v2"
+        }
+
+        # 检测数据结构类型
+        has_table_structure = any(
+            isinstance(item, dict) and "table" in item and "data_details" in item 
+            for item in data
+        )
+        
+        if has_table_structure:
+            # 处理表结构数据
+            summary["data_type"] = "structured_tables"
+            tables_info = []
+            total_data_records = 0
+            all_fields = set()
+            field_descriptions = {}
+            
+            for item in data:
+                if "table" in item and "data_details" in item:
+                    table_info = item["table"]
+                    data_details = item["data_details"]
+                    
+                    table_summary = {
+                        "table_name": table_info.get("table_name", "unknown"),
+                        "table_desc": table_info.get("table_desc", ""),
+                        "record_count": len(data_details) if isinstance(data_details, list) else 0,
+                        "fields": []
+                    }
+                    
+                    # 处理字段结构信息
+                    if "structure" in table_info and isinstance(table_info["structure"], list):
+                        for field_info in table_info["structure"]:
+                            if isinstance(field_info, dict):
+                                field_name = field_info.get("column_name", "")
+                                field_desc = field_info.get("column_desc", "")
+                                if field_name:
+                                    table_summary["fields"].append({
+                                        "name": field_name,
+                                        "description": field_desc
+                                    })
+                                    all_fields.add(field_name)
+                                    field_descriptions[field_name] = field_desc
+                    
+                    # 统计实际数据
+                    if isinstance(data_details, list):
+                        total_data_records += len(data_details)
+                        # 统计每个字段的数据类型和非空情况
+                        field_types = {}
+                        field_non_empty_count = {}
+                        
+                        for record in data_details:
+                            if isinstance(record, dict):
+                                for field_name, value in record.items():
+                                    if value is not None:
+                                        field_types.setdefault(field_name, set()).add(type(value).__name__)
+                                        field_non_empty_count[field_name] = field_non_empty_count.get(field_name, 0) + 1
+                        
+                        table_summary["field_stats"] = {
+                            "field_types": {k: list(v) for k, v in field_types.items()},
+                            "non_empty_counts": field_non_empty_count
+                        }
+                    
+                    tables_info.append(table_summary)
+            
+            summary.update({
+                "tables_count": len(tables_info),
+                "total_data_records": total_data_records,
+                "tables_info": tables_info,
+                "all_fields": list(all_fields),
+                "field_descriptions": field_descriptions
+            })
+            
+            # 统计数值字段（跨所有表）
+            numeric_stats = []
+            for item in data:
+                if "data_details" in item and isinstance(item["data_details"], list):
+                    for record in item["data_details"]:
+                        if isinstance(record, dict):
+                            for field_name, value in record.items():
+                                if isinstance(value, (int, float)):
+                                    # 查找已存在的字段统计或创建新的
+                                    existing_stat = next(
+                                        (stat for stat in numeric_stats if stat["field"] == field_name), 
+                                        None
+                                    )
+                                    if existing_stat:
+                                        existing_stat["values"].append(value)
+                                    else:
+                                        numeric_stats.append({
+                                            "field": field_name,
+                                            "values": [value],
+                                            "description": field_descriptions.get(field_name, "")
+                                        })
+            
+            # 计算数值字段统计
+            for stat in numeric_stats:
+                values = stat["values"]
+                if values:
+                    stat.update({
+                        "count": len(values),
+                        "total": sum(values),
+                        "average": sum(values) / len(values),
+                        "max": max(values),
+                        "min": min(values)
+                    })
+                    del stat["values"]  # 移除原始值列表以节省空间
+            
+            if numeric_stats:
+                summary["numeric_stats"] = numeric_stats
+                
+        else:
+            # 处理普通数据结构（保持原有逻辑）
+            summary["data_type"] = "simple_records"
+            summary["fields"] = list(data[0].keys()) if data else []
+
+            # 统计每个字段的数据类型
+            field_types = {}
+            for field in summary["fields"]:
+                types = set()
+                for item in data:
+                    value = item.get(field)
+                    if value is not None:
+                        types.add(type(value).__name__)
+                field_types[field] = list(types)
+            
+            summary["field_types"] = field_types
+
+            # 统计数值字段
+            numeric_fields = []
+            for field in summary["fields"]:
+                values = [item.get(field) for item in data if isinstance(item.get(field), (int, float))]
+                if values:
+                    numeric_fields.append({
+                        "field": field,
+                        "count": len(values),
+                        "total": sum(values),
+                        "average": sum(values) / len(values),
+                        "max": max(values),
+                        "min": min(values)
+                    })
+
+            if numeric_fields:
+                summary["numeric_stats"] = numeric_fields
+
+            # 统计非空字段
+            non_empty_counts = {}
+            for field in summary["fields"]:
+                non_empty_count = sum(1 for item in data if item.get(field) is not None and item.get(field) != "")
+                non_empty_counts[field] = non_empty_count
+            
+            summary["non_empty_counts"] = non_empty_counts
+
+        return summary
+
+    def _create_empty_data_response(self) -> dict[str, Any]:
+        """创建空数据响应"""
+        return {
+            "score": None,
+            "score_text": "无数据可供评分",
+            "analysis": "提供的数据为空，无法进行评分计算",
+            "suggestions": "请提供有效的数据进行评分",
+            "data_summary": {"total_records": 0, "version": "v2"},
+            "extraction_details": {
+                "all_extracted_scores": [],
+                "extraction_methods_used": [],
+                "total_extraction_attempts": 0
+            },
+            "confidence": 0.0,
+            "validation_results": {"validated": False, "warnings": [], "errors": ["数据为空"]},
+            "alternative_scores": [],
+            "extraction_method": "no_data",
+            "raw_response": ""
+        }
+
+    def _create_error_response_v2(self, data: list[dict[str, Any]], error_msg: str) -> dict[str, Any]:
+        """创建V2错误响应"""
+        return {
+            "score": None,
+            "score_text": f"评分计算失败：{error_msg}",
+            "analysis": "系统在处理评分请求时发生错误",
+            "suggestions": "请检查输入数据和规则描述，稍后重试",
+            "data_summary": {"total_records": len(data), "error": error_msg, "version": "v2"},
+            "extraction_details": {
+                "all_extracted_scores": [],
+                "extraction_methods_used": [],
+                "total_extraction_attempts": 0
+            },
+            "confidence": 0.0,
+            "validation_results": {"validated": False, "warnings": [], "errors": [error_msg]},
+            "alternative_scores": [],
+            "extraction_method": "error",
+            "raw_response": ""
+        }
+
+    def _create_parse_error_response_v2(self, response: str, data: list[dict[str, Any]], error_msg: str) -> dict[str, Any]:
+        """创建V2解析错误响应"""
+        return {
+            "score": None,
+            "score_text": response,  # 返回原始响应
+            "analysis": f"响应解析失败：{error_msg}",
+            "suggestions": "请查看原始响应内容",
+            "data_summary": {"total_records": len(data), "parse_error": error_msg, "version": "v2"},
+            "extraction_details": {
+                "all_extracted_scores": [],
+                "extraction_methods_used": [],
+                "total_extraction_attempts": 0
+            },
+            "confidence": 0.0,
+            "validation_results": {"validated": False, "warnings": [], "errors": [f"解析错误: {error_msg}"]},
+            "alternative_scores": [],
+            "extraction_method": "parse_error",
+            "raw_response": response
+        }
