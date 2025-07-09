@@ -1,11 +1,12 @@
+import logging
 import re
 import uuid
 from tokenize import group
 from typing import Any, List, Dict, Tuple, Optional, Set
 
 from api.service.askdata_service.sql_components_parser import SQLComponentsParser
+from api.service.askdata_service.util.parse_sql_extract import parse_sql_extract
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
-from api.work_flow_api import logger
 
 
 class TableConfigGenerator:
@@ -30,6 +31,11 @@ class TableConfigGenerator:
         Returns:
             包含列、过滤器和排序信息的配置字典
         """
+        logging.info(f"used_table_detail_dict: {used_table_detail_dict}")
+        logging.info(f"model_list: {model_list}")
+        logging.info(f"sql_components: {sql_components}")
+        logging.info(f"recommended_chart: {recommended_chart}")
+
         # 1. 解析SQL
         parts = SQLComponentsParser(sql_components).parse_all()
 
@@ -135,10 +141,10 @@ class TableConfigGenerator:
         filter_columns = []
         for cond in having_conditions.get('parsed_conditions', []):
             is_matched_semantic_field = False
-            alias, column_name = self._split_column(cond['field'])
+            table_alias, column_name = self._get_table_alias_and_field_by_split_column(cond['field'])
             operator = cond['operator']
             value = cond['value']
-            table_name = table_alias_mapping[alias]
+            table_name = table_alias_mapping[table_alias]
             table_detail = used_table_detail_dict[table_name]
             for metric in table_detail['dimsAndMetrics']['metrics']:
                 if metric['expression'].lower() == column_name.lower():
@@ -159,36 +165,59 @@ class TableConfigGenerator:
 
     def _build_selected_dimensions(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[Dict]:
         """构建group by维度字典"""
-        group_by_dimensions = []
-        table_alias_mapping = parts["table_alias_mapping"]
-        for group_by in parts["group_by"]:
-            is_matched_semantic_field = False
-            split_col = self._split_column(group_by)
-            if len(split_col) == 2:
-                alias, column_name = self._split_column(group_by)
-                table_name = table_alias_mapping[alias]
-                table_detail = used_table_detail_dict[table_name]
-                for dim in table_detail['dimsAndMetrics']['dimensions']:
-                    if dim['dimensionEnName'].lower() == column_name.lower():
-                        group_by_dimensions.append(
-                            {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
-                             "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4()),
-                             "nanoId": str(uuid.uuid4()), "original_sql_component": group_by}
-                        )
-                        is_matched_semantic_field = True
-                        break
-                if is_matched_semantic_field:
-                    continue
+        try:
+            group_by_dimensions = []
+            table_alias_mapping = parts["table_alias_mapping"]
+            for group_by in parts["group_by"]:
+                is_matched_semantic_field = False
+                split_col = self._get_table_alias_and_field_by_split_column(group_by)
+                if len(split_col) == 2:
+                    table_alias, column_name = self._get_table_alias_and_field_by_split_column(group_by)
+                    table_name = table_alias_mapping[table_alias]
+                    table_detail = used_table_detail_dict[table_name]
+                    is_timeseries = False
+                    time_unit = None
+                    time_source = None
+                    if column_name.lower().startswith("extract("):
+                        parsed_result = parse_sql_extract(column_name)
+                        if parsed_result['unit'] is not None and parsed_result['source'] is not None:
+                            time_unit = parsed_result['unit']
+                            time_source = parsed_result['source']
+                        if time_unit and time_source:
+                            is_timeseries = True
+                    for dim in table_detail['dimsAndMetrics']['dimensions']:
+                        if is_timeseries and dim['dimensionEnName'].lower() == time_source.lower():
+                            group_by_dimensions.append(
+                                {"is_semantic_field": True, "semantic_type": "dimension(timeseries)", "id": dim["dimensionId"],
+                                 "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4()),
+                                 "nanoId": str(uuid.uuid4()), "original_sql_component": group_by, "unit": time_unit}
+                            )
+                            is_matched_semantic_field = True
+                            break
+                        if dim['dimensionEnName'].lower() == column_name.lower():
+                            group_by_dimensions.append(
+                                {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
+                                 "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4()),
+                                 "nanoId": str(uuid.uuid4()), "original_sql_component": group_by}
+                            )
+                            is_matched_semantic_field = True
+                            break
+                    if is_matched_semantic_field:
+                        continue
 
-            if not is_matched_semantic_field:
-                group_by_dimensions.append({
-                    "is_semantic_field": False,
-                    "sql_column": group_by,
-                    "id": str(uuid.uuid4()),
-                    "wid": str(uuid.uuid4()),
-                    "nanoId": str(uuid.uuid4())
-                })
-        return group_by_dimensions
+                if not is_matched_semantic_field:
+                    group_by_dimensions.append({
+                        "is_semantic_field": False,
+                        "sql_column": group_by,
+                        "id": str(uuid.uuid4()),
+                        "wid": str(uuid.uuid4()),
+                        "nanoId": str(uuid.uuid4())
+                    })
+            return group_by_dimensions
+        except Exception as e:
+            logging.exception(f"parts: {parts}")
+            logging.exception(f"used_table_detail_dict: {used_table_detail_dict}")
+            return []
 
     def _build_selected_metrics(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[Dict]:
         selected_metrics = []
@@ -198,16 +227,16 @@ class TableConfigGenerator:
         metrics = list(set(selected_columns) - set(group_by))
         for metric in metrics:
             is_matched_semantic_field = False
-            split_col = self._split_column(metric)
+            split_col = self._get_table_alias_and_field_by_split_column(metric)
             if len(split_col) == 2:
-                alias, column_name = self._split_column(metric)
+                table_alias, column_name = self._get_table_alias_and_field_by_split_column(metric)
                 if column_name.lower() == "count(*)".lower():
                     selected_metrics.append(
                         {"is_semantic_field": False, "sql_column": metric, "id": str(uuid.uuid4()),
                          "wid": str(uuid.uuid4()), "nanoId": str(uuid.uuid4()), "original_sql_component": metric}
                     )
                     continue
-                table_name = table_alias_mapping[alias]
+                table_name = table_alias_mapping[table_alias]
                 table_detail = used_table_detail_dict[table_name]
                 for metric in table_detail['dimsAndMetrics']['metrics']:
                     if metric['expression'].lower() == column_name.lower():
@@ -346,7 +375,7 @@ class TableConfigGenerator:
         table_alias_mapping = parts["table_alias_mapping"]
         for col in parts["select_columns"]:
             is_matched_semantic_field = False
-            split_col = self._split_column(col)
+            split_col = self._get_table_alias_and_field_by_split_column(col)
             if len(split_col) == 2:
                 alias, column_name = split_col
                 table_name = table_alias_mapping[alias]
@@ -396,10 +425,10 @@ class TableConfigGenerator:
                      "operator": "", "value": "", "from_model": None, "id": str(uuid.uuid4()),
                      "wid": str(uuid.uuid4()), "original_sql_component": cond})
                 continue
-            alias, column_name = self._split_column(cond['field'])
+            table_alias, column_name = self._get_table_alias_and_field_by_split_column(cond['field'])
             operator = cond['operator']
             value = cond['value']
-            table_name = table_alias_mapping[alias]
+            table_name = table_alias_mapping[table_alias]
             table_detail = used_table_detail_dict[table_name]
             for dim in table_detail['dimsAndMetrics']['dimensions']:
                 if dim['dimensionEnName'].lower() == column_name.lower():
@@ -437,9 +466,14 @@ class TableConfigGenerator:
         order_by_fields = parts['order_by']
         for order_info in order_by_fields:
             is_matched_semantic_field = False
-            alias, column_name = self._split_column(order_info['field'])
+            table_alias, column_name = self._get_table_alias_and_field_by_split_column(order_info['field'])
             direction = order_info['direction']
-            table_name = table_alias_mapping[alias]
+            table_name = table_alias_mapping.get(table_alias, None)
+            if not table_name:
+                order_by_columns.append(
+                    {"is_semantic_field": False, "sql_column": order_info['field'], "id": str(uuid.uuid4()),
+                     "direction": direction, "wid": str(uuid.uuid4())})
+                continue
             table_detail = used_table_detail_dict[table_name]
             for metric in table_detail['dimsAndMetrics']['metrics']:
                 if metric['expression'].lower() == column_name.lower():
@@ -476,13 +510,16 @@ class TableConfigGenerator:
             return None
         return int(limit)
 
-    def _split_column(self, column: str) -> Tuple[str, str]:
+    def _get_table_alias_and_field_by_split_column(self, column: str) -> Tuple[str, str]:
         """
         将列名分割为 (table, field)
         支持以下格式：
         - 'table.field' -> ('table', 'field')
         - 'COUNT(table.field)' -> ('table', 'COUNT(field)')
         - 'COUNT(table.field) AS alias' -> ('table', 'COUNT(field)')
+        - 'EXTRACT(YEAR FROM t1.hire_date)' -> ('t1', 'EXTRACT(YEAR FROM hire_date)')
+        - 'SUBSTRING(t1.name FROM 1 FOR 10)' -> ('t1', 'SUBSTRING(name FROM 1 FOR 10)')
+        - 'CASE WHEN t1.status = 1 THEN t1.name END' -> ('t1', 'CASE WHEN status = 1 THEN name END')
         - 'field' -> ('', 'field')
         - 'COUNT(field)' -> ('', 'COUNT(field)')
         """
@@ -493,37 +530,89 @@ class TableConfigGenerator:
         if ' AS ' in column.upper():
             column = column.split(' AS ')[0].strip()
 
-        # 检查是否是聚合函数格式 (函数名(参数))
-        func_pattern = r'^([A-Z_]+)\((.*)\)$'
-        match = re.match(func_pattern, column, re.IGNORECASE)
-
-        if match:
-            # 是聚合函数
-            func_name = match.group(1)
-            func_arg = match.group(2).strip()
-
-            # 处理 DISTINCT 关键字
-            distinct_prefix = ""
-            if func_arg.upper().startswith('DISTINCT '):
-                distinct_prefix = "DISTINCT "
-                func_arg = func_arg[9:].strip()  # 去掉 'DISTINCT ' 前缀
-
-            # 分割函数参数中的表名和字段名
-            if '.' in func_arg:
-                parts = func_arg.split('.')
-                table = parts[0].strip()
-                field = parts[1].strip()
-                # 重新组装函数，去掉表前缀，保留 DISTINCT
-                new_column = f"{func_name}({distinct_prefix}{field})"
-                return (table, new_column)
-            else:
-                # 函数参数中没有表前缀，但可能有 DISTINCT
-                if distinct_prefix:
-                    new_column = f"{func_name}({distinct_prefix}{func_arg})"
+        # 查找所有表别名引用 (格式: alias.field)
+        table_refs = self._find_table_references(column)
+        
+        if not table_refs:
+            # 没有找到表引用，检查是否是简单的聚合函数
+            func_pattern = r'^([A-Z_]+)\((.*)\)$'
+            match = re.match(func_pattern, column, re.IGNORECASE)
+            if match:
+                func_name = match.group(1)
+                func_arg = match.group(2).strip()
+                
+                # 处理 DISTINCT 关键字
+                distinct_prefix = ""
+                if func_arg.upper().startswith('DISTINCT '):
+                    distinct_prefix = "DISTINCT "
+                    func_arg = func_arg[9:].strip()
+                
+                # 检查函数参数中是否有表前缀
+                if '.' in func_arg and not ' ' in func_arg:
+                    # 简单的 table.field 格式
+                    parts = func_arg.split('.')
+                    table = parts[0].strip()
+                    field = parts[1].strip()
+                    new_column = f"{func_name}({distinct_prefix}{field})"
+                    return (table, new_column)
                 else:
-                    new_column = column
-                return ("", new_column)
-        else:
-            # 不是聚合函数，按原逻辑处理
-            parts = column.split('.')
-            return (parts[0], parts[1]) if len(parts) == 2 else ("", column)
+                    # 函数参数中没有表前缀或者是复杂表达式
+                    if distinct_prefix:
+                        new_column = f"{func_name}({distinct_prefix}{func_arg})"
+                    else:
+                        new_column = column
+                    return ("", new_column)
+            else:
+                # 不是函数，按原逻辑处理
+                parts = column.split('.')
+                return (parts[0], parts[1]) if len(parts) == 2 else ("", column)
+        
+        # 有表引用，选择主要的表别名（出现次数最多的）
+        main_table = max(table_refs, key=table_refs.count) if table_refs else ""
+        
+        # 移除主要表别名，生成新的列表达式
+        new_column = self._remove_table_prefix(column, main_table)
+        
+        return (main_table, new_column)
+    
+    def _find_table_references(self, expression: str) -> List[str]:
+        """
+        查找表达式中的所有表别名引用
+        返回表别名列表
+        """
+        # 匹配 alias.field 格式，但排除数字开头的（如 1.5）
+        pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\.'
+        matches = re.findall(pattern, expression)
+        
+        # 过滤掉SQL关键字和数字
+        sql_keywords = {
+            'SELECT', 'FROM', 'WHERE', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER',
+            'ON', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'CASE', 'WHEN', 'THEN',
+            'ELSE', 'END', 'AS', 'DISTINCT', 'GROUP', 'BY', 'ORDER', 'HAVING',
+            'LIMIT', 'OFFSET', 'UNION', 'ALL', 'EXTRACT', 'SUBSTRING', 'CAST',
+            'CONVERT', 'DATEPART', 'DATEDIFF', 'YEAR', 'MONTH', 'DAY'
+        }
+        
+        table_refs = []
+        for match in matches:
+            if match.upper() not in sql_keywords and not match.isdigit():
+                table_refs.append(match)
+        
+        return table_refs
+    
+    def _remove_table_prefix(self, expression: str, table_alias: str) -> str:
+        """
+        从表达式中移除指定的表别名前缀
+        例如: 'EXTRACT(YEAR FROM t1.hire_date)' -> 'EXTRACT(YEAR FROM hire_date)'
+        """
+        if not table_alias:
+            return expression
+        
+        # 使用正则表达式匹配 table_alias. 但不匹配在字符串或标识符中间的
+        # 确保匹配的是完整的表别名，不是标识符的一部分
+        pattern = r'\b' + re.escape(table_alias) + r'\.'
+        
+        # 替换所有匹配的表前缀
+        result = re.sub(pattern, '', expression)
+        
+        return result
