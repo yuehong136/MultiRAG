@@ -2,6 +2,11 @@ import re
 from pathlib import PurePath
 
 from .user_service import UserService as UserService
+from .sensitive_word_service import (
+    SensitiveWordService, SensitiveWordCategoryService, 
+    SensitiveWordLevelService, SensitiveWordWhitelistService,
+    SensitiveFilterLogService, SensitiveFilterStatsService
+)
 
 
 def split_name_counter(filename: str) -> tuple[str, int | None]:

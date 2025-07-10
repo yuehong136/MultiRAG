@@ -691,6 +691,180 @@ class AskDataHistory(BaseModel):
         }
 
 
+class SensitiveWordCategory(BaseModel):
+    """敏感词分类表"""
+    __tablename__ = "t_ai_sensitive_categories"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    name = Column(String(128), index=True, nullable=False, doc="分类名称")
+    description = Column(Text, index=False, nullable=True, doc="分类描述")
+    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+    created_by = Column(String(32), index=True, nullable=False, doc="创建用户ID")
+    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "tenant_id": self.tenant_id,
+            "created_by": self.created_by,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+
+class SensitiveWordLevel(BaseModel):
+    """敏感词等级表"""
+    __tablename__ = "t_ai_sensitive_levels"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    name = Column(String(64), index=True, nullable=False, doc="等级名称")
+    level = Column(Integer, index=True, nullable=False, doc="等级数值(1-5)")
+    description = Column(Text, index=False, nullable=True, doc="等级描述")
+    action = Column(String(32), index=True, nullable=False, default="block", doc="处理动作: block/replace/warn")
+    replacement = Column(String(128), index=False, nullable=True, doc="替换文本")
+    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "level": self.level,
+            "description": self.description,
+            "action": self.action,
+            "replacement": self.replacement,
+            "tenant_id": self.tenant_id,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+
+class SensitiveWord(BaseModel):
+    """敏感词表"""
+    __tablename__ = "t_ai_sensitive_words"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    word = Column(String(255), index=True, nullable=False, doc="敏感词内容")
+    word_hash = Column(String(64), index=True, nullable=False, doc="敏感词MD5哈希")
+    category_id = Column(String(32), index=True, nullable=False, doc="分类ID")
+    level_id = Column(String(32), index=True, nullable=False, doc="等级ID")
+    match_type = Column(String(16), index=True, nullable=False, default="exact", doc="匹配类型: exact/partial/regex")
+    description = Column(Text, index=False, nullable=True, doc="词汇描述")
+    source = Column(String(64), index=True, nullable=True, doc="来源")
+    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+    created_by = Column(String(32), index=True, nullable=False, doc="创建用户ID")
+    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "word": self.word,
+            "category_id": self.category_id,
+            "level_id": self.level_id,
+            "match_type": self.match_type,
+            "description": self.description,
+            "source": self.source,
+            "tenant_id": self.tenant_id,
+            "created_by": self.created_by,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+
+class SensitiveWordWhitelist(BaseModel):
+    """敏感词白名单表"""
+    __tablename__ = "t_ai_sensitive_whitelists"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    word = Column(String(255), index=True, nullable=False, doc="白名单词汇")
+    word_hash = Column(String(64), index=True, nullable=False, doc="白名单词汇MD5哈希")
+    reason = Column(Text, index=False, nullable=True, doc="白名单原因")
+    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+    created_by = Column(String(32), index=True, nullable=False, doc="创建用户ID")
+    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "word": self.word,
+            "reason": self.reason,
+            "tenant_id": self.tenant_id,
+            "created_by": self.created_by,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+
+class SensitiveFilterLog(BaseModel):
+    """敏感词过滤日志表"""
+    __tablename__ = "t_ai_sensitive_filter_logs"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    user_id = Column(String(32), index=True, nullable=True, doc="用户ID")
+    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+    content_hash = Column(String(64), index=True, nullable=False, doc="内容MD5哈希")
+    matched_words = Column(JSONB, index=False, nullable=False, default=[], doc="匹配的敏感词")
+    filter_action = Column(String(32), index=True, nullable=False, doc="过滤动作")
+    source_type = Column(String(64), index=True, nullable=True, doc="来源类型")
+    source_id = Column(String(255), index=True, nullable=True, doc="来源ID")
+    ip_address = Column(String(64), index=True, nullable=True, doc="IP地址")
+    user_agent = Column(Text, index=False, nullable=True, doc="用户代理")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "tenant_id": self.tenant_id,
+            "content_hash": self.content_hash,
+            "matched_words": self.matched_words,
+            "filter_action": self.filter_action,
+            "source_type": self.source_type,
+            "source_id": self.source_id,
+            "ip_address": self.ip_address,
+            "user_agent": self.user_agent,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+
+class SensitiveFilterStats(BaseModel):
+    """敏感词过滤统计表"""
+    __tablename__ = "t_ai_sensitive_filter_stats"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+    stat_date = Column(DateTime, index=True, nullable=False, doc="统计日期")
+    total_requests = Column(Integer, index=False, nullable=False, default=0, doc="总请求数")
+    filtered_requests = Column(Integer, index=False, nullable=False, default=0, doc="被过滤请求数")
+    top_matched_words = Column(JSONB, index=False, nullable=False, default=[], doc="热门敏感词")
+    filter_rate = Column(Float, index=False, nullable=False, default=0.0, doc="过滤率")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "tenant_id": self.tenant_id,
+            "stat_date": self.stat_date,
+            "total_requests": self.total_requests,
+            "filtered_requests": self.filtered_requests,
+            "top_matched_words": self.top_matched_words,
+            "filter_rate": self.filter_rate,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+
 '''
 拥有权限，采用这种方式
 '''
