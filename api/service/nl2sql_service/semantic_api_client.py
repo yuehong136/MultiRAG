@@ -90,6 +90,7 @@ class SemanticApiClient:
             "get_model_relationships": "/api/drm/semanticOpenApi/getModelRelationships",
             "get_dataset_detail": "/api/drm/semanticOpenApi/getDatasetDetail",
             "get_model_inds_and_dims": "/api/drm/semanticOpenApi/getModelIndsAndDimsByModelId",
+            "get_hc_dimension_by_dimension_value": "/api/drm/semanticOpenApi/getHCDimensionByDimensionValue",
         }
 
         # 设置请求头
@@ -697,6 +698,162 @@ class SemanticApiClient:
                 logger.error(error_msg)
                 raise ApiRequestError(error_msg) from e
             raise  # 重新抛出已经包装的异常
+
+    async def get_hc_dimension_by_dimension_value_async(
+            self,
+            keyword: Union[str, List[str]],
+            dataset_ids: List[str],
+            fuzzy_match: bool = True,
+            page_size: int = 100,
+            max_pages: int = 100,
+            extract_rows: bool = True,
+            max_concurrent: int = 5
+    ) -> Union[Dict, List[Dict]]:
+        """
+        异步根据高基维度值搜索维度信息（API支持多关键词聚合）。
+
+        Args:
+            keyword: 搜索关键词或关键词列表.
+            dataset_ids: 数据集ID列表.
+            fuzzy_match: 是否模糊匹配.
+            page_size: 每页大小.
+            max_pages: 最大页数限制，防止无限请求.
+            extract_rows: 是否只提取rows部分数据.
+            max_concurrent: 用于分页请求的并发数.
+
+        Returns:
+            Union[Dict, List[Dict]]: 合并后的完整响应或只包含所有rows的列表.
+            [
+                {
+                "dimensionId": "dim_1024",
+                "dimensionName": "教师职称",
+                "dimensionEnName": "teacher_title",
+                "matched": [
+                  "客座教授",
+                  "特聘教授"
+                ]
+                },
+                {
+                "dimensionId": "dim_1028",
+                "dimensionName": "人员职级",
+                "dimensionEnName": "staff_rank",
+                "matched": [
+                  "初级讲师",
+                  "中级讲师",
+                  "高级讲师"
+                ]
+                },
+                {
+                "dimensionId": "dim_1035",
+                "dimensionName": "历史任职",
+                "dimensionEnName": "historical_position",
+                "matched": [
+                  "教授"
+                ]
+                }
+            ]
+
+        Raises:
+            ApiResponseError: API响应业务状态码不为0.
+            ApiRequestError: 请求过程中的其他错误.
+        """
+        logger.info(f"\n=== 根据高基维度值搜索维度信息 (服务端聚合) ===")
+
+        # 转换单个关键词为列表，以统一处理
+        if isinstance(keyword, str):
+            keywords = [keyword]
+        else:
+            keywords = keyword
+
+        logger.info(f"关键词列表: {keywords}, 数据集IDs: {dataset_ids}")
+
+        all_results = []
+
+        try:
+            # 模式二: 将所有关键词一次性发送给API
+            # 第一次请求，获取总数和第一页数据
+            request_data = {"keywordList": keywords, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
+            first_result = await self._make_async_request(
+                "POST",
+                self.api_paths["get_hc_dimension_by_dimension_value"],
+                params={"pi": 1, "ps": page_size},
+                data=request_data
+            )
+
+            # 计算总页数
+            data = first_result.get("data", {})
+            total = int(data.get("total", 0))
+            total_pages = (total + page_size - 1) // page_size  # 向上取整
+
+            # 获取第一页结果
+            if extract_rows:
+                first_page_rows = data.get("rows", [])
+                all_results.extend(first_page_rows)
+                logger.info(f"第一页返回了{len(first_page_rows)}条结果，总计 {total} 条。")
+
+                # 打印第一页结果的维度ID, 维度名称, 和匹配值
+                if first_page_rows:
+                    for idx, row in enumerate(first_page_rows[:min(3, len(first_page_rows))]):
+                        dim_id = row.get('dimensionId', 'N/A')
+                        dim_name = row.get('dimensionName', 'N/A')
+                        matched_values = row.get('matched', [])
+                        logger.info(
+                            f"  结果{idx + 1}: 维度ID={dim_id}, 维度名称={dim_name}, 匹配值={matched_values}")
+            else:
+                all_results.append(first_result)
+                logger.info(f"第一页已返回")
+
+            # 限制最大页数
+            total_pages = min(total_pages, max_pages)
+
+            if total_pages <= 1:
+                logger.info(f"总结果数: {len(all_results)}条，无需额外分页。")
+                return all_results
+
+            # 创建剩余页面的异步任务
+            page_tasks = []
+            for page in range(2, total_pages + 1):
+                task = self._make_async_request(
+                    "POST",
+                    self.api_paths["get_hc_dimension_by_dimension_value"],
+                    params={"pi": page, "ps": page_size},
+                    data=request_data
+                )
+                page_tasks.append(task)
+
+            # 限制并发请求数
+            page_results = []
+            for i in range(0, len(page_tasks), max_concurrent):
+                batch = page_tasks[i:i + max_concurrent]
+                batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                page_results.extend(batch_results)
+
+            # 处理后续页面的结果
+            additional_rows_count = 0
+            for result in page_results:
+                if isinstance(result, Exception):
+                    error_msg = f"分页请求出错: {str(result)}"
+                    logger.error(error_msg)
+                    # 根据需要决定是否抛出异常或继续
+                    continue
+
+                if extract_rows:
+                    rows = result.get("data", {}).get("rows", [])
+                    all_results.extend(rows)
+                    additional_rows_count += len(rows)
+                else:
+                    all_results.append(result)
+                    additional_rows_count += 1
+
+            logger.info(f"所有页面加载完成，总共获取到 {len(all_results)} 条结果。")
+            return all_results
+
+        except Exception as e:
+            if not isinstance(e, SemanticApiError):
+                error_msg = f"根据高基维度值搜索时出错: {str(e)}"
+                logger.error(error_msg)
+                raise ApiRequestError(error_msg) from e
+            raise
 
     async def get_metric_info_by_keyword_async(
             self,

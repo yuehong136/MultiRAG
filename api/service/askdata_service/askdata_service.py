@@ -58,8 +58,15 @@ class AskdataService:
         dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
             keyword=segmented_words,
             dataset_ids=dataset_id_list)
+        # 分词关键字作为维度值关键字获得获得维度列表（高基数维度）TODO 中台有了API后正式开启
+        hc_dimensions_by_value = None
+        # hc_dimensions_by_value = await self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
+        #     keyword=segmented_words,
+        #     dataset_ids=dataset_id_list)
+        # hc_dim_id_list = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
         # 4. 根据dimensionId对dimensions_by_keyword和dimensions_by_value进行维度去重，获得最终维度列表
         unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
+        # unique_dimensions.extend(hc_dim_id_list)
         dimension_values = await self.semantic_api_client.get_dimension_values_async(dimension_ids=unique_dimensions)
         dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=unique_dimensions)
         await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
@@ -88,7 +95,7 @@ class AskdataService:
         business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words,
                                                                                          domain_ids=domain_ids)
         semantic_layer_original = dict(dataset_details=dataset_details, dimensions=dimensions,
-                                       dimension_values=dimension_values,
+                                       dimension_values=dimension_values, hc_dimensions_by_value=hc_dimensions_by_value,
                                        metrics=metrics, model_details=model_details,
                                        model_relations=model_relations, business_term_rows=business_term_rows)
 
