@@ -1896,6 +1896,7 @@ class LLMScoringServiceV2:
     def calculate_score_v2(
             self,
             db: Session,
+            user_input: str,
             rule_description: str,
             data: list[dict[str, Any]],
             context: dict[str, Any] | None = None,
@@ -1924,11 +1925,10 @@ class LLMScoringServiceV2:
 
             # 调用LLM
             chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
-
             response = chat_model.chat(
                 system=prompt,
-                history=[{"role": "user", "content": "请严格按照格式要求进行评分"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 2000}
+                history=[{"role": "user", "content": f"{user_input}\n请严格按照格式要求进行评分"}],
+                gen_conf={"temperature": 0.1, "max_tokens": 8000}
             )
 
             # V2强化版响应解析

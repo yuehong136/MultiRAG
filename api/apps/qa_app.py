@@ -250,6 +250,7 @@ class CollectionStatusResponse(BaseModel):
 
 class CalcScoreV2Request(BaseModel):
     """评分计算请求V2 - 强化版"""
+    user_input: str | None = Field(None, description="用户补充要求")
     rule_description: str = Field(..., description="评分规则描述文本")
     data: list[dict[str, Any]] = Field(..., description="SQL查询结果数据")
     context: dict[str, Any] | None = Field(None, description="评分上下文信息")
@@ -966,6 +967,7 @@ def calculate_score_v2(
     4. number_sequence - 分析数字出现频率，选择重复出现的数字
 
     **参数说明:**
+    - user_input: 用户补充要求
     - rule_description: 评分规则的文本描述，由调用方提供
     - data: SQL查询结果数据列表
     - context: 评分上下文信息，可选
@@ -991,6 +993,7 @@ def calculate_score_v2(
     **使用示例（V2标准表结构数据格式）:**
     ```json
     {
+        "user_input": "根据规则计算每个人员的得分，并只将工号为10001的用户考核结果以及考核分析过程输出",
         "rule_description": "1.院士。对应得分：50000分/项\n2.国家级重大人才工程项目入选者/国家级青年人才入选者。对应得分：20000分/10000分/项\n3.省部级重大人才工程项目入选者/省部级青年人才入选者。对应得分：2000分/1000分/项",
         "data": [
             {
@@ -1085,6 +1088,7 @@ def calculate_score_v2(
         # 调用LLM评分服务V2
         score_result = llm_scorer_v2.calculate_score_v2(
             db=db,
+            user_input=request.user_input,
             rule_description=request.rule_description,
             data=request.data,
             context=request.context,
