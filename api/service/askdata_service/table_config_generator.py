@@ -1,10 +1,10 @@
 import logging
 import re
 import uuid
-from tokenize import group
-from typing import Any, List, Dict, Tuple, Optional, Set
+from typing import Any, List, Dict, Tuple, Optional
 
 from api.service.askdata_service.sql_components_parser import SQLComponentsParser
+from api.service.askdata_service.util.find_aggregate_columns import find_aggregate_columns
 from api.service.askdata_service.util.parse_sql_extract import parse_sql_extract
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 
@@ -89,7 +89,7 @@ class TableConfigGenerator:
             # 5. 处理维度，维度是group by中的内容
             selected_dimensions = self._build_selected_dimensions(parts, used_table_detail_dict)
 
-            # 6. 处理指标，指标其实就是select_columns字段减去group by字段
+            # 6. 处理指标，使用方法提取指标字段
             selected_metrics = self._build_selected_metrics(parts, used_table_detail_dict)
 
             # 7. 处理where
@@ -188,7 +188,8 @@ class TableConfigGenerator:
                     for dim in table_detail['dimsAndMetrics']['dimensions']:
                         if is_timeseries and dim['dimensionEnName'].lower() == time_source.lower():
                             group_by_dimensions.append(
-                                {"is_semantic_field": True, "semantic_type": "dimension(timeseries)", "id": dim["dimensionId"],
+                                {"is_semantic_field": True, "semantic_type": "dimension(timeseries)",
+                                 "id": dim["dimensionId"],
                                  "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4()),
                                  "nanoId": str(uuid.uuid4()), "original_sql_component": group_by, "unit": time_unit}
                             )
@@ -222,20 +223,18 @@ class TableConfigGenerator:
     def _build_selected_metrics(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[Dict]:
         selected_metrics = []
         selected_columns = parts["select_columns"]
-        group_by = parts['group_by']
         table_alias_mapping = parts["table_alias_mapping"]
-        metrics = list(set(selected_columns) - set(group_by))
+        metrics = find_aggregate_columns(selected_columns)
         for metric in metrics:
             is_matched_semantic_field = False
-            split_col = self._get_table_alias_and_field_by_split_column(metric)
-            if len(split_col) == 2:
-                table_alias, column_name = self._get_table_alias_and_field_by_split_column(metric)
-                if column_name.lower() == "count(*)".lower():
-                    selected_metrics.append(
-                        {"is_semantic_field": False, "sql_column": metric, "id": str(uuid.uuid4()),
-                         "wid": str(uuid.uuid4()), "nanoId": str(uuid.uuid4()), "original_sql_component": metric}
-                    )
-                    continue
+            table_alias, column_name = self._get_table_alias_and_field_by_split_column(metric)
+            if len(table_alias) == 0:
+                # 如果没有表别名，则无法确定来源表，暂时直接按照原始列名处理
+                selected_metrics.append(
+                    {"is_semantic_field": False, "sql_column": metric, "id": str(uuid.uuid4()),
+                     "wid": str(uuid.uuid4()), "nanoId": str(uuid.uuid4()), "original_sql_component": metric})
+                continue
+            else:
                 table_name = table_alias_mapping[table_alias]
                 table_detail = used_table_detail_dict[table_name]
                 for metric in table_detail['dimsAndMetrics']['metrics']:
