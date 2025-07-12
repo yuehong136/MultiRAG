@@ -383,17 +383,26 @@ class AskdataService:
 
             for where_condition in table_config.get("where_conditions", []):
                 if where_condition["is_semantic_field"]:
-                    semantic_field = self._find_semantic_field(where_condition["id"], all_semantic_fields)
+                    field_type = where_condition['semantic_field']['dataType']
                     column_name = where_condition['original_sql_component']['field']
                     operator = where_condition["operator"]
                     value = where_condition["value"]
                     if operator == "IN":
                         value = parse_sql_in_values(value)
-                    if "int" in where_condition['semantic_field']['dataType']:
+                    if "int" in field_type:
                         value = int(value)
+                    elif "date" in field_type:
+                        assembler.add_parameterized_where(f"{column_name} {operator} CAST(%s AS DATE)", [value])
+                        continue
+                    elif where_condition['semantic_field']['timeFormat']:
+                        # TODO中台完成改造后补全
+                        pass
                     assembler.add_filter(column_name, FilterOperator.from_value(operator), value)
                 else:
-                    assembler.add_raw_where(where_condition["sql_column"])
+                    if where_condition.get("sql_column", None):
+                        assembler.add_raw_where(where_condition["sql_column"])
+                    else:
+                        assembler.add_raw_where(where_condition["raw_condition"])
 
             for having_condition in table_config.get("having_conditions", []):
                 if having_condition["is_semantic_field"]:
