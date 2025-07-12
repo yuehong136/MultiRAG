@@ -417,16 +417,18 @@ class TableConfigGenerator:
         filter_columns = []
         for cond in where_conditions.get('parsed_conditions', []):
             is_matched_semantic_field = False
-            if "(" in cond['field']:
-                # 如果字段中包含了括号，则认为是复杂条件
-                filter_columns.append(
-                    {"is_semantic_field": False, "is_complex_condition": True, "raw_condition": cond['field'],
-                     "operator": "", "value": "", "from_model": None, "id": str(uuid.uuid4()),
-                     "wid": str(uuid.uuid4()), "original_sql_component": cond})
-                continue
-            table_alias, column_name = self._get_table_alias_and_field_by_split_column(cond['field'])
+            field = cond['field']
             operator = cond['operator']
             value = cond['value']
+            if "(" in field:
+                # 如果字段中包含了括号，则认为是复杂条件
+                filter_columns.append(
+                    {"is_semantic_field": False, "is_complex_condition": True,
+                     "raw_condition": cond['field'] + " " + cond['operator'] + " " + cond['value'], "from_model": None,
+                     "id": str(uuid.uuid4()),
+                     "wid": str(uuid.uuid4()), "original_sql_component": cond})
+                continue
+            table_alias, column_name = self._get_table_alias_and_field_by_split_column(field)
             table_name = table_alias_mapping[table_alias]
             table_detail = used_table_detail_dict[table_name]
             for dim in table_detail['dimsAndMetrics']['dimensions']:
@@ -531,7 +533,7 @@ class TableConfigGenerator:
 
         # 查找所有表别名引用 (格式: alias.field)
         table_refs = self._find_table_references(column)
-        
+
         if not table_refs:
             # 没有找到表引用，检查是否是简单的聚合函数
             func_pattern = r'^([A-Z_]+)\((.*)\)$'
@@ -539,13 +541,13 @@ class TableConfigGenerator:
             if match:
                 func_name = match.group(1)
                 func_arg = match.group(2).strip()
-                
+
                 # 处理 DISTINCT 关键字
                 distinct_prefix = ""
                 if func_arg.upper().startswith('DISTINCT '):
                     distinct_prefix = "DISTINCT "
                     func_arg = func_arg[9:].strip()
-                
+
                 # 检查函数参数中是否有表前缀
                 if '.' in func_arg and not ' ' in func_arg:
                     # 简单的 table.field 格式
@@ -565,15 +567,15 @@ class TableConfigGenerator:
                 # 不是函数，按原逻辑处理
                 parts = column.split('.')
                 return (parts[0], parts[1]) if len(parts) == 2 else ("", column)
-        
+
         # 有表引用，选择主要的表别名（出现次数最多的）
         main_table = max(table_refs, key=table_refs.count) if table_refs else ""
-        
+
         # 移除主要表别名，生成新的列表达式
         new_column = self._remove_table_prefix(column, main_table)
-        
+
         return (main_table, new_column)
-    
+
     def _find_table_references(self, expression: str) -> List[str]:
         """
         查找表达式中的所有表别名引用
@@ -582,7 +584,7 @@ class TableConfigGenerator:
         # 匹配 alias.field 格式，但排除数字开头的（如 1.5）
         pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\.'
         matches = re.findall(pattern, expression)
-        
+
         # 过滤掉SQL关键字和数字
         sql_keywords = {
             'SELECT', 'FROM', 'WHERE', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER',
@@ -591,14 +593,14 @@ class TableConfigGenerator:
             'LIMIT', 'OFFSET', 'UNION', 'ALL', 'EXTRACT', 'SUBSTRING', 'CAST',
             'CONVERT', 'DATEPART', 'DATEDIFF', 'YEAR', 'MONTH', 'DAY'
         }
-        
+
         table_refs = []
         for match in matches:
             if match.upper() not in sql_keywords and not match.isdigit():
                 table_refs.append(match)
-        
+
         return table_refs
-    
+
     def _remove_table_prefix(self, expression: str, table_alias: str) -> str:
         """
         从表达式中移除指定的表别名前缀
@@ -606,12 +608,12 @@ class TableConfigGenerator:
         """
         if not table_alias:
             return expression
-        
+
         # 使用正则表达式匹配 table_alias. 但不匹配在字符串或标识符中间的
         # 确保匹配的是完整的表别名，不是标识符的一部分
         pattern = r'\b' + re.escape(table_alias) + r'\.'
-        
+
         # 替换所有匹配的表前缀
         result = re.sub(pattern, '', expression)
-        
+
         return result
