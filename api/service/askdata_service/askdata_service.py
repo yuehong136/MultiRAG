@@ -1,3 +1,4 @@
+import asyncio
 import os
 import logging
 from datetime import date
@@ -21,6 +22,7 @@ from api.service.askdata_service.sql_assembler import FlexibleSQLAssembler, Filt
 from api.service.askdata_service.sql_metric_exp_rewriter import SQLFieldAliasProcessor
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
+from api.service.askdata_service.util.timer import Timer
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
@@ -42,75 +44,96 @@ class AskdataService:
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
                                       conversation_id: Optional[str] = None, llm_name: str = None,
                                       event_id: Optional[str] = None):
-        await send_event(event_id, {"message": "分词", "action": "start"}, "message")
-        segmented_words = await custom_tokenize_with_semantic_words(text=user_query, dataset_id_list=dataset_id_list)
-        await send_event(event_id, {"message": "分词", "action": "complete"}, "message")
-        await send_event(event_id, {"message": "分词结果", "data": segmented_words}, "data")
+        # 并行启动两个任务：语义层检索和图表推荐
+        async def semantic_layer_task():
+            await send_event(event_id, {"message": "分词", "action": "start"}, "message")
+            segmented_words = await custom_tokenize_with_semantic_words(text=user_query,
+                                                                        dataset_id_list=dataset_id_list)
+            await send_event(event_id, {"message": "分词", "action": "complete"}, "message")
+            await send_event(event_id, {"message": "分词结果", "data": segmented_words}, "data")
 
-        await send_event(event_id, {"message": "获取维度信息", "action": "start"}, "message")
-        # 1. 将分词到语义层结构化数据中进行检索得到相关数据
-        # 2. 根据分词关键字获得维度列表
-        dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(
-            keyword=segmented_words,
-            dataset_ids=dataset_id_list)
-        await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
-        # 3. 分词关键字作为维度值关键字获得获得维度列表
-        dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
-            keyword=segmented_words,
-            dataset_ids=dataset_id_list)
-        # 分词关键字作为维度值关键字获得获得维度列表（高基数维度）TODO 中台有了API后正式开启
-        hc_dimensions_by_value = None
-        # hc_dimensions_by_value = await self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
-        #     keyword=segmented_words,
-        #     dataset_ids=dataset_id_list)
-        # hc_dim_id_list = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
-        # 4. 根据dimensionId对dimensions_by_keyword和dimensions_by_value进行维度去重，获得最终维度列表
-        unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
-        # unique_dimensions.extend(hc_dim_id_list)
-        dimension_values = await self.semantic_api_client.get_dimension_values_async(dimension_ids=unique_dimensions)
-        dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=unique_dimensions)
-        await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
-        await send_event(event_id, {"message": "维度信息", "data": dimensions}, "data")
-        # 5. 根据分词关键字获得指标列表
-        await send_event(event_id, {"message": "获取指标信息", "action": "start"}, "message")
-        metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
-            keyword=segmented_words,
-            dataset_ids=dataset_id_list)
-        await send_event(event_id, {"message": "获取指标信息", "action": "complete"}, "message")
-        await send_event(event_id, {"message": "指标信息", "data": metrics}, "data")
+            await send_event(event_id, {"message": "获取维度信息", "action": "start"}, "message")
+            # 1. 将分词到语义层结构化数据中进行检索得到相关数据
+            # 2. 根据分词关键字获得维度列表
+            dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(
+                keyword=segmented_words,
+                dataset_ids=dataset_id_list)
+            await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
+            # 3. 分词关键字作为维度值关键字获得获得维度列表
+            dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
+                keyword=segmented_words,
+                dataset_ids=dataset_id_list)
+            # 分词关键字作为维度值关键字获得获得维度列表（高基数维度）TODO 中台有了API后正式开启
+            hc_dimensions_by_value = None
+            # hc_dimensions_by_value = await self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
+            #     keyword=segmented_words,
+            #     dataset_ids=dataset_id_list)
+            # hc_dim_id_list = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
+            # 4. 根据dimensionId对dimensions_by_keyword和dimensions_by_value进行维度去重，获得最终维度列表
+            unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
+            # unique_dimensions.extend(hc_dim_id_list)
+            dimension_values = await self.semantic_api_client.get_dimension_values_async(
+                dimension_ids=unique_dimensions)
+            dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=unique_dimensions)
+            await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
+            await send_event(event_id, {"message": "维度信息", "data": dimensions}, "data")
+            # 5. 根据分词关键字获得指标列表
+            await send_event(event_id, {"message": "获取指标信息", "action": "start"}, "message")
+            metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
+                keyword=segmented_words,
+                dataset_ids=dataset_id_list)
+            await send_event(event_id, {"message": "获取指标信息", "action": "complete"}, "message")
+            await send_event(event_id, {"message": "指标信息", "data": metrics}, "data")
 
-        # 6. 从维度和指标中提取所有modelId并去重，获得模型ID列表
-        model_ids = self._extract_unique_model_ids(dimensions, metrics)
+            # 6. 从维度和指标中提取所有modelId并去重，获得模型ID列表
+            model_ids = self._extract_unique_model_ids(dimensions, metrics)
 
-        # 7. 查询模型详情和关联关系
-        await send_event(event_id, {"message": "获取模型信息", "action": "start"}, "message")
-        model_details = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
-        await send_event(event_id, {"message": "获取模型信息", "action": "complete"}, "message")
-        await send_event(event_id, {"message": "模型信息", "data": model_details}, "data")
-        model_relations = await self.semantic_api_client.get_model_relationships_async(model_ids=model_ids)
-        await send_event(event_id, {}, "stream_end")
-        # 8. 查询业务术语
-        dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list)
-        domain_ids = self._extract_unique_domain_ids(dataset_details)
-        business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words,
-                                                                                         domain_ids=domain_ids)
-        semantic_layer_original = dict(dataset_details=dataset_details, dimensions=dimensions,
-                                       dimension_values=dimension_values, hc_dimensions_by_value=hc_dimensions_by_value,
-                                       metrics=metrics, model_details=model_details,
-                                       model_relations=model_relations, business_term_rows=business_term_rows)
+            # 7. 查询模型详情和关联关系
+            await send_event(event_id, {"message": "获取模型信息", "action": "start"}, "message")
+            model_details = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
+            await send_event(event_id, {"message": "获取模型信息", "action": "complete"}, "message")
+            await send_event(event_id, {"message": "模型信息", "data": model_details}, "data")
+            model_relations = await self.semantic_api_client.get_model_relationships_async(model_ids=model_ids)
 
-        logger.info(f"semantic_layer_original: {semantic_layer_original}")
+            # 8. 查询业务术语
+            dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list)
+            domain_ids = self._extract_unique_domain_ids(dataset_details)
+            business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words,
+                                                                                             domain_ids=domain_ids)
+            semantic_layer_original = dict(dataset_details=dataset_details, dimensions=dimensions,
+                                           dimension_values=dimension_values,
+                                           hc_dimensions_by_value=hc_dimensions_by_value,
+                                           metrics=metrics, model_details=model_details,
+                                           model_relations=model_relations, business_term_rows=business_term_rows)
 
-        processed_semantic_layer = process_semantic_layer(semantic_layer_original)
+            logger.info(f"semantic_layer_original: {semantic_layer_original}")
 
-        logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
+            processed_semantic_layer = process_semantic_layer(semantic_layer_original)
 
-        recommended_chart, recommendation_reason = await self.query_intent_analyzer.recommend_chart_with_reason(
-            user_question=user_query,
-            supported_charts_list=["明细表", "聚合表"],
-            semantic_layer_info=processed_semantic_layer,
-            llm_name=llm_name
+            logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
+            return processed_semantic_layer, model_ids
+
+        async def chart_recommendation_task():
+            # 使用不依赖语义层的图表推荐方法
+            recommended_chart, recommendation_reason = await self.query_intent_analyzer.recommend_chart_without_semantic(
+                user_question=user_query,
+                supported_charts_list=["明细表", "聚合表"],
+                llm_name=llm_name
+            )
+            return recommended_chart, recommendation_reason
+
+        # 并行执行两个任务
+        logger.info("开始并行执行语义层检索和图表推荐...")
+        chart_result, semantic_result = await asyncio.gather(
+            chart_recommendation_task(),
+            semantic_layer_task()
         )
+
+        # 解包结果
+        processed_semantic_layer, model_ids = semantic_result
+        recommended_chart, recommendation_reason = chart_result
+
+        await send_event(event_id, {}, "stream_end")
 
         logger.info(f"recommended_chart: {recommended_chart}, recommendation_reason: {recommendation_reason}")
 

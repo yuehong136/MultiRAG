@@ -178,6 +178,69 @@ class QueryIntentAnalyzer:
             default_chart = supported_charts_list[0] if supported_charts_list else "指标卡"
             return default_chart, f"分析过程中发生错误: {str(e)}"
 
+    async def recommend_chart_without_semantic(
+            self,
+            user_question: str,
+            supported_charts_list: List[str],
+            llm_name: str
+    ) -> Tuple[str, Optional[str]]:
+        """
+        不依赖语义层信息，仅基于用户问题推荐合适的图表类型。
+
+        参数:
+            user_question: 用户的自然语言问题
+            supported_charts_list: 系统支持的图表类型列表
+            llm_name: 用于分析的LLM模型名称
+
+        返回:
+            (推荐的图表类型, 推荐理由): 图表类型和理由的元组
+        """
+        try:
+            # 初始化LLM模型
+            llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+
+            # 从文件加载提示词模板（使用新的不依赖语义层的模板）
+            template_path = os.path.join(self.prompt_dir, "query_intent_without_semantic.txt")
+            prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
+
+            # 准备模板参数
+            template_values = {
+                "USER_QUESTION": user_question,
+                "SUPPORTED_CHARTS_LIST": json.dumps(supported_charts_list, ensure_ascii=False)
+            }
+
+            # 填充模板
+            prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
+
+            # 创建包含我们提示词的对话历史
+            history = [{"role": "user", "content": prompt}]
+
+            # LLM配置
+            gen_conf = {
+                "temperature": 0.1,
+                "top_p": 0.8,
+                "max_tokens": 1024
+            }
+
+            # 调用LLM处理我们的提示词
+            response = await asyncio.to_thread(
+                llm_model_instance.chat,
+                system="",
+                history=history,
+                gen_conf=gen_conf
+            )
+
+            # 提取和处理响应
+            parsed_data, success = self._extract_json_from_response(response)
+            chart, reason = self._extract_chart_recommendation(parsed_data, response, supported_charts_list)
+            return chart, reason
+
+        except Exception as e:
+            logger.error(f"Error in recommend_chart_without_semantic: {e}", exc_info=True)
+            # 发生错误时，返回默认图表类型和错误信息
+            default_chart = supported_charts_list[0] if supported_charts_list else "指标卡"
+            return default_chart, f"分析过程中发生错误: {str(e)}"
+
     async def analyze_query_intent_with_details(
             self,
             user_question: str,
