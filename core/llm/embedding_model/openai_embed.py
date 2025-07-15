@@ -1,6 +1,7 @@
 import numpy as np
 from openai import OpenAI
 
+from api.utils.log_utils import log_exception
 from core.llm.embedding_model.base import Base
 from core.utils import truncate
 
@@ -22,8 +23,11 @@ class OpenAIEmbed(Base):
         for i in range(0, len(texts), batch_size):
             res = self.client.embeddings.create(input=texts[i:i + batch_size],
                                                 model=self.model_name)
-            ress.extend([d.embedding for d in res.data])
-            total_tokens += self.total_token_count(res)
+            try:
+                ress.extend([d.embedding for d in res.data])
+                total_tokens += self.total_token_count(res)
+            except Exception as _e:
+                log_exception(_e, res)
         return np.array(ress), total_tokens
 
     def encode_queries(self, text):

@@ -1,6 +1,7 @@
 import numpy as np
 import requests
 
+from api.utils.log_utils import log_exception
 from core.llm.embedding_model.base import Base
 from core.utils import num_tokens_from_string
 
@@ -22,11 +23,14 @@ class HuggingFaceEmbed(Base):
                 headers={'Content-Type': 'application/json'}
             )
             if response.status_code == 200:
-                embedding = response.json()
-                embeddings.append(embedding[0])
+                try:
+                    embedding = response.json()
+                    embeddings.append(embedding[0])
+                    return np.array(embeddings), sum([num_tokens_from_string(text) for text in texts])
+                except Exception as _e:
+                    log_exception(_e, response)
             else:
                 raise Exception(f"Error: {response.status_code} - {response.text}")
-        return np.array(embeddings), sum([num_tokens_from_string(text) for text in texts])
 
     def encode_queries(self, text):
         response = requests.post(
@@ -35,8 +39,11 @@ class HuggingFaceEmbed(Base):
             headers={'Content-Type': 'application/json'}
         )
         if response.status_code == 200:
-            embedding = response.json()
-            return np.array(embedding[0]), num_tokens_from_string(text)
+            try:
+                embedding = response.json()
+                return np.array(embedding[0]), num_tokens_from_string(text)
+            except Exception as _e:
+                log_exception(_e, response)
         else:
             raise Exception(f"Error: {response.status_code} - {response.text}")
 

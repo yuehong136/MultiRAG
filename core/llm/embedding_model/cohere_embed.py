@@ -1,5 +1,6 @@
 import numpy as np
 
+from api.utils.log_utils import log_exception
 from core.llm.embedding_model.base import Base
 
 
@@ -21,8 +22,11 @@ class CoHereEmbed(Base):
                 input_type="search_document",
                 embedding_types=["float"],
             )
-            ress.extend([d for d in res.embeddings.float])
-            token_count += res.meta.billed_units.input_tokens
+            try:
+                ress.extend([d for d in res.embeddings.float])
+                token_count += res.meta.billed_units.input_tokens
+            except Exception as _e:
+                log_exception(_e, res)
         return np.array(ress), token_count
 
     def encode_queries(self, text):
@@ -32,6 +36,7 @@ class CoHereEmbed(Base):
             input_type="search_query",
             embedding_types=["float"],
         )
-        return np.array(res.embeddings.float[0]), int(
-            res.meta.billed_units.input_tokens
-        )
+        try:
+            return np.array(res.embeddings.float[0]), int(res.meta.billed_units.input_tokens)
+        except Exception as _e:
+            log_exception(_e, res)

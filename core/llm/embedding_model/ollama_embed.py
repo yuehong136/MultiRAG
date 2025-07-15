@@ -1,6 +1,7 @@
 import numpy as np
 from ollama import Client
 
+from api.utils.log_utils import log_exception
 from core.llm.embedding_model.base import Base
 
 
@@ -17,7 +18,10 @@ class OllamaEmbed(Base):
             res = self.client.embeddings(prompt=txt,
                                          model=self.model_name,
                                          options={"use_mmap": True})
-            arr.append(res["embedding"])
+            try:
+                arr.append(res["embedding"])
+            except Exception as _e:
+                log_exception(_e, res)
             tks_num += 128
         return np.array(arr), tks_num
 
@@ -25,4 +29,7 @@ class OllamaEmbed(Base):
         res = self.client.embeddings(prompt=text,
                                      model=self.model_name,
                                      options={"use_mmap": True})
-        return np.array(res["embedding"]), 128
+        try:
+            return np.array(res["embedding"]), 128
+        except Exception as _e:
+            log_exception(_e, res)

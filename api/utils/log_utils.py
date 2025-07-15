@@ -69,6 +69,13 @@ def initRootLogger(logfile_basename: str, log_format: str = "%(asctime)-15s %(le
     # msg = f"{logfile_basename} log path: {log_path}"
     logger.info(msg)
 
+
+def log_exception(e, *args):
+    logging.exception(e)
+    for a in args:
+        logging.error(str(a))
+    raise e
+
 # import typing
 # import traceback
 # import inspect

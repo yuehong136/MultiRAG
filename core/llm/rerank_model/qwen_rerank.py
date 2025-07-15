@@ -1,5 +1,6 @@
 import numpy as np
 
+from api.utils.log_utils import log_exception
 from core.llm.rerank_model.base import Base
 
 
@@ -22,8 +23,11 @@ class QWenRerank(Base):
         )
         rank = np.zeros(len(texts), dtype=float)
         if resp.status_code == HTTPStatus.OK:
-            for r in resp.output.results:
-                rank[r.index] = r.relevance_score
+            try:
+                for r in resp.output.results:
+                    rank[r.index] = r.relevance_score
+            except Exception as _e:
+                log_exception(_e, resp)
             return rank, resp.usage.total_tokens
         else:
             raise ValueError(f"Error calling QWenRerank model {self.model_name}: {resp.status_code} - {resp.text}")

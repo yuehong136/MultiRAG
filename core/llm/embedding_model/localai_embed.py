@@ -2,6 +2,7 @@ from urllib.parse import urljoin
 from openai import OpenAI
 import numpy as np
 
+from api.utils.log_utils import log_exception
 from core.llm.embedding_model.base import Base
 
 
@@ -18,7 +19,10 @@ class LocalAIEmbed(Base):
         ress = []
         for i in range(0, len(texts), batch_size):
             res = self.client.embeddings.create(input=texts[i:i + batch_size], model=self.model_name)
-            ress.extend([d.embedding for d in res.data])
+            try:
+                ress.extend([d.embedding for d in res.data])
+            except Exception as _e:
+                log_exception(_e, res)
         # local embedding for LmStudio donot count tokens
         return np.array(ress), 1024
 

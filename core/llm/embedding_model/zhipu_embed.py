@@ -1,28 +1,15 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： zhipu_embed.py
-@date：2024/8/8 9:00
-@desc:
-"""
 import numpy as np
-from dataclasses import dataclass, field
 from zhipuai import ZhipuAI
+
+from api.utils.log_utils import log_exception
 from core.llm.embedding_model.base import Base
 from core.utils import truncate
 
 
-@dataclass
 class ZhipuEmbed(Base):
-    key: str = None
-    model_name: str = "embedding-2"
-    base_url: str | None = None
-    client: ZhipuAI = field(init=False)
-
-    def __post_init__(self):
-        self.client = ZhipuAI(api_key=self.key)
-        print(f"ZhipuAI client initialized with key: {self.key}")
+    def __init__(self, key, model_name="embedding-3", **kwargs):
+        self.client = ZhipuAI(api_key=key)
+        self.model_name = model_name
 
     def encode(self, texts: list):
         arr = []
@@ -37,12 +24,18 @@ class ZhipuEmbed(Base):
 
         for txt in texts:
             res = self.client.embeddings.create(input=txt,
-                                                model=self.model_name, dimensions=768)
-            arr.append(res.data[0].embedding)
-            tks_num += self.total_token_count(res)
+                                                model=self.model_name)
+            try:
+                arr.append(res.data[0].embedding)
+                tks_num += self.total_token_count(res)
+            except Exception as _e:
+                log_exception(_e, res)
         return np.array(arr), tks_num
 
     def encode_queries(self, text):
         res = self.client.embeddings.create(input=text,
                                             model=self.model_name)
-        return np.array(res.data[0].embedding), self.total_token_count(res)
+        try:
+            return np.array(res.data[0].embedding), self.total_token_count(res)
+        except Exception as _e:
+            log_exception(_e, res)

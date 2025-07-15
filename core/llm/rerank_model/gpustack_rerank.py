@@ -1,7 +1,9 @@
+import numpy as np
 import requests
 from yarl import URL
 import httpx
 
+from api.utils.log_utils import log_exception
 from core.llm.rerank_model.base import Base
 from core.utils import num_tokens_from_string
 
@@ -37,15 +39,15 @@ class GPUStackRerank(Base):
             response_json = response.json()
 
             rank = np.zeros(len(texts), dtype=float)
-            if "results" not in response_json:
-                return rank, 0
 
             token_count = 0
             for t in texts:
                 token_count += num_tokens_from_string(t)
-
-            for result in response_json["results"]:
-                rank[result["index"]] = result["relevance_score"]
+            try:
+                for result in response_json["results"]:
+                    rank[result["index"]] = result["relevance_score"]
+            except Exception as _e:
+                log_exception(_e, response)
 
             return (
                 rank,
@@ -53,5 +55,6 @@ class GPUStackRerank(Base):
             )
 
         except httpx.HTTPStatusError as e:
-            raise ValueError(f"Error calling GPUStackRerank model {self.model_name}: {e.response.status_code} - {e.response.text}")
+            raise ValueError(
+                f"Error calling GPUStackRerank model {self.model_name}: {e.response.status_code} - {e.response.text}")
 

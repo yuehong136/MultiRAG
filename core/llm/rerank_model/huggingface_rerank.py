@@ -16,6 +16,7 @@ class HuggingfaceRerank(DefaultRerank):
                 res = requests.post(f"http://{url}/rerank", headers={"Content-Type": "application/json"},
                                     json={"query": query, "texts": texts[i: i + batch_size],
                                           "raw_scores": False, "truncate": True})
+
                 for o in res.json():
                     scores[o["index"] + i] = o["score"]
             except Exception as e:
