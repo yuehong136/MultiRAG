@@ -78,9 +78,9 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
     dataset_name = req_data["name"]
     if not isinstance(dataset_name, str):
         return get_data_error_result(retmsg="Dataset name must be string.")
-    if dataset_name == "":
+    if dataset_name.strip() == "":
         return get_data_error_result(retmsg="Dataset name can't be empty.")
-    if len(dataset_name.encode("utf-8")) >= DATASET_NAME_LIMIT:
+    if len(dataset_name.encode("utf-8")) > DATASET_NAME_LIMIT:
         return get_data_error_result(
             retmsg=f"Dataset name length is {len(dataset_name)} which is large than {DATASET_NAME_LIMIT}")
     # 验证 Milvus 集合名逻辑
