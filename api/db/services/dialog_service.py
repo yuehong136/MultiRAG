@@ -676,7 +676,7 @@ def tts(tts_mdl, text):
     return binascii.hexlify(bin).decode("utf-8")
 
 
-def ask(db: Session, question, kb_ids, tenant_id):
+def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None):
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     embedding_list = list(set([kb.embd_id for kb in kbs]))
 
@@ -684,7 +684,7 @@ def ask(db: Session, question, kb_ids, tenant_id):
     retriever = settings.retrievaler if not is_knowledge_graph else settings.kg_retrievaler
 
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
-    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT)
+    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_llm_name)
     max_tokens = chat_mdl.max_length
     tenant_ids = list([kb.tenant_id for kb in kbs])
 

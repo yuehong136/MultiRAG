@@ -865,6 +865,65 @@ class SensitiveFilterStats(BaseModel):
         }
 
 
+class Search(BaseModel):
+    """
+    搜索配置表
+    """
+    __tablename__ = "t_ai_search"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
+    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+    name = Column(String(128), index=True, nullable=False, doc="Search name")
+    description = Column(Text, index=False, nullable=True, doc="Search description")
+    created_by = Column(String(32), index=True, nullable=False, doc="创建人")
+    search_config = Column(JSONB, index=False, nullable=False, default=lambda: {
+        "kb_ids": [],
+        "doc_ids": [],
+        "similarity_threshold": 0.0,
+        "vector_similarity_weight": 0.3,
+        "use_kg": False,
+        # rerank settings
+        "rerank_id": "",
+        "top_k": 1024,
+        # chat settings
+        "summary": False,
+        "chat_id": "",
+        "llm_setting": {
+            "temperature": 0.1,
+            "top_p": 0.3,
+            "frequency_penalty": 0.7,
+            "presence_penalty": 0.4,
+        },
+        "chat_settingcross_languages": [],
+        "highlight": False,
+        "keyword": False,
+        "web_search": False,
+        "related_search": False,
+        "query_mindmap": False,
+    }, doc="搜索配置")
+    status = Column(String(1), index=True, nullable=True, default="1",
+                    doc="是否有效(0: 已删除, 1: 有效)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "avatar": self.avatar,
+            "tenant_id": self.tenant_id,
+            "name": self.name,
+            "description": self.description,
+            "created_by": self.created_by,
+            "search_config": self.search_config,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+    def __str__(self):
+        return self.name
+
+
 '''
 拥有权限，采用这种方式
 '''
