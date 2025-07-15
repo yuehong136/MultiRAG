@@ -125,7 +125,7 @@ def kb_prompt(kbinfos, max_tokens):
     doc2chunks = defaultdict(lambda: {"chunks": [], "meta": []})
     for i, ck in enumerate(kbinfos["chunks"][:chunks_num]):
         cnt = f"---\nID: {i}\n" + (f"URL: {ck['url']}\n" if "url" in ck else "")
-        cnt += get_text(ck)
+        cnt += re.sub(r"( style=\"[^\"]+\"|</?(html|body|head|title)>|<!DOCTYPE html>)", " ", get_text(ck), flags=re.DOTALL|re.IGNORECASE)
         doc2chunks[ck["docnm_kwd"]]["chunks"].append(cnt)
         doc2chunks[ck["docnm_kwd"]]["meta"] = docs.get(ck["doc_id"], {})
 
