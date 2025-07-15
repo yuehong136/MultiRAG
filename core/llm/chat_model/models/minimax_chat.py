@@ -6,13 +6,7 @@ from core.utils import num_tokens_from_string
 
 
 class MiniMaxChat(Base):
-    def __init__(
-        self,
-        key,
-        model_name,
-        base_url="https://api.minimax.chat/v1/text/chatcompletion_v2",
-        **kwargs
-    ):
+    def __init__(self, key, model_name, base_url="https://api.minimax.chat/v1/text/chatcompletion_v2", **kwargs):
         super().__init__(key, model_name, base_url=base_url, **kwargs)
 
         if not base_url:
