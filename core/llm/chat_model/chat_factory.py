@@ -1,6 +1,3 @@
-# chat_factory.py
-from core.llm.chat_model.models.doubao_chat import DoubaoChat
-from core.llm.chat_model.models.ernie_chat import ErnieChat
 from core.llm.chat_model.models.qwen_chat import QWenChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
@@ -48,11 +45,6 @@ class ChatFactory:
         elif self.model_name.endswith("b"):
             self.base_url = "http://localhost:6006"
             return OllamaChat(self.key, self.model_name, self.base_url)
-        elif self.model_name.startswith("ep"):
-            self.base_url = "https://ark.cn-beijing.volces.com/api/v3"
-            return DoubaoChat(self.key, self.model_name, self.base_url)
-        elif self.model_name.startswith("ERNIE"):
-            return ErnieChat(self.key, self.model_name, self.base_url)
         elif self.model_name.startswith("qwen"):
             return QWenChat(self.key, self.model_name, self.base_url)
         # 可以添加更多模型的实例化条件
