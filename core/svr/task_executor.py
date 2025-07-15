@@ -52,7 +52,7 @@ from core.app import laws, paper, presentation, manual, qa, table, book, resume,
     email, tag
 from core.nlp import search, rag_tokenizer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from core.settings import DOC_MAXIMUM_SIZE, SVR_CONSUMER_GROUP_NAME, get_svr_queue_name, get_svr_queue_names, print_rag_settings, TAG_FLD, PAGERANK_FLD
+from core.settings import DOC_MAXIMUM_SIZE, DOC_BULK_SIZE, EMBEDDING_BATCH_SIZE, SVR_CONSUMER_GROUP_NAME, get_svr_queue_name, get_svr_queue_names, print_rag_settings, TAG_FLD, PAGERANK_FLD
 from core.utils import rmSpace, num_tokens_from_string, truncate
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 from core.utils.storage_factory import STORAGE_IMPL
@@ -623,7 +623,6 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
     """
     if parser_config is None:
         parser_config = {}
-    batch_size = 16
     tts, cnts = [], []
     for d in docs:
         tts.append(rmSpace(d.get("docnm_kwd", "Title")))
@@ -642,8 +641,8 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
         tk_count += c
 
     cnts_ = np.array([])
-    for i in range(0, len(cnts), batch_size):
-        vts, c = await trio.to_thread.run_sync(lambda: mdl.encode([truncate(c, mdl.max_length-10) for c in cnts[i: i + batch_size]]))
+    for i in range(0, len(cnts), EMBEDDING_BATCH_SIZE):
+        vts, c = await trio.to_thread.run_sync(lambda: mdl.encode([truncate(c, mdl.max_length-10) for c in cnts[i: i + EMBEDDING_BATCH_SIZE]]))
         if len(cnts_) == 0:
             cnts_ = vts
         else:
@@ -825,9 +824,6 @@ async def do_handle_task(db, task):
     # 记录开始时间
     start_ts = timer()
 
-    # 分批大小，可根据需要自行调整
-    milvus_bulk_size = 4
-
     # 用于记录成功和失败的插入信息
     successful_inserts = []
     failed_inserts = []
@@ -845,9 +841,9 @@ async def do_handle_task(db, task):
             raise
 
     # 循环分批插入
-    for b in range(0, chunk_count, milvus_bulk_size):
+    for b in range(0, chunk_count, DOC_BULK_SIZE):
         # 取出本批次要插入的 chunks
-        chunk_batch = chunks[b: b + milvus_bulk_size]
+        chunk_batch = chunks[b: b + DOC_BULK_SIZE]
 
         # 将本批次内的数据先做类型转换
         converted_batch = []
