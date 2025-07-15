@@ -12,7 +12,7 @@ import random
 from datetime import datetime
 
 import xxhash
-from sqlalchemy import asc, desc, select, update, text
+from sqlalchemy import asc, desc, select, update, text, or_
 from sqlalchemy.orm import Session
 import trio
 
@@ -230,46 +230,53 @@ class TaskService(CommonService):
         """
         更新任务的 progress 和 progress_msg，并使用数据库锁。
         """
+        task = cls.get_by_id(db, id)
+        if not task:
+            logging.warning("Update_progress error: task not found")
+            return
+
         if os.environ.get("MACOS"):
             # 直接更新逻辑
-            if "progress_msg" in info and info["progress_msg"]:
-                task = db.query(cls.model).get(id)
-                if task:
-                    progress_msg = trim_header_by_lines(
-                        (task.progress_msg or "") + "\n" + info["progress_msg"], 3000
-                    )
-                    db.execute(
-                        update(cls.model)
-                        .where(cls.model.id == id)
-                        .values(progress_msg=progress_msg)
-                    )
-
-            if "progress" in info:
+            if info["progress_msg"]:
+                progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], 3000)
                 db.execute(
                     update(cls.model)
                     .where(cls.model.id == id)
-                    .values(progress=info["progress"])
+                    .values(progress_msg=progress_msg)
+                )
+
+            if "progress" in info:
+                prog = info["progress"]
+                db.execute(
+                    update(cls.model)
+                    .where(
+                        (cls.model.id == id) &
+                        (cls.model.progress != -1) &
+                        or_(prog == -1, prog > cls.model.progress)
+                    )
+                    .values(progress=prog)
                 )
             return
 
         with DatabaseLock.create(db, f"update_progress_{id}"):
-            if "progress_msg" in info and info["progress_msg"]:
-                task = db.query(cls.model).get(id)
-                if task:
-                    progress_msg = trim_header_by_lines(
-                        (task.progress_msg or "") + "\n" + info["progress_msg"], 3000
-                    )
-                    db.execute(
-                        update(cls.model)
-                        .where(cls.model.id == id)
-                        .values(progress_msg=progress_msg)
-                    )
-
-            if "progress" in info:
+            if info["progress_msg"]:
+                progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], 3000)
                 db.execute(
                     update(cls.model)
                     .where(cls.model.id == id)
-                    .values(progress=info["progress"])
+                    .values(progress_msg=progress_msg)
+                )
+
+            if "progress" in info:
+                prog = info["progress"]
+                db.execute(
+                    update(cls.model)
+                    .where(
+                        (cls.model.id == id) &
+                        (cls.model.progress != -1) &
+                        or_(prog == -1, prog > cls.model.progress)
+                    )
+                    .values(progress=prog)
                 )
 
 
