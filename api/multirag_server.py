@@ -6,10 +6,10 @@
 @date：2024/7/30 18:00
 @desc:
 """
-from api.utils.log_utils import initRootLogger
+from api.utils.log_utils import init_root_logger
 from plugin import GlobalPluginManager
-initRootLogger("multirag_server")
-# initRootLogger("multirag_server")
+init_root_logger("multirag_server")
+# init_root_logger("multirag_server")
 # for module in ["pdfminer"]:
 #     module_logger = logging.getLogger(module)
 #     module_logger.setLevel(logging.WARNING)
@@ -94,7 +94,7 @@ if __name__ == '__main__':
  /_/  /_/   \__,_/  /_/   \__/  /_/           /_/ |_|  /_/  |_|   \____/    
  
                         ╔╦╗ ┬ ┬ ┬  ┌┬┐ ┬ ┬─┐ ┌─┐ ╔═╗
-                        ║║║ │ │ │   │  │ ├┬┘ ├─┤ ║ ╦    【——v0.4.4——】  
+                        ║║║ │ │ │   │  │ ├┬┘ ├─┤ ║ ╦    【——v0.5.2——】  
                         ╩ ╩ └─┘ ┴─┘ ┴  ┴ ┴└─ ┴ ┴ ╚═╝
 ============================================================================
                 """)

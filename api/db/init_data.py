@@ -89,7 +89,7 @@ def init_superuser(db: Session):
         #         tenant["llm_id"],
         #         msg))
         logging.error(
-            "'{}' dosen't work. {}".format(
+            "'{}' doesn't work. {}".format(
                 tenant["llm_id"],
                 msg))
     else:
@@ -103,7 +103,7 @@ def init_superuser(db: Session):
         #     " '{}' doesn't work!".format(
         #         tenant["embd_id"]))
         logging.error(
-            "'{}' dosen't work!".format(
+            "'{}' doesn't work!".format(
                 tenant["embd_id"]))
 
 
