@@ -128,7 +128,15 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
 @router.post('/update', summary="更新知识库", response_description="成功更新知识库")
 def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
+    if not isinstance(req_data["name"], str):
+        return get_data_error_result(retmsg="Dataset name must be string.")
+    if req_data["name"].strip() == "":
+        return get_data_error_result(retmsg="Dataset name can't be empty.")
+    if len(req_data["name"].encode("utf-8")) > DATASET_NAME_LIMIT:
+        return get_data_error_result(
+            retmsg=f"Dataset name length is {len(req_data['name'])} which is large than {DATASET_NAME_LIMIT}")
     req_data["name"] = req_data["name"].strip()
+
     if not KnowledgebaseService.accessible4deletion(db, req_data["kb_id"], user.id):
         return get_json_result(
             data=False,
