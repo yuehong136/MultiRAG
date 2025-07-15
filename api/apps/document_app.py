@@ -140,6 +140,11 @@ async def upload(
         raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
     file_contents = []
     for file in files:
+        if file.filename == "":
+            return get_json_result(data=False, retmsg="No file selected!", retcode=settings.RetCode.ARGUMENT_ERROR)
+        if len(file.filename.encode("utf-8")) > 255:
+            return get_json_result(data=False, retmsg="File name must be 255 bytes or less.", retcode=settings.RetCode.ARGUMENT_ERROR)
+
         file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
     # 确保 labels 是 list 或 None
     if isinstance(labels, str):
@@ -235,6 +240,8 @@ def create_document(
     kb_id = req["kb_id"]
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
+    if len(req["name"].encode("utf-8")) > 255:
+        return construct_json_result(data=False, message="File name must be 255 bytes or less.", code=settings.RetCode.ARGUMENT_ERROR)
 
     try:
         kb = KnowledgebaseService.get_by_id(db, kb_id)
@@ -643,6 +650,10 @@ def rename(
         if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(doc.name.lower()).suffix:
             return construct_json_result(data=False, message="The extension of file can't be changed",
                                          code=settings.RetCode.ARGUMENT_ERROR)
+        if len(req["name"].encode("utf-8")) > 255:
+            return construct_json_result(data=False, message="File name must be 255 bytes or less.",
+                                   code=settings.RetCode.ARGUMENT_ERROR)
+
         for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
             if d.name == req["name"]:
                 return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
