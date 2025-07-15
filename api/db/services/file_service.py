@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 
+from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import FileType, KNOWLEDGEBASE_FOLDER_NAME, FileSource, ParserType
 from api.db.db_models import File, Document, Knowledgebase, File2Document
 from api.db.services import duplicate_name
@@ -314,8 +315,9 @@ class FileService(CommonService):
                 max_file_num_per_user = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
                 if max_file_num_per_user > 0 and DocumentService.get_doc_count(db, kb.tenant_id) >= max_file_num_per_user:
                     raise RuntimeError("Exceed the maximum file number of a free user!")
-                if len(filename.encode("utf-8")) >= 128:
-                    raise RuntimeError("Exceed the maximum length of file name!")
+                if len(filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
+                    raise RuntimeError(f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.")
+
                 filename = duplicate_name(
                     lambda *args, **kwargs: DocumentService.query(db, *args, **kwargs),
                     name=filename,

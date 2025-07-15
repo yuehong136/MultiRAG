@@ -20,7 +20,7 @@ from pymilvus import MilvusException
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 
-from api.constants import IMG_BASE64_PREFIX
+from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, ParserType, FileSource, db_models
 # from api.db.database import get_db
 from api.db.db_models import Task, get_db
@@ -142,8 +142,8 @@ async def upload(
     for file in files:
         if file.filename == "":
             return get_json_result(data=False, retmsg="No file selected!", retcode=settings.RetCode.ARGUMENT_ERROR)
-        if len(file.filename.encode("utf-8")) > 255:
-            return get_json_result(data=False, retmsg="File name must be 255 bytes or less.", retcode=settings.RetCode.ARGUMENT_ERROR)
+        if len(file.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
+            return get_json_result(data=False, retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=settings.RetCode.ARGUMENT_ERROR)
 
         file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
     # 确保 labels 是 list 或 None
@@ -240,8 +240,9 @@ def create_document(
     kb_id = req["kb_id"]
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
-    if len(req["name"].encode("utf-8")) > 255:
-        return construct_json_result(data=False, message="File name must be 255 bytes or less.", code=settings.RetCode.ARGUMENT_ERROR)
+    if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
+        return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", code=settings.RetCode.ARGUMENT_ERROR)
+
     if req["name"].strip() == "":
         return construct_json_result(data=False, message="File name can't be empty.", code=settings.RetCode.ARGUMENT_ERROR)
     req["name"] = req["name"].strip()
@@ -653,8 +654,8 @@ def rename(
         if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(doc.name.lower()).suffix:
             return construct_json_result(data=False, message="The extension of file can't be changed",
                                          code=settings.RetCode.ARGUMENT_ERROR)
-        if len(req["name"].encode("utf-8")) > 255:
-            return construct_json_result(data=False, message="File name must be 255 bytes or less.",
+        if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
+            return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
                                    code=settings.RetCode.ARGUMENT_ERROR)
 
         for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
