@@ -10,33 +10,25 @@ class OllamaChat(Base):
         self.client = Client(host=base_url) if not key or key == "x" else Client(host=base_url, headers={"Authorization": f"Bearer {key}"})
         self.model_name = model_name
 
-    def chat(self, system, history, gen_conf):
-        if system:
-            history.insert(0, {"role": "system", "content": system})
+    def _clean_conf(self, gen_conf):
+        options = {}
         if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
-        try:
-            # Calculate context size
-            ctx_size = self._calculate_dynamic_ctx(history)
+            options["num_predict"] = gen_conf["max_tokens"]
+        for k in ["temperature", "top_p", "presence_penalty", "frequency_penalty"]:
+            if k not in gen_conf:
+                continue
+            options[k] = gen_conf[k]
+        return options
 
-            options = {"num_ctx": ctx_size}
-            if "temperature" in gen_conf:
-                options["temperature"] = gen_conf["temperature"]
-            if "max_tokens" in gen_conf:
-                options["num_predict"] = gen_conf["max_tokens"]
-            if "top_p" in gen_conf:
-                options["top_p"] = gen_conf["top_p"]
-            if "presence_penalty" in gen_conf:
-                options["presence_penalty"] = gen_conf["presence_penalty"]
-            if "frequency_penalty" in gen_conf:
-                options["frequency_penalty"] = gen_conf["frequency_penalty"]
+    def _chat(self, history, gen_conf):
+        # Calculate context size
+        ctx_size = self._calculate_dynamic_ctx(history)
 
-            response = self.client.chat(model=self.model_name, messages=history, options=options)
-            ans = response["message"]["content"].strip()
-            token_count = response.get("eval_count", 0) + response.get("prompt_eval_count", 0)
-            return ans, token_count
-        except Exception as e:
-            return "**ERROR**: " + str(e), 0
+        gen_conf["num_ctx"] = ctx_size
+        response = self.client.chat(model=self.model_name, messages=history, options=gen_conf)
+        ans = response["message"]["content"].strip()
+        token_count = response.get("eval_count", 0) + response.get("prompt_eval_count", 0)
+        return ans, token_count
 
     def chat_streamly(self, system, history, gen_conf):
         if system:

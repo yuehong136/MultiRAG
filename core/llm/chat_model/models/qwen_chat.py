@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+from http import HTTPStatus
 
 from dashscope import Generation
 
@@ -18,15 +19,15 @@ from core.llm.chat_model.base import Base, LENGTH_NOTIFICATION_CN, LENGTH_NOTIFI
 
 
 class QWenChat(Base):
-    def __init__(self, key, model_name=Generation.Models.qwen_turbo, **kwargs):
-        super().__init__(key, model_name, base_url=None)
+    def __init__(self, key, model_name=Generation.Models.qwen_turbo, base_url=None, **kwargs):
+        super().__init__(key, model_name, base_url=base_url, **kwargs)
 
         import dashscope
 
         dashscope.api_key = key
         self.model_name = model_name
         if self.is_reasoning_model(self.model_name) or self.model_name in ["qwen-vl-plus", "qwen-vl-plus-latest", "qwen-vl-max", "qwen-vl-max-latest"]:
-            super().__init__(key, model_name, "https://dashscope.aliyuncs.com/compatible-mode/v1")
+            super().__init__(key, model_name, "https://dashscope.aliyuncs.com/compatible-mode/v1", **kwargs)
 
     def chat_with_tools(self, system: str, history: list, gen_conf: dict) -> tuple[str, int]:
         if "max_tokens" in gen_conf:
@@ -100,41 +101,22 @@ class QWenChat(Base):
             else:
                 return "".join(result_list[:-1]), result_list[-1]
 
-    def chat(self, system, history, gen_conf):
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
+    def _chat(self, history, gen_conf):
         if self.is_reasoning_model(self.model_name) or self.model_name in ["qwen-vl-plus", "qwen-vl-plus-latest", "qwen-vl-max", "qwen-vl-max-latest"]:
-            return super().chat(system, history, gen_conf)
-
-        stream_flag = str(os.environ.get("QWEN_CHAT_BY_STREAM", "true")).lower() == "true"
-        if not stream_flag:
-            from http import HTTPStatus
-
-            if system:
-                history.insert(0, {"role": "system", "content": system})
-
-            response = Generation.call(self.model_name, messages=history, result_format="message", **gen_conf)
-            ans = ""
-            tk_count = 0
-            if response.status_code == HTTPStatus.OK:
-                ans += response.output.choices[0]["message"]["content"]
-                tk_count += self.total_token_count(response)
-                if response.output.choices[0].get("finish_reason", "") == "length":
-                    if is_chinese([ans]):
-                        ans += LENGTH_NOTIFICATION_CN
-                    else:
-                        ans += LENGTH_NOTIFICATION_EN
-                return ans, tk_count
-
-            return "**ERROR**: " + response.message, tk_count
-        else:
-            g = self._chat_streamly(system, history, gen_conf, incremental_output=True)
-            result_list = list(g)
-            error_msg_list = [item for item in result_list if str(item).find("**ERROR**") >= 0]
-            if len(error_msg_list) > 0:
-                return "**ERROR**: " + "".join(error_msg_list), 0
-            else:
-                return "".join(result_list[:-1]), result_list[-1]
+            return super()._chat(history, gen_conf)
+        response = Generation.call(self.model_name, messages=history, result_format="message", **gen_conf)
+        ans = ""
+        tk_count = 0
+        if response.status_code == HTTPStatus.OK:
+            ans += response.output.choices[0]["message"]["content"]
+            tk_count += self.total_token_count(response)
+            if response.output.choices[0].get("finish_reason", "") == "length":
+                if is_chinese([ans]):
+                    ans += LENGTH_NOTIFICATION_CN
+                else:
+                    ans += LENGTH_NOTIFICATION_EN
+            return ans, tk_count
+        return "**ERROR**: " + response.message, tk_count
 
     def _wrap_toolcall_message(self, old_message, message):
         if not old_message:

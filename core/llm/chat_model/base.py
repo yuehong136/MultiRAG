@@ -36,13 +36,13 @@ class ToolCallSession(Protocol):
 
 
 class Base(ABC):
-    def __init__(self, key, model_name, base_url):
+    def __init__(self, key, model_name, base_url, **kwargs):
         timeout = int(os.environ.get("LM_TIMEOUT_SECONDS", 600))
         self.client = OpenAI(api_key=key, base_url=base_url, timeout=timeout)
         self.model_name = model_name
         # Configure retry parameters
-        self.max_retries = int(os.environ.get("LLM_MAX_RETRIES", 5))
-        self.base_delay = float(os.environ.get("LLM_BASE_DELAY", 2.0))
+        self.max_retries = kwargs.get("max_retries", int(os.environ.get("LLM_MAX_RETRIES", 5)))
+        self.base_delay = kwargs.get("retry_interval", float(os.environ.get("LLM_BASE_DELAY", 2.0)))
         self.is_tools = False
 
     def _get_delay(self, attempt):
@@ -73,6 +73,24 @@ class Base(ABC):
             return ERROR_MODEL
         else:
             return ERROR_GENERIC
+
+    def _clean_conf(self, gen_conf):
+        if "max_tokens" in gen_conf:
+            del gen_conf["max_tokens"]
+        return gen_conf
+
+    def _chat(self, history, gen_conf):
+        response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf)
+
+        if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
+            return "", 0
+        ans = response.choices[0].message.content.strip()
+        if response.choices[0].finish_reason == "length":
+            if is_chinese(ans):
+                ans += LENGTH_NOTIFICATION_CN
+            else:
+                ans += LENGTH_NOTIFICATION_EN
+        return ans, self.total_token_count(response)
 
     def bind_tools(self, toolcall_session, tools):
         if not (toolcall_session and tools):
@@ -119,12 +137,6 @@ class Base(ABC):
                     args = json.loads(tool_call.function.arguments)
 
                     tool_response = self.toolcall_session.tool_call(name, args)
-                    # if tool_response.choices[0].finish_reason == "length":
-                    #     if is_chinese(ans):
-                    #         ans += LENGTH_NOTIFICATION_CN
-                    #     else:
-                    #         ans += LENGTH_NOTIFICATION_EN
-                    #     return ans, tk_count + self.total_token_count(tool_response)
                     history.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_response)})
 
                 final_response = self.client.chat.completions.create(model=self.model_name, messages=history, tools=tools, **gen_conf)
@@ -162,23 +174,12 @@ class Base(ABC):
     def chat(self, system, history, gen_conf):
         if system:
             history.insert(0, {"role": "system", "content": system})
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
+        gen_conf = self._clean_conf(gen_conf)
 
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries):
             try:
-                response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf)
-
-                if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
-                    return "", 0
-                ans = response.choices[0].message.content.strip()
-                if response.choices[0].finish_reason == "length":
-                    if is_chinese(ans):
-                        ans += LENGTH_NOTIFICATION_CN
-                    else:
-                        ans += LENGTH_NOTIFICATION_EN
-                return ans, self.total_token_count(response)
+                return self._chat(history, gen_conf)
             except Exception as e:
                 logging.exception("chat_model.Base.chat got exception")
                 # Classify the error
@@ -288,12 +289,6 @@ class Base(ABC):
                                     ],
                                 }
                             )
-                            # if tool_response.choices[0].finish_reason == "length":
-                            #     if is_chinese(ans):
-                            #         ans += LENGTH_NOTIFICATION_CN
-                            #     else:
-                            #         ans += LENGTH_NOTIFICATION_EN
-                            #     return ans, total_tokens + self.total_token_count(tool_response)
                             history.append(
                                 {"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_response)})
                         final_tool_calls = {}

@@ -1,5 +1,4 @@
 # zhipu_chat.py
-from dataclasses import dataclass, field
 from typing import Any
 from core.llm.chat_model.base import Base, LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN
 from zhipuai import ZhipuAI
@@ -7,38 +6,21 @@ from zhipuai import ZhipuAI
 from core.nlp import is_chinese, is_english
 
 
-@dataclass
 class ZhipuChat(Base):
-    key: str
-    model_name: str = "glm-4-plus"
-    base_url: str | None = None
-    client: ZhipuAI = field(init=False)
+    def __init__(self, key, model_name="glm-4-airx", base_url=None, **kwargs):
+        super().__init__(key, model_name, base_url=base_url, **kwargs)
 
-    def __post_init__(self):
-        super().__init__(self.key, self.model_name, base_url=self.base_url)
-        self.client = ZhipuAI(api_key=self.key)
-        # print(f"ZhipuAI client initialized with key: {self.key}")
+        self.client = ZhipuAI(api_key=key)
+        self.model_name = model_name
 
-    def chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> tuple[str, int]:
-        if system:
-            history.insert(0, {"role": "system", "content": system})
+    def _clean_conf(self, gen_conf):
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
         if "presence_penalty" in gen_conf:
             del gen_conf["presence_penalty"]
         if "frequency_penalty" in gen_conf:
             del gen_conf["frequency_penalty"]
-        try:
-            response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf)
-            ans = response.choices[0].message.content.strip()
-            if response.choices[0].finish_reason == "length":
-                if is_chinese(ans):
-                    ans += LENGTH_NOTIFICATION_CN
-                else:
-                    ans += LENGTH_NOTIFICATION_EN
-            return ans, self.total_token_count(response)
-        except Exception as e:
-            return f"**ERROR**: {str(e)}", 0
+        return gen_conf
 
     def chat_with_tools(self, system: str, history: list, gen_conf: dict):
         if "presence_penalty" in gen_conf:

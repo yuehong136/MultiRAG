@@ -4,8 +4,8 @@ from core.utils import num_tokens_from_string
 
 
 class AnthropicChat(Base):
-    def __init__(self, key, model_name, base_url=None):
-        super().__init__(key, model_name, base_url=None)
+    def __init__(self, key, model_name, base_url=None, **kwargs):
+        super().__init__(key, model_name, base_url=base_url, **kwargs)
 
         import anthropic
 
@@ -13,9 +13,7 @@ class AnthropicChat(Base):
         self.model_name = model_name
         self.system = ""
 
-    def chat(self, system, history, gen_conf):
-        if system:
-            self.system = system
+    def _clean_conf(self, gen_conf):
         if "presence_penalty" in gen_conf:
             del gen_conf["presence_penalty"]
         if "frequency_penalty" in gen_conf:
@@ -23,29 +21,26 @@ class AnthropicChat(Base):
         gen_conf["max_tokens"] = 8192
         if "haiku" in self.model_name or "opus" in self.model_name:
             gen_conf["max_tokens"] = 4096
+        return gen_conf
 
-        ans = ""
-        try:
-            response = self.client.messages.create(
-                model=self.model_name,
-                messages=history,
-                system=self.system,
-                stream=False,
-                **gen_conf,
-            ).to_dict()
-            ans = response["content"][0]["text"]
-            if response["stop_reason"] == "max_tokens":
-                ans += "...\nFor the content length reason, it stopped, continue?" if is_english([ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
-            return (
-                ans,
-                response["usage"]["input_tokens"] + response["usage"]["output_tokens"],
-            )
-        except Exception as e:
-            return ans + "\n**ERROR**: " + str(e), 0
+    def _chat(self, history, gen_conf):
+        system = history[0]["content"] if history and history[0]["role"] == "system" else ""
+        response = self.client.messages.create(
+            model=self.model_name,
+            messages=[h for h in history if h["role"] != "system"],
+            system=system,
+            stream=False,
+            **gen_conf,
+        ).to_dict()
+        ans = response["content"][0]["text"]
+        if response["stop_reason"] == "max_tokens":
+            ans += "...\nFor the content length reason, it stopped, continue?" if is_english([ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
+        return (
+            ans,
+            response["usage"]["input_tokens"] + response["usage"]["output_tokens"],
+        )
 
     def chat_streamly(self, system, history, gen_conf):
-        if system:
-            self.system = system
         if "presence_penalty" in gen_conf:
             del gen_conf["presence_penalty"]
         if "frequency_penalty" in gen_conf:

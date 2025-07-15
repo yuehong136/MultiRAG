@@ -3,7 +3,6 @@ from core.llm.chat_model.models.azure_chat import AzureChat
 from core.llm.chat_model.models.baiduyiyan_chat import BaiduYiyanChat
 from core.llm.chat_model.models.cohere_chat import CoHereChat
 from core.llm.chat_model.models.deepseek_chat import DeepSeekChat
-from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gemini_chat import GeminiChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
 from core.llm.chat_model.models.gpustack_chat import GPUStackChat
@@ -11,6 +10,7 @@ from core.llm.chat_model.models.grop_chat import GroqChat
 from core.llm.chat_model.models.huggingface_chat import HuggingFaceChat
 from core.llm.chat_model.models.hunyuan_chat import HunyuanChat
 from core.llm.chat_model.models.lmstudio_chat import LmStudioChat
+from core.llm.chat_model.models.minimax_chat import MiniMaxChat
 from core.llm.chat_model.models.modelscope_chat import ModelScopeChat
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
@@ -21,6 +21,7 @@ from core.llm.chat_model.models.siliconflow_chat import SILICONFLOWChat
 from core.llm.chat_model.models.spark_chat import SparkChat
 from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
+from core.llm.chat_model.models.yi_chat import YiChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.cv_model.models.anthropic_cv import AnthropicCV
 from core.llm.cv_model.models.azuregptv4 import AzureGptV4
@@ -131,7 +132,6 @@ ChatModel = {
     "Tencent Hunyuan": HunyuanChat,
     "BaiduYiyan": BaiduYiyanChat,
     "Gemini": GeminiChat,
-    "Doubao": DoubaoChat,
     "XunFei Spark": SparkChat,
     "PPIO": PPIOChat,
     "OpenAI-API-Compatible": OpenAI_APIChat,
@@ -139,7 +139,9 @@ ChatModel = {
     "Cohere": CoHereChat,
     "HuggingFace": HuggingFaceChat,
     "GPUStack": GPUStackChat,
-    "LM-Studio": LmStudioChat
+    "LM-Studio": LmStudioChat,
+    "MiniMax": MiniMaxChat,
+    "01.AI": YiChat
 }
 
 RerankModel = {
