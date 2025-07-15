@@ -154,11 +154,14 @@ async def upload(
     # err, files = FileService.upload_document(db, kb, file_contents, user)
     err, files = FileService.upload_document(db, kb, file_contents, user, labels)  # 传递labels参数
 
+    # if err:
+    #     return get_json_result(data=files, retmsg="\n".join(err), retcode=settings.RetCode.SERVER_ERROR)
+    if err:
+        return construct_json_result(data=False, message="\n".join(err), code=settings.RetCode.SERVER_ERROR)
+
     if not files:
         return get_json_result(data=files, retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.", retcode=settings.RetCode.DATA_ERROR)
 
-    if err:
-        return construct_json_result(data=False, message="\n".join(err), code=settings.RetCode.SERVER_ERROR)
     return construct_json_result(data=files, code=settings.RetCode.SUCCESS)
 
 
