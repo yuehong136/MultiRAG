@@ -1,3 +1,6 @@
+import logging
+from json import JSONDecodeError
+
 import numpy as np
 import requests
 
@@ -27,7 +30,12 @@ class JinaEmbed(Base):
                 "input": texts[i:i + batch_size],
                 'encoding_type': 'float'
             }
-            res = requests.post(self.base_url, headers=self.headers, json=data).json()
+            response = requests.post(self.base_url, headers=self.headers, json=data)
+            try:
+                res = response.json()
+            except JSONDecodeError as e:
+                logging.error(f"JSON decode error: {e}\nResponse content: {response.text[:2000]}")
+                raise
             ress.extend([d["embedding"] for d in res["data"]])
             token_count += self.total_token_count(res)
         return np.array(ress), token_count
