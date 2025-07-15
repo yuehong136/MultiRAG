@@ -17,7 +17,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
 
 from api.db.db_models import SessionLocal
-from api.db.services.sensitive_word_service import SensitiveWordService
 from api.utils.api_utils import get_json_result
 from api import settings
 
@@ -58,7 +57,10 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
         logging.info(f"[敏感词中间件] 需要过滤: {request.url.path}")
         
         # 判断是否为SSE接口
-        is_sse_endpoint = request.url.path.endswith("_sse") or "stream" in str(request.url)
+        is_sse_endpoint = (request.url.path.endswith("_sse") or 
+                          "stream" in str(request.url) or 
+                          "completion" in request.url.path or
+                          request.headers.get("accept") == "text/event-stream")
         
         # 获取用户信息
         user_info = await self._get_user_info(request)
@@ -130,13 +132,10 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
                 )
             else:
                 # 普通接口返回JSON响应
-                return JSONResponse(
-                    status_code=400,
-                    content=get_json_result(
-                        data=False,
-                        retmsg="内容包含敏感信息，请修改后重试",
-                        retcode=settings.RetCode.OPERATING_ERROR
-                    )
+                return get_json_result(
+                    data=False,
+                    retmsg="内容包含敏感信息，请修改后重试",
+                    retcode=settings.RetCode.OPERATING_ERROR
                 )
         
         # 如果内容被过滤且不是SSE接口，修改请求体
@@ -148,11 +147,23 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
             # 修改请求体
             modified_body = self._modify_request_body(body, text_content, filtered_full_content)
             
-            # 创建新的receive函数
+            # 创建符合ASGI规范的receive函数
+            message_sent = False
+            
             async def new_receive():
+                nonlocal message_sent
+                if not message_sent:
+                    message_sent = True
+                    return {
+                        "type": "http.request",
+                        "body": modified_body.encode("utf-8") if isinstance(modified_body, str) else modified_body,
+                        "more_body": False
+                    }
+                # 后续调用返回空body
                 return {
                     "type": "http.request",
-                    "body": modified_body.encode("utf-8") if isinstance(modified_body, str) else modified_body
+                    "body": b"",
+                    "more_body": False
                 }
             
             # 替换原始receive函数
@@ -253,16 +264,34 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
             # 保存body到request对象，避免重复读取
             request._body = body
             
-            # 创建新的receive函数
+            # 创建符合ASGI规范的receive函数
+            message_sent = False
+            
             async def receive():
+                nonlocal message_sent
+                if not message_sent:
+                    message_sent = True
+                    return {
+                        "type": "http.request",
+                        "body": body,
+                        "more_body": False
+                    }
+                # 后续调用返回空body
                 return {
-                    "type": "http.request",
-                    "body": body
+                    "type": "http.request", 
+                    "body": b"",
+                    "more_body": False
                 }
             
             # 只在非SSE接口时替换receive函数
             # SSE接口可能需要特殊的receive处理
-            if not (request.url.path.endswith("_sse") or "stream" in str(request.url)):
+            # 检查更多SSE相关路径标识
+            is_sse = (request.url.path.endswith("_sse") or 
+                     "stream" in str(request.url) or 
+                     "completion" in request.url.path or
+                     request.headers.get("accept") == "text/event-stream")
+            
+            if not is_sse:
                 request._receive = receive
             
             if body:
@@ -327,17 +356,38 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
             return ""
     
     async def _filter_content(self, content: str, tenant_id: str, **kwargs) -> dict:
-        """执行敏感词过滤"""
+        """执行AI安全护栏检测"""
         db = SessionLocal()
         try:
-            return SensitiveWordService.filter_content(
+            # 使用新的AI护栏检测引擎
+            from api.db.services.ai_guard_engine_service import AIGuardEngineService
+            
+            # 根据请求路径确定服务代码
+            service_code = self._determine_service_code(kwargs.get('source_id', ''))
+            
+            detection_result = AIGuardEngineService.detect_content(
                 db=db,
                 content=content,
+                service_code=service_code,
                 tenant_id=tenant_id,
-                **kwargs
+                user_id=kwargs.get('user_id'),
+                request_id=kwargs.get('request_id'),
+                source_type=kwargs.get('source_type'),
+                source_id=kwargs.get('source_id'),
+                client_ip=kwargs.get('ip_address'),
+                user_agent=kwargs.get('user_agent')
             )
+            
+            # 转换为中间件兼容格式
+            return {
+                "is_sensitive": detection_result.get("is_blocked", False),
+                "filtered_content": content,  # 新系统暂时不修改内容
+                "matched_words": self._extract_matched_words(detection_result.get("matched_items", [])),
+                "action": detection_result.get("action", "pass"),
+                "risk_score": detection_result.get("overall_risk_score", 0.0)
+            }
         except Exception as e:
-            logging.error(f"敏感词过滤失败: {e}")
+            logging.error(f"AI安全护栏检测失败: {e}")
             return {
                 "is_sensitive": False,
                 "filtered_content": content,
@@ -346,6 +396,38 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
             }
         finally:
             db.close()
+    
+    def _determine_service_code(self, source_id: str) -> str:
+        """根据请求路径确定服务代码"""
+        try:
+            if not source_id:
+                return "query_security_check"
+            
+            # 根据URL路径选择服务代码
+            if "/llm/" in source_id or "/chat" in source_id:
+                return "query_security_check"
+            elif "/conversation/" in source_id:
+                return "response_security_check"
+            else:
+                return "query_security_check"
+        except Exception:
+            return "query_security_check"
+    
+    def _extract_matched_words(self, matched_items: list) -> list:
+        """从匹配项中提取词汇信息"""
+        try:
+            matched_words = []
+            for item in matched_items:
+                if isinstance(item, dict):
+                    matched_words.append({
+                        "word": item.get("content", ""),
+                        "type": item.get("type", "unknown"),
+                        "weight": item.get("weight", 1.0)
+                    })
+            return matched_words
+        except Exception as e:
+            logging.warning(f"提取匹配词汇失败: {e}")
+            return []
     
     def _modify_request_body(self, original_body: str, original_content: str, filtered_content: str) -> str:
         """修改请求体中的敏感内容"""
