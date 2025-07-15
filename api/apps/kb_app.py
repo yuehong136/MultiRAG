@@ -170,6 +170,10 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
             return get_data_error_result()
 
         if kb.pagerank != req_data.get("pagerank", 0):
+            # todo 测试 milvus 能否利用 pagerank【20250715】
+            if os.environ.get("DOC_ENGINE", "milvus") != "elasticsearch":
+                return get_data_error_result(retmsg="'pagerank' can only be set when doc_engine is elasticsearch")
+
             if req_data.get("pagerank", 0) > 0:
                 try:
                     settings.docStoreConn.update(
