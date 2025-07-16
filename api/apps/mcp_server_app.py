@@ -18,7 +18,7 @@ from api.db.services.user_service import TenantService
 from api.utils import get_uuid
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from api.utils.web_utils import get_float, safe_json_parse
-from mcp_client.mcp_tool_call import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
+from core.utils.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from api.apps import manager
 
 router = APIRouter()
@@ -921,7 +921,7 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
     if not mcp_ids:
         return get_data_error_result(retmsg="No MCP server IDs provided.")
 
-    timeout = req_data.get("timeout", 10.0)
+    timeout = get_float(req_data, "timeout", 10)
 
     results = {}
     tool_call_sessions = []
@@ -1072,7 +1072,8 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
     if not mcp_id:
         return get_data_error_result(retmsg="No MCP server ID provided.")
 
-    timeout = req_data.get("timeout", 10.0)
+    timeout = get_float(req_data, "timeout", 10)
+
     tool_name = req_data.get("tool_name", "")
     arguments = req_data.get("arguments", {})
     

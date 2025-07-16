@@ -7,7 +7,6 @@
 @desc:
 """
 from api.utils.log_utils import init_root_logger
-from mcp_client.mcp_tool_call import shutdown_all_mcp_sessions
 from plugin import GlobalPluginManager
 init_root_logger("multirag_server")
 # init_root_logger("multirag_server")
@@ -41,6 +40,7 @@ from api.versions import get_multirag_version
 import uvicorn
 from api.utils import show_configs
 from core.settings import print_rag_settings
+from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions
 from core.utils.redis_conn import RedisDistributedLock
 
 stop_event = threading.Event()

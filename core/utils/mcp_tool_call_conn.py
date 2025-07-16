@@ -3,6 +3,7 @@ import logging
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from string import Template
 from typing import Any, Literal
 
@@ -101,7 +102,7 @@ class MCPToolCallSession(ToolCallSession):
         try:
             result: CallToolResult | Exception = await asyncio.wait_for(results.get(), timeout=timeout)
         except asyncio.TimeoutError:
-            raise TimeoutError(f"MCP task '{task_type}' timeout after {timeout}s")
+            raise asyncio.TimeoutError(f"MCP task '{task_type}' timeout after {timeout}s")
 
         if isinstance(result, Exception):
             raise result
@@ -128,8 +129,8 @@ class MCPToolCallSession(ToolCallSession):
         future = asyncio.run_coroutine_threadsafe(self._get_tools_from_mcp_server(), self._event_loop)
         try:
             return future.result(timeout=timeout)
-        except TimeoutError:
-            logging.error(f"Timeout when fetching tools from MCP server: {self._mcp_server.id}")
+        except FuturesTimeoutError:
+            logging.error(f"Timeout when fetching tools from MCP server: {self._mcp_server.id} (timeout={timeout})")
             return []
         except Exception:
             logging.exception(f"Error fetching tools from MCP server: {self._mcp_server.id}")
@@ -140,9 +141,9 @@ class MCPToolCallSession(ToolCallSession):
         future = asyncio.run_coroutine_threadsafe(self._call_mcp_tool(name, arguments), self._event_loop)
         try:
             return future.result(timeout=timeout)
-        except TimeoutError as te:
-            logging.error(f"Timeout calling tool '{name}' on MCP server: {self._mcp_server.id}")
-            return f"Timeout calling tool '{name}': {te}."
+        except FuturesTimeoutError:
+            logging.error(f"Timeout calling tool '{name}' on MCP server: {self._mcp_server.id} (timeout={timeout})")
+            return f"Timeout calling tool '{name}' (timeout={timeout})."
         except Exception as e:
             logging.exception(f"Error calling tool '{name}' on MCP server: {self._mcp_server.id}")
             return f"Error calling tool '{name}': {e}."
@@ -164,8 +165,8 @@ class MCPToolCallSession(ToolCallSession):
         future = asyncio.run_coroutine_threadsafe(self.close(), self._event_loop)
         try:
             future.result(timeout=timeout)
-        except TimeoutError:
-            logging.error(f"Timeout while closing session for server {self._mcp_server.id}")
+        except FuturesTimeoutError:
+            logging.error(f"Timeout while closing session for server {self._mcp_server.id} (timeout={timeout})")
         except Exception:
             logging.exception(f"Unexpected error during close_sync for {self._mcp_server.id}")
 
