@@ -87,6 +87,8 @@ class FileSource(StrEnum):
 
 class MCPServerType(StrEnum):
     SSE = "sse"
-    StreamableHttp = "streamable-http"
+    STREAMABLE_HTTP = "streamable-http"
+
+VALID_MCP_SERVER_TYPES = {MCPServerType.SSE, MCPServerType.STREAMABLE_HTTP}
 
 KNOWLEDGEBASE_FOLDER_NAME = ".knowledgebase"

@@ -875,8 +875,8 @@ class MCPServer(BaseModel):
     url = Column(String(2048), index=False, nullable=False, doc="MCP Server URL")
     server_type = Column(String(32), index=True, nullable=False, doc="MCP Server type")
     description = Column(Text, index=False, nullable=True, doc="MCP Server description")
-    variables = Column(JSONB, index=False, nullable=True, default=[], doc="MCP Server variables")
-    headers = Column(JSONB, index=False, nullable=True, default={}, doc="MCP Server additional request headers")
+    variables = Column(JSONB, index=False, nullable=True, default=dict, doc="MCP Server variables")
+    headers = Column(JSONB, index=False, nullable=True, default=dict, doc="MCP Server additional request headers")
 
 
 class Search(BaseModel):

@@ -1,4 +1,7 @@
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.functions import func
+
 from api.db.db_models import MCPServer
 from api.db.services.common_service import CommonService
 
@@ -16,7 +19,7 @@ class MCPServerService(CommonService):
     model = MCPServer
 
     @classmethod
-    def get_servers(cls, db: Session, tenant_id: str, id_list: list[str] | None = None):
+    def get_servers(cls, db: Session, tenant_id: str, id_list: list[str] | None, page_number, items_per_page, orderby, desc, keywords):
         """Retrieve all MCP servers associated with a tenant.
 
         This method fetches all MCP servers for a given tenant, ordered by creation time.
@@ -32,14 +35,29 @@ class MCPServerService(CommonService):
                        Returns None if no MCP servers are found.
         """
         fields = [
-            cls.model.id, cls.model.name, cls.model.server_type, cls.model.url, cls.model.description, 
-            cls.model.variables, cls.model.update_date
+            cls.model.id,
+            cls.model.name,
+            cls.model.server_type,
+            cls.model.url,
+            cls.model.description,
+            cls.model.variables,
+            cls.model.create_date,
+            cls.model.update_date,
         ]
 
         query = db.query(*fields).filter(cls.model.tenant_id == tenant_id).order_by(cls.model.create_time.desc())
 
         if id_list is not None:
             query = query.filter(cls.model.id.in_(id_list))
+        if keywords:
+            query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
+        if desc:
+            query = query.order_by(getattr(cls.model, orderby).desc())
+        else:
+            query = query.order_by(getattr(cls.model, orderby).asc())
+        if page_number and items_per_page:
+            offset = (page_number - 1) * items_per_page
+            query = query.offset(offset).limit(items_per_page)
 
         servers = query.all()
         if not servers:
@@ -59,3 +77,15 @@ class MCPServerService(CommonService):
             server_list.append(server_dict)
         
         return server_list
+
+
+    @classmethod
+    def get_by_name_and_tenant(cls, db: Session, name: str, tenant_id: str):
+        try:
+            mcp_server = db.query(cls.model).filter_by(
+                name=name,
+                tenant_id=tenant_id
+            ).first()
+            return bool(mcp_server), mcp_server
+        except SQLAlchemyError:
+            return False, None

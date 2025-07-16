@@ -3,7 +3,7 @@
 @project: multirag
 @Author：龙
 @file： search_app.py
-@date：2024/7/15 16:20
+@date：2025/7/15 16:20
 @desc: 搜索应用接口
 """
 from fastapi import APIRouter, Depends, Query
@@ -142,8 +142,8 @@ def create(request: CreateSearchRequest, db: Session = Depends(get_db), user=Dep
         return get_data_error_result(retmsg="Search name must be string.")
     if search_name.strip() == "":
         return get_data_error_result(retmsg="Search name can't be empty.")
-    if len(search_name.encode("utf-8")) > DATASET_NAME_LIMIT:
-        return get_data_error_result(retmsg=f"Search name length is {len(search_name)} which is large than {DATASET_NAME_LIMIT}")
+    if len(search_name.encode("utf-8")) > 255:
+        return get_data_error_result(retmsg=f"Search name length is {len(search_name)} which is large than 255.")
 
     # 验证租户
     tenant = TenantService.get_by_id(db, user.id)
@@ -153,15 +153,15 @@ def create(request: CreateSearchRequest, db: Session = Depends(get_db), user=Dep
     search_name = search_name.strip()
     search_name = duplicate_name(KnowledgebaseService.query, name=search_name, tenant_id=user.id, status=StatusEnum.VALID.value)
 
-    # 检查重复名称
-    existing_search = SearchService.query(
-        db=db,
-        name=search_name,
-        tenant_id=user.id,
-        status=StatusEnum.VALID.value
-    )
-    if existing_search:
-        return get_data_error_result(retmsg=f"已存在该搜索应用名: {existing_search[0].name}，请调整！")
+    # # 检查重复名称
+    # existing_search = SearchService.query(
+    #     db=db,
+    #     name=search_name,
+    #     tenant_id=user.id,
+    #     status=StatusEnum.VALID.value
+    # )
+    # if existing_search:
+    #     return get_data_error_result(retmsg=f"已存在该搜索应用名: {existing_search[0].name}，请调整！")
 
     try:
         req_data["id"] = get_uuid()
