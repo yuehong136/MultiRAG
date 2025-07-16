@@ -80,6 +80,14 @@ class CacheToolsRequest(BaseModel):
     tools: list[dict]
 
 
+class TestMCPRequest(BaseModel):
+    url: str
+    server_type: str
+    timeout: float = 10.0
+    headers: dict | None = None
+    variables: dict | None = None
+
+
 @router.post('/list', summary="获取MCP服务器列表", response_description="成功获取MCP服务器列表")
 def list_mcp(
     request: ListMCPServerRequest,
@@ -939,8 +947,9 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
 
                 try:
                     tools = tool_call_session.get_tools(timeout)
-                except Exception:
+                except Exception as e:
                     tools = []
+                    return get_data_error_result(retmsg=f"MCP list tools error: {e}")
 
                 results[server_key] = []
                 for tool in tools:
@@ -1262,5 +1271,135 @@ def cache_tools(request: CacheToolsRequest, db: Session = Depends(get_db), user=
             return get_data_error_result(retmsg="Failed to update MCP server.")
 
         return get_json_result(data=tools_dict)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post("/test_mcp", summary="测试MCP连接", response_description="成功测试MCP连接")
+def test_mcp(request: TestMCPRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    ### POST `/test_mcp` 测试MCP连接
+
+    **功能描述**:
+    此接口用于测试MCP服务器连接，验证配置是否正确。不会将MCP服务器信息保存到数据库中，
+    仅用于连接测试和工具获取验证。支持各种MCP服务器类型的连接测试。
+
+    ---
+    ### 请求体 (Request Body)
+    | 字段          | 类型     | 必填 | 描述                                     |
+    |---------------|----------|------|------------------------------------------|
+    | `url`         | `string` | 是   | MCP服务器的URL地址                       |
+    | `server_type` | `string` | 是   | MCP服务器类型                            |
+    | `timeout`     | `float`  | 否   | 连接超时时间（秒），默认10.0             |
+    | `headers`     | `object` | 否   | 连接头部信息                             |
+    | `variables`   | `object` | 否   | 环境变量配置                             |
+
+    **请求示例**:
+    ```json
+    {
+        "url": "http://localhost:8080",
+        "server_type": "stdio",
+        "timeout": 15.0,
+        "headers": {
+            "Authorization": "Bearer token123"
+        },
+        "variables": {
+            "ENV": "test"
+        }
+    }
+    ```
+
+    ---
+    ### 响应 (Response)
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": [
+            {
+                "name": "tool1",
+                "description": "Tool 1 description",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "param1": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        ]
+    }
+    ```
+
+    #### 错误响应
+    - **连接失败**:
+    ```json
+    {
+        "retcode": 400,
+        "retmsg": "MCP list tools error: Connection timeout",
+        "data": null
+    }
+    ```
+
+    ---
+    ### 主要流程
+    1. 验证请求参数的有效性
+    2. 创建临时的MCP服务器实例（不保存到数据库）
+    3. 使用MCPToolCallSession建立连接
+    4. 尝试获取可用工具列表
+    5. 返回工具列表信息
+
+    ---
+    ### 注意事项
+    - **临时连接**: 测试连接不会保存服务器信息到数据库
+    - **超时设置**: 建议设置合理的超时时间避免长时间等待
+    - **资源清理**: 连接测试完成后会自动清理资源
+    - **错误处理**: 提供详细的错误信息便于调试
+    """
+    req_data = request.model_dump()
+
+    url = req_data.get("url", "")
+    if not url:
+        return get_data_error_result(retmsg="Invaild MCP url.")
+
+    server_type = req_data.get("server_type", "")
+    if server_type not in VALID_MCP_SERVER_TYPES:
+        return get_data_error_result(retmsg="Unsupported MCP server type.")
+
+    timeout = get_float(req_data, "timeout", 10)
+    headers = safe_json_parse(req_data.get("headers", {}))
+    variables = safe_json_parse(req_data.get("variables", {}))
+
+    tool_call_sessions = []
+    try:
+        # 创建临时的MCP服务器实例用于测试
+        mcp_server = MCPServer(
+            id=f"{server_type}: {url}",
+            server_type=server_type,
+            url=url,
+            headers=headers,
+            variables=variables,
+        )
+
+        tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables)
+        tool_call_sessions.append(tool_call_session)
+        
+        try:
+            tools = tool_call_session.get_tools(timeout)
+        except Exception as e:
+            tools = []
+            return get_data_error_result(retmsg=f"MCP list tools error: {e}")
+        
+        results = []
+        for tool in tools:
+            tool_dict = tool.model_dump()
+            results.append(tool_dict)
+        
+        # PERF: blocking call to close sessions — consider moving to background thread or task queue
+        close_multiple_mcp_toolcall_sessions(tool_call_sessions)
+        return get_json_result(data=results)
+        
     except Exception as e:
         return server_error_response(e)
