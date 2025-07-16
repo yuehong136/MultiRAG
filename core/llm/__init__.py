@@ -12,6 +12,7 @@ from core.llm.chat_model.models.hunyuan_chat import HunyuanChat
 from core.llm.chat_model.models.lmstudio_chat import LmStudioChat
 from core.llm.chat_model.models.minimax_chat import MiniMaxChat
 from core.llm.chat_model.models.modelscope_chat import ModelScopeChat
+from core.llm.chat_model.models.moonshot_chat import MoonshotChat
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
 from core.llm.chat_model.models.openrouter_chat import OpenRouterChat
@@ -141,7 +142,8 @@ ChatModel = {
     "GPUStack": GPUStackChat,
     "LM-Studio": LmStudioChat,
     "MiniMax": MiniMaxChat,
-    "01.AI": YiChat
+    "01.AI": YiChat,
+    "Moonshot": MoonshotChat
 }
 
 RerankModel = {
