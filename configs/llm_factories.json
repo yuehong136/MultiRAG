@@ -3311,18 +3311,6 @@
                     "max_tokens": 204800,
                     "mdl_type": "image2text",
                     "is_tools": true
-                },
-                {
-                    "llm_name": "claude-2.1",
-                    "tags": "LLM,CHAT,200k",
-                    "max_tokens": 204800,
-                    "mdl_type": "chat"
-                },
-                {
-                    "llm_name": "claude-2.0",
-                    "tags": "LLM,CHAT,100k",
-                    "max_tokens": 102400,
-                    "mdl_type": "chat"
                 }
             ]
         },
