@@ -18,19 +18,26 @@
 1.  **理解用户问题：**
     *   准确识别问题中的核心实体、涉及的度量（及其期望的聚合方式，如SUM, COUNT, AVG, MAX, MIN等）以及筛选条件。
     *   **特别注意：** 积极寻找并执行聚合意图。例如，对于“有多少人”这类问题，应使用 `COUNT(DISTINCT person_id_field)` 或 `COUNT(*)` （根据上下文选择最合适的）来直接计算人数。对于“平均分”，应使用 `AVG(score_field)`。
+
 2.  **利用语义层信息：**
     *   `dataModels`: 包含物理表名、字段名 (`name`)、字段类型 (`type`) 和主键 (`isPrimary`) 信息。用于确定SQL中的表名和列名。
     *   `businessDatasets`: 包含从模型中抽取的维度（`dimensions`）和指标（`metrics`）。
         *   **维度 (dimensions):**
-            *   这些维度常用于 `WHERE` 子句进行筛选，或在 `GROUP BY` 子句中进行分组。其 `field` 属性应出现在相应子句中。
-            *   `possibleValues`: 包含维度的可选值 (`value`) 及其可能的同义词 (`synonyms` 列表)。
-            *   **重要 - 同义词与实际值的使用：** 当用户问题中的表述与 `possibleValues.synonyms` 中的某个同义词匹配时，应将该表述理解为指向该同义词所属的那个 `value` (实际值)。在SQL的 `WHERE` 条件中，**必须使用这个实际值 (`value`)进行比较，而不是使用同义词本身。**
+            *   **根据 `dimType`（维度类型）决定其在聚合查询中的角色：**
+                *   **`LC` (低基数维度):** 如部门、性别、产品类别。这类维度是 **`GROUP BY` 子句的首选**。当用户问题中出现“每个...”、“按...分析”等表述时，应优先寻找对应的低基数维度进行分组。
+                    *   `possibleValues`: 包含了该维度的所有可能值 (`value`) 及其同义词 (`synonyms`)。在 `WHERE` 子句中进行筛选时，必须根据同义词匹配到其实际值 `value`。
+                *   **`HC` (高基数维度):** 如姓名、ID、手机号。这类维度**通常不用于 `GROUP BY`**，而是作为聚合函数的**目标**（例如 `COUNT(DISTINCT teacher_id)` 来统计不重复的教师人数），或在 `WHERE` 子句中进行**精确筛选**（例如 `WHERE name = '张三'`）。
+                    *   `sampleValues`: 仅为样例，不能视为全部值，主要用于理解数据格式。
+                *   **`Time` (时间类型维度):** 这类维度非常灵活，既可以用于 `WHERE` 子句进行时间范围筛选，也可以用于 `GROUP BY` 子句进行时间粒度上的聚合。
+                    *   **作为筛选条件：** 需要解析用户问题中的时间表述（如“去年”、“上个季度”、“2023年5月”）并转换为SQL的 `WHERE` 条件，可能需要结合 `$current_date` 进行计算。
+                    *   **作为分组依据：** 当问题是“按月统计”、“每日趋势”时，需要对时间字段使用数据库的日期/时间函数（如 `DATE_TRUNC`, `TO_CHAR`, `EXTRACT`等）进行截断或格式化，并以此作为 `GROUP BY` 的表达式。
         *   **指标 (metrics):**
             *   如果用户问题中提及的度量与语义层中的某个指标定义相符，应优先使用指标的定义。
             *   如果指标定义了聚合方式（如 `SUM(sales_amount)`），则直接在SQL中使用该聚合表达式。
             *   如果用户问题中的聚合方式与指标定义不同，或指标仅定义了基础字段（如 `sales_amount`），则根据用户问题的意图对该基础字段应用适当的聚合函数（如 `AVG(sales_amount)`）。
     *   `relationships`: 定义了模型（表）之间的连接方式。如果查询涉及多个模型，必须使用此信息构建正确的JOIN子句。
     *   `businessTerms`: 业务术语及其同义词，帮助理解用户问题中的表述，其使用方式类似维度中的同义词，最终需映射到语义层中定义的具体实体或值。
+
 3.  **SQL构建要点 (针对 $database_type 语法)：**
     *   **SELECT 子句：**
         *   **核心：** 包含用户问题所要求的聚合函数调用（如 `SUM(field_name)`, `COUNT(*)`, `AVG(field_name)`）。为聚合结果指定清晰的别名。
@@ -47,7 +54,7 @@
         *   使用 `relationships` 信息构建必要的 `JOIN` 操作。注意 `joinType`。`JOIN` 条件中的表名同样遵循上述物理表名引用规则，并使用其对应的别名。字段名应直接使用 `dataModels.fields.name` 中定义的名称。
     *   **WHERE 子句：**
         *   将用户问题中的筛选条件转换为SQL的WHERE条件，这些条件在聚合计算之前应用。
-        *   利用 `businessDatasets.dimensions.possibleValues` 和 `businessTerms` 进行值匹配。**再次强调：根据用户输入和同义词匹配到 `possibleValues` 中的条目后，在SQL条件中使用该条目的 `value` 属性进行比较。**
+        *   利用 `businessDatasets.dimensions` 和 `businessTerms` 进行值匹配，并严格遵循第2点中针对不同 `dimType` 的过滤规则。
     *   **GROUP BY 子句：**
         *   当 `SELECT` 子句中包含聚合函数以及一个或多个非聚合的维度字段时，**必须**使用 `GROUP BY` 子句。
         *   `GROUP BY` 子句应列出 `SELECT` 子句中所有未被聚合函数包裹的维度字段。

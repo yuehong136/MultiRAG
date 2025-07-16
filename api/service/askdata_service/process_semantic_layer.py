@@ -1,3 +1,4 @@
+import json
 from typing import List, Dict, Any
 
 
@@ -63,17 +64,20 @@ def process_business_datasets(
                 dimension_output = {}
                 dimension_output["id"] = dimension_id
                 dimension_output["name"] = dimension.get("dimensionName")
+                dimension_output["dimType"] = dimension.get("dimtype")
+                if dimension_output["dimType"].lower() == "time":
+                    semanticsformat = dimension.get('semanticsformat',{})
+                    if semanticsformat:
+                        dimension_output["timeFormat"] = json.loads(semanticsformat).get("timeFormat")
                 dimension_output["field"] = dimension.get("dimensionEnName")
                 dimension_output["fromModel"] = dimension.get("modelName")
                 dimension_output["fromModelId"] = dimension.get("modelId")
                 dimension_output["comment"] = dimension.get("description")
                 dimension_output["synonyms"] = dimension.get("synonyms")
-                if dimension["dimtype"] == "HC":
-                    for hc_dimension in hc_dimensions_by_value:
-                        if hc_dimension["dimensionId"] == dimension_id:
-                            dimension_output["possibleValues"] = hc_dimension["matched"]
-                else:
+                if dimension_output["dimType"].lower() == "time" or dimension_output["dimType"] == "LC":
                     dimension_output["possibleValues"] = dimension_values[dimension_id]
+                else:
+                    dimension_output["sampleValues"] = dimension_values[dimension_id]
                 dimensions_output.append(dimension_output)
         business_dataset["dimensions"] = dimensions_output
 
