@@ -699,10 +699,14 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         "content_sm_ltks": rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(request.content_with_weight)),
     }
     important_kwd = request.important_kwd if request.important_kwd is not None else []
+    if not isinstance(important_kwd, list):
+        return get_data_error_result(retmsg="`important_kwd` should be a list")
     d["important_kwd"] = important_kwd
     d["important_tks"] = rag_tokenizer.tokenize(" ".join(important_kwd)) if important_kwd else ""
 
     question_kwd = request.question_kwd if request.question_kwd is not None else []
+    if not isinstance(question_kwd, list):
+        return get_data_error_result(retmsg="`question_kwd` should be a list")
     d["question_kwd"] = question_kwd
     d["question_tks"] = rag_tokenizer.tokenize("\n".join(question_kwd)) if question_kwd else ""
 
