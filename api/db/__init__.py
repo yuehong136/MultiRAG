@@ -44,6 +44,7 @@ class LLMType(StrEnum):
     RERANK = 'rerank'
     TTS    = 'tts'
 
+
 class ChatStyle(StrEnum):
     CREATIVE = 'Creative'
     PRECISE = 'Precise'
@@ -77,10 +78,15 @@ class ParserType(StrEnum):
     KG = "knowledge_graph"
     TAG = "tag"
 
+
 class FileSource(StrEnum):
     LOCAL = ""
     KNOWLEDGEBASE = "knowledgebase"
     S3 = "s3"
 
+
+class MCPServerType(StrEnum):
+    SSE = "sse"
+    StreamableHttp = "streamable-http"
 
 KNOWLEDGEBASE_FOLDER_NAME = ".knowledgebase"

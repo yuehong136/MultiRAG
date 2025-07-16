@@ -70,7 +70,7 @@ class QWenChat(Base):
                     tool_name = assistant_output.tool_calls[0]["function"]["name"]
                     if tool_name:
                         arguments = json.loads(assistant_output.tool_calls[0]["function"]["arguments"])
-                        tool_info["content"] = self.toolcall_session.tool_call(name=tool_name, arguments=arguments)
+                        tool_info["content"] = self.toolcall_sessions[tool_name].tool_call(name=tool_name, arguments=arguments)
                     history.append(tool_info)
 
                     response = Generation.call(self.model_name, messages=history, result_format="message", tools=self.tools, **gen_conf)
@@ -194,7 +194,7 @@ class QWenChat(Base):
 
                                 tool_name = toolcall_message.tool_calls[0]["function"]["name"]
                                 history.append(toolcall_message)
-                                tool_info["content"] = self.toolcall_session.tool_call(name=tool_name, arguments=tool_arguments)
+                                tool_info["content"] = self.toolcall_sessions[tool_name].tool_call(name=tool_name, arguments=tool_arguments)
                                 history.append(tool_info)
                                 tool_info = {"content": "", "role": "tool"}
                                 tool_name = ""

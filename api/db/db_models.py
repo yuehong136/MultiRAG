@@ -865,6 +865,20 @@ class SensitiveFilterStats(BaseModel):
         }
 
 
+class MCPServer(BaseModel):
+    __tablename__ = "t_ai_mcp_server"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    name = Column(String(255), index=True, nullable=False, doc="MCP Server name")
+    tenant_id = Column(String(32), index=True, nullable=False)
+    url = Column(String(2048), index=False, nullable=False, doc="MCP Server URL")
+    server_type = Column(String(32), index=True, nullable=False, doc="MCP Server type")
+    description = Column(Text, index=False, nullable=True, doc="MCP Server description")
+    variables = Column(JSONB, index=False, nullable=True, default=[], doc="MCP Server variables")
+    headers = Column(JSONB, index=False, nullable=True, default={}, doc="MCP Server additional request headers")
+
+
 class Search(BaseModel):
     """
     搜索配置表
