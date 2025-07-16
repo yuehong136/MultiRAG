@@ -34,7 +34,7 @@ class CreateMCPServerRequest(BaseModel):
 
 
 class UpdateMCPServerRequest(BaseModel):
-    id: str
+    mcp_id: str
     name: str | None = None
     server_type: str | None = None
     url: str | None = None
@@ -73,6 +73,11 @@ class TestToolRequest(BaseModel):
     tool_name: str
     arguments: dict
     timeout: float = 10.0
+
+
+class CacheToolsRequest(BaseModel):
+    mcp_id: str
+    tools: list[dict]
 
 
 @router.post('/list', summary="获取MCP服务器列表", response_description="成功获取MCP服务器列表")
@@ -349,7 +354,7 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
     ### 请求体 (Request Body)
     | 字段          | 类型     | 必填 | 描述                                               |
     |---------------|----------|------|----------------------------------------------------|
-    | `id`          | `string` | 是   | 要更新的MCP服务器ID                                |
+    | `mcp_id`      | `string` | 是   | 要更新的MCP服务器ID                                |
     | `name`        | `string` | 否   | 新的MCP服务器名称                                  |
     | `server_type` | `string` | 否   | 新的MCP服务器类型                                  |
     | `url`         | `string` | 否   | 新的MCP服务器URL                                   |
@@ -431,7 +436,7 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
     if server_name and len(server_name.encode("utf-8")) > 255:
         return get_data_error_result(retmsg=f"Invalid MCP name or length is {len(server_name)} which is large than 255.")
 
-    mcp_id = req_data.get("id", "")
+    mcp_id = req_data.get("mcp_id", "")
     mcp_server = MCPServerService.get_by_id(db, mcp_id)
     if not mcp_server or mcp_server.tenant_id != user.id:
         return get_data_error_result(retmsg=f"Cannot find MCP server {mcp_id} for user {user.id}")
@@ -443,18 +448,16 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
         req_data["variables"] = safe_json_parse(req_data.get("variables", mcp_server.variables))
 
     try:
-        server_id = req_data["id"]
         req_data["tenant_id"] = user.id
-        
-        # 移除id字段，避免更新时冲突
-        req_data.pop("id", None)
+        req_data.pop("mcp_id", None)
+        req_data["id"] = mcp_id
 
         # 更新MCP服务器
-        if not MCPServerService.filter_update(db, [MCPServer.id == server_id, MCPServer.tenant_id == user.id], req_data):
+        if not MCPServerService.filter_update(db, [MCPServer.id == mcp_id, MCPServer.tenant_id == user.id], req_data):
             return get_data_error_result(retmsg="Failed to update MCP server.")
 
         # 获取更新后的MCP服务器
-        updated_mcp = MCPServerService.get_by_id(db, server_id)
+        updated_mcp = MCPServerService.get_by_id(db, req_data["id"])
         if not updated_mcp:
             return get_data_error_result(retmsg="Failed to fetch updated MCP server.")
 
@@ -929,11 +932,23 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
             if mcp_server and mcp_server.tenant_id == user.id:
                 server_key = mcp_server.id
 
+                cached_tools = mcp_server.variables.get("tools", {})
+
                 tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables)
                 tool_call_sessions.append(tool_call_session)
-                tools = tool_call_session.get_tools(timeout)
 
-                results[server_key] = [tool.model_dump() for tool in tools]
+                try:
+                    tools = tool_call_session.get_tools(timeout)
+                except Exception:
+                    tools = []
+
+                results[server_key] = []
+                for tool in tools:
+                    tool_dict = tool.model_dump()
+                    cached_tool = cached_tools.get(tool_dict["name"])
+
+                    tool_dict["enabled"] = cached_tool.get("enabled") if cached_tool and "enabled" in cached_tool else True
+                    results[server_key].append(tool_dict)
 
         # PERF: blocking call to close sessions — consider moving to background thread or task queue
         close_multiple_mcp_toolcall_sessions(tool_call_sessions)
@@ -1077,5 +1092,174 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
         # PERF: blocking call to close sessions — consider moving to background thread or task queue
         close_multiple_mcp_toolcall_sessions(tool_call_sessions)
         return get_json_result(data=result)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post('/cache_tools', summary="缓存MCP工具配置", response_description="成功缓存MCP工具配置")
+def cache_tools(request: CacheToolsRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    ### POST `/cache_tools` 缓存MCP工具配置
+    
+    **功能描述**:
+    此接口用于缓存MCP服务器的工具配置信息。将工具列表保存到MCP服务器的variables中，
+    用于后续快速访问工具信息，避免重复查询MCP服务器。支持工具的启用/禁用状态管理。
+    
+    ---
+    ### 请求体 (Request Body)
+    | 字段      | 类型          | 必填 | 描述                           |
+    |-----------|---------------|------|--------------------------------|
+    | `mcp_id`  | `string`      | 是   | MCP服务器ID                     |
+    | `tools`   | `list[object]` | 是   | 工具列表，每个工具包含name字段   |
+    
+    **请求示例**:
+    ```json
+    {
+        "mcp_id": "uuid-server-id",
+        "tools": [
+            {
+                "name": "search_web",
+                "description": "Search the web for information",
+                "enabled": true,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "get_weather",
+                "description": "Get weather information",
+                "enabled": false,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "Location to get weather for"
+                        }
+                    },
+                    "required": ["location"]
+                }
+            }
+        ]
+    }
+    ```
+    
+    ---
+    ### 响应 (Response)
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "search_web": {
+                "name": "search_web",
+                "description": "Search the web for information",
+                "enabled": true,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "get_weather": {
+                "name": "get_weather",
+                "description": "Get weather information",
+                "enabled": false,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "Location to get weather for"
+                        }
+                    },
+                    "required": ["location"]
+                }
+            }
+        }
+    }
+    ```
+    
+    #### 错误响应
+    - **无MCP服务器ID**:
+    ```json
+    {
+        "retcode": 400,
+        "retmsg": "No MCP server ID provided.",
+        "data": null
+    }
+    ```
+    - **服务器未找到**:
+    ```json
+    {
+        "retcode": 400,
+        "retmsg": "Cannot find MCP server uuid-server-id for user user-id",
+        "data": null
+    }
+    ```
+    - **更新失败**:
+    ```json
+    {
+        "retcode": 400,
+        "retmsg": "Failed to update MCP server.",
+        "data": null
+    }
+    ```
+    
+    ---
+    ### 主要流程
+    1. 验证请求参数，确保提供了MCP服务器ID和工具列表
+    2. 查找指定的MCP服务器，验证用户权限
+    3. 将工具列表转换为以工具名称为键的字典格式
+    4. 更新MCP服务器的variables字段，保存工具缓存
+    5. 返回缓存的工具配置信息
+    
+    ---
+    ### 注意事项
+    - **权限验证**: 只能缓存用户有权限的MCP服务器工具
+    - **数据格式**: 工具列表会被转换为字典格式存储
+    - **数据持久化**: 缓存的工具信息会保存到数据库中
+    - **配置合并**: 工具缓存会与现有variables合并
+    - **性能优化**: 缓存可以减少对MCP服务器的重复查询
+    - **状态管理**: 支持工具的启用/禁用状态配置
+    """
+    req_data = request.model_dump()
+    mcp_id = req_data.get("mcp_id", "")
+    
+    if not mcp_id:
+        return get_data_error_result(retmsg="No MCP server ID provided.")
+    
+    tools = req_data.get("tools", [])
+
+    try:
+        mcp_server = MCPServerService.get_by_id(db, mcp_id)
+        if not mcp_server or mcp_server.tenant_id != user.id:
+            return get_data_error_result(retmsg=f"Cannot find MCP server {mcp_id} for user {user.id}")
+
+        # 获取现有的variables
+        variables = mcp_server.variables or {}
+        
+        # 将工具列表转换为字典格式，以工具名称为键
+        tools_dict = {tool["name"]: tool for tool in tools if isinstance(tool, dict) and "name" in tool}
+        variables["tools"] = tools_dict
+
+        # 更新MCP服务器的variables
+        if not MCPServerService.filter_update(db, [MCPServer.id == mcp_id, MCPServer.tenant_id == user.id], {"variables": variables}):
+            return get_data_error_result(retmsg="Failed to update MCP server.")
+
+        return get_json_result(data=tools_dict)
     except Exception as e:
         return server_error_response(e)
