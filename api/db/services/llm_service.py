@@ -35,15 +35,26 @@ class TenantLLMService(CommonService):
 
     @classmethod
     def get_api_key(cls, db: Session, tenant_id: str, model_name: str):
-        # logging.info(f"Debug: Fetching API key for tenant_id={tenant_id}, model_name={model_name}")
         mdlnm, fid = TenantLLMService.split_model_name_and_factory(model_name)
         if not fid:
             objs = cls.query(db, tenant_id=tenant_id, llm_name=mdlnm)
         else:
             objs = cls.query(db, tenant_id=tenant_id, llm_name=mdlnm, llm_factory=fid)
+
+        if (not objs) and fid:
+            if fid == "LocalAI":
+                mdlnm += "___LocalAI"
+            elif fid == "HuggingFace":
+                mdlnm += "___HuggingFace"
+            elif fid == "OpenAI-API-Compatible":
+                mdlnm += "___OpenAI-API"
+            elif fid == "VLLM":
+                mdlnm += "___VLLM"
+
+            objs = cls.query(db, tenant_id=tenant_id, llm_name=mdlnm, llm_factory=fid)
+
         if not objs:
             return None
-        # logging.info(f"Debug: Found API key: {objs[0].api_key}")
         return objs[0]
 
     @classmethod
