@@ -279,6 +279,12 @@ class SemanticLayerRequest(BaseModel):
         title="数据集ID列表",
         description="数据集ID列表",
     )
+    # 启用深度搜索，会对使用分词去高基数维度进行探查
+    enable_deep_search: bool = Field(
+        False,
+        title="启用深度搜索",
+        description="是否启用深度搜索功能"
+    )
 
 
 @router.post("/get-semantic-layer-streaming/{custom_event_id}", response_model=ResponseSchema,

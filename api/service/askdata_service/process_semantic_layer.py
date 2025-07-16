@@ -43,7 +43,6 @@ def process_data_models(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def process_business_datasets(
         dataset_details,
         dimensions,
-        hc_dimensions_by_value,
         metrics,
         dimension_values
 ) -> List[Dict[str, Any]]:
@@ -131,7 +130,6 @@ def process_semantic_layer(semantic_layer: Dict[str, Any]) -> Dict[str, Any]:
     dataset_details = semantic_layer.get("dataset_details")
     dimensions = semantic_layer.get("dimensions")
     dimension_values = semantic_layer.get("dimension_values")
-    hc_dimensions_by_value = semantic_layer.get("hc_dimensions_by_value", [])
     metrics = semantic_layer.get("metrics")
     model_details = semantic_layer.get("model_details")
     model_relations = semantic_layer.get("model_relations")
@@ -145,8 +143,7 @@ def process_semantic_layer(semantic_layer: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     semantic_structure["dataModels"] = process_data_models(model_details)
-    semantic_structure["businessDatasets"] = process_business_datasets(dataset_details, dimensions,
-                                                                       hc_dimensions_by_value, metrics,
+    semantic_structure["businessDatasets"] = process_business_datasets(dataset_details, dimensions, metrics,
                                                                        dimension_values)
     semantic_structure["relationships"] = process_relationships(model_relations)
     semantic_structure["businessTerms"] = process_business_terms(business_term_rows)

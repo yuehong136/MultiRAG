@@ -43,7 +43,7 @@ class AskdataService:
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
                                       conversation_id: Optional[str] = None, llm_name: str = None,
-                                      event_id: Optional[str] = None):
+                                      event_id: Optional[str] = None, enable_deep_search: bool = False):
         # 并行启动两个任务：语义层检索和图表推荐
         async def semantic_layer_task():
             await send_event(event_id, {"message": "分词", "action": "start"}, "message")
@@ -63,15 +63,17 @@ class AskdataService:
             dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
                 keyword=segmented_words,
                 dataset_ids=dataset_id_list)
-            # 分词关键字作为维度值关键字获得获得维度列表（高基数维度）TODO 中台有了API后正式开启
-            hc_dimensions_by_value = None
-            # hc_dimensions_by_value = await self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
-            #     keyword=segmented_words,
-            #     dataset_ids=dataset_id_list)
-            # hc_dim_id_list = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
+            hc_dim_id_list = []
+            # 分词关键字作为维度值关键字获得获得维度列表（高基数维度）
+            # TODO 将已经检索得到的维度传入该接口，这样可以不必再去这些已经得到的维度中去查询了
+            if enable_deep_search:
+                hc_dimensions_by_value = await self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
+                    keyword_list=segmented_words,
+                    dataset_ids=dataset_id_list)
+                hc_dim_id_list = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
             # 4. 根据dimensionId对dimensions_by_keyword和dimensions_by_value进行维度去重，获得最终维度列表
             unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
-            # unique_dimensions.extend(hc_dim_id_list)
+            unique_dimensions.extend(hc_dim_id_list)
             dimension_values = await self.semantic_api_client.get_dimension_values_async(
                 dimension_ids=unique_dimensions)
             dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=unique_dimensions)
@@ -102,7 +104,6 @@ class AskdataService:
                                                                                              domain_ids=domain_ids)
             semantic_layer_original = dict(dataset_details=dataset_details, dimensions=dimensions,
                                            dimension_values=dimension_values,
-                                           hc_dimensions_by_value=hc_dimensions_by_value,
                                            metrics=metrics, model_details=model_details,
                                            model_relations=model_relations, business_term_rows=business_term_rows)
 
