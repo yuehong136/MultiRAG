@@ -586,6 +586,13 @@ def run(
                 info["progress_msg"] = ""
                 info["chunk_num"] = 0
                 info["token_num"] = 0
+
+            doc = DocumentService.get_by_id(db, id)
+            if not doc:
+                return get_data_error_result(retmsg="Document not found!")
+            if doc.run == TaskStatus.DONE.value:
+                DocumentService.clear_chunk_num_when_rerun(db, doc.id)
+
             DocumentService.update_by_id(db, id, info)
             d = DocumentService.get_by_doc_id(db, id)
             kb_id = d["kb_id"]

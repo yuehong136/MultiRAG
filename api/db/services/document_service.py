@@ -413,12 +413,28 @@ class DocumentService(CommonService):
                 raise e
 
         return None
-        # kb_update = db.query(Knowledgebase).filter_by(id=doc.kb_id).update({
-        #     Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
-        #     Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
-        #     Knowledgebase.doc_num: Knowledgebase.doc_num - 1
-        # })
-        # return kb_update
+
+    @classmethod
+    def clear_chunk_num_when_rerun(cls, db: Session, doc_id):
+        # 获取文档
+        doc = db.query(cls.model).filter(cls.model.id == doc_id).first()
+        assert doc, "Can't find document in database."
+
+        # 更新知识库统计
+        num = (
+            db.query(Knowledgebase)
+            .filter(Knowledgebase.id == doc.kb_id)
+            .update({
+                Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
+                Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
+            })
+        )
+
+        # 提交事务
+        db.commit()
+
+        return num
+
 
     @classmethod
     def get_tenant_id(cls, db: Session, doc_id: str):
