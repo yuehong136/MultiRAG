@@ -41,7 +41,7 @@ import trio
 import faulthandler
 
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db import LLMType, ParserType, TaskStatus
+from api.db import LLMType, ParserType
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService
@@ -244,8 +244,7 @@ async def collect(db: Session):
     canceled = False
     task = TaskService.get_task(db, msg["id"])
     if task:
-        doc = DocumentService.get_by_id(db, task["doc_id"])
-        canceled = doc.run == TaskStatus.CANCEL.value or doc.progress < 0
+        canceled = TaskService.do_cancel(db, task["id"])
 
     if not task or canceled:
         state = "is unknown" if not task else "has been cancelled"
