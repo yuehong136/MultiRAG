@@ -17,7 +17,8 @@ from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.user_service import TenantService
 from api.utils import get_uuid
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
-from api.utils.web_utils import safe_json_parse
+from api.utils.web_utils import get_float, safe_json_parse
+from mcp_client.mcp_tool_call import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from api.apps import manager
 
 router = APIRouter()
@@ -60,6 +61,18 @@ class ImportMCPServerRequest(BaseModel):
 
 class ExportMCPServerRequest(BaseModel):
     mcp_ids: list[str]
+
+
+class ListToolsRequest(BaseModel):
+    mcp_ids: list[str]
+    timeout: float = 10.0
+
+
+class TestToolRequest(BaseModel):
+    mcp_id: str
+    tool_name: str
+    arguments: dict
+    timeout: float = 10.0
 
 
 @router.post('/list', summary="获取MCP服务器列表", response_description="成功获取MCP服务器列表")
@@ -418,11 +431,16 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
     if server_name and len(server_name.encode("utf-8")) > 255:
         return get_data_error_result(retmsg=f"Invalid MCP name or length is {len(server_name)} which is large than 255.")
 
+    mcp_id = req_data.get("id", "")
+    mcp_server = MCPServerService.get_by_id(db, mcp_id)
+    if not mcp_server or mcp_server.tenant_id != user.id:
+        return get_data_error_result(retmsg=f"Cannot find MCP server {mcp_id} for user {user.id}")
+
     # 使用safe_json_parse处理JSON字段
     if "headers" in req_data and req_data["headers"] is not None:
-        req_data["headers"] = safe_json_parse(req_data["headers"])
+        req_data["headers"] = safe_json_parse(req_data.get("headers", mcp_server.headers))
     if "variables" in req_data and req_data["variables"] is not None:
-        req_data["variables"] = safe_json_parse(req_data["variables"])
+        req_data["variables"] = safe_json_parse(req_data.get("variables", mcp_server.variables))
 
     try:
         server_id = req_data["id"]
@@ -770,5 +788,294 @@ def export_multiple(request: ExportMCPServerRequest, db: Session = Depends(get_d
                 }
 
         return get_json_result(data={"mcpServers": exported_servers})
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post('/list_tools', summary="获取MCP服务器工具列表", response_description="成功获取MCP服务器工具列表")
+def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    ### POST `/list_tools` 获取MCP服务器工具列表
+    
+    **功能描述**:
+    此接口用于获取指定MCP服务器的工具列表。通过连接到MCP服务器并查询其可用工具，
+    返回每个工具的详细信息，包括工具名称、描述、参数等。支持批量查询多个MCP服务器的工具。
+    
+    ---
+    ### 请求体 (Request Body)
+    | 字段      | 类型          | 必填 | 描述                         |
+    |-----------|---------------|------|------------------------------|
+    | `mcp_ids` | `list[string]` | 是   | MCP服务器ID列表               |
+    | `timeout` | `float`       | 否   | 连接超时时间（秒），默认10.0   |
+    
+    **请求示例**:
+    ```json
+    {
+        "mcp_ids": ["uuid-server-id-1", "uuid-server-id-2"],
+        "timeout": 15.0
+    }
+    ```
+    
+    ---
+    ### 响应 (Response)
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "uuid-server-id-1": [
+                {
+                    "name": "search_web",
+                    "description": "Search the web for information",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query"
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                },
+                {
+                    "name": "get_weather",
+                    "description": "Get weather information",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "Location to get weather for"
+                            }
+                        },
+                        "required": ["location"]
+                    }
+                }
+            ],
+            "uuid-server-id-2": [
+                {
+                    "name": "translate_text",
+                    "description": "Translate text between languages",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "text": {
+                                "type": "string",
+                                "description": "Text to translate"
+                            },
+                            "target_language": {
+                                "type": "string",
+                                "description": "Target language code"
+                            }
+                        },
+                        "required": ["text", "target_language"]
+                    }
+                }
+            ]
+        }
+    }
+    ```
+    
+    #### 错误响应
+    - **无MCP服务器ID**:
+    ```json
+    {
+        "retcode": 400,
+        "retmsg": "No MCP server IDs provided.",
+        "data": null
+    }
+    ```
+    - **连接超时**:
+    ```json
+    {
+        "retcode": 500,
+        "retmsg": "Connection timeout or server error",
+        "data": null
+    }
+    ```
+    
+    ---
+    ### 主要流程
+    1. 验证请求参数，确保提供了MCP服务器ID列表
+    2. 遍历每个MCP服务器ID，验证用户权限
+    3. 为每个有效的MCP服务器创建工具调用会话
+    4. 并行查询所有MCP服务器的工具列表
+    5. 关闭所有会话连接并返回结果
+    
+    ---
+    ### 注意事项
+    - **权限验证**: 只能查询用户有权限的MCP服务器工具
+    - **超时设置**: 建议根据网络状况调整timeout参数
+    - **资源管理**: 系统会自动关闭MCP连接，避免资源泄漏
+    - **批量处理**: 支持同时查询多个MCP服务器的工具
+    - **错误处理**: 单个服务器连接失败不会影响其他服务器的查询
+    """
+    req_data = request.model_dump()
+    mcp_ids = req_data.get("mcp_ids", [])
+    
+    if not mcp_ids:
+        return get_data_error_result(retmsg="No MCP server IDs provided.")
+
+    timeout = req_data.get("timeout", 10.0)
+
+    results = {}
+    tool_call_sessions = []
+    try:
+        for mcp_id in mcp_ids:
+            mcp_server = MCPServerService.get_by_id(db, mcp_id)
+
+            if mcp_server and mcp_server.tenant_id == user.id:
+                server_key = mcp_server.id
+
+                tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables)
+                tool_call_sessions.append(tool_call_session)
+                tools = tool_call_session.get_tools(timeout)
+
+                results[server_key] = [tool.model_dump() for tool in tools]
+
+        # PERF: blocking call to close sessions — consider moving to background thread or task queue
+        close_multiple_mcp_toolcall_sessions(tool_call_sessions)
+        return get_json_result(data=results)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post('/test_tool', summary="测试MCP工具", response_description="成功测试MCP工具")
+def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    ### POST `/test_tool` 测试MCP工具
+    
+    **功能描述**:
+    此接口用于测试指定MCP服务器的特定工具。通过连接到MCP服务器并调用指定工具，
+    返回工具执行结果。主要用于验证工具功能、调试工具参数或演示工具能力。
+    
+    ---
+    ### 请求体 (Request Body)
+    | 字段        | 类型     | 必填 | 描述                         |
+    |-------------|----------|------|------------------------------|
+    | `mcp_id`    | `string` | 是   | MCP服务器ID                   |
+    | `tool_name` | `string` | 是   | 要测试的工具名称               |
+    | `arguments` | `object` | 是   | 工具参数，JSON对象格式         |
+    | `timeout`   | `float`  | 否   | 执行超时时间（秒），默认10.0   |
+    
+    **请求示例**:
+    ```json
+    {
+        "mcp_id": "uuid-server-id",
+        "tool_name": "search_web",
+        "arguments": {
+            "query": "Claude AI assistant",
+            "max_results": 5
+        },
+        "timeout": 30.0
+    }
+    ```
+    
+    ---
+    ### 响应 (Response)
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Found 5 results for 'Claude AI assistant':\\n\\n1. Claude - Anthropic's AI Assistant\\n   Description: Claude is an AI assistant created by Anthropic...\\n   URL: https://claude.ai\\n\\n2. Introduction to Claude AI\\n   Description: Learn about Claude's capabilities...\\n   URL: https://docs.anthropic.com"
+                }
+            ],
+            "isError": false
+        }
+    }
+    ```
+    
+    #### 错误响应
+    - **无MCP服务器ID**:
+    ```json
+    {
+        "retcode": 400,
+        "retmsg": "No MCP server ID provided.",
+        "data": null
+    }
+    ```
+    - **缺少工具信息**:
+    ```json
+    {
+        "retcode": 400,
+        "retmsg": "Require provide tool name and arguments.",
+        "data": null
+    }
+    ```
+    - **服务器未找到**:
+    ```json
+    {
+        "retcode": 400,
+        "retmsg": "Cannot find MCP server uuid-server-id for user user-id",
+        "data": null
+    }
+    ```
+    - **工具执行失败**:
+    ```json
+    {
+        "retcode": 500,
+        "retmsg": "Tool execution failed",
+        "data": {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Error: Invalid parameters provided to tool"
+                }
+            ],
+            "isError": true
+        }
+    }
+    ```
+    
+    ---
+    ### 主要流程
+    1. 验证请求参数，确保提供了必要的工具信息
+    2. 查找指定的MCP服务器，验证用户权限
+    3. 创建MCP工具调用会话
+    4. 执行指定工具并传入参数
+    5. 关闭会话连接并返回执行结果
+    
+    ---
+    ### 注意事项
+    - **权限验证**: 只能测试用户有权限的MCP服务器工具
+    - **参数验证**: 工具参数必须符合工具定义的schema
+    - **超时设置**: 建议根据工具复杂度调整timeout参数
+    - **错误处理**: 工具执行错误会在响应中标明isError状态
+    - **资源管理**: 系统会自动关闭MCP连接
+    - **安全性**: 工具执行在受控环境中，但仍需注意参数安全
+    """
+    req_data = request.model_dump()
+    mcp_id = req_data.get("mcp_id", "")
+    
+    if not mcp_id:
+        return get_data_error_result(retmsg="No MCP server ID provided.")
+
+    timeout = req_data.get("timeout", 10.0)
+    tool_name = req_data.get("tool_name", "")
+    arguments = req_data.get("arguments", {})
+    
+    if not all([tool_name, arguments]):
+        return get_data_error_result(retmsg="Require provide tool name and arguments.")
+
+    tool_call_sessions = []
+    try:
+        mcp_server = MCPServerService.get_by_id(db, mcp_id)
+        if not mcp_server or mcp_server.tenant_id != user.id:
+            return get_data_error_result(retmsg=f"Cannot find MCP server {mcp_id} for user {user.id}")
+
+        tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables)
+        tool_call_sessions.append(tool_call_session)
+        result = tool_call_session.tool_call(tool_name, arguments, timeout)
+
+        # PERF: blocking call to close sessions — consider moving to background thread or task queue
+        close_multiple_mcp_toolcall_sessions(tool_call_sessions)
+        return get_json_result(data=result)
     except Exception as e:
         return server_error_response(e)
