@@ -1,28 +1,12 @@
-#
-#  Copyright 2024 The InfiniFlow Authors. All Rights Reserved.
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-#
 import datetime
 import json
 import logging
-import os
 import re
 from collections import defaultdict
 
 import json_repair
 
-from api.settings import FACTORY_LLM_INFOS
+from api import settings
 from api.db import LLMType
 from api.db.db_models import db_connection
 from core.settings import TAG_FLD
@@ -57,7 +41,7 @@ def llm_id2llm_type(llm_id):
 
     llm_id, *_ = TenantLLMService.split_model_name_and_factory(llm_id)
 
-    llm_factories = FACTORY_LLM_INFOS
+    llm_factories = settings.FACTORY_LLM_INFOS
     for llm_factory in llm_factories:
         for llm in llm_factory["llm"]:
             if llm_id == llm["llm_name"]:
@@ -95,9 +79,9 @@ def message_fit_in(msg, max_length=4000):
         msg[0]["content"] = m
         return max_length, msg
 
-    m = msg_[1]["content"]
-    m = encoder.decode(encoder.encode(m)[: max_length - ll2])
-    msg[1]["content"] = m
+    m = msg_[-1]["content"]
+    m = encoder.decode(encoder.encode(m)[:max_length - ll2])
+    msg[-1]["content"] = m
     return max_length, msg
 
 
@@ -142,6 +126,7 @@ def kb_prompt(kbinfos, max_tokens):
 
 
 def citation_prompt():
+    print("USE PROMPT", flush=True)
     return """
 
 # Citation requirements:
@@ -357,11 +342,11 @@ Bonjour le monde ! Parlons de la sécurité de l'IA.
 ###
 こんにちは世界！AIの安全性について話し合いましょう。
 """
-    user_prompt=f"""
+    user_prompt = f"""
 Input:
 {query}
 ===
-{', '.join(languages)}
+{", ".join(languages)}
 
 Output:
 """
@@ -492,3 +477,5 @@ Output format (include only sections relevant to the image content):
 Ensure high accuracy, clarity, and completeness in your analysis, and include only the information present in the image. Avoid unnecessary statements about missing elements.
 """
     return prompt
+
+# todo 中台还不准备做对接，等中台对接后此方法揭开注释，并且继续完成：-> Refa: change citation mark as [ID:n] (#7923) | Fix: Grammar and clarity improvements in prompt templates (#8023) ｜ Refa: refactor prompts into markdown-style structure using Jinja2 (#8667)
