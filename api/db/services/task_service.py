@@ -359,12 +359,12 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
         for task in parse_task_array:
             ck_num += reuse_prev_task_chunks(task, prev_tasks, chunking_config)
         TaskService.filter_delete(db, [Task.doc_id == doc["id"]])
-        chunk_ids = []
-        for task in prev_tasks:
-            if task["chunk_ids"]:
-                chunk_ids.extend(task["chunk_ids"].split())
-        if chunk_ids:
-            settings.docStoreConn.delete({"id": chunk_ids}, search.index_name_one(chunking_config["tenant_id"], chunking_config["name"]),
+        pre_chunk_ids = []
+        for pre_task in prev_tasks:
+            if pre_task["chunk_ids"]:
+                pre_chunk_ids.extend(pre_task["chunk_ids"].split())
+        if pre_chunk_ids:
+            settings.docStoreConn.delete({"id": pre_chunk_ids}, search.index_name_one(chunking_config["tenant_id"], chunking_config["name"]),
                                          chunking_config["kb_id"])
     DocumentService.update_by_id(db, doc["id"], {"chunk_num": ck_num})
 
