@@ -129,6 +129,7 @@ async def upload(
             blob = await file_obj.read()
             filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
                                       parent_id=last_folder.id)
+            STORAGE_IMPL.put(last_folder.id, location, blob)
             file_data = {
                 "id": get_uuid(),
                 "parent_id": last_folder.id,
@@ -140,7 +141,6 @@ async def upload(
                 "size": len(blob),
             }
             file = FileService.insert(db, file_data)
-            STORAGE_IMPL.put(last_folder.id, location, blob)
             file_dict = {
                 "id": file.id,
                 "parent_id": file.parent_id,
