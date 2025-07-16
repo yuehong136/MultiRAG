@@ -49,7 +49,7 @@ azure:
 opendal:
   scheme: 'mysql'  # Storage type, such as s3, oss, azure, etc.
   config:
-  oss_table: 'your_table_name'
+  oss_table: 'opendal_storage'
 
 s3:
   access_key: 'access_key'
