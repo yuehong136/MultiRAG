@@ -368,12 +368,13 @@ async def build_chunks(task, progress_callback, db: Session):
                         d["image"].close()  # Close original image
                         d["image"] = converted_image
                     d["image"].save(output_buffer, format='JPEG')
-                    d["image"].close()  # Close PIL image after saving
 
                 async with minio_limiter:
                     await trio.to_thread.run_sync(
                         lambda: STORAGE_IMPL.put(task["kb_id"], d["pk"], output_buffer.getvalue()))
                 d["img_id"] = "{}-{}".format(task["kb_id"], d["pk"])
+                if not isinstance(d["image"], bytes):
+                    d["image"].close()
                 del d["image"]  # Remove image reference
                 docs.append(d)
             finally:
