@@ -134,9 +134,9 @@ class Base(ABC):
         tk_count = 0
         hist = deepcopy(history)
         # Implement exponential backoff retry strategy
-        for attempt in range(self.max_retries+1):
+        for attempt in range(self.max_retries + 1):
             history = hist
-            for _ in range(self.max_rounds*2):
+            for _ in range(self.max_rounds * 2):
                 try:
                     response = self.client.chat.completions.create(model=self.model_name, messages=history, tools=self.tools, **gen_conf)
                     tk_count += self.total_token_count(response)
@@ -175,7 +175,7 @@ class Base(ABC):
         gen_conf = self._clean_conf(gen_conf)
 
         # Implement exponential backoff retry strategy
-        for attempt in range(self.max_retries+1):
+        for attempt in range(self.max_retries + 1):
             try:
                 return self._chat(history, gen_conf)
             except Exception as e:
@@ -209,9 +209,9 @@ class Base(ABC):
         total_tokens = 0
         hist = deepcopy(history)
         # Implement exponential backoff retry strategy
-        for attempt in range(self.max_retries+1):
+        for attempt in range(self.max_retries + 1):
             history = hist
-            for _ in range(self.max_rounds*2):
+            for _ in range(self.max_rounds * 2):
                 reasoning_start = False
                 try:
                     response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, tools=tools, **gen_conf)

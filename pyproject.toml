@@ -167,10 +167,11 @@ dependencies = [
     "sse-starlette>=2.2.1",
     "langfuse>=2.60.0",
     "debugpy>=1.8.13",
-    "mcp>=1.6.0",
+    "mcp>=1.9.4",
 #    "opensearch-py==2.7.1"
     "jieba>=0.42.1",
-    "pluginlib==0.9.4"
+    "pluginlib==0.9.4",
+    "click>=8.1.8",
 ]
 
 [tool.uv]
