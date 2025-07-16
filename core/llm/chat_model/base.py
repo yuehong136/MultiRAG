@@ -38,9 +38,6 @@ class ToolCallSession(Protocol):
 
 
 class Base(ABC):
-    tools: list[Any]
-    toolcall_sessions: dict[str, ToolCallSession]
-
     def __init__(self, key, model_name, base_url, **kwargs):
         timeout = int(os.environ.get("LM_TIMEOUT_SECONDS", 600))
         self.client = OpenAI(api_key=key, base_url=base_url, timeout=timeout)
@@ -123,6 +120,37 @@ class Base(ABC):
                 error_code = ERROR_MAX_RETRIES
             return f"{ERROR_PREFIX}: {error_code} - {str(e)}"
 
+    def _verbose_tool_use(self, name, args, res):
+        return "<tool_call>" + json.dumps({
+            "name": name,
+            "args": args,
+            "result": res
+        }, ensure_ascii=False, indent=2) + "</tool_call>"
+
+    def _append_history(self, hist, tool_call, tool_res):
+        hist.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": tool_call.index,
+                        "id": tool_call.id,
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments,
+                        },
+                        "type": "function",
+                    },
+                ],
+            }
+        )
+        try:
+            if isinstance(tool_res, dict):
+                tool_res = json.dumps(tool_res, ensure_ascii=False)
+        finally:
+            hist.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_res)})
+        return hist
+
     def bind_tools(self, toolcall_session, tools):
         if not (toolcall_session and tools):
             return
@@ -133,22 +161,22 @@ class Base(ABC):
             self.tools.append(tool)
 
     def chat_with_tools(self, system: str, history: list, gen_conf: dict):
-        gen_conf = self._clean_conf(gen_conf)
         if system:
             history.insert(0, {"role": "system", "content": system})
 
+        gen_conf = self._clean_conf(gen_conf)
         ans = ""
         tk_count = 0
         hist = deepcopy(history)
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries + 1):
             history = hist
-            for _ in range(self.max_rounds * 2):
-                try:
+            try:
+                for _ in range(self.max_rounds * 2):
                     response = self.client.chat.completions.create(model=self.model_name, messages=history, tools=self.tools, **gen_conf)
                     tk_count += self.total_token_count(response)
-                    if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
-                        raise Exception("500 response structure error.")
+                    if any([not response.choices, not response.choices[0].message]):
+                        raise Exception(f"500 response structure error. Response: {response}")
 
                     if not hasattr(response.choices[0].message, "tool_calls") or not response.choices[0].message.tool_calls:
                         if hasattr(response.choices[0].message, "reasoning_content") and response.choices[0].message.reasoning_content:
@@ -165,15 +193,17 @@ class Base(ABC):
                         try:
                             args = json_repair.loads(tool_call.function.arguments)
                             tool_response = self.toolcall_sessions[name].tool_call(name, args)
-                            history.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_response)})
+                            history = self._append_history(history, tool_call, tool_response)
+                            ans += self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:
+                            logging.exception(msg=f"Wrong JSON argument format in LLM tool call response: {tool_call}")
                             history.append({"role": "tool", "tool_call_id": tool_call.id, "content": f"Tool call error: \n{tool_call}\nException:\n" + str(e)})
+                            ans += self._verbose_tool_use(name, {}, str(e))
 
-
-                except Exception as e:
-                    e = self._exceptions(e, attempt)
-                    if e:
-                        return e, tk_count
+            except Exception as e:
+                e = self._exceptions(e, attempt)
+                if e:
+                    return e, tk_count
         assert False, "Shouldn't be here."
 
     def chat(self, system, history, gen_conf):
@@ -206,9 +236,7 @@ class Base(ABC):
         return final_tool_calls
 
     def chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict):
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
-
+        gen_conf = self._clean_conf(gen_conf)
         tools = self.tools
         if system:
             history.insert(0, {"role": "system", "content": system})
@@ -218,9 +246,9 @@ class Base(ABC):
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries + 1):
             history = hist
-            for _ in range(self.max_rounds * 2):
-                reasoning_start = False
-                try:
+            try:
+                for _ in range(self.max_rounds * 2):
+                    reasoning_start = False
                     response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, tools=tools, **gen_conf)
                     final_tool_calls = {}
                     answer = ""
@@ -230,9 +258,11 @@ class Base(ABC):
                                 index = tool_call.index
 
                                 if index not in final_tool_calls:
+                                    if not tool_call.function.arguments:
+                                        tool_call.function.arguments = ""
                                     final_tool_calls[index] = tool_call
                                 else:
-                                    final_tool_calls[index].function.arguments += tool_call.function.arguments
+                                    final_tool_calls[index].function.arguments += tool_call.function.arguments if tool_call.function.arguments else ""
                             continue
 
                         if any([not resp.choices, not resp.choices[0].delta, not hasattr(resp.choices[0].delta, "content")]):
@@ -271,40 +301,26 @@ class Base(ABC):
                         name = tool_call.function.name
                         try:
                             args = json_repair.loads(tool_call.function.arguments)
-                            tool_response = self.toolcall_sessions[name].tool_call(name, args)
-                            history.append(
-                                {
-                                    "role": "assistant",
-                                    "tool_calls": [
-                                        {
-                                            "index": tool_call.index,
-                                            "id": tool_call.id,
-                                            "function": {
-                                                "name": tool_call.function.name,
-                                                "arguments": tool_call.function.arguments,
-                                            },
-                                            "type": "function",
-                                        },
-                                    ],
-                                }
-                            )
-                            history.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_response)})
+                            tool_response = self.toolcall_session[name].tool_call(name, args)
+                            history = self._append_history(history, tool_call, tool_response)
+                            yield self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:
                             logging.exception(msg=f"Wrong JSON argument format in LLM tool call response: {tool_call}")
                             history.append({"role": "tool", "tool_call_id": tool_call.id, "content": f"Tool call error: \n{tool_call}\nException:\n" + str(e)})
-                except Exception as e:
-                    e = self._exceptions(e, attempt)
-                    if e:
-                        yield total_tokens
-                        return
+                            yield self._verbose_tool_use(name, {}, str(e))
 
-        assert False, "Shouldn't be here."
+            except Exception as e:
+                e = self._exceptions(e, attempt)
+                if e:
+                    yield total_tokens
+                    return
+
+        yield total_tokens
 
     def chat_streamly(self, system, history, gen_conf):
         if system:
             history.insert(0, {"role": "system", "content": system})
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
+        gen_conf = self._clean_conf(gen_conf)
         ans = ""
         total_tokens = 0
         reasoning_start = False
