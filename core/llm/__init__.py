@@ -51,6 +51,7 @@ from core.llm.embedding_model.openai_embed import OpenAIEmbed
 from core.llm.embedding_model.qwen_embed import QWenEmbed
 from core.llm.embedding_model.siliconflow_embed import SILICONFLOWEmbed
 from core.llm.embedding_model.volcengine_embed import VolcEngineEmbed
+from core.llm.embedding_model.voyage_embed import VoyageEmbed
 from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
@@ -98,7 +99,8 @@ EmbeddingModel = {
     "VLLM": OpenAI_APIEmbed,
     "Cohere": CoHereEmbed,
     "VolcEngine": VolcEngineEmbed,
-    "HuggingFace": HuggingFaceEmbed
+    "HuggingFace": HuggingFaceEmbed,
+    "Voyage AI": VoyageEmbed,
 }
 
 CvModel = {
