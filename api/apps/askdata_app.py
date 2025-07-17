@@ -111,11 +111,18 @@ async def get_sql_and_table_config(
                 )
             else:
                 logger.info(f"修复后查询数据成功: {new_result['data']}")
-                return ResponseSchema(
-                    status=StatusEnum.SUCCESS,
-                    message="查询数据成功",
-                    data=new_result["data"]
-                )
+                sql = fix_result["sql"]
+                sql_components = fix_result["sqlComponents"]
+                used_models = fix_result["usedModels"]
+                # 构建使用到的模型和表的详情字典
+                _, used_table_detail_dict, model_list, intersection_dataset_ids = await service.build_model_details(
+                    model_ids=body.semantic_layer.get('model_ids', []),
+                    used_models=used_models)
+
+                if len(intersection_dataset_ids) > 1:
+                    logger.error(f"模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
+                    logger.error(f"model_ids: {body.semantic_layer.get('model_ids', [])}, used_models: {used_models}")
+                    raise Exception("模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
 
         # 2. 生成表格配置
         model_table_alias_mapping_list, table_config = await service.generate_table_config(
