@@ -17,6 +17,7 @@ from io import BytesIO
 from PIL import Image
 
 from api.db import LLMType
+from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from deepdoc.parser.pdf_parser import VisionParser
 from core.nlp import tokenize, is_english
@@ -133,7 +134,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             pdf_parser = PlainParser()
             sections, _ = pdf_parser(filename, binary, from_page=from_page, to_page=to_page, callback=callback)
         else:
-            vision_model = LLMBundle(kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=layout_recognizer, lang=lang)
+            with db_connection() as db:
+                vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=layout_recognizer, lang=lang)
             pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
             sections, _ = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page,
                                       callback=callback)
