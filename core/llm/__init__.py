@@ -21,6 +21,7 @@ from core.llm.chat_model.models.qwen_chat import QWenChat
 from core.llm.chat_model.models.siliconflow_chat import SILICONFLOWChat
 from core.llm.chat_model.models.spark_chat import SparkChat
 from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
+from core.llm.chat_model.models.xai_chat import xAIChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
 from core.llm.chat_model.models.yi_chat import YiChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
@@ -34,6 +35,7 @@ from core.llm.cv_model.models.ollama_cv import OllamaCV
 from core.llm.cv_model.models.openai_api_cv import OpenAI_APICV
 from core.llm.cv_model.models.qwen_cv import QWenCV
 from core.llm.cv_model.models.siliconflow_cv import SILICONFLOWCV
+from core.llm.cv_model.models.xai_cv import xAICV
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.cohere_embed import CoHereEmbed
@@ -113,6 +115,7 @@ CvModel = {
     "SILICONFLOW": SILICONFLOWCV,
     "BaiduYiyan": BaiduYiyanCV,
     "LM-Studio": LmStudioCV,
+    "xAI": xAICV,
 }
 
 
@@ -143,7 +146,8 @@ ChatModel = {
     "LM-Studio": LmStudioChat,
     "MiniMax": MiniMaxChat,
     "01.AI": YiChat,
-    "Moonshot": MoonshotChat
+    "Moonshot": MoonshotChat,
+    "xAI": xAIChat,
 }
 
 RerankModel = {
