@@ -21,7 +21,7 @@ import trio
 from api.db.db_models import SessionLocal
 from api import settings
 from api.utils import get_uuid
-from api.utils.api_utils import timeout
+from api.utils.api_utils import timeout, is_strong_enough
 from graphrag.light.graph_extractor import GraphExtractor as LightKGExt
 from graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -42,14 +42,6 @@ from core.nlp import rag_tokenizer, search
 from core.utils.redis_conn import RedisDistributedLock
 
 
-@timeout(30, 2)
-async def _is_strong_enough(chat_model, embedding_model):
-    _ = await trio.to_thread.run_sync(lambda: embedding_model.encode(["Are you strong enough!?"]))
-    res =  await trio.to_thread.run_sync(lambda: chat_model.chat("Nothing special.", [{"role":"user", "content": "Are you strong enough!?"}], {}))
-    if res.find("**ERROR**") >= 0:
-        raise Exception(res)
-
-
 async def run_graphrag(
     row: dict,
     language,
@@ -60,9 +52,7 @@ async def run_graphrag(
     callback,
 ):
     # Pressure test for GraphRAG task
-    async with trio.open_nursery() as nursery:
-        for _ in range(12):
-            nursery.start_soon(_is_strong_enough, chat_model, embedding_model)
+    await is_strong_enough(chat_model, embedding_model)
 
     start = trio.current_time()
     tenant_id, kb_id, doc_id = row["tenant_id"], str(row["kb_id"]), row["doc_id"]

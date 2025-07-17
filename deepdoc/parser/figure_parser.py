@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PIL import Image
 
+from api.utils.api_utils import timeout
 from core.app.picture import vision_llm_chunk as picture_vision_llm_chunk
 from core.prompts import vision_llm_figure_describe_prompt
 
@@ -77,6 +78,7 @@ class VisionFigureParser:
     def __call__(self, **kwargs):
         callback = kwargs.get("callback", lambda prog, msg: None)
 
+        @timeout(30, 3)
         def process(figure_idx, figure_binary):
             description_text = picture_vision_llm_chunk(
                 binary=figure_binary,
