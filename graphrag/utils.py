@@ -491,16 +491,20 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
 
     semaphore = trio.Semaphore(5)
     async with trio.open_nursery() as nursery:
-        for node in change.added_updated_nodes:
+        for ii, node in enumerate(change.added_updated_nodes):
             node_attrs = graph.nodes[node]
             async with semaphore:
+                if ii%100 == 9 and callback:
+                    callback(msg=f"Get embedding of nodes: {ii}/{len(change.added_updated_nodes)}")
                 nursery.start_soon(graph_node_to_chunk, kb_id, embd_mdl, node, node_attrs, chunks)
-        for from_node, to_node in change.added_updated_edges:
+        for ii, (from_node, to_node) in enumerate(change.added_updated_edges):
             edge_attrs = graph.get_edge_data(from_node, to_node)
             if not edge_attrs:
                 # added_updated_edges could record a non-existing edge if both from_node and to_node participate in nodes merging.
                 continue
             async with semaphore:
+                if ii%100 == 9 and callback:
+                    callback(msg=f"Get embedding of edges: {ii}/{len(change.added_updated_edges)}")
                 nursery.start_soon(graph_edge_to_chunk, kb_id, embd_mdl, from_node, to_node, edge_attrs, chunks)
     now = trio.current_time()
     if callback:
