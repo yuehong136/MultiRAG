@@ -4,6 +4,7 @@ import threading
 import time
 
 from api.db.db_models import SessionLocal, db_connection
+from api.utils.api_utils import timeout
 from api.utils.log_utils import init_root_logger, get_project_base_directory
 from graphrag.general.index import run_graphrag
 from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
@@ -309,36 +310,9 @@ async def build_chunks(task, progress_callback, db: Session):
         doc["auth"] = task["auth"]
     if task.get("pagerank"):
         doc[PAGERANK_FLD] = int(task["pagerank"])
-    # el = 0
-    # for ck in cks:
-    #     d = copy.deepcopy(doc)
-    #     d.update(ck)
-    #     d["pk"] = xxhash.xxh64((ck["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
-    #     d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
-    #     d["create_timestamp_flt"] = datetime.now().timestamp()
-    #     d["page_num_int"] = d.get("page_num_int", [])
-    #     d["position_int"] = d.get("position_int", [])
-    #     d["top_int"] = d.get("top_int", [])
-    #     # if not d.get("image"):
-    #     #     docs.append(d)
-    #     #     continue
-    #     if "image" not in d:
-    #         docs.append(d)  # 如果 image 字段不存在，则直接添加到 docs
-    #         continue
-    #     elif d["image"] is None:
-    #         del d["image"]  # 如果 image 字段为空，则删除该条记录的image
-    #         docs.append(d)
-    #         continue
-    #     try:
-    #         output_buffer = BytesIO()
-    #         if isinstance(d["image"], bytes):
-    #             output_buffer = BytesIO(d["image"])
-    #         else:
-    #             d["image"].save(output_buffer, format='JPEG')
-    #
-    #         st = timer()
-    #         await trio.to_thread.run_sync(lambda: STORAGE_IMPL.put(task["kb_id"], d["pk"], output_buffer.getvalue()))
-    #         el += timer() - st
+    st = timer()
+
+    @timeout(60)
     async def upload_to_minio(document, chunk):
         try:
             d = copy.deepcopy(document)
@@ -382,6 +356,7 @@ async def build_chunks(task, progress_callback, db: Session):
         except Exception:
             logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
             raise
+
     async with trio.open_nursery() as nursery:
         for ck in cks:
             nursery.start_soon(upload_to_minio, doc, ck)
@@ -419,8 +394,7 @@ async def build_chunks(task, progress_callback, db: Session):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "question", {"topn": topn})
             if not cached:
                 async with chat_limiter:
-                    cached = await trio.to_thread.run_sync(
-                        lambda: question_proposal(chat_mdl, d["content_with_weight"], topn))
+                    cached = await trio.to_thread.run_sync(lambda: question_proposal(chat_mdl, d["content_with_weight"], topn))
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "question", {"topn": topn})
             if cached:
                 d["question_kwd"] = cached.split("\n")
@@ -620,6 +594,7 @@ async def get_schema(collection_name):
     return schema
 
 
+@timeout(60*20)
 async def embedding(docs, mdl, parser_config=None, callback=None):
     """
     为文档生成向量嵌入，并同时存储到标准vector字段和维度特定字段中
@@ -684,6 +659,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
     return tk_count
 
 
+@timeout(3600)
 async def run_raptor(row, chat_mdl, embd_mdl, vector_size, callback=None):
     chunks = []
     if vector_size != 768:
@@ -728,6 +704,7 @@ async def run_raptor(row, chat_mdl, embd_mdl, vector_size, callback=None):
     return res, tk_count
 
 
+@timeout(60*60*1.5)
 async def do_handle_task(db, task):
     # 将 Row 转换为字典，确保可以修改字段
     task = task._asdict() if hasattr(task, "_asdict") else dict(task)

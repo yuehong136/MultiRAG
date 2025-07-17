@@ -193,11 +193,13 @@ def tidy_graph(graph: nx.Graph, callback, check_attribute: bool = True):
     if purged_edges and callback:
         callback(msg=f"Purged {len(purged_edges)} edges from graph due to missing essential attributes.")
 
+
 def get_from_to(node1, node2):
     if node1 < node2:
         return (node1, node2)
     else:
         return (node2, node1)
+
 
 def graph_merge(g1: nx.Graph, g2: nx.Graph, change: GraphChange):
     """Merge graph g2 into g1 in place."""
@@ -399,6 +401,7 @@ async def does_graph_contains(tenant_id, kb_id, doc_id):
         graph_doc_ids = set(fields2[chunk_id]["source_id"])
     return doc_id in graph_doc_ids
 
+
 async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
     conds = {
         "fields": ["source_id"],
@@ -508,8 +511,6 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
     now = trio.current_time()
     if callback:
         callback(msg=f"set_graph added/updated {len(change.added_updated_nodes)} nodes and {len(change.added_updated_edges)} edges from index in {now - start:.2f}s.")
-
-
 
 
 def is_continuous_subsequence(subseq, seq):

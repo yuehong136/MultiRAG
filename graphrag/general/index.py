@@ -21,6 +21,7 @@ import trio
 from api.db.db_models import SessionLocal
 from api import settings
 from api.utils import get_uuid
+from api.utils.api_utils import timeout
 from graphrag.light.graph_extractor import GraphExtractor as LightKGExt
 from graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -126,6 +127,7 @@ async def run_graphrag(
     return
 
 
+@timeout(60*60*2)
 async def generate_subgraph(
     extractor: Extractor,
     tenant_id: str,
@@ -198,6 +200,8 @@ async def generate_subgraph(
     callback(msg=f"generated subgraph for doc {doc_id} in {now - start:.2f} seconds.")
     return subgraph
 
+
+@timeout(60*3)
 async def merge_subgraph(
         tenant_id: str,
         kb_id: str,
@@ -229,6 +233,7 @@ async def merge_subgraph(
     return new_graph
 
 
+@timeout(60*60)
 async def resolve_entities(
     graph,
     subgraph_nodes: set[str],
@@ -253,6 +258,8 @@ async def resolve_entities(
     now = trio.current_time()
     callback(msg=f"Graph resolution done in {now - start:.2f}s.")
 
+
+@timeout(60*30)
 async def extract_community(
     graph,
     tenant_id: str,
