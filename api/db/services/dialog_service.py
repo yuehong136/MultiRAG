@@ -3,7 +3,7 @@
 @project: multirag
 @Author：龙
 @file： dialog_service.py
-@date：2024/7/24 21:00
+@date：2025/7/17 15:30
 @desc:
 """
 import logging
@@ -201,34 +201,34 @@ BAD_CITATION_PATTERNS = [
     re.compile(r"【\s*ID\s*[: ]*\s*(\d+)\s*】"),  # 【ID: 12】
     re.compile(r"ref\s*(\d+)", flags=re.IGNORECASE),  # ref12、REF 12
 ]
-# todo 中台还不准备做对接，等中台对接后此方法揭开注释，并且继续完成：-> Refa: change citation mark as [ID:n] (#7923) | Fix: Grammar and clarity improvements in prompt templates (#8023)
-# def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
-#     max_index = len(kbinfos["chunks"])
-#
-#     def safe_add(i):
-#         if 0 <= i < max_index:
-#             idx.add(i)
-#             return True
-#         return False
-#
-#     def find_and_replace(pattern, group_index=1, repl=lambda i: f"ID:{i}", flags=0):
-#         nonlocal answer
-#
-#         def replacement(match):
-#             try:
-#                 i = int(match.group(group_index))
-#                 if safe_add(i):
-#                     return f"[{repl(i)}]"
-#             except Exception:
-#                 pass
-#             return match.group(0)
-#
-#         answer = re.sub(pattern, replacement, answer, flags=flags)
-#
-#     for pattern in BAD_CITATION_PATTERNS:
-#         find_and_replace(pattern)
-#
-#     return answer, idx
+
+def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
+    max_index = len(kbinfos["chunks"])
+
+    def safe_add(i):
+        if 0 <= i < max_index:
+            idx.add(i)
+            return True
+        return False
+
+    def find_and_replace(pattern, group_index=1, repl=lambda i: f"ID:{i}", flags=0):
+        nonlocal answer
+
+        def replacement(match):
+            try:
+                i = int(match.group(group_index))
+                if safe_add(i):
+                    return f"[{repl(i)}]"
+            except Exception:
+                pass
+            return match.group(0)
+
+        answer = re.sub(pattern, replacement, answer, flags=flags)
+
+    for pattern in BAD_CITATION_PATTERNS:
+        find_and_replace(pattern)
+
+    return answer, idx
 
 
 def chat(dialog, messages, db, stream=True, **kwargs):
@@ -259,23 +259,14 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             langfuse.trace = langfuse_tracer.trace(name=f"{dialog.name}-{llm_model_config['llm_name']}")
 
     check_langfuse_tracer_ts = timer()
-
-    # kbs = KnowledgebaseService.get_by_ids(db, dialog.kb_ids)
     kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = get_models(db, dialog)
     toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
     if toolcall_session and tools:
         chat_mdl.bind_tools(toolcall_session, tools)
     bind_models_ts = timer()
 
-    # # 提取并去重知识库的嵌入ID
-    # embedding_list = list(set([kb.embd_id for kb in kbs]))
-
     kb_names = list([kb.name for kb in kbs])
     print("正在检索的知识库 --> ", kb_names)
-    # if len(embedding_list) > 1:
-    #     # 如果没有，则返回一条错误消息，指示知识库使用不同的嵌入模型
-    #     yield {"answer": "**ERROR**: Knowledge bases use different embedding models.", "reference": []}
-    #     return {"answer": "**ERROR**: Knowledge bases use different embedding models.", "reference": []}
 
     retriever = settings.retrievaler
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
@@ -398,39 +389,6 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     if "max_tokens" in gen_conf:
         gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
 
-    def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
-        max_index = len(kbinfos["chunks"])
-
-        def safe_add(i):
-            if 0 <= i < max_index:
-                idx.add(i)
-                return True
-            return False
-
-        def find_and_replace(pattern, group_index=1, repl=lambda i: f"##{i}$$", flags=0):
-            nonlocal answer
-            for match in re.finditer(pattern, answer, flags=flags):
-                try:
-                    i = int(match.group(group_index))
-                    if safe_add(i):
-                        answer = answer.replace(match.group(0), repl(i))
-                except Exception:
-                    continue
-
-        find_and_replace(r"\(\s*ID:\s*(\d+)\s*\)")  # (ID: 12)
-        find_and_replace(r"ID[: ]+(\d+)")  # ID: 12, ID 12
-        find_and_replace(r"\$\$(\d+)\$\$")  # $$12$$
-        find_and_replace(r"\$\[(\d+)\]\$")  # $[12]$
-        find_and_replace(r"\$\$(\d+)\${2,}")  # $$12$$$$
-        find_and_replace(r"\$(\d+)\$")  # $12$
-        find_and_replace(r"(#{2,})(\d+)(\${2,})", group_index=2)  # 2+ # and 2+ $
-        find_and_replace(r"(#{2,})(\d+)(#{1,})", group_index=2)  # 2+ # and 1+ #
-        find_and_replace(r"##(\d+)#{2,}")  # ##12###
-        find_and_replace(r"【(\d+)】")  # 【12】
-        find_and_replace(r"ref\s*(\d+)", flags=re.IGNORECASE)  # ref12, ref 12, REF 12
-
-        return answer, idx
-
     def decorate_answer(answer):
         nonlocal embd_mdl, prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_tracer
 
@@ -442,9 +400,8 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             answer = ans[1]
 
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
-            answer = re.sub(r"##[ij]\$\$", "", answer, flags=re.DOTALL)
             idx = set([])
-            if embd_mdl and not re.search(r"##[0-9]+\$\$", answer):
+            if embd_mdl and not re.search(r"\[ID:([0-9]+)\]", answer):
                 answer, idx = retriever.insert_citations(
                     answer,
                     [ck["content_ltks"] for ck in kbinfos["chunks"]],
@@ -454,7 +411,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     vtweight=dialog.vector_similarity_weight
                 )
             else:
-                for match in re.finditer(r"##([0-9]+)\$\$", answer):
+                for match in re.finditer(r"\[ID:([0-9]+)\]", answer):
                     i = int(match.group(1))
                     if i < len(kbinfos["chunks"]):
                         idx.add(i)
