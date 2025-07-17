@@ -154,7 +154,7 @@ def init_settings():
     if lower_case_doc_engine == "milvus":
         docStoreConn = core.utils.milvus_conn.MilvusConnection()
     elif lower_case_doc_engine == "opensearch":
-        docStoreConn = core.utils.opensearch_coon.OSConnection()
+        docStoreConn = core.utils.opensearch_conn.OSConnection()
     elif lower_case_doc_engine == "infinity":
         docStoreConn = core.utils.infinity_conn.InfinityConnection()
     else:
