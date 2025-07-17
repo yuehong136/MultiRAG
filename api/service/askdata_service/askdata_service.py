@@ -63,16 +63,16 @@ class AskdataService:
             dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
                 keyword=segmented_words,
                 dataset_ids=dataset_id_list)
+            unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
             hc_dim_id_list = []
             # 分词关键字作为维度值关键字获得获得维度列表（高基数维度）
-            # TODO 将已经检索得到的维度传入该接口，这样可以不必再去这些已经得到的维度中去查询了
             if enable_deep_search:
                 hc_dimensions_by_value = await self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
                     keyword_list=segmented_words,
-                    dataset_ids=dataset_id_list)
+                    dataset_ids=dataset_id_list,
+                    exclude_dim_ids=unique_dimensions)
                 hc_dim_id_list = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
             # 4. 根据dimensionId对dimensions_by_keyword和dimensions_by_value进行维度去重，获得最终维度列表
-            unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
             unique_dimensions.extend(hc_dim_id_list)
             dimension_values = await self.semantic_api_client.get_dimension_values_async(
                 dimension_ids=unique_dimensions)

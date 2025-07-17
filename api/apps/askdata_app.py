@@ -315,6 +315,7 @@ async def get_semantic_layer_streaming(
             dataset_id_list=body.dataset_id_list,
             conversation_id=body.conversation_id,
             event_id=custom_event_id,
+            enable_deep_search = body.enable_deep_search,
             llm_name=body.llm_name)
 
         logger.info(f"processed_semantic_layer:{processed_semantic_layer}")

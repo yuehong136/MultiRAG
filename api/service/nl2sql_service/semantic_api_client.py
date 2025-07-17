@@ -703,6 +703,7 @@ class SemanticApiClient:
             self,
             keyword_list: List[str],
             dataset_ids: List[str],
+            exclude_dim_ids: List[str] = None,
             fuzzy_match: bool = True
     ) -> List[Dict]:
         """
@@ -711,6 +712,7 @@ class SemanticApiClient:
         logger.info(f"\n=== 通过维度值搜索HC维度信息 ===")
         logger.info(f"关键词列表: {keyword_list}")
         logger.info(f"数据集ID: {dataset_ids}")
+        logger.info(f"排除维度ID: {exclude_dim_ids}")
         logger.info(f"模糊匹配: {fuzzy_match}")
 
         # 参数验证
@@ -732,6 +734,7 @@ class SemanticApiClient:
                 data={
                     "keywordList": keyword_list,
                     "datasetIds": dataset_ids,
+                    "excludeDimIds": exclude_dim_ids,
                     "fuzzyMatch": fuzzy_match
                 }
             )
