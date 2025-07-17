@@ -7,7 +7,6 @@ from collections import defaultdict
 import jinja2
 import json_repair
 
-from api import settings
 from core.prompt_template import load_prompt
 from api.db.db_models import db_connection
 from core.settings import TAG_FLD
@@ -35,18 +34,6 @@ def chunks_format(reference):
         }
         for chunk in reference.get("chunks", [])
     ]
-
-
-def llm_id2llm_type(llm_id):
-    from api.db.services.llm_service import TenantLLMService
-
-    llm_id, *_ = TenantLLMService.split_model_name_and_factory(llm_id)
-
-    llm_factories = settings.FACTORY_LLM_INFOS
-    for llm_factory in llm_factories:
-        for llm in llm_factory["llm"]:
-            if llm_id == llm["llm_name"]:
-                return llm["mdl_type"].strip(",")[-1]
 
 
 def message_fit_in(msg, max_length=4000):
@@ -178,8 +165,9 @@ def question_proposal(chat_mdl, content, topn=3):
 def full_question(db, tenant_id, llm_id, messages, language=None):
     from api.db import LLMType
     from api.db.services.llm_service import LLMBundle
+    from api.db.services.llm_service import TenantLLMService
 
-    if llm_id2llm_type(llm_id) == "image2text":
+    if TenantLLMService.llm_id2llm_type(llm_id) == "image2text":
         chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
     else:
         chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_id)
@@ -210,10 +198,11 @@ def full_question(db, tenant_id, llm_id, messages, language=None):
 def cross_languages(db, tenant_id, llm_id, query, languages=None):
     from api.db import LLMType
     from api.db.services.llm_service import LLMBundle
+    from api.db.services.llm_service import TenantLLMService
 
     if languages is None:
         languages = []
-    if llm_id and llm_id2llm_type(llm_id) == "image2text":
+    if llm_id and TenantLLMService.llm_id2llm_type(llm_id) == "image2text":
         chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
     else:
         chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_id)

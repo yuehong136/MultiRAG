@@ -29,7 +29,7 @@ from uuid import uuid1
 from urllib.parse import quote, urlencode
 import requests
 
-from api.db.db_models import APIToken, MCPServer
+from api.db.db_models import APIToken
 from api.db.services.api_service import APITokenService
 from api import settings
 from api.utils import HTTP_STATUS_CODES, get_uuid
@@ -403,7 +403,7 @@ def get_data_openai(id=None,
     }
 
 
-def get_mcp_tools(mcp_servers: list[MCPServer], timeout: float | int = 10) -> tuple[dict, str]:
+def get_mcp_tools(mcp_servers: list, timeout: float | int = 10) -> tuple[dict, str]:
     results = {}
     tool_call_sessions = []
     try:

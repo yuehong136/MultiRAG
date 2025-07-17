@@ -262,6 +262,14 @@ class TenantLLMService(CommonService):
         objs = db.query(cls.model).filter(cls.model.llm_factory == "OpenAI", cls.model.llm_name.notin_(["text-embedding-3-small", "text-embedding-3-large"])).all()
         return objs
 
+    @staticmethod
+    def llm_id2llm_type(llm_id: str) -> str | None:
+        llm_id, *_ = TenantLLMService.split_model_name_and_factory(llm_id)
+        llm_factories = settings.FACTORY_LLM_INFOS
+        for llm_factory in llm_factories:
+            for llm in llm_factory["llm"]:
+                if llm_id == llm["llm_name"]:
+                    return llm["mdl_type"].strip(",")[-1]
 # class LLMBundle(object):
 #     def __init__(self, tenant_id: str, llm_type: str, llm_name: str = None, lang: str = "Chinese"):
 #         self.tenant_id = tenant_id

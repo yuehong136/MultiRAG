@@ -11,7 +11,6 @@ from api.constants import MULTI_RAG_SERVICE_NAME
 from api.utils import get_base_config
 from api.utils.file_utils import get_project_base_directory
 from core.nlp import search
-from graphrag import search as kg_search
 
 LIGHTEN = int(os.environ.get("LIGHTEN", "0"))
 
@@ -161,6 +160,7 @@ def init_settings():
         raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
 
     retrievaler = search.Dealer(docStoreConn)
+    from graphrag import search as kg_search
     kg_retrievaler = kg_search.KGSearch(docStoreConn)
 
     if int(os.environ.get("SANDBOX_ENABLED", "0")):
