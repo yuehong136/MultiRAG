@@ -1,6 +1,7 @@
 import base64
 from io import BytesIO
 from core.llm.cv_model.base import Base
+from core.prompts import vision_llm_describe_prompt
 
 
 class GeminiCV(Base):
@@ -28,7 +29,7 @@ class GeminiCV(Base):
     def describe_with_prompt(self, image, prompt=None):
         from PIL.Image import open
         b64 = self.image2base64(image)
-        vision_prompt = self.vision_llm_prompt(b64, prompt) if prompt else self.vision_llm_prompt(b64)
+        vision_prompt = prompt if prompt else vision_llm_describe_prompt()
         img = open(BytesIO(base64.b64decode(b64)))
         input = [vision_prompt, img]
         res = self.model.generate_content(
