@@ -29,7 +29,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.task_service import TaskService, queue_tasks
+from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
 from api import settings
@@ -1709,6 +1709,9 @@ def run(
                             return construct_json_result(data=False, message="Milvus delete failed!", code=settings.RetCode.ARGUMENT_ERROR)
                 except MilvusException as e:
                     return construct_json_result(data=False, message=str(e), code=settings.RetCode.ARGUMENT_ERROR)
+
+            if str(req["run"]) == TaskStatus.CANCEL.value:
+                cancel_all_task_of(db, id)
 
             if str(req["run"]) == TaskStatus.RUNNING.value:
                 doc = DocumentService.get_by_id(db, id).to_dict()

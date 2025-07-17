@@ -45,7 +45,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db import LLMType, ParserType
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
-from api.db.services.task_service import TaskService
+from api.db.services.task_service import TaskService, has_canceled
 from api.db.services.file2document_service import File2DocumentService
 from api import settings
 from api.versions import get_multirag_version
@@ -188,7 +188,7 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
     try:
         if prog is not None and prog < 0:
             msg = "[ERROR]" + msg
-        cancel = TaskService.do_cancel(db, task_id)
+        cancel = has_canceled(task_id)
 
         if cancel:
             msg += " [Canceled]"
@@ -245,7 +245,7 @@ async def collect(db: Session):
     canceled = False
     task = TaskService.get_task(db, msg["id"])
     if task:
-        canceled = DocumentService.do_cancel(db, task["doc_id"])
+        canceled = has_canceled(task["id"])
 
     if not task or canceled:
         state = "is unknown" if not task else "has been cancelled"
@@ -424,7 +424,7 @@ async def build_chunks(task, progress_callback, db: Session):
 
         docs_to_tag = []
         for d in docs:
-            task_canceled = DocumentService.do_cancel(db, task["doc_id"])
+            task_canceled = has_canceled(task["id"])
             if task_canceled:
                 progress_callback(-1, msg="Task has been canceled.")
                 return
@@ -745,7 +745,7 @@ async def do_handle_task(db, task):
         progress_callback(-1, msg=error_message)
         raise Exception(error_message)
 
-    task_canceled = DocumentService.do_cancel(db, task_doc_id)
+    task_canceled = has_canceled(task_id)
     if task_canceled:
         progress_callback(-1, msg="Task has been canceled.")
         return
@@ -888,7 +888,7 @@ async def do_handle_task(db, task):
         # 若执行到此，说明插入成功，记录插入结果
         successful_inserts.append(doc_store_result)
 
-        task_canceled = DocumentService.do_cancel(db, task_doc_id)
+        task_canceled = has_canceled(task_id)
         if task_canceled:
             progress_callback(-1, msg="Task has been canceled.")
             return
