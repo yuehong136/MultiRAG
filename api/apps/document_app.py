@@ -3,7 +3,7 @@
 @project: multirag
 @Author：龙
 @file： document_app.py
-@date：2024/7/29 17:17
+@date：2025/7/17 11:30
 @desc:
 """
 import logging
@@ -23,7 +23,6 @@ from urllib.parse import quote
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, ParserType, FileSource, db_models
-# from api.db.database import get_db
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
@@ -40,7 +39,6 @@ from api.utils import get_uuid
 from api.utils.file_utils import filename_type, thumbnail, get_project_base_directory
 from api.utils.web_utils import html2pdf, is_valid_url
 from core.nlp import search
-# from core.utils.milvus_conn import MILVUS_CONNECTION
 from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 
@@ -67,8 +65,11 @@ class DocumentFilter(BaseModel):
 
 
 class ChangeStatusRequest(BaseModel):
-    doc_id: str = Field(..., description="文档ID")
+    doc_ids: list[str] | str = Field(..., description="文档ID或文档ID列表")
     status: int = Field(..., description="状态")
+    
+    # 兼容旧版本字段
+    doc_id: str | None = Field(None, description="文档ID（兼容旧版本）")
 
 class ChangeAuthRequest(BaseModel):
     doc_id: str = Field(..., description="文档ID")
@@ -115,30 +116,158 @@ async def upload(
         user=Depends(manager)
 ):
     """
-    上传文件到指定的知识库。
+    ### POST `/upload` 文件上传接口
 
-    该路由允许用户上传多个文件并将其关联到特定的知识库（Knowledgebase）。用户还可以选择传递
-    `labels` 参数，该参数为一个 JSON 格式的字符串，用于标注文件的相关属性或责任。
+    **功能描述**:
+    此接口用于上传单个或多个文件到指定的知识库，支持文件标签标注和自动文件类型识别。上传的文件会被存储并创建对应的文档记录。
 
-    参数:
-    - kb_id (str): 知识库的唯一标识符。
-    - files (List[UploadFile]): 要上传的文件列表。用户可以一次上传多个文件。
-    - labels (Optional[str]): 一个可选的 JSON 字符串，用于标注文件的属性或责任。示例：`["label1", "label2"]`。
-    返回值:
-    - JSON 响应对象，包含上传文件的处理结果。如果操作成功，返回已上传文件的信息；如果操作失败，
-      返回错误消息和状态码。
+    ---
 
-    异常:
-    - HTTPException: 如果 `kb_id` 对应的知识库不存在，返回 404 错误。
-    - 其他服务器相关错误，如文件类型不支持或超过最大文件数量限制。
+    ### 请求参数
 
-    逻辑流程:
-    1. 验证 `kb_id` 和 `files` 是否存在，如果缺失则返回错误消息。
-    2. 根据 `kb_id` 获取对应的知识库，如果找不到则返回 404 错误。
-    3. 读取并存储每个文件的内容。
-    4. 如果提供了 `labels` 参数，将其从 JSON 字符串转换为 Python 列表。
-    5. 调用 `FileService.upload_document` 方法，将文件和 `labels` 一起上传。
-    6. 如果上传过程中发生错误，返回错误消息；否则返回上传成功的文件信息。
+    #### Form Data 参数
+    | 参数名    | 类型                | 必填 | 描述                                                                |
+    |-----------|---------------------|------|---------------------------------------------------------------------|
+    | `kb_id`   | `string`           | 是   | 知识库的唯一标识符                                                  |
+    | `files`   | `list[UploadFile]` | 是   | 要上传的文件列表，支持多文件同时上传                                |
+    | `labels`  | `string`           | 否   | JSON格式的标签字符串，用于标注文件属性，如 `["标签1", "标签2"]`     |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": [
+            {
+                "id": "doc_123456",
+                "name": "示例文档.pdf",
+                "size": 1024000,
+                "type": "pdf",
+                "thumbnail": "/v1/document/image/kb_id-thumbnail_id",
+                "created_time": "2024-01-01 12:00:00",
+                "status": "uploaded"
+            }
+        ]
+    }
+    ```
+
+    #### 错误响应
+
+    - **400: 参数错误**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Lack of \"KB ID\"",
+            "data": false
+        }
+        ```
+
+    - **400: 文件问题**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "No file selected!",
+            "data": false
+        }
+        ```
+
+    - **400: 文件名过长**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "File name must be 255 bytes or less.",
+            "data": false
+        }
+        ```
+
+    - **404: 知识库不存在**
+        ```json
+        {
+            "status_code": 404,
+            "detail": "Can't find this knowledgebase!"
+        }
+        ```
+
+    - **500: 服务器错误**
+        ```json
+        {
+            "retcode": 500,
+            "retmsg": "Upload processing failed",
+            "data": false
+        }
+        ```
+
+    ---
+
+    ### 主要流程
+
+    1. **参数验证**:
+        - 验证知识库ID是否存在
+        - 验证文件列表是否为空
+        - 检查文件名长度限制
+
+    2. **知识库验证**:
+        - 根据kb_id查找知识库
+        - 验证用户是否有权限访问该知识库
+
+    3. **文件处理**:
+        - 读取所有上传文件的内容
+        - 验证文件格式和大小
+        - 生成文件缩略图（如果适用）
+
+    4. **标签处理**:
+        - 解析JSON格式的labels参数
+        - 验证标签格式的正确性
+
+    5. **存储操作**:
+        - 将文件存储到对象存储系统
+        - 在数据库中创建文档记录
+        - 关联文件与知识库的关系
+
+    ---
+
+    ### 支持的文件类型
+
+    - **文档类型**: PDF, DOC, DOCX, TXT, MD
+    - **表格类型**: XLS, XLSX, CSV
+    - **演示文稿**: PPT, PPTX
+    - **图片类型**: JPG, JPEG, PNG, GIF, BMP
+    - **其他格式**: HTML, XML, JSON
+
+    ---
+
+    ### 使用示例
+
+    #### 单文件上传
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/upload" \
+        -F "kb_id=kb_123456" \
+        -F "files=@document.pdf"
+    ```
+
+    #### 多文件上传带标签
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/upload" \
+        -F "kb_id=kb_123456" \
+        -F "files=@doc1.pdf" \
+        -F "files=@doc2.docx" \
+        -F 'labels=["重要文档", "技术资料"]'
+    ```
+
+    ---
+
+    ### 注意事项
+
+    - **文件大小限制**: 单个文件建议不超过100MB
+    - **文件名限制**: 文件名不能超过255字节
+    - **并发上传**: 支持同时上传多个文件，但建议单次不超过10个
+    - **标签格式**: labels必须是有效的JSON数组格式
+    - **权限控制**: 只有知识库的所有者才能上传文件
+    - **自动解析**: 上传后文件会自动进入解析队列等待处理
     """
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
@@ -186,6 +315,158 @@ def web_crawl(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
+    """
+    ### POST `/web_crawl` 网页爬取接口
+
+    **功能描述**:
+    此接口用于爬取指定URL的网页内容，将网页转换为PDF格式后存储到知识库中。支持动态网页内容抓取和自动文档创建。
+
+    ---
+
+    ### 请求体 (Request Body)
+
+    | 字段     | 类型     | 必填 | 描述                                        |
+    |----------|----------|------|---------------------------------------------|
+    | `kb_id`  | `string` | 是   | 目标知识库的唯一标识符                      |
+    | `name`   | `string` | 是   | 保存的文档名称（不包含.pdf后缀）            |
+    | `url`    | `string` | 是   | 要爬取的网页URL地址                         |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "id": "doc_123456",
+            "kb_id": "kb_789",
+            "name": "示例网页.pdf",
+            "size": 2048000,
+            "type": "pdf",
+            "location": "网页内容.pdf",
+            "thumbnail": "base64_encoded_thumbnail",
+            "created_by": "user_id",
+            "parser_id": "pdf_parser",
+            "suffix": "pdf"
+        }
+    }
+    ```
+
+    #### 错误响应
+
+    - **400: URL格式无效**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "The URL format is invalid",
+            "data": false
+        }
+        ```
+
+    - **404: 知识库不存在**
+        ```json
+        {
+            "status_code": 404,
+            "detail": "Can't find this knowledgebase!"
+        }
+        ```
+
+    - **500: 下载失败**
+        ```json
+        {
+            "retcode": 500,
+            "retmsg": "Download failure.",
+            "data": false
+        }
+        ```
+
+    - **500: 文件类型不支持**
+        ```json
+        {
+            "retcode": 500,
+            "retmsg": "This type of file has not been supported yet!",
+            "data": false
+        }
+        ```
+
+    ---
+
+    ### 主要流程
+
+    1. **URL验证**:
+        - 验证URL格式的有效性
+        - 检查是否为可访问的网址
+
+    2. **知识库验证**:
+        - 根据kb_id查找知识库
+        - 验证用户是否有权限访问
+
+    3. **网页爬取**:
+        - 使用专用工具将网页转换为PDF
+        - 保持原网页的格式和布局
+
+    4. **文件处理**:
+        - 生成唯一的文件名避免重复
+        - 创建文档缩略图
+        - 确定文件类型和解析器
+
+    5. **存储操作**:
+        - 将PDF文件存储到对象存储
+        - 在数据库中创建文档记录
+        - 关联到指定的知识库
+
+    ---
+
+    ### 特殊处理
+
+    #### 文件类型自动识别
+    - **图片文件**: 自动设置为图片解析器
+    - **演示文稿**: PPT/PPTX自动设置为演示文稿解析器  
+    - **邮件文件**: EML自动设置为邮件解析器
+    - **PDF文件**: 使用知识库默认解析器
+
+    #### 文件名处理
+    - 自动添加.pdf后缀
+    - 如果文件名重复，自动追加序号
+    - 支持中文文件名
+
+    ---
+
+    ### 使用示例
+
+    #### 爬取技术文档
+    ```json
+    {
+        "kb_id": "tech_docs_kb",
+        "name": "API文档",
+        "url": "https://docs.example.com/api"
+    }
+    ```
+
+    #### 爬取新闻页面
+    ```json
+    {
+        "kb_id": "news_kb", 
+        "name": "今日新闻",
+        "url": "https://news.example.com/today"
+    }
+    ```
+
+    ---
+
+    ### 注意事项
+
+    - **URL限制**: 仅支持HTTP/HTTPS协议的网址
+    - **内容限制**: 无法爬取需要登录或有访问限制的页面
+    - **格式保持**: 尽量保持原网页的排版和格式
+    - **文件大小**: 生成的PDF大小取决于网页内容复杂度
+    - **处理时间**: 复杂网页的转换可能需要较长时间
+    - **动态内容**: 支持JavaScript渲染的动态内容抓取
+    - **存储路径**: 文件存储在知识库对应的存储空间中
+    """
     kb_id = request_body.kb_id
     name = request_body.name
     url = request_body.url
@@ -296,6 +577,158 @@ def list_docs(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
+    """
+    ### GET `/list` 列出文档接口
+
+    **功能描述**:
+    此接口用于获取指定知识库中的文档列表，支持关键词搜索、分页查询和排序功能。返回文档的基本信息和缩略图。
+
+    ---
+
+    ### 请求参数 (Query Parameters)
+
+    | 参数名      | 类型      | 必填 | 默认值       | 描述                                                    |
+    |-------------|-----------|------|-------------|--------------------------------------------------------|
+    | `kb_id`     | `string`  | 是   | -           | 知识库的唯一标识符                                      |
+    | `keywords`  | `string`  | 否   | ""          | 搜索关键词，支持文档名称模糊匹配                        |
+    | `page`      | `int`     | 否   | 1           | 页码，从1开始                                          |
+    | `page_size` | `int`     | 否   | 15          | 每页返回的文档数量                                      |
+    | `orderby`   | `string`  | 否   | create_time | 排序字段，支持: create_time, name, size, update_time   |
+    | `desc`      | `boolean` | 否   | true        | 是否降序排列                                           |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "total": 100,
+            "docs": [
+                {
+                    "id": "doc_123456",
+                    "name": "技术文档.pdf",
+                    "size": 1024000,
+                    "type": "pdf",
+                    "status": "1",
+                    "run": "done",
+                    "progress": 100,
+                    "chunk_num": 50,
+                    "token_num": 15000,
+                    "thumbnail": "/v1/document/image/kb_id-thumbnail_id",
+                    "create_time": "2024-01-01 12:00:00",
+                    "update_time": "2024-01-01 13:00:00",
+                    "created_by": "user_123",
+                    "parser_id": "pdf_parser",
+                    "suffix": "pdf"
+                }
+            ]
+        }
+    }
+    ```
+
+    #### 错误响应
+
+    - **400: 知识库ID缺失**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Lack of \"KB ID\"",
+            "data": false
+        }
+        ```
+
+    - **403: 权限不足**
+        ```json
+        {
+            "retcode": 403,
+            "retmsg": "Only owner of knowledgebase authorized for this operation.",
+            "data": false
+        }
+        ```
+
+    ---
+
+    ### 主要流程
+
+    1. **权限验证**:
+        - 验证知识库ID是否存在
+        - 检查用户是否为知识库的所有者
+        - 确认用户有访问权限
+
+    2. **数据查询**:
+        - 根据关键词进行模糊搜索
+        - 应用分页和排序参数
+        - 统计符合条件的文档总数
+
+    3. **结果处理**:
+        - 转换时间格式为字符串
+        - 处理缩略图URL路径
+        - 格式化返回数据
+
+    ---
+
+    ### 排序字段说明
+
+    | 字段名        | 描述           | 数据类型    |
+    |---------------|----------------|-------------|
+    | `create_time` | 创建时间       | datetime    |
+    | `update_time` | 更新时间       | datetime    |
+    | `name`        | 文档名称       | string      |
+    | `size`        | 文件大小       | integer     |
+    | `progress`    | 处理进度       | integer     |
+
+    ---
+
+    ### 文档状态说明
+
+    #### 运行状态 (run)
+    - `unstart`: 未开始处理
+    - `running`: 正在处理
+    - `done`: 处理完成
+    - `fail`: 处理失败
+
+    #### 可用状态 (status)
+    - `0`: 禁用，不参与检索
+    - `1`: 启用，正常使用
+
+    ---
+
+    ### 使用示例
+
+    #### 基本查询
+    ```
+    GET /v1/document/list?kb_id=kb_123456
+    ```
+
+    #### 关键词搜索
+    ```
+    GET /v1/document/list?kb_id=kb_123456&keywords=技术文档
+    ```
+
+    #### 分页查询
+    ```
+    GET /v1/document/list?kb_id=kb_123456&page=2&page_size=20
+    ```
+
+    #### 自定义排序
+    ```
+    GET /v1/document/list?kb_id=kb_123456&orderby=size&desc=false
+    ```
+
+    ---
+
+    ### 注意事项
+
+    - **权限控制**: 只有知识库所有者才能查看文档列表
+    - **缩略图处理**: 自动处理缩略图URL，支持base64和文件路径两种格式
+    - **时间格式**: 所有时间字段统一转换为字符串格式返回
+    - **性能优化**: 建议合理设置page_size，避免单次查询过多数据
+    - **搜索范围**: 关键词搜索仅匹配文档名称，不包含文档内容
+    """
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
 
@@ -491,35 +924,269 @@ def change_status(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
+    """
+    ### POST `/change_status` 更改文档状态接口
+
+    **功能描述**:
+    此接口用于更改单个或多个文档的可用状态，支持批量操作和向后兼容。接口会同步更新数据库中的文档状态和搜索索引中的可用性标记。
+
+    ---
+
+    ### 请求体 (Request Body)
+
+    | 字段        | 类型               | 必填 | 描述                                                                                 |
+    |-------------|-------------------|------|--------------------------------------------------------------------------------------|
+    | `doc_ids`   | `list[str]` 或 `str` | 是   | 文档ID列表或单个文档ID。支持批量操作，可传入字符串数组或单个字符串。                 |
+    | `status`    | `int`             | 是   | 文档状态：0 = 禁用，1 = 启用。                                                      |
+    | `doc_id`    | `str`             | 否   | 单个文档ID（向后兼容字段）。当 `doc_ids` 不存在时使用此字段。                        |
+
+    **兼容性说明**:
+    - 新版本调用者应使用 `doc_ids` 字段
+    - 旧版本调用者可继续使用 `doc_id` 字段，系统会自动兼容
+    - 优先级：`doc_ids` > `doc_id`
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+
+    - **`Content-Type: application/json`**
+    - **批量操作响应示例**:
+        ```json
+        {
+            "retcode": 0,
+            "retmsg": "success", 
+            "data": {
+                "doc_123": {"status": "1"},
+                "doc_456": {"status": "1"},
+                "doc_789": {"error": "No authorization."}
+            }
+        }
+        ```
+
+    - **单文档操作响应示例**:
+        ```json
+        {
+            "retcode": 0,
+            "retmsg": "success",
+            "data": {
+                "doc_123": {"status": "1"}
+            }
+        }
+        ```
+
+    #### 错误响应
+
+    - **400: 参数错误**
+        - **状态值无效**:
+            ```json
+            {
+                "retcode": 400,
+                "retmsg": "\"Status\" must be either 0 or 1!",
+                "data": false
+            }
+            ```
+        - **文档ID缺失**:
+            ```json
+            {
+                "retcode": 400,
+                "retmsg": "Document ID(s) required!",
+                "data": false
+            }
+            ```
+
+    #### 单个文档处理错误类型
+
+    在批量操作中，每个文档ID的处理结果单独返回，可能的错误包括：
+
+    - **权限不足**:
+        ```json
+        "doc_id": {"error": "No authorization."}
+        ```
+
+    - **文档不存在**:
+        ```json
+        "doc_id": {"error": "Document not found!"}
+        ```
+
+    - **知识库不存在**:
+        ```json
+        "doc_id": {"error": "Can't find this knowledgebase!"}
+        ```
+
+    - **数据库更新失败**:
+        ```json
+        "doc_id": {"error": "Database error (Document update)!"}
+        ```
+
+    - **搜索索引更新失败**:
+        ```json
+        "doc_id": {"error": "Database error (docStore update)!"}
+        ```
+
+    - **内部服务器错误**:
+        ```json
+        "doc_id": {"error": "Internal server error: 具体错误信息"}
+        ```
+
+    ---
+
+    ### 主要流程
+
+    1. **参数验证**:
+        - 验证状态值必须为 0 或 1
+        - 处理兼容性字段，优先使用 `doc_ids`，回退到 `doc_id`
+        - 将单个文档ID转换为列表格式以统一处理
+
+    2. **批量处理循环**:
+        - 遍历所有文档ID
+        - 对每个文档进行权限验证
+        - 验证文档和所属知识库的存在性
+
+    3. **状态更新**:
+        - 更新数据库中的文档状态记录
+        - 同步更新搜索索引中的 `available_int` 字段
+        - 确保数据库和搜索引擎的数据一致性
+
+    4. **结果汇总**:
+        - 为每个文档ID返回处理结果
+        - 成功时返回新状态，失败时返回错误信息
+
+    ---
+
+    ### 使用场景
+
+    #### 1. 单文档状态更改（向后兼容）
+    ```json
+    {
+        "doc_id": "doc_123456",
+        "status": 1
+    }
+    ```
+
+    #### 2. 批量文档状态更改（新功能）
+    ```json
+    {
+        "doc_ids": ["doc_123", "doc_456", "doc_789"],
+        "status": 0
+    }
+    ```
+
+    #### 3. 混合格式（推荐使用 doc_ids）
+    ```json
+    {
+        "doc_ids": "doc_123456",
+        "status": 1
+    }
+    ```
+
+    ---
+
+    ### 注意事项
+
+    - **权限控制**: 只有文档的拥有者才能更改文档状态
+    - **数据一致性**: 接口会同时更新关系数据库和向量数据库的状态
+    - **批量操作**: 每个文档的处理结果独立返回，部分失败不影响其他文档
+    - **状态含义**: 
+      - `0`: 文档禁用，不参与检索
+      - `1`: 文档启用，正常参与检索
+    - **错误处理**: 单个文档处理失败不会影响其他文档的处理
+    - **向后兼容**: 完全兼容旧版本的 `doc_id` 字段调用方式
+
+    ---
+
+    ### 示例请求
+
+    #### 批量启用文档:
+    ```json
+    {
+        "doc_ids": ["doc_001", "doc_002", "doc_003"],
+        "status": 1
+    }
+    ```
+
+    #### 单文档禁用（旧版本兼容）:
+    ```json
+    {
+        "doc_id": "doc_123456",
+        "status": 0
+    }
+    ```
+
+    ### 示例响应
+
+    #### 批量操作成功响应:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "doc_001": {"status": "1"},
+            "doc_002": {"status": "1"}, 
+            "doc_003": {"error": "Document not found!"}
+        }
+    }
+    ```
+
+    #### 单文档操作成功响应:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "doc_123456": {"status": "0"}
+        }
+    }
+    ```
+    """
     req = request_body.model_dump()
     if str(req["status"]) not in ["0", "1"]:
         return construct_json_result(data=False, message='"Status" must be either 0 or 1!',
                                      code=settings.RetCode.ARGUMENT_ERROR)
-    if not DocumentService.accessible(db, req["doc_id"], user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR)
 
-    try:
-        doc = DocumentService.get_by_id(db, req["doc_id"])
-        if not doc:
-            return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
-        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
-        if not kb:
-            return construct_json_result(data=False, message="Can't find this knowledgebase!",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+    # 处理兼容性：优先使用 doc_ids，如果不存在则使用 doc_id
+    doc_ids = req.get("doc_ids")
+    if doc_ids is None:
+        doc_ids = req.get("doc_id")
+    
+    # 确保 doc_ids 是列表格式
+    if isinstance(doc_ids, str):
+        doc_ids = [doc_ids]
+    
+    if not doc_ids:
+        return construct_json_result(data=False, message="Document ID(s) required!",
+                                     code=settings.RetCode.ARGUMENT_ERROR)
 
-        if not DocumentService.update_by_id(db, req["doc_id"], {"status": str(req["status"])}):
-            return construct_json_result(data=False, message="Database error (Document update)!",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+    result = {}
+    for doc_id in doc_ids:
+        if not DocumentService.accessible(db, doc_id, user.id):
+            result[doc_id] = {"error": "No authorization."}
+            continue
 
-        status = int(req["status"])
-        settings.docStoreConn.update({"doc_id": req["doc_id"]}, {"available_int": status},
-                                     search.index_name_one(kb.tenant_id, kb.name), doc.kb_id)
-        return construct_json_result(data=True)
-    except Exception as e:
-        return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message=str(e))
+        try:
+            doc = DocumentService.get_by_id(db, doc_id)
+            if not doc:
+                result[doc_id] = {"error": "Document not found!"}
+                continue
+            kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+            if not kb:
+                result[doc_id] = {"error": "Can't find this knowledgebase!"}
+                continue
+
+            if not DocumentService.update_by_id(db, doc_id, {"status": str(req["status"])}):
+                result[doc_id] = {"error": "Database error (Document update)!"}
+                continue
+
+            status = int(req["status"])
+            if not settings.docStoreConn.update({"doc_id": doc_id}, {"available_int": status},
+                                               search.index_name_one(kb.tenant_id, kb.name), doc.kb_id):
+                result[doc_id] = {"error": "Database error (docStore update)!"}
+            result[doc_id] = {"status": str(req["status"])}
+        except Exception as e:
+            result[doc_id] = {"error": f"Internal server error: {str(e)}"}
+
+    return construct_json_result(data=result)
 
 
 @router.post("/change_auth", summary="更改文档授权", response_description="成功更改文档授权")
@@ -571,6 +1238,182 @@ def rm(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
+    """
+    ### POST `/rm` 删除文档接口
+
+    **功能描述**:
+    此接口用于删除单个或多个文档，包括数据库记录、文件存储和相关的任务记录。支持批量删除操作，并自动处理文档间的依赖关系。
+
+    ---
+
+    ### 请求体 (Request Body)
+
+    | 字段      | 类型          | 必填 | 描述                                              |
+    |-----------|---------------|------|---------------------------------------------------|
+    | `doc_id`  | `list[str]`   | 是   | 要删除的文档ID列表，支持单个或多个文档ID          |
+
+    **兼容性说明**:
+    - 请求体中的 `doc_id` 字段支持字符串和字符串数组两种格式
+    - 单个文档删除：`{"doc_id": "doc_123"}`
+    - 批量文档删除：`{"doc_id": ["doc_123", "doc_456"]}`
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": true
+    }
+    ```
+
+    #### 错误响应
+
+    - **403: 权限不足**
+        ```json
+        {
+            "retcode": 403,
+            "retmsg": "No authorization.",
+            "data": false
+        }
+        ```
+
+    - **400: 文档不存在**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Document not found!",
+            "data": false
+        }
+        ```
+
+    - **400: 租户不存在**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Tenant not found!",
+            "data": false
+        }
+        ```
+
+    - **400: 数据库删除失败**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Database error (Document removal)!",
+            "data": false
+        }
+        ```
+
+    - **500: 服务器错误**
+        ```json
+        {
+            "retcode": 500,
+            "retmsg": "删除过程中发生的具体错误信息",
+            "data": false
+        }
+        ```
+
+    ---
+
+    ### 主要流程
+
+    1. **权限验证**:
+        - 检查用户对每个文档的删除权限
+        - 验证用户是否为文档的所有者或有删除权限
+
+    2. **删除前准备**:
+        - 获取文档的基本信息（解析器类型、知识库ID等）
+        - 获取文件存储地址信息
+        - 初始化知识库文档目录结构
+
+    3. **批量删除操作**:
+        - 删除相关的任务记录
+        - 从数据库中移除文档记录
+        - 删除文件与文档的关联记录
+        - 从对象存储中删除文件内容
+
+    4. **特殊处理**:
+        - 对于表格类型文档，更新知识库的字段映射
+        - 统计表格文档数量，必要时清理字段映射配置
+
+    5. **错误处理**:
+        - 收集所有删除过程中的错误信息
+        - 确保部分失败不影响其他文档的删除
+
+    ---
+
+    ### 删除范围
+
+    #### 数据库记录
+    - 文档基本信息记录
+    - 文件与文档的关联关系
+    - 相关的处理任务记录
+    - 向量索引中的文档数据
+
+    #### 存储文件
+    - 原始上传文件
+    - 生成的缩略图
+    - 处理过程中的临时文件
+
+    #### 配置信息
+    - 表格文档的字段映射（当知识库中无其他表格文档时）
+    - 文档的元数据配置
+
+    ---
+
+    ### 特殊文档类型处理
+
+    #### 表格文档 (TABLE)
+    - 删除表格文档时会检查知识库中的表格文档数量
+    - 如果是最后一个表格文档，会自动清理字段映射配置
+    - 确保知识库配置的一致性
+
+    #### 虚拟文档 (VIRTUAL)
+    - 仅删除数据库记录，无需处理文件存储
+    - 清理相关的文档内容块
+
+    ---
+
+    ### 使用示例
+
+    #### 删除单个文档
+    ```json
+    {
+        "doc_id": ["doc_123456"]
+    }
+    ```
+
+    #### 批量删除文档
+    ```json
+    {
+        "doc_id": ["doc_123", "doc_456", "doc_789"]
+    }
+    ```
+
+    #### 兼容格式（单个文档）
+    ```json
+    {
+        "doc_id": "doc_123456"
+    }
+    ```
+
+    ---
+
+    ### 注意事项
+
+    - **权限控制**: 只有文档的创建者或有删除权限的用户才能执行删除操作
+    - **不可逆操作**: 删除操作不可撤销，请谨慎使用
+    - **批量处理**: 支持批量删除，但建议单次删除数量不超过100个
+    - **依赖检查**: 删除前会检查文档是否被其他功能引用
+    - **存储清理**: 自动清理所有相关的存储文件，释放存储空间
+    - **索引同步**: 同步清理向量数据库中的相关索引
+    - **事务处理**: 使用事务确保数据一致性，避免部分删除导致的数据不一致
+    - **错误累积**: 多个文档删除时，单个失败不会阻止其他文档的删除
+    """
     req = request_body.model_dump()
     doc_ids = req["doc_id"]
     if isinstance(doc_ids, str):
@@ -641,6 +1484,183 @@ def run(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
+    """
+    ### POST `/run` 运行文档处理任务接口
+
+    **功能描述**:
+    此接口用于启动或停止文档的处理任务，支持批量操作。可以控制文档的解析、向量化等处理流程，并可选择是否清除历史处理数据。
+
+    ---
+
+    ### 请求体 (Request Body)
+
+    | 字段       | 类型          | 必填 | 描述                                                        |
+    |------------|---------------|------|-------------------------------------------------------------|
+    | `doc_ids`  | `list[str]`   | 是   | 要处理的文档ID列表                                          |
+    | `run`      | `int`         | 是   | 任务状态：0=停止，1=启动                                    |
+    | `delete`   | `boolean`     | 否   | 是否删除历史处理数据，默认false                             |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": true
+    }
+    ```
+
+    #### 错误响应
+
+    - **403: 权限不足**
+        ```json
+        {
+            "retcode": 403,
+            "retmsg": "No authorization.",
+            "data": false
+        }
+        ```
+
+    - **400: 文档不存在**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Document not found!",
+            "data": false
+        }
+        ```
+
+    - **400: 租户不存在**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Tenant not found!",
+            "data": false
+        }
+        ```
+
+    - **400: Milvus删除失败**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Milvus delete failed!",
+            "data": false
+        }
+        ```
+
+    ---
+
+    ### 主要流程
+
+    1. **权限验证**:
+        - 验证用户对所有文档的访问权限
+        - 确保用户有操作这些文档的权利
+
+    2. **状态更新**:
+        - 更新文档的运行状态
+        - 重置进度信息（当启动新任务时）
+        - 清零chunk_num和token_num（当delete=true时）
+
+    3. **数据清理**（当delete=true时）:
+        - 删除相关的任务记录
+        - 清除Milvus中的向量数据
+        - 重置文档的处理统计信息
+
+    4. **任务调度**（当run=1时）:
+        - 获取文档的存储信息
+        - 将文档加入处理队列
+        - 处理表格文档的特殊逻辑
+
+    ---
+
+    ### 任务状态说明
+
+    #### 运行状态值
+    | 值 | 状态      | 描述                           |
+    |----|-----------|--------------------------------|
+    | 0  | 停止      | 停止文档处理，不进入处理队列   |
+    | 1  | 运行      | 启动文档处理，加入处理队列     |
+
+    #### 文档处理状态
+    - `unstart`: 未开始处理
+    - `running`: 正在处理中
+    - `done`: 处理完成
+    - `fail`: 处理失败
+
+    ---
+
+    ### 特殊处理逻辑
+
+    #### 表格文档处理 (TABLE类型)
+    - 启动表格文档处理前会检查知识库中的表格文档数量
+    - 如果是首个表格文档，会清理旧的字段映射配置
+    - 确保表格文档的字段映射一致性
+
+    #### 重新处理 (delete=true)
+    - 清除文档在向量数据库中的所有数据
+    - 重置文档的chunk_num、token_num等统计信息
+    - 删除相关的处理任务记录
+    - 适用于文档内容发生变化需要重新处理的场景
+
+    ---
+
+    ### 使用场景
+
+    #### 1. 启动文档处理
+    ```json
+    {
+        "doc_ids": ["doc_123", "doc_456"],
+        "run": 1
+    }
+    ```
+
+    #### 2. 停止文档处理
+    ```json
+    {
+        "doc_ids": ["doc_123", "doc_456"],
+        "run": 0
+    }
+    ```
+
+    #### 3. 重新处理文档（清除历史数据）
+    ```json
+    {
+        "doc_ids": ["doc_123"],
+        "run": 1,
+        "delete": true
+    }
+    ```
+
+    ---
+
+    ### 处理队列机制
+
+    #### 任务优先级
+    - 按照文档提交顺序进行处理
+    - 支持并发处理多个文档
+    - 自动处理任务失败和重试
+
+    #### 进度跟踪
+    - 实时更新文档处理进度
+    - 记录处理过程中的错误信息
+    - 提供详细的处理状态反馈
+
+    ---
+
+    ### 注意事项
+
+    - **权限控制**: 只有文档所有者才能控制文档的处理状态
+    - **批量操作**: 支持同时处理多个文档，但建议合理控制数量
+    - **数据一致性**: delete操作会彻底清除相关数据，请谨慎使用
+    - **处理时间**: 文档处理时间取决于文档大小和复杂度
+    - **资源占用**: 处理过程会占用系统资源，建议错峰处理大量文档
+    - **状态同步**: 任务状态变更会实时反映在文档列表中
+    - **错误处理**: 处理失败的文档会保留错误信息供调试使用
+    - **向量数据**: 删除操作会同步清理Milvus中的向量数据
+    """
     req = request_body.model_dump()
 
     for doc_id in req["doc_ids"]:
