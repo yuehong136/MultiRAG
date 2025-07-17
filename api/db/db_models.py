@@ -418,8 +418,8 @@ class Document(BaseModel):
     process_begin_at = Column(DateTime, index=True, nullable=True)
     process_duration = Column(Float, index=False, nullable=False, default=0)
     meta_fields = Column(JSONB, index=False, nullable=False, default={})
-    run = Column(String(1), index=True, nullable=True, default="0",
-                 doc="start to run processing or cancel.(1: run it; 2: cancel)")
+    suffix = Column(String(32), index=True, nullable=False, default="", doc="The real file extension suffix")
+    run = Column(String(1), index=True, nullable=True, default="0", doc="start to run processing or cancel.(1: run it; 2: cancel)")
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 

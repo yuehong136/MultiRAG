@@ -11,6 +11,7 @@ import json
 import re
 import os
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
@@ -361,6 +362,7 @@ class FileService(CommonService):
                     "created_by": current_user.id,
                     "type": filetype,
                     "name": filename,
+                    "suffix": Path(filename).suffix.lstrip("."),
                     "location": location,
                     "size": len(file_blob),
                     "thumbnail": thumbnail_location,

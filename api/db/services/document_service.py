@@ -77,8 +77,8 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,
-                     orderby: str, desc: bool, keywords: str | None = None,
-                     run_status: list | None = None, types: list | None = None) -> tuple[list[dict], int]:
+                     orderby: str, desc: bool, keywords: str | None,
+                     run_status: list | None, types: list | None, suffix: list) -> tuple[list[dict], int]:
         query = db.query(cls.model).filter_by(kb_id=kb_id)
 
         if keywords:
@@ -89,6 +89,9 @@ class DocumentService(CommonService):
 
         if types:
             query = query.filter(cls.model.type.in_(types))
+
+        if suffix:
+            query = query.filter(cls.model.suffix.in_(suffix))
 
         count = query.count()
 
@@ -103,6 +106,67 @@ class DocumentService(CommonService):
             docs = query.all()
 
         return [doc.to_dict() for doc in docs], count
+
+    @classmethod
+    def get_filter_by_kb_id(cls, db: Session, kb_id, keywords, run_status, types, suffix):
+        """
+        优化版本：使用数据库聚合查询提高性能
+
+        returns:
+        {
+            "suffix": {
+                "ppt": 1,
+                "doxc": 2
+            },
+            "run_status": {
+             "1": 2,
+             "2": 2
+            }
+        }, total
+        where "1" => RUNNING, "2" => CANCEL
+        """
+        # 构建基础查询条件
+        filters = [cls.model.kb_id == kb_id]
+
+        # 添加关键词过滤
+        if keywords:
+            filters.append(func.lower(cls.model.name).contains(keywords.lower()))
+
+        # 添加运行状态过滤
+        if run_status:
+            filters.append(cls.model.run.in_(run_status))
+
+        # 添加类型过滤
+        if types:
+            filters.append(cls.model.type.in_(types))
+
+        # 添加后缀过滤
+        if suffix:
+            filters.append(cls.model.suffix.in_(suffix))
+
+        # 获取总数
+        total = db.query(cls.model).filter(*filters).count()
+
+        # 统计suffix分布
+        suffix_stats = db.query(
+            cls.model.suffix,
+            func.count(cls.model.suffix).label('count')
+        ).filter(*filters).group_by(cls.model.suffix).all()
+
+        # 统计run_status分布
+        run_status_stats = db.query(
+            cls.model.run,
+            func.count(cls.model.run).label('count')
+        ).filter(*filters).group_by(cls.model.run).all()
+
+        # 构建返回字典
+        suffix_counter = {stat.suffix: stat.count for stat in suffix_stats}
+        run_status_counter = {str(stat.run): stat.count for stat in run_status_stats}
+
+        return {
+            "suffix": suffix_counter,
+            "run_status": run_status_counter
+        }, total
 
     @classmethod
     def count_by_kb_id(cls, db: Session, kb_id: str, keywords: str | None = None,

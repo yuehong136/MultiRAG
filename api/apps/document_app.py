@@ -11,6 +11,7 @@ import os.path
 import json
 import pathlib
 import re
+from pathlib import Path
 from io import BytesIO
 from typing import Any
 
@@ -62,6 +63,7 @@ class CreateDocumentRequest(BaseModel):
 class DocumentFilter(BaseModel):
     run_status: list[str] | None = []
     types: list[str] | None = []
+    suffix: list[str] = []
 
 
 class ChangeStatusRequest(BaseModel):
@@ -95,6 +97,14 @@ class ChangeParserRequest(BaseModel):
 class SetMetaRequest(BaseModel):
     doc_id: str = Field(..., description="文档ID")
     meta: dict[str, Any] = Field(..., description="元数据对象")
+
+
+class FilterRequest(BaseModel):
+    kb_id: str = Field(..., description="知识库ID")
+    keywords: str = Field(default="", description="关键词")
+    suffix: list[str] = Field(default=[], description="文件后缀过滤")
+    run_status: list[str] = Field(default=[], description="运行状态过滤")
+    types: list[str] = Field(default=[], description="文件类型过滤")
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
 async def upload(
@@ -215,7 +225,8 @@ def web_crawl(
             "name": filename,
             "location": location,
             "size": len(blob),
-            "thumbnail": thumbnail(filename, blob)
+            "thumbnail": thumbnail(filename, blob),
+            "suffix": Path(filename).suffix.lstrip("."),
         }
         if doc["type"] == FileType.VISUAL:
             doc["parser_id"] = ParserType.PICTURE.value
@@ -265,6 +276,7 @@ def create_document(
             "created_by": user.id,
             "type": FileType.VIRTUAL,
             "name": req["name"],
+            "suffix": Path(req["name"]).suffix.lstrip("."),
             "location": "",
             "size": 0
         })
@@ -355,9 +367,11 @@ def list_docs(
                 code=settings.RetCode.ARGUMENT_ERROR
             )
 
+    suffix = filter_params.suffix
+
     try:
         docs, tol = DocumentService.get_by_kb_id(
-            db, kb_id, page, page_size, orderby, desc, keywords, run_status, types
+            db, kb_id, page, page_size, orderby, desc, keywords, run_status, types, suffix
         )
         docs = [convert_datetime_to_str(d) for d in docs]
 
@@ -368,6 +382,65 @@ def list_docs(
         return construct_json_result(data={"total": tol, "docs": docs})
     except Exception as e:
         return construct_error_response(e)
+
+@router.post("/filter", summary="获取文档过滤器", response_description="成功获取文档过滤器")
+def get_filter(
+        request_body: FilterRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    获取指定知识库的文档过滤器统计信息。
+    
+    该接口根据提供的过滤条件，返回知识库中文档的统计信息，包括文件后缀分布和运行状态分布。
+    
+    参数:
+    - kb_id (str): 知识库ID
+    - keywords (str): 关键词过滤，默认为空
+    - suffix (list[str]): 文件后缀过滤，默认为空列表
+    - run_status (list[str]): 运行状态过滤，默认为空列表  
+    - types (list[str]): 文件类型过滤，默认为空列表
+    
+    返回:
+    - 包含过滤器统计信息和总数的响应
+    """
+    req = request_body.model_dump()
+    kb_id = req.get("kb_id")
+    
+    if not kb_id:
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
+    
+    # 验证用户是否有权访问该知识库
+    tenants = UserTenantService.query(db, user_id=user.id)
+    for tenant in tenants:
+        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
+            break
+    else:
+        return get_json_result(data=False, retmsg="Only owner of knowledgebase authorized for this operation.", retcode=settings.RetCode.OPERATING_ERROR)
+
+    keywords = req.get("keywords", "")
+    suffix = req.get("suffix", [])
+    run_status = req.get("run_status", [])
+    types = req.get("types", [])
+
+    # 验证 run_status 参数
+    if run_status:
+        invalid_status = {s for s in run_status if s not in VALID_TASK_STATUS}
+        if invalid_status:
+            return get_data_error_result(retmsg=f"Invalid filter run status conditions: {', '.join(invalid_status)}")
+
+    # 验证 types 参数  
+    if types:
+        invalid_types = {t for t in types if t not in VALID_FILE_TYPES}
+        if invalid_types:
+            return get_data_error_result(retmsg=f"Invalid filter conditions: {', '.join(invalid_types)} type{'s' if len(invalid_types) > 1 else ''}")
+
+    try:
+        filter_data, total = DocumentService.get_filter_by_kb_id(db, kb_id, keywords, run_status, types, suffix)
+        return get_json_result(data={"total": total, "filter": filter_data})
+    except Exception as e:
+        return server_error_response(e)
+
 
 @router.post('/infos', summary="获取文档信息", response_description="成功获取文档信息")
 def docinfos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)):
