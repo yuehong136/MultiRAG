@@ -245,7 +245,7 @@ async def collect(db: Session):
     canceled = False
     task = TaskService.get_task(db, msg["id"])
     if task:
-        canceled = TaskService.do_cancel(db, task["id"])
+        canceled = DocumentService.do_cancel(db, task["doc_id"])
 
     if not task or canceled:
         state = "is unknown" if not task else "has been cancelled"
@@ -424,7 +424,7 @@ async def build_chunks(task, progress_callback, db: Session):
 
         docs_to_tag = []
         for d in docs:
-            task_canceled = TaskService.do_cancel(db, task["id"])
+            task_canceled = DocumentService.do_cancel(db, task["doc_id"])
             if task_canceled:
                 progress_callback(-1, msg="Task has been canceled.")
                 return
@@ -745,7 +745,7 @@ async def do_handle_task(db, task):
         progress_callback(-1, msg=error_message)
         raise Exception(error_message)
 
-    task_canceled = TaskService.do_cancel(db, task_id)
+    task_canceled = DocumentService.do_cancel(db, task_doc_id)
     if task_canceled:
         progress_callback(-1, msg="Task has been canceled.")
         return
@@ -888,7 +888,7 @@ async def do_handle_task(db, task):
         # 若执行到此，说明插入成功，记录插入结果
         successful_inserts.append(doc_store_result)
 
-        task_canceled = TaskService.do_cancel(db, task_id)
+        task_canceled = DocumentService.do_cancel(db, task_doc_id)
         if task_canceled:
             progress_callback(-1, msg="Task has been canceled.")
             return
