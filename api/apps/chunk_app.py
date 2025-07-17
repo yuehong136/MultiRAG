@@ -998,7 +998,7 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
             return get_data_error_result(retmsg="KnowledgeBase not found!")
 
         if not settings.docStoreConn.delete(collection_name=search.index_name_one(kb.tenant_id, kb.name), ids=req["chunk_ids"]):
-            return get_data_error_result(retmsg="Index updating failure")
+            return get_data_error_result(retmsg="Chunk deleting failure")
         deleted_chunk_ids = req["chunk_ids"]
         chunk_number = len(deleted_chunk_ids)
         DocumentService.decrement_chunk_num(db, doc.id, doc.kb_id, 1, chunk_number, 0)
