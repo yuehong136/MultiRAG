@@ -37,7 +37,7 @@ from api.utils.api_utils import construct_json_result, construct_error_response,
     get_json_result, get_data_error_result, server_error_response
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type, thumbnail, get_project_base_directory
-from api.utils.web_utils import html2pdf, is_valid_url
+from api.utils.web_utils import CONTENT_TYPE_MAP, html2pdf, is_valid_url
 from core.nlp import search
 from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
@@ -1797,13 +1797,14 @@ def get_document(
         # 将文件内容包装成 BytesIO 对象
         file_stream = BytesIO(file_content)
 
-        ext = re.search(r"\.([^.]+)$", doc.name)
+        ext = re.search(r"\.([^.]+)$", doc.name.lower())
+        ext = ext.group(1) if ext else None
         media_type = "application/octet-stream"
         if ext:
             if doc.type == FileType.VISUAL.value:
-                media_type = f'image/{ext.group(1)}'
+                media_type = CONTENT_TYPE_MAP.get(ext, f"image/{ext}")
             else:
-                media_type = f'application/{ext.group(1)}'
+                media_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
 
         # 使用 quote 对文件名进行编码
         encoded_filename = quote(doc.name)
