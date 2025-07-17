@@ -17,6 +17,7 @@ from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.user_service import TenantService
 from api.utils import get_uuid
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
+from api.utils.mcp_server import get_mcp_tools
 from api.utils.web_utils import get_float, safe_json_parse
 from core.utils.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from api.apps import manager
@@ -160,10 +161,14 @@ def list_mcp(
     
     try:
         servers = MCPServerService.get_servers(
-            db, user.id, mcp_ids, page, page_size, orderby, desc, keywords
+            db, user.id, mcp_ids, 0, 0, orderby, desc, keywords
         ) or []
+        total = len(servers)
 
-        return get_json_result(data={"mcp_servers": servers, "total": len(servers)})
+        if page and page_size:
+            servers = servers[(page - 1) * page_size : page * page_size]
+
+        return get_json_result(data={"mcp_servers": servers, "total": total})
     except Exception as e:
         return server_error_response(e)
 
@@ -327,24 +332,43 @@ def create(request: CreateMCPServerRequest, db: Session = Depends(get_db), user=
     if not server_name or len(server_name.encode("utf-8")) > 255:
         return get_data_error_result(retmsg=f"Invalid MCP name or length is {len(server_name)} which is large than 255.")
 
-    # 使用safe_json_parse处理JSON字段
-    req_data["headers"] = safe_json_parse(req_data.get("headers", {}))
-    req_data["variables"] = safe_json_parse(req_data.get("variables", {}))
+    e, _ = MCPServerService.get_by_name_and_tenant(db, name=server_name, tenant_id=user.id)
+    if e:
+        return get_data_error_result(retmsg="Duplicated MCP server name.")
+
+    url = req_data.get("url", "")
+    if not url:
+        return get_data_error_result(retmsg="Invalid url.")
+
+    headers = safe_json_parse(req_data.get("headers", {}))
+    req_data["headers"] = headers
+    variables = safe_json_parse(req_data.get("variables", {}))
+    variables.pop("tools", None)
+
+    timeout = get_float(req_data, "timeout", 10)
 
     try:
         req_data["id"] = get_uuid()
         req_data["tenant_id"] = user.id
 
-        # 验证租户存在
         tenant = TenantService.get_by_id(db, user.id)
         if not tenant:
             return get_data_error_result(retmsg="Tenant not found.")
 
-        # 创建MCP服务器
-        if not MCPServerService.insert(db, **req_data):
-            return get_data_error_result()
+        mcp_server = MCPServer(id=server_name, name=server_name, url=url, server_type=server_type, variables=variables, headers=headers)
+        server_tools, err_message = get_mcp_tools([mcp_server], timeout)
+        if err_message:
+            return get_data_error_result(err_message)
 
-        return get_json_result(data={"id": req_data["id"]})
+        tools = server_tools[server_name]
+        tools = {tool["name"]: tool for tool in tools if isinstance(tool, dict) and "name" in tool}
+        variables["tools"] = tools
+        req_data["variables"] = variables
+
+        if not MCPServerService.insert(db, **req_data):
+            return get_data_error_result("Failed to create MCP server.")
+
+        return get_json_result(data=req_data)
     except Exception as e:
         return server_error_response(e)
 
@@ -436,29 +460,43 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
     """
     req_data = request.model_dump()
 
-    server_type = req_data.get("server_type", "")
-    if server_type and server_type not in VALID_MCP_SERVER_TYPES:
-        return get_data_error_result(retmsg="Unsupported MCP server type.")
-    
-    server_name = req_data.get("name", "")
-    if server_name and len(server_name.encode("utf-8")) > 255:
-        return get_data_error_result(retmsg=f"Invalid MCP name or length is {len(server_name)} which is large than 255.")
-
     mcp_id = req_data.get("mcp_id", "")
     mcp_server = MCPServerService.get_by_id(db, mcp_id)
     if not mcp_server or mcp_server.tenant_id != user.id:
         return get_data_error_result(retmsg=f"Cannot find MCP server {mcp_id} for user {user.id}")
 
-    # 使用safe_json_parse处理JSON字段
-    if "headers" in req_data and req_data["headers"] is not None:
-        req_data["headers"] = safe_json_parse(req_data.get("headers", mcp_server.headers))
-    if "variables" in req_data and req_data["variables"] is not None:
-        req_data["variables"] = safe_json_parse(req_data.get("variables", mcp_server.variables))
+    server_type = req_data.get("server_type", mcp_server.server_type)
+    if server_type and server_type not in VALID_MCP_SERVER_TYPES:
+        return get_data_error_result(retmsg="Unsupported MCP server type.")
+    server_name = req_data.get("name", mcp_server.name)
+    if server_name and len(server_name.encode("utf-8")) > 255:
+        return get_data_error_result(retmsg=f"Invaild MCP name or length is {len(server_name)} which is large than 255.")
+    url = req_data.get("url", mcp_server.url)
+    if not url:
+        return get_data_error_result(retmsg="Invaild url.")
+
+    headers = safe_json_parse(req_data.get("headers", mcp_server.headers))
+    req_data["headers"] = headers
+
+    variables = safe_json_parse(req_data.get("variables", mcp_server.variables))
+    variables.pop("tools", None)
+
+    timeout = get_float(req_data, "timeout", 10)
 
     try:
         req_data["tenant_id"] = user.id
         req_data.pop("mcp_id", None)
         req_data["id"] = mcp_id
+
+        mcp_server = MCPServer(id=server_name, name=server_name, url=url, server_type=server_type, variables=variables, headers=headers)
+        server_tools, err_message = get_mcp_tools([mcp_server], timeout)
+        if err_message:
+            return get_data_error_result(err_message)
+
+        tools = server_tools[server_name]
+        tools = {tool["name"]: tool for tool in tools if isinstance(tool, dict) and "name" in tool}
+        variables["tools"] = tools
+        req_data["variables"] = variables
 
         # 更新MCP服务器
         if not MCPServerService.filter_update(db, [MCPServer.id == mcp_id, MCPServer.tenant_id == user.id], req_data):
@@ -666,11 +704,17 @@ def import_multiple(request: ImportMCPServerRequest, db: Session = Depends(get_d
     if not servers:
         return get_data_error_result(retmsg="No MCP servers provided.")
 
+    timeout = get_float(req_data, "timeout", 10)
+
     results = []
     try:
         for server_name, config in servers.items():
-            if not all(key in config for key in ["type", "url"]):
+            if not all(key in config for key in {"type", "url"}):
                 results.append({"server": server_name, "success": False, "message": "Missing required fields (type or url)"})
+                continue
+
+            if not server_name or len(server_name.encode("utf-8")) > 255:
+                results.append({"server": server_name, "success": False, "message": f"Invaild MCP name or length is {len(server_name)} which is large than 255."})
                 continue
 
             base_name = server_name
@@ -691,17 +735,25 @@ def import_multiple(request: ImportMCPServerRequest, db: Session = Depends(get_d
                 "name": new_name,
                 "url": config["url"],
                 "server_type": config["type"],
-                "variables": {
-                    "authorization_token": config.get("authorization_token", ""),
-                    "tool_configuration": config.get("tool_configuration", {})
-                },
+                "variables": {"authorization_token": config.get("authorization_token", "")},
             }
+
+            headers = {"authorization_token": config["authorization_token"]} if "authorization_token" in config else {}
+            variables = {k: v for k, v in config.items() if k not in {"type", "url", "headers"}}
+            mcp_server = MCPServer(id=new_name, name=new_name, url=config["url"], server_type=config["type"], variables=variables, headers=headers)
+            server_tools, err_message = get_mcp_tools([mcp_server], timeout)
+            if err_message:
+                results.append({"server": base_name, "success": False, "message": err_message})
+                continue
+
+            tools = server_tools[new_name]
+            tools = {tool["name"]: tool for tool in tools if isinstance(tool, dict) and "name" in tool}
+            create_data["variables"]["tools"] = tools
 
             if MCPServerService.insert(db, **create_data):
                 result = {"server": server_name, "success": True, "action": "created", "id": create_data["id"], "new_name": new_name}
                 if new_name != base_name:
-                    result["message"] = f"Renamed from '{base_name}' to avoid duplication"
-
+                    result["message"] = f"Renamed from '{base_name}' to '{new_name}' avoid duplication"
                 results.append(result)
             else:
                 results.append({"server": server_name, "success": False, "message": "Failed to create MCP server."})
@@ -795,7 +847,7 @@ def export_multiple(request: ExportMCPServerRequest, db: Session = Depends(get_d
                     "url": mcp_server.url,
                     "name": mcp_server.name,
                     "authorization_token": mcp_server.variables.get("authorization_token", ""),
-                    "tool_configuration": mcp_server.variables.get("tool_configuration", {}),
+                    "tools": mcp_server.variables.get("tools", {}),
                 }
 
         return get_json_result(data={"mcpServers": exported_servers})
@@ -954,16 +1006,17 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
                 results[server_key] = []
                 for tool in tools:
                     tool_dict = tool.model_dump()
-                    cached_tool = cached_tools.get(tool_dict["name"])
+                    cached_tool = cached_tools.get(tool_dict["name"], {})
 
-                    tool_dict["enabled"] = cached_tool.get("enabled") if cached_tool and "enabled" in cached_tool else True
+                    tool_dict["enabled"] = cached_tool.get("enabled", True)
                     results[server_key].append(tool_dict)
 
-        # PERF: blocking call to close sessions — consider moving to background thread or task queue
-        close_multiple_mcp_toolcall_sessions(tool_call_sessions)
         return get_json_result(data=results)
     except Exception as e:
         return server_error_response(e)
+    finally:
+        # PERF: blocking call to close sessions — consider moving to background thread or task queue
+        close_multiple_mcp_toolcall_sessions(tool_call_sessions)
 
 
 @router.post('/test_tool', summary="测试MCP工具", response_description="成功测试MCP工具")
