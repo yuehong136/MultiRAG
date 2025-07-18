@@ -61,14 +61,6 @@ async def get_sql_and_table_config(
             recommended_chart=body.semantic_layer.get('recommended_chart'),
         )
 
-        sql = sql_generation_result["sql"]
-        used_models = sql_generation_result["usedModels"]
-        sql_components = sql_generation_result["sqlComponents"]
-
-        logger.info(f"sql:{sql}")
-        logger.info(f"used_models:{used_models}")
-        logger.info(f"sql_components:{sql_components}")
-
         if not sql_generation_result or not sql_generation_result.get("sql"):
             logger.error("未能从Service层获取有效的SQL生成结果。")
             return ResponseSchema(
@@ -79,6 +71,7 @@ async def get_sql_and_table_config(
         sql = sql_generation_result["sql"]
         used_models = sql_generation_result["usedModels"]
         sql_components = sql_generation_result["sqlComponents"]
+        query_complexity = sql_generation_result["queryComplexity"]
 
         # 构建使用到的模型和表的详情字典
         _, used_table_detail_dict, model_list, intersection_dataset_ids = await service.build_model_details(
@@ -124,6 +117,20 @@ async def get_sql_and_table_config(
                     logger.error(f"model_ids: {body.semantic_layer.get('model_ids', [])}, used_models: {used_models}")
                     raise Exception("模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
 
+        # 复杂查询，直接返回结果
+        if query_complexity == "complex":
+            logger.info(f"当前SQL查询复杂度为：{query_complexity}")
+            response_data = {
+                "sql": sql,
+                "query_complexity": query_complexity,
+                "result": result["data"]
+            }
+            return ResponseSchema(
+                status=StatusEnum.SUCCESS,
+                message="生成初始SQL及配置成功",
+                data=response_data
+            )
+
         # 2. 生成表格配置
         model_table_alias_mapping_list, table_config = await service.generate_table_config(
             used_table_detail_dict=used_table_detail_dict,
@@ -139,6 +146,7 @@ async def get_sql_and_table_config(
         # 将sql_generation_result中的所有内容都包含进去
         response_data = {
             "sql": sql,
+            "query_complexity": query_complexity,
             "result": result["data"],
             "table_config": table_config,
             "sql_components": sql_components,

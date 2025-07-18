@@ -91,8 +91,8 @@ class NLQToInitialSQLGenerator:
             logger.warning(f"JSON中缺少必须的'sql'字段或其类型不是字符串。")
             return None
 
-        # 定义期望的组件键
-        component_keys = ["select", "from", "where", "groupBy", "orderBy", "limit"]
+        # 定义期望的组件键 - 添加了 having 键
+        component_keys = ["select", "from", "where", "groupBy", "having", "orderBy", "limit"]
 
         # 获取sqlComponents，如果不存在则为空字典
         sql_components = json_data.get('sqlComponents', {})
@@ -105,11 +105,19 @@ class NLQToInitialSQLGenerator:
             if key not in sql_components or not isinstance(sql_components[key], str):
                 sql_components[key] = ""
 
-        return {
+        # 构建返回数据，保留所有原始字段
+        result = {
             "sql": self._clean_sql(sql),
             "usedModels": json_data.get('usedModels', []) or [],
             "sqlComponents": sql_components
         }
+
+        # 保留其他可能的字段（如 queryComplexity 等）
+        for key, value in json_data.items():
+            if key not in ["sql", "usedModels", "sqlComponents"]:
+                result[key] = value
+
+        return result
 
     async def generate_sql_query_with_components(self, user_query: str, semantic_layer: Dict[str, Any],
                                                  llm_name: str, recommended_chart: str) -> \

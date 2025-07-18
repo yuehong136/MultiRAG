@@ -67,12 +67,24 @@
         *   **通常情况下，绝对不要**使用 `LIMIT` 子句，因为它会返回不完整的数据，破坏后续的探索分析。
         *   **唯一的例外是：** 当且仅当用户的提问包含非常明确的“Top-N”或“Bottom-N”意图时（例如，“最多的5个”、“排名前10的”、“最少的3个”等），才可以在SQL中使用 `ORDER BY` 配合 `LIMIT` 子句，以直接生成排名结果。如果问题是开放式的探索（如“有哪些部门”、“查询教师信息”），则严禁使用 `LIMIT`。
 
-4.  **输出格式：**
+4.  **查询复杂度评估与标记：**
+    *   在生成SQL后，你必须对其结构进行评估，以判断其复杂度。
+    *   **简单查询 (`"simple"`)**: 如果SQL查询仅由一个不含子查询的 `SELECT` 语句构成，只使用了 `FROM`, `JOIN`, `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY`, `LIMIT` 这些标准子句，那么它应被标记为 `"simple"`。
+    *   **复杂查询 (`"complex"`)**: 如果SQL查询包含以下任何一种高级特性，它必须被标记为 `"complex"`：
+        *   公用表表达式 (CTEs, 即 `WITH` 子句)
+        *   窗口函数 (例如 `ROW_NUMBER() OVER (...)`, `RANK() OVER (...)` 等)
+        *   集合操作 (如 `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`)
+        *   在 `SELECT`, `FROM`, 或 `WHERE` 子句中嵌套了子查询。
+    *   此评估结果将用于填充最终输出JSON中的 `queryComplexity` 字段。
+
+5.  **输出格式：**
     *   **严格以JSON格式输出，不包含任何解释、注释或markdown标记。**
     *   **JSON对象必须包含以下键：**
         *   `"sql"`: (字符串类型) 包含你生成的完整、可执行的SQL查询语句。
         *   `"usedModels"`: (字符串数组类型) 包含该SQL查询中实际使用到的所有模型的名称。模型的名称来源于输入信息`dataModels`中的`name`字段。你需要分析生成的SQL，从`FROM`和`JOIN`子句中识别出所有用到的表，然后将这些表映射回它们在`dataModels`中对应的模型`name`，并形成一个列表。
+        *   `"queryComplexity"`: (字符串类型) 根据**指南#4**的评估结果，必须包含 `"simple"` 或 `"complex"`，用于标识生成的SQL的结构复杂度。
         *   `"sqlComponents"`: (对象类型) 包含分解后的SQL查询的各个组成部分。每个部分都是一个字符串，**包含完整的子句关键字**。如果某个部分不存在于最终的SQL中，则其对应的值应为空字符串 `""`。
+            *   **注意：** 如果 `"queryComplexity"` 被标记为 `"complex"`，则此 `sqlComponents` 对象中的所有值都**必须**设置为空字符串 (`""`)，因为复杂查询无法被有效分解。
             *   `"select"`: 完整的 `SELECT` 子句 (例如: `"SELECT t1.teacher_id AS "教师ID", t1.name AS "教师姓名", t2.class_hours AS "课时数""`)。
             *   `"from"`: 完整的 `FROM` 和 `JOIN` 子句 (例如: `"FROM gx_test_teachers AS t1 JOIN gx_test_classes AS t2 ON t1.teacher_id = t2.teacher_id"`)。
             *   `"where"`: 完整的 `WHERE` 子句 (例如: `"WHERE t1.department = '计算机科学与技术学院'"`).
@@ -96,6 +108,6 @@ $semantic_layer
 
 ---
 
-**请根据以上信息生成一个包含SQL查询、所用模型及SQL各组成部分的JSON对象：**
+**请根据以上信息生成一个包含SQL查询、所用模型、查询复杂度及SQL各组成部分的JSON对象：**
 ```json
 ```
