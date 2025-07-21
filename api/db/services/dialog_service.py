@@ -241,7 +241,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     #     return
     chat_start_ts = timer()
 
-    if TenantLLMService.lm_id2llm_type(dialog.llm_id) == "image2text":
+    if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
         llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
     else:
         llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
