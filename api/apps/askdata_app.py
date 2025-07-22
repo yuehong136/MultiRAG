@@ -459,3 +459,96 @@ async def re_query(
             status=StatusEnum.ERROR,
             message=f"生成re-query SQL失败：{str(e)}"
         )
+
+
+class GetHCDimValuesByDimValueRequest(BaseModel):
+    """获取高基数维度值请求模型"""
+    keyword: str = Field(..., title="搜索关键词", description="用于搜索维度值的关键词")
+    dimension_id: str = Field(..., title="维度ID", description="高基数维度的ID")
+    page_index: int = Field(1, title="页码", description="页码，从1开始", ge=1)
+    page_size: int = Field(20, title="页面大小", description="每页返回的记录数", ge=1, le=1000)
+    fuzzy_match: bool = Field(True, title="模糊匹配", description="是否启用模糊匹配")
+
+
+@router.post("/get-hc-dim-values-by-dim-value", response_model=ResponseSchema,
+             summary="根据关键词在高基数维度中搜索维度值")
+async def get_hc_dim_values_by_dim_value(
+        body: GetHCDimValuesByDimValueRequest = Body(
+            ...,
+            title="高基数维度值搜索请求",
+            description="根据关键词在指定的高基数维度中搜索匹配的维度值，支持指定页码和每页数量"
+        ),
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        service: AskdataService = Depends(get_askdata_service)
+) -> ResponseSchema:
+    """
+    根据关键词在高基数维度中搜索维度值
+
+    通过提供关键词和维度ID，在指定的高基数维度中搜索匹配的维度值。
+    支持模糊匹配和分页查询，只返回指定页面的数据。
+    """
+    logger.info(f"收到高基数维度值搜索请求: {body.model_dump_json()}")
+
+    try:
+        # 参数验证
+        if not body.keyword.strip():
+            return ResponseSchema(
+                status=StatusEnum.ERROR,
+                message="搜索关键词不能为空"
+            )
+
+        if not body.dimension_id.strip():
+            return ResponseSchema(
+                status=StatusEnum.ERROR,
+                message="维度ID不能为空"
+            )
+
+        # 调用Service层方法
+        result = await service.get_hc_dim_values_by_dim_value(
+            keyword=body.keyword.strip(),
+            dimension_id=body.dimension_id.strip(),
+            page_index=body.page_index,
+            page_size=body.page_size,
+            fuzzy_match=body.fuzzy_match
+        )
+
+        # 解析返回结果
+        data_info = result.get("data", {})
+        dimension_values = data_info.get("data", [])
+        total = int(data_info.get("total", 0))
+        sql = data_info.get("sql", "")
+
+        logger.info(f"成功获取到第{body.page_index}页的 {len(dimension_values)} 条高基数维度值，总计 {total} 条")
+
+        # 计算分页信息
+        total_pages = (total + body.page_size - 1) // body.page_size if total > 0 else 0
+        has_next_page = body.page_index < total_pages
+        has_prev_page = body.page_index > 1
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message=f"成功获取到第{body.page_index}页的 {len(dimension_values)} 条高基数维度值",
+            data={
+                "dimension_values": dimension_values,
+                "pagination": {
+                    "current_page": body.page_index,
+                    "page_size": body.page_size,
+                    "total_count": total,
+                    "total_pages": total_pages,
+                    "has_next_page": has_next_page,
+                    "has_prev_page": has_prev_page
+                },
+                "dimension_id": body.dimension_id,
+                "search_keyword": body.keyword,
+                "fuzzy_match": body.fuzzy_match,
+                "sql": sql
+            }
+        )
+
+    except Exception as e:
+        logger.exception("获取高基数维度值失败")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"获取高基数维度值失败: {str(e)}"
+        )

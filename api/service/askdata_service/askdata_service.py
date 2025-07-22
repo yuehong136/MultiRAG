@@ -5,7 +5,7 @@ from datetime import date
 from enum import Enum
 from typing import Any, List, Dict, Optional, Tuple, Set
 from collections import Counter
-
+import json
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
 
@@ -408,7 +408,11 @@ class AskdataService:
             for where_condition in table_config.get("where_conditions", []):
                 if where_condition["is_semantic_field"]:
                     field_type = where_condition['semantic_field']['dataType']
-                    column_name = where_condition['original_sql_component']['field']
+                    column_name = None
+                    if where_condition.get("original_sql_component", {}).get("field"):
+                        column_name = where_condition['original_sql_component']['field']
+                    else:
+                        pass
                     operator = where_condition["operator"]
                     value = where_condition["value"]
                     if operator == "IN":
@@ -418,9 +422,9 @@ class AskdataService:
                     elif "date" in field_type:
                         assembler.add_parameterized_where(f"{column_name} {operator} CAST(%s AS DATE)", [value])
                         continue
-                    elif where_condition['semantic_field']['timeFormat']:
-                        # TODO中台完成改造后补全
-                        pass
+                    # elif where_condition['semantic_field']['timeFormat']:
+                    # TODO中台完成改造后补全
+                    # pass
                     assembler.add_filter(column_name, FilterOperator.from_value(operator), value)
                 else:
                     if where_condition.get("sql_column", None):
@@ -458,6 +462,52 @@ class AskdataService:
                 assembler.set_limit(int(sql_components["limit"]))
 
             return assembler.build_sql_for_jdbc()
+
+    async def get_hc_dim_values_by_dim_value(
+            self,
+            keyword: str,
+            dimension_id: str,
+            page_index: int = 1,
+            page_size: int = 20,
+            fuzzy_match: bool = True
+    ) -> Dict[str, Any]:
+        """
+        根据关键词在高基数维度中搜索维度值
+
+        Args:
+            keyword: 搜索关键词
+            dimension_id: 维度ID
+            page_index: 页码（从1开始）
+            page_size: 每页大小
+            fuzzy_match: 是否模糊匹配
+
+        Returns:
+            Dict[str, Any]: 完整的API响应结果
+        """
+        logger.info(
+            f"开始搜索高基数维度值: keyword={keyword}, dimension_id={dimension_id}, page_index={page_index}, page_size={page_size}")
+
+        try:
+            # 调用API客户端方法
+            result = await self.semantic_api_client.get_hc_dim_values_by_dim_value_async(
+                keyword=keyword,
+                dimension_id=dimension_id,
+                page_index=page_index,
+                page_size=page_size,
+                fuzzy_match=fuzzy_match
+            )
+
+            # 获取数据部分
+            data_info = result.get("data", {})
+            dimension_values = data_info.get("data", [])
+            total = data_info.get("total", 0)
+
+            logger.info(f"成功获取到第{page_index}页的 {len(dimension_values)} 条高基数维度值，总计 {total} 条")
+            return result
+
+        except Exception as e:
+            logger.exception(f"获取高基数维度值失败: {str(e)}")
+            raise
 
     def _find_semantic_field(self, semantic_id: str, all_semantic_fields: List[Dict[str, Any]]) -> Optional[
         Dict[str, Any]]:

@@ -91,6 +91,7 @@ class SemanticApiClient:
             "get_dataset_detail": "/api/drm/semanticOpenApi/getDatasetDetail",
             "get_model_inds_and_dims": "/api/drm/semanticOpenApi/getModelIndsAndDimsByModelId",
             "get_hc_dimension_by_dimension_value": "/api/drm/semanticOpenApi/getHCDimensionByDimensionValue",
+            "get_hc_dim_values_by_dim_value": "/api/drm/semanticOpenApi/getHCDimValuesByDimValue"
         }
 
         # 设置请求头
@@ -2089,5 +2090,111 @@ class SemanticApiClient:
         except Exception as e:
             # 捕获其他所有异常
             error_msg = f"获取模型 {model_id} 的指标和维度时发生意外错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
+
+    async def get_hc_dim_values_by_dim_value_async(
+            self,
+            keyword: str,
+            dimension_id: str,
+            page_index: int = 1,
+            page_size: int = 100,
+            fuzzy_match: bool = True
+    ) -> Dict:
+        """
+        异步获取高基数维度中的维度值（支持模糊匹配和指定页面）
+
+        Args:
+            keyword: 搜索关键词
+            dimension_id: 维度ID
+            page_index: 页码（从1开始）
+            page_size: 每页大小
+            fuzzy_match: 是否模糊匹配
+
+        Returns:
+            Dict: 完整的API响应结果
+
+        Raises:
+            ApiRequestError: 请求过程中的错误
+            ApiResponseError: API响应业务状态码不为0
+            ApiNetworkError: 网络连接错误
+        """
+        logger.info(f"\n=== 根据关键词在高基数维度中搜索维度值 ===")
+        logger.info(
+            f"维度ID: {dimension_id}, 关键词: {keyword}, 页码: {page_index}, 页面大小: {page_size}, 模糊匹配: {fuzzy_match}")
+
+        # 参数验证
+        if not keyword:
+            error_msg = "搜索关键词不能为空"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg)
+
+        if not dimension_id:
+            error_msg = "维度ID不能为空"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg)
+
+        if page_index < 1:
+            error_msg = "页码必须大于等于1"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg)
+
+        if page_size < 1 or page_size > 1000:
+            error_msg = "页面大小必须在1-1000之间"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg)
+
+        try:
+            # 发起请求，获取指定页面的结果
+            logger.info(f"正在获取关键词'{keyword}'在维度'{dimension_id}'中的第{page_index}页结果")
+            result = await self._make_async_request(
+                "POST",
+                self.api_paths["get_hc_dim_values_by_dim_value"],
+                params={"pi": page_index, "ps": page_size},
+                data={"keyword": keyword, "dimensionId": dimension_id, "fuzzyMatch": fuzzy_match}
+            )
+
+            if str(result.get("code", "")) != "0":
+                error_msg = f"获取第{page_index}页结果失败: {result.get('msg', '未知错误')}"
+                logger.warning(error_msg)
+                raise ApiResponseError(error_msg)
+
+            # 解析结果
+            data_info = result.get("data", {})
+            total = int(data_info.get("total", 0))
+            page_data = data_info.get("data", [])
+
+            logger.info(f"第{page_index}页返回了 {len(page_data)} 条维度值，总计 {total} 条")
+
+            # 打印部分示例值
+            if page_data:
+                sample_size = min(5, len(page_data))
+                logger.info(f"第{page_index}页示例维度值:")
+                for i, item in enumerate(page_data[:sample_size]):
+                    value = item.get('mc', 'N/A')
+                    logger.info(f"  示例 {i + 1}: {value}")
+
+                if len(page_data) > sample_size:
+                    logger.info(f"  ...以及其他 {len(page_data) - sample_size} 条维度值")
+
+            # 数据完整性验证
+            if page_data:
+                for idx, item in enumerate(page_data):
+                    if 'mc' not in item or not item['mc']:
+                        logger.warning(f"结果中第 {idx + 1} 条数据缺少mc字段")
+
+            return result
+
+        except SemanticApiError as e:
+            # 如果是已经封装好的API异常则直接抛出
+            raise
+        except aiohttp.ClientError as e:
+            # 网络连接错误单独处理
+            error_msg = f"获取高基数维度值过程中发生网络错误: {str(e)}"
+            logger.error(error_msg)
+            raise ApiNetworkError(error_msg) from e
+        except Exception as e:
+            # 其他异常封装为ApiRequestError后抛出
+            error_msg = f"获取高基数维度值过程中出错: {str(e)}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
