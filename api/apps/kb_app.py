@@ -50,7 +50,10 @@ class UpdateKnowledgebaseRequest(BaseModel):
     name: str
     description: str | None = None
     permission: str | None = None
+    avatar: str | None = None
     parser_id: str | None = None
+    parser_config: dict | None = None
+    embd_id: str | None = None
     pagerank: int | None = 0
 
 
@@ -165,14 +168,17 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
                                                    status=StatusEnum.VALID.value)) > 1:
             return get_data_error_result(retmsg="Duplicated knowledgebase name.")
 
-        del req_data["kb_id"]
-        if not KnowledgebaseService.update_by_id(db, kb.id, req_data):
+        # 过滤掉None值，避免将None写入数据库
+        filtered_data = {k: v for k, v in req_data.items() if v is not None and k != "kb_id"}
+
+        if not KnowledgebaseService.update_by_id(db, kb.id, filtered_data):
             return get_data_error_result()
 
         if kb.pagerank != req_data.get("pagerank", 0):
             # todo 测试 milvus 能否利用 pagerank【20250715】
             if os.environ.get("DOC_ENGINE", "milvus") != "elasticsearch":
-                return get_data_error_result(retmsg="'pagerank' can only be set when doc_engine is elasticsearch")
+                logging.warning("'pagerank' can only be set when doc_engine is elasticsearch")
+                # return get_data_error_result(retmsg="'pagerank' can only be set when doc_engine is elasticsearch")
 
             if req_data.get("pagerank", 0) > 0:
                 try:
@@ -202,7 +208,8 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         if not kb:
             return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
         kb = kb.to_dict()
-        kb.update(req_data)
+        # 使用filtered_data而不是req_data，避免包含None值
+        kb.update(filtered_data)
 
         return get_json_result(data=kb)
     except Exception as e:
