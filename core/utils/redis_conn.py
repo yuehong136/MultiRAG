@@ -79,7 +79,6 @@ class RedisDB:
         return self.REDIS
 
     def health(self):
-
         self.REDIS.ping()
         a, b = "xx", "yy"
         self.REDIS.set(a, b, 3)
@@ -216,6 +215,7 @@ class RedisDB:
                 logging.exception(
                     "RedisDB.queue_product " + str(queue) + " got exception: " + str(e)
                 )
+                self.__open__()
         return False
 
     def queue_consumer(self, queue_name, group_name, consumer_name, msg_id=b">") -> RedisMsg:
