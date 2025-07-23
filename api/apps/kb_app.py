@@ -170,9 +170,20 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
 
         # 过滤掉None值，避免将None写入数据库
         filtered_data = {k: v for k, v in req_data.items() if v is not None and k != "kb_id"}
-
+        old_name = kb.name
         if not KnowledgebaseService.update_by_id(db, kb.id, filtered_data):
             return get_data_error_result()
+
+        # ===== 插入 Milvus 重命名逻辑 =====
+        if "name" in req_data:
+            # 1 构造 Milvus 原集合名 & 新集合名
+            old_coll = search.index_name_one(kb.tenant_id, old_name)
+            new_coll = search.index_name_one(kb.tenant_id, req_data["name"])
+
+            # 2 确认原集合存在
+            if settings.docStoreConn.has_collection(old_coll):
+                settings.docStoreConn.rename_collection(old_coll, new_coll)
+                logging.info(f"Milvus collection renamed: {old_coll} → {new_coll}")
 
         if kb.pagerank != req_data.get("pagerank", 0):
             # todo 测试 milvus 能否利用 pagerank【20250715】
