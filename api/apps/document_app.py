@@ -1742,13 +1742,12 @@ def rename(
 ):
     req = request_body.model_dump()
 
-    for doc_id in req["doc_ids"]:
-        if not DocumentService.accessible(db, doc_id, user.id):
-            return get_json_result(
-                data=False,
-                retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
-            )
+    if not DocumentService.accessible(db, req["doc_id"], user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
+        )
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
