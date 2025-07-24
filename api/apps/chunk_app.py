@@ -46,7 +46,7 @@ class ListChunkRequest(BaseModel):
     page: int | None = 1
     size: int | None = 30
     keywords: str | None = ""
-    available_int: int | None = 1
+    available_int: int | None = None
 
 
 class SetChunkRequest(BaseModel):
