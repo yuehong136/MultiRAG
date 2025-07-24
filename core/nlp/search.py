@@ -204,9 +204,9 @@ class Dealer:
                         kwds.add(tok)
             return list(kwds)
 
-        def _build_result(results):
+        def _build_result(results, kwds: list[str] | None = None):
             total = self.dataStore.getTotal(results)
-            keywords = _process_keywords(keywords_raw)
+            keywords = _process_keywords(kwds)
             ids = self.dataStore.getChunkIds(results)
             highlight_rst = self.dataStore.getHighlight(results, keywords, "content_with_weight")
             aggs = self.dataStore.getAggregation(results, "docnm_kwd")
@@ -227,8 +227,8 @@ class Dealer:
             if req.get("sort"):
                 order_by.asc("page_num_int").asc("top_int").desc("create_timestamp_flt")
             results = self.dataStore.search(src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
-            keywords_raw: list[str] = []
-            return _build_result(results)
+            keywords_raw: list[str] =  []
+            return _build_result(results, keywords_raw)
 
         # ---------- 有 query ----------
         search_mode = req.get("search_mode", "")
@@ -273,7 +273,7 @@ class Dealer:
                     output_fields=src,
                     offset=offset,
                 )
-                return _build_result(results)
+                return _build_result(results, keywords_raw)
 
             # === Sparse 模式 ===
             if "sparse" in search_mode:
@@ -285,7 +285,7 @@ class Dealer:
                     limit=topk,
                     output_fields=src,
                 )
-                return _build_result(results)
+                return _build_result(results, keywords_raw)
 
             # # === Dense 模式 ===
             # if "dense" in search_mode and emb_mdl:
@@ -303,7 +303,7 @@ class Dealer:
             #         output_fields=src,
             #         param={"metric_type": "COSINE", "params": {"nprobe": 10}},
             #     )
-            #     return _build_result(results)
+            #     return _build_result(results, keywords_raw)
 
             # === Fusion / Text-only 模式 ===
             order_by = OrderByExpr()
@@ -346,7 +346,7 @@ class Dealer:
                     kb_ids,
                     rank_feature=rank_feature,
                 )
-            return _build_result(results)
+            return _build_result(results, keywords_raw)
 
         except Exception as exc:  # noqa: BLE001
             logging.error("Search failed: %s", exc, exc_info=True)

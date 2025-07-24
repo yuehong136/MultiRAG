@@ -348,16 +348,13 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
             return get_data_error_result(retmsg="Document not found!")
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         kb_ids = KnowledgebaseService.get_kb_ids(db, tenant_id)
-        if not request.keywords:
-            query = {
-                "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords,
-                "sort": True
-            }
-        else:
-            query = {
-                "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "filter_exp": f"content_with_weight like '%{request.keywords}%'" if request.keywords else None,
-                "sort": True
-            }
+        query = {
+            "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords,
+            "sort": True
+        }
+        if request.keywords:
+            query["filter_exp"] = f"content_with_weight like '%{request.keywords}%'" if request.keywords else None
+
         # 先计算出所有问题块的总数
         # query_count = {
         #     "doc_ids": [request.doc_id], "question": request.keywords,

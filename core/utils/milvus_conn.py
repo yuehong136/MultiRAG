@@ -42,6 +42,7 @@ from pymilvus import __version__
 
 from api.utils.file_utils import get_project_base_directory
 from core import settings
+from core.nlp import is_english
 from core.settings import TAG_FLD, PAGERANK_FLD
 from core.utils import singleton, get_float
 from core.utils.doc_store_conn import (
@@ -1102,67 +1103,62 @@ class MilvusConnection(DocStoreConnection):
 
         return result
 
-    def getHighlight(self, res, keywords: list[str], fieldnm: str) -> dict[str, str]:
-        """生成高亮文本 (Milvus不支持高亮，需要在应用层实现)"""
-        result = {}
+    def getHighlight(self, res, keywords: list[str], fieldnm: str):
+        """
+        生成高亮文本（应用层实现）
+        - res：可以是 list 或 (list, …) 形式
+        - keywords：待高亮关键词列表
+        - fieldnm：要高亮的字段名
+        返回 {doc_id: snippet} 格式的字典
+        """
+        ans: dict[str, str] = {}
 
-        # 获取结果列表
-        if isinstance(res, tuple):
-            results = res[0]
-        else:
-            results = res
-
+        # 兼容 tuple 包装
+        results = res[0] if isinstance(res, tuple) else res
         if not isinstance(results, list):
-            return {}
+            return ans
 
-        # 处理每一个结果项
         for item in results:
             if not isinstance(item, dict):
                 continue
 
-            # 兼容低版本使用'id'和高版本使用'pk'的情况
-            doc_id = None
-            if "pk" in item:
-                doc_id = item.get("pk")
-            elif "id" in item:
-                doc_id = item.get("id")
-
-            if doc_id is None:
+            # 兼容低/高版本 id 字段
+            doc_id = item.get("pk") or item.get("id")
+            if not doc_id:
                 continue
 
-            # 尝试从item或者entity中获取字段值
+            # 提取待高亮文本
             text = None
-            if fieldnm in item:
-                text = item.get(fieldnm)
-            elif "entity" in item and isinstance(item["entity"], dict) and fieldnm in item["entity"]:
-                text = item["entity"].get(fieldnm)
-
+            if fieldnm in item and isinstance(item[fieldnm], str):
+                text = item[fieldnm]
+            elif isinstance(item.get("entity"), dict) and isinstance(item["entity"].get(fieldnm), str):
+                text = item["entity"][fieldnm]
             if not isinstance(text, str):
                 continue
 
-            # 清理文本
-            text = re.sub(r"[\r\n]", " ", text, flags=re.IGNORECASE | re.MULTILINE)
-            highlighted_parts = []
+            # 清理换行符
+            text = re.sub(r"[\r\n]+", " ", text, flags=re.IGNORECASE | re.MULTILINE)
 
-            # 为每个句子应用高亮
+            # 语言检测：如果不是英文，直接回退全文
+            if not is_english(text.split()):
+                ans[doc_id] = text
+                continue
+
+            # 英文内容按句子拆分并高亮关键词
+            snippets: list[str] = []
             for sentence in re.split(r"[.?!;\n]", text):
-                for keyword in keywords:
-                    sentence = re.sub(
-                        r"(^|[ .?/'\"\(\)!,:;-])(%s)([ .?/'\"\(\)!,:;-])" % re.escape(keyword),
-                        r"\1<em>\2</em>\3",
-                        sentence,
-                        flags=re.IGNORECASE | re.MULTILINE,
-                    )
+                sent = sentence
+                for kw in keywords:
+                    pattern = rf"(^|[ .?/'\"()!,:;-])({re.escape(kw)})([ .?/'\"()!,:;-])"
+                    # 此处只使用 IGNORECASE
+                    sent = re.sub(pattern, r"\1<em>\2</em>\3", sent, flags=re.IGNORECASE)
+                if re.search(r"<em>[^<>]+</em>", sent, flags=re.IGNORECASE):
+                    snippets.append(sent.strip())
 
-                # 只保留包含高亮的部分
-                if re.search(r"<em>[^<>]+</em>", sentence, flags=re.IGNORECASE | re.MULTILINE):
-                    highlighted_parts.append(sentence.strip())
+            # 有高亮句子则拼接，否则回退全文
+            ans[doc_id] = "...".join(snippets) if snippets else text
 
-            # 如果找到高亮部分，将其合并
-            if highlighted_parts:
-                result[doc_id] = "...".join(highlighted_parts)
-
-        return result
+        return ans
 
     def getAggregation(self, res, fieldnm: str) -> list[tuple]:
         """获取聚合结果 (Milvus不支持直接聚合，需要在应用层实现)"""
