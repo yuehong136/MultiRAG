@@ -46,6 +46,7 @@ class ListChunkRequest(BaseModel):
     page: int | None = 1
     size: int | None = 30
     keywords: str | None = ""
+    available_int: int | None = 1
 
 
 class SetChunkRequest(BaseModel):
@@ -347,18 +348,24 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
             return get_data_error_result(retmsg="Document not found!")
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         kb_ids = KnowledgebaseService.get_kb_ids(db, tenant_id)
-        query = {
-            "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords,
-            "sort": True
-        }
+        if not request.keywords:
+            query = {
+                "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords,
+                "sort": True
+            }
+        else:
+            query = {
+                "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "filter_exp": f"content_with_weight like '%{request.keywords}%'" if request.keywords else None,
+                "sort": True
+            }
         # 先计算出所有问题块的总数
-        query_count = {
-            "doc_ids": [request.doc_id], "question": request.keywords,
-            "sort": True
-        }
-        if "available_int" in request:
-            query["available_int"] = int(request["available_int"])
-            query_count["available_int"] = int(request["available_int"])
+        # query_count = {
+        #     "doc_ids": [request.doc_id], "question": request.keywords,
+        #     "sort": True
+        # }
+        if request.available_int:
+            query["available_int"] = request.available_int
+            # query_count["available_int"] = request["available_int"]
         # total = settings.retrievaler.count(query_count, search.index_name_one(tenant_id, kb.name)).total
         # sres = settings.retrievaler.search(query, search.index_name_one(tenant_id, kb.name))
         # total = settings.retrievaler.search(query_count, search.index_name_one(tenant_id, kb.name), kb_ids).total

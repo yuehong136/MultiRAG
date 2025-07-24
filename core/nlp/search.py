@@ -114,7 +114,13 @@ class Dealer:
             if key in req and req[key] is not None:
                 condition[key] = req[key]
         if req.get("filter_exp"):
-            condition["auth"] = req["filter_exp"]
+            exp = req["filter_exp"]
+            # 如果 filter_exp 中含有 LIKE，就作为 content_with_weight 过滤，
+            # 否则走 auth 逻辑
+            if "like" in exp.lower():
+                condition["content_with_weight"] = exp
+            else:
+                condition["auth"] = exp
         return condition
 
 
