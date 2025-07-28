@@ -42,7 +42,7 @@ class AskdataService:
         self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
-                                      conversation_id: Optional[str] = None, llm_name: str = None,
+                                      userid:str, llm_name: str = None,
                                       event_id: Optional[str] = None, enable_deep_search: bool = False):
         # 并行启动两个任务：语义层检索和图表推荐
         async def semantic_layer_task():

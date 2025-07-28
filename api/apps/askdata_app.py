@@ -300,6 +300,12 @@ class SemanticLayerRequest(BaseModel):
         title="启用深度搜索",
         description="是否启用深度搜索功能"
     )
+    # userid，后续需要去获取该用户语义层的权限。
+    userid: str = Field(
+        "",
+        title="用户ID",
+        description="用户ID，后续需要去获取该用户语义层的权限。"
+    )
 
 
 @router.post("/get-semantic-layer-streaming/{custom_event_id}", response_model=ResponseSchema,
@@ -321,7 +327,7 @@ async def get_semantic_layer_streaming(
         processed_semantic_layer, model_ids, recommended_chart, recommendation_reason = await service.generate_semantic_layer(
             user_query=body.user_query,
             dataset_id_list=body.dataset_id_list,
-            conversation_id=body.conversation_id,
+            userid=body.userid,
             event_id=custom_event_id,
             enable_deep_search = body.enable_deep_search,
             llm_name=body.llm_name)
