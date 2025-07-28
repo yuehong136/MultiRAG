@@ -514,7 +514,7 @@ async def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
             tenant_id=user.id,
             status=StatusEnum.VALID.value,
             reverse=True,
-            order_by=DialogService.model.create_time)
+            order_by="create_time")
         diags = [d.to_dict() for d in diags]
         for d in diags:
             d["kb_ids"], d["kb_names"] = get_kb_names(d["kb_ids"], db)
