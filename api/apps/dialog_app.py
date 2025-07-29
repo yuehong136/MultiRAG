@@ -105,7 +105,7 @@ class DialogRequest(BaseModel):
 
     description: str = Field(default="A helpful dialog", max_length=500, description="对话的描述")
 
-    icon: str = Field(default="", max_length=200, description="对话的图标URL")
+    icon: str = Field(default="", description="对话的图标URL")
 
     top_n: int = Field(
         default=6,
