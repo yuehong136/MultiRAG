@@ -61,7 +61,25 @@ async def get_sql_and_table_config(
             recommended_chart=body.semantic_layer.get('recommended_chart'),
         )
 
-        if not sql_generation_result or not sql_generation_result.get("sql"):
+        if not sql_generation_result:
+            logger.error("未能从Service层获取有效的SQL生成结果。")
+            return ResponseSchema(
+                status=StatusEnum.ERROR,
+                message="SQL生成失败或LLM返回格式不正确"
+            )
+
+        if sql_generation_result.get("status") == "failed":
+            return ResponseSchema(
+                # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
+                status=StatusEnum.SUCCESS,
+                message=f"SQL生成失败: {sql_generation_result.get('errorMessage')}",
+                data={
+                    "status": StatusEnum.ERROR,
+                    "message": sql_generation_result.get("errorMessage"),
+                }
+            )
+
+        if not sql_generation_result.get("sql"):
             logger.error("未能从Service层获取有效的SQL生成结果。")
             return ResponseSchema(
                 status=StatusEnum.ERROR,

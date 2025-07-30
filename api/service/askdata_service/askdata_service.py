@@ -192,6 +192,9 @@ class AskdataService:
             logger.warning("NLQ to Initial SQL 生成失败，返回 None。")
             return None
 
+        if result.get("status") == "failed":
+            return result
+
         logger.info(f"成功生成SQL: {result.get('sql')}")
         return result
 

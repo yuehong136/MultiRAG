@@ -180,7 +180,9 @@ class NLQToInitialSQLGenerator:
             if not json_response:
                 logger.error(f"无法从LLM的响应中提取JSON。原始响应: {response}")
                 return None
-
+            if json_response.get("status") == "failed":
+                logger.error(f"生成SQL失败: {json_response.get('errorMessage')}")
+                return json_response
             validated_data = self._parse_and_validate_llm_json(json_response)
             if not validated_data:
                 logger.error(f"提取的JSON未能通过验证。原始JSON: {json_response}")

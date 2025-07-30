@@ -139,29 +139,28 @@ async def query_data_with_params(sql: str, dataset_wid: int, sql_params: List[An
 # 使用示例
 async def main():
     # 示例1：普通查询
-    #     print("=== 示例1：普通查询 ===")
-    #     query = """
-    # -- [查询意图为按部门分组统计教师数量。主要内容是从教师信息表和高校部门信息表获取数据，按部门名称分组统计每个部门的教师人数。无时间范围，因非明细数据查询不涉及分页。]\nSELECT d.department_name, COUNT(t.teacher_id) AS teacher_count\nFROM gx_test_teachers t -- 教师信息表，别名为t\nLEFT JOIN gx_test_departments d -- 高校部门信息表，别名为d\nON t.department_id = d.department_id\nGROUP BY d.department_name;
-    #     """
-    #
-    #     response1 = await query_data_from_zt_by_sql(query)
-    #     print(json.dumps(response1, indent=2, ensure_ascii=False))
+        print("=== 示例1：普通查询 ===")
+        query = """
+        SELECT COUNT(*) AS total_teachers
+FROM gx_test_teachers t1
+WHERE "t1"."hire_date" >= CAST('2009-01-01' AS DATE)
+  AND "t1"."hire_date" <= CAST('2010-12-31' AS DATE)
+        """
+
+        response1 = await query_data_from_zt_by_sql(query)
+        print(json.dumps(response1, indent=2, ensure_ascii=False))
 
     # 示例2：参数化查询
-    print("\n=== 示例2：参数化查询 ===")
-    param_sql = """SELECT "t1"."teacher_id", "t1"."name", "t1"."title"
-FROM gx_test_teachers AS t1
-         LEFT JOIN gx_test_departments AS t2 ON t1.department_id = t2.department_id
-WHERE "t2"."department_name" = ?
-ORDER BY "t1"."gender" ASC"""
-    dataset_wid = 35799132679879680
-    sql_params = ["计算机科学与技术学院"]
-
-    try:
-        response2 = await query_data_with_params(param_sql, dataset_wid, sql_params)
-        print(json.dumps(response2, indent=2, ensure_ascii=False))
-    except Exception as e:
-        print(f"发生错误: {e}")
+    # print("\n=== 示例2：参数化查询 ===")
+    # param_sql = """SELECT "t1"."zgh", "t1"."xm", "t1"."nl", "t2"."mc" FROM t_jzg_jbxx AS t1 LEFT JOIN t_code_zzmm AS t2 ON t1.zzmm = t2.dm WHERE "t1"."nl" < ? AND "t2"."mc" = ?"""
+    # dataset_wid = 35979979193188352
+    # sql_params = [32, "中国共产党党员"]
+    #
+    # try:
+    #     response2 = await query_data_with_params(param_sql, dataset_wid, sql_params)
+    #     print(json.dumps(response2, indent=2, ensure_ascii=False))
+    # except Exception as e:
+    #     print(f"发生错误: {e}")
 
 
 # 如果直接执行此文件则运行示例
