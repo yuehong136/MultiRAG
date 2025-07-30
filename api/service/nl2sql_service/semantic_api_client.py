@@ -91,7 +91,8 @@ class SemanticApiClient:
             "get_dataset_detail": "/api/drm/semanticOpenApi/getDatasetDetail",
             "get_model_inds_and_dims": "/api/drm/semanticOpenApi/getModelIndsAndDimsByModelId",
             "get_hc_dimension_by_dimension_value": "/api/drm/semanticOpenApi/getHCDimensionByDimensionValue",
-            "get_hc_dim_values_by_dim_value": "/api/drm/semanticOpenApi/getHCDimValuesByDimValue"
+            "get_hc_dim_values_by_dim_value": "/api/drm/semanticOpenApi/getHCDimValuesByDimValue",
+            "get_user_semantic_permissions": "/api/drm/semanticOpenApi/getUserSemanticPermissions",
         }
 
         # 设置请求头
@@ -2196,5 +2197,106 @@ class SemanticApiClient:
         except Exception as e:
             # 其他异常封装为ApiRequestError后抛出
             error_msg = f"获取高基数维度值过程中出错: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
+
+    async def get_user_semantic_permissions_async(
+            self,
+            user_id: str,
+            dataset_id_list: List[str]
+    ) -> Optional[Dict]:
+        logger.info(f"\n=== 获取用户语义权限信息 ===")
+        logger.info(f"用户ID: {user_id}")
+        logger.info(f"数据集ID列表: {dataset_id_list}")
+
+        # 参数验证
+        if not user_id:
+            error_msg = "用户ID不能为空"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg)
+
+        if not dataset_id_list:
+            error_msg = "数据集ID列表不能为空"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg)
+
+        try:
+            # 发起请求
+            result = await self._make_async_request(
+                "POST",
+                self.api_paths["get_user_semantic_permissions"],
+                data={
+                    "userId": user_id,  # 修复：参数名应该是 userId 而不是 userid
+                    "dataset_id_list": dataset_id_list
+                }
+            )
+
+            # 获取数据部分
+            permission_data = result.get("data")
+
+            if permission_data and isinstance(permission_data, dict):
+                returned_user_id = permission_data.get('userId', 'N/A')
+                data_permissions = permission_data.get('dataPermissions', {})
+                # 修复：API返回的是 'models' 而不是 'model'
+                models = data_permissions.get('models', [])
+
+                logger.info(f"成功获取用户 {returned_user_id} 的语义权限信息")
+                logger.info(f"权限涉及 {len(models)} 个模型")
+
+                # 打印权限详情
+                for idx, model_perm in enumerate(models):
+                    # 修复：API返回的是 'modelId' 而不是 'model_id'
+                    model_id = model_perm.get('modelId', 'N/A')
+                    # 修复：API返回的是 'allowedColumns' 而不是 'allowedSemanticField'
+                    allowed_fields = model_perm.get('allowedColumns', [])
+                    row_filter = model_perm.get('rowFilter', {})
+
+                    logger.info(f"  模型 {idx + 1}: ID={model_id}")
+                    logger.info(f"    允许访问的语义字段数量: {len(allowed_fields)}")
+
+                    # 统计维度和指标的数量
+                    dim_count = sum(1 for field in allowed_fields if field.get('semanticType') == 'dim')
+                    metric_count = sum(1 for field in allowed_fields if field.get('semanticType') == 'metric')
+                    logger.info(f"    其中维度: {dim_count} 个, 指标: {metric_count} 个")
+
+                    # 修复：rowFilter 是一个字典对象，需要检查其内容
+                    if row_filter and isinstance(row_filter, dict):
+                        rules = row_filter.get('rules', [])
+                        logical_operator = row_filter.get('logicalOperator', '')
+                        if rules:
+                            logger.info(f"    行级过滤条件: 逻辑操作符={logical_operator}, 规则数量={len(rules)}")
+                        else:
+                            logger.info(f"    行级过滤条件: 已配置但无具体规则")
+                    else:
+                        logger.info(f"    无行级过滤条件")
+
+                    # 打印部分字段示例
+                    if allowed_fields:
+                        sample_size = min(3, len(allowed_fields))
+                        logger.info(f"    字段示例:")
+                        for i, field in enumerate(allowed_fields[:sample_size]):
+                            semantic_type = field.get('semanticType', 'N/A')
+                            semantic_name = field.get('semanticName', 'N/A')
+                            semantic_id = field.get('semanticId', 'N/A')
+                            # 显示更多字段信息
+                            semantic = field.get('semantic', 'N/A')
+                            logger.info(
+                                f"      {i + 1}. {semantic_type}: {semantic_name} (ID: {semantic_id}, semantic: {semantic})")
+
+                        if len(allowed_fields) > sample_size:
+                            logger.info(f"      ...以及其他 {len(allowed_fields) - sample_size} 个字段")
+
+                return permission_data
+            else:
+                logger.warning(f"用户 {user_id} 未返回有效的权限数据或数据格式不正确")
+                return None
+
+        except SemanticApiError as e:
+            # 如果是已经封装好的API异常则直接抛出
+            logger.error(f"获取用户 {user_id} 的语义权限时出错: {str(e)}")
+            raise
+        except Exception as e:
+            # 其他异常封装为ApiRequestError后抛出
+            error_msg = f"获取用户语义权限过程中出错: {str(e)}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
