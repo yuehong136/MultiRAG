@@ -66,7 +66,7 @@ def process_business_datasets(
                 dimension_output["name"] = dimension.get("dimensionName")
                 dimension_output["dimType"] = dimension.get("dimtype")
                 if dimension_output["dimType"].lower() == "time":
-                    semanticsformat = dimension.get('semanticsformat',{})
+                    semanticsformat = dimension.get('semanticsformat', {})
                     if semanticsformat:
                         dimension_output["timeFormat"] = json.loads(semanticsformat).get("timeFormat")
                 dimension_output["field"] = dimension.get("dimensionEnName")
@@ -75,9 +75,12 @@ def process_business_datasets(
                 dimension_output["comment"] = dimension.get("description")
                 dimension_output["synonyms"] = dimension.get("synonyms")
                 if dimension_output["dimType"].lower() == "time" or dimension_output["dimType"] == "LC":
-                    dimension_output["possibleValues"] = dimension_values[dimension_id]
+                    dimension_output["possibleValues"] = dimension_values.get(dimension_id, [])
                 else:
-                    dimension_output["sampleValues"] = dimension_values[dimension_id]
+                    dimension_output["sampleValues"] = dimension_values.get(dimension_id, [])
+                if not dimension.get("hasPermission", True):
+                    dimension_output["hasPermission"] = False
+                    dimension_output["permissionDesc"] = "当前用户无权限访问此维度，在生成SQL时不允许使用此维度"
                 dimensions_output.append(dimension_output)
         business_dataset["dimensions"] = dimensions_output
 
@@ -89,13 +92,17 @@ def process_business_datasets(
                 metric_output = {}
                 metric_output["id"] = metric.get("metricId")
                 metric_output["name"] = metric.get("metricName")
-                metric_output["enName"] = metric.get("metricEnName")
-                metric_output["synonyms"] = metric.get("synonyms")
                 metric_output["comment"] = metric.get("description")
                 metric_output["calculationFormula"] = metric.get("expression")
                 metric_output["formatting"] = metric.get("formatting")
                 metric_output["fromModel"] = metric.get("modelName")
                 metric_output["fromModelId"] = metric.get("modelId")
+                if not metric.get("hasPermission", True):
+                    metric_output["hasPermission"] = False
+                    metric_output["permissionDesc"] = "当前用户无权限访问此指标，在生成SQL时不允许使用此指标"
+                else:
+                    metric_output["enName"] = metric.get("metricEnName")
+                    metric_output["synonyms"] = metric.get("synonyms")
                 metrics_output.append(metric_output)
         business_dataset["metrics"] = metrics_output
 

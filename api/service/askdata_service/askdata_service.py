@@ -22,6 +22,8 @@ from api.service.askdata_service.sql_assembler import FlexibleSQLAssembler, Filt
 from api.service.askdata_service.sql_metric_exp_rewriter import SQLFieldAliasProcessor
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
+from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
+    filter_metrics_by_permissions
 from api.service.askdata_service.util.timer import Timer
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
@@ -63,20 +65,29 @@ class AskdataService:
             dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
                 keyword=segmented_words,
                 dataset_ids=dataset_id_list)
-            unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
+            involved_dimension_id_list = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
             hc_dim_id_list = []
             # 分词关键字作为维度值关键字获得获得维度列表（高基数维度）
             if enable_deep_search:
                 hc_dimensions_by_value = await self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
                     keyword_list=segmented_words,
                     dataset_ids=dataset_id_list,
-                    exclude_dim_ids=unique_dimensions)
+                    exclude_dim_ids=involved_dimension_id_list)
                 hc_dim_id_list = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
             # 4. 根据dimensionId对dimensions_by_keyword和dimensions_by_value进行维度去重，获得最终维度列表
-            unique_dimensions.extend(hc_dim_id_list)
-            dimension_values = await self.semantic_api_client.get_dimension_values_async(
-                dimension_ids=unique_dimensions)
-            dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=unique_dimensions)
+            involved_dimension_id_list.extend(hc_dim_id_list)
+            # 根据用户的权限列表，去掉不允许访问的维度
+            user_semantic_permissions = await self.semantic_api_client.get_user_semantic_permissions_async(userid, dataset_id_list)
+            allowed_dimension_id_list, prohibited_dimension_id_list = filter_dimensions_by_permissions(involved_dimension_id_list, user_semantic_permissions)
+            # 使用allowed_dimension_id_list获得允许访问的维度的维度值，被禁止的维度就没必要获取了
+            dimension_values = await self.semantic_api_client.get_dimension_values_async(dimension_ids=allowed_dimension_id_list)
+            # 维度信息则使用involved_dimension_id_list（所有涉及到的维度）获得
+            dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=involved_dimension_id_list)
+            # 清除不允许访问的维度的信息，仅保留必要信息
+            for dimension in dimensions:
+                if dimension['dimensionId'] in prohibited_dimension_id_list:
+                    dimension['hasPermission'] = False
+
             await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
             await send_event(event_id, {"message": "维度信息", "data": dimensions}, "data")
             # 5. 根据分词关键字获得指标列表
@@ -84,6 +95,12 @@ class AskdataService:
             metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
                 keyword=segmented_words,
                 dataset_ids=dataset_id_list)
+            metric_ids = [metric["metricId"] for metric in metrics]
+            allowed_metrics, prohibited_metrics = filter_metrics_by_permissions(metric_ids, user_semantic_permissions)
+            for metric in metrics:
+                if metric["metricId"] in prohibited_metrics:
+                    metric["hasPermission"] = False
+
             await send_event(event_id, {"message": "获取指标信息", "action": "complete"}, "message")
             await send_event(event_id, {"message": "指标信息", "data": metrics}, "data")
 
