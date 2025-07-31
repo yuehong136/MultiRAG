@@ -126,7 +126,7 @@ class AskdataService:
 
             logger.info(f"semantic_layer_original: {semantic_layer_original}")
 
-            processed_semantic_layer = process_semantic_layer(semantic_layer_original)
+            processed_semantic_layer = process_semantic_layer(semantic_layer_original, user_semantic_permissions)
 
             logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
             return processed_semantic_layer, model_ids

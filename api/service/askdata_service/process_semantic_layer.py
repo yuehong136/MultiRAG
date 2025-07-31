@@ -2,14 +2,28 @@ import json
 from typing import List, Dict, Any
 
 
-def process_data_models(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def process_data_models(models: List[Dict[str, Any]], user_semantic_permissions: Dict[str, Any]) -> List[
+    Dict[str, Any]]:
     data_models_output = []
     if not models:
         return data_models_output
 
+    # 构建权限映射字典，以 modelId 为键
+    permissions_map = {}
+    if user_semantic_permissions and user_semantic_permissions.get("dataPermissions"):
+        data_permissions = user_semantic_permissions["dataPermissions"]
+        if data_permissions.get("models"):
+            for permission_model in data_permissions["models"]:
+                model_id = permission_model.get("modelId")
+                if model_id:
+                    permissions_map[model_id] = permission_model
+
     for model_data in models:
+        model_id = model_data.get("modelId")
+
         # 构建每个 dataModel 的基本结构
         data_model = {
+            "modelId": model_id,  # 添加 modelId
             "name": model_data.get("modelName"),
             "table": model_data.get("tableName"),
             "fields": []
@@ -25,16 +39,42 @@ def process_data_models(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 # 检查 is_pk 字段并转换为布尔值
                 if field_data.get("is_pk") == '1':
                     processed_field["isPrimary"] = True
-                else:
-                    # 如果 is_pk 不是 '1'，则不包含 isPrimary 字段或设为 False
-                    # 根据示例，只有主键才包含 isPrimary: true
-                    pass
 
                 # 添加 comment 字段（如果存在）
                 if field_data.get("description"):
                     processed_field["comment"] = field_data.get("description")
 
                 data_model["fields"].append(processed_field)
+
+        # 处理 rowFilter
+        row_filter_value = None  # 初始化为 None
+
+        if model_id and model_id in permissions_map:
+            permission_model = permissions_map[model_id]
+            row_filter = permission_model.get("rowFilter")
+
+            if row_filter and row_filter.get("rules"):
+                # 如果有行级权限规则，构建 rowFilter
+                processed_row_filter = {
+                    "logicalOperator": row_filter.get("logicalOperator", "OR"),
+                    "rules": []
+                }
+
+                for rule in row_filter["rules"]:
+                    processed_rule = {}
+                    if rule.get("expression"):
+                        # 提取 WHERE 后面的条件部分
+                        expression = rule["expression"]
+                        if expression.upper().startswith("WHERE "):
+                            expression = expression[6:]  # 移除 "WHERE " 前缀
+                        processed_rule["expression"] = expression
+
+                    processed_row_filter["rules"].append(processed_rule)
+
+                row_filter_value = processed_row_filter
+
+        # 统一赋值，避免类型推断警告
+        data_model["rowFilter"] = row_filter_value
 
         data_models_output.append(data_model)
 
@@ -137,7 +177,7 @@ def process_business_terms(business_term_rows) -> List[Dict[str, Any]]:
     return business_terms
 
 
-def process_semantic_layer(semantic_layer: Dict[str, Any]) -> Dict[str, Any]:
+def process_semantic_layer(semantic_layer: Dict[str, Any], user_semantic_permissions: Dict[str, Any]) -> Dict[str, Any]:
     dataset_details = semantic_layer.get("dataset_details")
     dimensions = semantic_layer.get("dimensions")
     dimension_values = semantic_layer.get("dimension_values")
@@ -153,7 +193,7 @@ def process_semantic_layer(semantic_layer: Dict[str, Any]) -> Dict[str, Any]:
         "businessTerms": []
     }
 
-    semantic_structure["dataModels"] = process_data_models(model_details)
+    semantic_structure["dataModels"] = process_data_models(model_details, user_semantic_permissions)
     semantic_structure["businessDatasets"] = process_business_datasets(dataset_details, dimensions, metrics,
                                                                        dimension_values)
     semantic_structure["relationships"] = process_relationships(model_relations)
