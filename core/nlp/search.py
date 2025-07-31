@@ -114,7 +114,13 @@ class Dealer:
             if key in req and req[key] is not None:
                 condition[key] = req[key]
         if req.get("filter_exp"):
-            condition["auth"] = req["filter_exp"]
+            exp = req["filter_exp"]
+            # 如果 filter_exp 中含有 LIKE，就作为 content_with_weight 过滤，
+            # 否则走 auth 逻辑
+            if "like" in exp.lower():
+                condition["content_with_weight"] = exp
+            else:
+                condition["auth"] = exp
         return condition
 
 
@@ -198,9 +204,9 @@ class Dealer:
                         kwds.add(tok)
             return list(kwds)
 
-        def _build_result(results):
+        def _build_result(results, kwds: list[str] | None = None):
             total = self.dataStore.getTotal(results)
-            keywords = _process_keywords(keywords_raw)
+            keywords = _process_keywords(kwds)
             ids = self.dataStore.getChunkIds(results)
             highlight_rst = self.dataStore.getHighlight(results, keywords, "content_with_weight")
             aggs = self.dataStore.getAggregation(results, "docnm_kwd")
@@ -221,8 +227,8 @@ class Dealer:
             if req.get("sort"):
                 order_by.asc("page_num_int").asc("top_int").desc("create_timestamp_flt")
             results = self.dataStore.search(src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
-            keywords_raw: list[str] = []
-            return _build_result(results)
+            keywords_raw: list[str] =  []
+            return _build_result(results, keywords_raw)
 
         # ---------- 有 query ----------
         search_mode = req.get("search_mode", "")
@@ -267,7 +273,7 @@ class Dealer:
                     output_fields=src,
                     offset=offset,
                 )
-                return _build_result(results)
+                return _build_result(results, keywords_raw)
 
             # === Sparse 模式 ===
             if "sparse" in search_mode:
@@ -279,7 +285,7 @@ class Dealer:
                     limit=topk,
                     output_fields=src,
                 )
-                return _build_result(results)
+                return _build_result(results, keywords_raw)
 
             # # === Dense 模式 ===
             # if "dense" in search_mode and emb_mdl:
@@ -297,7 +303,7 @@ class Dealer:
             #         output_fields=src,
             #         param={"metric_type": "COSINE", "params": {"nprobe": 10}},
             #     )
-            #     return _build_result(results)
+            #     return _build_result(results, keywords_raw)
 
             # === Fusion / Text-only 模式 ===
             order_by = OrderByExpr()
@@ -340,7 +346,7 @@ class Dealer:
                     kb_ids,
                     rank_feature=rank_feature,
                 )
-            return _build_result(results)
+            return _build_result(results, keywords_raw)
 
         except Exception as exc:  # noqa: BLE001
             logging.error("Search failed: %s", exc, exc_info=True)
@@ -872,7 +878,7 @@ class Dealer:
             for c in cites[i]:
                 if c in seted:
                     continue
-                res += f" ##{c}$$"
+                res += f" [ID:{c}]"
                 seted.add(c)
 
         return res, seted
@@ -1092,32 +1098,35 @@ class Dealer:
                     rank_feature=rank_feature)
         # Already paginated in search function
         idx = np.argsort(sim * -1)[(page - 1) * page_size:page * page_size]
-
-        # def floor_sim(score):
-        #     return (int(score * 100.) % 100) / 100.
-
         dim = len(sres.query_vector)
         if dim != 768:
             vector_column = f"q_{dim}_vec"
         else:
             vector_column = "vector"
         zero_vector = [0.0] * dim
-
         sim_np = np.array(sim)
+        if doc_ids:
+            similarity_threshold = 0
         filtered_count = (sim_np >= similarity_threshold).sum()
         ranks["total"] = int(filtered_count) # Convert from np.int64 to Python int otherwise JSON serializable error
         for i in idx:
             if sim[i] < similarity_threshold:
                 break
-            if len(ranks["chunks"]) >= page_size:
-                if aggs:
-                    continue
-                break
+
             id = sres.ids[i]
             chunk = sres.field[id]
             text = chunk["content_with_weight"]
             dnm = chunk.get("docnm_kwd", "")
             did = chunk.get("doc_id", "")
+
+            if len(ranks["chunks"]) >= page_size:
+                if aggs:
+                    if dnm not in ranks["doc_aggs"]:
+                        ranks["doc_aggs"][dnm] = {"doc_id": did, "count": 0}
+                    ranks["doc_aggs"][dnm]["count"] += 1
+                    continue
+                break
+
             position_int = chunk.get("position_int", [])
             d = {
                 "chunk_id": id,

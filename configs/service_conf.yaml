@@ -38,16 +38,19 @@ minio:
   workflow_bucket: 'multirag-workflow'
 
 azure:
-  auth_type: 'sas'
-  container_url: 'container_url'
-  sas_token: 'sas_token'
-#azure:
-#  auth_type: 'spn'
-#  account_url: 'account_url'
-#  client_id: 'client_id'
-#  secret: 'secret'
-#  tenant_id: 'tenant_id'
-#  container_name: 'container_name'
+  auth_type: 'spn'
+  account_url: 'account_url'
+  client_id: 'client_id'
+  secret: 'secret'
+  tenant_id: 'tenant_id'
+  container_name: 'container_name'
+
+# The OSS object storage uses the MySQL configuration above by default. If you need to switch to another object storage service, please uncomment and configure the following parameters.
+opendal:
+  scheme: 'mysql'  # Storage type, such as s3, oss, azure, etc.
+  config:
+  oss_table: 'opendal_storage'
+
 s3:
   access_key: 'access_key'
   secret_key: 'secret_key'
@@ -169,4 +172,3 @@ dcs_server:
   protocol: http
   host: localhost
   port: 8081
-

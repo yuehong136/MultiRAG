@@ -50,7 +50,10 @@ class UpdateKnowledgebaseRequest(BaseModel):
     name: str
     description: str | None = None
     permission: str | None = None
+    avatar: str | None = None
     parser_id: str | None = None
+    parser_config: dict | None = None
+    embd_id: str | None = None
     pagerank: int | None = 0
 
 
@@ -78,11 +81,11 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
     dataset_name = req_data["name"]
     if not isinstance(dataset_name, str):
         return get_data_error_result(retmsg="Dataset name must be string.")
-    if dataset_name == "":
+    if dataset_name.strip() == "":
         return get_data_error_result(retmsg="Dataset name can't be empty.")
-    if len(dataset_name.encode("utf-8")) >= DATASET_NAME_LIMIT:
+    if len(dataset_name.encode("utf-8")) > DATASET_NAME_LIMIT:
         return get_data_error_result(
-            retmsg=f"Dataset name length is {len(dataset_name)} which is large than {DATASET_NAME_LIMIT}")
+            retmsg=f"Dataset name length is {len(dataset_name)} which is larger than {DATASET_NAME_LIMIT}")
     # 验证 Milvus 集合名逻辑
     if not re.match(MILVUS_NAME_PATTERN, dataset_name):
         return get_data_error_result(
@@ -128,7 +131,15 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
 @router.post('/update', summary="更新知识库", response_description="成功更新知识库")
 def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
+    if not isinstance(req_data["name"], str):
+        return get_data_error_result(retmsg="Dataset name must be string.")
+    if req_data["name"].strip() == "":
+        return get_data_error_result(retmsg="Dataset name can't be empty.")
+    if len(req_data["name"].encode("utf-8")) > DATASET_NAME_LIMIT:
+        return get_data_error_result(
+            retmsg=f"Dataset name length is {len(req_data['name'])} which is large than {DATASET_NAME_LIMIT}")
     req_data["name"] = req_data["name"].strip()
+
     if not KnowledgebaseService.accessible4deletion(db, req_data["kb_id"], user.id):
         return get_json_result(
             data=False,
@@ -157,11 +168,29 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
                                                    status=StatusEnum.VALID.value)) > 1:
             return get_data_error_result(retmsg="Duplicated knowledgebase name.")
 
-        del req_data["kb_id"]
-        if not KnowledgebaseService.update_by_id(db, kb.id, req_data):
+        # 过滤掉None值，避免将None写入数据库
+        filtered_data = {k: v for k, v in req_data.items() if v is not None and k != "kb_id"}
+        old_name = kb.name
+        if not KnowledgebaseService.update_by_id(db, kb.id, filtered_data):
             return get_data_error_result()
 
+        # ===== 插入 Milvus 重命名逻辑 =====
+        if "name" in req_data:
+            # 1 构造 Milvus 原集合名 & 新集合名
+            old_coll = search.index_name_one(kb.tenant_id, old_name)
+            new_coll = search.index_name_one(kb.tenant_id, req_data["name"])
+
+            # 2 确认原集合存在
+            if settings.docStoreConn.has_collection(old_coll):
+                settings.docStoreConn.rename_collection(old_coll, new_coll)
+                logging.info(f"Milvus collection renamed: {old_coll} → {new_coll}")
+
         if kb.pagerank != req_data.get("pagerank", 0):
+            # todo 测试 milvus 能否利用 pagerank【20250715】
+            if os.environ.get("DOC_ENGINE", "milvus") != "elasticsearch":
+                logging.warning("'pagerank' can only be set when doc_engine is elasticsearch")
+                # return get_data_error_result(retmsg="'pagerank' can only be set when doc_engine is elasticsearch")
+
             if req_data.get("pagerank", 0) > 0:
                 try:
                     settings.docStoreConn.update(
@@ -190,7 +219,8 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         if not kb:
             return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
         kb = kb.to_dict()
-        kb.update(req_data)
+        # 使用filtered_data而不是req_data，避免包含None值
+        kb.update(filtered_data)
 
         return get_json_result(data=kb)
     except Exception as e:

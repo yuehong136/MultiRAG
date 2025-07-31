@@ -10,7 +10,7 @@ from typing import Annotated, Literal, Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, Discriminator, model_validator
+from pydantic import BaseModel, Field, Discriminator, model_validator, field_validator
 
 from api.apps import manager
 from api.db.db_models import get_db
@@ -105,7 +105,7 @@ class DialogRequest(BaseModel):
 
     description: str = Field(default="A helpful dialog", max_length=500, description="对话的描述")
 
-    icon: str = Field(default="", max_length=200, description="对话的图标URL")
+    icon: str = Field(default="", description="对话的图标URL")
 
     top_n: int = Field(
         default=6,
@@ -170,6 +170,18 @@ class DialogRequest(BaseModel):
         default=None,
         description="检索模式配置，决定对话中检索知识库时使用的策略"
     )
+
+    # 字段验证器 - 验证name字段
+    @field_validator('name')
+    def validate_name(cls, v: str) -> str:  # ✅ 直接使用 cls，Pydantic会自动处理
+        """验证对话名称"""
+        if v.strip() == "":
+            raise ValueError("Dialog name can't be empty.")
+
+        if len(v.encode("utf-8")) > 255:
+            raise ValueError(f"Dialog name length is {len(v)} which is larger than 255")
+
+        return v
 
     # 模型验证器
     @model_validator(mode='after')
@@ -502,7 +514,7 @@ async def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
             tenant_id=user.id,
             status=StatusEnum.VALID.value,
             reverse=True,
-            order_by=DialogService.model.create_time)
+            order_by="create_time")
         diags = [d.to_dict() for d in diags]
         for d in diags:
             d["kb_ids"], d["kb_names"] = get_kb_names(d["kb_ids"], db)

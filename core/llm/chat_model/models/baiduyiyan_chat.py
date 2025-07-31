@@ -4,10 +4,10 @@ from core.llm.chat_model.base import Base
 
 
 class BaiduYiyanChat(Base):
-    def __init__(self, key, model_name, base_url="https://qianfan.baidubce.com/v2"):
+    def __init__(self, key, model_name, base_url="https://qianfan.baidubce.com/v2", **kwargs):
         if not base_url:
             base_url = "https://qianfan.baidubce.com/v2"
-        super().__init__(key, model_name, base_url)
+        super().__init__(key, model_name, base_url, **kwargs)
 # class BaiduYiyanChat(Base):
 #     def __init__(self, key, model_name, base_url=None):
 #         import qianfan

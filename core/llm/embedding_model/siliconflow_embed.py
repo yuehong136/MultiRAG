@@ -1,6 +1,7 @@
 import numpy as np
 import requests
 
+from api.utils.log_utils import log_exception
 from core.llm.embedding_model.base import Base
 
 
@@ -29,11 +30,14 @@ class SILICONFLOWEmbed(Base):
                 "input": texts_batch,
                 "encoding_format": "float",
             }
-            res = requests.post(self.base_url, json=payload, headers=self.headers).json()
-            if "data" not in res or not isinstance(res["data"], list) or len(res["data"]) != len(texts_batch):
-                raise ValueError(f"SILICONFLOWEmbed.encode got invalid response from {self.base_url}")
-            ress.extend([d["embedding"] for d in res["data"]])
-            token_count += self.total_token_count(res)
+            response = requests.post(self.base_url, json=payload, headers=self.headers)
+            try:
+                res = response.json()
+                ress.extend([d["embedding"] for d in res["data"]])
+                token_count += self.total_token_count(res)
+            except Exception as _e:
+                log_exception(_e, response)
+
         return np.array(ress), token_count
 
     def encode_queries(self, text):
@@ -42,7 +46,9 @@ class SILICONFLOWEmbed(Base):
             "input": text,
             "encoding_format": "float",
         }
-        res = requests.post(self.base_url, json=payload, headers=self.headers).json()
-        if "data" not in res or not isinstance(res["data"], list) or len(res["data"])!= 1:
-            raise ValueError(f"SILICONFLOWEmbed.encode_queries got invalid response from {self.base_url}")
-        return np.array(res["data"][0]["embedding"]), self.total_token_count(res)
+        response = requests.post(self.base_url, json=payload, headers=self.headers)
+        try:
+            res = response.json()
+            return np.array(res["data"][0]["embedding"]), self.total_token_count(res)
+        except Exception as _e:
+            log_exception(_e, response)

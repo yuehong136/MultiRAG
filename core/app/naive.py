@@ -30,7 +30,7 @@ from api.db import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownParser, PdfParser, TxtParser
-from deepdoc.parser.figure_parser import VisionFigureParser, vision_figure_parser_figure_data_wraper
+from deepdoc.parser.figure_parser import VisionFigureParser, vision_figure_parser_figure_data_wrapper
 from deepdoc.parser.pdf_parser import PlainParser, VisionParser
 from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, tokenize_chunks, tokenize_chunks_with_images, tokenize_table
 
@@ -122,7 +122,7 @@ class Docx(DocxParser):
             if block_type != 'p':
                 continue
 
-            if block.style and re.search(r"Heading\s*(\d+)", block.style.name, re.I):
+            if block.style and block.style.name and re.search(r"Heading\s*(\d+)", block.style.name, re.I):
                 try:
                     level_match = re.search(r"(\d+)", block.style.name)
                     if level_match:
@@ -314,9 +314,21 @@ class Markdown(MarkdownParser):
         # Find all image URLs in text
         for url in image_urls:
             try:
-                response = requests.get(url, stream=True, timeout=30)
-                if response.status_code == 200 and response.headers['Content-Type'].startswith('image/'):
-                    img = Image.open(BytesIO(response.content)).convert('RGB')
+                # check if the url is a local file or a remote URL
+                if url.startswith(('http://', 'https://')):
+                    # For remote URLs, download the image
+                    response = requests.get(url, stream=True, timeout=30)
+                    if response.status_code == 200 and response.headers['Content-Type'].startswith('image/'):
+                        img = Image.open(BytesIO(response.content)).convert('RGB')
+                        images.append(img)
+                else:
+                    # For local file paths, open the image directly
+                    from pathlib import Path
+                    local_path = Path(url)
+                    if not local_path.exists():
+                        logging.warning(f"Local image file not found: {url}")
+                        continue
+                    img = Image.open(url).convert('RGB')
                     images.append(img)
             except Exception as e:
                 logging.error(f"Failed to download/open image from {url}: {e}")
@@ -324,14 +336,14 @@ class Markdown(MarkdownParser):
 
         return images if images else None
 
-    def __call__(self, filename, binary=None):
+    def __call__(self, filename, binary=None, separate_tables=True):
         if binary:
             encoding = find_codec(binary)
             txt = binary.decode(encoding, errors="ignore")
         else:
             with open(filename, "r") as f:
                 txt = f.read()
-        remainder, tables = self.extract_tables_and_remainder(f'{txt}\n')
+        remainder, tables = self.extract_tables_and_remainder(f'{txt}\n', separate_tables=separate_tables)
         sections = []
         tbls = []
         for sec in remainder.split("\n"):
@@ -381,7 +393,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         sections, tables = Docx()(filename, binary)
 
         if vision_model:
-            figures_data = vision_figure_parser_figure_data_wraper(sections)
+            figures_data = vision_figure_parser_figure_data_wrapper(sections)
             try:
                 docx_vision_parser = VisionFigureParser(vision_model=vision_model, figures_data=figures_data, **kwargs)
                 boosted_figures = docx_vision_parser(callback=callback)
@@ -469,7 +481,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     elif re.search(r"\.(md|markdown)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
         markdown_parser = Markdown(int(parser_config.get("chunk_token_num", 128)))
-        sections, tables = markdown_parser(filename, binary)
+        sections, tables = markdown_parser(filename, binary, separate_tables=False)
 
         # Process images for each section
         section_images = []

@@ -1,6 +1,7 @@
 import numpy as np
 import requests
 
+from api.utils.log_utils import log_exception
 from core.llm.embedding_model.base import Base
 from core.utils import truncate
 
@@ -27,9 +28,13 @@ class JinaEmbed(Base):
                 "input": texts[i:i + batch_size],
                 'encoding_type': 'float'
             }
-            res = requests.post(self.base_url, headers=self.headers, json=data).json()
-            ress.extend([d["embedding"] for d in res["data"]])
-            token_count += self.total_token_count(res)
+            response = requests.post(self.base_url, headers=self.headers, json=data)
+            try:
+                res = response.json()
+                ress.extend([d["embedding"] for d in res["data"]])
+                token_count += self.total_token_count(res)
+            except Exception as _e:
+                log_exception(_e, response)
         return np.array(ress), token_count
 
     def encode_queries(self, text):

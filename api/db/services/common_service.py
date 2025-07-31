@@ -7,6 +7,7 @@ from sqlalchemy import Row, desc, asc, text
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from sqlalchemy.exc import NoResultFound, IntegrityError
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 from api.db import db_models
 
@@ -29,8 +30,8 @@ class CommonService(Generic[ModelType]):
         return datetime.now(timezone.utc)
 
     @classmethod
-    def query(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None, order_by: str | None = None,
-              **kwargs) -> list[ModelType] | list[Row]:
+    def query(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None,
+              order_by: str | InstrumentedAttribute | None = None, **kwargs) -> list[ModelType] | list[Row]:
         """
        根据条件查询数据库中的记录。
 

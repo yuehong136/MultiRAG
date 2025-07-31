@@ -3,7 +3,7 @@
 @project: multirag
 @Author：龙
 @file： dialog_service.py
-@date：2024/7/24 21:00
+@date：2025/7/17 15:30
 @desc:
 """
 import logging
@@ -34,7 +34,7 @@ from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
 from core.nlp import extract_between
 from core.nlp.search import index_name
-from core.prompts import kb_prompt, message_fit_in, llm_id2llm_type, keyword_extraction, full_question, chunks_format, \
+from core.prompts import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
     citation_prompt, cross_languages
 from core.utils import rmSpace, num_tokens_from_string
 from core.utils.tavily_conn import Tavily
@@ -138,7 +138,7 @@ class DialogService(CommonService):
 
 
 def chat_solo(db, dialog, messages, stream=True):
-    if llm_id2llm_type(dialog.llm_id) == "image2text":
+    if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
         chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
     else:
         chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
@@ -170,36 +170,78 @@ def chat_solo(db, dialog, messages, stream=True):
         yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
 
 
+def get_models(db, dialog):
+    embd_mdl, chat_mdl, rerank_mdl, tts_mdl = None, None, None, None
+    kbs = KnowledgebaseService.get_by_ids(db, dialog.kb_ids)
+    embedding_list = list(set([kb.embd_id for kb in kbs]))
+    if len(embedding_list) > 1:
+        raise Exception("**ERROR**: Knowledge bases use different embedding models.")
+
+    if embedding_list:
+        embd_mdl = LLMBundle(db, dialog.tenant_id, LLMType.EMBEDDING, embedding_list[0])
+        if not embd_mdl:
+            raise LookupError("Embedding model(%s) not found" % embedding_list[0])
+
+    if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
+        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
+    else:
+        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+
+    if dialog.rerank_id:
+        rerank_mdl = LLMBundle(db, dialog.tenant_id, LLMType.RERANK, dialog.rerank_id)
+
+    if dialog.prompt_config.get("tts"):
+        tts_mdl = LLMBundle(db, dialog.tenant_id, LLMType.TTS)
+    return kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl
+
+
+BAD_CITATION_PATTERNS = [
+    re.compile(r"\(\s*ID\s*[: ]*\s*(\d+)\s*\)"),  # (ID: 12)
+    re.compile(r"\[\s*ID\s*[: ]*\s*(\d+)\s*\]"),  # [ID: 12]
+    re.compile(r"【\s*ID\s*[: ]*\s*(\d+)\s*】"),  # 【ID: 12】
+    re.compile(r"ref\s*(\d+)", flags=re.IGNORECASE),  # ref12、REF 12
+]
+
+def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
+    max_index = len(kbinfos["chunks"])
+
+    def safe_add(i):
+        if 0 <= i < max_index:
+            idx.add(i)
+            return True
+        return False
+
+    def find_and_replace(pattern, group_index=1, repl=lambda i: f"ID:{i}", flags=0):
+        nonlocal answer
+
+        def replacement(match):
+            try:
+                i = int(match.group(group_index))
+                if safe_add(i):
+                    return f"[{repl(i)}]"
+            except Exception:
+                pass
+            return match.group(0)
+
+        answer = re.sub(pattern, replacement, answer, flags=flags)
+
+    for pattern in BAD_CITATION_PATTERNS:
+        find_and_replace(pattern)
+
+    return answer, idx
+
+
 def chat(dialog, messages, db, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
     # todo ragflow用这个方法实现了无kb时应用对话。但我们通过前后端交互对接实现了，所以注释掉这部分
-    # if not dialog.kb_ids:
+    # if not dialog.kb_ids and not dialog.prompt_config.get("tavily_api_key"):
     #     for ans in chat_solo(db, dialog, messages, stream):
     #         yield ans
     #     return
     chat_start_ts = timer()
 
-    # # Get llm model name and model provider name
-    # llm_id, model_provider = TenantLLMService.split_model_name_and_factory(dialog.llm_id)
-    #
-    # # Get llm model instance by model and provide name
-    # llm = LLMService.query(db, llm_name=llm_id) if not model_provider else LLMService.query(db, llm_name=llm_id,
-    #                                                                                         fid=model_provider)
-    #
-    # if not llm:
-    #     # Model name is provided by tenant, but not system built-in
-    #     llm = TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id) if not model_provider else \
-    #         TenantLLMService.query(db, tenant_id=dialog.tenant_id, llm_name=llm_id, llm_factory=model_provider)
-    #     print("TenantLLMService.query result:", llm)
-    #     if not llm:
-    #         # 如果仍然查询不到，则抛出异常
-    #         raise LookupError("LLM(%s) not found" % dialog.llm_id)
-    #     max_tokens = 8192
-    # else:
-    #     max_tokens = llm[0].max_tokens
-
-    if llm_id2llm_type(dialog.llm_id) == "image2text":
+    if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
         llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
     else:
         llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
@@ -217,61 +259,27 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             langfuse.trace = langfuse_tracer.trace(name=f"{dialog.name}-{llm_model_config['llm_name']}")
 
     check_langfuse_tracer_ts = timer()
-
-    kbs = KnowledgebaseService.get_by_ids(db, dialog.kb_ids)
-
-    # 提取并去重知识库的嵌入ID
-    embedding_list = list(set([kb.embd_id for kb in kbs]))
+    kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = get_models(db, dialog)
+    toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
+    if toolcall_session and tools:
+        chat_mdl.bind_tools(toolcall_session, tools)
+    bind_models_ts = timer()
 
     kb_names = list([kb.name for kb in kbs])
     print("正在检索的知识库 --> ", kb_names)
-    if len(embedding_list) > 1:
-        # 如果没有，则返回一条错误消息，指示知识库使用不同的嵌入模型
-        yield {"answer": "**ERROR**: Knowledge bases use different embedding models.", "reference": []}
-        return {"answer": "**ERROR**: Knowledge bases use different embedding models.", "reference": []}
 
     retriever = settings.retrievaler
-
-    # 提取用户提出的问题
-    questions = [m["content"] for m in messages if m["role"] == "user"]
+    questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
     attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None
     if "doc_ids" in messages[-1]:
         attachments = messages[-1]["doc_ids"]
-
-    create_retriever_ts = timer()
-
-    if len(embedding_list) != 0:
-        embd_mdl = LLMBundle(db, dialog.tenant_id, LLMType.EMBEDDING, embedding_list[0])
-        if not embd_mdl:
-            raise LookupError("Embedding model(%s) not found" % embedding_list[0])
-
-    bind_embedding_ts = timer()
-
-    if llm_id2llm_type(dialog.llm_id) == "image2text":
-        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
-    else:
-        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
-        toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
-        if toolcall_session and tools:
-            chat_mdl.bind_tools(toolcall_session, tools)
-
-    bind_llm_ts = timer()
-
-    # 获取提示配置和字段映射
     prompt_config = dialog.prompt_config
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
-    tts_mdl = None
-    if prompt_config.get("tts"):
-        tts_mdl = LLMBundle(db, dialog.tenant_id, LLMType.TTS)
     # 如果字段映射存在，尝试使用SQL检索答案
-    # 检查field_map是否为空，如果不为空，则执行以下操作
     if field_map:
-        # 使用日志记录器记录使用SQL进行检索的信息
         logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
-        # 调用use_sql函数尝试使用SQL查询获取答案
         ans = use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True))
-        # 如果查询到答案，则通过yield返回，并结束函数执行
         if ans:
             yield ans
             return
@@ -295,19 +303,13 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         questions = questions[-1:]
 
     if prompt_config.get("cross_languages"):
-        questions = [cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
+        questions = [cross_languages(db, dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
+
+    if prompt_config.get("keyword", False):
+        questions[-1] += keyword_extraction(chat_mdl, questions[-1])
 
     refine_question_ts = timer()
 
-    # 如果存在重新排序模型，初始化重新排序模型
-    rerank_mdl = None
-    if dialog.rerank_id:
-        rerank_mdl = LLMBundle(db, dialog.tenant_id, LLMType.RERANK, dialog.rerank_id)
-
-    # 添加问题以确保长度足够
-    # 根据问题列表的长度，复制最后一个问题，目的是为了后续的知识抽取和问答融合
-    bind_reranker_ts = timer()
-    generate_keyword_ts = bind_reranker_ts
     thought = ""
     kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
 
@@ -316,11 +318,6 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         # 如果不包含，则初始化知识信息为一个空的字典
         knowledges = []
     else:
-        # 如果包含"knowledge"参数，且设置了关键字提取，那么对最后一个问题进行关键字提取
-        if prompt_config.get("keyword", False):
-            questions[-1] += keyword_extraction(chat_mdl, questions[-1])
-            generate_keyword_ts = timer()
-
         knowledges = []
         if prompt_config.get("reasoning", False):
             reasoner = DeepResearcher(
@@ -336,23 +333,24 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                 elif stream:
                     yield think
         else:
-            kbinfos = retriever.retrieval(
-                " ".join(questions),
-                filter_exp,
-                embd_mdl,
-                dialog.tenant_id,
-                kb_names,
-                1,
-                dialog.top_n,
-                dialog.similarity_threshold,
-                dialog.vector_similarity_weight,
-                doc_ids=attachments,
-                top=1024,
-                aggs=False,
-                rerank_mdl=rerank_mdl,
-                rank_feature=label_question(db, " ".join(questions), kbs),
-                search_mode=dialog.search_mode
-            )
+            if embd_mdl:
+                kbinfos = retriever.retrieval(
+                    " ".join(questions),
+                    filter_exp,
+                    embd_mdl,
+                    dialog.tenant_id,
+                    kb_names,
+                    1,
+                    dialog.top_n,
+                    dialog.similarity_threshold,
+                    dialog.vector_similarity_weight,
+                    doc_ids=attachments,
+                    top=1024,
+                    aggs=False,
+                    rerank_mdl=rerank_mdl,
+                    rank_feature=label_question(db, " ".join(questions), kbs),
+                    search_mode=dialog.search_mode
+                )
             if prompt_config.get("tavily_api_key"):
                 tav = Tavily(prompt_config["tavily_api_key"])
                 tav_res = tav.retrieve_chunks(" ".join(questions))
@@ -365,20 +363,9 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
             knowledges = kb_prompt(kbinfos, max_tokens)
 
-    # # 如果需要自我检索并且内容不相关，尝试重写问题
-    # if dialog.prompt_config.get("self_rag") and not relevant(dialog.tenant_id, dialog.llm_id, questions[-1],
-    #                                                          knowledges, db):
-    #     questions[-1] = rewrite(dialog.tenant_id, dialog.llm_id, questions[-1], db)
-    #     kbinfos = retrievaler.retrieval(" ".join(questions), filter_exp, embd_mdl, dialog.tenant_id, kb_names, 1, dialog.top_n,
-    #                                     dialog.similarity_threshold,
-    #                                     dialog.vector_similarity_weight,
-    #                                     doc_ids=attachments,
-    #                                     top=1024, aggs=False, rerank_mdl=rerank_mdl)
-    #     knowledges = [ck["text"] for ck in kbinfos["chunks"]]
     logging.debug("{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
 
     retrieval_ts = timer()
-    # 如果没有知识并且配置了空响应，返回空响应
     if not knowledges and prompt_config.get("empty_response"):
         empty_res = prompt_config["empty_response"]
         yield {"answer": empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions), "audio_binary": tts(tts_mdl, empty_res)}
@@ -387,8 +374,6 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
     gen_conf = dialog.llm_setting
 
-    # 拼接系统提示和消息内容
-    # 初始化消息列表，包含系统消息
     msg = [{"role": "system", "content": prompt_config["system"].format(**kwargs)}]
     prompt4citation = ""
     if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
@@ -396,8 +381,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     msg.extend([{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])} for m in messages if m["role"] != "system"])
     used_token_count, msg = message_fit_in(msg, int(max_tokens * 0.95))
 
-    # 断言消息长度至少为2，以验证message_fit_in函数的正确性
-    # 如果消息长度小于2，说明函数可能存在bug，需要进行调试
+    # 检查消息列表的长度是否至少为2
     assert len(msg) >= 2, f"message_fit_in has bug: {msg}"
     prompt = msg[0]["content"]
 
@@ -405,41 +389,8 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     if "max_tokens" in gen_conf:
         gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
 
-    def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
-        max_index = len(kbinfos["chunks"])
-
-        def safe_add(i):
-            if 0 <= i < max_index:
-                idx.add(i)
-                return True
-            return False
-
-        def find_and_replace(pattern, group_index=1, repl=lambda i: f"##{i}$$", flags=0):
-            nonlocal answer
-            for match in re.finditer(pattern, answer, flags=flags):
-                try:
-                    i = int(match.group(group_index))
-                    if safe_add(i):
-                        answer = answer.replace(match.group(0), repl(i))
-                except Exception:
-                    continue
-
-        find_and_replace(r"\(\s*ID:\s*(\d+)\s*\)")  # (ID: 12)
-        find_and_replace(r"ID[: ]+(\d+)")  # ID: 12, ID 12
-        find_and_replace(r"\$\$(\d+)\$\$")  # $$12$$
-        find_and_replace(r"\$\[(\d+)\]\$")  # $[12]$
-        find_and_replace(r"\$\$(\d+)\${2,}")  # $$12$$$$
-        find_and_replace(r"\$(\d+)\$")  # $12$
-        find_and_replace(r"(#{2,})(\d+)(\${2,})", group_index=2)  # 2+ # and 2+ $
-        find_and_replace(r"(#{2,})(\d+)(#{1,})", group_index=2)  # 2+ # and 1+ #
-        find_and_replace(r"##(\d+)#{2,}")  # ##12###
-        find_and_replace(r"【(\d+)】")  # 【12】
-        find_and_replace(r"ref\s*(\d+)", flags=re.IGNORECASE)  # ref12, ref 12, REF 12
-
-        return answer, idx
-
     def decorate_answer(answer):
-        nonlocal prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_tracer
+        nonlocal embd_mdl, prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_tracer
 
         refs = []
         ans = answer.split("</think>")
@@ -449,9 +400,8 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             answer = ans[1]
 
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
-            answer = re.sub(r"##[ij]\$\$", "", answer, flags=re.DOTALL)
             idx = set([])
-            if not re.search(r"##[0-9]+\$\$", answer):
+            if embd_mdl and not re.search(r"\[ID:([0-9]+)\]", answer):
                 answer, idx = retriever.insert_citations(
                     answer,
                     [ck["content_ltks"] for ck in kbinfos["chunks"]],
@@ -461,7 +411,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     vtweight=dialog.vector_similarity_weight
                 )
             else:
-                for match in re.finditer(r"##([0-9]+)\$\$", answer):
+                for match in re.finditer(r"\[ID:([0-9]+)\]", answer):
                     i = int(match.group(1))
                     if i < len(kbinfos["chunks"]):
                         idx.add(i)
@@ -488,13 +438,9 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         total_time_cost = (finish_chat_ts - chat_start_ts) * 1000
         check_llm_time_cost = (check_llm_ts - chat_start_ts) * 1000
         check_langfuse_tracer_cost = (check_langfuse_tracer_ts - check_llm_ts) * 1000
-        create_retriever_time_cost = (create_retriever_ts - check_langfuse_tracer_ts) * 1000
-        bind_embedding_time_cost = (bind_embedding_ts - create_retriever_ts) * 1000
-        bind_llm_time_cost = (bind_llm_ts - bind_embedding_ts) * 1000
-        refine_question_time_cost = (refine_question_ts - bind_llm_ts) * 1000
-        bind_reranker_time_cost = (bind_reranker_ts - refine_question_ts) * 1000
-        generate_keyword_time_cost = (generate_keyword_ts - bind_reranker_ts) * 1000
-        retrieval_time_cost = (retrieval_ts - generate_keyword_ts) * 1000
+        bind_embedding_time_cost = (bind_models_ts - check_langfuse_tracer_ts) * 1000
+        refine_question_time_cost = (refine_question_ts - bind_models_ts) * 1000
+        retrieval_time_cost = (retrieval_ts - refine_question_ts) * 1000
         generate_result_time_cost = (finish_chat_ts - retrieval_ts) * 1000
 
         tk_num = num_tokens_from_string(think + answer)
@@ -505,12 +451,8 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             f"  - Total: {total_time_cost:.1f}ms\n"
             f"  - Check LLM: {check_llm_time_cost:.1f}ms\n"
             f"  - Check Langfuse tracer: {check_langfuse_tracer_cost:.1f}ms\n"
-            f"  - Create retriever: {create_retriever_time_cost:.1f}ms\n"
-            f"  - Bind embedding: {bind_embedding_time_cost:.1f}ms\n"
-            f"  - Bind LLM: {bind_llm_time_cost:.1f}ms\n"
-            f"  - Multi-turn optimization: {refine_question_time_cost:.1f}ms\n"
-            f"  - Bind reranker: {bind_reranker_time_cost:.1f}ms\n"
-            f"  - Generate keyword: {generate_keyword_time_cost:.1f}ms\n"
+            f"  - Bind models: {bind_embedding_time_cost:.1f}ms\n"
+            f"  - Query refinement(LLM): {refine_question_time_cost:.1f}ms\n"
             f"  - Retrieval: {retrieval_time_cost:.1f}ms\n"
             f"  - Generate answer: {generate_result_time_cost:.1f}ms\n\n"
             "## Token usage:\n"
@@ -691,7 +633,7 @@ def tts(tts_mdl, text):
     return binascii.hexlify(bin).decode("utf-8")
 
 
-def ask(db: Session, question, kb_ids, tenant_id):
+def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None):
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     embedding_list = list(set([kb.embd_id for kb in kbs]))
 
@@ -699,7 +641,7 @@ def ask(db: Session, question, kb_ids, tenant_id):
     retriever = settings.retrievaler if not is_knowledge_graph else settings.kg_retrievaler
 
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
-    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT)
+    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_llm_name)
     max_tokens = chat_mdl.max_length
     tenant_ids = list([kb.tenant_id for kb in kbs])
 

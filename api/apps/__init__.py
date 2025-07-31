@@ -41,15 +41,31 @@ Multi-RAG API helps you do awesome stuff. 🚀
 tags_metadata = [
     {
         "name": "default",
-        "description": "获取Auth Token",
+        "description": "🔐 认证授权 - 获取Access Token和用户认证相关接口",
     },
     {
         "name": "llm",
-        "description": "模型相关接口",
+        "description": "🤖 大语言模型 - LLM相关接口，支持多种模型调用和管理",
         "externalDocs": {
             "description": "问题反馈",
             "url": "https://cake-doom-0c6.notion.site/LLM-1315b7c31d624827a9e5e067475d1a31?pvs=4",
         },
+    },
+    {
+        "name": "workflow",
+        "description": "⚡ 工作流引擎 - 工作流编排、执行和管理相关接口",
+    },
+    {
+        "name": "file",
+        "description": "📄 文件管理 - 文件上传、下载、管理和处理相关接口",
+    },
+    {
+        "name": "document",
+        "description": "📚 文档处理 - 文档解析、向量化和检索相关接口",
+    },
+    {
+        "name": "api",
+        "description": "🔧 API管理 - API配置、监控和管理相关接口",
     },
 ]
 
@@ -94,8 +110,8 @@ app = FastAPI(
         "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
     },
     openapi_tags=tags_metadata,
-    # docs_url=None,
-    # redoc_url=None,
+    docs_url=None,
+    redoc_url=None,
     lifespan=lifespan
 )
 # 添加处理CORS（跨域资源共享）的中间件
@@ -110,6 +126,17 @@ settings.init_settings()
 
 # 添加Session中间件，使用项目的SECRET_KEY
 app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
+
+# 添加敏感词过滤中间件
+try:
+    from api.middleware.sensitive_word_middleware import SensitiveWordMiddlewareConfig
+    sensitive_word_middleware = SensitiveWordMiddlewareConfig.create_middleware(app)
+    app.add_middleware(type(sensitive_word_middleware),
+                      excluded_paths=sensitive_word_middleware.excluded_paths,
+                      strict_paths=sensitive_word_middleware.strict_paths)
+    logging.info("敏感词过滤中间件已启用")
+except Exception as e:
+    logging.warning(f"敏感词过滤中间件启用失败: {e}")
 
 # 初始化登录管理器，设置密钥和令牌URL
 manager = LoginManager(settings.SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))

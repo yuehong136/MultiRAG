@@ -106,8 +106,7 @@ class RAGFlowPdfParser:
 
     def _y_dis(
             self, a, b):
-        return (
-                b["top"] + b["bottom"] - a["top"] - a["bottom"]) / 2
+        return (b["top"] + b["bottom"] - a["top"] - a["bottom"]) / 2
 
     def _match_proj(self, b):
         proj_patt = [
@@ -130,9 +129,9 @@ class RAGFlowPdfParser:
         tks_down = rag_tokenizer.tokenize(down["text"][:LEN]).split()
         tks_up = rag_tokenizer.tokenize(up["text"][-LEN:]).split()
         tks_all = up["text"][-LEN:].strip() \
-                  + (" " if re.match(r"[a-zA-Z0-9]+",
-                                     up["text"][-1] + down["text"][0]) else "") \
-                  + down["text"][:LEN].strip()
+            + (" " if re.match(r"[a-zA-Z0-9]+",
+                               up["text"][-1] + down["text"][0]) else "") \
+            + down["text"][:LEN].strip()
         tks_all = rag_tokenizer.tokenize(tks_all).split()
         fea = [
             up.get("R", -1) == down.get("R", -1),
@@ -154,7 +153,7 @@ class RAGFlowPdfParser:
             True if re.search(r"[，,][^。.]+$", up["text"]) else False,
             True if re.search(r"[，,][^。.]+$", up["text"]) else False,
             True if re.search(r"[\(（][^\)）]+$", up["text"])
-                    and re.search(r"[\)）]", down["text"]) else False,
+            and re.search(r"[\)）]", down["text"]) else False,
             self._match_proj(down),
             True if re.match(r"[A-Z]", down["text"]) else False,
             True if re.match(r"[A-Z]", up["text"][-1]) else False,
@@ -180,13 +179,13 @@ class RAGFlowPdfParser:
         return fea
 
     @staticmethod
-    def sort_X_by_page(arr, threashold):
+    def sort_X_by_page(arr, threshold):
         # sort using y1 first and then x1
         arr = sorted(arr, key=lambda r: (r["page_number"], r["x0"], r["top"]))
         for i in range(len(arr) - 1):
             for j in range(i, -1, -1):
                 # restore the order using th
-                if abs(arr[j + 1]["x0"] - arr[j]["x0"]) < threashold \
+                if abs(arr[j + 1]["x0"] - arr[j]["x0"]) < threshold \
                         and arr[j + 1]["top"] < arr[j]["top"] \
                         and arr[j + 1]["page_number"] == arr[j]["page_number"]:
                     tmp = arr[j]
@@ -216,7 +215,7 @@ class RAGFlowPdfParser:
                 continue
             for tb in tbls:  # for table
                 left, top, right, bott = tb["x0"] - MARGIN, tb["top"] - MARGIN, \
-                                         tb["x1"] + MARGIN, tb["bottom"] + MARGIN
+                    tb["x1"] + MARGIN, tb["bottom"] + MARGIN
                 left *= ZM
                 top *= ZM
                 right *= ZM
@@ -264,13 +263,13 @@ class RAGFlowPdfParser:
         for b in self.boxes:
             if b.get("layout_type", "") != "table":
                 continue
-            ii = Recognizer.find_overlapped_with_threashold(b, rows, thr=0.3)
+            ii = Recognizer.find_overlapped_with_threshold(b, rows, thr=0.3)
             if ii is not None:
                 b["R"] = ii
                 b["R_top"] = rows[ii]["top"]
                 b["R_bott"] = rows[ii]["bottom"]
 
-            ii = Recognizer.find_overlapped_with_threashold(
+            ii = Recognizer.find_overlapped_with_threshold(
                 b, headers, thr=0.3)
             if ii is not None:
                 b["H_top"] = headers[ii]["top"]
@@ -285,7 +284,7 @@ class RAGFlowPdfParser:
                 b["C_left"] = clmns[ii]["x0"]
                 b["C_right"] = clmns[ii]["x1"]
 
-            ii = Recognizer.find_overlapped_with_threashold(b, spans, thr=0.3)
+            ii = Recognizer.find_overlapped_with_threshold(b, spans, thr=0.3)
             if ii is not None:
                 b["H_top"] = spans[ii]["top"]
                 b["H_bott"] = spans[ii]["bottom"]
@@ -346,8 +345,7 @@ class RAGFlowPdfParser:
             if not b["text"]:
                 left, right, top, bott = b["x0"] * ZM, b["x1"] * \
                                          ZM, b["top"] * ZM, b["bottom"] * ZM
-                b["box_image"] = self.ocr.get_rotate_crop_image(img_np, np.array(
-                    [[left, top], [right, top], [right, bott], [left, bott]], dtype=np.float32))
+                b["box_image"] = self.ocr.get_rotate_crop_image(img_np, np.array([[left, top], [right, top], [right, bott], [left, bott]], dtype=np.float32))
                 boxes_to_reg.append(b)
             del b["txt"]
         texts = self.ocr.recognize_batch([b["box_image"] for b in boxes_to_reg], device_id)
@@ -480,6 +478,9 @@ class RAGFlowPdfParser:
         self.boxes = bxs
 
     def _concat_downward(self, concat_between_pages=True):
+        self.boxes = Recognizer.sort_Y_firstly(self.boxes, 0)
+        return
+
         # count boxes in the same row as a feature
         for i in range(len(self.boxes)):
             mh = self.mean_height[self.boxes[i]["page_number"] - 1]
@@ -675,7 +676,7 @@ class RAGFlowPdfParser:
                 i += 1
                 continue
             lout_no = str(self.boxes[i]["page_number"]) + \
-                      "-" + str(self.boxes[i]["layoutno"])
+                "-" + str(self.boxes[i]["layoutno"])
             if TableStructureRecognizer.is_caption(self.boxes[i]) or self.boxes[i]["layout_type"] in ["table caption",
                                                                                                       "title",
                                                                                                       "figure caption",
@@ -1056,7 +1057,7 @@ class RAGFlowPdfParser:
         logging.debug("Images converted.")
         self.is_english = [re.search(r"[a-zA-Z0-9,/¸;:'\[\]\(\)!@#$%^&*\"?<>._-]{30,}", "".join(
             random.choices([c["text"] for c in self.page_chars[i]], k=min(100, len(self.page_chars[i]))))) for i in
-                           range(len(self.page_chars))]
+            range(len(self.page_chars))]
         if sum([1 if e else 0 for e in self.is_english]) > len(
                 self.page_images) / 2:
             self.is_english = True
@@ -1100,7 +1101,7 @@ class RAGFlowPdfParser:
                         chars = __ocr_preprocess()
 
                         nursery.start_soon(__img_ocr, i, i % PARALLEL_DEVICES, img, chars,
-                                        self.parallel_limiter[i % PARALLEL_DEVICES])
+                                           self.parallel_limiter[i % PARALLEL_DEVICES])
                         await trio.sleep(0.1)
             else:
                 for i, img in enumerate(self.page_images):
@@ -1137,7 +1138,8 @@ class RAGFlowPdfParser:
             need_image, zoomin, return_html, False)
         return self.__filterout_scraps(deepcopy(self.boxes), zoomin), tbls
 
-    def remove_tag(self, txt):
+    @staticmethod
+    def remove_tag(txt):
         return re.sub(r"@@[\t0-9.-]+?##", "", txt)
 
     def crop(self, text, ZM=3, need_position=False):
@@ -1175,7 +1177,7 @@ class RAGFlowPdfParser:
                 self.page_images[pns[0]].crop((left * ZM, top * ZM,
                                                right *
                                                ZM, min(
-                        bottom, self.page_images[pns[0]].size[1])
+                                                   bottom, self.page_images[pns[0]].size[1])
                                                ))
             )
             if 0 < ii < len(poss) - 1:

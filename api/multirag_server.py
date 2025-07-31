@@ -6,10 +6,10 @@
 @date：2024/7/30 18:00
 @desc:
 """
-from api.utils.log_utils import initRootLogger
+from api.utils.log_utils import init_root_logger
 from plugin import GlobalPluginManager
-initRootLogger("multirag_server")
-# initRootLogger("multirag_server")
+init_root_logger("multirag_server")
+# init_root_logger("multirag_server")
 # for module in ["pdfminer"]:
 #     module_logger = logging.getLogger(module)
 #     module_logger.setLevel(logging.WARNING)
@@ -40,6 +40,7 @@ from api.versions import get_multirag_version
 import uvicorn
 from api.utils import show_configs
 from core.settings import print_rag_settings
+from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions
 from core.utils.redis_conn import RedisDistributedLock
 
 stop_event = threading.Event()
@@ -70,6 +71,7 @@ def update_progress():
 
 def signal_handler(sig, frame):
     logging.info("Received interrupt signal, shutting down...")
+    shutdown_all_mcp_sessions()
     stop_event.set()
     time.sleep(1)
     sys.exit(0)
@@ -94,7 +96,7 @@ if __name__ == '__main__':
  /_/  /_/   \__,_/  /_/   \__/  /_/           /_/ |_|  /_/  |_|   \____/    
  
                         ╔╦╗ ┬ ┬ ┬  ┌┬┐ ┬ ┬─┐ ┌─┐ ╔═╗
-                        ║║║ │ │ │   │  │ ├┬┘ ├─┤ ║ ╦    【——v0.4.4——】  
+                        ║║║ │ │ │   │  │ ├┬┘ ├─┤ ║ ╦    【——v0.6.0 preview——】  
                         ╩ ╩ └─┘ ┴─┘ ┴  ┴ ┴└─ ┴ ┴ ╚═╝
 ============================================================================
                 """)

@@ -46,6 +46,7 @@ class ListChunkRequest(BaseModel):
     page: int | None = 1
     size: int | None = 30
     keywords: str | None = ""
+    available_int: int | None = None
 
 
 class SetChunkRequest(BaseModel):
@@ -351,14 +352,17 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
             "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords,
             "sort": True
         }
+        if request.keywords:
+            query["filter_exp"] = f"content_with_weight like '%{request.keywords}%'" if request.keywords else None
+
         # 先计算出所有问题块的总数
-        query_count = {
-            "doc_ids": [request.doc_id], "question": request.keywords,
-            "sort": True
-        }
-        if "available_int" in request:
-            query["available_int"] = int(request["available_int"])
-            query_count["available_int"] = int(request["available_int"])
+        # query_count = {
+        #     "doc_ids": [request.doc_id], "question": request.keywords,
+        #     "sort": True
+        # }
+        if request.available_int:
+            query["available_int"] = request.available_int
+            # query_count["available_int"] = request["available_int"]
         # total = settings.retrievaler.count(query_count, search.index_name_one(tenant_id, kb.name)).total
         # sres = settings.retrievaler.search(query, search.index_name_one(tenant_id, kb.name))
         # total = settings.retrievaler.search(query_count, search.index_name_one(tenant_id, kb.name), kb_ids).total
@@ -699,10 +703,14 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         "content_sm_ltks": rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(request.content_with_weight)),
     }
     important_kwd = request.important_kwd if request.important_kwd is not None else []
+    if not isinstance(important_kwd, list):
+        return get_data_error_result(retmsg="`important_kwd` should be a list")
     d["important_kwd"] = important_kwd
     d["important_tks"] = rag_tokenizer.tokenize(" ".join(important_kwd)) if important_kwd else ""
 
     question_kwd = request.question_kwd if request.question_kwd is not None else []
+    if not isinstance(question_kwd, list):
+        return get_data_error_result(retmsg="`question_kwd` should be a list")
     d["question_kwd"] = question_kwd
     d["question_tks"] = rag_tokenizer.tokenize("\n".join(question_kwd)) if question_kwd else ""
 
@@ -994,7 +1002,7 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
             return get_data_error_result(retmsg="KnowledgeBase not found!")
 
         if not settings.docStoreConn.delete(collection_name=search.index_name_one(kb.tenant_id, kb.name), ids=req["chunk_ids"]):
-            return get_data_error_result(retmsg="Index updating failure")
+            return get_data_error_result(retmsg="Chunk deleting failure")
         deleted_chunk_ids = req["chunk_ids"]
         chunk_number = len(deleted_chunk_ids)
         DocumentService.decrement_chunk_num(db, doc.id, doc.kb_id, 1, chunk_number, 0)
@@ -1153,11 +1161,17 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
          "content_with_weight": req["content_with_weight"]}
     d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
     d["important_kwd"] = req.get("important_kwd", [])
-    d["important_tks"] = rag_tokenizer.tokenize(" ".join(req.get("important_kwd", [])))
+    if not isinstance(d["important_kwd"], list):
+        return get_data_error_result(retmsg="`important_kwd` is required to be a list")
+    d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
     d["question_kwd"] = req.get("question_kwd", [])
-    d["question_tks"] = rag_tokenizer.tokenize("\n".join(req.get("question_kwd", [])))
+    if not isinstance(d["question_kwd"], list):
+        return get_data_error_result(retmsg="`question_kwd` is required to be a list")
+    d["question_tks"] = rag_tokenizer.tokenize("\n".join(d["question_kwd"]))
     d["create_time"] = str(datetime.datetime.now()).replace("T", " ")[:19]
     d["create_timestamp_flt"] = datetime.datetime.now().timestamp()
+    if "tag_feas" in req:
+        d["tag_feas"] = req["tag_feas"]
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])

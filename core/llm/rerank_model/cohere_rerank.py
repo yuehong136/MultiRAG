@@ -1,5 +1,6 @@
 import numpy as np
 
+from api.utils.log_utils import log_exception
 from core.llm.rerank_model.base import Base
 from core.utils import num_tokens_from_string
 
@@ -23,6 +24,9 @@ class CoHereRerank(Base):
             return_documents=False,
         )
         rank = np.zeros(len(texts), dtype=float)
-        for d in res.results:
-            rank[d.index] = d.relevance_score
+        try:
+            for d in res.results:
+                rank[d.index] = d.relevance_score
+        except Exception as _e:
+            log_exception(_e, res)
         return rank, token_count

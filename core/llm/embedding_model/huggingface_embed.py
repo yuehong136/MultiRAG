@@ -1,6 +1,7 @@
 import numpy as np
 import requests
 
+from api.utils.log_utils import log_exception
 from core.llm.embedding_model.base import Base
 from core.utils import num_tokens_from_string
 

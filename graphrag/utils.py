@@ -17,13 +17,12 @@ from typing import Any, Callable
 import os
 import trio
 from typing import Set, Tuple
-
 import networkx as nx
 import numpy as np
 import xxhash
 from networkx.readwrite import json_graph
 import dataclasses
-
+from api.utils.api_utils import timeout
 from api import settings
 from api.utils import get_uuid
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -160,30 +159,32 @@ def set_tags_to_cache(kb_ids, tags):
     REDIS_CONN.set(k, json.dumps(tags).encode("utf-8"), 600)
 
 
-def tidy_graph(graph: nx.Graph, callback):
+def tidy_graph(graph: nx.Graph, callback, check_attribute: bool = True):
     """
     Ensure all nodes and edges in the graph have some essential attribute.
     """
-    def is_valid_node(node_attrs: dict) -> bool:
+    def is_valid_item(node_attrs: dict) -> bool:
         valid_node = True
         for attr in ["description", "source_id"]:
             if attr not in node_attrs:
                 valid_node = False
                 break
         return valid_node
-    purged_nodes = []
-    for node, node_attrs in graph.nodes(data=True):
-        if not is_valid_node(node_attrs):
-            purged_nodes.append(node)
-    for node in purged_nodes:
-        graph.remove_node(node)
-    if purged_nodes and callback:
-        callback(msg=f"Purged {len(purged_nodes)} nodes from graph due to missing essential attributes.")
+    if check_attribute:
+        purged_nodes = []
+        for node, node_attrs in graph.nodes(data=True):
+            if not is_valid_item(node_attrs):
+                purged_nodes.append(node)
+        for node in purged_nodes:
+            graph.remove_node(node)
+        if purged_nodes and callback:
+            callback(msg=f"Purged {len(purged_nodes)} nodes from graph due to missing essential attributes.")
 
     purged_edges = []
     for source, target, attr in graph.edges(data=True):
-        if not is_valid_node(attr):
-            purged_edges.append((source, target))
+        if check_attribute:
+            if not is_valid_item(attr):
+                purged_edges.append((source, target))
         if "keywords" not in attr:
             attr["keywords"] = []
     for source, target in purged_edges:
@@ -191,11 +192,13 @@ def tidy_graph(graph: nx.Graph, callback):
     if purged_edges and callback:
         callback(msg=f"Purged {len(purged_edges)} edges from graph due to missing essential attributes.")
 
+
 def get_from_to(node1, node2):
     if node1 < node2:
         return (node1, node2)
     else:
         return (node2, node1)
+
 
 def graph_merge(g1: nx.Graph, g2: nx.Graph, change: GraphChange):
     """Merge graph g2 into g1 in place."""
@@ -303,6 +306,7 @@ def chunk_id(chunk):
     return xxhash.xxh64((chunk["content_with_weight"] + chunk["kb_id"]).encode("utf-8")).hexdigest()
 
 
+@timeout(3, 3)
 async def graph_node_to_chunk(kb_id, embd_mdl, ent_name, meta, chunks):
     chunk = {
         "id": get_uuid(),
@@ -328,6 +332,7 @@ async def graph_node_to_chunk(kb_id, embd_mdl, ent_name, meta, chunks):
     chunks.append(chunk)
 
 
+@timeout(3, 3)
 def get_relation(tenant_id, kb_id, from_ent_name, to_ent_name, size=1):
     ents = from_ent_name
     if isinstance(ents, str):
@@ -356,6 +361,7 @@ def get_relation(tenant_id, kb_id, from_ent_name, to_ent_name, size=1):
     return res
 
 
+@timeout(3, 3)
 async def graph_edge_to_chunk(kb_id, embd_mdl, from_ent_name, to_ent_name, meta, chunks):
     chunk = {
         "id": get_uuid(),
@@ -396,6 +402,7 @@ async def does_graph_contains(tenant_id, kb_id, doc_id):
     for chunk_id in fields2.keys():
         graph_doc_ids = set(fields2[chunk_id]["source_id"])
     return doc_id in graph_doc_ids
+
 
 async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
     conds = {
@@ -482,16 +489,23 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
             "removed_kwd": "N"
         })
 
+    semaphore = trio.Semaphore(5)
     async with trio.open_nursery() as nursery:
-        for node in change.added_updated_nodes:
+        for ii, node in enumerate(change.added_updated_nodes):
             node_attrs = graph.nodes[node]
-            nursery.start_soon(graph_node_to_chunk, kb_id, embd_mdl, node, node_attrs, chunks)
-        for from_node, to_node in change.added_updated_edges:
+            async with semaphore:
+                if ii%100 == 9 and callback:
+                    callback(msg=f"Get embedding of nodes: {ii}/{len(change.added_updated_nodes)}")
+                nursery.start_soon(graph_node_to_chunk, kb_id, embd_mdl, node, node_attrs, chunks)
+        for ii, (from_node, to_node) in enumerate(change.added_updated_edges):
             edge_attrs = graph.get_edge_data(from_node, to_node)
             if not edge_attrs:
                 # added_updated_edges could record a non-existing edge if both from_node and to_node participate in nodes merging.
                 continue
-            nursery.start_soon(graph_edge_to_chunk, kb_id, embd_mdl, from_node, to_node, edge_attrs, chunks)
+            async with semaphore:
+                if ii%100 == 9 and callback:
+                    callback(msg=f"Get embedding of edges: {ii}/{len(change.added_updated_edges)}")
+                nursery.start_soon(graph_edge_to_chunk, kb_id, embd_mdl, from_node, to_node, edge_attrs, chunks)
     now = trio.current_time()
     if callback:
         callback(msg=f"set_graph converted graph change to {len(chunks)} chunks in {now - start:.2f}s.")
@@ -506,8 +520,6 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
     now = trio.current_time()
     if callback:
         callback(msg=f"set_graph added/updated {len(change.added_updated_nodes)} nodes and {len(change.added_updated_edges)} edges from index in {now - start:.2f}s.")
-
-
 
 
 def is_continuous_subsequence(subseq, seq):

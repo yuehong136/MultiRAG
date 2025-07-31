@@ -6,12 +6,11 @@ from enum import IntEnum, Enum
 
 import core.utils
 import core.utils.milvus_conn
-# import core.utils.infinity_conn, opensearch_coon
+# import core.utils.infinity_conn, opensearch_conn
 from api.constants import MULTI_RAG_SERVICE_NAME
 from api.utils import get_base_config
 from api.utils.file_utils import get_project_base_directory
 from core.nlp import search
-from graphrag import search as kg_search
 
 LIGHTEN = int(os.environ.get("LIGHTEN", "0"))
 
@@ -154,13 +153,14 @@ def init_settings():
     if lower_case_doc_engine == "milvus":
         docStoreConn = core.utils.milvus_conn.MilvusConnection()
     elif lower_case_doc_engine == "opensearch":
-        docStoreConn = core.utils.opensearch_coon.OSConnection()
+        docStoreConn = core.utils.opensearch_conn.OSConnection()
     elif lower_case_doc_engine == "infinity":
         docStoreConn = core.utils.infinity_conn.InfinityConnection()
     else:
         raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
 
     retrievaler = search.Dealer(docStoreConn)
+    from graphrag import search as kg_search
     kg_retrievaler = kg_search.KGSearch(docStoreConn)
 
     if int(os.environ.get("SANDBOX_ENABLED", "0")):

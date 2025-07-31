@@ -70,7 +70,7 @@ ENV PATH=/root/.local/bin:$PATH
 #安装python
 RUN mkdir -p /etc/uv && \
     echo 'python-install-mirror = "file:///mirror"' > /etc/uv/uv.toml && \
-    uv python install 3.12.11 && \
+    uv python install 3.12.10 && \
     rm -rf /mirror  # 安装后删除
 
 # 使用mount绑定挂载模型文件并根据条件复制到目标位置

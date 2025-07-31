@@ -3,7 +3,7 @@
 @project: multirag
 @Author：龙
 @file： file_app.py
-@date：2024/7/22 22:28
+@date：2025/7/17 13:50
 @desc:
 """
 import os
@@ -19,7 +19,6 @@ from starlette.responses import StreamingResponse
 
 from api.db import FileType, FileSource
 from api.db.db_models import get_db
-# from api.db.database import get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -28,6 +27,7 @@ from api import settings
 from api.utils.api_utils import construct_json_result, construct_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type
+from api.utils.web_utils import CONTENT_TYPE_MAP
 from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 from pydantic import BaseModel, Field
@@ -129,6 +129,7 @@ async def upload(
             blob = await file_obj.read()
             filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
                                       parent_id=last_folder.id)
+            STORAGE_IMPL.put(last_folder.id, location, blob)
             file_data = {
                 "id": get_uuid(),
                 "parent_id": last_folder.id,
@@ -140,7 +141,6 @@ async def upload(
                 "size": len(blob),
             }
             file = FileService.insert(db, file_data)
-            STORAGE_IMPL.put(last_folder.id, location, blob)
             file_dict = {
                 "id": file.id,
                 "parent_id": file.parent_id,
@@ -452,6 +452,7 @@ async def get_file(
         file = FileService.get_by_id(db, file_id)
         if not file:
             return get_data_error_result(retmsg="Document not found!")
+
         b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
         file_content = STORAGE_IMPL.get(b, n)
         if not file_content:
@@ -459,13 +460,14 @@ async def get_file(
 
         # 将文件内容包装成 BytesIO 对象
         file_stream = BytesIO(file_content)
-        ext = re.search(r"\.([^.]+)$", file.name)
+        ext = re.search(r"\.([^.]+)$", file.name.lower())
+        ext = ext.group(1) if ext else None
         media_type = "application/octet-stream"
         if ext:
             if file.type == FileType.VISUAL.value:
-                media_type = f'image/{ext.group(1)}'
+                media_type = CONTENT_TYPE_MAP.get(ext, f"image/{ext}")
             else:
-                media_type = f'application/{ext.group(1)}'
+                media_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
         encoded_filename = quote(file.name)
 
         response = StreamingResponse(file_stream, media_type=media_type)

@@ -3,11 +3,13 @@
 @project: multirag
 @Author：龙
 @file： file2document_app.py
-@date：2024/7/23 18:57
+@date：2025/7/17 9:53
 @desc:
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+
+from pathlib import Path
 
 from api.db.db_models import get_db
 from api.db.services.file2document_service import File2DocumentService
@@ -18,7 +20,6 @@ from api.utils import get_uuid
 from api.db import FileType
 from api.db.services.document_service import DocumentService
 from api import settings
-# from api.db.database import get_db
 from api.apps import manager
 
 router = APIRouter()
@@ -87,6 +88,7 @@ def convert(
                         "created_by": user.id,
                         "type": file.type,
                         "name": file.name,
+                        "suffix": Path(file.name).suffix.lstrip("."),
                         "location": file.location,
                         "size": file.size
                     })

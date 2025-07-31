@@ -3,6 +3,7 @@ from urllib.parse import urljoin
 import numpy as np
 import requests
 
+from api.utils.log_utils import log_exception
 from core.llm.rerank_model.base import Base
 from core.utils import num_tokens_from_string, truncate
 
@@ -33,10 +34,11 @@ class LocalAIRerank(Base):
             token_count += num_tokens_from_string(t)
         res = requests.post(self.base_url, headers=self.headers, json=data).json()
         rank = np.zeros(len(texts), dtype=float)
-        if 'results' not in res:
-            raise ValueError("response not contains results\n" + str(res))
-        for d in res["results"]:
-            rank[d["index"]] = d["relevance_score"]
+        try:
+            for d in res["results"]:
+                rank[d["index"]] = d["relevance_score"]
+        except Exception as _e:
+            log_exception(_e, res)
 
         # Normalize the rank values to the range 0 to 1
         min_rank = np.min(rank)

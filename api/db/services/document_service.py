@@ -27,7 +27,7 @@ from api.utils import current_timestamp, get_format_time, get_uuid
 from api.utils.db_utils import bulk_insert_into_db
 # from api.settings import docStoreConn
 from api import settings
-from core.settings import get_svr_queue_name
+from core.settings import get_svr_queue_name, SVR_CONSUMER_GROUP_NAME
 from core.nlp import search, rag_tokenizer
 from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
@@ -77,8 +77,10 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,
-                     orderby: str, desc: bool, keywords: str | None = None,
-                     run_status: list | None = None, types: list | None = None) -> tuple[list[dict], int]:
+                     orderby: str, desc: bool, keywords: str | None,
+                     run_status: list | None = None, types: list | None = None, suffix: list = None) -> tuple[list[dict], int]:
+        if suffix is None:
+            suffix = []
         query = db.query(cls.model).filter_by(kb_id=kb_id)
 
         if keywords:
@@ -89,6 +91,9 @@ class DocumentService(CommonService):
 
         if types:
             query = query.filter(cls.model.type.in_(types))
+
+        if suffix:
+            query = query.filter(cls.model.suffix.in_(suffix))
 
         count = query.count()
 
@@ -103,6 +108,67 @@ class DocumentService(CommonService):
             docs = query.all()
 
         return [doc.to_dict() for doc in docs], count
+
+    @classmethod
+    def get_filter_by_kb_id(cls, db: Session, kb_id, keywords, run_status, types, suffix):
+        """
+        优化版本：使用数据库聚合查询提高性能
+
+        returns:
+        {
+            "suffix": {
+                "ppt": 1,
+                "doxc": 2
+            },
+            "run_status": {
+             "1": 2,
+             "2": 2
+            }
+        }, total
+        where "1" => RUNNING, "2" => CANCEL
+        """
+        # 构建基础查询条件
+        filters = [cls.model.kb_id == kb_id]
+
+        # 添加关键词过滤
+        if keywords:
+            filters.append(func.lower(cls.model.name).contains(keywords.lower()))
+
+        # 添加运行状态过滤
+        if run_status:
+            filters.append(cls.model.run.in_(run_status))
+
+        # 添加类型过滤
+        if types:
+            filters.append(cls.model.type.in_(types))
+
+        # 添加后缀过滤
+        if suffix:
+            filters.append(cls.model.suffix.in_(suffix))
+
+        # 获取总数
+        total = db.query(cls.model).filter(*filters).count()
+
+        # 统计suffix分布
+        suffix_stats = db.query(
+            cls.model.suffix,
+            func.count(cls.model.suffix).label('count')
+        ).filter(*filters).group_by(cls.model.suffix).all()
+
+        # 统计run_status分布
+        run_status_stats = db.query(
+            cls.model.run,
+            func.count(cls.model.run).label('count')
+        ).filter(*filters).group_by(cls.model.run).all()
+
+        # 构建返回字典
+        suffix_counter = {stat.suffix: stat.count for stat in suffix_stats}
+        run_status_counter = {str(stat.run): stat.count for stat in run_status_stats}
+
+        return {
+            "suffix": suffix_counter,
+            "run_status": run_status_counter
+        }, total
 
     @classmethod
     def count_by_kb_id(cls, db: Session, kb_id: str, keywords: str | None = None,
@@ -413,12 +479,28 @@ class DocumentService(CommonService):
                 raise e
 
         return None
-        # kb_update = db.query(Knowledgebase).filter_by(id=doc.kb_id).update({
-        #     Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
-        #     Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
-        #     Knowledgebase.doc_num: Knowledgebase.doc_num - 1
-        # })
-        # return kb_update
+
+    @classmethod
+    def clear_chunk_num_when_rerun(cls, db: Session, doc_id):
+        # 获取文档
+        doc = db.query(cls.model).filter(cls.model.id == doc_id).first()
+        assert doc, "Can't find document in database."
+
+        # 更新知识库统计
+        num = (
+            db.query(Knowledgebase)
+            .filter(Knowledgebase.id == doc.kb_id)
+            .update({
+                Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
+                Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
+            })
+        )
+
+        # 提交事务
+        db.commit()
+
+        return num
+
 
     @classmethod
     def get_tenant_id(cls, db: Session, doc_id: str):
@@ -645,7 +727,8 @@ class DocumentService(CommonService):
                     if t.progress == -1:
                         bad += 1
                     prg += t.progress if t.progress >= 0 else 0
-                    msg.append(t.progress_msg)
+                    if t.progress_msg.strip():
+                        msg.append(t.progress_msg)
                     if t.task_type == "raptor":
                         has_raptor = True
                     elif t.task_type == "graphrag":
@@ -657,10 +740,10 @@ class DocumentService(CommonService):
                     prg = -1
                     status = TaskStatus.FAIL.value
                 elif finished:
-                    if d["parser_config"].get("raptor", {}).get("use_raptor") and not has_raptor:
+                    if (d["parser_config"].get("raptor") or {}).get("use_raptor") and not has_raptor:
                         queue_raptor_o_graphrag_tasks(db, d, "raptor", priority)
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
-                    elif d["parser_config"].get("graphrag", {}).get("use_graphrag") and not has_graphrag:
+                    elif (d["parser_config"].get("graphrag") or {}).get("use_graphrag") and not has_graphrag:
                         queue_raptor_o_graphrag_tasks(db, d, "graphrag", priority)
                         prg = 0.98 * len(tsks) / (len(tsks) + 1)
                     else:
@@ -675,6 +758,10 @@ class DocumentService(CommonService):
                     info["progress"] = prg
                 if msg:
                     info["progress_msg"] = msg
+                    if msg.endswith("created task graphrag") or msg.endswith("created task raptor"):
+                        info["progress_msg"] += "\n%d tasks are ahead in the queue..."%get_queue_length(priority)
+                else:
+                    info["progress_msg"] = "%d tasks are ahead in the queue..."%get_queue_length(priority)
                 cls.update_by_id(db, d["id"], info)
             except Exception as e:
                 if str(e).find("'0'") < 0:
@@ -719,6 +806,12 @@ def queue_raptor_o_graphrag_tasks(db, doc, ty, priority):
     task["digest"] = hasher.hexdigest()
     bulk_insert_into_db(db, Task, [task], True)
     assert REDIS_CONN.queue_product(get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
+
+
+def get_queue_length(priority):
+    group_info = REDIS_CONN.queue_info(get_svr_queue_name(priority), SVR_CONSUMER_GROUP_NAME)
+    return int(group_info.get("lag", 0))
+
 
 # def doc_upload_and_parse(conversation_id, file_objs, user_id):
 #     from core.app import presentation, picture, naive, audio, email

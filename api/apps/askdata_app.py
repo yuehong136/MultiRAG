@@ -431,9 +431,9 @@ class ReQueryRequest(BaseModel):
     conversation_id: str = Field(..., description="会话ID")
     ask_id: str = Field(..., description="用户的提问ID")
     chart_type: str = Field(..., description="图表类型")
-    table_config: Dict[str, Any] = Field(..., description="表配置"),
-    sql_components: Dict[str, Any] = Field(..., description="SQL组件"),
-    model_table_alias_mapping_list: List[Dict[str, Any]] = Field(..., description="模型表别名映射列表"),
+    table_config: Dict[str, Any] = Field(..., description="表配置")
+    sql_components: Dict[str, Any] = Field(..., description="SQL组件")
+    model_table_alias_mapping_list: List[Dict[str, Any]] = Field(..., description="模型表别名映射列表")
     dataset_id: str = Field(..., description="数据集ID")
 
     class Config:

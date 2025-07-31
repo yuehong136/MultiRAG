@@ -3,17 +3,20 @@
 @project: multirag
 @Author：龙
 @file： api_utils.py
-@date：2024/7/9 9:00
+@date：2025/7/17 16:00
 @desc:
 """
+import asyncio
 import logging
+import queue
 import json
 import random
+import threading
 import time
 from datetime import datetime
 from functools import wraps
 from io import BytesIO
-from typing import Callable
+from typing import Any, Callable, Coroutine, Type
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
@@ -31,6 +34,10 @@ from api.db.services.api_service import APITokenService
 from api import settings
 from api.utils import HTTP_STATUS_CODES, get_uuid
 from api.constants import REQUEST_WAIT_SEC, REQUEST_MAX_WAIT_SEC
+
+import trio
+
+from core.utils.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 
 
 def request(**kwargs):
@@ -394,3 +401,123 @@ def get_data_openai(id=None,
             }
         ]
     }
+
+
+def get_mcp_tools(mcp_servers: list, timeout: float | int = 10) -> tuple[dict, str]:
+    results = {}
+    tool_call_sessions = []
+    try:
+        for mcp_server in mcp_servers:
+            server_key = mcp_server.id
+
+            cached_tools = mcp_server.variables.get("tools", {})
+
+            tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables)
+            tool_call_sessions.append(tool_call_session)
+
+            try:
+                tools = tool_call_session.get_tools(timeout)
+            except Exception:
+                tools = []
+
+            results[server_key] = []
+            for tool in tools:
+                tool_dict = tool.model_dump()
+                cached_tool = cached_tools.get(tool_dict["name"], {})
+
+                tool_dict["enabled"] = cached_tool.get("enabled", True)
+                results[server_key].append(tool_dict)
+
+        # PERF: blocking call to close sessions — consider moving to background thread or task queue
+        close_multiple_mcp_toolcall_sessions(tool_call_sessions)
+        return results, ""
+    except Exception as e:
+        return {}, str(e)
+
+
+TimeoutException = Type[BaseException] | BaseException
+OnTimeoutCallback = Callable[..., Any] | Coroutine[Any, Any, Any]
+
+def timeout(
+    seconds: float | int | None = None,
+    attempts: int = 2,
+    *,
+    exception: TimeoutException | None = None,
+    on_timeout: OnTimeoutCallback | None = None
+):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            result_queue = queue.Queue(maxsize=1)
+            def target():
+                try:
+                    result = func(*args, **kwargs)
+                    result_queue.put(result)
+                except Exception as e:
+                    result_queue.put(e)
+
+            thread = threading.Thread(target=target)
+            thread.daemon = True
+            thread.start()
+
+            for a in range(attempts):
+                try:
+                    result = result_queue.get(timeout=seconds)
+                    if isinstance(result, Exception):
+                        raise result
+                    return result
+                except queue.Empty:
+                    pass
+            raise TimeoutError(f"Function '{func.__name__}' timed out after {seconds} seconds and {attempts} attempts.")
+
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs) -> Any:
+            if seconds is None:
+                return await func(*args, **kwargs)
+
+            for a in range(attempts):
+                try:
+                    with trio.fail_after(seconds):
+                        return await func(*args, **kwargs)
+                except trio.TooSlowError:
+                    if a < attempts - 1:
+                        continue
+                    if on_timeout is not None:
+                        if callable(on_timeout):
+                            result = on_timeout()
+                            if isinstance(result, Coroutine):
+                                return await result
+                            return result
+                        return on_timeout
+
+                    if exception is None:
+                        raise TimeoutError(f"Operation timed out after {seconds} seconds and {attempts} attempts.")
+
+                    if isinstance(exception, BaseException):
+                        raise exception
+
+                    if isinstance(exception, type) and issubclass(exception, BaseException):
+                        raise exception(f"Operation timed out after {seconds} seconds and {attempts} attempts.")
+
+                    raise RuntimeError("Invalid exception type provided")
+
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return wrapper
+    return decorator
+
+
+async def is_strong_enough(chat_model, embedding_model):
+
+    @timeout(30, 2)
+    async def _is_strong_enough():
+        nonlocal chat_model, embedding_model
+        _ = await trio.to_thread.run_sync(lambda: embedding_model.encode(["Are you strong enough!?"]))
+        res =  await trio.to_thread.run_sync(lambda: chat_model.chat("Nothing special.", [{"role":"user", "content": "Are you strong enough!?"}], {}))
+        if res.find("**ERROR**") >= 0:
+            raise Exception(res)
+
+    # Pressure test for GraphRAG task
+    async with trio.open_nursery() as nursery:
+        for _ in range(12):
+            nursery.start_soon(_is_strong_enough)

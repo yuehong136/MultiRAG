@@ -21,6 +21,7 @@ import trio
 from api.db.db_models import SessionLocal
 from api import settings
 from api.utils import get_uuid
+from api.utils.api_utils import timeout, is_strong_enough
 from graphrag.light.graph_extractor import GraphExtractor as LightKGExt
 from graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -50,6 +51,9 @@ async def run_graphrag(
     embedding_model,
     callback,
 ):
+    # Pressure test for GraphRAG task
+    await is_strong_enough(chat_model, embedding_model)
+
     start = trio.current_time()
     tenant_id, kb_id, doc_id = row["tenant_id"], str(row["kb_id"]), row["doc_id"]
     chunks = []
@@ -60,14 +64,14 @@ async def run_graphrag(
 
     subgraph = await generate_subgraph(
         LightKGExt
-        if "method" not in row["kb_parser_config"]["graphrag"] or row["kb_parser_config"]["graphrag"]["method"] != "general"
+        if "method" not in row["kb_parser_config"].get("graphrag", {}) or row["kb_parser_config"]["graphrag"]["method"] != "general"
         else GeneralKGExt,
         tenant_id,
         kb_id,
         doc_id,
         chunks,
         language,
-        row["kb_parser_config"]["graphrag"]["entity_types"],
+        row["kb_parser_config"]["graphrag"].get("entity_types", []),
         chat_model,
         embedding_model,
         callback,
@@ -126,6 +130,7 @@ async def run_graphrag(
     return
 
 
+@timeout(60*60, 1)
 async def generate_subgraph(
     extractor: Extractor,
     tenant_id: str,
@@ -169,7 +174,7 @@ async def generate_subgraph(
         )
     if ignored_rels:
         callback(msg=f"ignored {ignored_rels} relations due to missing entities.")
-    tidy_graph(subgraph, callback)
+    tidy_graph(subgraph, callback, check_attribute=False)
 
     subgraph.graph["source_id"] = [doc_id]
     chunk = {
@@ -198,6 +203,8 @@ async def generate_subgraph(
     callback(msg=f"generated subgraph for doc {doc_id} in {now - start:.2f} seconds.")
     return subgraph
 
+
+@timeout(60*3)
 async def merge_subgraph(
         tenant_id: str,
         kb_id: str,
@@ -229,6 +236,7 @@ async def merge_subgraph(
     return new_graph
 
 
+@timeout(60*30, 1)
 async def resolve_entities(
     graph,
     subgraph_nodes: set[str],
@@ -253,6 +261,8 @@ async def resolve_entities(
     now = trio.current_time()
     callback(msg=f"Graph resolution done in {now - start:.2f}s.")
 
+
+@timeout(60*30, 1)
 async def extract_community(
     graph,
     tenant_id: str,

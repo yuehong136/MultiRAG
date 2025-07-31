@@ -3,7 +3,6 @@ from core.llm.chat_model.models.azure_chat import AzureChat
 from core.llm.chat_model.models.baiduyiyan_chat import BaiduYiyanChat
 from core.llm.chat_model.models.cohere_chat import CoHereChat
 from core.llm.chat_model.models.deepseek_chat import DeepSeekChat
-from core.llm.chat_model.models.doubao_chat import DoubaoChat
 from core.llm.chat_model.models.gemini_chat import GeminiChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
 from core.llm.chat_model.models.gpustack_chat import GPUStackChat
@@ -11,7 +10,9 @@ from core.llm.chat_model.models.grop_chat import GroqChat
 from core.llm.chat_model.models.huggingface_chat import HuggingFaceChat
 from core.llm.chat_model.models.hunyuan_chat import HunyuanChat
 from core.llm.chat_model.models.lmstudio_chat import LmStudioChat
+from core.llm.chat_model.models.minimax_chat import MiniMaxChat
 from core.llm.chat_model.models.modelscope_chat import ModelScopeChat
+from core.llm.chat_model.models.moonshot_chat import MoonshotChat
 from core.llm.chat_model.models.ollama_chat import OllamaChat
 from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
 from core.llm.chat_model.models.openrouter_chat import OpenRouterChat
@@ -20,7 +21,9 @@ from core.llm.chat_model.models.qwen_chat import QWenChat
 from core.llm.chat_model.models.siliconflow_chat import SILICONFLOWChat
 from core.llm.chat_model.models.spark_chat import SparkChat
 from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
+from core.llm.chat_model.models.xai_chat import xAIChat
 from core.llm.chat_model.models.xinference_chat import XinferenceChat
+from core.llm.chat_model.models.yi_chat import YiChat
 from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.cv_model.models.anthropic_cv import AnthropicCV
 from core.llm.cv_model.models.azuregptv4 import AzureGptV4
@@ -32,6 +35,7 @@ from core.llm.cv_model.models.ollama_cv import OllamaCV
 from core.llm.cv_model.models.openai_api_cv import OpenAI_APICV
 from core.llm.cv_model.models.qwen_cv import QWenCV
 from core.llm.cv_model.models.siliconflow_cv import SILICONFLOWCV
+from core.llm.cv_model.models.xai_cv import xAICV
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.cohere_embed import CoHereEmbed
@@ -47,6 +51,7 @@ from core.llm.embedding_model.openai_embed import OpenAIEmbed
 from core.llm.embedding_model.qwen_embed import QWenEmbed
 from core.llm.embedding_model.siliconflow_embed import SILICONFLOWEmbed
 from core.llm.embedding_model.volcengine_embed import VolcEngineEmbed
+from core.llm.embedding_model.voyage_embed import VoyageEmbed
 from core.llm.embedding_model.xinference_embed import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
@@ -94,7 +99,8 @@ EmbeddingModel = {
     "VLLM": OpenAI_APIEmbed,
     "Cohere": CoHereEmbed,
     "VolcEngine": VolcEngineEmbed,
-    "HuggingFace": HuggingFaceEmbed
+    "HuggingFace": HuggingFaceEmbed,
+    "Voyage AI": VoyageEmbed,
 }
 
 CvModel = {
@@ -111,6 +117,7 @@ CvModel = {
     "SILICONFLOW": SILICONFLOWCV,
     "BaiduYiyan": BaiduYiyanCV,
     "LM-Studio": LmStudioCV,
+    "xAI": xAICV,
 }
 
 
@@ -131,7 +138,6 @@ ChatModel = {
     "Tencent Hunyuan": HunyuanChat,
     "BaiduYiyan": BaiduYiyanChat,
     "Gemini": GeminiChat,
-    "Doubao": DoubaoChat,
     "XunFei Spark": SparkChat,
     "PPIO": PPIOChat,
     "OpenAI-API-Compatible": OpenAI_APIChat,
@@ -139,7 +145,11 @@ ChatModel = {
     "Cohere": CoHereChat,
     "HuggingFace": HuggingFaceChat,
     "GPUStack": GPUStackChat,
-    "LM-Studio": LmStudioChat
+    "LM-Studio": LmStudioChat,
+    "MiniMax": MiniMaxChat,
+    "01.AI": YiChat,
+    "Moonshot": MoonshotChat,
+    "xAI": xAIChat,
 }
 
 RerankModel = {
