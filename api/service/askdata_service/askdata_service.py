@@ -5,7 +5,6 @@ from datetime import date
 from enum import Enum
 from typing import Any, List, Dict, Optional, Tuple, Set
 from collections import Counter
-import json
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
 
@@ -24,7 +23,6 @@ from api.service.askdata_service.table_config_generator import TableConfigGenera
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
 from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
     filter_metrics_by_permissions
-from api.service.askdata_service.util.timer import Timer
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
