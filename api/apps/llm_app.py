@@ -597,44 +597,183 @@ def delete_factory(request: DeleteFactoryRequest, db: Session = Depends(get_db),
 
 
 @router.get('/my_llms', summary="获取用户的所有模型", response_description="成功获取到用户的所有模型")
-def my_llms(db: Session = Depends(get_db), user=Depends(manager)):
+def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=Depends(manager), request: Request = None):
     """
-    获取当前用户的所有模型信息。
-    摘要: 获取用户的所有模型
-    响应描述: 成功获取到用户的所有模型
+    ### GET `/v1/llm/my_llms` 获取用户的所有模型
 
-    返回:
-    - dict: 包含用户所有模型信息的JSON结果，数据部分是一个字典，其中每个键代表一个模型工厂，值是该工厂下的模型信息列表。
+**功能描述**:
+此接口用于获取当前登录用户的所有可用语言模型列表，支持按模型厂商分组显示，并可选择是否包含详细信息如token使用量、API基址、最大token数等。接口返回用户配置的所有模型的结构化信息，便于前端展示和管理。
 
-    功能:
-    1. 查询当前用户的所有模型信息。
-    2. 按模型工厂分类整理模型信息。
-    3. 将整理后的模型信息封装为JSON格式的字典并返回。
+---
 
-    流程:
-    1. 使用TenantLLMService从数据库中获取当前用户的所有模型信息。
-    2. 遍历获取的模型信息，按模型工厂分类整理模型信息。
-    3. 将整理后的模型信息封装为JSON格式的字典并返回。
+### 查询参数 (Query Parameters)
 
-    异常处理:
-    - 如果在执行数据库操作或数据处理过程中发生异常，将捕获异常并抛出HTTP异常，返回服务器错误响应。
+| 字段             | 类型      | 必填 | 描述                                                                                    |
+|------------------|-----------|------|---------------------------------------------------------------------------------------|
+| `include_details`| `boolean` | 否   | 是否包含详细信息，`true` 表示返回详细信息（包含已使用token数、API基址、最大token数），`false` 表示返回基本信息。默认值为 `false`。|
 
-    注意:
-    - 用户的模型信息按模型工厂分类，每个工厂下包含多个模型信息。
+---
+
+### 响应 (Response)
+
+#### 成功响应 (200)
+
+- **`Content-Type: application/json`**
+
+- **基本信息响应 (`include_details=false`)**:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "OpenAI": {
+                "tags": ["CHAT", "EMBEDDING"],
+                "llm": [
+                    {
+                        "type": "chat",
+                        "name": "gpt-4",
+                        "used_token": 15420
+                    },
+                    {
+                        "type": "embedding",
+                        "name": "text-embedding-ada-002",
+                        "used_token": 8950
+                    }
+                ]
+            },
+            "Anthropic": {
+                "tags": ["CHAT"],
+                "llm": [
+                    {
+                        "type": "chat", 
+                        "name": "claude-3-opus",
+                        "used_token": 12300
+                    }
+                ]
+            }
+        }
+    }
+    ```
+
+- **详细信息响应 (`include_details=true`)**:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success", 
+        "data": {
+            "OpenAI": {
+                "tags": ["CHAT", "EMBEDDING"],
+                "llm": [
+                    {
+                        "type": "chat",
+                        "name": "gpt-4",
+                        "used_token": 15420,
+                        "api_base": "https://api.openai.com/v1",
+                        "max_tokens": 8192
+                    },
+                    {
+                        "type": "embedding",
+                        "name": "text-embedding-ada-002", 
+                        "used_token": 8950,
+                        "api_base": "https://api.openai.com/v1",
+                        "max_tokens": 8192
+                    }
+                ]
+            }
+        }
+    }
+    ```
+
+---
+
+### 错误响应
+
+#### **500: 内部错误**
+- **描述**: 当发生意外错误时，返回此错误。
+- **示例**:
+    ```json
+    {
+        "detail": "数据库连接失败或其他系统错误信息"
+    }
+    ```
+
+---
+
+### 返回数据结构说明
+
+- **外层结构**: 按模型厂商（如 "OpenAI"、"Anthropic" 等）分组
+- **厂商信息**:
+    - `tags`: 该厂商支持的模型类型标签数组
+    - `llm`: 该厂商下的具体模型列表
+- **模型信息**:
+    - `type`: 模型类型（如 "chat"、"embedding"、"rerank"、"image2text"、"tts" 等）
+    - `name`: 模型名称
+    - `used_token`: 已使用的token数量
+    - `api_base`: API基础地址（仅在 `include_details=true` 时返回）
+    - `max_tokens`: 最大token限制（仅在 `include_details=true` 时返回，默认8192）
+
+---
+
+### 主要流程
+
+1. 根据查询参数 `include_details` 确定返回详细程度。
+2. 查询当前用户租户下的所有已配置模型。
+3. 如果需要详细信息，则额外查询模型厂商的标签信息并包含API基址、最大token数等。
+4. 按模型厂商分组整理数据，每个厂商包含支持的模型类型和具体模型列表。
+5. 返回结构化的模型信息数据。
+
+---
+
+### 注意事项
+
+- **数据分组**: 返回数据按模型厂商进行分组，便于前端按厂商展示模型列表。
+- **可选详情**: 通过 `include_details` 参数控制是否返回详细信息，基本模式下只返回核心字段以减少数据传输量。
+- **Token统计**: `used_token` 字段显示该模型的累计使用量，可用于使用情况分析。
+- **厂商标签**: `tags` 字段标识该厂商支持的模型类型，帮助前端做功能分类展示。
+- **API配置**: 详细模式下会返回 `api_base` 和 `max_tokens`，用于模型配置管理。
+
     """
     try:
-        res = {}
-        for o in TenantLLMService.get_my_llms(db, user.id):
-            if o.llm_factory not in res:
-                res[o.llm_factory] = {
-                    "tags": o.tags,
-                    "llm": []
-                }
-            res[o.llm_factory]["llm"].append({
-                "type": o.mdl_type,
-                "name": o.llm_name,
-                "used_token": o.used_tokens
-            })
+
+        if include_details:
+            res = {}
+            objs = TenantLLMService.query(db, tenant_id=user.id)
+            factories = LLMFactoriesService.query(db, status=StatusEnum.VALID.value)
+
+            for o in objs:
+                o_dict = o.to_dict()
+                factory_tags = None
+                for f in factories:
+                    if f.name == o_dict["llm_factory"]:
+                        factory_tags = f.tags
+                        break
+
+                if o_dict["llm_factory"] not in res:
+                    res[o_dict["llm_factory"]] = {
+                        "tags": factory_tags,
+                        "llm": []
+                    }
+
+                res[o_dict["llm_factory"]]["llm"].append({
+                    "type": o_dict["mdl_type"],
+                    "name": o_dict["llm_name"],
+                    "used_token": o_dict["used_tokens"],
+                    "api_base": o_dict["api_base"] or "",
+                    "max_tokens": o_dict["max_tokens"] or 8192
+                })
+        else:
+            res = {}
+            for o in TenantLLMService.get_my_llms(db, user.id):
+                if o.llm_factory not in res:
+                    res[o.llm_factory] = {
+                        "tags": o.tags,
+                        "llm": []
+                    }
+                res[o.llm_factory]["llm"].append({
+                    "type": o.mdl_type,
+                    "name": o.llm_name,
+                    "used_token": o.used_tokens
+                })
         return get_json_result(data=res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
