@@ -145,7 +145,7 @@ class TableConfigGenerator:
             operator = cond['operator']
             value = cond['value']
             table_name = table_alias_mapping[table_alias]
-            table_detail = used_table_detail_dict[table_name]
+            table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
             for metric in table_detail['dimsAndMetrics']['metrics']:
                 if metric['expression'].lower() == column_name.lower():
                     filter_columns.append(
@@ -174,7 +174,7 @@ class TableConfigGenerator:
                 if len(split_col) == 2:
                     table_alias, column_name = self._get_table_alias_and_field_by_split_column(group_by)
                     table_name = table_alias_mapping[table_alias]
-                    table_detail = used_table_detail_dict[table_name]
+                    table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
                     is_timeseries = False
                     time_unit = None
                     time_source = None
@@ -188,7 +188,7 @@ class TableConfigGenerator:
                     for dim in table_detail['dimsAndMetrics']['dimensions']:
                         if is_timeseries and dim['dimensionEnName'].lower() == time_source.lower():
                             group_by_dimensions.append(
-                                {"is_semantic_field": True, "semantic_type": "dimension(timeseries)",
+                                {"is_semantic_field": True, "semantic_type": "dimension",
                                  "id": dim["dimensionId"],
                                  "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4()),
                                  "nanoId": str(uuid.uuid4()), "original_sql_component": group_by, "unit": time_unit}
@@ -236,7 +236,7 @@ class TableConfigGenerator:
                 continue
             else:
                 table_name = table_alias_mapping[table_alias]
-                table_detail = used_table_detail_dict[table_name]
+                table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
                 for metric in table_detail['dimsAndMetrics']['metrics']:
                     if metric['expression'].lower() == column_name.lower():
                         selected_metrics.append(
@@ -378,7 +378,7 @@ class TableConfigGenerator:
             if len(split_col) == 2:
                 alias, column_name = split_col
                 table_name = table_alias_mapping[alias]
-                table_detail = used_table_detail_dict[table_name]
+                table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
                 for dim in table_detail['dimsAndMetrics']['dimensions']:
                     if dim['dimensionEnName'].lower() == column_name.lower():
                         selected_columns.append(
@@ -402,6 +402,31 @@ class TableConfigGenerator:
                 selected_columns.append(
                     {"is_semantic_field": False, "sql_column": col, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
         return selected_columns
+
+    def _get_table_detail_with_fallback(self, used_table_detail_dict: Dict[str, Any], table_name: str) -> Dict[
+        str, Any]:
+        """
+        获取表详情，支持带引号/不带引号的表名容错处理
+        """
+        # 1. 先尝试原始表名
+        if table_name in used_table_detail_dict:
+            return used_table_detail_dict[table_name]
+
+        # 2. 如果原始表名失败，尝试去掉引号
+        if table_name.startswith('"') and table_name.endswith('"'):
+            table_name_no_quotes = table_name[1:-1]
+            if table_name_no_quotes in used_table_detail_dict:
+                return used_table_detail_dict[table_name_no_quotes]
+
+        # 3. 如果不带引号，尝试加上引号
+        elif not (table_name.startswith('"') and table_name.endswith('"')):
+            table_name_with_quotes = f'"{table_name}"'
+            if table_name_with_quotes in used_table_detail_dict:
+                return used_table_detail_dict[table_name_with_quotes]
+
+        # 4. 都找不到，抛出更详细的异常
+        available_keys = list(used_table_detail_dict.keys())
+        raise KeyError(f"Table '{table_name}' not found. Available tables: {available_keys}")
 
     def _process_where_conditions(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[
         Dict[str, Any]]:
@@ -430,7 +455,7 @@ class TableConfigGenerator:
                 continue
             table_alias, column_name = self._get_table_alias_and_field_by_split_column(field)
             table_name = table_alias_mapping[table_alias]
-            table_detail = used_table_detail_dict[table_name]
+            table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
             for dim in table_detail['dimsAndMetrics']['dimensions']:
                 if dim['dimensionEnName'].lower() == column_name.lower():
                     filter_columns.append(
@@ -475,7 +500,7 @@ class TableConfigGenerator:
                     {"is_semantic_field": False, "sql_column": order_info['field'], "id": str(uuid.uuid4()),
                      "direction": direction, "wid": str(uuid.uuid4())})
                 continue
-            table_detail = used_table_detail_dict[table_name]
+            table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
             for metric in table_detail['dimsAndMetrics']['metrics']:
                 if metric['expression'].lower() == column_name.lower():
                     order_by_columns.append(
