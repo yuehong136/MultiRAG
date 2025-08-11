@@ -2,6 +2,46 @@ import json
 from typing import List, Dict, Any
 
 
+def filter_dimension_values_by_segmented_words(dimension_values: List[Dict[str, Any]], segmented_words: List[str]) -> \
+List[Dict[str, Any]]:
+    """
+    根据分词列表对维度值进行模糊匹配过滤
+
+    Args:
+        dimension_values: 维度值列表，包含 value 和可能的 synonyms
+        segmented_words: 分词列表
+
+    Returns:
+        过滤后的维度值列表
+    """
+    if not segmented_words:
+        # 如果没有分词，返回原始数据
+        return dimension_values
+
+    filtered_values = []
+
+    for dim_value in dimension_values:
+        value = dim_value.get('value', '')
+        synonyms = dim_value.get('synonyms', [])
+
+        # 检查 value 是否与任何分词匹配
+        value_matched = any(word in value or value in word for word in segmented_words)
+
+        # 检查 synonyms 是否与任何分词匹配
+        synonyms_matched = False
+        if synonyms:
+            for synonym in synonyms:
+                if any(word in synonym or synonym in word for word in segmented_words):
+                    synonyms_matched = True
+                    break
+
+        # 如果 value 或 synonyms 中任何一个匹配，则保留该维度值
+        if value_matched or synonyms_matched:
+            filtered_values.append(dim_value)
+
+    return filtered_values
+
+
 def process_data_models(models: List[Dict[str, Any]], user_semantic_permissions: Dict[str, Any]) -> List[
     Dict[str, Any]]:
     data_models_output = []
@@ -85,7 +125,8 @@ def process_business_datasets(
         dataset_details,
         dimensions,
         metrics,
-        dimension_values
+        dimension_values,
+        segmented_words
 ) -> List[Dict[str, Any]]:
     business_datasets_output = []
     for dataset_detail in dataset_details:
@@ -114,10 +155,15 @@ def process_business_datasets(
                 dimension_output["fromModelId"] = dimension.get("modelId")
                 dimension_output["comment"] = dimension.get("description")
                 dimension_output["synonyms"] = dimension.get("synonyms")
+
+                # 修改这里：使用分词进行过滤
                 if dimension_output["dimType"].lower() == "time" or dimension_output["dimType"] == "LC":
-                    dimension_output["possibleValues"] = dimension_values.get(dimension_id, [])
-                else:
-                    dimension_output["sampleValues"] = dimension_values.get(dimension_id, [])
+                    original_values = dimension_values.get(dimension_id, [])
+                    # 使用分词进行模糊匹配过滤
+                    filtered_values = filter_dimension_values_by_segmented_words(original_values, segmented_words)
+                    dimension_output["sampleValues"] = filtered_values
+                # else:
+                #     dimension_output["sampleValues"] = dimension_values.get(dimension_id, [])
                 if not dimension.get("hasPermission", True):
                     dimension_output["hasPermission"] = False
                     dimension_output["permissionDesc"] = "当前用户无权限访问此维度，在生成SQL时不允许使用此维度"
@@ -177,7 +223,8 @@ def process_business_terms(business_term_rows) -> List[Dict[str, Any]]:
     return business_terms
 
 
-def process_semantic_layer(semantic_layer: Dict[str, Any], user_semantic_permissions: Dict[str, Any]) -> Dict[str, Any]:
+def process_semantic_layer(semantic_layer: Dict[str, Any], user_semantic_permissions: Dict[str, Any],
+                           segmented_words: List[str]) -> Dict[str, Any]:
     dataset_details = semantic_layer.get("dataset_details")
     dimensions = semantic_layer.get("dimensions")
     dimension_values = semantic_layer.get("dimension_values")
@@ -195,7 +242,7 @@ def process_semantic_layer(semantic_layer: Dict[str, Any], user_semantic_permiss
 
     semantic_structure["dataModels"] = process_data_models(model_details, user_semantic_permissions)
     semantic_structure["businessDatasets"] = process_business_datasets(dataset_details, dimensions, metrics,
-                                                                       dimension_values)
+                                                                       dimension_values, segmented_words)
     semantic_structure["relationships"] = process_relationships(model_relations)
     semantic_structure["businessTerms"] = process_business_terms(business_term_rows)
 
