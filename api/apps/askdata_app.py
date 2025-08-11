@@ -122,6 +122,7 @@ async def get_sql_and_table_config(
                 )
             else:
                 logger.info(f"修复后查询数据成功: {new_result['data']}")
+                result = new_result
                 sql = fix_result["sql"]
                 sql_components = fix_result["sqlComponents"]
                 used_models = fix_result["usedModels"]
