@@ -225,7 +225,7 @@ class AskdataService:
         )
 
     async def build_model_details(self, model_ids: List[str],
-                                  used_models: List[str]) -> Tuple[Dict, Dict, List, Set]:
+                                  used_models: List[str], dataset_id_list: List[str]) -> Tuple[Dict, Dict, List, Set]:
         """构建模型详情字典"""
         used_model_detail_dict = {}
         used_table_detail_dict = {}
@@ -254,6 +254,9 @@ class AskdataService:
         logger.info(f"model_in_dataset_dict: {model_in_dataset_dict}")
 
         intersection_dataset_ids = self._get_intersection_of_all_lists(model_in_dataset_dict)
+        if len(dataset_id_list) == 1:
+            intersection_dataset_ids = set(dataset_id_list)
+            return used_model_detail_dict, used_table_detail_dict, model_list, intersection_dataset_ids
         if len(intersection_dataset_ids) == 0:
             logger.error(f"模型中没有使用任何数据集，可能导致无法生成正确的SQL。")
             logger.error(f"model_ids: {model_ids}, used_models: {used_models}")

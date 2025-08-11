@@ -94,7 +94,7 @@ async def get_sql_and_table_config(
         # 构建使用到的模型和表的详情字典
         _, used_table_detail_dict, model_list, intersection_dataset_ids = await service.build_model_details(
             model_ids=body.semantic_layer.get('model_ids', []),
-            used_models=used_models)
+            used_models=used_models,dataset_id_list=body.dataset_id_list)
 
         if len(intersection_dataset_ids) > 1:
             logger.error(f"模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
@@ -129,7 +129,8 @@ async def get_sql_and_table_config(
                 # 构建使用到的模型和表的详情字典
                 _, used_table_detail_dict, model_list, intersection_dataset_ids = await service.build_model_details(
                     model_ids=body.semantic_layer.get('model_ids', []),
-                    used_models=used_models)
+                    used_models=used_models,
+                    dataset_id_list=body.dataset_id_list)
 
                 if len(intersection_dataset_ids) > 1:
                     logger.error(f"模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
