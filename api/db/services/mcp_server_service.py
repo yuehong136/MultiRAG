@@ -47,7 +47,7 @@ class MCPServerService(CommonService):
 
         query = db.query(*fields).filter(cls.model.tenant_id == tenant_id).order_by(cls.model.create_time.desc())
 
-        if id_list is not None:
+        if id_list:
             query = query.filter(cls.model.id.in_(id_list))
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))

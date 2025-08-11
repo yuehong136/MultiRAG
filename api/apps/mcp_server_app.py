@@ -339,9 +339,9 @@ def create(request: CreateMCPServerRequest, db: Session = Depends(get_db), user=
     if not url:
         return get_data_error_result(retmsg="Invalid url.")
 
-    headers = safe_json_parse(req_data.get("headers", {}))
+    headers = safe_json_parse(req_data.get("headers") or {})
     req_data["headers"] = headers
-    variables = safe_json_parse(req_data.get("variables", {}))
+    variables = safe_json_parse(req_data.get("variables") or {})
     variables.pop("tools", None)
 
     timeout = get_float(req_data, "timeout", 10)
