@@ -5,7 +5,7 @@ import threading
 from collections.abc import Iterable
 import numpy as np
 from huggingface_hub import snapshot_download
-from core.llm.rerank_model.base import Base, sigmoid
+from core.llm.rerank_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
 from core.utils import num_tokens_from_string, truncate
 
@@ -90,10 +90,9 @@ class DefaultRerank(Base):
 
     def _compute_batch_scores(self, batch_pairs, max_length=None):
         if max_length is None:
-            scores = self._model.compute_score(batch_pairs)
+            scores = self._model.compute_score(batch_pairs, normalize=True)
         else:
-            scores = self._model.compute_score(batch_pairs, max_length=max_length)
-        scores = sigmoid(np.array(scores))
+            scores = self._model.compute_score(batch_pairs, max_length=max_length, normalize=True)
         if not isinstance(scores, Iterable):
             scores = [scores]
         return scores
