@@ -23,7 +23,6 @@ def get_encoding(file):
 
 class RAGFlowHtmlParser:
     def __call__(self, fnm, binary=None):
-        txt = ""
         if binary:
             # 检查 binary 是否为字节类型，只有在其为字节类型时才进行解码
             if isinstance(binary, bytes):
