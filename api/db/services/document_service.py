@@ -16,11 +16,11 @@ import xxhash
 from pymilvus import MilvusException
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func, asc, and_, or_
+from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc
 
 from api.constants import IMG_BASE64_PREFIX
 from api.db import FileType, TaskStatus, StatusEnum, UserTenantRole
-from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, db_connection
+from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, db_connection, File2Document, File
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils import current_timestamp, get_format_time, get_uuid
@@ -41,39 +41,89 @@ class DocumentService(CommonService):
         super().__init__(Document)
 
     @classmethod
-    def get_list(cls, db: Session, kb_id, page_number, items_per_page, orderby, desc, keywords=None, id=None, name=None):
-        # 初始化查询
-        query = db.query(cls.model).filter(cls.model.kb_id == kb_id)
+    def get_cls_model_fields(cls):
+        return [
+            cls.model.id,
+            cls.model.thumbnail,
+            cls.model.kb_id,
+            cls.model.parser_id,
+            cls.model.parser_config,
+            cls.model.source_type,
+            cls.model.type,
+            cls.model.created_by,
+            cls.model.name,
+            cls.model.location,
+            cls.model.size,
+            cls.model.token_num,
+            cls.model.chunk_num,
+            cls.model.progress,
+            cls.model.progress_msg,
+            cls.model.process_begin_at,
+            cls.model.process_duration,
+            cls.model.meta_fields,
+            cls.model.suffix,
+            cls.model.run,
+            cls.model.status,
+            cls.model.create_time,
+            cls.model.create_date,
+            cls.model.update_time,
+            cls.model.update_date,
+        ]
 
-        # 根据 id 添加过滤条件
-        if id:
-            query = query.filter(cls.model.id == id)
+    @classmethod
+    def get_list(
+            cls,
+            db: Session,
+            kb_id,
+            page_number: int,
+            items_per_page: int,
+            orderby: str,
+            desc: bool,
+            keywords: str = None,
+            id: int = None,
+            name: str = None
+    ):
+        # 1) 需要返回的列 —— 等价于 Peewee 的 select(*fields)
+        #    确保 get_cls_model_fields() 返回的是 Column/ColumnElement 列对象，而不是字符串
+        fields: list = cls.get_cls_model_fields()
 
-        # 根据 name 添加精确匹配过滤条件
+        # 2) 基础查询（含 join）
+        base = (
+            select(*fields)
+            .select_from(cls.model)
+            .join(File2Document, File2Document.document_id == cls.model.id)
+            .join(File, File.id == File2Document.file_id)
+            .where(cls.model.kb_id == kb_id)
+        )
+
+        # 3) 过滤
+        if id is not None:
+            base = base.where(cls.model.id == id)
         if name:
-            query = query.filter(cls.model.name == name)
-
-        # 根据 keywords 添加模糊匹配过滤条件
+            base = base.where(cls.model.name == name)
         if keywords:
-            query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
+            # 等价于 lower(name) like %lower(keywords)%
+            base = base.where(func.lower(cls.model.name).contains(keywords.lower()))
 
-        # 根据 desc 确定排序方式
-        order_clause = getattr(cls.model, orderby)
+            # ilike（更直观，也能走索引策略更好）：
+            # base = base.where(cls.model.name.ilike(f"%{keywords}%"))
+
+        # 4) 排序（避免与 sqlalchemy.desc 重名）
+        order_col = getattr(cls.model, orderby)
         if desc:
-            query = query.order_by(desc(order_clause))
+            base = base.order_by(sa_desc(order_col))
         else:
-            query = query.order_by(asc(order_clause))
+            base = base.order_by(asc(order_col))
 
-        # 获取记录总数
-        count = query.count()
+        # 5) 总数（不受分页影响）
+        total = db.execute(select(func.count()).select_from(base.subquery())).scalar_one()
 
-        # 添加分页
-        query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
+        # 6) 分页
+        stmt = base.offset((page_number - 1) * items_per_page).limit(items_per_page)
 
-        # 执行查询并返回结果
-        results = query.all()
-
-        return [item.__dict__ for item in results], count
+        # 7) 执行并返回“字典行”（等价 Peewee 的 .dicts()）
+        rows = db.execute(stmt).mappings().all()
+        return [dict(r) for r in rows], total
 
     @classmethod
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,
@@ -81,8 +131,14 @@ class DocumentService(CommonService):
                      run_status: list | None = None, types: list | None = None, suffix: list = None) -> tuple[list[dict], int]:
         if suffix is None:
             suffix = []
-        query = db.query(cls.model).filter_by(kb_id=kb_id)
-
+        fields = cls.get_cls_model_fields()
+        query = (
+            db.query(*fields)
+            .select_from(cls.model)
+            .join(File2Document, File2Document.document_id == cls.model.id)
+            .join(File, File.id == File2Document.file_id)
+            .filter(cls.model.kb_id == kb_id)
+        )
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
 
@@ -107,7 +163,9 @@ class DocumentService(CommonService):
         else:
             docs = query.all()
 
-        return [doc.to_dict() for doc in docs], count
+        col_names = [getattr(c, "key", getattr(c, "name", None)) for c in fields]
+
+        return [dict(zip(col_names, row)) for row in docs], count
 
     @classmethod
     def get_filter_by_kb_id(cls, db: Session, kb_id, keywords, run_status, types, suffix):
@@ -146,24 +204,56 @@ class DocumentService(CommonService):
         if suffix:
             filters.append(cls.model.suffix.in_(suffix))
 
-        # 获取总数
-        total = db.query(cls.model).filter(*filters).count()
+        # 2) 构造“已 join”的基础 FROM（关键最小改动：select_from + join + 复用 filters）
+        base_from = (
+            db.query(cls.model.id)  # 这里只取 id 作为锚点
+            .select_from(cls.model)
+            .join(File2Document, File2Document.document_id == cls.model.id)
+            .join(File, File.id == File2Document.file_id)
+            .filter(*filters)
+        )
 
-        # 统计suffix分布
-        suffix_stats = db.query(
-            cls.model.suffix,
-            func.count(cls.model.suffix).label('count')
-        ).filter(*filters).group_by(cls.model.suffix).all()
+        # 3) total：按文档去重计数，避免一文档多文件被重复计算
+        total = (
+            db.query(func.count(func.distinct(cls.model.id)))
+            .select_from(cls.model)
+            .join(File2Document, File2Document.document_id == cls.model.id)
+            .join(File, File.id == File2Document.file_id)
+            .filter(*filters)
+            .scalar()
+        )
 
-        # 统计run_status分布
-        run_status_stats = db.query(
-            cls.model.run,
-            func.count(cls.model.run).label('count')
-        ).filter(*filters).group_by(cls.model.run).all()
+        # 4) suffix 分布：同理对 Document.id 去重计数
+        suffix_stats = (
+            db.query(
+                cls.model.suffix,
+                func.count(func.distinct(cls.model.id)).label("count")
+            )
+            .select_from(cls.model)
+            .join(File2Document, File2Document.document_id == cls.model.id)
+            .join(File, File.id == File2Document.file_id)
+            .filter(*filters)
+            .group_by(cls.model.suffix)
+            .all()
+        )
 
-        # 构建返回字典
-        suffix_counter = {stat.suffix: stat.count for stat in suffix_stats}
-        run_status_counter = {str(stat.run): stat.count for stat in run_status_stats}
+        # 5) run_status 分布：同理
+        run_status_stats = (
+            db.query(
+                cls.model.run,
+                func.count(func.distinct(cls.model.id)).label("count")
+            )
+            .select_from(cls.model)
+            .join(File2Document, File2Document.document_id == cls.model.id)
+            .join(File, File.id == File2Document.file_id)
+            .filter(*filters)
+            .group_by(cls.model.run)
+            .all()
+        )
+
+        # 6) 组装返回
+        suffix_counter = {row.suffix: row.count for row in suffix_stats}
+        run_status_counter = {str(row.run): row.count for row in run_status_stats}
 
         return {
             "suffix": suffix_counter,
