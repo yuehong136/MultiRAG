@@ -384,7 +384,10 @@ def list_tags(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
             retmsg='No authorization.',
             retcode=settings.RetCode.AUTHENTICATION_ERROR
         )
-    tags = settings.retrievaler.all_tags(user.id, [kb_id])
+    tenants = UserTenantService.get_tenants_by_user_id(db, user.id)
+    tags = []
+    for tenant in tenants:
+        tags += settings.retrievaler.all_tags(tenant["tenant_id"], [kb_id])
     return get_json_result(data=tags)
 
 
@@ -398,7 +401,10 @@ def list_tags_from_kbs(kb_ids: str, db: Session = Depends(get_db), user=Depends(
                 retmsg='No authorization.',
                 retcode=settings.RetCode.AUTHENTICATION_ERROR
             )
-    tags = settings.retrievaler.all_tags(user.id, kb_id_list)
+    tenants = UserTenantService.get_tenants_by_user_id(db, user.id)
+    tags = []
+    for tenant in tenants:
+        tags += settings.retrievaler.all_tags(tenant["tenant_id"], kb_ids)
     return get_json_result(data=tags)
 
 
