@@ -745,7 +745,15 @@ class DocumentService(CommonService):
     @classmethod
     def get_thumbnails(cls, db: Session, doc_ids: list[str]):
         query = db.query(cls.model.id, cls.model.kb_id, cls.model.thumbnail).filter(cls.model.id.in_(doc_ids))
-        return query.all()
+        rows = query.all()
+        return [
+            {
+                "id": row.id,
+                "kb_id": row.kb_id,
+                "thumbnail": row.thumbnail
+            }
+            for row in rows
+        ]
 
     @classmethod
     def update_parser_config(cls, db: Session, id: str, config: dict):

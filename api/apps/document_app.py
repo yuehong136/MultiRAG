@@ -895,27 +895,23 @@ def docinfos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(man
 
 @router.get("/thumbnails", summary="获取文档缩略图", response_description="成功获取文档缩略图")
 def thumbnails(
-        doc_ids: str,
+        doc_ids: list[str] = Query(..., description="文档ID列表，例如 ?doc_ids=1&doc_ids=2"),
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-    doc_ids_list = doc_ids.split(",")
-    if not doc_ids_list:
+    if not doc_ids:
         return construct_json_result(data=False, message='Lack of "Document ID"', code=settings.RetCode.ARGUMENT_ERROR)
 
     try:
-        docs = DocumentService.get_thumbnails(db, doc_ids_list)
+        docs = DocumentService.get_thumbnails(db, doc_ids)
 
         for doc_item in docs:
             if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
                 doc_item['thumbnail'] = f"/v1/document/image/{doc_item['kb_id']}-{doc_item['thumbnail']}"
 
-        # docs 是一个包含元组的列表，每个元组包含两个元素：文档 ID 和缩略图
-        thumbnail_dict = {doc[0]: doc[1] for doc in docs}
-
-        return construct_json_result(data=thumbnail_dict)
+        return get_json_result(data={d["id"]: d["thumbnail"] for d in docs})
     except Exception as e:
-        return construct_error_response(e)
+        return server_error_response(e)
 
 
 @router.post("/change_status", summary="更改文档状态", response_description="成功更改文档状态")
