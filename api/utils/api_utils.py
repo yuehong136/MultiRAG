@@ -702,7 +702,7 @@ async def is_strong_enough(chat_model, embedding_model):
     async def _is_strong_enough():
         nonlocal chat_model, embedding_model
         if embedding_model:
-            with trio.fail_after(3):
+            with trio.fail_after(10):
                 _ = await trio.to_thread.run_sync(lambda: embedding_model.encode(["Are you strong enough!?"]))
         if chat_model:
             with trio.fail_after(30):
