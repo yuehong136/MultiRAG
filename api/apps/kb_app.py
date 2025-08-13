@@ -156,10 +156,10 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
 
-        if req_data["parser_id"] == "tag" and os.environ.get('DOC_ENGINE', "milvus") == "infinity":
+        if req_data["parser_id"] == "tag" and os.environ.get('DOC_ENGINE', "milvus") == "milvus":
             return get_json_result(
                 data=False,
-                retmsg='The chunking method Tag has not been supported by Infinity yet.',
+                retmsg='The chunking method Tag has not been supported by milvus yet.',
                 retcode=settings.RetCode.OPERATING_ERROR
             )
 
@@ -187,7 +187,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
 
         if kb.pagerank != req_data.get("pagerank", 0):
             # todo 测试 milvus 能否利用 pagerank【20250715】
-            if os.environ.get("DOC_ENGINE", "milvus") != "elasticsearch":
+            if os.environ.get("DOC_ENGINE", "milvus") != "milvus":
                 logging.warning("'pagerank' can only be set when doc_engine is elasticsearch")
                 # return get_data_error_result(retmsg="'pagerank' can only be set when doc_engine is elasticsearch")
 
