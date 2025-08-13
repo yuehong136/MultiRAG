@@ -369,6 +369,7 @@ class DocumentService(CommonService):
 
     @classmethod
     def remove_document(cls, db: Session, doc: Document, tenant_id: str):
+        from api.db.services.task_service import TaskService
         # 在删除文档前先保存需要的属性
         doc_id = doc.id
         cls.clear_chunk_num(db, doc.id)
@@ -378,6 +379,7 @@ class DocumentService(CommonService):
         # 构建 Milvus 集合名称
         collection_name = search.index_name_one(tenant_id, kb.name)
 
+        TaskService.filter_delete(db, [Task.doc_id == doc.id])
         page = 0
         page_size = 1000
         all_chunk_ids = []
