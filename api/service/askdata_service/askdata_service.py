@@ -408,14 +408,19 @@ class AskdataService:
                                                          model_table_alias_mapping_list)
                     model_name = self._find_model_name(semantic_field["from_model_id"], model_table_alias_mapping_list)
                     if metric["semantic_type"] == "measure" or metric["semantic_type"] == "dimension":
-                        column_name = f"{table_alias}.{semantic_field['field_detail']['metricEnName']}"
+                        field_name = semantic_field["field_detail"].get("metricEnName", None)
+                        semantic_name = semantic_field["field_detail"].get("semanticName", None)
+                        if not field_name:
+                            field_name = semantic_field["field_detail"].get("dimensionEnName", None)
+                            semantic_name = semantic_field["field_detail"].get("dimensionName", None)
+                        column_name = f"{table_alias}.{field_name}"
                         aggr_type = metric["type"]
                         if aggr_type == "COUNT_DISTINCT":
                             alias = f"COUNT_DISTINCT_{model_name}_{{semantic_field['field_detail']['metricEnName']}}"
                             assembler.add_raw_column(f"COUNT(DISTINCT {column_name})",
                                                      alias)
                         else:
-                            alias = f"{aggr_type}_{model_name}_{semantic_field['field_detail']['metricEnName']}"
+                            alias = f"{aggr_type}_{model_name}_{semantic_name}"
                             assembler.add_raw_column(f"{aggr_type}({column_name})",
                                                      alias)
                     elif metric["semantic_type"] == "metric":
