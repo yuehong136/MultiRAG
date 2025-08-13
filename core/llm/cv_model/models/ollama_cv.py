@@ -1,3 +1,5 @@
+import os
+
 from ollama import Client
 
 from core.llm.cv_model.base import Base
@@ -8,6 +10,7 @@ class OllamaCV(Base):
         self.client = Client(host=kwargs["base_url"])
         self.model_name = model_name
         self.lang = lang
+        self.keep_alive = kwargs.get("ollama_keep_alive", int(os.environ.get("OLLAMA_KEEP_ALIVE", -1)))
 
     def describe(self, image):
         prompt = self.prompt("")
@@ -56,7 +59,7 @@ class OllamaCV(Base):
                 model=self.model_name,
                 messages=history,
                 options=options,
-                keep_alive=-1
+                keep_alive=self.keep_alive
             )
 
             ans = response["message"]["content"].strip()
@@ -87,7 +90,7 @@ class OllamaCV(Base):
                 messages=history,
                 stream=True,
                 options=options,
-                keep_alive=-1
+                keep_alive=self.keep_alive
             )
             for resp in response:
                 if resp["done"]:
