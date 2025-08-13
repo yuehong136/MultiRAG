@@ -168,7 +168,6 @@
                     "max_tokens": 131072,
                     "mdl_type": "chat",
                     "is_tools": true
-
                 },
                 {
                     "llm_name": "grok-3-mini",
@@ -176,7 +175,6 @@
                     "max_tokens": 131072,
                     "mdl_type": "chat",
                     "is_tools": true
-
                 },
                 {
                     "llm_name": "grok-3-mini-mini-fast",
@@ -184,7 +182,6 @@
                     "max_tokens": 131072,
                     "mdl_type": "chat",
                     "is_tools": true
-
                 },
                 {
                     "llm_name": "grok-2-vision",
@@ -192,7 +189,6 @@
                     "max_tokens": 32768,
                     "mdl_type": "image2text",
                     "is_tools": true
-
                 }
             ]
         },
@@ -631,6 +627,13 @@
             "status": "1",
             "llm": [
                 {
+                    "llm_name": "kimi-thinking-preview",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 131072,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
                     "llm_name": "kimi-k2-0711-preview",
                     "tags": "LLM,CHAT,128k",
                     "max_tokens": 131072,
@@ -638,22 +641,8 @@
                     "is_tools": true
                 },
                 {
-                    "llm_name": "kimi-latest-8k",
-                    "tags": "LLM,CHAT,8k",
-                    "max_tokens": 8192,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "kimi-latest-32k",
-                    "tags": "LLM,CHAT,32k",
-                    "max_tokens": 32768,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "kimi-latest-128k",
-                    "tags": "LLM,CHAT,128k",
+                    "llm_name": "kimi-latest",
+                    "tags": "LLM,CHAT,8k,32k,128k",
                     "max_tokens": 131072,
                     "mdl_type": "chat",
                     "is_tools": true
