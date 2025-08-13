@@ -1,4 +1,5 @@
 import logging
+from typing import Generator
 
 from langfuse import Langfuse
 
@@ -50,7 +51,6 @@ class TenantLLMService(CommonService):
                 mdlnm += "___OpenAI-API"
             elif fid == "VLLM":
                 mdlnm += "___VLLM"
-
             objs = cls.query(db, tenant_id=tenant_id, llm_name=mdlnm, llm_factory=fid)
 
         if not objs:
@@ -467,7 +467,7 @@ class LLMBundle:
 
         return txt
 
-    def tts(self, text):
+    def tts(self, text: str) -> Generator[bytes, None, None]:
         if self.langfuse:
             span = self.trace.span(name="tts", input={"text": text})
 
