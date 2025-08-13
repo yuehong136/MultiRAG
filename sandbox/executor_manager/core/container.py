@@ -26,7 +26,7 @@ from core.logger import logger
 
 _CONTAINER_QUEUES: dict[SupportLanguage, Queue] = {}
 _CONTAINER_LOCK: asyncio.Lock = asyncio.Lock()
-_CONTAINER_EXECUTION_SEMAPHORES:dict[SupportLanguage,asyncio.Semaphore] = {}
+_CONTAINER_EXECUTION_SEMAPHORES: dict[SupportLanguage, asyncio.Semaphore] = {}
 
 
 async def init_containers(size: int) -> tuple[int, int]:
