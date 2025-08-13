@@ -698,7 +698,7 @@ def timeout(
 
 
 async def is_strong_enough(chat_model, embedding_model):
-    @timeout(30, 2)
+    @timeout(60, 2)
     async def _is_strong_enough():
         nonlocal chat_model, embedding_model
         if embedding_model:
