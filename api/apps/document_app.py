@@ -29,7 +29,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
+from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks
 from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
 from api import settings
@@ -1680,19 +1680,23 @@ def run(
                 info["chunk_num"] = 0
                 info["token_num"] = 0
 
-            doc = DocumentService.get_by_id(db, id)
-            if not doc:
-                return get_data_error_result(retmsg="Document not found!")
-            if doc.run == TaskStatus.DONE.value:
-                DocumentService.clear_chunk_num_when_rerun(db, doc.id)
-
-            DocumentService.update_by_id(db, id, info)
             d = DocumentService.get_by_doc_id(db, id)
             kb_id = d["kb_id"]
             kb = KnowledgebaseService.get_by_id(db, kb_id)
             tenant_id = kb.tenant_id
             if not tenant_id:
                 return construct_json_result(data=False, message="Tenant not found!", code=settings.RetCode.ARGUMENT_ERROR)
+
+            if str(req["run"]) == TaskStatus.CANCEL.value:
+                if str(d["run"]) == TaskStatus.RUNNING.value:
+                    cancel_all_task_of(db, id)
+                else:
+                    return get_data_error_result(retmsg="Cannot cancel a task that is not in RUNNING status")
+
+            if str(req["run"]) == TaskStatus.RUNNING.value and str(d["run"]) == TaskStatus.DONE.value:
+                DocumentService.clear_chunk_num_when_rerun(db, d["id"])
+
+            DocumentService.update_by_id(db, id, info)
 
             # 构建 Milvus 集合名称
             collection_name = search.index_name_one(tenant_id, kb.name)
@@ -1710,11 +1714,8 @@ def run(
                 except MilvusException as e:
                     return construct_json_result(data=False, message=str(e), code=settings.RetCode.ARGUMENT_ERROR)
 
-            if str(req["run"]) == TaskStatus.CANCEL.value:
-                cancel_all_task_of(db, id)
-
             if str(req["run"]) == TaskStatus.RUNNING.value:
-                doc = DocumentService.get_by_id(db, id).to_dict()
+                doc = d
                 doc["tenant_id"] = tenant_id
 
                 doc_parser = doc.get("parser_id", ParserType.NAIVE)
