@@ -757,15 +757,214 @@ def list_docs(
 @router.post("/list", summary="列出文档", response_description="成功列出文档")  # 改为 POST
 def list_docs(
         filter_params: DocumentFilter,  # JSON body 参数
-        kb_id: str,
-        keywords: str = "",
-        page: int = 0,  # 默认0表示不分页
-        page_size: int = 0,  # 默认0表示不分页
-        orderby: str = "create_time",
-        desc: bool = True,
+        kb_id: str = Query(..., description="知识库 ID"),
+        keywords: str = Query("", description="关键字"),
+        page: int = Query(0, description="分页页码"),
+        page_size: int = Query(0, description="分页大小"),
+        orderby: str = Query("create_time", description="排序字段"),
+        desc: bool = Query(True, description="是否倒序"),
+        create_time_from: int | None = Query(0, description="创建时间起（时间戳）"),
+        create_time_to: int | None = Query(0, description="创建时间止（时间戳）"),
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
+    """
+    ### POST `/list` 列出文档接口
+
+    **功能描述**:
+    此接口用于获取指定知识库中的文档列表，支持关键词搜索、分页查询、排序及多条件过滤（运行状态、文件类型、文件后缀、创建时间范围）。返回文档的基本信息和缩略图。
+
+    ---
+
+    ### 请求参数
+
+    #### Query Parameters
+    | 参数名              | 类型      | 必填 | 默认值       | 描述                                                    |
+    |---------------------|-----------|------|-------------|--------------------------------------------------------|
+    | `kb_id`             | `string`  | 是   | -           | 知识库的唯一标识符                                      |
+    | `keywords`          | `string`  | 否   | ""          | 搜索关键词，支持文档名称模糊匹配                        |
+    | `page`              | `int`     | 否   | 0           | 页码，从0开始，0表示不分页                              |
+    | `page_size`         | `int`     | 否   | 0           | 每页返回的文档数量，0表示不分页                          |
+    | `orderby`           | `string`  | 否   | create_time | 排序字段，支持: create_time, name, size, update_time   |
+    | `desc`              | `boolean` | 否   | true        | 是否降序排列                                           |
+    | `create_time_from`  | `int`     | 否   | 0           | 创建时间范围起始（Unix时间戳，0表示不限制）             |
+    | `create_time_to`    | `int`     | 否   | 0           | 创建时间范围结束（Unix时间戳，0表示不限制）             |
+
+    #### JSON Body (DocumentFilter)
+    | 字段名        | 类型          | 必填 | 默认值 | 描述                                            |
+    |---------------|--------------|------|--------|------------------------------------------------|
+    | `run_status`  | `list[string]` | 否   | []     | 运行状态过滤，支持: unstart, running, done, fail |
+    | `types`       | `list[string]` | 否   | []     | 文件类型过滤，需在系统支持类型列表中            |
+    | `suffix`      | `list[string]` | 否   | []     | 文件后缀名过滤                                  |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "total": 100,
+            "docs": [
+                {
+                    "id": "doc_123456",
+                    "name": "技术文档.pdf",
+                    "size": 1024000,
+                    "type": "pdf",
+                    "status": "1",
+                    "run": "done",
+                    "progress": 100,
+                    "chunk_num": 50,
+                    "token_num": 15000,
+                    "thumbnail": "/v1/document/image/kb_id-thumbnail_id",
+                    "create_time": "2024-01-01 12:00:00",
+                    "update_time": "2024-01-01 13:00:00",
+                    "created_by": "user_123",
+                    "parser_id": "pdf_parser",
+                    "suffix": "pdf"
+                }
+            ]
+        }
+    }
+    ```
+
+    #### 错误响应
+
+    - **400: 知识库ID缺失**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Lack of \"KB ID\"",
+            "data": false
+        }
+        ```
+
+    - **400: 过滤条件无效**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Invalid filter run status conditions: abc",
+            "data": false
+        }
+        ```
+
+    - **403: 权限不足**
+        ```json
+        {
+            "retcode": 403,
+            "retmsg": "Only owner of knowledgebase authorized for this operation.",
+            "data": false
+        }
+        ```
+
+    ---
+
+    ### 主要流程
+
+    1. **权限验证**:
+        - 验证知识库ID是否存在
+        - 检查用户是否为知识库的所有者
+        - 确认用户有访问权限
+
+    2. **参数校验**:
+        - 校验 `run_status` 是否在有效范围
+        - 校验 `types` 是否在支持的文件类型列表中
+
+    3. **数据查询**:
+        - 根据关键词进行模糊搜索
+        - 按分页与排序参数查询文档
+        - 根据 `create_time_from` 和 `create_time_to` 过滤时间范围
+        - 统计符合条件的文档总数
+
+    4. **结果处理**:
+        - 转换时间格式为字符串
+        - 处理缩略图URL路径
+        - 格式化返回数据
+
+    ---
+
+    ### 排序字段说明
+
+    | 字段名        | 描述           | 数据类型    |
+    |---------------|----------------|-------------|
+    | `create_time` | 创建时间       | datetime    |
+    | `update_time` | 更新时间       | datetime    |
+    | `name`        | 文档名称       | string      |
+    | `size`        | 文件大小       | integer     |
+    | `progress`    | 处理进度       | integer     |
+
+    ---
+
+    ### 文档状态说明
+
+    #### 运行状态 (run)
+    - `unstart`: 未开始处理
+    - `running`: 正在处理
+    - `done`: 处理完成
+    - `fail`: 处理失败
+
+    #### 可用状态 (status)
+    - `0`: 禁用，不参与检索
+    - `1`: 启用，正常使用
+
+    ---
+
+    ### 使用示例
+
+    #### 基本查询
+    ```
+    POST /v1/document/list?kb_id=kb_123456
+    Body: {}
+    ```
+
+    #### 关键词搜索
+    ```
+    POST /v1/document/list?kb_id=kb_123456&keywords=技术文档
+    Body: {}
+    ```
+
+    #### 分页查询
+    ```
+    POST /v1/document/list?kb_id=kb_123456&page=2&page_size=20
+    Body: {}
+    ```
+
+    #### 自定义排序
+    ```
+    POST /v1/document/list?kb_id=kb_123456&orderby=size&desc=false
+    Body: {}
+    ```
+
+    #### 按时间范围筛选
+    ```
+    POST /v1/document/list?kb_id=kb_123456&create_time_from=1700000000&create_time_to=1700500000
+    Body: {}
+    ```
+
+    #### 多条件过滤
+    ```
+    POST /v1/document/list?kb_id=kb_123456
+    Body: {
+        "run_status": ["done", "running"],
+        "types": ["pdf", "docx"],
+        "suffix": ["pdf"]
+    }
+    ```
+
+    ---
+
+    ### 注意事项
+
+    - **权限控制**: 只有知识库所有者才能查看文档列表
+    - **缩略图处理**: 自动处理缩略图URL，支持base64和文件路径两种格式
+    - **时间格式**: 所有时间字段统一转换为字符串格式返回
+    - **性能优化**: 建议合理设置page_size，避免单次查询过多数据
+    - **搜索范围**: 关键词搜索仅匹配文档名称，不包含文档内容
+    - **时间过滤**: `create_time_from` 和 `create_time_to` 为 Unix 时间戳，0 表示不限制
+    """
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
 
@@ -808,6 +1007,14 @@ def list_docs(
         )
         docs = [convert_datetime_to_str(d) for d in docs]
 
+        # === 新增的时间范围过滤逻辑 ===
+        if create_time_from or create_time_to:
+            docs = [
+                doc for doc in docs
+                if (create_time_from == 0 or doc.get("create_time", 0) >= create_time_from)
+                and (create_time_to == 0 or doc.get("create_time", 0) <= create_time_to)
+            ]
+        # 处理缩略图路径
         for doc_item in docs:
             if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
                 doc_item['thumbnail'] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
