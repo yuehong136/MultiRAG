@@ -20,6 +20,8 @@ from api.service.askdata_service.sql_assembler import FlexibleSQLAssembler, Filt
 
 from api.service.askdata_service.sql_metric_exp_rewriter import SQLFieldAliasProcessor
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
+from api.service.askdata_service.util.add_table_alias_to_fields import add_table_alias_to_fields
+from api.service.askdata_service.util.convert_aggregation_value import convert_aggregation_value
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
 from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
     filter_metrics_by_permissions
@@ -461,14 +463,16 @@ class AskdataService:
             for having_condition in table_config.get("having_conditions", []):
                 if having_condition["is_semantic_field"]:
                     semantic_field = self._find_semantic_field(having_condition["id"], all_semantic_fields)
-                    column_name = having_condition['original_sql_component']['field']
+                    table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                         model_table_alias_mapping_list)
+                    expression = semantic_field["field_detail"]["expression"]
+                    column_name = add_table_alias_to_fields(expression, table_alias)
                     operator = having_condition["operator"]
                     value = having_condition["value"]
                     if operator == "IN":
                         value = parse_sql_in_values(value)
-                    elif column_name.startswith("COUNT(") or column_name.startswith("SUM(") or column_name.startswith(
-                            "AVG(") or column_name.startswith("MAX(") or column_name.startswith("MIN("):
-                        value = int(value)
+                    else:
+                        value = convert_aggregation_value(column_name, value)
                     assembler.add_having(column_name, FilterOperator.from_value(operator), value)
                 else:
                     assembler.add_raw_having(having_condition["sql_column"])
