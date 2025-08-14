@@ -348,15 +348,15 @@ class AskdataService:
 
         if chart_type == "table-row":
             for column in table_config["columns"]:
-                column_name = ""
                 if column["is_semantic_field"]:
                     semantic_field = self._find_semantic_field(column["id"], all_semantic_fields)
                     table_alias = self._find_table_alias(semantic_field["from_model_id"],
                                                          model_table_alias_mapping_list)
                     column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                    assembler.add_column(column_name)
                 else:
                     column_name = column["sql_column"]
-                assembler.add_column(column_name)
+                    assembler.add_raw_column(column_name)
 
             for filter in table_config["filters"]:
                 if filter["is_semantic_field"]:
