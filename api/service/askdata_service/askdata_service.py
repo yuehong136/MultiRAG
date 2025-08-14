@@ -363,17 +363,23 @@ class AskdataService:
                     semantic_field = self._find_semantic_field(filter["id"], all_semantic_fields)
                     table_alias = self._find_table_alias(semantic_field["from_model_id"],
                                                          model_table_alias_mapping_list)
-                    column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
-                    operator = filter["operator"]
-                    value = filter["value"]
-                    if operator == "IN":
-                        value = parse_sql_in_values(value)
-                    if "int" in filter['semantic_field']['dataType']:
-                        value = int(value)
-                    assembler.add_filter(column_name, FilterOperator.from_value(operator), value)
+                    column_name, operator, converted_value, needs_special_handling, special_sql = process_where_condition(
+                        filter, semantic_field, table_alias
+                    )
+
+                    if needs_special_handling:
+                        # 需要特殊处理的情况（如日期 CAST）
+                        assembler.add_parameterized_where(special_sql, [converted_value])
+                    else:
+                        # 普通情况
+                        assembler.add_filter(column_name, FilterOperator.from_value(operator), converted_value)
                 else:
-                    raw_condition = filter["raw_condition"]
-                    assembler.add_raw_where(raw_condition)
+                    raw_condition = filter.get("raw_condition", None)
+                    if raw_condition:
+                        assembler.add_raw_where(raw_condition)
+                    else:
+                        assembler.add_raw_where(sql_condition=f"{filter['sql_column']} {filter['operator']} {filter['value']}")
+
 
             for order_by in table_config["order_by"]:
                 if order_by["is_semantic_field"]:
