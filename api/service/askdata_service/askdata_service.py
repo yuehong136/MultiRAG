@@ -22,6 +22,7 @@ from api.service.askdata_service.sql_metric_exp_rewriter import SQLFieldAliasPro
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
 from api.service.askdata_service.util.add_table_alias_to_fields import add_table_alias_to_fields
 from api.service.askdata_service.util.convert_aggregation_value import convert_aggregation_value
+from api.service.askdata_service.util.convert_where_condition_value import process_where_condition
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
 from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
     filter_metrics_by_permissions
@@ -435,25 +436,20 @@ class AskdataService:
 
             for where_condition in table_config.get("where_conditions", []):
                 if where_condition["is_semantic_field"]:
-                    field_type = where_condition['semantic_field']['dataType']
-                    column_name = None
-                    if where_condition.get("original_sql_component", {}).get("field"):
-                        column_name = where_condition['original_sql_component']['field']
+                    semantic_field = self._find_semantic_field(where_condition["id"], all_semantic_fields)
+                    table_alias = self._find_table_alias(semantic_field["from_model_id"],
+                                                         model_table_alias_mapping_list)
+
+                    column_name, operator, converted_value, needs_special_handling, special_sql = process_where_condition(
+                        where_condition, semantic_field, table_alias
+                    )
+
+                    if needs_special_handling:
+                        # 需要特殊处理的情况（如日期 CAST）
+                        assembler.add_parameterized_where(special_sql, [converted_value])
                     else:
-                        pass
-                    operator = where_condition["operator"]
-                    value = where_condition["value"]
-                    if operator == "IN":
-                        value = parse_sql_in_values(value)
-                    if "int" in field_type:
-                        value = int(value)
-                    elif "date" in field_type:
-                        assembler.add_parameterized_where(f"{column_name} {operator} CAST(%s AS DATE)", [value])
-                        continue
-                    # elif where_condition['semantic_field']['timeFormat']:
-                    # TODO中台完成改造后补全
-                    # pass
-                    assembler.add_filter(column_name, FilterOperator.from_value(operator), value)
+                        # 普通情况
+                        assembler.add_filter(column_name, FilterOperator.from_value(operator), converted_value)
                 else:
                     if where_condition.get("sql_column", None):
                         assembler.add_raw_where(where_condition["sql_column"])
