@@ -23,7 +23,7 @@ from api.db.db_models import get_db
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
-from core.prompts import keyword_extraction, cross_languages
+from core.prompts.prompts import keyword_extraction, cross_languages
 from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService

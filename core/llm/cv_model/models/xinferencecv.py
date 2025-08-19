@@ -2,31 +2,16 @@ from urllib.parse import urljoin
 
 from openai import OpenAI
 
+from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.base import Base
 
 
-class XinferenceCV(Base):
-    def __init__(self, key, model_name="", lang="Chinese", base_url=""):
+class XinferenceCV(GptV4):
+    _FACTORY_NAME = "Xinference"
+
+    def __init__(self, key, model_name="", lang="Chinese", base_url="", **kwargs):
         base_url = urljoin(base_url, "v1")
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name
         self.lang = lang
-
-    def describe(self, image):
-        b64 = self.image2base64(image)
-
-        res = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=self.prompt(b64)
-        )
-        return res.choices[0].message.content.strip(), res.usage.total_tokens
-
-    def describe_with_prompt(self, image, prompt=None):
-        b64 = self.image2base64(image)
-        vision_prompt = self.vision_llm_prompt(b64, prompt) if prompt else self.vision_llm_prompt(b64)
-
-        res = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=vision_prompt,
-        )
-        return res.choices[0].message.content.strip(), res.usage.total_tokens
+        Base.__init__(self, **kwargs)

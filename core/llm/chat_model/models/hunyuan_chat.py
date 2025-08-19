@@ -4,6 +4,8 @@ from core.llm.chat_model.base import Base
 
 
 class HunyuanChat(Base):
+    _FACTORY_NAME = "Tencent Hunyuan"
+
     def __init__(self, key, model_name, base_url=None, **kwargs):
         super().__init__(key, model_name, base_url=base_url, **kwargs)
 
@@ -25,7 +27,9 @@ class HunyuanChat(Base):
             _gen_conf["TopP"] = gen_conf["top_p"]
         return _gen_conf
 
-    def _chat(self, history, gen_conf):
+    def _chat(self, history, gen_conf=None, **kwargs):
+        if gen_conf is None:
+            gen_conf = {}
         from tencentcloud.hunyuan.v20230901 import models
 
         hist = [{k.capitalize(): v for k, v in item.items()} for item in history]
@@ -36,7 +40,9 @@ class HunyuanChat(Base):
         ans = response.Choices[0].Message.Content
         return ans, response.Usage.TotalTokens
 
-    def chat_streamly(self, system, history, gen_conf):
+    def chat_streamly(self, system, history, gen_conf=None, **kwargs):
+        if gen_conf is None:
+            gen_conf = {}
         from tencentcloud.common.exception.tencent_cloud_sdk_exception import (
             TencentCloudSDKException,
         )

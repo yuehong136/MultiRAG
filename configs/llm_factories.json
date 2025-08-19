@@ -501,6 +501,34 @@
             "tags": "LLM,TEXT EMBEDDING,SPEECH2TEXT,MODERATION",
             "status": "1",
             "llm": [
+               {
+                    "llm_name": "glm-4.5-airx",
+                    "tags": "LLM,CHAT,128K",
+                    "max_tokens": 128000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+               },
+               {
+                    "llm_name": "glm-4.5-air",
+                    "tags": "LLM,CHAT,128K",
+                    "max_tokens": 128000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+               },
+               {
+                    "llm_name": "glm-4.5",
+                    "tags": "LLM,CHAT,128K",
+                    "max_tokens": 128000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+               },
+               {
+                    "llm_name": "glm-4.5v",
+                    "tags": "LLM,CHAT,IMAGE2TEXT",
+                    "max_tokens": 128000,
+                    "mdl_type": "image2text",
+                    "is_tools": true
+                },
                 {
                     "llm_name": "glm-z1-air",
                     "tags": "LLM,CHAT,128K",

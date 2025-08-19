@@ -6,6 +6,8 @@ from core.llm.chat_model.base import Base
 
 
 class OllamaChat(Base):
+    _FACTORY_NAME = "Ollama"
+
     def __init__(self, key, model_name, base_url=None, **kwargs):
         super().__init__(key, model_name, base_url=base_url, **kwargs)
 
@@ -23,8 +25,10 @@ class OllamaChat(Base):
             options[k] = gen_conf[k]
         return options
 
-    def _chat(self, history, gen_conf):
+    def _chat(self, history, gen_conf=None, **kwargs):
         # Calculate context size
+        if gen_conf is None:
+            gen_conf = {}
         ctx_size = self._calculate_dynamic_ctx(history)
 
         gen_conf["num_ctx"] = ctx_size
@@ -33,7 +37,9 @@ class OllamaChat(Base):
         token_count = response.get("eval_count", 0) + response.get("prompt_eval_count", 0)
         return ans, token_count
 
-    def chat_streamly(self, system, history, gen_conf):
+    def chat_streamly(self, system, history, gen_conf=None, **kwargs):
+        if gen_conf is None:
+            gen_conf = {}
         if system:
             history.insert(0, {"role": "system", "content": system})
         if "max_tokens" in gen_conf:

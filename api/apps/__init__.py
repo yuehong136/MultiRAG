@@ -90,6 +90,11 @@ async def lifespan(app: FastAPI):
     # 关闭时执行的代码
     logging.info("Shutting down update_progress thread")
     stop_event.set()
+
+    logging.info("Shutting down MCP sessions")
+    from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions
+    shutdown_all_mcp_sessions()
+
     await workflow_state_manager.shutdown()
 
 
@@ -127,16 +132,16 @@ settings.init_settings()
 # 添加Session中间件，使用项目的SECRET_KEY
 app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 
-# 添加敏感词过滤中间件
-try:
-    from api.middleware.sensitive_word_middleware import SensitiveWordMiddlewareConfig
-    sensitive_word_middleware = SensitiveWordMiddlewareConfig.create_middleware(app)
-    app.add_middleware(type(sensitive_word_middleware),
-                      excluded_paths=sensitive_word_middleware.excluded_paths,
-                      strict_paths=sensitive_word_middleware.strict_paths)
-    logging.info("敏感词过滤中间件已启用")
-except Exception as e:
-    logging.warning(f"敏感词过滤中间件启用失败: {e}")
+# # 添加敏感词过滤中间件
+# try:
+#     from api.middleware.sensitive_word_middleware import SensitiveWordMiddlewareConfig
+#     sensitive_word_middleware = SensitiveWordMiddlewareConfig.create_middleware(app)
+#     app.add_middleware(type(sensitive_word_middleware),
+#                       excluded_paths=sensitive_word_middleware.excluded_paths,
+#                       strict_paths=sensitive_word_middleware.strict_paths)
+#     logging.info("敏感词过滤中间件已启用")
+# except Exception as e:
+#     logging.warning(f"敏感词过滤中间件启用失败: {e}")
 
 # 初始化登录管理器，设置密钥和令牌URL
 manager = LoginManager(settings.SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))
@@ -304,11 +309,3 @@ async def login(data: OAuth2PasswordRequestForm = Depends(), db: Session = Depen
 @app.get("/", summary="根目录")
 async def root():
     return {"message": "进入docs接口调试文档,请在地址后加/docs,需要标准doc文档,请在地址后加/redoc"}
-
-
-# 如果此脚本被直接运行，则使用uvicorn启动FastAPI服务器
-if __name__ == "__main__":
-    import uvicorn
-
-    # uvicorn.run("__init__:app", host="0.0.0.0", port=8000, reload=True)
-    uvicorn.run("__init__:app", host="192.168.2.43", port=8123, reload=True)

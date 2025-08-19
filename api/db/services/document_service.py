@@ -18,7 +18,7 @@ from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc
 
-from api.constants import IMG_BASE64_PREFIX
+from api.constants import IMG_BASE64_PREFIX, FILE_NAME_LEN_LIMIT
 from api.db import FileType, TaskStatus, StatusEnum, UserTenantRole
 from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, db_connection, File2Document, File
 from api.db.services.common_service import CommonService
@@ -124,6 +124,16 @@ class DocumentService(CommonService):
         # 7) 执行并返回“字典行”（等价 Peewee 的 .dicts()）
         rows = db.execute(stmt).mappings().all()
         return [dict(r) for r in rows], total
+
+    @classmethod
+    def check_doc_health(cls, db: Session, tenant_id: str, filename):
+        import os
+        MAX_FILE_NUM_PER_USER = int(os.environ.get("MAX_FILE_NUM_PER_USER", 0))
+        if MAX_FILE_NUM_PER_USER > 0 and DocumentService.get_doc_count(db, tenant_id) >= MAX_FILE_NUM_PER_USER:
+            raise RuntimeError("Exceed the maximum file number of a free user!")
+        if len(filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
+            raise RuntimeError("Exceed the maximum length of file name!")
+        return True
 
     @classmethod
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,

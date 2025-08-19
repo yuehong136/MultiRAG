@@ -1,6 +1,7 @@
 import base64
 import copy
 import datetime
+import hashlib
 import io
 import json
 import os
@@ -398,6 +399,9 @@ def delta_seconds(date_string: str):
     delta = now - date_string
     return delta.total_seconds()
 
+
+def hash_str2int(line:str, mod: int=10 ** 8) -> int:
+    return int(hashlib.sha1(line.encode("utf-8")).hexdigest(), 16) % mod
 
 HTTP_STATUS_CODES = {
     100: "Continue",

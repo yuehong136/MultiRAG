@@ -30,13 +30,21 @@ from core.llm.cv_model.models.azuregptv4 import AzureGptV4
 from core.llm.cv_model.models.baiduyiyan_cv import BaiduYiyanCV
 from core.llm.cv_model.models.gemini_cv import GeminiCV
 from core.llm.cv_model.models.gptv4 import GptV4
+from core.llm.cv_model.models.gpustack_cv import GPUStackCV
+from core.llm.cv_model.models.hunyuan_cv import HunyuanCV
 from core.llm.cv_model.models.lmstudio_cv import LmStudioCV
+from core.llm.cv_model.models.local_cv import LocalCV
+from core.llm.cv_model.models.localai_cv import LocalAICV
 from core.llm.cv_model.models.ollama_cv import OllamaCV
 from core.llm.cv_model.models.openai_api_cv import OpenAI_APICV
+from core.llm.cv_model.models.openrouter_cv import OpenRouterCV
 from core.llm.cv_model.models.qwen_cv import QWenCV
 from core.llm.cv_model.models.siliconflow_cv import SILICONFLOWCV
+from core.llm.cv_model.models.stepfun_cv import StepFunCV
+from core.llm.cv_model.models.togetherai_cv import TogetherAICV
 from core.llm.cv_model.models.xai_cv import xAICV
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
+from core.llm.cv_model.models.yi_cv import YiCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.cohere_embed import CoHereEmbed
 from core.llm.embedding_model.default_embedding import DefaultEmbedding
@@ -118,6 +126,14 @@ CvModel = {
     "BaiduYiyan": BaiduYiyanCV,
     "LM-Studio": LmStudioCV,
     "xAI": xAICV,
+    "Tencent Hunyuan": HunyuanCV,
+    "StepFun": StepFunCV,
+    "TogetherAI": TogetherAICV,
+    "01.AI": YiCV,
+    "OpenRouter": OpenRouterCV,
+    "LocalAI": LocalAICV,
+    "GPUStack": GPUStackCV,
+    "Moonshot": LocalCV,
 }
 
 

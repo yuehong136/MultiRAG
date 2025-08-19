@@ -1,11 +1,14 @@
 import base64
 from io import BytesIO
+
 from core.llm.cv_model.base import Base
-from core.prompts import vision_llm_describe_prompt
+from core.prompts.prompts import vision_llm_describe_prompt
 
 
 class GeminiCV(Base):
-    def __init__(self, key, model_name="gemini-1.5-pro", lang="Chinese", **kwargs):
+    _FACTORY_NAME = "Gemini"
+
+    def __init__(self, key, model_name="gemini-1.0-pro-vision-latest", lang="Chinese", **kwargs):
         from google.generativeai import GenerativeModel, client
 
         client.configure(api_key=key)
@@ -16,7 +19,9 @@ class GeminiCV(Base):
         self.lang = lang
         Base.__init__(self, **kwargs)
 
-    def _form_history(self, system, history, images=[]):
+    def _form_history(self, system, history, images=None):
+        if images is None:
+            images = []
         hist = []
         if system:
             hist.append({"role": "user", "parts": [system, history[0]["content"]]})
@@ -38,7 +43,6 @@ class GeminiCV(Base):
         img = open(BytesIO(base64.b64decode(b64)))
         input = [prompt, img]
         res = self.model.generate_content(input)
-        img.close()
         return res.text, res.usage_metadata.total_token_count
 
     def describe_with_prompt(self, image, prompt=None):
@@ -51,10 +55,11 @@ class GeminiCV(Base):
         res = self.model.generate_content(
             input,
         )
-        img.close()
         return res.text, res.usage_metadata.total_token_count
 
-    def chat(self, system, history, gen_conf, images=[]):
+    def chat(self, system, history, gen_conf, images=None):
+        if images is None:
+            images = []
         from transformers import GenerationConfig
         try:
             response = self.model.generate_content(
@@ -65,7 +70,9 @@ class GeminiCV(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system, history, gen_conf, images=[]):
+    def chat_streamly(self, system, history, gen_conf, images=None):
+        if images is None:
+            images = []
         from transformers import GenerationConfig
         ans = ""
         try:

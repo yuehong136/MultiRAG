@@ -17,7 +17,9 @@ class GroqChat(Base):
                 del gen_conf[k]
         return gen_conf
 
-    def chat_streamly(self, system, history, gen_conf):
+    def chat_streamly(self, system, history, gen_conf=None, **kwargs):
+        if gen_conf is None:
+            gen_conf = {}
         if system:
             history.insert(0, {"role": "system", "content": system})
         for k in list(gen_conf.keys()):

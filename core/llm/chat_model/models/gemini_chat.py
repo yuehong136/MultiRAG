@@ -4,6 +4,8 @@ from core.llm.chat_model.base import Base
 
 
 class GeminiChat(Base):
+    _FACTORY_NAME = "Gemini"
+
     def __init__(self, key, model_name, base_url=None, **kwargs):
         super().__init__(key, model_name, base_url=base_url, **kwargs)
 
@@ -24,7 +26,9 @@ class GeminiChat(Base):
                 gen_conf["max_output_tokens"] = gen_conf.pop("max_tokens")
         return gen_conf
 
-    def _chat(self, history, gen_conf):
+    def _chat(self, history, gen_conf=None, **kwargs):
+        if gen_conf is None:
+            gen_conf = {}
         from google.generativeai.types import content_types
         system = history[0]["content"] if history and history[0]["role"] == "system" else ""
         hist = []
@@ -46,7 +50,9 @@ class GeminiChat(Base):
         ans = response.text
         return ans, response.usage_metadata.total_token_count
 
-    def chat_streamly(self, system, history, gen_conf):
+    def chat_streamly(self, system, history, gen_conf=None, **kwargs):
+        if gen_conf is None:
+            gen_conf = {}
         from google.generativeai.types import content_types
 
         if system:
