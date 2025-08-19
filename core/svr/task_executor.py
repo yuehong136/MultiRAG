@@ -597,7 +597,6 @@ async def get_schema(collection_name):
     return schema
 
 
-@timeout(60*20)
 async def embedding(docs, mdl, parser_config=None, callback=None):
     """
     为文档生成向量嵌入，并同时存储到标准vector字段和维度特定字段中
@@ -630,10 +629,15 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
         tts = np.concatenate([vts for _ in range(len(tts))], axis=0)
         tk_count += c
 
+    @timeout(5)
+    def batch_encode(txts):
+        nonlocal mdl
+        return mdl.encode([truncate(c, mdl.max_length-10) for c in txts])
+
     cnts_ = np.array([])
     for i in range(0, len(cnts), EMBEDDING_BATCH_SIZE):
         async with embed_limiter:
-            vts, c = await trio.to_thread.run_sync(lambda: mdl.encode([truncate(c, mdl.max_length-10) for c in cnts[i: i + EMBEDDING_BATCH_SIZE]]))
+            vts, c = await trio.to_thread.run_sync(lambda: batch_encode(cnts[i: i + EMBEDDING_BATCH_SIZE]))
         if len(cnts_) == 0:
             cnts_ = vts
         else:
