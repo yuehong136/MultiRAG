@@ -384,17 +384,32 @@ def get_parser_config(chunk_method, parser_config):
     return merged_config
 
 
-def get_data_openai(id=None,
-                    created=None,
-                    model=None,
-                    prompt_tokens=0,
-                    completion_tokens=0,
-                    content=None,
-                    finish_reason=None,
-                    object="chat.completion",
-                    param=None,
-                    ):
+def get_data_openai(
+    id=None,
+    created=None,
+    model=None,
+    prompt_tokens=0,
+    completion_tokens=0,
+    content=None,
+    finish_reason=None,
+    object="chat.completion",
+    param=None,
+    stream=False
+):
     total_tokens = prompt_tokens + completion_tokens
+
+    if stream:
+        return {
+            "id": f"{id}",
+            "object": "chat.completion.chunk",
+            "model": model,
+            "choices": [{
+                "delta": {"content": content},
+                "finish_reason": finish_reason,
+                "index": 0,
+            }],
+        }
+
     return {
         "id": f"{id}",
         "object": object,
@@ -408,20 +423,18 @@ def get_data_openai(id=None,
             "completion_tokens_details": {
                 "reasoning_tokens": 0,
                 "accepted_prediction_tokens": 0,
-                "rejected_prediction_tokens": 0
-            }
+                "rejected_prediction_tokens": 0,
+            },
         },
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": content
-                },
-                "logprobs": None,
-                "finish_reason": finish_reason,
-                "index": 0
-            }
-        ]
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": content
+            },
+            "logprobs": None,
+            "finish_reason": finish_reason,
+            "index": 0,
+        }],
     }
 
 
