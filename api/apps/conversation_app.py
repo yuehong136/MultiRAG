@@ -269,7 +269,8 @@ async def set_conversation(request: SetConversationRequest, db: Session = Depend
             "dialog_id": req["dialog_id"],
             "name": name,
             "message": [{"role": "assistant", "content": dia.prompt_config["prologue"]}],
-            "user_id": user.id
+            "user_id": user.id,
+            "reference": [],
         }
         ConversationService.save(db, **conv)
         
