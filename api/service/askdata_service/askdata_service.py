@@ -407,8 +407,8 @@ class AskdataService:
                     assembler.add_column(column_name)
                     assembler.add_group_by(column_name)
                 else:
-                    assembler.add_column(dimension["sql_column"])
-                    assembler.add_group_by(dimension["sql_column"])
+                    assembler.add_raw_column(dimension["sql_column"])
+                    assembler.add_raw_group_by(dimension["sql_column"])
 
             for metric in table_config["metrics"]:
                 if metric["is_semantic_field"]:
