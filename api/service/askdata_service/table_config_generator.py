@@ -4,6 +4,7 @@ import uuid
 from typing import Any, List, Dict, Tuple, Optional
 
 from api.service.askdata_service.sql_components_parser import SQLComponentsParser
+from api.service.askdata_service.util.are_expressions_equal_ignore_quotes import are_expressions_equal_ignore_quotes
 from api.service.askdata_service.util.find_aggregate_columns import find_aggregate_columns
 from api.service.askdata_service.util.parse_sql_extract import parse_sql_extract
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
@@ -237,11 +238,11 @@ class TableConfigGenerator:
             else:
                 table_name = table_alias_mapping[table_alias]
                 table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
-                for metric in table_detail['dimsAndMetrics']['metrics']:
-                    if metric['expression'].lower() == column_name.lower():
+                for model_metric in table_detail['dimsAndMetrics']['metrics']:
+                    if (model_metric['expression'].lower() == column_name.lower()) or are_expressions_equal_ignore_quotes(model_metric['expression'], column_name):
                         selected_metrics.append(
-                            {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
-                             "metric_name": metric["metricName"], "wid": str(uuid.uuid4()),
+                            {"is_semantic_field": True, "semantic_type": "metric", "id": model_metric["metricId"],
+                             "metric_name": model_metric["metricName"], "wid": str(uuid.uuid4()),
                              "nanoId": str(uuid.uuid4()), "original_sql_component": metric}
                         )
                         is_matched_semantic_field = True
