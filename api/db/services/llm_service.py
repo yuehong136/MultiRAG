@@ -274,7 +274,12 @@ class TenantLLMService(CommonService):
                     return llm["mdl_type"].split(",")[-1]
         with db_connection() as db:
             for llm in LLMService.query(db, llm_name=llm_id):
-                return llm.model_type
+                return llm.mdl_type
+            llm = TenantLLMService.get_or_none(db, llm_name=llm_id)
+            if llm:
+                return llm.mdl_type
+            for llm in TenantLLMService.query(db, llm_name=llm_id):
+                return llm.mdl_type
 
 # class LLMBundle(object):
 #     def __init__(self, tenant_id: str, llm_type: str, llm_name: str = None, lang: str = "Chinese"):
