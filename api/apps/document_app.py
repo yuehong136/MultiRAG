@@ -549,6 +549,18 @@ def create_document(
             return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
                                          code=settings.RetCode.ARGUMENT_ERROR)
 
+        kb_root_folder = FileService.get_kb_folder(db, kb.tenant_id)
+        if not kb_root_folder:
+            return get_data_error_result(retmsg="Cannot find the root folder.")
+        kb_folder = FileService.new_a_file_from_kb(
+            db,
+            kb.tenant_id,
+            kb.name,
+            kb_root_folder["id"],
+        )
+        if not kb_folder:
+            return get_data_error_result(retmsg="Cannot find the kb folder for this file.")
+
         doc = DocumentService.insert(db, {
             "id": get_uuid(),
             "kb_id": kb.id,
