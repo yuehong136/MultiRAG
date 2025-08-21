@@ -10,13 +10,14 @@ import asyncio
 import logging
 import json
 import re
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from api.apps import manager, executor
 from agent.component.agent_with_tools import Agent, AgentParam
@@ -28,8 +29,6 @@ from api.db import StatusEnum, LLMType
 from api.db.db_models import TenantLLM, get_db, db_connection
 from api.utils.base64_image import test_image
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
-from pydantic import BaseModel, Field
-from typing import Any
 
 from core.prompts.prompts import kb_prompt
 from core.utils.tavily_conn import Tavily
@@ -258,7 +257,7 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
                 if m.find("**ERROR**") >= 0:
                     raise Exception(m)
             except Exception as e:
-                msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
+                msg += f"\nFail to access model({llm.fid}/{llm.llm_name}) this api key." + str(e)
             chat_passed = True
         elif not rerank_passed and llm.mdl_type == LLMType.RERANK:
             assert factory in RerankModel, f"Re-rank model from {factory} is not supported yet."
@@ -270,7 +269,7 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
                 rerank_passed = True
                 logging.debug(f'passed model rerank {llm.llm_name}')
             except Exception as e:
-                msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
+                msg += f"\nFail to access model({llm.fid}/{llm.llm_name}) using this api key." + str(e)
 
     if msg:
         return get_data_error_result(retmsg=msg)
@@ -495,7 +494,7 @@ POST
             if not tc and m.find("**ERROR**:") >= 0:
                 raise Exception(m)
         except Exception as e:
-            msg += f"\nFail to access model({mdl_nm})." + str(e)
+            msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
     elif llm["mdl_type"] == LLMType.RERANK:
         assert factory in RerankModel, f"RE-rank model from {factory} is not supported yet."
         try:
@@ -508,10 +507,9 @@ POST
             if len(arr) == 0:
                 raise Exception("Not known.")
         except KeyError:
-            msg += f"{factory} dose not support this model({mdl_nm})"
+            msg += f"{factory} dose not support this model({factory}/{mdl_nm})"
         except Exception as e:
-            msg += f"\nFail to access model({mdl_nm})." + str(
-                e)
+            msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
     elif llm["mdl_type"] == LLMType.IMAGE2TEXT.value:
         assert factory in CvModel, f"Image to text model from {factory} is not supported yet."
         mdl = CvModel[factory](
@@ -525,7 +523,7 @@ POST
             if not m and not tc:
                 raise Exception(m)
         except Exception as e:
-            msg += f"\nFail to access model({llm['llm_name']})." + str(e)
+            msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
     elif llm["mdl_type"] == LLMType.TTS:
         assert factory in TTSModel, f"TTS model from {factory} is not supported yet."
         mdl = TTSModel[factory](
@@ -535,7 +533,7 @@ POST
             for resp in mdl.tts("Hello~ Multirager!"):
                 pass
         except RuntimeError as e:
-            msg += f"\nFail to access model({mdl_nm})." + str(e)
+            msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
     else:
         # TODO: check other type of models
         pass
