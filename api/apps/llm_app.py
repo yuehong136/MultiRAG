@@ -158,9 +158,17 @@ class ChatAgentAdapter:
                                knowledge_context: str = "", files: list[str] = None):
         """使用工具进行流式对话，直接复用Agent的流式能力"""
 
-        # 准备历史记录 - 适配Agent的消息格式
+        # 准备历史记录 - 保持字典格式，但添加当前查询
+        history = []
         if messages:
-            self.canvas_mock.history = messages
+            # 保持字典格式的消息
+            history = messages.copy()
+        
+        # 添加当前查询到历史记录末尾（因为_prepare_prompt_variables会用[:-1]移除它）
+        if query:
+            history.append({"role": "user", "content": query})
+        
+        self.canvas_mock.history = history
 
         # 准备输入变量
         self.canvas_mock.globals["sys.query"] = query
