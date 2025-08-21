@@ -19,7 +19,7 @@ from langfuse import Langfuse
 
 from agentic_reasoning import DeepResearcher
 from datetime import datetime
-from sqlalchemy import asc
+from sqlalchemy import asc, func
 from sqlalchemy.orm import Session
 
 from api.db import LLMType, StatusEnum, ParserType
@@ -34,7 +34,7 @@ from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
 from core.nlp import extract_between
 from core.nlp.search import index_name
-from core.prompts import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
+from core.prompts.prompts import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
     citation_prompt, cross_languages
 from core.utils import rmSpace, num_tokens_from_string
 from core.utils.tavily_conn import Tavily
@@ -136,6 +136,90 @@ class DialogService(CommonService):
         results = query.all()
         return [item.__dict__ for item in results]
 
+    @classmethod
+    def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc,
+                          keywords=None, parser_id=None):
+        from api.db.db_models import User
+        fields = [
+            cls.model.id,
+            cls.model.tenant_id,
+            cls.model.name,
+            cls.model.description,
+            cls.model.language,
+            cls.model.llm_id,
+            cls.model.llm_setting,
+            cls.model.prompt_type,
+            cls.model.prompt_config,
+            cls.model.similarity_threshold,
+            cls.model.vector_similarity_weight,
+            cls.model.top_n,
+            cls.model.top_k,
+            cls.model.do_refer,
+            cls.model.rerank_id,
+            cls.model.kb_ids,
+            cls.model.status,
+            User.nickname,
+            User.avatar.label("tenant_avatar"),
+            cls.model.update_time,
+            cls.model.create_time,
+        ]
+
+        # 构建查询表达式
+        query = db.query(*fields).join(User, cls.model.tenant_id == User.id).filter(
+            ((cls.model.tenant_id.in_(joined_tenant_ids)) | (cls.model.tenant_id == user_id)) &
+            (cls.model.status == StatusEnum.VALID.value)
+        )
+
+        if keywords:
+            query = query.filter(func.lower(cls.model.name).ilike(f"%{keywords.lower()}%"))
+
+        if parser_id:
+            query = query.filter(cls.model.parser_id == parser_id)
+
+        # 根据 desc 参数确定排序方式
+        if desc:
+            query = query.order_by(getattr(cls.model, orderby).desc())
+        else:
+            query = query.order_by(getattr(cls.model, orderby).asc())
+
+        # 获取总记录数
+        total = query.count()
+
+        # 条件分页
+        if page_number and items_per_page:
+            dialogs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
+        else:
+            dialogs = query.all()
+
+        # 转换结果为字典
+        result = []
+        for dlg in dialogs:
+            dlg_dict = {
+                'id': dlg[0],
+                'tenant_id': dlg[1],
+                'name': dlg[2],
+                'description': dlg[3],
+                'language': dlg[4],
+                'llm_id': dlg[5],
+                'llm_setting': dlg[6],
+                'prompt_type': dlg[7],
+                'prompt_config': dlg[8],
+                'similarity_threshold': dlg[9],
+                'vector_similarity_weight': dlg[10],
+                'top_n': dlg[11],
+                'top_k': dlg[12],
+                'do_refer': dlg[13],
+                'rerank_id': dlg[14],
+                'kb_ids': dlg[15],
+                'status': dlg[16],
+                'nickname': dlg[17],
+                'tenant_avatar': dlg[18],
+                'update_time': dlg[19],
+                'create_time': dlg[20],
+            }
+            result.append(dlg_dict)
+
+        return result, total
 
 def chat_solo(db, dialog, messages, stream=True):
     if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
