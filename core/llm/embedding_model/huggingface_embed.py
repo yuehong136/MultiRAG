@@ -7,7 +7,7 @@ from core.utils import num_tokens_from_string
 
 
 class HuggingFaceEmbed(Base):
-    def __init__(self, key, model_name, base_url=None):
+    def __init__(self, key, model_name, base_url=None, **kwargs):
         if not model_name:
             raise ValueError("Model name cannot be None")
         self.key = key

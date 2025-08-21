@@ -68,9 +68,11 @@ from core.llm.rerank_model.default_rerank import DefaultRerank
 from core.llm.rerank_model.gpustack_rerank import GPUStackRerank
 from core.llm.rerank_model.huggingface_rerank import HuggingfaceRerank
 from core.llm.rerank_model.jina_rerank import JinaRerank
+from core.llm.rerank_model.lmstudio_rerank import LmStudioRerank
 from core.llm.rerank_model.localai_rerank import LocalAIRerank
 from core.llm.rerank_model.openai_api_rerank import OpenAI_APIRerank
 from core.llm.rerank_model.qwen_rerank import QWenRerank
+from core.llm.rerank_model.togetherai_rerank import TogetherAIRerank
 from core.llm.rerank_model.xinference_rerank import XInferenceRerank
 from core.llm.rerank_model.youdao_rerank import YoudaoRerank
 from core.llm.sequence2txt_model.azureseq2txt import AzureSeq2txt
@@ -179,7 +181,9 @@ RerankModel = {
     "Xinference": XInferenceRerank,
     "Tongyi-Qianwen": QWenRerank,
     "GPUStack": GPUStackRerank,
-    "HuggingFace": HuggingfaceRerank
+    "HuggingFace": HuggingfaceRerank,
+    "LM-Studio": LmStudioRerank,
+    "TogetherAI": TogetherAIRerank,
 }
 
 

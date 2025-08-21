@@ -3,11 +3,15 @@ from abc import ABC
 
 
 class Base(ABC):
-    def __init__(self, key, model_name, base_url):
+    def __init__(self, key, model_name, base_url, **kwargs):
+        """
+        Abstract base class constructor.
+        Parameters are not stored; subclasses should handle their own initialization.
+        """
         pass
 
     def tts(self, audio):
         pass
 
     def normalize_text(self, text):
-        return re.sub(r'(\*\*|##\d+\$\$|#)', '', text)
+        return re.sub(r"(\*\*|##\d+\$\$|#)", "", text)
