@@ -9,9 +9,9 @@
 import asyncio
 import logging
 import json
-import os
 import re
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
@@ -19,19 +19,19 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from api.apps import manager, executor
-# from api.db.database import get_db
+from agent.component.agent_with_tools import Agent, AgentParam
 from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService, LLMBundle
 from api.db.services.user_service import TenantService
 from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from api.db import StatusEnum, LLMType
-from api.db.db_models import TenantLLM, get_db
-from api.utils.file_utils import get_project_base_directory
+from api.db.db_models import TenantLLM, get_db, db_connection
+from api.utils.base64_image import test_image
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 from pydantic import BaseModel, Field
 from typing import Any
 
-from core.prompts import kb_prompt
+from core.prompts.prompts import kb_prompt
 from core.utils.tavily_conn import Tavily
 
 
@@ -130,10 +130,11 @@ class RecognizeIntentResponse(BaseModel):
 class FieldMeta(BaseModel):
     field_id: int
     name: str
-    type: str                            # "text" | "enum" | "datetime"
+    type: str  # "text" | "enum" | "datetime"
     required: bool = False
     options: list[str] | None = None  # 仅 enum 时有效
-    description: str | None = None    # 给 LLM 的说明，可带示例
+    description: str | None = None  # 给 LLM 的说明，可带示例
+
 
 class FillFieldsRequest(BaseModel):
     user_text: str = Field(..., max_length=900, description="用户的自然语言输入")
@@ -141,6 +142,7 @@ class FillFieldsRequest(BaseModel):
     llm_name: str = Field(..., description="调用的对话模型名称")
     gen_conf: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0.0})
     retry: bool = Field(default=True, description="是否允许内部再追问一次")
+
 
 class FillFieldsResponse(BaseModel):
     field_values: dict[str, Any]
@@ -409,6 +411,7 @@ POST
     factory = req["llm_factory"]
     api_key = req.get("api_key", "x")
     llm_name = req["llm_name"]
+
     def apikey_json(keys):
         nonlocal req
         return json.dumps({k: req.get(k, "") for k in keys})
@@ -517,10 +520,10 @@ POST
             base_url=llm["api_base"]
         )
         try:
-            with open(os.path.join(get_project_base_directory(), "configs/multirag.png"), "rb") as f:
-                m, tc = mdl.describe(f.read())
-                if not m and not tc:
-                    raise Exception(m)
+            image_data = test_image
+            m, tc = mdl.describe(image_data)
+            if not m and not tc:
+                raise Exception(m)
         except Exception as e:
             msg += f"\nFail to access model({llm['llm_name']})." + str(e)
     elif llm["mdl_type"] == LLMType.TTS:
@@ -645,7 +648,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                 "tags": ["CHAT"],
                 "llm": [
                     {
-                        "type": "chat", 
+                        "type": "chat",
                         "name": "claude-3-opus",
                         "used_token": 12300
                     }
@@ -659,7 +662,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
     ```json
     {
         "retcode": 0,
-        "retmsg": "success", 
+        "retmsg": "success",
         "data": {
             "OpenAI": {
                 "tags": ["CHAT", "EMBEDDING"],
@@ -673,7 +676,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                     },
                     {
                         "type": "embedding",
-                        "name": "text-embedding-ada-002", 
+                        "name": "text-embedding-ada-002",
                         "used_token": 8950,
                         "api_base": "https://api.openai.com/v1",
                         "max_tokens": 8192
@@ -922,6 +925,7 @@ def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user
 
     return get_json_result(data=data)
 
+
 @router.post('/chat_service_sse', summary="模型对话服务", response_description="成功调用对话模型")
 async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session = Depends(get_db), user=Depends(manager)):
     """
@@ -1044,17 +1048,17 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
 
     """
     req_dict = request.model_dump()
-    
+
     # 检查是否有敏感词过滤结果
     if hasattr(req, 'state') and hasattr(req.state, 'sensitive_filter_result'):
         filter_result = req.state.sensitive_filter_result
         logging.info(f"[SSE接口] 检测到敏感词过滤结果: {filter_result.get('is_sensitive')}")
-        
+
         if filter_result.get('is_sensitive') and filter_result.get('action') == 'filter':
             # 使用过滤后的内容替换原始内容
             filtered_content = filter_result.get('filtered_content', '')
             matched_words = filter_result.get('matched_words', [])
-            
+
             # 处理messages中的敏感词
             if 'messages' in req_dict and isinstance(req_dict['messages'], list):
                 for msg in req_dict['messages']:
@@ -1067,7 +1071,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
                             if word in content:
                                 content = content.replace(word, replacement)
                         msg['content'] = content
-            
+
             # 处理prompt中的敏感词
             if 'prompt' in req_dict and req_dict['prompt']:
                 prompt = req_dict['prompt']
@@ -1077,7 +1081,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
                     if word in prompt:
                         prompt = prompt.replace(word, replacement)
                 req_dict['prompt'] = prompt
-                
+
             logging.info(f"[SSE接口] 已应用敏感词过滤，替换了 {len(matched_words)} 个敏感词")
 
     # 使用可能已过滤的数据
@@ -1114,7 +1118,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
 
         # 如果llm_type为image2text，添加image参数
         if llm_type == 'image2text':
-            call_params["image"] = req["image"]
+            call_params["images"] = req["image"]
 
         # 非流式调用，直接返回完整响应
         data = chat_mdl.chat(**call_params)
@@ -1154,7 +1158,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
         if llm_type == "image2text":
             llm_model_config = TenantLLMService.get_model_config(db, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT,
                                                                  req["llm_name"])
-            call_params["image"] = req["image"]
+            call_params["images"] = req["image"]
         else:
             llm_model_config = TenantLLMService.get_model_config(db, tenants[0]["tenant_id"], LLMType.CHAT,
                                                                  req["llm_name"])
@@ -1599,7 +1603,7 @@ def recognize_intent(
     # 3) 调 LLM
     answer = chat_mdl.chat(
         system=prompt,
-        history=[{"role": "user", "content": "请根据要求返回规定的格式"}],   # 空 user 消息 → 模型直接输出结果
+        history=[{"role": "user", "content": "请根据要求返回规定的格式"}],  # 空 user 消息 → 模型直接输出结果
         gen_conf=req["gen_conf"]
     )
 
@@ -1678,7 +1682,7 @@ def fill_fields(
             obj = {}
         values: dict[str, Any] = {}
         missing = []
-        invalid: dict[str,str] = {}
+        invalid: dict[str, str] = {}
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         for f in fields:
@@ -1692,7 +1696,7 @@ def fill_fields(
                         missing.append(f.name)
                         continue
                 else:
-                    values[f.name] = "" if f.type=="text" else None
+                    values[f.name] = "" if f.type == "text" else None
                     continue
             # 校验类型
             if f.type == "enum":
