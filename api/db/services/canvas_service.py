@@ -317,11 +317,9 @@ def completion(
     conv.message.append(
         {"role": "assistant", "content": txt, "created_at": time.time(), "id": message_id}
     )
-    try:
-        conv.reference = canvas.get_reference()
-        conv.errors = canvas.error
-    except Exception:
-        pass
+    conv.reference = canvas.get_reference()
+    conv.errors = canvas.error
+    conv.dsl = str(canvas)
 
     API4ConversationService.append_message(db, conv.id, conv.to_dict())
 

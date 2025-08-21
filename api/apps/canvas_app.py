@@ -36,7 +36,7 @@ from api.db.services.canvas_service import (
 )
 from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
-from api.db.services.user_service import TenantService
+from api.db.services.user_service import TenantService, UserTenantService
 from api.settings import RetCode
 from api.utils import get_uuid
 from api.utils.api_utils import (
@@ -191,13 +191,11 @@ def save(request: SetCanvasRequest, db: Session = Depends(get_db), user=Depends(
 
 @router.get("/get/{canvas_id}", summary="获取 Canvas 详情")
 def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    try:
-        e, c = UserCanvasService.get_by_tenant_id(db, canvas_id)
-        if not e or c["user_id"] != user.id:
-            return get_data_error_result(retmsg="canvas not found.")
-        return get_json_result(data=c)
-    except Exception as e:
-        return server_error_response(e)
+    e, c = UserCanvasService.get_by_tenant_id(db, canvas_id)
+    tids = [t.tenant_id for t in UserTenantService.query(db, user_id=user.id)]
+    if not e or (c["user_id"] != user.id and c["user_id"]  not in tids):
+        return get_data_error_result(retmsg="canvas not found.")
+    return get_json_result(data=c)
 
 @router.get("/getsse/{canvas_id}", summary="SSE获取（供外部token使用）")
 def getsse(
