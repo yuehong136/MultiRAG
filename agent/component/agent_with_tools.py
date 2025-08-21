@@ -25,6 +25,7 @@ import json_repair
 
 from agent.component.llm import LLMParam, LLM
 from agent.tools.base import LLMToolPluginCallSession, ToolParamBase, ToolBase, ToolMeta
+from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle, TenantLLMService
 from api.db.services.mcp_server_service import MCPServerService
 from api.utils.api_utils import timeout
@@ -85,17 +86,18 @@ class Agent(LLM, ToolBase):
         for cpn in self._param.tools:
             cpn = self._load_tool_obj(cpn)
             self.tools[cpn.get_meta()["function"]["name"]] = cpn
-
-        self.chat_mdl = LLMBundle(self._canvas.get_tenant_id(), TenantLLMService.llm_id2llm_type(self._param.llm_id), self._param.llm_id,
-                                  max_retries=self._param.max_retries,
-                                  retry_interval=self._param.delay_after_error,
-                                  max_rounds=self._param.max_rounds,
-                                  verbose_tool_use=True
-                                  )
+        with db_connection() as db:
+            self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), TenantLLMService.llm_id2llm_type(self._param.llm_id), self._param.llm_id,
+                                      max_retries=self._param.max_retries,
+                                      retry_interval=self._param.delay_after_error,
+                                      max_rounds=self._param.max_rounds,
+                                      verbose_tool_use=True
+                                      )
         self.tool_meta = [v.get_meta() for _,v in self.tools.items()]
 
         for mcp in self._param.mcp:
-            _, mcp_server = MCPServerService.get_by_id(mcp["mcp_id"])
+            with db_connection() as db:
+                mcp_server = MCPServerService.get_by_id(db, mcp["mcp_id"])
             tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables)
             for tnm, meta in mcp["tools"].items():
                 self.tool_meta.append(mcp_tool_metadata_to_openai_tool(meta))
@@ -204,7 +206,8 @@ class Agent(LLM, ToolBase):
         last_calling = ""
         if len(hist) > 3:
             self.callback("Multi-turn conversation optimization", {}, " running ...")
-            user_request = full_question(messages=history, chat_mdl=self.chat_mdl)
+            with db_connection() as db:
+                user_request = full_question(db, messages=history, chat_mdl=self.chat_mdl)
         else:
             user_request = history[-1]["content"]
 

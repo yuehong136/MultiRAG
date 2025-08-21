@@ -32,6 +32,253 @@ from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 
 from core.prompts.prompts import kb_prompt
 from core.utils.tavily_conn import Tavily
+from api.db.services.mcp_server_service import MCPServerService
+from core.utils.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
+
+
+class ChatAgentAdapter:
+    """对话Agent适配器，直接复用Agent类但适配对话场景"""
+
+    def __init__(self, tenant_id: str, llm_name: str, system_prompt: str = "", mcp_ids: list[str] = None):
+        self.tenant_id = tenant_id
+        self.llm_name = llm_name
+        self.system_prompt = system_prompt
+        self.mcp_ids = mcp_ids or []
+
+        # 创建简化的Canvas mock - 只提供Agent需要的接口
+        self.canvas_mock = self._create_canvas_mock()
+
+        # 创建Agent参数，直接复用AgentParam
+        agent_param = AgentParam()
+        agent_param.llm_id = llm_name
+        agent_param.sys_prompt = system_prompt or "You are a helpful AI assistant."
+        agent_param.prompts = [{"role": "user", "content": "{sys.query}"}]
+        agent_param.mcp = self._prepare_mcp_config()
+        agent_param.tools = []
+        agent_param.max_rounds = 5
+        agent_param.cite = True
+        agent_param.temperature = 0.1
+        agent_param.max_tokens = 0
+
+        # 创建Agent实例，直接复用完整的Agent功能
+        self.agent = Agent(self.canvas_mock, "chat_agent", agent_param)
+
+    def _create_canvas_mock(self):
+        """创建最小化的Canvas mock，满足Agent的依赖"""
+        from agent.canvas import Canvas
+
+        class CanvasMock(Canvas):
+            def __init__(self, tenant_id):
+                # 使用最小化的DSL初始化Canvas
+                minimal_dsl = json.dumps({
+                    "components": {
+                        "begin": {
+                            "obj": {
+                                "component_name": "Begin",
+                                "params": {
+                                    "prologue": "Hi there!"
+                                }
+                            },
+                            "downstream": [],
+                            "upstream": [],
+                            "parent_id": ""
+                        }
+                    },
+                    "history": [],
+                    "path": [],
+                    "retrieval": [],
+                    "globals": {
+                        "sys.query": "",
+                        "sys.user_id": tenant_id,
+                        "sys.conversation_turns": 0,
+                        "sys.files": []
+                    }
+                })
+                super().__init__(minimal_dsl, tenant_id=tenant_id)
+                self._tenant_id = tenant_id
+                self.history = []
+                self.retrieval = {"chunks": {}, "doc_aggs": {}}
+                self.memory = []
+                self.globals = {
+                    "sys.query": "",
+                    "sys.user_id": tenant_id,
+                    "sys.conversation_turns": 0,
+                    "sys.files": []
+                }
+
+            def get_tenant_id(self):
+                return self._tenant_id
+
+            def get_history(self, window_size=10):
+                return self.history[-window_size:] if self.history else []
+
+            def get_reference(self):
+                return self.retrieval
+
+            def get_memory(self):
+                return self.memory
+
+            def add_memory(self, user, assist, summ):
+                self.memory.append((user, assist, summ))
+
+            def tool_use_callback(self, component_id, *args, **kwargs):
+                logging.debug(f"Tool callback: {component_id}")
+
+            def get_variable_value(self, var_name):
+                return self.globals.get(var_name, "")
+
+            def set_variable_value(self, var_name, value):
+                self.globals[var_name] = value
+
+        return CanvasMock(self.tenant_id)
+
+    def _prepare_mcp_config(self):
+        """准备MCP配置，直接复用现有的MCP服务查询逻辑"""
+        mcp_config = []
+
+        if self.mcp_ids:
+            for mcp_id in self.mcp_ids:
+                try:
+                    with db_connection() as db:
+                        # 使用正确的MCPServerService调用方式
+                        mcp_server = MCPServerService.get_by_id(db, mcp_id)
+                    if mcp_server and mcp_server.tenant_id == self.tenant_id:
+                        cached_tools = (mcp_server.variables or {}).get("tools", {})
+                        if cached_tools:
+                            mcp_config.append({
+                                "mcp_id": mcp_id,
+                                "tools": cached_tools
+                            })
+                except Exception as e:
+                    logging.warning(f"Failed to load MCP server {mcp_id}: {e}")
+
+        return mcp_config
+
+    def chat_with_tools_stream(self, query: str, messages: list[dict] = None,
+                               knowledge_context: str = "", files: list[str] = None):
+        """使用工具进行流式对话，直接复用Agent的流式能力"""
+
+        # 准备历史记录 - 适配Agent的消息格式
+        if messages:
+            self.canvas_mock.history = messages
+
+        # 准备输入变量
+        self.canvas_mock.globals["sys.query"] = query
+        if files:
+            self.canvas_mock.globals["sys.files"] = files
+
+        # 如果有知识上下文，临时修改系统提示词
+        original_prompt = self.agent._param.sys_prompt
+        if knowledge_context:
+            enhanced_prompt = original_prompt + "\n\n" + knowledge_context
+            self.agent._param.sys_prompt = enhanced_prompt
+
+        try:
+            # 准备Agent调用参数
+            kwargs = {
+                "user_prompt": query,
+                "reasoning": "Direct chat request",
+                "context": "Chat conversation context"
+            }
+
+            # 检查Agent是否有工具
+            if self.agent.tools:
+                # 有工具时，使用Agent的完整流式工具调用能力
+                # 直接复用Agent的stream_output_with_tools方法
+                prompt, msg = self.agent._prepare_prompt_variables()
+
+                # 创建用于收集工具使用历史的列表
+                use_tools = []
+
+                # 添加工具调用开始提示
+                yield "🔧 Starting tool analysis...\n"
+
+                # 直接调用Agent的_react_with_tools_streamly方法，监控工具调用
+                previous_tool_count = 0
+                for delta_ans, _ in self.agent._react_with_tools_streamly(msg, use_tools):
+                    # 检查是否有新的工具调用
+                    if len(use_tools) > previous_tool_count:
+                        # 显示新的工具调用
+                        new_tools = use_tools[previous_tool_count:]
+                        for tool_call in new_tools:
+                            tool_name = tool_call.get('name', 'Unknown')
+                            tool_args = tool_call.get('arguments', {})
+
+                            # 简化参数显示
+                            args_preview = ""
+                            if isinstance(tool_args, dict) and tool_args:
+                                key_args = []
+                                # for k, v in list(tool_args.items())[:2]:  # 只显示前2个关键参数
+                                for k, v in list(tool_args.items()):
+                                    # if isinstance(v, str) and len(v) > 30:
+                                    #     v = v[:30] + "..."
+                                    key_args.append(f"{k}={v}")
+                                args_preview = f"({', '.join(key_args)})"
+
+                            yield f"\n🔧 **工具调用**: {tool_name}{args_preview}\n"
+
+                            # 显示结果（如果已有结果）
+                            tool_results = tool_call.get('results', '')
+                            if tool_results:
+                                results_preview = str(tool_results)
+                                # if len(results_preview) > 200:
+                                #     results_preview = results_preview[:200] + "..."
+                                yield f"📋 **结果**: {results_preview}\n\n"
+
+                        previous_tool_count = len(use_tools)
+                    if delta_ans:
+                        yield delta_ans
+
+                # 保存工具使用历史，供verbose模式使用
+                self.agent._last_use_tools = use_tools
+                # 同时设置为Agent的标准输出格式
+                if use_tools:
+                    self.agent.set_output("use_tools", use_tools)
+
+            else:
+                # 没有工具时，直接使用LLM流式输出
+                # 调用Agent的invoke方法获取流式生成器
+                self.agent._param.prompts = [{"role": "user", "content": query}]
+                prompt, msg = self.agent._prepare_prompt_variables()
+
+                # 直接使用Agent的_stream_output方法
+                for delta in self.agent._stream_output(prompt, msg):
+                    yield delta
+
+        finally:
+            # 恢复原始系统提示词
+            if knowledge_context:
+                self.agent._param.sys_prompt = original_prompt
+
+
+
+def prepare_knowledge_context(db: Session, messages: list[dict], tavily_api_key: str, tenant_id: str, llm_name: str) -> str:
+    """准备知识上下文，复用现有的Tavily集成"""
+    knowledge_context = ""
+
+    if tavily_api_key and messages:
+        try:
+            llm_model_config = TenantLLMService.get_model_config(db, tenant_id, LLMType.CHAT, llm_name)
+            max_tokens = llm_model_config.get("max_tokens", 8192)
+
+            kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
+            questions = [m["content"] for m in messages if m["role"] == "user"]
+
+            if questions:
+                tav = Tavily(tavily_api_key)
+                tav_res = tav.retrieve_chunks(" ".join(questions))
+                kbinfos["chunks"].extend(tav_res["chunks"])
+                kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
+                kbinfos["total"] = len(kbinfos["chunks"])
+
+            if kbinfos["total"] > 0:
+                knowledges = kb_prompt(kbinfos, max_tokens)
+                knowledge_context = "\n------\n" + "\n\n------\n\n".join(knowledges)
+
+        except Exception as e:
+            logging.warning(f"Tavily search failed: {e}")
+
+    return knowledge_context
 
 
 class SetAPIKeyRequest(BaseModel):
@@ -87,6 +334,22 @@ class LLMServiceRequest(BaseModel):
     gen_conf: dict[str, Any]
     image: str = ""
     tavily_api_key: str = ""
+
+
+class ChatRequest(BaseModel):
+    """聊天请求模型"""
+    prompt: str = ""
+    messages: list[dict[str, Any]]
+    llm_name: str
+    stream: bool = True
+    gen_conf: dict[str, Any] = {}
+    image: str = ""
+    tavily_api_key: str = ""
+    # MCP 集成相关
+    mcp_ids: list[str] = []
+    mcp_timeout: float = 10.0
+    verbose_tool_use: bool = False
+    files: list[str] = []
 
 
 class FinePromptRequest(BaseModel):
@@ -1734,3 +1997,192 @@ def fill_fields(
         "missing": final["missing"],
         "invalid": final["invalid"]
     })
+
+
+@router.post('/enhanced_chat_sse')
+async def enhanced_chat_service_sse(
+        request: ChatRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+
+    mcp_sessions = []
+
+    try:
+        # 获取租户信息
+        try:
+            tenants = TenantService.get_info_by(db, user.id)
+            if not tenants:
+                raise HTTPException(status_code=404, detail="Tenant not found!")
+
+            tenant_id = tenants[0]["tenant_id"]
+        except Exception as e:
+            logging.error(f"Failed to get tenant info: {e}")
+            raise HTTPException(status_code=500, detail="Failed to get tenant information")
+
+        # 验证模型
+        try:
+            my_llms = TenantLLMService.get_my_llms(db, tenant_id)
+        except Exception as e:
+            logging.error(f"Failed to get LLMs: {e}")
+            raise HTTPException(status_code=500, detail="Failed to get available models")
+
+        llm_type = None
+        for row in my_llms:
+            if row[4] == request.llm_name:
+                llm_type = row[-3]
+                break
+
+        if not llm_type:
+            raise HTTPException(status_code=404, detail=f"Model {request.llm_name} not found")
+
+        # 准备知识上下文（复用现有的Tavily集成）
+        knowledge_context = prepare_knowledge_context(db, request.messages, request.tavily_api_key, tenant_id, request.llm_name)
+
+        # 创建对话Agent适配器，直接复用Agent类
+        chat_agent = ChatAgentAdapter(
+            tenant_id=tenant_id,
+            llm_name=request.llm_name,
+            system_prompt=request.prompt,
+            mcp_ids=request.mcp_ids
+        )
+
+        if not request.stream:
+            # 非流式响应
+            result_content = ""
+            try:
+                for delta in chat_agent.chat_with_tools_stream(
+                        query=request.messages[-1]["content"] if request.messages else "",
+                        messages=request.messages[:-1] if request.messages else [],
+                        knowledge_context=knowledge_context,
+                        files=request.files
+                ):
+                    result_content += delta
+
+                return {"retcode": 0, "retmsg": "success", "data": {"answer": result_content}}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
+
+        # 流式响应
+        async def sse_stream():
+            try:
+                accumulated_content = ""
+
+                # 开始标记
+                start_data = {
+                    "retcode": 0,
+                    "retmsg": "Chat started",
+                    "data": ""
+                }
+                yield f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n"
+
+                # 流式对话
+                stream_generator = chat_agent.chat_with_tools_stream(
+                    query=request.messages[-1]["content"] if request.messages else "",
+                    messages=request.messages[:-1] if request.messages else [],
+                    knowledge_context=knowledge_context,
+                    files=request.files
+                )
+
+                # 简化流式输出处理
+                for delta in stream_generator:
+                    if delta:  # 只有非空内容才输出
+                        accumulated_content += delta
+
+                        response_data = {
+                            "retcode": 0,
+                            "retmsg": "",
+                            "data": accumulated_content
+                        }
+                        yield f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
+
+                # 如果启用详细模式，显示工具调用统计
+                if request.verbose_tool_use and chat_agent.agent.tools:
+                    use_tools = getattr(chat_agent.agent, '_last_use_tools', [])
+                    if use_tools:
+                        tools_summary = f"\n\n📊 **本次对话使用了 {len(use_tools)} 个工具调用**"
+
+                        # tools_summary = "\n\n**工具调用历史（仅展示最近3个工具调用）**:\n"
+                        # for i, tool_call in enumerate(use_tools[-3:], 1):  # 最近3个工具调用
+                        #     tool_name = tool_call.get('name', 'Unknown')
+                        #     tool_args = tool_call.get('arguments', {})
+                        #     tool_results = tool_call.get('results', '')
+                        #
+                        #     # 格式化参数显示
+                        #     args_str = ""
+                        #     if isinstance(tool_args, dict) and tool_args:
+                        #         args_items = []
+                        #         for k, v in list(tool_args.items())[:3]:  # 只显示前3个参数
+                        #             if isinstance(v, str) and len(v) > 50:
+                        #                 v = v[:50] + "..."
+                        #             args_items.append(f"{k}={v}")
+                        #         args_str = f"({', '.join(args_items)})"
+                        #
+                        #     # 格式化结果显示，保留更多内容
+                        #     results_str = str(tool_results)
+                        #     if len(results_str) > 500:  # 增加到500字符
+                        #         results_str = results_str[:500] + "..."
+                        #
+                        #     tools_summary += f"\n**{i}. {tool_name}**{args_str}:\n```\n{results_str}\n```\n"
+
+                        accumulated_content += tools_summary
+                        final_data = {
+                            "retcode": 0,
+                            "retmsg": "",
+                            "data": accumulated_content
+                        }
+                        yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
+
+                # 结束标记
+                end_data = {
+                    "retcode": 0,
+                    "retmsg": "Stream completed",
+                    "data": True
+                }
+                yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
+
+            except Exception as e:
+                logging.exception(f"Stream error: {e}")
+                error_data = {
+                    "retcode": 500,
+                    "retmsg": str(e),
+                    "data": {"answer": f"**ERROR**: {str(e)}"}
+                }
+                yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+
+                # 错误后的结束标记
+                end_data = {
+                    "retcode": 0,
+                    "retmsg": "",
+                    "data": True
+                }
+                yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            sse_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control",
+                "Access-Control-Expose-Headers": "X-Accel-Buffering"
+            }
+        )
+
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        logging.exception(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # 清理MCP会话
+        if mcp_sessions:
+            try:
+                close_multiple_mcp_toolcall_sessions(mcp_sessions)
+            except Exception as e:
+                logging.warning(f"Error closing MCP sessions: {e}")

@@ -52,7 +52,8 @@ class LLMToolPluginCallSession(ToolCallSession):
         assert name in self.tools_map, f"LLM tool {name} does not exist"
         st = timer()
         if isinstance(self.tools_map[name], MCPToolCallSession):
-            resp = self.tools_map[name].tool_call(name, arguments, 60)
+            # resp = self.tools_map[name].tool_call(name, arguments, 60)
+            resp = self.tools_map[name].tool_call(name, arguments, 120)
         else:
             resp = self.tools_map[name].invoke(**arguments)
 

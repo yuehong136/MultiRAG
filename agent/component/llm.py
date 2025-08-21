@@ -77,7 +77,9 @@ class LLM(ComponentBase):
 
     def __init__(self, canvas, id, param: ComponentParamBase):
         super().__init__(canvas, id, param)
-        self.chat_mdl = LLMBundle(self._canvas.get_tenant_id(), TenantLLMService.llm_id2llm_type(self._param.llm_id),
+        from api.db.db_models import db_connection
+        with db_connection() as db:
+            self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), TenantLLMService.llm_id2llm_type(self._param.llm_id),
                                   self._param.llm_id, max_retries=self._param.max_retries,
                                   retry_interval=self._param.delay_after_error
                                   )
