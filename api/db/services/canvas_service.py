@@ -263,7 +263,7 @@ def completion(
     逻辑 2: 逐步 run 并 SSE 输出
     逻辑 3: 写入消息/引用/错误，并更新会话 DSL
     """
-    query = kwargs.get("query", "") or ""
+    query = kwargs.get("query", "") or kwargs.get("question", "") or ""
     files = kwargs.get("files", []) or []
     inputs = kwargs.get("inputs", {}) or {}
     user_id = kwargs.get("user_id", "") or ""
