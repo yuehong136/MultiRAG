@@ -321,7 +321,7 @@ async def build_chunks(task, progress_callback, db: Session):
             d = copy.deepcopy(document)
             d.update(chunk)
             d["pk"] = xxhash.xxh64(
-                (chunk["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
+                (chunk["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
             d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
             d["create_timestamp_flt"] = datetime.now().timestamp()
             d["page_num_int"] = d.get("page_num_int", [])
