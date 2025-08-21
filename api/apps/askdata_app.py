@@ -92,17 +92,19 @@ async def get_sql_and_table_config(
         query_complexity = sql_generation_result["queryComplexity"]
 
         # 构建使用到的模型和表的详情字典
-        _, used_table_detail_dict, model_list, intersection_dataset_ids = await service.build_model_details(
+        used_model_detail_dict, used_table_detail_dict, model_list, intersection_dataset_ids = await service.get_model_details_and_determine_dataset(
             model_ids=body.semantic_layer.get('model_ids', []),
-            used_models=used_models,dataset_id_list=body.dataset_id_list)
-
-        if len(intersection_dataset_ids) > 1:
-            logger.error(f"模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
-            logger.error(f"model_ids: {body.semantic_layer.get('model_ids', [])}, used_models: {used_models}")
-            raise Exception("模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
+            used_models=used_models, dataset_id_list=body.dataset_id_list)
 
         # 执行查询
-        result = await query_data_with_params(sql, list(intersection_dataset_ids)[0], [])
+        if not intersection_dataset_ids:
+            logger.error("无法确定数据集ID")
+            return ResponseSchema(
+                status=StatusEnum.ERROR,
+                message="无法确定查询的数据集"
+            )
+        dataset_id = list(intersection_dataset_ids)[0]
+        result = await query_data_with_params(sql, dataset_id, [])
         if result["status"] == "error":
             logger.error(f"查询数据失败: {result['message']}")
             logger.info("尝试修复SQL查询")
@@ -113,7 +115,14 @@ async def get_sql_and_table_config(
                 semantic_layer=body.semantic_layer.get('processed_semantic_layer', {}),
                 llm_name=body.llm_name
             )
-            new_result = await query_data_with_params(fix_result["sql"], list(intersection_dataset_ids)[0], [])
+            if not intersection_dataset_ids:
+                logger.error("无法确定数据集ID")
+                return ResponseSchema(
+                    status=StatusEnum.ERROR,
+                    message="无法确定查询的数据集"
+                )
+            dataset_id = list(intersection_dataset_ids)[0]
+            new_result = await query_data_with_params(sql, dataset_id, [])
             if new_result["status"] == "error":
                 logger.error(f"修复后查询数据失败: {new_result['message']}")
                 return ResponseSchema(
@@ -127,15 +136,10 @@ async def get_sql_and_table_config(
                 sql_components = fix_result["sqlComponents"]
                 used_models = fix_result["usedModels"]
                 # 构建使用到的模型和表的详情字典
-                _, used_table_detail_dict, model_list, intersection_dataset_ids = await service.build_model_details(
+                used_model_detail_dict, used_table_detail_dict, model_list, intersection_dataset_ids = await service.get_model_details_and_determine_dataset(
                     model_ids=body.semantic_layer.get('model_ids', []),
                     used_models=used_models,
                     dataset_id_list=body.dataset_id_list)
-
-                if len(intersection_dataset_ids) > 1:
-                    logger.error(f"模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
-                    logger.error(f"model_ids: {body.semantic_layer.get('model_ids', [])}, used_models: {used_models}")
-                    raise Exception("模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
 
         # 复杂查询，直接返回结果
         if query_complexity == "complex":
@@ -171,7 +175,7 @@ async def get_sql_and_table_config(
             "table_config": table_config,
             "sql_components": sql_components,
             "model_table_alias_mapping_list": model_table_alias_mapping_list,
-            "dataset_id": list(intersection_dataset_ids)[0]
+            "dataset_id": list(intersection_dataset_ids)[0] if intersection_dataset_ids else None
         }
 
         return ResponseSchema(
@@ -349,7 +353,7 @@ async def get_semantic_layer_streaming(
             dataset_id_list=body.dataset_id_list,
             userid=body.userid,
             event_id=custom_event_id,
-            enable_deep_search = body.enable_deep_search,
+            enable_deep_search=body.enable_deep_search,
             llm_name=body.llm_name)
 
         logger.info(f"processed_semantic_layer:{processed_semantic_layer}")

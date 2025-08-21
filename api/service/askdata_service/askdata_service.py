@@ -4,7 +4,6 @@ import logging
 from datetime import date
 from enum import Enum
 from typing import Any, List, Dict, Optional, Tuple, Set
-from collections import Counter
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
 
@@ -29,6 +28,8 @@ from api.service.askdata_service.util.semantic_permissions_filter import filter_
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
+from api.service.askdata_service.model_dataset_resolver import ModelDatasetResolver
+
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class AskdataService:
         self.history_service = AskDataHistoryService()
         self.table_config_generator = TableConfigGenerator(self.semantic_api_client)
         self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
+        self.model_dataset_resolver = ModelDatasetResolver(self.semantic_api_client)
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
                                       userid:str, llm_name: str = None,
@@ -227,86 +229,19 @@ class AskdataService:
             recommended_chart=recommended_chart
         )
 
-    async def build_model_details(self, model_ids: List[str],
-                                  used_models: List[str], dataset_id_list: List[str]) -> Tuple[Dict, Dict, List, Set]:
-        """构建模型详情字典"""
-        used_model_detail_dict = {}
-        used_table_detail_dict = {}
-        model_list = []
-
-        model_detail_list = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
-        logger.info(f"model_detail_list: {model_detail_list}")
-
-        model_in_dataset_dict: Dict[str, List[str]] = {}
-
-        for model_detail in model_detail_list:
-            if model_detail.get('modelName') in used_models:
-                # 获取模型的指标和维度信息
-                model_detail[
-                    'dimsAndMetrics'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
-                    model_id=model_detail["modelId"]
-                )
-                model_list.append(model_detail)
-                used_model_detail_dict[model_detail["modelName"]] = model_detail
-                used_table_detail_dict[model_detail["tableName"]] = model_detail
-                used_in_dataset_id_list = []
-                for dataset in model_detail["usedInDatasets"]:
-                    used_in_dataset_id_list.append(dataset["datasetId"])
-                model_in_dataset_dict[model_detail["modelId"]] = used_in_dataset_id_list
-
-        logger.info(f"model_in_dataset_dict: {model_in_dataset_dict}")
-
-        intersection_dataset_ids = self._get_intersection_of_all_lists(model_in_dataset_dict)
-        if len(dataset_id_list) == 1:
-            intersection_dataset_ids = set(dataset_id_list)
-            return used_model_detail_dict, used_table_detail_dict, model_list, intersection_dataset_ids
-        if len(intersection_dataset_ids) == 0:
-            logger.error(f"模型中没有使用任何数据集，可能导致无法生成正确的SQL。")
-            logger.error(f"model_ids: {model_ids}, used_models: {used_models}")
-            raise Exception("模型中没有使用任何数据集，可能导致无法生成正确的SQL。")
-        if len(intersection_dataset_ids) > 1:
-            logger.error(f"模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
-            logger.error(f"model_ids: {model_ids}, used_models: {used_models}")
-            raise Exception("模型中存在多个数据集使用，可能导致无法生成正确的SQL。")
-
-        return used_model_detail_dict, used_table_detail_dict, model_list, intersection_dataset_ids
-
-    def _get_intersection_of_all_lists(self, data_dict):
-        """获取字典中所有列表的交集，如果没有交集则返回出现次数最多的值"""
-        if not data_dict:
-            return set()
-
-        # 过滤掉空列表
-        non_empty_lists = [lst for lst in data_dict.values() if lst]
-
-        if not non_empty_lists:
-            return set()
-
-        # 将第一个非空列表转为集合作为初始交集
-        result = set(non_empty_lists[0])
-
-        # 与其他所有非空列表取交集
-        for lst in non_empty_lists[1:]:
-            result = result.intersection(set(lst))
-
-        # 如果有交集，直接返回
-        if result:
-            return result
-
-        # 如果没有交集，统计所有元素出现次数，返回出现次数最多的值
-        all_elements = []
-        for lst in non_empty_lists:
-            all_elements.extend(lst)
-
-        if not all_elements:
-            return set()
-
-        # 使用Counter统计出现次数
-        counter = Counter(all_elements)
-        # 获取出现次数最多的元素
-        most_common_element = counter.most_common(1)[0][0]
-
-        return {most_common_element}
+    async def get_model_details_and_determine_dataset(
+        self,
+        model_ids: List[str],
+        used_models: List[str],
+        dataset_id_list: List[str]
+    ) -> Tuple[Dict, Dict, List, Set]:
+        """
+        构建模型详情字典，并确定使用的数据集
+        委托给专门的解析器处理
+        """
+        return await self.model_dataset_resolver.get_model_details_and_determine_dataset(
+            model_ids, used_models, dataset_id_list
+        )
 
     async def add_ask_data_history(self, conversation_id: str, ask_id: str, data: str):
         """添加一条问数历史记录。"""
