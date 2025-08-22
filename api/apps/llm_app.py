@@ -258,6 +258,139 @@ class ChatAgentAdapter:
             if knowledge_context:
                 self.agent._param.sys_prompt = original_prompt
 
+    def chat_with_tools_stream_structured(self, query: str, messages: list[dict] = None,
+                                         knowledge_context: str = "", files: list[str] = None):
+        """
+        带工具的流式对话 - 结构化输出版本
+        返回结构化的SSE消息，每个文本消息都包含累积内容
+        """
+        # 处理历史消息
+        messages = messages or []
+        history = []
+        for msg in messages:
+            history.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", "")
+            })
+        
+        if query:
+            history.append({"role": "user", "content": query})
+        
+        # 合并知识上下文到系统提示词
+        original_prompt = self.agent._param.sys_prompt
+        if knowledge_context:
+            self.agent._param.sys_prompt = self.agent._param.sys_prompt + "\n" + knowledge_context
+        
+        try:
+            # 准备提示词
+            self.agent._param.prompts = history
+            prompt, msg = self.agent._prepare_prompt_variables()
+            
+            # 累积文本内容（重要：与原实现保持一致）
+            accumulated_text = ""
+            
+            # 检查是否有工具可用
+            if self.agent.tools:
+                use_tools = []
+                
+                # 发送工具分析开始消息
+                yield {"type": "tool_start", "content": "Starting tool analysis..."}
+                
+                # 调用Agent的_react_with_tools_streamly方法
+                previous_tool_count = 0
+                call_id_counter = 0
+                
+                for delta_ans, _ in self.agent._react_with_tools_streamly(msg, use_tools):
+                    # 检查是否有新的工具调用
+                    if len(use_tools) > previous_tool_count:
+                        new_tools = use_tools[previous_tool_count:]
+                        for tool_call in new_tools:
+                            call_id_counter += 1
+                            call_id = f"call_{call_id_counter}"
+                            
+                            tool_name = tool_call.get('name', 'Unknown')
+                            tool_args = tool_call.get('arguments', {})
+                            
+                            # 发送工具调用消息
+                            yield {
+                                "type": "tool_call",
+                                "content": {
+                                    "tool_name": tool_name,
+                                    "arguments": tool_args,
+                                    "call_id": call_id
+                                }
+                            }
+                            
+                            # 如果有结果，发送工具结果消息
+                            tool_results = tool_call.get('results', '')
+                            if tool_results:
+                                yield {
+                                    "type": "tool_result",
+                                    "content": {
+                                        "tool_name": tool_name,
+                                        "result": tool_results,
+                                        "call_id": call_id,
+                                        "success": True
+                                    }
+                                }
+                        
+                        previous_tool_count = len(use_tools)
+                    
+                    # 处理文本增量并输出累积内容
+                    if delta_ans:
+                        accumulated_text += delta_ans  # 累积增量
+                        # 输出累积内容（与原实现一致）
+                        yield {
+                            "type": "text",
+                            "content": accumulated_text  # 直接输出累积内容
+                        }
+                
+                # 发送工具分析结束消息
+                if use_tools:
+                    yield {
+                        "type": "tool_end",
+                        "content": {
+                            "total_calls": len(use_tools),
+                            "summary": f"Used {len(use_tools)} tool(s)"
+                        }
+                    }
+                
+                # 保存工具使用历史
+                self.agent._last_use_tools = use_tools
+                if use_tools:
+                    self.agent.set_output("use_tools", use_tools)
+            
+            else:
+                # 没有工具时，直接使用LLM流式输出
+                self.agent._param.prompts = [{"role": "user", "content": query}]
+                prompt, msg = self.agent._prepare_prompt_variables()
+                
+                for delta in self.agent._stream_output(prompt, msg):
+                    if delta:
+                        accumulated_text += delta  # 累积增量
+                        # 输出累积内容（与原实现一致）
+                        yield {
+                            "type": "text",
+                            "content": accumulated_text  # 直接输出累积内容
+                        }
+            
+            # 不再发送完成消息，由外层处理
+        
+        except Exception as e:
+            # 发送错误消息
+            yield {
+                "type": "error",
+                "content": {
+                    "error": str(e),
+                    "code": 500
+                }
+            }
+        
+        finally:
+            # 恢复原始系统提示词
+            if knowledge_context:
+                self.agent._param.sys_prompt = original_prompt
+
 
 
 def prepare_knowledge_context(db: Session, messages: list[dict], tavily_api_key: str, tenant_id: str, llm_name: str) -> str:
@@ -358,6 +491,8 @@ class ChatRequest(BaseModel):
     mcp_timeout: float = 10.0
     verbose_tool_use: bool = False
     files: list[str] = []
+    # 结构化输出控制
+    structured_output: bool = False  # 是否使用结构化的SSE消息格式
 
 
 class FinePromptRequest(BaseModel):
@@ -2074,41 +2209,70 @@ async def enhanced_chat_service_sse(
         # 流式响应
         async def sse_stream():
             try:
-                accumulated_content = ""
-
-                # 开始标记
-                start_data = {
-                    "retcode": 0,
-                    "retmsg": "Chat started",
-                    "data": ""
-                }
-                yield f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n"
-
-                # 流式对话
-                stream_generator = chat_agent.chat_with_tools_stream(
-                    query=request.messages[-1]["content"] if request.messages else "",
-                    messages=request.messages[:-1] if request.messages else [],
-                    knowledge_context=knowledge_context,
-                    files=request.files
-                )
-
-                # 简化流式输出处理
-                for delta in stream_generator:
-                    if delta:  # 只有非空内容才输出
-                        accumulated_content += delta
-
-                        response_data = {
+                # 根据structured_output参数选择输出格式
+                if request.structured_output:
+                    # 使用结构化格式输出
+                    stream_generator = chat_agent.chat_with_tools_stream_structured(
+                        query=request.messages[-1]["content"] if request.messages else "",
+                        messages=request.messages[:-1] if request.messages else [],
+                        knowledge_context=knowledge_context,
+                        files=request.files
+                    )
+                    
+                    # 输出结构化消息，保持原有的包装格式
+                    for message in stream_generator:
+                        # 将结构化消息包装成原有格式
+                        wrapped_message = {
                             "retcode": 0,
                             "retmsg": "",
-                            "data": accumulated_content
+                            "data": message  # 整个结构化消息作为data
                         }
-                        yield f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps(wrapped_message, ensure_ascii=False)}\n\n"
+                    
+                    # 发送结束标记（与原格式保持一致）
+                    end_data = {
+                        "retcode": 0,
+                        "retmsg": "Stream completed",
+                        "data": True
+                    }
+                    yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
+                else:
+                    # 使用原始格式输出（向后兼容）
+                    accumulated_content = ""
 
-                # 如果启用详细模式，显示工具调用统计
-                if request.verbose_tool_use and chat_agent.agent.tools:
-                    use_tools = getattr(chat_agent.agent, '_last_use_tools', [])
-                    if use_tools:
-                        tools_summary = f"\n\n📊 **本次对话使用了 {len(use_tools)} 个工具调用**"
+                    # 开始标记
+                    start_data = {
+                        "retcode": 0,
+                        "retmsg": "Chat started",
+                        "data": ""
+                    }
+                    yield f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n"
+
+                    # 流式对话
+                    stream_generator = chat_agent.chat_with_tools_stream(
+                        query=request.messages[-1]["content"] if request.messages else "",
+                        messages=request.messages[:-1] if request.messages else [],
+                        knowledge_context=knowledge_context,
+                        files=request.files
+                    )
+
+                    # 简化流式输出处理
+                    for delta in stream_generator:
+                        if delta:  # 只有非空内容才输出
+                            accumulated_content += delta
+
+                            response_data = {
+                                "retcode": 0,
+                                "retmsg": "",
+                                "data": accumulated_content
+                            }
+                            yield f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
+
+                    # 如果启用详细模式，显示工具调用统计（仅在非结构化模式下）
+                    if request.verbose_tool_use and chat_agent.agent.tools:
+                        use_tools = getattr(chat_agent.agent, '_last_use_tools', [])
+                        if use_tools:
+                            tools_summary = f"\n\n📊 **本次对话使用了 {len(use_tools)} 个工具调用**"
 
                         # tools_summary = "\n\n**工具调用历史（仅展示最近3个工具调用）**:\n"
                         # for i, tool_call in enumerate(use_tools[-3:], 1):  # 最近3个工具调用
@@ -2129,25 +2293,25 @@ async def enhanced_chat_service_sse(
                         #     # 格式化结果显示，保留更多内容
                         #     results_str = str(tool_results)
                         #     if len(results_str) > 500:  # 增加到500字符
-                        #         results_str = results_str[:500] + "..."
-                        #
-                        #     tools_summary += f"\n**{i}. {tool_name}**{args_str}:\n```\n{results_str}\n```\n"
+                            #         results_str = results_str[:500] + "..."
+                            #
+                            #     tools_summary += f"\n**{i}. {tool_name}**{args_str}:\n```\n{results_str}\n```\n"
 
-                        accumulated_content += tools_summary
-                        final_data = {
-                            "retcode": 0,
-                            "retmsg": "",
-                            "data": accumulated_content
-                        }
-                        yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
+                            accumulated_content += tools_summary
+                            final_data = {
+                                "retcode": 0,
+                                "retmsg": "",
+                                "data": accumulated_content
+                            }
+                            yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
 
-                # 结束标记
-                end_data = {
-                    "retcode": 0,
-                    "retmsg": "Stream completed",
-                    "data": True
-                }
-                yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
+                    # 结束标记（仅在非结构化模式下）
+                    end_data = {
+                        "retcode": 0,
+                        "retmsg": "Stream completed",
+                        "data": True
+                    }
+                    yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
             except Exception as e:
                 logging.exception(f"Stream error: {e}")
