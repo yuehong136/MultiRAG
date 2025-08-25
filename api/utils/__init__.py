@@ -1,6 +1,7 @@
 import base64
 import copy
 import datetime
+import hashlib
 import io
 import json
 import os
@@ -64,6 +65,22 @@ def show_configs():
             if "secret_key" in v:
                 v = copy.deepcopy(v)
                 v["secret_key"] = "*" * 8
+            if "secret" in v:
+                v = copy.deepcopy(v)
+                v["secret"] = "*" * 8
+            if "sas_token" in v:
+                v = copy.deepcopy(v)
+                v["sas_token"] = "*" * 8
+            if "oauth" in k:
+                v =  copy.deepcopy(v)
+                for key, val in v.items():
+                  if "client_secret" in val:
+                      val["client_secret"] = "*" * 8
+            if "authentication" in k:
+                v =  copy.deepcopy(v)
+                for key, val in v.items():
+                  if "http_secret_key" in val:
+                      val["http_secret_key"] = "*" * 8
         msg += f"\n\t{k}: {v}"
     # logging.info("默认不展示service_conf.yaml,如有需要,请至 api/utils/__init__.py 解开注释")
     logging.info(msg)
@@ -382,6 +399,9 @@ def delta_seconds(date_string: str):
     delta = now - date_string
     return delta.total_seconds()
 
+
+def hash_str2int(line:str, mod: int=10 ** 8) -> int:
+    return int(hashlib.sha1(line.encode("utf-8")).hexdigest(), 16) % mod
 
 HTTP_STATUS_CODES = {
     100: "Continue",

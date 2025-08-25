@@ -30,13 +30,21 @@ from core.llm.cv_model.models.azuregptv4 import AzureGptV4
 from core.llm.cv_model.models.baiduyiyan_cv import BaiduYiyanCV
 from core.llm.cv_model.models.gemini_cv import GeminiCV
 from core.llm.cv_model.models.gptv4 import GptV4
+from core.llm.cv_model.models.gpustack_cv import GPUStackCV
+from core.llm.cv_model.models.hunyuan_cv import HunyuanCV
 from core.llm.cv_model.models.lmstudio_cv import LmStudioCV
+from core.llm.cv_model.models.local_cv import LocalCV
+from core.llm.cv_model.models.localai_cv import LocalAICV
 from core.llm.cv_model.models.ollama_cv import OllamaCV
 from core.llm.cv_model.models.openai_api_cv import OpenAI_APICV
+from core.llm.cv_model.models.openrouter_cv import OpenRouterCV
 from core.llm.cv_model.models.qwen_cv import QWenCV
 from core.llm.cv_model.models.siliconflow_cv import SILICONFLOWCV
+from core.llm.cv_model.models.stepfun_cv import StepFunCV
+from core.llm.cv_model.models.togetherai_cv import TogetherAICV
 from core.llm.cv_model.models.xai_cv import xAICV
 from core.llm.cv_model.models.xinferencecv import XinferenceCV
+from core.llm.cv_model.models.yi_cv import YiCV
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 from core.llm.embedding_model.cohere_embed import CoHereEmbed
 from core.llm.embedding_model.default_embedding import DefaultEmbedding
@@ -60,9 +68,11 @@ from core.llm.rerank_model.default_rerank import DefaultRerank
 from core.llm.rerank_model.gpustack_rerank import GPUStackRerank
 from core.llm.rerank_model.huggingface_rerank import HuggingfaceRerank
 from core.llm.rerank_model.jina_rerank import JinaRerank
+from core.llm.rerank_model.lmstudio_rerank import LmStudioRerank
 from core.llm.rerank_model.localai_rerank import LocalAIRerank
 from core.llm.rerank_model.openai_api_rerank import OpenAI_APIRerank
 from core.llm.rerank_model.qwen_rerank import QWenRerank
+from core.llm.rerank_model.togetherai_rerank import TogetherAIRerank
 from core.llm.rerank_model.xinference_rerank import XInferenceRerank
 from core.llm.rerank_model.youdao_rerank import YoudaoRerank
 from core.llm.sequence2txt_model.azureseq2txt import AzureSeq2txt
@@ -118,6 +128,14 @@ CvModel = {
     "BaiduYiyan": BaiduYiyanCV,
     "LM-Studio": LmStudioCV,
     "xAI": xAICV,
+    "Tencent Hunyuan": HunyuanCV,
+    "StepFun": StepFunCV,
+    "TogetherAI": TogetherAICV,
+    "01.AI": YiCV,
+    "OpenRouter": OpenRouterCV,
+    "LocalAI": LocalAICV,
+    "GPUStack": GPUStackCV,
+    "Moonshot": LocalCV,
 }
 
 
@@ -163,7 +181,9 @@ RerankModel = {
     "Xinference": XInferenceRerank,
     "Tongyi-Qianwen": QWenRerank,
     "GPUStack": GPUStackRerank,
-    "HuggingFace": HuggingfaceRerank
+    "HuggingFace": HuggingfaceRerank,
+    "LM-Studio": LmStudioRerank,
+    "TogetherAI": TogetherAIRerank,
 }
 
 

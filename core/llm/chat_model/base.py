@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import re
 from abc import ABC
 from copy import deepcopy
 from typing import Any, Protocol
@@ -8,6 +9,7 @@ from typing import Any, Protocol
 import json_repair
 import openai
 from openai import OpenAI
+from strenum import StrEnum
 from core.nlp import is_chinese, is_english
 from core.utils import num_tokens_from_string
 import logging
@@ -15,20 +17,26 @@ import time
 
 
 # Error message constants
+class LLMErrorCode(StrEnum):
+    ERROR_RATE_LIMIT = "RATE_LIMIT_EXCEEDED"
+    ERROR_AUTHENTICATION = "AUTH_ERROR"
+    ERROR_INVALID_REQUEST = "INVALID_REQUEST"
+    ERROR_SERVER = "SERVER_ERROR"
+    ERROR_TIMEOUT = "TIMEOUT"
+    ERROR_CONNECTION = "CONNECTION_ERROR"
+    ERROR_MODEL = "MODEL_ERROR"
+    ERROR_MAX_ROUNDS = "ERROR_MAX_ROUNDS"
+    ERROR_CONTENT_FILTER = "CONTENT_FILTERED"
+    ERROR_QUOTA = "QUOTA_EXCEEDED"
+    ERROR_MAX_RETRIES = "MAX_RETRIES_EXCEEDED"
+    ERROR_GENERIC = "GENERIC_ERROR"
+
+
+class ReActMode(StrEnum):
+    FUNCTION_CALL = "function_call"
+    REACT = "react"
+
 ERROR_PREFIX = "**ERROR**"
-ERROR_RATE_LIMIT = "RATE_LIMIT_EXCEEDED"
-ERROR_AUTHENTICATION = "AUTH_ERROR"
-ERROR_INVALID_REQUEST = "INVALID_REQUEST"
-ERROR_SERVER = "SERVER_ERROR"
-ERROR_TIMEOUT = "TIMEOUT"
-ERROR_CONNECTION = "CONNECTION_ERROR"
-ERROR_MODEL = "MODEL_ERROR"
-ERROR_CONTENT_FILTER = "CONTENT_FILTERED"
-ERROR_QUOTA = "QUOTA_EXCEEDED"
-ERROR_MAX_RETRIES = "MAX_RETRIES_EXCEEDED"
-ERROR_GENERIC = "GENERIC_ERROR"
-
-
 LENGTH_NOTIFICATION_CN = "······\n由于大模型的上下文窗口大小限制，回答已经被大模型截断。"
 LENGTH_NOTIFICATION_EN = "...\nThe answer is truncated by your chosen LLM due to its limitation on context length."
 
@@ -52,50 +60,79 @@ class Base(ABC):
 
     def _get_delay(self):
         """Calculate retry delay time"""
-        return self.base_delay + random.uniform(10, 150)
+        return self.base_delay * random.uniform(10, 150)
 
     def _classify_error(self, error):
         """Classify error based on error message content"""
         error_str = str(error).lower()
 
-        if "rate limit" in error_str or "429" in error_str or "tpm limit" in error_str or "too many requests" in error_str or "requests per minute" in error_str:
-            return ERROR_RATE_LIMIT
-        elif "auth" in error_str or "key" in error_str or "apikey" in error_str or "401" in error_str or "forbidden" in error_str or "permission" in error_str:
-            return ERROR_AUTHENTICATION
-        elif "invalid" in error_str or "bad request" in error_str or "400" in error_str or "format" in error_str or "malformed" in error_str or "parameter" in error_str:
-            return ERROR_INVALID_REQUEST
-        elif "server" in error_str or "502" in error_str or "503" in error_str or "504" in error_str or "500" in error_str or "unavailable" in error_str:
-            return ERROR_SERVER
-        elif "timeout" in error_str or "timed out" in error_str:
-            return ERROR_TIMEOUT
-        elif "connect" in error_str or "network" in error_str or "unreachable" in error_str or "dns" in error_str:
-            return ERROR_CONNECTION
-        elif "quota" in error_str or "capacity" in error_str or "credit" in error_str or "billing" in error_str or "limit" in error_str and "rate" not in error_str:
-            return ERROR_QUOTA
-        elif "filter" in error_str or "content" in error_str or "policy" in error_str or "blocked" in error_str or "safety" in error_str or "inappropriate" in error_str:
-            return ERROR_CONTENT_FILTER
-        elif "model" in error_str or "not found" in error_str or "does not exist" in error_str or "not available" in error_str:
-            return ERROR_MODEL
-        else:
-            return ERROR_GENERIC
+        keywords_mapping = [
+            (["quota", "capacity", "credit", "billing", "balance", "欠费"], LLMErrorCode.ERROR_QUOTA),
+            (["rate limit", "429", "tpm limit", "too many requests", "requests per minute"], LLMErrorCode.ERROR_RATE_LIMIT),
+            (["auth", "key", "apikey", "401", "forbidden", "permission"], LLMErrorCode.ERROR_AUTHENTICATION),
+            (["invalid", "bad request", "400", "format", "malformed", "parameter"], LLMErrorCode.ERROR_INVALID_REQUEST),
+            (["server", "503", "502", "504", "500", "unavailable"], LLMErrorCode.ERROR_SERVER),
+            (["timeout", "timed out"], LLMErrorCode.ERROR_TIMEOUT),
+            (["connect", "network", "unreachable", "dns"], LLMErrorCode.ERROR_CONNECTION),
+            (["filter", "content", "policy", "blocked", "safety", "inappropriate"], LLMErrorCode.ERROR_CONTENT_FILTER),
+            (["model", "not found", "does not exist", "not available"], LLMErrorCode.ERROR_MODEL),
+            (["max rounds"], LLMErrorCode.ERROR_MODEL),
+        ]
+        for words, code in keywords_mapping:
+            if re.search("({})".format("|".join(words)), error_str):
+                return code
+
+        return LLMErrorCode.ERROR_GENERIC
 
     def _clean_conf(self, gen_conf):
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
         return gen_conf
 
-    def _chat(self, history, gen_conf):
-        response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf)
+    def _chat(self, history, gen_conf, **kwargs):
+        logging.info("[HISTORY]" + json.dumps(history, ensure_ascii=False, indent=2))
+        if self.model_name.lower().find("qwen3") >=0:
+            kwargs["extra_body"] = {"enable_thinking": False}
+        response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf, **kwargs)
 
         if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
             return "", 0
         ans = response.choices[0].message.content.strip()
         if response.choices[0].finish_reason == "length":
-            if is_chinese(ans):
-                ans += LENGTH_NOTIFICATION_CN
-            else:
-                ans += LENGTH_NOTIFICATION_EN
+            ans = self._length_stop(ans)
         return ans, self.total_token_count(response)
+
+    def _chat_streamly(self, history, gen_conf, **kwargs):
+        logging.info("[HISTORY STREAMLY]" + json.dumps(history, ensure_ascii=False, indent=4))
+        reasoning_start = False
+        response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, **gen_conf,
+                                                       stop=kwargs.get("stop"))
+        for resp in response:
+            if not resp.choices:
+                continue
+            if not resp.choices[0].delta.content:
+                resp.choices[0].delta.content = ""
+            if kwargs.get("with_reasoning", True) and hasattr(resp.choices[0].delta, "reasoning_content") and \
+                    resp.choices[0].delta.reasoning_content:
+                ans = ""
+                if not reasoning_start:
+                    reasoning_start = True
+                    ans = "<think>"
+                ans += resp.choices[0].delta.reasoning_content + "</think>"
+            else:
+                reasoning_start = False
+                ans = resp.choices[0].delta.content
+
+            tol = self.total_token_count(resp)
+            if not tol:
+                tol = num_tokens_from_string(resp.choices[0].delta.content)
+
+            if resp.choices[0].finish_reason == "length":
+                if is_chinese(ans):
+                    ans += LENGTH_NOTIFICATION_CN
+                else:
+                    ans += LENGTH_NOTIFICATION_EN
+            yield ans, tol
 
     def _length_stop(self, ans):
         if is_chinese([ans]):
@@ -106,19 +143,17 @@ class Base(ABC):
         logging.exception("OpenAI chat_with_tools")
         # Classify the error
         error_code = self._classify_error(e)
+        if attempt == self.max_retries:
+            error_code = LLMErrorCode.ERROR_MAX_RETRIES
 
         # Check if it's a rate limit error or server error and not the last attempt
-        should_retry = (error_code == ERROR_RATE_LIMIT or error_code == ERROR_SERVER) and attempt < self.max_retries
-
-        if should_retry:
-            delay = self._get_delay()
-            logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
-            time.sleep(delay)
-        else:
-            # For non-rate limit errors or the last attempt, return an error message
-            if attempt == self.max_retries:
-                error_code = ERROR_MAX_RETRIES
+        should_retry = (error_code == LLMErrorCode.ERROR_RATE_LIMIT or error_code == LLMErrorCode.ERROR_SERVER)
+        if not should_retry:
             return f"{ERROR_PREFIX}: {error_code} - {str(e)}"
+
+        delay = self._get_delay()
+        logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
+        time.sleep(delay)
 
     def _verbose_tool_use(self, name, args, res):
         return "<tool_call>" + json.dumps({
@@ -155,16 +190,15 @@ class Base(ABC):
         if not (toolcall_session and tools):
             return
         self.is_tools = True
+        self.toolcall_sessions = toolcall_session
+        self.tools = tools
 
-        for tool in tools:
-            self.toolcall_sessions[tool["function"]["name"]] = toolcall_session
-            self.tools.append(tool)
-
-    def chat_with_tools(self, system: str, history: list, gen_conf: dict):
+    def chat_with_tools(self, system: str, history: list, gen_conf: dict | None=None):
+        if gen_conf is None:
+            gen_conf = {}
         if system:
             history.insert(0, {"role": "system", "content": system})
 
-        gen_conf = self._clean_conf(gen_conf)
         ans = ""
         tk_count = 0
         hist = deepcopy(history)
@@ -172,8 +206,9 @@ class Base(ABC):
         for attempt in range(self.max_retries + 1):
             history = hist
             try:
-                for _ in range(self.max_rounds * 2):
-                    response = self.client.chat.completions.create(model=self.model_name, messages=history, tools=self.tools, **gen_conf)
+                for _ in range(self.max_rounds+1):
+                    logging.info(f"{self.tools=}")
+                    response = self.client.chat.completions.create(model=self.model_name, messages=history, tools=self.tools, tool_choice="auto", **gen_conf)
                     tk_count += self.total_token_count(response)
                     if any([not response.choices, not response.choices[0].message]):
                         raise Exception(f"500 response structure error. Response: {response}")
@@ -189,10 +224,11 @@ class Base(ABC):
                         return ans, tk_count
 
                     for tool_call in response.choices[0].message.tool_calls:
+                        logging.info(f"Response {tool_call=}")
                         name = tool_call.function.name
                         try:
                             args = json_repair.loads(tool_call.function.arguments)
-                            tool_response = self.toolcall_sessions[name].tool_call(name, args)
+                            tool_response = self.toolcall_sessions.tool_call(name, args)
                             history = self._append_history(history, tool_call, tool_response)
                             ans += self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:
@@ -200,13 +236,22 @@ class Base(ABC):
                             history.append({"role": "tool", "tool_call_id": tool_call.id, "content": f"Tool call error: \n{tool_call}\nException:\n" + str(e)})
                             ans += self._verbose_tool_use(name, {}, str(e))
 
+                logging.warning( f"Exceed max rounds: {self.max_rounds}")
+                history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
+                response, token_count = self._chat(history, gen_conf)
+                ans += response
+                tk_count += token_count
+                return ans, tk_count
             except Exception as e:
                 e = self._exceptions(e, attempt)
                 if e:
                     return e, tk_count
+
         assert False, "Shouldn't be here."
 
-    def chat(self, system, history, gen_conf):
+    def chat(self, system, history, gen_conf=None, **kwargs):
+        if gen_conf is None:
+            gen_conf = {}
         if system:
             history.insert(0, {"role": "system", "content": system})
         gen_conf = self._clean_conf(gen_conf)
@@ -214,7 +259,7 @@ class Base(ABC):
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries + 1):
             try:
-                return self._chat(history, gen_conf)
+                return self._chat(history, gen_conf, **kwargs)
             except Exception as e:
                 e = self._exceptions(e, attempt)
                 if e:
@@ -235,7 +280,9 @@ class Base(ABC):
 
         return final_tool_calls
 
-    def chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict):
+    def chat_streamly_with_tools(self, system: str, history: list, gen_conf=None):
+        if gen_conf is None:
+            gen_conf = {}
         gen_conf = self._clean_conf(gen_conf)
         tools = self.tools
         if system:
@@ -247,9 +294,10 @@ class Base(ABC):
         for attempt in range(self.max_retries + 1):
             history = hist
             try:
-                for _ in range(self.max_rounds * 2):
+                for _ in range(self.max_rounds + 1):
                     reasoning_start = False
-                    response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, tools=tools, **gen_conf)
+                    logging.info(f"{tools=}")
+                    response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, tools=tools, tool_choice="auto", **gen_conf)
                     final_tool_calls = {}
                     answer = ""
                     for resp in response:
@@ -265,13 +313,15 @@ class Base(ABC):
                                     final_tool_calls[index].function.arguments += tool_call.function.arguments if tool_call.function.arguments else ""
                             continue
 
-                        if any([not resp.choices, not resp.choices[0].delta, not hasattr(resp.choices[0].delta, "content")]):
+                        if any([not resp.choices, not resp.choices[0].delta,
+                                not hasattr(resp.choices[0].delta, "content")]):
                             raise Exception("500 response structure error.")
 
                         if not resp.choices[0].delta.content:
                             resp.choices[0].delta.content = ""
 
-                        if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
+                        if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[
+                            0].delta.reasoning_content:
                             ans = ""
                             if not reasoning_start:
                                 reasoning_start = True
@@ -301,59 +351,57 @@ class Base(ABC):
                         name = tool_call.function.name
                         try:
                             args = json_repair.loads(tool_call.function.arguments)
-                            tool_response = self.toolcall_session[name].tool_call(name, args)
+                            yield self._verbose_tool_use(name, args, "Begin to call...")
+                            tool_response = self.toolcall_sessions.tool_call(name, args)
                             history = self._append_history(history, tool_call, tool_response)
                             yield self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:
                             logging.exception(msg=f"Wrong JSON argument format in LLM tool call response: {tool_call}")
-                            history.append({"role": "tool", "tool_call_id": tool_call.id, "content": f"Tool call error: \n{tool_call}\nException:\n" + str(e)})
+                            history.append({"role": "tool", "tool_call_id": tool_call.id,
+                                            "content": f"Tool call error: \n{tool_call}\nException:\n" + str(e)})
                             yield self._verbose_tool_use(name, {}, str(e))
+
+                logging.warning(f"Exceed max rounds: {self.max_rounds}")
+                history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
+                response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True,
+                                                               **gen_conf)
+                for resp in response:
+                    if any([not resp.choices, not resp.choices[0].delta,
+                            not hasattr(resp.choices[0].delta, "content")]):
+                        raise Exception("500 response structure error.")
+                    if not resp.choices[0].delta.content:
+                        resp.choices[0].delta.content = ""
+                        continue
+                    tol = self.total_token_count(resp)
+                    if not tol:
+                        total_tokens += num_tokens_from_string(resp.choices[0].delta.content)
+                    else:
+                        total_tokens += tol
+                    answer += resp.choices[0].delta.content
+                    yield resp.choices[0].delta.content
+
+                yield total_tokens
+                return
 
             except Exception as e:
                 e = self._exceptions(e, attempt)
                 if e:
+                    yield e
                     yield total_tokens
                     return
 
-        yield total_tokens
+        assert False, "Shouldn't be here."
 
-    def chat_streamly(self, system, history, gen_conf):
+    def chat_streamly(self, system, history, gen_conf: dict={}, **kwargs):
         if system:
             history.insert(0, {"role": "system", "content": system})
         gen_conf = self._clean_conf(gen_conf)
         ans = ""
         total_tokens = 0
-        reasoning_start = False
         try:
-            response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, **gen_conf)
-            for resp in response:
-                if not resp.choices:
-                    continue
-                if not resp.choices[0].delta.content:
-                    resp.choices[0].delta.content = ""
-                if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
-                    ans = ""
-                    if not reasoning_start:
-                        reasoning_start = True
-                        ans = "<think>"
-                    ans += resp.choices[0].delta.reasoning_content + "</think>"
-                else:
-                    reasoning_start = False
-                    ans = resp.choices[0].delta.content
-
-                tol = self.total_token_count(resp)
-                if not tol:
-                    total_tokens += num_tokens_from_string(resp.choices[0].delta.content)
-                else:
-                    total_tokens += tol
-
-                if resp.choices[0].finish_reason == "length":
-                    if is_chinese(ans):
-                        ans += LENGTH_NOTIFICATION_CN
-                    else:
-                        ans += LENGTH_NOTIFICATION_EN
-                yield ans
-
+            for delta_ans, tol in self._chat_streamly(history, gen_conf, **kwargs):
+                yield delta_ans
+                total_tokens += tol
         except openai.APIError as e:
             yield ans + "\n**ERROR**: " + str(e)
 

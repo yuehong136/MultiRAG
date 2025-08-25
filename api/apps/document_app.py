@@ -29,7 +29,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
+from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks
 from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
 from api import settings
@@ -549,6 +549,18 @@ def create_document(
             return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
                                          code=settings.RetCode.ARGUMENT_ERROR)
 
+        kb_root_folder = FileService.get_kb_folder(db, kb.tenant_id)
+        if not kb_root_folder:
+            return get_data_error_result(retmsg="Cannot find the root folder.")
+        kb_folder = FileService.new_a_file_from_kb(
+            db,
+            kb.tenant_id,
+            kb.name,
+            kb_root_folder["id"],
+        )
+        if not kb_folder:
+            return get_data_error_result(retmsg="Cannot find the kb folder for this file.")
+
         doc = DocumentService.insert(db, {
             "id": get_uuid(),
             "kb_id": kb.id,
@@ -757,15 +769,214 @@ def list_docs(
 @router.post("/list", summary="列出文档", response_description="成功列出文档")  # 改为 POST
 def list_docs(
         filter_params: DocumentFilter,  # JSON body 参数
-        kb_id: str,
-        keywords: str = "",
-        page: int = 0,  # 默认0表示不分页
-        page_size: int = 0,  # 默认0表示不分页
-        orderby: str = "create_time",
-        desc: bool = True,
+        kb_id: str = Query(..., description="知识库 ID"),
+        keywords: str = Query("", description="关键字"),
+        page: int = Query(0, description="分页页码"),
+        page_size: int = Query(0, description="分页大小"),
+        orderby: str = Query("create_time", description="排序字段"),
+        desc: bool = Query(True, description="是否倒序"),
+        create_time_from: int | None = Query(0, description="创建时间起（时间戳）"),
+        create_time_to: int | None = Query(0, description="创建时间止（时间戳）"),
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
+    """
+    ### POST `/list` 列出文档接口
+
+    **功能描述**:
+    此接口用于获取指定知识库中的文档列表，支持关键词搜索、分页查询、排序及多条件过滤（运行状态、文件类型、文件后缀、创建时间范围）。返回文档的基本信息和缩略图。
+
+    ---
+
+    ### 请求参数
+
+    #### Query Parameters
+    | 参数名              | 类型      | 必填 | 默认值       | 描述                                                    |
+    |---------------------|-----------|------|-------------|--------------------------------------------------------|
+    | `kb_id`             | `string`  | 是   | -           | 知识库的唯一标识符                                      |
+    | `keywords`          | `string`  | 否   | ""          | 搜索关键词，支持文档名称模糊匹配                        |
+    | `page`              | `int`     | 否   | 0           | 页码，从0开始，0表示不分页                              |
+    | `page_size`         | `int`     | 否   | 0           | 每页返回的文档数量，0表示不分页                          |
+    | `orderby`           | `string`  | 否   | create_time | 排序字段，支持: create_time, name, size, update_time   |
+    | `desc`              | `boolean` | 否   | true        | 是否降序排列                                           |
+    | `create_time_from`  | `int`     | 否   | 0           | 创建时间范围起始（Unix时间戳，0表示不限制）             |
+    | `create_time_to`    | `int`     | 否   | 0           | 创建时间范围结束（Unix时间戳，0表示不限制）             |
+
+    #### JSON Body (DocumentFilter)
+    | 字段名        | 类型          | 必填 | 默认值 | 描述                                            |
+    |---------------|--------------|------|--------|------------------------------------------------|
+    | `run_status`  | `list[string]` | 否   | []     | 运行状态过滤，支持: unstart, running, done, fail |
+    | `types`       | `list[string]` | 否   | []     | 文件类型过滤，需在系统支持类型列表中            |
+    | `suffix`      | `list[string]` | 否   | []     | 文件后缀名过滤                                  |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "total": 100,
+            "docs": [
+                {
+                    "id": "doc_123456",
+                    "name": "技术文档.pdf",
+                    "size": 1024000,
+                    "type": "pdf",
+                    "status": "1",
+                    "run": "done",
+                    "progress": 100,
+                    "chunk_num": 50,
+                    "token_num": 15000,
+                    "thumbnail": "/v1/document/image/kb_id-thumbnail_id",
+                    "create_time": "2024-01-01 12:00:00",
+                    "update_time": "2024-01-01 13:00:00",
+                    "created_by": "user_123",
+                    "parser_id": "pdf_parser",
+                    "suffix": "pdf"
+                }
+            ]
+        }
+    }
+    ```
+
+    #### 错误响应
+
+    - **400: 知识库ID缺失**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Lack of \"KB ID\"",
+            "data": false
+        }
+        ```
+
+    - **400: 过滤条件无效**
+        ```json
+        {
+            "retcode": 400,
+            "retmsg": "Invalid filter run status conditions: abc",
+            "data": false
+        }
+        ```
+
+    - **403: 权限不足**
+        ```json
+        {
+            "retcode": 403,
+            "retmsg": "Only owner of knowledgebase authorized for this operation.",
+            "data": false
+        }
+        ```
+
+    ---
+
+    ### 主要流程
+
+    1. **权限验证**:
+        - 验证知识库ID是否存在
+        - 检查用户是否为知识库的所有者
+        - 确认用户有访问权限
+
+    2. **参数校验**:
+        - 校验 `run_status` 是否在有效范围
+        - 校验 `types` 是否在支持的文件类型列表中
+
+    3. **数据查询**:
+        - 根据关键词进行模糊搜索
+        - 按分页与排序参数查询文档
+        - 根据 `create_time_from` 和 `create_time_to` 过滤时间范围
+        - 统计符合条件的文档总数
+
+    4. **结果处理**:
+        - 转换时间格式为字符串
+        - 处理缩略图URL路径
+        - 格式化返回数据
+
+    ---
+
+    ### 排序字段说明
+
+    | 字段名        | 描述           | 数据类型    |
+    |---------------|----------------|-------------|
+    | `create_time` | 创建时间       | datetime    |
+    | `update_time` | 更新时间       | datetime    |
+    | `name`        | 文档名称       | string      |
+    | `size`        | 文件大小       | integer     |
+    | `progress`    | 处理进度       | integer     |
+
+    ---
+
+    ### 文档状态说明
+
+    #### 运行状态 (run)
+    - `unstart`: 未开始处理
+    - `running`: 正在处理
+    - `done`: 处理完成
+    - `fail`: 处理失败
+
+    #### 可用状态 (status)
+    - `0`: 禁用，不参与检索
+    - `1`: 启用，正常使用
+
+    ---
+
+    ### 使用示例
+
+    #### 基本查询
+    ```
+    POST /v1/document/list?kb_id=kb_123456
+    Body: {}
+    ```
+
+    #### 关键词搜索
+    ```
+    POST /v1/document/list?kb_id=kb_123456&keywords=技术文档
+    Body: {}
+    ```
+
+    #### 分页查询
+    ```
+    POST /v1/document/list?kb_id=kb_123456&page=2&page_size=20
+    Body: {}
+    ```
+
+    #### 自定义排序
+    ```
+    POST /v1/document/list?kb_id=kb_123456&orderby=size&desc=false
+    Body: {}
+    ```
+
+    #### 按时间范围筛选
+    ```
+    POST /v1/document/list?kb_id=kb_123456&create_time_from=1700000000&create_time_to=1700500000
+    Body: {}
+    ```
+
+    #### 多条件过滤
+    ```
+    POST /v1/document/list?kb_id=kb_123456
+    Body: {
+        "run_status": ["done", "running"],
+        "types": ["pdf", "docx"],
+        "suffix": ["pdf"]
+    }
+    ```
+
+    ---
+
+    ### 注意事项
+
+    - **权限控制**: 只有知识库所有者才能查看文档列表
+    - **缩略图处理**: 自动处理缩略图URL，支持base64和文件路径两种格式
+    - **时间格式**: 所有时间字段统一转换为字符串格式返回
+    - **性能优化**: 建议合理设置page_size，避免单次查询过多数据
+    - **搜索范围**: 关键词搜索仅匹配文档名称，不包含文档内容
+    - **时间过滤**: `create_time_from` 和 `create_time_to` 为 Unix 时间戳，0 表示不限制
+    """
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
 
@@ -808,6 +1019,14 @@ def list_docs(
         )
         docs = [convert_datetime_to_str(d) for d in docs]
 
+        # === 新增的时间范围过滤逻辑 ===
+        if create_time_from or create_time_to:
+            docs = [
+                doc for doc in docs
+                if (create_time_from == 0 or doc.get("create_time", 0) >= create_time_from)
+                and (create_time_to == 0 or doc.get("create_time", 0) <= create_time_to)
+            ]
+        # 处理缩略图路径
         for doc_item in docs:
             if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
                 doc_item['thumbnail'] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
@@ -895,27 +1114,23 @@ def docinfos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(man
 
 @router.get("/thumbnails", summary="获取文档缩略图", response_description="成功获取文档缩略图")
 def thumbnails(
-        doc_ids: str,
+        doc_ids: list[str] = Query(..., description="文档ID列表，例如 ?doc_ids=1&doc_ids=2"),
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-    doc_ids_list = doc_ids.split(",")
-    if not doc_ids_list:
+    if not doc_ids:
         return construct_json_result(data=False, message='Lack of "Document ID"', code=settings.RetCode.ARGUMENT_ERROR)
 
     try:
-        docs = DocumentService.get_thumbnails(db, doc_ids_list)
+        docs = DocumentService.get_thumbnails(db, doc_ids)
 
         for doc_item in docs:
             if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
                 doc_item['thumbnail'] = f"/v1/document/image/{doc_item['kb_id']}-{doc_item['thumbnail']}"
 
-        # docs 是一个包含元组的列表，每个元组包含两个元素：文档 ID 和缩略图
-        thumbnail_dict = {doc[0]: doc[1] for doc in docs}
-
-        return construct_json_result(data=thumbnail_dict)
+        return get_json_result(data={d["id"]: d["thumbnail"] for d in docs})
     except Exception as e:
-        return construct_error_response(e)
+        return server_error_response(e)
 
 
 @router.post("/change_status", summary="更改文档状态", response_description="成功更改文档状态")
@@ -1680,19 +1895,23 @@ def run(
                 info["chunk_num"] = 0
                 info["token_num"] = 0
 
-            doc = DocumentService.get_by_id(db, id)
-            if not doc:
-                return get_data_error_result(retmsg="Document not found!")
-            if doc.run == TaskStatus.DONE.value:
-                DocumentService.clear_chunk_num_when_rerun(db, doc.id)
-
-            DocumentService.update_by_id(db, id, info)
             d = DocumentService.get_by_doc_id(db, id)
             kb_id = d["kb_id"]
             kb = KnowledgebaseService.get_by_id(db, kb_id)
             tenant_id = kb.tenant_id
             if not tenant_id:
                 return construct_json_result(data=False, message="Tenant not found!", code=settings.RetCode.ARGUMENT_ERROR)
+
+            if str(req["run"]) == TaskStatus.CANCEL.value:
+                if str(d["run"]) == TaskStatus.RUNNING.value:
+                    cancel_all_task_of(db, id)
+                else:
+                    return get_data_error_result(retmsg="Cannot cancel a task that is not in RUNNING status")
+
+            if str(req["run"]) == TaskStatus.RUNNING.value and str(d["run"]) == TaskStatus.DONE.value:
+                DocumentService.clear_chunk_num_when_rerun(db, d["id"])
+
+            DocumentService.update_by_id(db, id, info)
 
             # 构建 Milvus 集合名称
             collection_name = search.index_name_one(tenant_id, kb.name)
@@ -1710,11 +1929,8 @@ def run(
                 except MilvusException as e:
                     return construct_json_result(data=False, message=str(e), code=settings.RetCode.ARGUMENT_ERROR)
 
-            if str(req["run"]) == TaskStatus.CANCEL.value:
-                cancel_all_task_of(db, id)
-
             if str(req["run"]) == TaskStatus.RUNNING.value:
-                doc = DocumentService.get_by_id(db, id).to_dict()
+                doc = d
                 doc["tenant_id"] = tenant_id
 
                 doc_parser = doc.get("parser_id", ParserType.NAIVE)

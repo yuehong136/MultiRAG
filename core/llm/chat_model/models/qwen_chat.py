@@ -16,4 +16,6 @@ class QWenChat(Base):
         if not base_url:
             base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
         super().__init__(key, model_name, base_url=base_url, **kwargs)
+        # Set default max_length for QWenChat, can be overridden by config
+        self.max_length = kwargs.get("max_length", 8192)
         return

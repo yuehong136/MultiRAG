@@ -1,14 +1,19 @@
+import os
+
 from ollama import Client
 
 from core.llm.chat_model.base import Base
 
 
 class OllamaChat(Base):
+    _FACTORY_NAME = "Ollama"
+
     def __init__(self, key, model_name, base_url=None, **kwargs):
         super().__init__(key, model_name, base_url=base_url, **kwargs)
 
         self.client = Client(host=base_url) if not key or key == "x" else Client(host=base_url, headers={"Authorization": f"Bearer {key}"})
         self.model_name = model_name
+        self.keep_alive = kwargs.get("ollama_keep_alive", int(os.environ.get("OLLAMA_KEEP_ALIVE", -1)))
 
     def _clean_conf(self, gen_conf):
         options = {}
@@ -20,17 +25,21 @@ class OllamaChat(Base):
             options[k] = gen_conf[k]
         return options
 
-    def _chat(self, history, gen_conf):
+    def _chat(self, history, gen_conf=None, **kwargs):
         # Calculate context size
+        if gen_conf is None:
+            gen_conf = {}
         ctx_size = self._calculate_dynamic_ctx(history)
 
         gen_conf["num_ctx"] = ctx_size
-        response = self.client.chat(model=self.model_name, messages=history, options=gen_conf, keep_alive=-1)
+        response = self.client.chat(model=self.model_name, messages=history, options=gen_conf, keep_alive=self.keep_alive)
         ans = response["message"]["content"].strip()
         token_count = response.get("eval_count", 0) + response.get("prompt_eval_count", 0)
         return ans, token_count
 
-    def chat_streamly(self, system, history, gen_conf):
+    def chat_streamly(self, system, history, gen_conf=None, **kwargs):
+        if gen_conf is None:
+            gen_conf = {}
         if system:
             history.insert(0, {"role": "system", "content": system})
         if "max_tokens" in gen_conf:
@@ -52,7 +61,7 @@ class OllamaChat(Base):
 
             ans = ""
             try:
-                response = self.client.chat(model=self.model_name, messages=history, stream=True, options=options, keep_alive=-1)
+                response = self.client.chat(model=self.model_name, messages=history, stream=True, options=options, keep_alive=self.keep_alive)
                 for resp in response:
                     if resp["done"]:
                         token_count = resp.get("prompt_eval_count", 0) + resp.get("eval_count", 0)

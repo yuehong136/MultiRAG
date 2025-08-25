@@ -27,10 +27,10 @@ from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
-# from api.db.database import get_db
 from api.apps import manager
 from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.app.tag import label_question
+from core.prompts.prompts import chunks_format
 
 
 class SetConversationRequest(BaseModel):
@@ -81,9 +81,6 @@ class CompletionRequest(BaseModel):
 
     messages: list[dict]
     """消息列表，每个消息包含角色和内容。"""
-
-    quote: bool | None = False
-    """是否引用，默认值为 False。"""
 
     stream: bool | None = True
     """是否使用流式响应，默认值为 True。"""
@@ -272,7 +269,8 @@ async def set_conversation(request: SetConversationRequest, db: Session = Depend
             "dialog_id": req["dialog_id"],
             "name": name,
             "message": [{"role": "assistant", "content": dia.prompt_config["prologue"]}],
-            "user_id": user.id
+            "user_id": user.id,
+            "reference": [],
         }
         ConversationService.save(db, **conv)
         
@@ -313,24 +311,12 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
                 avatar = dialog[0].icon
                 break
         else:
-            return get_json_result(
-                data=False, retmsg=f'Only owner of conversation authorized for this operation.',
-                retcode=settings.RetCode.OPERATING_ERROR)
-
-        def get_value(d, k1, k2):
-            return d.get(k1, d.get(k2))
+            return get_json_result(data=False, retmsg=f'Only owner of conversation authorized for this operation.', retcode=settings.RetCode.OPERATING_ERROR)
 
         for ref in conv.reference:
-            ref["chunks"] = [{
-                "id": get_value(ck, "chunk_id", "id"),
-                "content": get_value(ck, "content", "text"),
-                "document_id": get_value(ck, "doc_id", "document_id"),
-                "document_name": get_value(ck, "docnm_kwd", "document_name"),
-                "dataset_id": get_value(ck, "kb_id", "dataset_id"),
-                "image_id": get_value(ck, "image_id", "img_id"),
-                "positions": get_value(ck, "positions", "position_int"),
-                "doc_type": get_value(ck, "doc_type", "doc_type_kwd"),
-            } for ck in ref.get("chunks", [])]
+            if isinstance(ref, list):
+                continue
+            ref["chunks"] = chunks_format(ref)
 
         conv = conv.to_dict()
         conv["avatar"] = avatar
@@ -454,7 +440,6 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
         - request: CompletionRequest对象，包含会话的详细信息
             - conversation_id: str 会话的唯一标识符
             - messages: List[dict] 消息列表，每个消息包含角色和内容
-            - quote: Optional[bool] 是否引用，默认值为 False
             - stream: Optional[bool] 是否使用流式响应，默认值为 True
             - filter_condition: Optional[dict] 过滤条件
 
@@ -498,22 +483,10 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
         if not conv.reference:
             conv.reference = []
         else:
-            def get_value(d, k1, k2):
-                return d.get(k1, d.get(k2))
-
             for ref in conv.reference:
                 if isinstance(ref, list):
                     continue
-                ref["chunks"] = [{
-                    "id": get_value(ck, "chunk_id", "id"),
-                    "content": get_value(ck, "content", "text"),
-                    "document_id": get_value(ck, "doc_id", "document_id"),
-                    "document_name": get_value(ck, "docnm_kwd", "document_name"),
-                    "dataset_id": get_value(ck, "kb_id", "dataset_id"),
-                    "image_id": get_value(ck, "image_id", "img_id"),
-                    "positions": get_value(ck, "positions", "position_int"),
-                    "doc_type": get_value(ck, "doc_type_kwd", "doc_type_kwd"),
-                } for ck in ref.get("chunks", [])]
+                ref["chunks"] = chunks_format(ref)
 
         if not conv.reference:
             conv.reference = []

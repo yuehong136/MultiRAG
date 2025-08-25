@@ -44,9 +44,6 @@ class Pdf(PdfParser):
             callback
         )
         callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
-        # for bb in self.boxes:
-        #    for b in bb:
-        #        print(b)
         logging.debug("OCR: {}".format(timer() - start))
 
         start = timer()
@@ -172,6 +169,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     """
         Only pdf is supported.
     """
+    parser_config = kwargs.get(
+        "parser_config", {
+            "chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC"})
     pdf_parser = None
     doc = {
         "docnm_kwd": filename
@@ -182,7 +182,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     eng = lang.lower() == "english"  # pdf_parser.is_english
     if re.search(r"\.pdf$", filename, re.IGNORECASE):
         pdf_parser = Pdf()
-        if kwargs.get("layout_recognize", "DeepDOC") == "Plain Text":
+        if parser_config.get("layout_recognize", "DeepDOC") == "Plain Text":
             pdf_parser = PlainParser()
         sections, tbls = pdf_parser(filename if not binary else binary,
                                     from_page=from_page, to_page=to_page, callback=callback)
@@ -217,7 +217,6 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             if lvl <= most_level and i > 0 and lvl != levels[i - 1]:
                 sid += 1
             sec_ids.append(sid)
-            # print(lvl, self.boxes[i]["text"], most_level, sid)
 
         sections = [(txt, sec_ids[i], poss)
                     for i, (txt, _, poss) in enumerate(sections)]

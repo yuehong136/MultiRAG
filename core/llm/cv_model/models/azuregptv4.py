@@ -2,16 +2,20 @@ import json
 
 from openai.lib.azure import AzureOpenAI
 
+from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.base import Base
 
 
-class AzureGptV4(Base):
+class AzureGptV4(GptV4):
+    _FACTORY_NAME = "Azure-OpenAI"
+
     def __init__(self, key, model_name, lang="Chinese", **kwargs):
         api_key = json.loads(key).get('api_key', '')
         api_version = json.loads(key).get('api_version', '2024-02-01')
         self.client = AzureOpenAI(api_key=api_key, azure_endpoint=kwargs["base_url"], api_version=api_version)
         self.model_name = model_name
         self.lang = lang
+        Base.__init__(self, **kwargs)
 
     def describe(self, image):
         b64 = self.image2base64(image)

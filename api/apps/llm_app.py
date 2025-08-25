@@ -9,30 +9,417 @@
 import asyncio
 import logging
 import json
-import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from api.apps import manager, executor
-# from api.db.database import get_db
+from agent.component.agent_with_tools import Agent, AgentParam
 from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService, LLMBundle
 from api.db.services.user_service import TenantService
 from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from api.db import StatusEnum, LLMType
-from api.db.db_models import TenantLLM, get_db
-from api.utils.file_utils import get_project_base_directory
+from api.db.db_models import TenantLLM, get_db, db_connection
+from api.utils.base64_image import test_image
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
-from pydantic import BaseModel, Field
-from typing import Any
 
-from core.prompts import kb_prompt
+from core.prompts.prompts import kb_prompt
 from core.utils.tavily_conn import Tavily
+from api.db.services.mcp_server_service import MCPServerService
+from core.utils.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
+
+
+class ChatAgentAdapter:
+    """对话Agent适配器，直接复用Agent类但适配对话场景"""
+
+    def __init__(self, tenant_id: str, llm_name: str, system_prompt: str = "", mcp_ids: list[str] = None):
+        self.tenant_id = tenant_id
+        self.llm_name = llm_name
+        self.system_prompt = system_prompt
+        self.mcp_ids = mcp_ids or []
+
+        # 创建简化的Canvas mock - 只提供Agent需要的接口
+        self.canvas_mock = self._create_canvas_mock()
+
+        # 创建Agent参数，直接复用AgentParam
+        agent_param = AgentParam()
+        agent_param.llm_id = llm_name
+        agent_param.sys_prompt = system_prompt or "You are a helpful AI assistant."
+        agent_param.prompts = [{"role": "user", "content": "{sys.query}"}]
+        agent_param.mcp = self._prepare_mcp_config()
+        agent_param.tools = []
+        agent_param.max_rounds = 5
+        agent_param.cite = True
+        agent_param.temperature = 0.1
+        agent_param.max_tokens = 0
+
+        # 创建Agent实例，直接复用完整的Agent功能
+        self.agent = Agent(self.canvas_mock, "chat_agent", agent_param)
+
+    def _create_canvas_mock(self):
+        """创建最小化的Canvas mock，满足Agent的依赖"""
+        from agent.canvas import Canvas
+
+        class CanvasMock(Canvas):
+            def __init__(self, tenant_id):
+                # 使用最小化的DSL初始化Canvas
+                minimal_dsl = json.dumps({
+                    "components": {
+                        "begin": {
+                            "obj": {
+                                "component_name": "Begin",
+                                "params": {
+                                    "prologue": "Hi there!"
+                                }
+                            },
+                            "downstream": [],
+                            "upstream": [],
+                            "parent_id": ""
+                        }
+                    },
+                    "history": [],
+                    "path": [],
+                    "retrieval": [],
+                    "globals": {
+                        "sys.query": "",
+                        "sys.user_id": tenant_id,
+                        "sys.conversation_turns": 0,
+                        "sys.files": []
+                    }
+                })
+                super().__init__(minimal_dsl, tenant_id=tenant_id)
+                self._tenant_id = tenant_id
+                self.history = []
+                self.retrieval = {"chunks": {}, "doc_aggs": {}}
+                self.memory = []
+                self.globals = {
+                    "sys.query": "",
+                    "sys.user_id": tenant_id,
+                    "sys.conversation_turns": 0,
+                    "sys.files": []
+                }
+
+            def get_tenant_id(self):
+                return self._tenant_id
+
+            def get_history(self, window_size=10):
+                return self.history[-window_size:] if self.history else []
+
+            def get_reference(self):
+                return self.retrieval
+
+            def get_memory(self):
+                return self.memory
+
+            def add_memory(self, user, assist, summ):
+                self.memory.append((user, assist, summ))
+
+            def tool_use_callback(self, component_id, *args, **kwargs):
+                logging.debug(f"Tool callback: {component_id}")
+
+            def get_variable_value(self, var_name):
+                return self.globals.get(var_name, "")
+
+            def set_variable_value(self, var_name, value):
+                self.globals[var_name] = value
+
+        return CanvasMock(self.tenant_id)
+
+    def _prepare_mcp_config(self):
+        """准备MCP配置，直接复用现有的MCP服务查询逻辑"""
+        mcp_config = []
+
+        if self.mcp_ids:
+            for mcp_id in self.mcp_ids:
+                try:
+                    with db_connection() as db:
+                        # 使用正确的MCPServerService调用方式
+                        mcp_server = MCPServerService.get_by_id(db, mcp_id)
+                    if mcp_server and mcp_server.tenant_id == self.tenant_id:
+                        cached_tools = (mcp_server.variables or {}).get("tools", {})
+                        if cached_tools:
+                            mcp_config.append({
+                                "mcp_id": mcp_id,
+                                "tools": cached_tools
+                            })
+                except Exception as e:
+                    logging.warning(f"Failed to load MCP server {mcp_id}: {e}")
+
+        return mcp_config
+
+    def chat_with_tools_stream(self, query: str, messages: list[dict] = None,
+                               knowledge_context: str = "", files: list[str] = None):
+        """使用工具进行流式对话，直接复用Agent的流式能力"""
+
+        # 准备历史记录 - 保持字典格式，但添加当前查询
+        history = []
+        if messages:
+            # 保持字典格式的消息
+            history = messages.copy()
+        
+        # 添加当前查询到历史记录末尾（因为_prepare_prompt_variables会用[:-1]移除它）
+        if query:
+            history.append({"role": "user", "content": query})
+        
+        self.canvas_mock.history = history
+
+        # 准备输入变量
+        self.canvas_mock.globals["sys.query"] = query
+        if files:
+            self.canvas_mock.globals["sys.files"] = files
+
+        # 如果有知识上下文，临时修改系统提示词
+        original_prompt = self.agent._param.sys_prompt
+        if knowledge_context:
+            enhanced_prompt = original_prompt + "\n\n" + knowledge_context
+            self.agent._param.sys_prompt = enhanced_prompt
+
+        try:
+            # 准备Agent调用参数
+            kwargs = {
+                "user_prompt": query,
+                "reasoning": "Direct chat request",
+                "context": "Chat conversation context"
+            }
+
+            # 检查Agent是否有工具
+            if self.agent.tools:
+                # 有工具时，使用Agent的完整流式工具调用能力
+                # 直接复用Agent的stream_output_with_tools方法
+                prompt, msg = self.agent._prepare_prompt_variables()
+
+                # 创建用于收集工具使用历史的列表
+                use_tools = []
+
+                # 添加工具调用开始提示
+                yield "🔧 Starting tool analysis...\n"
+
+                # 直接调用Agent的_react_with_tools_streamly方法，监控工具调用
+                previous_tool_count = 0
+                for delta_ans, _ in self.agent._react_with_tools_streamly(msg, use_tools):
+                    # 检查是否有新的工具调用
+                    if len(use_tools) > previous_tool_count:
+                        # 显示新的工具调用
+                        new_tools = use_tools[previous_tool_count:]
+                        for tool_call in new_tools:
+                            tool_name = tool_call.get('name', 'Unknown')
+                            tool_args = tool_call.get('arguments', {})
+
+                            # 简化参数显示
+                            args_preview = ""
+                            if isinstance(tool_args, dict) and tool_args:
+                                key_args = []
+                                # for k, v in list(tool_args.items())[:2]:  # 只显示前2个关键参数
+                                for k, v in list(tool_args.items()):
+                                    # if isinstance(v, str) and len(v) > 30:
+                                    #     v = v[:30] + "..."
+                                    key_args.append(f"{k}={v}")
+                                args_preview = f"({', '.join(key_args)})"
+
+                            yield f"\n🔧 **工具调用**: {tool_name}{args_preview}\n"
+
+                            # 显示结果（如果已有结果）
+                            tool_results = tool_call.get('results', '')
+                            if tool_results:
+                                results_preview = str(tool_results)
+                                # if len(results_preview) > 200:
+                                #     results_preview = results_preview[:200] + "..."
+                                yield f"📋 **结果**: {results_preview}\n\n"
+
+                        previous_tool_count = len(use_tools)
+                    if delta_ans:
+                        yield delta_ans
+
+                # 保存工具使用历史，供verbose模式使用
+                self.agent._last_use_tools = use_tools
+                # 同时设置为Agent的标准输出格式
+                if use_tools:
+                    self.agent.set_output("use_tools", use_tools)
+
+            else:
+                # 没有工具时，直接使用LLM流式输出
+                # 调用Agent的invoke方法获取流式生成器
+                self.agent._param.prompts = [{"role": "user", "content": query}]
+                prompt, msg = self.agent._prepare_prompt_variables()
+
+                # 直接使用Agent的_stream_output方法
+                for delta in self.agent._stream_output(prompt, msg):
+                    yield delta
+
+        finally:
+            # 恢复原始系统提示词
+            if knowledge_context:
+                self.agent._param.sys_prompt = original_prompt
+
+    def chat_with_tools_stream_structured(self, query: str, messages: list[dict] = None,
+                                         knowledge_context: str = "", files: list[str] = None):
+        """
+        带工具的流式对话 - 结构化输出版本
+        返回结构化的SSE消息，每个文本消息都包含累积内容
+        """
+        # 处理历史消息
+        messages = messages or []
+        history = []
+        for msg in messages:
+            history.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", "")
+            })
+        
+        if query:
+            history.append({"role": "user", "content": query})
+        
+        # 合并知识上下文到系统提示词
+        original_prompt = self.agent._param.sys_prompt
+        if knowledge_context:
+            self.agent._param.sys_prompt = self.agent._param.sys_prompt + "\n" + knowledge_context
+        
+        try:
+            # 准备提示词
+            self.agent._param.prompts = history
+            prompt, msg = self.agent._prepare_prompt_variables()
+            
+            # 累积文本内容（重要：与原实现保持一致）
+            accumulated_text = ""
+            
+            # 检查是否有工具可用
+            if self.agent.tools:
+                use_tools = []
+                
+                # 发送工具分析开始消息
+                yield {"type": "tool_start", "content": "Starting tool analysis..."}
+                
+                # 调用Agent的_react_with_tools_streamly方法
+                previous_tool_count = 0
+                call_id_counter = 0
+                
+                for delta_ans, _ in self.agent._react_with_tools_streamly(msg, use_tools):
+                    # 检查是否有新的工具调用
+                    if len(use_tools) > previous_tool_count:
+                        new_tools = use_tools[previous_tool_count:]
+                        for tool_call in new_tools:
+                            call_id_counter += 1
+                            call_id = f"call_{call_id_counter}"
+                            
+                            tool_name = tool_call.get('name', 'Unknown')
+                            tool_args = tool_call.get('arguments', {})
+                            
+                            # 发送工具调用消息
+                            yield {
+                                "type": "tool_call",
+                                "content": {
+                                    "tool_name": tool_name,
+                                    "arguments": tool_args,
+                                    "call_id": call_id
+                                }
+                            }
+                            
+                            # 如果有结果，发送工具结果消息
+                            tool_results = tool_call.get('results', '')
+                            if tool_results:
+                                yield {
+                                    "type": "tool_result",
+                                    "content": {
+                                        "tool_name": tool_name,
+                                        "result": tool_results,
+                                        "call_id": call_id,
+                                        "success": True
+                                    }
+                                }
+                        
+                        previous_tool_count = len(use_tools)
+                    
+                    # 处理文本增量并输出累积内容
+                    if delta_ans:
+                        accumulated_text += delta_ans  # 累积增量
+                        # 输出累积内容（与原实现一致）
+                        yield {
+                            "type": "text",
+                            "content": accumulated_text  # 直接输出累积内容
+                        }
+                
+                # 发送工具分析结束消息
+                if use_tools:
+                    yield {
+                        "type": "tool_end",
+                        "content": {
+                            "total_calls": len(use_tools),
+                            "summary": f"Used {len(use_tools)} tool(s)"
+                        }
+                    }
+                
+                # 保存工具使用历史
+                self.agent._last_use_tools = use_tools
+                if use_tools:
+                    self.agent.set_output("use_tools", use_tools)
+            
+            else:
+                # 没有工具时，直接使用LLM流式输出
+                self.agent._param.prompts = [{"role": "user", "content": query}]
+                prompt, msg = self.agent._prepare_prompt_variables()
+                
+                for delta in self.agent._stream_output(prompt, msg):
+                    if delta:
+                        accumulated_text += delta  # 累积增量
+                        # 输出累积内容（与原实现一致）
+                        yield {
+                            "type": "text",
+                            "content": accumulated_text  # 直接输出累积内容
+                        }
+            
+            # 不再发送完成消息，由外层处理
+        
+        except Exception as e:
+            # 发送错误消息
+            yield {
+                "type": "error",
+                "content": {
+                    "error": str(e),
+                    "code": 500
+                }
+            }
+        
+        finally:
+            # 恢复原始系统提示词
+            if knowledge_context:
+                self.agent._param.sys_prompt = original_prompt
+
+
+
+def prepare_knowledge_context(db: Session, messages: list[dict], tavily_api_key: str, tenant_id: str, llm_name: str) -> str:
+    """准备知识上下文，复用现有的Tavily集成"""
+    knowledge_context = ""
+
+    if tavily_api_key and messages:
+        try:
+            llm_model_config = TenantLLMService.get_model_config(db, tenant_id, LLMType.CHAT, llm_name)
+            max_tokens = llm_model_config.get("max_tokens", 8192)
+
+            kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
+            questions = [m["content"] for m in messages if m["role"] == "user"]
+
+            if questions:
+                tav = Tavily(tavily_api_key)
+                tav_res = tav.retrieve_chunks(" ".join(questions))
+                kbinfos["chunks"].extend(tav_res["chunks"])
+                kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
+                kbinfos["total"] = len(kbinfos["chunks"])
+
+            if kbinfos["total"] > 0:
+                knowledges = kb_prompt(kbinfos, max_tokens)
+                knowledge_context = "\n------\n" + "\n\n------\n\n".join(knowledges)
+
+        except Exception as e:
+            logging.warning(f"Tavily search failed: {e}")
+
+    return knowledge_context
 
 
 class SetAPIKeyRequest(BaseModel):
@@ -90,6 +477,24 @@ class LLMServiceRequest(BaseModel):
     tavily_api_key: str = ""
 
 
+class ChatRequest(BaseModel):
+    """聊天请求模型"""
+    prompt: str = ""
+    messages: list[dict[str, Any]]
+    llm_name: str
+    stream: bool = True
+    gen_conf: dict[str, Any] = {}
+    image: str = ""
+    tavily_api_key: str = ""
+    # MCP 集成相关
+    mcp_ids: list[str] = []
+    mcp_timeout: float = 10.0
+    verbose_tool_use: bool = False
+    files: list[str] = []
+    # 结构化输出控制
+    structured_output: bool = False  # 是否使用结构化的SSE消息格式
+
+
 class FinePromptRequest(BaseModel):
     prompt: str
     llm_name: str
@@ -130,10 +535,11 @@ class RecognizeIntentResponse(BaseModel):
 class FieldMeta(BaseModel):
     field_id: int
     name: str
-    type: str                            # "text" | "enum" | "datetime"
+    type: str  # "text" | "enum" | "datetime"
     required: bool = False
     options: list[str] | None = None  # 仅 enum 时有效
-    description: str | None = None    # 给 LLM 的说明，可带示例
+    description: str | None = None  # 给 LLM 的说明，可带示例
+
 
 class FillFieldsRequest(BaseModel):
     user_text: str = Field(..., max_length=900, description="用户的自然语言输入")
@@ -141,6 +547,7 @@ class FillFieldsRequest(BaseModel):
     llm_name: str = Field(..., description="调用的对话模型名称")
     gen_conf: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0.0})
     retry: bool = Field(default=True, description="是否允许内部再追问一次")
+
 
 class FillFieldsResponse(BaseModel):
     field_values: dict[str, Any]
@@ -256,7 +663,7 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
                 if m.find("**ERROR**") >= 0:
                     raise Exception(m)
             except Exception as e:
-                msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
+                msg += f"\nFail to access model({llm.fid}/{llm.llm_name}) this api key." + str(e)
             chat_passed = True
         elif not rerank_passed and llm.mdl_type == LLMType.RERANK:
             assert factory in RerankModel, f"Re-rank model from {factory} is not supported yet."
@@ -268,7 +675,7 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
                 rerank_passed = True
                 logging.debug(f'passed model rerank {llm.llm_name}')
             except Exception as e:
-                msg += f"\nFail to access model({llm.llm_name}) using this api key." + str(e)
+                msg += f"\nFail to access model({llm.fid}/{llm.llm_name}) using this api key." + str(e)
 
     if msg:
         return get_data_error_result(retmsg=msg)
@@ -409,6 +816,7 @@ POST
     factory = req["llm_factory"]
     api_key = req.get("api_key", "x")
     llm_name = req["llm_name"]
+
     def apikey_json(keys):
         nonlocal req
         return json.dumps({k: req.get(k, "") for k in keys})
@@ -492,7 +900,7 @@ POST
             if not tc and m.find("**ERROR**:") >= 0:
                 raise Exception(m)
         except Exception as e:
-            msg += f"\nFail to access model({mdl_nm})." + str(e)
+            msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
     elif llm["mdl_type"] == LLMType.RERANK:
         assert factory in RerankModel, f"RE-rank model from {factory} is not supported yet."
         try:
@@ -505,10 +913,9 @@ POST
             if len(arr) == 0:
                 raise Exception("Not known.")
         except KeyError:
-            msg += f"{factory} dose not support this model({mdl_nm})"
+            msg += f"{factory} dose not support this model({factory}/{mdl_nm})"
         except Exception as e:
-            msg += f"\nFail to access model({mdl_nm})." + str(
-                e)
+            msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
     elif llm["mdl_type"] == LLMType.IMAGE2TEXT.value:
         assert factory in CvModel, f"Image to text model from {factory} is not supported yet."
         mdl = CvModel[factory](
@@ -517,12 +924,12 @@ POST
             base_url=llm["api_base"]
         )
         try:
-            with open(os.path.join(get_project_base_directory(), "configs/multirag.png"), "rb") as f:
-                m, tc = mdl.describe(f.read())
-                if not m and not tc:
-                    raise Exception(m)
+            image_data = test_image
+            m, tc = mdl.describe(image_data)
+            if not m and not tc:
+                raise Exception(m)
         except Exception as e:
-            msg += f"\nFail to access model({llm['llm_name']})." + str(e)
+            msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
     elif llm["mdl_type"] == LLMType.TTS:
         assert factory in TTSModel, f"TTS model from {factory} is not supported yet."
         mdl = TTSModel[factory](
@@ -532,7 +939,7 @@ POST
             for resp in mdl.tts("Hello~ Multirager!"):
                 pass
         except RuntimeError as e:
-            msg += f"\nFail to access model({mdl_nm})." + str(e)
+            msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
     else:
         # TODO: check other type of models
         pass
@@ -645,7 +1052,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                 "tags": ["CHAT"],
                 "llm": [
                     {
-                        "type": "chat", 
+                        "type": "chat",
                         "name": "claude-3-opus",
                         "used_token": 12300
                     }
@@ -659,7 +1066,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
     ```json
     {
         "retcode": 0,
-        "retmsg": "success", 
+        "retmsg": "success",
         "data": {
             "OpenAI": {
                 "tags": ["CHAT", "EMBEDDING"],
@@ -673,7 +1080,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                     },
                     {
                         "type": "embedding",
-                        "name": "text-embedding-ada-002", 
+                        "name": "text-embedding-ada-002",
                         "used_token": 8950,
                         "api_base": "https://api.openai.com/v1",
                         "max_tokens": 8192
@@ -922,6 +1329,7 @@ def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user
 
     return get_json_result(data=data)
 
+
 @router.post('/chat_service_sse', summary="模型对话服务", response_description="成功调用对话模型")
 async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session = Depends(get_db), user=Depends(manager)):
     """
@@ -1044,17 +1452,17 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
 
     """
     req_dict = request.model_dump()
-    
+
     # 检查是否有敏感词过滤结果
     if hasattr(req, 'state') and hasattr(req.state, 'sensitive_filter_result'):
         filter_result = req.state.sensitive_filter_result
         logging.info(f"[SSE接口] 检测到敏感词过滤结果: {filter_result.get('is_sensitive')}")
-        
+
         if filter_result.get('is_sensitive') and filter_result.get('action') == 'filter':
             # 使用过滤后的内容替换原始内容
             filtered_content = filter_result.get('filtered_content', '')
             matched_words = filter_result.get('matched_words', [])
-            
+
             # 处理messages中的敏感词
             if 'messages' in req_dict and isinstance(req_dict['messages'], list):
                 for msg in req_dict['messages']:
@@ -1067,7 +1475,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
                             if word in content:
                                 content = content.replace(word, replacement)
                         msg['content'] = content
-            
+
             # 处理prompt中的敏感词
             if 'prompt' in req_dict and req_dict['prompt']:
                 prompt = req_dict['prompt']
@@ -1077,7 +1485,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
                     if word in prompt:
                         prompt = prompt.replace(word, replacement)
                 req_dict['prompt'] = prompt
-                
+
             logging.info(f"[SSE接口] 已应用敏感词过滤，替换了 {len(matched_words)} 个敏感词")
 
     # 使用可能已过滤的数据
@@ -1114,7 +1522,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
 
         # 如果llm_type为image2text，添加image参数
         if llm_type == 'image2text':
-            call_params["image"] = req["image"]
+            call_params["images"] = req["image"]
 
         # 非流式调用，直接返回完整响应
         data = chat_mdl.chat(**call_params)
@@ -1154,7 +1562,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
         if llm_type == "image2text":
             llm_model_config = TenantLLMService.get_model_config(db, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT,
                                                                  req["llm_name"])
-            call_params["image"] = req["image"]
+            call_params["images"] = req["image"]
         else:
             llm_model_config = TenantLLMService.get_model_config(db, tenants[0]["tenant_id"], LLMType.CHAT,
                                                                  req["llm_name"])
@@ -1599,7 +2007,7 @@ def recognize_intent(
     # 3) 调 LLM
     answer = chat_mdl.chat(
         system=prompt,
-        history=[{"role": "user", "content": "请根据要求返回规定的格式"}],   # 空 user 消息 → 模型直接输出结果
+        history=[{"role": "user", "content": "请根据要求返回规定的格式"}],  # 空 user 消息 → 模型直接输出结果
         gen_conf=req["gen_conf"]
     )
 
@@ -1678,7 +2086,7 @@ def fill_fields(
             obj = {}
         values: dict[str, Any] = {}
         missing = []
-        invalid: dict[str,str] = {}
+        invalid: dict[str, str] = {}
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         for f in fields:
@@ -1692,7 +2100,7 @@ def fill_fields(
                         missing.append(f.name)
                         continue
                 else:
-                    values[f.name] = "" if f.type=="text" else None
+                    values[f.name] = "" if f.type == "text" else None
                     continue
             # 校验类型
             if f.type == "enum":
@@ -1732,3 +2140,221 @@ def fill_fields(
         "missing": final["missing"],
         "invalid": final["invalid"]
     })
+
+
+@router.post('/enhanced_chat_sse')
+async def enhanced_chat_service_sse(
+        request: ChatRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+
+    mcp_sessions = []
+
+    try:
+        # 获取租户信息
+        try:
+            tenants = TenantService.get_info_by(db, user.id)
+            if not tenants:
+                raise HTTPException(status_code=404, detail="Tenant not found!")
+
+            tenant_id = tenants[0]["tenant_id"]
+        except Exception as e:
+            logging.error(f"Failed to get tenant info: {e}")
+            raise HTTPException(status_code=500, detail="Failed to get tenant information")
+
+        # 验证模型
+        try:
+            my_llms = TenantLLMService.get_my_llms(db, tenant_id)
+        except Exception as e:
+            logging.error(f"Failed to get LLMs: {e}")
+            raise HTTPException(status_code=500, detail="Failed to get available models")
+
+        llm_type = None
+        for row in my_llms:
+            if row[4] == request.llm_name:
+                llm_type = row[-3]
+                break
+
+        if not llm_type:
+            raise HTTPException(status_code=404, detail=f"Model {request.llm_name} not found")
+
+        # 准备知识上下文（复用现有的Tavily集成）
+        knowledge_context = prepare_knowledge_context(db, request.messages, request.tavily_api_key, tenant_id, request.llm_name)
+
+        # 创建对话Agent适配器，直接复用Agent类
+        chat_agent = ChatAgentAdapter(
+            tenant_id=tenant_id,
+            llm_name=request.llm_name,
+            system_prompt=request.prompt,
+            mcp_ids=request.mcp_ids
+        )
+
+        if not request.stream:
+            # 非流式响应
+            result_content = ""
+            try:
+                for delta in chat_agent.chat_with_tools_stream(
+                        query=request.messages[-1]["content"] if request.messages else "",
+                        messages=request.messages[:-1] if request.messages else [],
+                        knowledge_context=knowledge_context,
+                        files=request.files
+                ):
+                    result_content += delta
+
+                return {"retcode": 0, "retmsg": "success", "data": {"answer": result_content}}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
+
+        # 流式响应
+        async def sse_stream():
+            try:
+                # 根据structured_output参数选择输出格式
+                if request.structured_output:
+                    # 使用结构化格式输出
+                    stream_generator = chat_agent.chat_with_tools_stream_structured(
+                        query=request.messages[-1]["content"] if request.messages else "",
+                        messages=request.messages[:-1] if request.messages else [],
+                        knowledge_context=knowledge_context,
+                        files=request.files
+                    )
+                    
+                    # 输出结构化消息，保持原有的包装格式
+                    for message in stream_generator:
+                        # 将结构化消息包装成原有格式
+                        wrapped_message = {
+                            "retcode": 0,
+                            "retmsg": "",
+                            "data": message  # 整个结构化消息作为data
+                        }
+                        yield f"data: {json.dumps(wrapped_message, ensure_ascii=False)}\n\n"
+                    
+                    # 发送结束标记（与原格式保持一致）
+                    end_data = {
+                        "retcode": 0,
+                        "retmsg": "Stream completed",
+                        "data": True
+                    }
+                    yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
+                else:
+                    # 使用原始格式输出（向后兼容）
+                    accumulated_content = ""
+
+                    # 开始标记
+                    start_data = {
+                        "retcode": 0,
+                        "retmsg": "Chat started",
+                        "data": ""
+                    }
+                    yield f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n"
+
+                    # 流式对话
+                    stream_generator = chat_agent.chat_with_tools_stream(
+                        query=request.messages[-1]["content"] if request.messages else "",
+                        messages=request.messages[:-1] if request.messages else [],
+                        knowledge_context=knowledge_context,
+                        files=request.files
+                    )
+
+                    # 简化流式输出处理
+                    for delta in stream_generator:
+                        if delta:  # 只有非空内容才输出
+                            accumulated_content += delta
+
+                            response_data = {
+                                "retcode": 0,
+                                "retmsg": "",
+                                "data": accumulated_content
+                            }
+                            yield f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
+
+                    # 如果启用详细模式，显示工具调用统计（仅在非结构化模式下）
+                    if request.verbose_tool_use and chat_agent.agent.tools:
+                        use_tools = getattr(chat_agent.agent, '_last_use_tools', [])
+                        if use_tools:
+                            tools_summary = f"\n\n📊 **本次对话使用了 {len(use_tools)} 个工具调用**"
+
+                        # tools_summary = "\n\n**工具调用历史（仅展示最近3个工具调用）**:\n"
+                        # for i, tool_call in enumerate(use_tools[-3:], 1):  # 最近3个工具调用
+                        #     tool_name = tool_call.get('name', 'Unknown')
+                        #     tool_args = tool_call.get('arguments', {})
+                        #     tool_results = tool_call.get('results', '')
+                        #
+                        #     # 格式化参数显示
+                        #     args_str = ""
+                        #     if isinstance(tool_args, dict) and tool_args:
+                        #         args_items = []
+                        #         for k, v in list(tool_args.items())[:3]:  # 只显示前3个参数
+                        #             if isinstance(v, str) and len(v) > 50:
+                        #                 v = v[:50] + "..."
+                        #             args_items.append(f"{k}={v}")
+                        #         args_str = f"({', '.join(args_items)})"
+                        #
+                        #     # 格式化结果显示，保留更多内容
+                        #     results_str = str(tool_results)
+                        #     if len(results_str) > 500:  # 增加到500字符
+                            #         results_str = results_str[:500] + "..."
+                            #
+                            #     tools_summary += f"\n**{i}. {tool_name}**{args_str}:\n```\n{results_str}\n```\n"
+
+                            accumulated_content += tools_summary
+                            final_data = {
+                                "retcode": 0,
+                                "retmsg": "",
+                                "data": accumulated_content
+                            }
+                            yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
+
+                    # 结束标记（仅在非结构化模式下）
+                    end_data = {
+                        "retcode": 0,
+                        "retmsg": "Stream completed",
+                        "data": True
+                    }
+                    yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
+
+            except Exception as e:
+                logging.exception(f"Stream error: {e}")
+                error_data = {
+                    "retcode": 500,
+                    "retmsg": str(e),
+                    "data": {"answer": f"**ERROR**: {str(e)}"}
+                }
+                yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+
+                # 错误后的结束标记
+                end_data = {
+                    "retcode": 0,
+                    "retmsg": "",
+                    "data": True
+                }
+                yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            sse_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control",
+                "Access-Control-Expose-Headers": "X-Accel-Buffering"
+            }
+        )
+
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        logging.exception(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # 清理MCP会话
+        if mcp_sessions:
+            try:
+                close_multiple_mcp_toolcall_sessions(mcp_sessions)
+            except Exception as e:
+                logging.warning(f"Error closing MCP sessions: {e}")

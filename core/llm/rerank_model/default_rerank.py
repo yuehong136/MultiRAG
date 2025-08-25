@@ -5,6 +5,8 @@ import threading
 from collections.abc import Iterable
 import numpy as np
 from huggingface_hub import snapshot_download
+
+from api.utils.log_utils import log_exception
 from core.llm.rerank_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
 from core.utils import num_tokens_from_string, truncate
@@ -51,7 +53,7 @@ class DefaultRerank(Base):
             import torch
             torch.cuda.empty_cache()
         except Exception as e:
-            print(f"Error emptying cache: {e}")
+            log_exception(e)
 
     def _process_batch(self, pairs, max_batch_size=None):
         """template method for subclass call"""

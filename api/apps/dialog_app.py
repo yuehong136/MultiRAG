@@ -8,9 +8,9 @@
 """
 from typing import Annotated, Literal, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, Discriminator, model_validator, field_validator
+from pydantic import BaseModel, Field, Discriminator, model_validator, field_validator, ConfigDict
 
 from api.apps import manager
 from api.db.db_models import get_db
@@ -23,7 +23,7 @@ from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
-# from api.db.database import get_db
+
 
 router = APIRouter()
 
@@ -100,56 +100,45 @@ class PromptConfig(BaseModel):
 # 改进后的 DialogRequest
 class DialogRequest(BaseModel):
     dialog_id: str | None = Field(None, description="对话的唯一标识符，如果为空则表示创建新对话")
-
     name: str = Field(default="New Dialog", max_length=100, description="对话的名称")
-
     description: str = Field(default="A helpful dialog", max_length=500, description="对话的描述")
-
     icon: str = Field(default="", description="对话的图标URL")
-
     top_n: int = Field(
         default=6,
         ge=1,
         le=50,
         description="从知识库中返回给用户的最大条目数"
     )
-
     top_k: int = Field(
         default=1024,
         ge=1,
         le=10000,
         description="从知识库中检索的最大条目数"
     )
-
     rerank_id: str | None = Field(
         default=None,
         description="重新排序模型的ID，用于对检索结果进行重新排序"
     )
-
     similarity_threshold: float = Field(
         default=0.1,
         ge=0.0,
         le=1.0,
         description="相似度阈值，低于此阈值的结果将被过滤"
     )
-
     vector_similarity_weight: float = Field(
         default=0.3,
         ge=0.0,
         le=1.0,
         description="向量相似度权重，用于重新排序阶段"
     )
-
     llm_id: str | None = Field(
         default=None,
         description="大语言模型的ID，如果不指定则使用租户默认模型"
     )
-
     llm_setting: dict[str, Any] | None = Field(
         default=None,
         description="大语言模型的配置参数"
     )
-
     prompt_config: dict[str, Any] | None = Field(
         default=None,
         description="""提示配置字典，建议包含以下字段：
@@ -159,12 +148,10 @@ class DialogRequest(BaseModel):
         - empty_response: 未找到相关内容时的回复
         """
     )
-
     kb_ids: list[str] | None = Field(
         default=None,
         description="知识库的ID列表"
     )
-
     # 新增的搜索模式参数
     search_mode: SearchModeType | None = Field(
         default=None,
@@ -226,49 +213,20 @@ class DialogRequest(BaseModel):
         mode_type = mode_data.pop('type')
         return {mode_type: mode_data}
 
-# class DialogRequest(BaseModel):
-#     dialog_id: str | None = None
-#     """对话的唯一标识符，如果为空则表示创建新对话。"""
-#
-#     name: str | None = "New Dialog"
-#     """对话的名称，默认值为 'New Dialog'。"""
-#
-#     description: str | None = "A helpful dialog"
-#     """对话的描述，默认值为 'A helpful dialog'。"""
-#
-#     icon: str | None = ""
-#     """对话的图标URL，默认值为空字符串。"""
-#
-#     top_n: int | None = 6
-#     """从知识库中返回的最大条目数，默认值为 6。"""
-#
-#     top_k: int | None = 1024
-#     """从知识库中检索的最大条目数，默认值为 1024。"""
-#
-#     rerank_id: str | None = ""
-#     """重新排序的ID，默认值为空字符串。"""
-#
-#     similarity_threshold: float | None = 0.1
-#     """相似度阈值，默认值为 0.1。"""
-#
-#     vector_similarity_weight: float | None = 0.3
-#     """向量相似度权重，默认值为 0.3。"""
-#
-#     llm_id: str | None = ""
-#     """大语言模型的ID，默认值为空字符串。"""
-#
-#     llm_setting: dict | None
-#     """大语言模型的配置，默认值为空字典。"""
-#
-#     prompt_config: dict | None
-#     """提示配置，包含系统提示、开场白、参数和空响应消息。"""
-#
-#     kb_ids: list[str] | None
-#     """知识库的ID列表，默认值为空列表。"""
 
 class RemoveDialogRequest(BaseModel):
     dialog_ids: list[str]
     """要删除的对话ID列表。"""
+
+
+class ListDialogsRequest(BaseModel):
+    owner_ids: list[int] = Field(default_factory=list)
+
+class ListDialogsResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")  # 允许 dialogs 内部是任意字段字典
+    dialogs: list[dict[str, Any]]
+    total: int
+
 
 def get_kb_names(kb_ids, db: Session):
     ids, nms = [], []
@@ -398,20 +356,21 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
             ],
             "empty_response": "Sorry! 知识库中未找到相关内容！"
         }
+        is_create = not request.dialog_id
+        if not is_create:
+            # 使用提供的配置或默认配置
+            prompt_config = request.prompt_config or default_prompt_config
 
-        # 使用提供的配置或默认配置
-        prompt_config = request.prompt_config or default_prompt_config
+            if not request.kb_ids and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config['system']:
+                return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no knowledge base/Tavily used here.")
 
-        if not request.kb_ids and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config['system']:
-            return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no knowledge base/Tavily used here.")
-
-        # 验证系统提示中是否包含所有必需参数
-        for p in prompt_config["parameters"]:
-            if p["optional"]:
-                continue
-            if prompt_config["system"].find("{%s}" % p["key"]) < 0:
-                return get_data_error_result(
-                    retmsg="Parameter '{}' is not used".format(p["key"]))
+            # 验证系统提示中是否包含所有必需参数
+            for p in prompt_config["parameters"]:
+                if p["optional"]:
+                    continue
+                if prompt_config["system"].find("{%s}" % p["key"]) < 0:
+                    return get_data_error_result(
+                        retmsg="Parameter '{}' is not used".format(p["key"]))
 
         tenant = TenantService.get_by_id(db, user.id)
         if not tenant:
@@ -521,6 +480,71 @@ async def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
         return get_json_result(data=diags)
     except Exception as e:
         return server_error_response(e)
+
+
+@router.post("/next", response_model=ListDialogsResponse, summary="List dialogs (next)")
+def list_dialogs_next(
+    # Query 参数（保持与你原逻辑一致的默认值与行为）
+    keywords: Annotated[str, Query(alias="keywords", description="关键词模糊搜索")] = "",
+    page_number: Annotated[int, Query(alias="page", ge=0, description="页码（从1开始；为0则不分页）")] = 0,
+    items_per_page: Annotated[int, Query(alias="page_size", ge=0, description="每页大小（为0则不分页）")] = 0,
+    parser_id: Annotated[str | None, Query(alias="parser_id", description="parser 过滤")] = None,
+    orderby: Annotated[str, Query(alias="orderby", description="排序字段")] = "create_time",
+    # 原逻辑：默认 true；当传入字符串 "false" 时才为 False。
+    # 在 FastAPI 中直接使用 bool 会自动解析 ?desc=false 为 False，因此等价且更安全。
+    desc: Annotated[bool, Query(alias="desc", description="是否降序")] = True,
+    body: ListDialogsRequest = Depends(),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    try:
+        owner_ids = body.owner_ids or []
+        if not owner_ids:
+            # tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
+            # tenants = [tenant["tenant_id"] for tenant in tenants]
+            tenants: list[int] = []  # 与原注释保持一致：keep it here
+            dialogs, total = DialogService.get_by_tenant_ids(
+                db,
+                tenants,                      # joined_tenant_ids
+                user.id,              # user_id
+                page_number,                  # page_number
+                items_per_page,               # items_per_page
+                orderby,                      # orderby
+                desc,                         # desc
+                keywords,                     # keywords
+                parser_id                     # parser_id
+            )
+        else:
+            tenants = owner_ids
+            # 与原逻辑一致：不分页取全量
+            dialogs, _ = DialogService.get_by_tenant_ids(
+                db,
+                tenants,
+                user.id,
+                0,            # page_number=0 -> 不分页
+                0,            # items_per_page=0 -> 不分页
+                orderby,
+                desc,
+                keywords,
+                parser_id
+            )
+            # 过滤 tenant_id
+            dialogs = [d for d in dialogs if d.get("tenant_id") in tenants]
+            total = len(dialogs)
+            # 手动分页
+            if page_number and items_per_page:
+                start = (page_number - 1) * items_per_page
+                end = page_number * items_per_page
+                dialogs = dialogs[start:end]
+
+        return get_json_result(data=ListDialogsResponse(dialogs=dialogs, total=total))
+
+    except HTTPException:
+        # 透传框架级异常
+        raise
+    except Exception as e:
+        return server_error_response(e)
+
 
 @router.post('/rm', summary="删除对话应用", response_description="成功删除对话应用")
 async def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends(manager)):

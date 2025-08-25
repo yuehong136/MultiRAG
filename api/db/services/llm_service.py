@@ -1,4 +1,7 @@
 import logging
+import re
+from functools import partial
+from typing import Generator, Any
 
 from langfuse import Langfuse
 
@@ -50,7 +53,6 @@ class TenantLLMService(CommonService):
                 mdlnm += "___OpenAI-API"
             elif fid == "VLLM":
                 mdlnm += "___VLLM"
-
             objs = cls.query(db, tenant_id=tenant_id, llm_name=mdlnm, llm_factory=fid)
 
         if not objs:
@@ -143,7 +145,7 @@ class TenantLLMService(CommonService):
         return model_config
 
     @classmethod
-    def model_instance(cls, db: Session, tenant_id, llm_type, llm_name=None, lang="Chinese"):
+    def model_instance(cls, db: Session, tenant_id, llm_type, llm_name=None, lang="Chinese", **kwargs):
         model_config = TenantLLMService.get_model_config(db, tenant_id, llm_type, llm_name)
 
         if llm_type == LLMType.EMBEDDING.value:
@@ -161,13 +163,13 @@ class TenantLLMService(CommonService):
             if model_config["llm_factory"] not in CvModel:
                 logging.info(f"Debug: Image2Text model factory not supported: {model_config['llm_factory']}")
                 return
-            return CvModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], lang, base_url=model_config["api_base"])
+            return CvModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], lang, base_url=model_config["api_base"], **kwargs)
 
         if llm_type == LLMType.CHAT.value:
             if model_config["llm_factory"] not in ChatModel:
                 logging.info(f"Debug: Chat model factory not supported: {model_config['llm_factory']}")
                 return
-            return ChatModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
+            return ChatModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"], **kwargs)
 
         if llm_type == LLMType.SPEECH2TEXT:
             if model_config["llm_factory"] not in Seq2txtModel:
@@ -269,7 +271,16 @@ class TenantLLMService(CommonService):
         for llm_factory in llm_factories:
             for llm in llm_factory["llm"]:
                 if llm_id == llm["llm_name"]:
-                    return llm["mdl_type"].strip(",")[-1]
+                    return llm["mdl_type"].split(",")[-1]
+        with db_connection() as db:
+            for llm in LLMService.query(db, llm_name=llm_id):
+                return llm.mdl_type
+            llm = TenantLLMService.get_or_none(db, llm_name=llm_id)
+            if llm:
+                return llm.mdl_type
+            for llm in TenantLLMService.query(db, llm_name=llm_id):
+                return llm.mdl_type
+
 # class LLMBundle(object):
 #     def __init__(self, tenant_id: str, llm_type: str, llm_name: str = None, lang: str = "Chinese"):
 #         self.tenant_id = tenant_id
@@ -357,27 +368,28 @@ class TenantLLMService(CommonService):
 #                 return
 #             yield txt
 class LLMBundle:
-    def __init__(self, db: Session, tenant_id: str, llm_type: str, llm_name: str | None = None, lang: str = "Chinese"):
+    def __init__(self, db: Session, tenant_id: str, llm_type: str, llm_name: str | None = None, lang: str = "Chinese", **kwargs):
         self.db = db
         self.tenant_id = tenant_id
         self.llm_type = llm_type
         self.llm_name = llm_name
         self.lang = lang
-        self.mdl = TenantLLMService.model_instance(db, tenant_id, llm_type, llm_name, lang=lang)
+        self.mdl = TenantLLMService.model_instance(db, tenant_id, llm_type, llm_name, lang=lang, **kwargs)
         assert self.mdl, "Can't find model for {}/{}/{}".format(tenant_id, llm_type, llm_name)
         model_config = TenantLLMService.get_model_config(db, tenant_id, llm_type, llm_name)
         self.max_length = model_config.get("max_tokens", 8192)
 
         self.is_tools = model_config.get("is_tools", False)
+        self.verbose_tool_use = kwargs.get("verbose_tool_use")
 
         langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=tenant_id)
+        self.langfuse = None
         if langfuse_keys:
             langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
             if langfuse.auth_check():
                 self.langfuse = langfuse
-                self.trace = self.langfuse.trace(name=f"{self.llm_type}-{self.llm_name}")
-        else:
-            self.langfuse = None
+                trace_id = self.langfuse.create_trace_id()
+                self.trace_context = {"trace_id": trace_id}
 
     def bind_tools(self, toolcall_session, tools):
         if not self.is_tools:
@@ -387,7 +399,7 @@ class LLMBundle:
 
     def encode(self, texts: list):
         if self.langfuse:
-            generation = self.trace.generation(name="encode", model=self.llm_name, input={"texts": texts})
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="encode", model=self.llm_name, input={"texts": texts})
 
         embeddings, used_tokens = self.mdl.encode(texts)
         llm_name = getattr(self, "llm_name", None)
@@ -395,13 +407,14 @@ class LLMBundle:
             logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
 
         if self.langfuse:
-            generation.end(usage_details={"total_tokens": used_tokens})
+            generation.update(usage_details={"total_tokens": used_tokens})
+            generation.end()
 
         return embeddings, used_tokens
 
     def encode_queries(self, query: str):
         if self.langfuse:
-            generation = self.trace.generation(name="encode_queries", model=self.llm_name, input={"query": query})
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="encode_queries", model=self.llm_name, input={"query": query})
 
         emd, used_tokens = self.mdl.encode_queries(query)
         llm_name = getattr(self, "llm_name", None)
@@ -409,39 +422,42 @@ class LLMBundle:
             logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
 
         if self.langfuse:
-            generation.end(usage_details={"total_tokens": used_tokens})
+            generation.update(usage_details={"total_tokens": used_tokens})
+            generation.end()
 
         return emd, used_tokens
 
     def similarity(self, query: str, texts: list):
         if self.langfuse:
-            generation = self.trace.generation(name="similarity", model=self.llm_name, input={"query": query, "texts": texts})
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="similarity", model=self.llm_name, input={"query": query, "texts": texts})
 
         sim, used_tokens = self.mdl.similarity(query, texts)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
             logging.error(f"Can't update token usage for {self.tenant_id}/RERANK used_tokens: {used_tokens}")
 
         if self.langfuse:
-            generation.end(usage_details={"total_tokens": used_tokens})
+            generation.update(usage_details={"total_tokens": used_tokens})
+            generation.end()
 
         return sim, used_tokens
 
     def describe(self, image, max_tokens: int = 300):
         if self.langfuse:
-            generation = self.trace.generation(name="describe", metadata={"model": self.llm_name})
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="describe", metadata={"model": self.llm_name})
 
         txt, used_tokens = self.mdl.describe(image)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens):
             logging.error(f"Can't update token usage for {self.tenant_id}/IMAGE2TEXT used_tokens: {used_tokens}")
 
         if self.langfuse:
-            generation.end(output={"output": txt}, usage_details={"total_tokens": used_tokens})
+            generation.update(output={"output": txt}, usage_details={"total_tokens": used_tokens})
+            generation.end()
 
         return txt
 
     def describe_with_prompt(self, image, prompt):
         if self.langfuse:
-            generation = self.trace.generation(name="describe_with_prompt", metadata={"model": self.llm_name, "prompt": prompt})
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="describe_with_prompt", metadata={"model": self.llm_name, "prompt": prompt})
 
         txt, used_tokens = self.mdl.describe_with_prompt(image, prompt)
         if not TenantLLMService.increase_usage(
@@ -449,13 +465,14 @@ class LLMBundle:
             logging.error("LLMBundle.describe can't update token usage for {}/IMAGE2TEXT used_tokens: {}".format(self.tenant_id, used_tokens))
 
         if self.langfuse:
-            generation.end(output={"output": txt}, usage_details={"total_tokens": used_tokens})
+            generation.update(output={"output": txt}, usage_details={"total_tokens": used_tokens})
+            generation.end()
 
         return txt
 
     def transcription(self, audio):
         if self.langfuse:
-            generation = self.trace.generation(name="transcription", metadata={"model": self.llm_name})
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="transcription", metadata={"model": self.llm_name})
 
         txt, used_tokens = self.mdl.transcription(audio)
         if not TenantLLMService.increase_usage(
@@ -463,13 +480,14 @@ class LLMBundle:
             logging.error("Can't update token usage for {}/SEQUENCE2TXT used_tokens: {}".format(self.tenant_id, used_tokens))
 
         if self.langfuse:
-            generation.end(output={"output": txt}, usage_details={"total_tokens": used_tokens})
+            generation.update(output={"output": txt}, usage_details={"total_tokens": used_tokens})
+            generation.end()
 
         return txt
 
-    def tts(self, text):
+    def tts(self, text: str) -> Generator[bytes, None, None]:
         if self.langfuse:
-            span = self.trace.span(name="tts", input={"text": text})
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="tts", input={"text": text})
 
         for chunk in self.mdl.tts(text):
             if isinstance(chunk, int):
@@ -479,7 +497,7 @@ class LLMBundle:
             yield chunk
 
         if self.langfuse:
-            span.end()
+            generation.end()
 
     def _remove_reasoning_content(self, txt: str) -> str:
         first_think_start = txt.find("<think>")
@@ -495,50 +513,68 @@ class LLMBundle:
 
         return txt[last_think_end + len("</think>") :]
 
-    def chat(self, system, history, gen_conf, **kwargs):
+    def chat(self, system: str, history: list, gen_conf: dict[str, Any] | None=None, **kwargs) -> str:
+        if gen_conf is None:
+            gen_conf = {}
         if self.langfuse:
-            generation = self.trace.generation(name="chat", model=self.llm_name, input={"system": system, "history": history})
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="chat", model=self.llm_name, input={"system": system, "history": history})
 
-        chat = self.mdl.chat
+        chat_partial = partial(self.mdl.chat, system, history, gen_conf)
         if self.is_tools and self.mdl.is_tools:
-            chat = self.mdl.chat_with_tools
+            chat_partial = partial(self.mdl.chat_with_tools, system, history, gen_conf)
 
-        txt, used_tokens = chat(system, history, gen_conf, **kwargs)
+        txt, used_tokens = chat_partial(**kwargs)
         txt = self._remove_reasoning_content(txt)
+
+        if not self.verbose_tool_use:
+            txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
 
         if isinstance(used_tokens, int) and not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
             logging.error("LLMBundle.chat can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, used_tokens))
 
         if self.langfuse:
-            generation.end(output={"output": txt}, usage_details={"total_tokens": used_tokens})
+            generation.update(output={"output": txt}, usage_details={"total_tokens": used_tokens})
+            generation.end()
 
         return txt
 
-    def chat_streamly(self, system, history, gen_conf, **kwargs):
+    def chat_streamly(self, system: str, history: list, gen_conf:  dict[str, Any] | None=None, **kwargs):
+        if gen_conf is None:
+            gen_conf = {}
         if self.langfuse:
-            generation = self.trace.generation(name="chat_streamly", model=self.llm_name, input={"system": system, "history": history})
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="chat_streamly", model=self.llm_name, input={"system": system, "history": history})
 
         ans = ""
-        chat_streamly = self.mdl.chat_streamly
-
+        chat_partial = partial(self.mdl.chat_streamly, system, history, gen_conf)
+        total_tokens = 0
         if self.is_tools and self.mdl.is_tools:
-            chat_streamly = self.mdl.chat_streamly_with_tools
+            chat_partial = partial(self.mdl.chat_streamly_with_tools, system, history, gen_conf)
 
-        for txt in chat_streamly(system, history, gen_conf, **kwargs):
+        for txt in chat_partial(**kwargs):
             if isinstance(txt, int):
+                total_tokens = txt
                 if self.langfuse:
-                    generation.end(output={"output": ans})
+                    generation.update(output={"output": ans})
+                    generation.end()
+                break
 
-                if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, txt, self.llm_name):
-                    logging.error("LLMBundle.chat_streamly can't update token usage for {}/CHAT llm_name: {}, content: {}".format(self.tenant_id, self.llm_name, txt))
-                return ans
+                # if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, txt, self.llm_name):
+                #     logging.error("LLMBundle.chat_streamly can't update token usage for {}/CHAT llm_name: {}, content: {}".format(self.tenant_id, self.llm_name, txt))
+                # return ans
 
             if txt.endswith("</think>"):
                 ans = ans.rstrip("</think>")
 
-            if type(self.mdl).__name__ == "QWenCV":
-                ans = txt
-            else:
-                ans += txt
+            if not self.verbose_tool_use:
+                txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
 
+            # if type(self.mdl).__name__ == "QWenCV":
+            #     ans = txt
+            # else:
+            #     ans += txt
+            ans += txt
             yield ans
+
+        if total_tokens > 0:
+            if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, txt, self.llm_name):
+                logging.error("LLMBundle.chat_streamly can't update token usage for {}/CHAT llm_name: {}, content: {}".format(self.tenant_id, self.llm_name, txt))

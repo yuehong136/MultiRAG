@@ -1,4 +1,5 @@
-# zhipu_chat.py
+import json
+import logging
 from typing import Any
 from core.llm.chat_model.base import Base, LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN
 from zhipuai import ZhipuAI
@@ -7,6 +8,8 @@ from core.nlp import is_chinese, is_english
 
 
 class ZhipuChat(Base):
+    _FACTORY_NAME = "ZHIPU-AI"
+
     def __init__(self, key, model_name="glm-4-airx", base_url=None, **kwargs):
         super().__init__(key, model_name, base_url=base_url, **kwargs)
 
@@ -22,7 +25,7 @@ class ZhipuChat(Base):
             del gen_conf["frequency_penalty"]
         return gen_conf
 
-    def chat_with_tools(self, system: str, history: list, gen_conf: dict):
+    def chat_with_tools(self, system: str, history: list, gen_conf: dict | None=None):
         if "presence_penalty" in gen_conf:
             del gen_conf["presence_penalty"]
         if "frequency_penalty" in gen_conf:
@@ -30,7 +33,9 @@ class ZhipuChat(Base):
 
         return super().chat_with_tools(system, history, gen_conf)
 
-    def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]):
+    def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None=None, **kwargs):
+        if gen_conf is None:
+            gen_conf = {}
         if system:
             history.insert(0, {"role": "system", "content": system})
         if "max_tokens" in gen_conf:
@@ -42,6 +47,7 @@ class ZhipuChat(Base):
         ans = ""
         tk_count = 0
         try:
+            logging.info(json.dumps(history, ensure_ascii=False, indent=2))
             response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, **gen_conf)
             for resp in response:
                 if not resp.choices[0].delta.content and resp.choices[0].finish_reason != 'stop':
@@ -62,7 +68,9 @@ class ZhipuChat(Base):
 
         yield tk_count
 
-    def chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict):
+    def chat_streamly_with_tools(self, system: str, history: list, gen_conf=None):
+        if gen_conf is None:
+            gen_conf = {}
         if "presence_penalty" in gen_conf:
             del gen_conf["presence_penalty"]
         if "frequency_penalty" in gen_conf:

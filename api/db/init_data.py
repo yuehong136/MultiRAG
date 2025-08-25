@@ -166,6 +166,11 @@ def init_llm_factory(db: Session):
 
 def add_graph_templates(db: Session):
     dir = os.path.join(get_project_base_directory(), "agent", "templates")
+    CanvasTemplateService.filter_delete(db, [1 == 1])
+    if not os.path.exists(dir):
+        logging.warning("Missing agent templates!")
+        return
+
     for fnm in os.listdir(dir):
         try:
             with open(os.path.join(dir, fnm), "r", encoding="utf-8") as f:
@@ -204,7 +209,7 @@ def add_graph_templates(db: Session):
         except Exception:
             # print("Add graph templates error: ", e)
             # print("------------", flush=True)
-            logging.exception("Add graph templates error: ")
+            logging.exception("Add agent templates error: ")
 
             db.rollback()  # 回滚事务
 

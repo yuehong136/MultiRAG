@@ -254,11 +254,18 @@ class User(BaseModel):
     def to_dict(self):
         return {
             "id": self.id,
+            "access_token": self.access_token,
+            "avatar": self.avatar,
             "email": self.email,
+            "is_active": self.is_active,
+            "is_anonymous": self.is_anonymous,
+            "language": self.language,
             "nickname": self.nickname,
+            "password": self.password,
+            "status": self.status,
+            "timezone": self.timezone,
             "last_login_time": self.last_login_time,
-            "is_superuser": self.is_superuser,
-            # Add other fields as needed
+            "is_superuser": self.is_superuser
         }
 
 
@@ -540,9 +547,11 @@ class API4Conversation(BaseModel):
     reference = Column(JSONB, index=False, nullable=True, default=[])
     tokens = Column(Integer, index=False, nullable=False, default=0)
     source = Column(String(16), index=True, nullable=True, doc="none|agent|dialog")
+    dsl = Column(JSONB, index=False, nullable=True, default={})
     duration = Column(Float, index=True, nullable=False, default=0)
     round = Column(Integer, index=True, nullable=False, default=0)
     thumb_up = Column(Integer, index=True, nullable=False, default=0)
+    errors = Column(Text, index=False, nullable=True, default=None, doc="errors")
 
 
 class UserCanvas(BaseModel):
