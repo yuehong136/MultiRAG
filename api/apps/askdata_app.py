@@ -582,3 +582,45 @@ async def get_hc_dim_values_by_dim_value(
             status=StatusEnum.ERROR,
             message=f"获取高基数维度值失败: {str(e)}"
         )
+
+
+class GenerateWideTableSqlReq(BaseModel):
+    """自然语言转初始SQL请求的基础模型"""
+    user_query: str = Field(..., title="查询文本", description="用户提出的自然语言查询文本")
+    dataset_id: str = Field(..., title="数据集ID", description="数据集ID")
+    llm_name: str = Field("gpt-4", title="LLM模型名称", description="用于将自然语言转换为SQL的LLM模型名称")
+    conversation_id: str = Field(None, title="conversation_id", description="conversation_id")
+    ask_id: str = Field(None, title="ask_id", description="用户的提问ID")
+    userid: str = Field(
+        "",
+        title="用户ID",
+        description="用户ID，后续需要去获取该用户语义层的权限。"
+    )
+
+
+@router.post("/generate-wide-table-sql", response_model=ResponseSchema)
+async def generate_wide_table_sql(
+        body: GenerateWideTableSqlReq = Body(
+            ...
+        ),
+        db: Session = Depends(get_db), user=Depends(manager),
+        service: AskdataService = Depends(get_askdata_service)
+):
+    try:
+        # 调用service生成宽表SQL
+        sql = await service.generate_widetable_sql(
+            dataset_id=body.dataset_id,
+            user_id=body.userid)
+
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="生成初始SQL及配置成功",
+            data={"sql": sql}
+        )
+
+    except Exception as e:
+        logger.exception("generate-wide-table-sql 发生异常")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"处理请求失败：{str(e)}"
+        )

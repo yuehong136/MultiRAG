@@ -25,6 +25,7 @@ from api.service.askdata_service.util.convert_where_condition_value import proce
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
 from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
     filter_metrics_by_permissions
+from api.service.askdata_service.util.wide_table_sql_generator import WideTableSQLGenerator
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
@@ -503,6 +504,77 @@ class AskdataService:
             if mapping["modelId"] == model_id:
                 return mapping["modelName"]
 
+    async def generate_widetable_sql(
+            self,
+            dataset_id: str,
+            user_id: str = None
+    ) -> str:
+        """
+        生成宽表查询SQL
+
+        Args:
+            dataset_id: 数据集ID
+            user_id: 用户ID
+
+        Returns:
+            生成的SQL语句
+        """
+        try:
+            logger.info(f"开始生成宽表SQL - 数据集ID: {dataset_id}, 用户ID: {user_id}")
+
+            # 1. 获取数据集详情
+            logger.info("步骤1: 获取数据集详情...")
+            dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_id)
+
+            if not dataset_details or len(dataset_details) == 0:
+                raise ValueError(f"未找到数据集 {dataset_id} 的详情信息")
+
+            dataset_detail = dataset_details[0]
+            logger.info(f"数据集名称: {dataset_detail.get('datasetName')}")
+            logger.info(f"包含模型数: {len(dataset_detail.get('models', []))}")
+
+            # 2. 获取模型关系
+            logger.info("步骤2: 获取模型关系...")
+            model_ids = [model["modelId"] for model in dataset_detail.get("models", [])]
+
+            if not model_ids:
+                raise ValueError("数据集中没有模型")
+
+            model_relationships = await self.semantic_api_client.get_model_relationships_async(model_ids)
+            logger.info(f"获取到 {len(model_relationships)} 条模型关系")
+
+            # 3. 获取用户权限（如果提供了用户ID）
+            user_permissions = None
+            if user_id:
+                logger.info("步骤3: 获取用户权限...")
+                try:
+                    user_permissions = await self.semantic_api_client.get_user_semantic_permissions_async(
+                        user_id,
+                        [dataset_id]
+                    )
+                    logger.info(f"成功获取用户 {user_id} 的权限信息")
+                except Exception as e:
+                    logger.warning(f"获取用户权限失败，将使用默认权限: {str(e)}")
+                    user_permissions = None
+            else:
+                logger.info("步骤3: 未提供用户ID，跳过权限获取")
+
+            # 4. 生成SQL
+            logger.info("步骤4: 生成宽表SQL...")
+            sql_generator = WideTableSQLGenerator()
+            sql = sql_generator.generate_sql(
+                dataset_detail=dataset_detail,
+                model_relationships=model_relationships,
+                user_permissions=user_permissions,
+                user_id=user_id or "default"
+            )
+
+            logger.info("宽表SQL生成成功")
+            return sql
+
+        except Exception as e:
+            logger.error(f"生成宽表SQL时发生错误: {str(e)}", exc_info=True)
+            raise
 
 def get_askdata_service(db: Session = Depends(get_db), user=Depends(manager)) -> AskdataService:
     """通过依赖注入获取AskdataService实例。"""
