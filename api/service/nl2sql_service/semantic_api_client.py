@@ -86,6 +86,7 @@ class SemanticApiClient:
             "get_business_term_info": "/api/drm/semanticOpenApi/getBusinessTermInfo",
             "get_model_detail": "/api/drm/semanticOpenApi/getModelDetail",
             "get_dimension_info_by_id": "/api/drm/semanticOpenApi/getDimensionInfoById",
+            "get_metric_info_by_id": "/api/drm/semanticOpenApi/getMetricInfoByKId",
             "get_dimension_values": "/api/drm/semanticOpenApi/getDimensionValues",
             "get_model_relationships": "/api/drm/semanticOpenApi/getModelRelationships",
             "get_dataset_detail": "/api/drm/semanticOpenApi/getDatasetDetail",
@@ -1129,6 +1130,131 @@ class SemanticApiClient:
 
             # 其他异常封装为ApiRequestError后抛出
             error_msg = f"获取维度详情过程中出错: {str(e)}"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg) from e
+
+    async def get_metric_info_by_id_async(
+            self,
+            metric_ids: Union[str, List[str]],
+            max_concurrent: int = 5
+    ) -> List[Dict]:
+        """
+        异步获取指标详情信息（支持单个ID或ID列表，并发请求）
+
+        Args:
+            metric_ids: 单个指标ID或指标ID列表
+            max_concurrent: 最大并发请求数
+
+        Returns:
+            List[Dict]: 指标详情信息列表
+
+        Raises:
+            ApiRequestError: 请求过程中的错误
+            ApiResponseError: API响应错误（业务状态码非0）
+        """
+        logger.info(f"\n=== 根据指标ID获取指标详情 ===")
+
+        if not metric_ids:
+            return []
+
+        # 确保API路径已添加
+        if "get_metric_info_by_id" not in self.api_paths:
+            self.api_paths["get_metric_info_by_id"] = "/api/drm/semanticOpenApi/getMetricInfoByKId"
+
+        # 转换单个ID为列表
+        if isinstance(metric_ids, str):
+            metric_ids = [metric_ids]
+
+        all_results = []
+        error_count = 0  # 跟踪错误数量
+
+        try:
+            # 创建异步任务列表
+            tasks = []
+            for metric_id in metric_ids:
+                logger.info(f"正在准备获取指标ID: {metric_id} 的详情")
+                task = self._make_async_request(
+                    "POST",
+                    self.api_paths["get_metric_info_by_id"],
+                    data={"metricId": metric_id}
+                )
+                tasks.append((metric_id, task))
+
+            # 限制并发请求数
+            processed_count = 0
+            for i in range(0, len(tasks), max_concurrent):
+                batch = tasks[i:i + max_concurrent]
+                batch_ids = [metric_id for metric_id, _ in batch]
+                batch_tasks = [task for _, task in batch]
+
+                logger.info(
+                    f"正在并发获取 {len(batch_ids)} 个指标详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
+
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+
+                # 处理结果
+                for idx, (metric_id, result) in enumerate(zip(batch_ids, batch_results)):
+                    if isinstance(result, Exception):
+                        error_msg = f"指标ID {metric_id} 的请求出错: {str(result)}"
+                        logger.error(error_msg)
+                        error_count += 1
+                        # 不立即抛出异常，继续处理其他ID，但记录错误
+                        continue
+
+                    if str(result.get("code", "")) != "0":
+                        error_msg = f"获取指标ID {metric_id} 失败: {result.get('msg', '未知错误')}"
+                        logger.warning(error_msg)
+                        error_count += 1
+                        raise ApiResponseError(error_msg)
+
+                    # 获取数据部分
+                    metric_info = result.get("data", [])
+
+                    if metric_info:
+                        # 添加原始请求的指标ID，以便跟踪匹配关系
+                        for item in metric_info:
+                            if "requested_metric_id" not in item:
+                                item["requested_metric_id"] = metric_id
+
+                        all_results.extend(metric_info)
+                        logger.info(f"指标ID {metric_id} 返回了 {len(metric_info)} 条详情信息")
+
+                        # 打印第一条详情的关键信息
+                        if metric_info:
+                            first_info = metric_info[0]
+                            metric_name = first_info.get('metricName', 'N/A')
+                            metric_en_name = first_info.get('metricEnName', 'N/A')
+                            model_name = first_info.get('modelName', 'N/A')
+                            logger.info(
+                                f"  指标名称={metric_name}, 英文名称={metric_en_name}, 模型名称={model_name}")
+                    else:
+                        error_msg = f"指标ID {metric_id} 未返回任何详情信息"
+                        logger.warning(error_msg)
+                        # 空结果也视为一种异常情况
+                        raise ApiResponseError(error_msg)
+
+                processed_count += len(batch)
+                logger.info(f"已处理 {processed_count}/{len(metric_ids)} 个指标ID")
+
+            # 全部处理失败的情况
+            if error_count == len(metric_ids):
+                raise ApiRequestError(f"所有 {len(metric_ids)} 个指标ID的请求都失败了")
+
+            # 部分失败的情况下，如果没有任何结果，也抛出异常
+            if len(all_results) == 0:
+                raise ApiRequestError(f"未能获取到任何指标详情信息，{error_count} 个请求失败")
+
+            # 返回所有结果
+            logger.info(f"总共获取到 {len(all_results)} 条指标详情信息")
+            return all_results
+
+        except Exception as e:
+            if isinstance(e, SemanticApiError):
+                # 如果是已经封装好的API异常则直接抛出
+                raise
+
+            # 其他异常封装为ApiRequestError后抛出
+            error_msg = f"获取指标详情过程中出错: {str(e)}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
