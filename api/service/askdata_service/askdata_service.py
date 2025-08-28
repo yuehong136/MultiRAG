@@ -12,6 +12,7 @@ from api.db.db_models import get_db
 from api.db.services.ask_data_history_service import AskDataHistoryService
 from api.service.askdata_service.async_llm_service import AsyncLLMService
 from api.service.askdata_service.event.event_utils import send_event
+from api.service.askdata_service.llm.semantic_field_extractor import SemanticFieldExtractor
 from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLGenerator
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
 from api.service.askdata_service.query_intent import QueryIntentAnalyzer
@@ -45,98 +46,91 @@ class AskdataService:
         self.history_service = AskDataHistoryService()
         self.table_config_generator = TableConfigGenerator(self.semantic_api_client)
         self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
+        self.semantic_field_extractor = SemanticFieldExtractor(db, user.id, self.prompt_dir)
         self.model_dataset_resolver = ModelDatasetResolver(self.semantic_api_client)
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
-                                      userid:str, llm_name: str = None,
+                                      userid: str, llm_name: str = None,
                                       event_id: Optional[str] = None, enable_deep_search: bool = False):
-        # 并行启动两个任务：语义层检索和图表推荐
-        async def semantic_layer_task():
+
+        # 1. 先获取dataset_details（只获取一次）
+        dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list)
+
+        # 2. 定义三个主要的并行任务
+
+        async def llm_extraction_task():
+            """LLM提取语义字段，静默执行，不发送事件"""
+            try:
+                extracted_fields = await self.semantic_field_extractor.extract_semantic_fields(
+                    user_query=user_query,
+                    dataset_info=dataset_details,
+                    llm_name=llm_name
+                )
+
+                logger.info(f"LLM提取到的语义字段：{extracted_fields}")
+
+                llm_dimension_ids = [field["dimension_id"] for field in extracted_fields if "dimension_id" in field]
+                llm_metric_ids = [field["metric_id"] for field in extracted_fields if "metric_id" in field]
+
+                return llm_dimension_ids, llm_metric_ids
+            except Exception as e:
+                logger.warning(f"LLM extraction failed: {e}")
+                return [], []
+
+        async def keyword_search_and_semantic_layer_task():
+            """分词检索和语义层构建"""
+            # 1. 分词
             await send_event(event_id, {"message": "分词", "action": "start"}, "message")
-            segmented_words = await custom_tokenize_with_semantic_words(text=user_query,
-                                                                        dataset_id_list=dataset_id_list)
+            segmented_words = await custom_tokenize_with_semantic_words(
+                text=user_query,
+                dataset_id_list=dataset_id_list
+            )
             await send_event(event_id, {"message": "分词", "action": "complete"}, "message")
             await send_event(event_id, {"message": "分词结果", "data": segmented_words}, "data")
 
+            # 2. 开始获取维度信息
             await send_event(event_id, {"message": "获取维度信息", "action": "start"}, "message")
-            # 1. 将分词到语义层结构化数据中进行检索得到相关数据
-            # 2. 根据分词关键字获得维度列表
-            dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(
+
+            # 并行获取维度相关信息
+            dimensions_by_keyword_task = self.semantic_api_client.get_dimension_info_by_keyword_async(
                 keyword=segmented_words,
-                dataset_ids=dataset_id_list)
-            await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
-            # 3. 分词关键字作为维度值关键字获得获得维度列表
-            dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
+                dataset_ids=dataset_id_list
+            )
+            dimensions_by_value_task = self.semantic_api_client.get_dimension_by_dimension_value_async(
                 keyword=segmented_words,
-                dataset_ids=dataset_id_list)
-            involved_dimension_id_list = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
-            hc_dim_id_list = []
-            # 分词关键字作为维度值关键字获得获得维度列表（高基数维度）
+                dataset_ids=dataset_id_list
+            )
+
+            dimensions_by_keyword, dimensions_by_value = await asyncio.gather(
+                dimensions_by_keyword_task,
+                dimensions_by_value_task
+            )
+
+            keyword_dimension_ids = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
+
+            # 高基数维度检索（如果启用）
+            hc_dim_ids = []
             if enable_deep_search:
                 hc_dimensions_by_value = await self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
                     keyword_list=segmented_words,
                     dataset_ids=dataset_id_list,
-                    exclude_dim_ids=involved_dimension_id_list)
-                hc_dim_id_list = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
-            # 4. 根据dimensionId对dimensions_by_keyword和dimensions_by_value进行维度去重，获得最终维度列表
-            involved_dimension_id_list.extend(hc_dim_id_list)
-            # 根据用户的权限列表，去掉不允许访问的维度
-            user_semantic_permissions = await self.semantic_api_client.get_user_semantic_permissions_async(userid, dataset_id_list)
-            allowed_dimension_id_list, prohibited_dimension_id_list = filter_dimensions_by_permissions(involved_dimension_id_list, user_semantic_permissions)
-            # 使用allowed_dimension_id_list获得允许访问的维度的维度值，被禁止的维度就没必要获取了
-            dimension_values = await self.semantic_api_client.get_dimension_values_async(dimension_ids=allowed_dimension_id_list)
-            # 维度信息则使用involved_dimension_id_list（所有涉及到的维度）获得
-            dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=involved_dimension_id_list)
-            # 清除不允许访问的维度的信息，仅保留必要信息
-            for dimension in dimensions:
-                if dimension['dimensionId'] in prohibited_dimension_id_list:
-                    dimension['hasPermission'] = False
+                    exclude_dim_ids=keyword_dimension_ids
+                )
+                hc_dim_ids = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
 
-            await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
-            await send_event(event_id, {"message": "维度信息", "data": dimensions}, "data")
-            # 5. 根据分词关键字获得指标列表
+            keyword_dimension_ids.extend(hc_dim_ids)
+
+            # 3. 获取指标信息
             await send_event(event_id, {"message": "获取指标信息", "action": "start"}, "message")
-            metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
+            keyword_metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
                 keyword=segmented_words,
-                dataset_ids=dataset_id_list)
-            metric_ids = [metric["metricId"] for metric in metrics]
-            allowed_metrics, prohibited_metrics = filter_metrics_by_permissions(metric_ids, user_semantic_permissions)
-            for metric in metrics:
-                if metric["metricId"] in prohibited_metrics:
-                    metric["hasPermission"] = False
+                dataset_ids=dataset_id_list
+            )
 
-            await send_event(event_id, {"message": "获取指标信息", "action": "complete"}, "message")
-            await send_event(event_id, {"message": "指标信息", "data": metrics}, "data")
-
-            # 6. 从维度和指标中提取所有modelId并去重，获得模型ID列表
-            model_ids = self._extract_unique_model_ids(dimensions, metrics)
-
-            # 7. 查询模型详情和关联关系
-            await send_event(event_id, {"message": "获取模型信息", "action": "start"}, "message")
-            model_details = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
-            await send_event(event_id, {"message": "获取模型信息", "action": "complete"}, "message")
-            await send_event(event_id, {"message": "模型信息", "data": model_details}, "data")
-            model_relations = await self.semantic_api_client.get_model_relationships_async(model_ids=model_ids)
-
-            # 8. 查询业务术语
-            dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list)
-            domain_ids = self._extract_unique_domain_ids(dataset_details)
-            business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words,
-                                                                                             domain_ids=domain_ids)
-            semantic_layer_original = dict(dataset_details=dataset_details, dimensions=dimensions,
-                                           dimension_values=dimension_values,
-                                           metrics=metrics, model_details=model_details,
-                                           model_relations=model_relations, business_term_rows=business_term_rows)
-
-            logger.info(f"semantic_layer_original: {semantic_layer_original}")
-
-            processed_semantic_layer = process_semantic_layer(semantic_layer_original, user_semantic_permissions, segmented_words)
-
-            logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
-            return processed_semantic_layer, model_ids
+            return keyword_dimension_ids, keyword_metrics, segmented_words
 
         async def chart_recommendation_task():
-            # 使用不依赖语义层的图表推荐方法
+            """图表推荐，静默执行"""
             recommended_chart, recommendation_reason = await self.query_intent_analyzer.recommend_chart_without_semantic(
                 user_question=user_query,
                 supported_charts_list=["明细表", "聚合表"],
@@ -144,16 +138,119 @@ class AskdataService:
             )
             return recommended_chart, recommendation_reason
 
-        # 并行执行两个任务
-        logger.info("开始并行执行语义层检索和图表推荐...")
-        chart_result, semantic_result = await asyncio.gather(
-            chart_recommendation_task(),
-            semantic_layer_task()
+        # 3. 并行执行三个任务
+        logger.info("开始并行执行：LLM字段提取、关键字检索和图表推荐...")
+
+        (llm_dim_ids, llm_metric_ids), \
+            (keyword_dim_ids, keyword_metrics, segmented_words), \
+            (recommended_chart, recommendation_reason) = await asyncio.gather(
+            llm_extraction_task(),
+            keyword_search_and_semantic_layer_task(),
+            chart_recommendation_task()
         )
 
-        # 解包结果
-        processed_semantic_layer, model_ids = semantic_result
-        recommended_chart, recommendation_reason = chart_result
+        # 4. 合并LLM提取和关键字检索的结果
+        # 合并维度ID（去重）
+        all_dimension_ids = list(set(keyword_dim_ids + llm_dim_ids))
+
+        # 处理指标：检查LLM提取的指标是否已在keyword_metrics中
+        existing_metric_ids = {metric["metricId"] for metric in keyword_metrics}
+        new_metric_ids = [mid for mid in llm_metric_ids if mid not in existing_metric_ids]
+
+        # 如果有新的指标ID，需要单独查询
+        all_metrics = keyword_metrics
+        if new_metric_ids:
+            new_metrics = await self.semantic_api_client.get_metric_info_by_id_async(metric_ids=new_metric_ids)
+            all_metrics.extend(new_metrics)
+
+        all_metric_ids = [metric["metricId"] for metric in all_metrics]
+
+        # 5. 获取用户权限
+        user_semantic_permissions = await self.semantic_api_client.get_user_semantic_permissions_async(
+            userid, dataset_id_list
+        )
+
+        # 过滤权限
+        allowed_dimension_ids, prohibited_dimension_ids = filter_dimensions_by_permissions(
+            all_dimension_ids, user_semantic_permissions
+        )
+        allowed_metric_ids, prohibited_metric_ids = filter_metrics_by_permissions(
+            all_metric_ids, user_semantic_permissions
+        )
+
+        # 6. 获取维度值和维度详情（并行）
+        dimension_values_task = self.semantic_api_client.get_dimension_values_async(
+            dimension_ids=allowed_dimension_ids
+        )
+        dimensions_task = self.semantic_api_client.get_dimension_info_by_id_async(
+            dimension_ids=all_dimension_ids
+        )
+
+        dimension_values, dimensions = await asyncio.gather(
+            dimension_values_task,
+            dimensions_task
+        )
+
+        # 标记无权限的维度和指标
+        for dimension in dimensions:
+            if dimension['dimensionId'] in prohibited_dimension_ids:
+                dimension['hasPermission'] = False
+
+        for metric in all_metrics:
+            if metric["metricId"] in prohibited_metric_ids:
+                metric["hasPermission"] = False
+
+        # 完成维度信息获取
+        await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
+        await send_event(event_id, {"message": "维度信息", "data": dimensions}, "data")
+
+        # 完成指标信息获取
+        await send_event(event_id, {"message": "获取指标信息", "action": "complete"}, "message")
+        await send_event(event_id, {"message": "指标信息", "data": all_metrics}, "data")
+
+        # 7. 获取模型信息
+        await send_event(event_id, {"message": "获取模型信息", "action": "start"}, "message")
+
+        model_ids = self._extract_unique_model_ids(dimensions, all_metrics)
+
+        model_details_task = self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
+        model_relations_task = self.semantic_api_client.get_model_relationships_async(model_ids=model_ids)
+
+        model_details, model_relations = await asyncio.gather(
+            model_details_task,
+            model_relations_task
+        )
+
+        await send_event(event_id, {"message": "获取模型信息", "action": "complete"}, "message")
+        await send_event(event_id, {"message": "模型信息", "data": model_details}, "data")
+
+        # 8. 获取业务术语
+        domain_ids = self._extract_unique_domain_ids(dataset_details)
+        business_term_rows = await self.semantic_api_client.get_business_term_info_async(
+            keyword=segmented_words,
+            domain_ids=domain_ids
+        )
+
+        # 9. 构建最终的语义层
+        semantic_layer_original = dict(
+            dataset_details=dataset_details,
+            dimensions=dimensions,
+            dimension_values=dimension_values,
+            metrics=all_metrics,
+            model_details=model_details,
+            model_relations=model_relations,
+            business_term_rows=business_term_rows
+        )
+
+        logger.info(f"semantic_layer_original: {semantic_layer_original}")
+
+        processed_semantic_layer = process_semantic_layer(
+            semantic_layer_original,
+            user_semantic_permissions,
+            segmented_words
+        )
+
+        logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
 
         await send_event(event_id, {}, "stream_end")
 
