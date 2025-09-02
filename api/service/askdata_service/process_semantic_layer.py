@@ -157,13 +157,15 @@ def process_business_datasets(
                 dimension_output["synonyms"] = dimension.get("synonyms")
 
                 # 修改这里：使用分词进行过滤
-                if dimension_output["dimType"].lower() == "time" or dimension_output["dimType"] == "LC":
+                if dimension_output["dimType"] == "LC":
                     original_values = dimension_values.get(dimension_id, [])
                     # 使用分词进行模糊匹配过滤
                     filtered_values = filter_dimension_values_by_segmented_words(original_values, segmented_words)
-                    dimension_output["sampleValues"] = filtered_values
-                # else:
-                #     dimension_output["sampleValues"] = dimension_values.get(dimension_id, [])
+                    # 进一步限制样例值的数量，给大模型提供部分样例即可，太多会影响效果
+                    dimension_output["sampleValues"] = filtered_values[:20]
+                elif dimension_output["dimType"].lower() == "time":
+                    original_values = dimension_values.get(dimension_id, [])
+                    dimension_output["sampleValues"] = original_values[:5]
                 if not dimension.get("hasPermission", True):
                     dimension_output["hasPermission"] = False
                     dimension_output["permissionDesc"] = "当前用户无权限访问此维度，在生成SQL时不允许使用此维度"
