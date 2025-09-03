@@ -96,7 +96,7 @@ async def get_sql_and_table_config(
             model_ids=body.semantic_layer.get('model_ids', []),
             used_models=used_models, dataset_id_list=body.dataset_id_list)
 
-        # 执行查询
+        # 确定数据集ID
         if not intersection_dataset_ids:
             logger.error("无法确定数据集ID")
             return ResponseSchema(
@@ -104,10 +104,16 @@ async def get_sql_and_table_config(
                 message="无法确定查询的数据集"
             )
         dataset_id = list(intersection_dataset_ids)[0]
+
+        # 执行查询
         result = await query_data_with_params(sql, dataset_id, [])
+
+        # 如果查询失败，尝试修复SQL
         if result["status"] == "error":
             logger.error(f"查询数据失败: {result['message']}")
             logger.info("尝试修复SQL查询")
+            logger.info(f"原始SQL: {sql}")
+
             # 尝试修复SQL查询
             fix_result = await service.fix_sql_query_with_components(
                 original_sql=sql,
@@ -115,31 +121,52 @@ async def get_sql_and_table_config(
                 semantic_layer=body.semantic_layer.get('processed_semantic_layer', {}),
                 llm_name=body.llm_name
             )
-            if not intersection_dataset_ids:
-                logger.error("无法确定数据集ID")
+
+            # 检查修复结果
+            if not fix_result or not fix_result.get("sql"):
+                logger.error("SQL修复失败，返回原始错误")
                 return ResponseSchema(
                     status=StatusEnum.ERROR,
-                    message="无法确定查询的数据集"
+                    message=f"查询数据失败: {result['message']}"
                 )
-            dataset_id = list(intersection_dataset_ids)[0]
-            new_result = await query_data_with_params(sql, dataset_id, [])
+
+            # 获取修复后的SQL和组件
+            fixed_sql = fix_result["sql"]
+            logger.info(f"修复后的SQL: {fixed_sql}")
+
+            # 使用修复后的SQL重新执行查询
+            new_result = await query_data_with_params(fixed_sql, dataset_id, [])
+
             if new_result["status"] == "error":
                 logger.error(f"修复后查询数据失败: {new_result['message']}")
                 return ResponseSchema(
                     status=StatusEnum.ERROR,
-                    message=f"查询数据失败: {new_result['message']}"
+                    message=f"查询数据失败（修复后）: {new_result['message']}"
                 )
             else:
-                logger.info(f"修复后查询数据成功: {new_result['data']}")
+                logger.info(f"修复后查询数据成功")
+                # 更新所有相关变量为修复后的版本
                 result = new_result
-                sql = fix_result["sql"]
-                sql_components = fix_result["sqlComponents"]
-                used_models = fix_result["usedModels"]
-                # 构建使用到的模型和表的详情字典
-                used_model_detail_dict, used_table_detail_dict, model_list, intersection_dataset_ids = await service.get_model_details_and_determine_dataset(
-                    model_ids=body.semantic_layer.get('model_ids', []),
-                    used_models=used_models,
-                    dataset_id_list=body.dataset_id_list)
+                sql = fixed_sql
+                sql_components = fix_result.get("sqlComponents", sql_components)
+                used_models = fix_result.get("usedModels", used_models)
+
+                # 重新构建使用到的模型和表的详情字典（如果used_models发生变化）
+                if fix_result.get("usedModels") and fix_result["usedModels"] != used_models:
+                    logger.info("修复后的SQL使用了不同的模型，重新构建模型详情")
+                    used_model_detail_dict, used_table_detail_dict, model_list, intersection_dataset_ids = await service.get_model_details_and_determine_dataset(
+                        model_ids=body.semantic_layer.get('model_ids', []),
+                        used_models=fix_result["usedModels"],
+                        dataset_id_list=body.dataset_id_list)
+
+                    # 再次检查数据集ID
+                    if not intersection_dataset_ids:
+                        logger.error("修复后无法确定数据集ID")
+                        return ResponseSchema(
+                            status=StatusEnum.ERROR,
+                            message="修复后无法确定查询的数据集"
+                        )
+                    dataset_id = list(intersection_dataset_ids)[0]
 
         # 复杂查询，直接返回结果
         if query_complexity == "complex":
@@ -147,7 +174,8 @@ async def get_sql_and_table_config(
             response_data = {
                 "sql": sql,
                 "query_complexity": query_complexity,
-                "result": result["data"]
+                "result": result["data"],
+                "was_fixed": result.get("was_fixed", False)  # 标记是否经过修复
             }
             return ResponseSchema(
                 status=StatusEnum.SUCCESS,
@@ -164,10 +192,8 @@ async def get_sql_and_table_config(
         )
 
         logger.info(f"model_table_alias_mapping_list:{model_table_alias_mapping_list}")
-        logger.info(f"table_config:{table_config}")
 
         # 4. 构建返回给前端的数据结构
-        # 将sql_generation_result中的所有内容都包含进去
         response_data = {
             "sql": sql,
             "query_complexity": query_complexity,
@@ -175,7 +201,8 @@ async def get_sql_and_table_config(
             "table_config": table_config,
             "sql_components": sql_components,
             "model_table_alias_mapping_list": model_table_alias_mapping_list,
-            "dataset_id": list(intersection_dataset_ids)[0] if intersection_dataset_ids else None
+            "dataset_id": dataset_id,
+            "was_fixed": result.get("was_fixed", False)  # 标记是否经过修复
         }
 
         return ResponseSchema(
