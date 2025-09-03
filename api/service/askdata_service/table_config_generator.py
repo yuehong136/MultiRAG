@@ -33,7 +33,6 @@ class TableConfigGenerator:
             包含列、过滤器和排序信息的配置字典
         """
         logging.info(f"used_table_detail_dict: {used_table_detail_dict}")
-        logging.info(f"model_list: {model_list}")
         logging.info(f"sql_components: {sql_components}")
         logging.info(f"recommended_chart: {recommended_chart}")
 
@@ -262,9 +261,14 @@ class TableConfigGenerator:
     async def _build_semantic_fields_info(self, model_list: List[Dict]) -> Dict[str, List]:
         """一次性构建所有语义字段信息，避免重复遍历"""
         available_fields, filterable_fields, sortable_fields, all_fields = [], [], [], []
-        all_dimension_ids = [
-            dim['dimensionId'] for model in model_list for dim in model["dimsAndMetrics"]["dimensions"]
-        ]
+        all_dimension_ids = []
+        for model in model_list:
+            dimensions = model["dimsAndMetrics"]["dimensions"]
+            for dim in dimensions:
+                # 如果是时间字段或者是高基数维度的字段，就不查询他们的维度值。因为时间类型的值是通过前端组件选择得到的，高基数维度的值是前端动态调用接口得到的
+                if dim["dimtype"].lower() == "time" or dim["dimtype"].lower() == "hc":
+                    continue
+                all_dimension_ids.append(dim['dimensionId'])
 
         dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
             dimension_ids=all_dimension_ids
@@ -291,7 +295,11 @@ class TableConfigGenerator:
 
             for dim in model["dimsAndMetrics"]["dimensions"]:
                 dim_id = dim["dimensionId"]
-                dim['possibleValues'] = dimensions_value_dict.get(dim_id, [])
+                # 如果是时间类型或者高基数维度，则不不要将值传给前端，
+                if dim["dimtype"].lower() == "time" or dim["dimtype"].lower() == "hc":
+                    pass
+                else:
+                    dim['possibleValues'] = dimensions_value_dict.get(dim_id, [])
                 available_fields.append({"is_allow_use": True, "semantic_type": "dimension", "id": dim_id,
                                          "dimension_name": dim["dimensionName"]})
                 filterable_fields.append(
@@ -313,9 +321,14 @@ class TableConfigGenerator:
     async def _build_semantic_fields_info_for_aggr(self, model_list: List[Dict]) -> Dict[str, List]:
         """一次性构建所有语义字段信息，避免重复遍历"""
         available_dimensions, available_metrics, sortable_fields, whereable_fields, havingable_fields, all_fields = [], [], [], [], [], []
-        all_dimension_ids = [
-            dim['dimensionId'] for model in model_list for dim in model["dimsAndMetrics"]["dimensions"]
-        ]
+        all_dimension_ids = []
+        for model in model_list:
+            dimensions = model["dimsAndMetrics"]["dimensions"]
+            for dim in dimensions:
+                # 如果是时间字段或者是高基数维度的字段，就不查询他们的维度值。因为时间类型的值是通过前端组件选择得到的，高基数维度的值是前端动态调用接口得到的
+                if dim["dimtype"].lower() == "time" or dim["dimtype"].lower() == "hc":
+                    continue
+                all_dimension_ids.append(dim['dimensionId'])
 
         dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
             dimension_ids=all_dimension_ids
@@ -345,7 +358,10 @@ class TableConfigGenerator:
 
             for dim in model["dimsAndMetrics"]["dimensions"]:
                 dim_id = dim["dimensionId"]
-                dim['possibleValues'] = dimensions_value_dict.get(dim_id, [])
+                if dim["dimtype"].lower() == "time" or dim["dimtype"].lower() == "hc":
+                    pass
+                else:
+                    dim['possibleValues'] = dimensions_value_dict.get(dim_id, [])
                 available_dimensions.append({"is_allow_use": True, "semantic_type": "dimension", "id": dim_id,
                                              "dimension_name": dim["dimensionName"]})
                 available_metrics.append(
