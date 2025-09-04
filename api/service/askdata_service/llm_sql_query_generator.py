@@ -237,7 +237,7 @@ class NLQToInitialSQLGenerator:
     #
     #     return result, is_valid, message
 
-    async def fix_sql_query_with_components(self, original_sql: str, error_message: str,
+    async def fix_sql_query_with_components(self, user_query: str, original_sql: str, error_message: str,
                                             semantic_layer: Dict[str, Any], llm_name: str) -> Optional[Dict[str, Any]]:
         """
         修复执行失败的SQL查询
@@ -263,6 +263,7 @@ class NLQToInitialSQLGenerator:
             prompt = PromptTemplateUtil.fill_template(
                 prompt_template,
                 {
+                    "user_query": user_query,
                     "original_sql": original_sql,
                     "error_message": error_message,
                     "semantic_layer": semantic_layer_str,

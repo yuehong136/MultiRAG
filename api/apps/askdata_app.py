@@ -116,6 +116,7 @@ async def get_sql_and_table_config(
 
             # 尝试修复SQL查询
             fix_result = await service.fix_sql_query_with_components(
+                user_query=body.user_query,
                 original_sql=sql,
                 error_message=result["message"],
                 semantic_layer=body.semantic_layer.get('processed_semantic_layer', {}),

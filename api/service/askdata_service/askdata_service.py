@@ -242,7 +242,6 @@ class AskdataService:
             business_term_rows=business_term_rows
         )
 
-        logger.info(f"semantic_layer_original: {semantic_layer_original}")
 
         processed_semantic_layer = process_semantic_layer(
             semantic_layer_original,
@@ -299,13 +298,13 @@ class AskdataService:
         logger.info(f"成功生成SQL: {result.get('sql')}")
         return result
 
-    async def fix_sql_query_with_components(self, original_sql: str, error_message: str,
+    async def fix_sql_query_with_components(self, user_query: str, original_sql: str, error_message: str,
                                             semantic_layer: Dict[str, Any], llm_name: str) -> Optional[Dict[str, Any]]:
         """
         修复执行失败的SQL查询
         """
         result = await self.nlq_to_initial_sql_generator.fix_sql_query_with_components(
-            original_sql, error_message, semantic_layer, llm_name
+            user_query, original_sql, error_message, semantic_layer, llm_name
         )
         if not result:
             logger.warning("NLQ to Initial SQL 修复失败，返回 None。")
