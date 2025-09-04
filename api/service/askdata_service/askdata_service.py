@@ -426,7 +426,7 @@ class AskdataService:
 
             limit = table_config["limit"]
             if limit:
-                assembler.set_limit(limit)
+                assembler.set_limit(int(limit) if isinstance(limit, str) else limit)
 
             return assembler.build_sql_for_jdbc()
         elif chart_type == "table-aggr" or chart_type == "bar" or chart_type == "pie" or chart_type == "line" or chart_type == "area" or chart_type == "matrix" or chart_type == "bubble":
