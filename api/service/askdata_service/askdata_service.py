@@ -211,7 +211,9 @@ class AskdataService:
         # 7. 获取模型信息
         await send_event(event_id, {"message": "获取模型信息", "action": "start"}, "message")
 
-        model_ids = self._extract_unique_model_ids(dimensions, all_metrics)
+        model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
+        await send_event(event_id, {"message": "获取模型信息", "action": "complete"}, "message")
+        await send_event(event_id, {"message": "模型信息", "data": model_mappings}, "data")
 
         model_details_task = self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
         model_relations_task = self.semantic_api_client.get_model_relationships_async(model_ids=model_ids)
@@ -220,9 +222,6 @@ class AskdataService:
             model_details_task,
             model_relations_task
         )
-
-        await send_event(event_id, {"message": "获取模型信息", "action": "complete"}, "message")
-        await send_event(event_id, {"message": "模型信息", "data": model_details}, "data")
 
         # 8. 获取业务术语
         domain_ids = self._extract_unique_domain_ids(dataset_details)
@@ -348,12 +347,30 @@ class AskdataService:
         """根据对话ID获取问数历史记录。"""
         return self.history_service.get_history_by_conversation_id(self.db, conversation_id)
 
-    def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> List[str]:
-        """从维度和指标数据中提取所有modelId并去重。"""
-        return list(set(
-            [d.get('modelId') for d in dimensions if d.get('modelId')] +
-            [m.get('modelId') for m in metrics if m.get('modelId')]
-        ))
+    def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> Tuple[
+        List[str], List[Dict[str, str]]]:
+        """从维度和指标数据中提取所有modelId并去重，同时返回模型详细信息。
+
+        Returns:
+            Tuple[List[str], List[Dict[str, str]]]: (modelId列表, 模型详细信息列表)
+        """
+        # 收集所有包含modelId的项目
+        all_items = [d for d in dimensions if d.get('modelId')] + [m for m in metrics if m.get('modelId')]
+
+        # 使用字典去重，以modelId为key
+        unique_models = {}
+        for item in all_items:
+            model_id = item.get('modelId')
+            if model_id and model_id not in unique_models:
+                unique_models[model_id] = {
+                    'modelId': model_id,
+                    'modelName': item.get('modelName', '')  # 如果没有modelName则使用空字符串
+                }
+
+        model_ids = list(unique_models.keys())
+        model_details = list(unique_models.values())
+
+        return model_ids, model_details
 
     def _deduplicate_dimensions(self, dims_by_keyword: List[Any], dims_by_value: List[Any]) -> List[str]:
         """根据dimensionId对两个维度列表进行去重合并。"""
