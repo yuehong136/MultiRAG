@@ -531,9 +531,12 @@ class APIToken(BaseModel):
     __table_args__ = {"schema": "usr_ai"}
 
     tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
+    name = Column(String(20), nullable=False, doc="Token名称")
+    description = Column(Text, nullable=True, doc="Token描述")  # 使用 Text 类型
     token = Column(String(255), primary_key=True, index=True, nullable=False)
     dialog_id = Column(String(32), index=True, nullable=True)
     source = Column(String(16), index=True, nullable=True, doc="none|agent|dialog")
+    beta = Column(String(255), index=True, nullable=True)
 
 
 class API4Conversation(BaseModel):
@@ -562,6 +565,7 @@ class UserCanvas(BaseModel):
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
     user_id = Column(String(255), index=True, nullable=False, doc="user_id")
     title = Column(String(255), index=False, nullable=True, doc="Canvas title")
+    permission = Column(String(16), index=True, nullable=False, default="me", doc="me|team")
     description = Column(Text, index=False, nullable=True, doc="Canvas description")
     canvas_type = Column(String(32), index=True, nullable=True, doc="Canvas type")
     dsl = Column(JSONB, index=False, nullable=True, default={})
