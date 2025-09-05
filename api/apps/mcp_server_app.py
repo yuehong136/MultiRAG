@@ -65,14 +65,14 @@ class ExportMCPServerRequest(BaseModel):
 
 class ListToolsRequest(BaseModel):
     mcp_ids: list[str]
-    timeout: float = 10.0
+    timeout: float = 1000.0
 
 
 class TestToolRequest(BaseModel):
     mcp_id: str
     tool_name: str
     arguments: dict
-    timeout: float = 10.0
+    timeout: float = 1000.0
 
 
 class CacheToolsRequest(BaseModel):

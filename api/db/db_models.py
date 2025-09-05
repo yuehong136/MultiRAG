@@ -704,6 +704,97 @@ class AskDataHistory(BaseModel):
         }
 
 
+# ===== API环境管理相关表 =====
+
+class ApiEnvironment(BaseModel):
+    """API环境表"""
+    __tablename__ = "t_ai_api_environments"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+    name = Column(String(100), index=True, nullable=False, doc="环境名称")
+    description = Column(Text, index=False, nullable=True, doc="环境描述")
+    is_default = Column(Boolean, index=True, nullable=False, default=False, doc="是否默认环境")
+    is_global = Column(Boolean, index=True, nullable=False, default=False, doc="是否全局环境")
+    status = Column(String(1), index=True, nullable=False, default="1", doc="状态(0:禁用,1:启用)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "tenant_id": self.tenant_id,
+            "name": self.name,
+            "description": self.description,
+            "is_default": self.is_default,
+            "is_global": self.is_global,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time,
+            "create_date": self.create_date,
+            "update_date": self.update_date
+        }
+
+
+class ApiEnvironmentVariable(BaseModel):
+    """API环境变量表"""
+    __tablename__ = "t_ai_api_environment_variables"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    environment_id = Column(String(32), index=True, nullable=False, doc="环境ID")
+    key_name = Column(String(100), index=True, nullable=False, doc="变量名")
+    key_value = Column(Text, index=False, nullable=False, doc="变量值")
+    description = Column(Text, index=False, nullable=True, doc="变量描述")
+    is_secret = Column(Boolean, index=True, nullable=False, default=False, doc="是否敏感信息")
+    variable_type = Column(String(20), index=True, nullable=False, default="string", doc="变量类型(string,number,boolean)")
+    status = Column(String(1), index=True, nullable=False, default="1", doc="状态(0:禁用,1:启用)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "environment_id": self.environment_id,
+            "key_name": self.key_name,
+            "key_value": self.key_value,
+            "description": self.description,
+            "is_secret": self.is_secret,
+            "variable_type": self.variable_type,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time,
+            "create_date": self.create_date,
+            "update_date": self.update_date
+        }
+
+
+class GlobalApiEnvironment(BaseModel):
+    """全局预设API环境表"""
+    __tablename__ = "t_ai_global_api_environments"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    name = Column(String(100), index=True, nullable=False, doc="环境名称")
+    description = Column(Text, index=False, nullable=True, doc="环境描述")
+    server_url = Column(String(500), index=True, nullable=True, doc="服务器URL")
+    variables = Column(JSONB, index=False, nullable=False, default=dict, doc="预设变量")
+    is_active = Column(Boolean, index=True, nullable=False, default=True, doc="是否启用")
+    status = Column(String(1), index=True, nullable=False, default="1", doc="状态(0:禁用,1:启用)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "server_url": self.server_url,
+            "variables": self.variables,
+            "is_active": self.is_active,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time,
+            "create_date": self.create_date,
+            "update_date": self.update_date
+        }
+
+
 class SensitiveWordCategory(BaseModel):
     """敏感词分类表"""
     __tablename__ = "t_ai_sensitive_categories"
