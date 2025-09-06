@@ -13,6 +13,7 @@ from api.db.services.ask_data_history_service import AskDataHistoryService
 from api.service.askdata_service.async_llm_service import AsyncLLMService
 from api.service.askdata_service.event.event_utils import send_event
 from api.service.askdata_service.llm.semantic_field_extractor import SemanticFieldExtractor
+from api.service.askdata_service.llm.semantic_relevance_filter import SemanticRelevanceFilter
 from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLGenerator
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
 from api.service.askdata_service.query_intent import QueryIntentAnalyzer
@@ -23,7 +24,9 @@ from api.service.askdata_service.table_config_generator import TableConfigGenera
 from api.service.askdata_service.util.add_table_alias_to_fields import add_table_alias_to_fields
 from api.service.askdata_service.util.convert_aggregation_value import convert_aggregation_value
 from api.service.askdata_service.util.convert_where_condition_value import process_where_condition
+from api.service.askdata_service.util.merge_dimensions_and_metrics import merge_dimensions_and_metrics
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
+from api.service.askdata_service.util.semantic_filter_processor import apply_semantic_filter
 from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
     filter_metrics_by_permissions
 from api.service.askdata_service.util.wide_table_sql_generator import WideTableSQLGenerator
@@ -47,6 +50,7 @@ class AskdataService:
         self.table_config_generator = TableConfigGenerator(self.semantic_api_client)
         self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
         self.semantic_field_extractor = SemanticFieldExtractor(db, user.id, self.prompt_dir)
+        self.semantic_relevance_filter = SemanticRelevanceFilter(db, user.id, self.prompt_dir)
         self.model_dataset_resolver = ModelDatasetResolver(self.semantic_api_client)
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
@@ -191,6 +195,21 @@ class AskdataService:
             dimensions_task
         )
 
+        # 将维度和指标简化后进行合并，为交给LLM进一步排除冗余语义做准备
+        merged_dimensions_and_metrics = merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics)
+        exclude_dim_and_metric = await self.semantic_relevance_filter.filter_irrelevant_fields(
+            user_query=user_query,
+            dataset_info=merged_dimensions_and_metrics,
+            llm_name=llm_name
+        )
+
+        dimensions, all_metrics, excluded_details = apply_semantic_filter(
+            dimensions=dimensions,
+            all_metrics=all_metrics,
+            exclude_dim_and_metric=exclude_dim_and_metric,
+            log_details=True  # 是否打印详细日志
+        )
+
         # 标记无权限的维度和指标
         for dimension in dimensions:
             if dimension['dimensionId'] in prohibited_dimension_ids:
@@ -240,7 +259,6 @@ class AskdataService:
             model_relations=model_relations,
             business_term_rows=business_term_rows
         )
-
 
         processed_semantic_layer = process_semantic_layer(
             semantic_layer_original,
@@ -326,10 +344,10 @@ class AskdataService:
         )
 
     async def get_model_details_and_determine_dataset(
-        self,
-        model_ids: List[str],
-        used_models: List[str],
-        dataset_id_list: List[str]
+            self,
+            model_ids: List[str],
+            used_models: List[str],
+            dataset_id_list: List[str]
     ) -> Tuple[Dict, Dict, List, Set]:
         """
         构建模型详情字典，并确定使用的数据集
@@ -427,8 +445,8 @@ class AskdataService:
                     if raw_condition:
                         assembler.add_raw_where(raw_condition)
                     else:
-                        assembler.add_raw_where(sql_condition=f"{filter['sql_column']} {filter['operator']} {filter['value']}")
-
+                        assembler.add_raw_where(
+                            sql_condition=f"{filter['sql_column']} {filter['operator']} {filter['value']}")
 
             for order_by in table_config["order_by"]:
                 if order_by["is_semantic_field"]:
@@ -688,6 +706,7 @@ class AskdataService:
         except Exception as e:
             logger.error(f"生成宽表SQL时发生错误: {str(e)}", exc_info=True)
             raise
+
 
 def get_askdata_service(db: Session = Depends(get_db), user=Depends(manager)) -> AskdataService:
     """通过依赖注入获取AskdataService实例。"""
