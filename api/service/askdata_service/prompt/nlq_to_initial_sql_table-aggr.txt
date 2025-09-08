@@ -56,7 +56,7 @@
     *   **特别注意：** 积极寻找并执行聚合意图。例如，对于“有多少人”这类问题，应使用 `COUNT(DISTINCT person_id_field)` 或 `COUNT(*)` （根据上下文选择最合适的）来直接计算人数。对于“平均分”，应使用 `AVG(score_field)`。
 
 3.  **利用语义层信息：**
-    *   `dataModels`: 包含物理表名、字段名 (`name`)、字段类型 (`type`) 、主键 (`isPrimary`) 以及行级权限 (`rowFilter`) 信息。用于确定SQL中的表名、列名和强制过滤条件。
+    *   `dataModels`: 包含模型Id(`modelId`)、模型名 (`name`)、物理表名 (`table`)、字段信息（fields）以及行级权限 (`rowFilter`) 信息。用于确定SQL中的表名、列名和强制过滤条件。
     *   `businessDatasets`: 包含从模型中抽取的维度（`dimensions`）和指标（`metrics`）。
         *   **维度 (dimensions):**
             *   **根据 `dimType`（维度类型）决定其在聚合查询中的角色：**
