@@ -11,7 +11,8 @@ from api.db.db_models import (
     Base, BaseModel, User, Tenant, UserTenant, LLMFactories, LLM, TenantLLM,
     Knowledgebase, Document, File, File2Document, Task, Dialog, Conversation,
     APIToken, API4Conversation, UserCanvas, CanvasTemplate,
-    WritingProject, WritingChapter, WritingReferenceMaterial, WritingChapterContent
+    WritingProject, WritingChapter, WritingReferenceMaterial, WritingChapterContent,
+    ApiEnvironment, ApiEnvironmentVariable, GlobalApiEnvironment
 )
 
 from alembic import context

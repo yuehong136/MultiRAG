@@ -159,6 +159,12 @@ class WritingService(CommonService):
                 ```
                 """
 
+                # 在调用外部LLM前提交以释放数据库连接
+                try:
+                    db.commit()
+                except Exception:
+                    pass
+
                 # 调用LLM API
                 content = llm_bundle.chat("", [{"role": "user", "content": prompt}], {})
 
@@ -679,6 +685,12 @@ class WritingService(CommonService):
             # 构建提示词
             prompt = cls._build_writing_prompt(db, chapter_id, context, extra_references)
 
+            # 在调用外部LLM前提交以释放数据库连接
+            try:
+                db.commit()
+            except Exception:
+                pass
+
             # 调用LLM API
             content = llm_bundle.chat("", [{"role": "user", "content": prompt}], {})
 
@@ -773,6 +785,12 @@ class WritingService(CommonService):
 
             # 调用LLM API流式接口
             content_buffer = ""
+
+            # 在开始外部LLM流式调用前提交以释放数据库连接
+            try:
+                db.commit()
+            except Exception:
+                pass
 
             # 修复：根据llm_bundle.chat_streamly的实际返回类型调整
             # 方案1：如果chat_streamly返回一个普通生成器而不是异步生成器
@@ -1099,6 +1117,12 @@ class WritingService(CommonService):
 
             # 存储最后得到的完整内容
             final_content = ""
+
+            # 在开始外部LLM流式调用前提交以释放数据库连接
+            try:
+                db.commit()
+            except Exception:
+                pass
 
             # 发送流式内容到前端
             for content in llm_bundle.chat_streamly("", [{"role": "user", "content": prompt}], {}):

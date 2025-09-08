@@ -67,6 +67,10 @@ tags_metadata = [
         "name": "api",
         "description": "🔧 API管理 - API配置、监控和管理相关接口",
     },
+    {
+        "name": "openapi_filter",
+        "description": "📋 OpenAPI过滤 - OpenAPI文档过滤和裁剪服务",
+    },
 ]
 
 # 在模块顶部（路由定义之前）创建线程池
@@ -181,8 +185,8 @@ def load_user(email: str, db: Session = None):
 
 # 定义一个函数，用于搜索API和应用页面的路径
 def search_pages_path(pages_dir):
-    app_path_list = [path for path in pages_dir.glob('*_app.py') if not path.name.startswith('.')]
-    api_path_list = [path for path in pages_dir.glob('*_api.py') if not path.name.startswith('.')]
+    app_path_list = [path for path in pages_dir.glob("*_app.py") if not path.name.startswith(".")]
+    api_path_list = [path for path in pages_dir.glob("*sdk/*.py") if not path.name.startswith(".")]
     app_path_list.extend(api_path_list)
     return app_path_list
 

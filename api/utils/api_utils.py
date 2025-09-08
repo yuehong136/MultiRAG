@@ -19,7 +19,7 @@ from functools import wraps
 from io import BytesIO
 from typing import Any, Callable, Coroutine, Type
 
-from fastapi import Request, Response
+from fastapi import Request, Response, Depends
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from itsdangerous import URLSafeTimedSerializer
@@ -31,7 +31,7 @@ from uuid import uuid1
 from urllib.parse import quote, urlencode
 import requests
 
-from api.db.db_models import APIToken
+from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api import settings
 from api.db.services.llm_service import TenantLLMService, LLMService
@@ -265,26 +265,39 @@ def convert_datetime_to_str(data: dict):
             data[key] = value.strftime('%Y-%m-%d %H:%M:%S')
     return data
 
+async def token_required(request: Request, db: Session = Depends(get_db)):
+    authorization_str = request.headers.get("Authorization")
+    if not authorization_str:
+        return get_json_result(data=False, retmsg="`Authorization` can't be empty")
 
-def token_required(func):
-    @wraps(func)
-    def decorated_function(*args, **kwargs):
-        request: Request = kwargs.get('request')  # 从 kwargs 中获取 FastAPI Request 对象
-        db: Session = kwargs.get('db')  # 从 kwargs 中获取数据库会话对象
+    authorization_list = authorization_str.split()
+    if len(authorization_list) < 2:
+        return get_json_result(data=False, retmsg="Please check your authorization format.")
 
-        authorization_header = request.headers.get('Authorization')
-
-        token = authorization_header.split()[1]
-        objs = APIToken.query(db, token=token)
-
-        if not objs:
-            return get_json_result(
-                data=False, retmsg='Token is not valid!', retcode=settings.RetCode.AUTHENTICATION_ERROR
-            )
-        kwargs['tenant_id'] = objs[0].tenant_id
-        return func(*args, **kwargs)
-
-    return decorated_function
+    token = authorization_list[1]
+    objs = APIToken.query(db, token=token)
+    if not objs:
+        return get_json_result(data=False, retmsg="Authentication error: API key is invalid!", retcode=settings.RetCode.AUTHENTICATION_ERROR)
+    return objs[0].tenant_id
+# def token_required(func):
+#     @wraps(func)
+#     def decorated_function(*args, **kwargs):
+#         request: Request = kwargs.get('request')  # 从 kwargs 中获取 FastAPI Request 对象
+#         db: Session = kwargs.get('db')  # 从 kwargs 中获取数据库会话对象
+#
+#         authorization_header = request.headers.get('Authorization')
+#
+#         token = authorization_header.split()[1]
+#         objs = APIToken.query(db, token=token)
+#
+#         if not objs:
+#             return get_json_result(
+#                 data=False, retmsg='Token is not valid!', retcode=settings.RetCode.AUTHENTICATION_ERROR
+#             )
+#         kwargs['tenant_id'] = objs[0].tenant_id
+#         return func(*args, **kwargs)
+#
+#     return decorated_function
 
 
 def get_result(retcode=settings.RetCode.SUCCESS, retmsg='error', data=None):
@@ -319,6 +332,14 @@ def get_error_data_result(retcode=settings.RetCode.DATA_ERROR,
 
 def get_error_argument_result(message="Invalid arguments"):
     return get_result(retcode=settings.RetCode.ARGUMENT_ERROR, retmsg=message)
+
+
+def get_error_permission_result(message="Permission error"):
+    return get_result(retcode=settings.RetCode.PERMISSION_ERROR, retmsg=message)
+
+
+def get_error_operating_result(message="Operating error"):
+    return get_result(retcode=settings.RetCode.OPERATING_ERROR, retmsg=message)
 
 
 def generate_confirmation_token(tenant_id: str) -> str:

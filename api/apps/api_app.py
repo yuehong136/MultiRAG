@@ -45,6 +45,10 @@ from api.apps import manager
 
 
 class NewTokenRequest(BaseModel):
+    dialog_id: str | None = None
+    """对话的唯一标识符。"""
+    canvas_id: str | None = None
+    """画布的唯一标识符。"""
     tenant_id: str
     """租户的唯一标识符。"""
 
@@ -150,11 +154,11 @@ async def new_token(request: NewTokenRequest, db: Session = Depends(get_db), use
                "update_time": None,
                "update_date": None
                }
-        if request.get("canvas_id"):
-            obj["dialog_id"] = request["canvas_id"]
+        if request.canvas_id:
+            obj["dialog_id"] = request.canvas_id
             obj["source"] = "agent"
         else:
-            obj["dialog_id"] = request["dialog_id"]
+            obj["dialog_id"] = request.dialog_id
         if not APITokenService.save(db, **obj):
             return get_data_error_result(retmsg="Fail to new a dialog!")
 

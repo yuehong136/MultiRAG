@@ -12,6 +12,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field, field_validator, ConfigDict, ValidationError
+from typing import Annotated, Any
 
 from api.apps.api_app import generate_confirmation_token
 from api.db.db_models import APIToken, get_db, DATABASE_TYPE
@@ -29,6 +31,42 @@ from api.apps import manager
 
 router = APIRouter()
 
+
+class TokenCreateRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: Annotated[str, Field(min_length=1, max_length=20, description="Token名称")]
+    description: str | None = Field(None, description="Token描述")
+
+    @field_validator('name')
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if not v:
+            raise ValueError('Token名称不能为空')
+        if len(v) > 20:
+            raise ValueError('Token名称不能超过20个字符')
+        return v
+
+    @field_validator('description')
+    @classmethod
+    def validate_description(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            return None
+        return v
+
+
+class TokenResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    token: str
+    name: str
+    description: str | None
+    beta: str
+    create_date: str
+    create_time: int
+    update_date: str
+    update_time: int
 
 @router.get("/version", summary="获取版本", response_description="成功获取版本")
 async def version(user=Depends(manager)):
@@ -160,35 +198,15 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
     return get_json_result(data=res)
 
 
-@router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌")
-def new_token(db: Session = Depends(get_db), user=Depends(manager)):
+@router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌", response_model=dict[str, Any])
+def new_token(request: TokenCreateRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    新建访问令牌的接口说明文档。
+    创建新的API访问令牌
 
-    概要：为当前用户的新租户创建新的API访问令牌。
-    响应描述：成功创建并返回新的API访问令牌。
+    - **name**: Token名称（必填，最大20字符）
+    - **description**: Token描述（可选）
 
-    返回：
-    - dict: 返回包含新生成的API访问令牌信息的 JSON 结果。
-
-    功能：
-    1. 查询当前用户的租户信息，确保用户属于某个租户。
-    2. 生成新的访问令牌，并附带生成时间和更新信息。
-    3. 将新令牌保存到数据库中并返回。
-
-    流程：
-    1. 使用 UserTenantService 从数据库中查询当前用户的租户信息。
-    2. 如果用户不属于任何租户，返回错误信息。
-    3. 使用 generate_confirmation_token 生成新的令牌，并附加时间信息。
-    4. 调用 APITokenService 保存新生成的令牌。
-    5. 返回新令牌的详细信息，包括租户ID和生成时间。
-
-    异常处理：
-    - 如果用户不属于任何租户，返回错误信息。
-    - 如果在保存新令牌的过程中发生异常，抛出 HTTP 异常，并返回错误信息。
-
-    注意：
-    - 用户必须属于某个租户才能生成新的API访问令牌。
+    返回创建的令牌信息，包括token、创建时间等
     """
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
@@ -196,14 +214,19 @@ def new_token(db: Session = Depends(get_db), user=Depends(manager)):
             return get_data_error_result(retmsg="Tenant not found!")
 
         tenant_id = [tenant for tenant in tenants if tenant.role == 'owner'][0].tenant_id
-        obj = {"tenant_id": tenant_id, "token": generate_confirmation_token(tenant_id),
-               "create_time": current_timestamp(),
-               "create_date": datetime_format(datetime.now()),
-               "update_time": None,
-               "update_date": None
-               }
+        obj = {
+            "tenant_id": tenant_id,
+            "token": generate_confirmation_token(tenant_id),
+            "beta": generate_confirmation_token(generate_confirmation_token(tenant_id)).replace("multirag-", "")[:32],
+            "name": request.name,
+            "description": request.description,
+            "create_time": current_timestamp(),
+            "create_date": datetime_format(datetime.now()),
+            "update_time": None,
+            "update_date": None,
+        }
 
-        if not APITokenService.save(**obj):
+        if not APITokenService.save(db, **obj):
             return get_data_error_result(retmsg="Fail to new a dialog!")
 
         return get_json_result(data=obj)
