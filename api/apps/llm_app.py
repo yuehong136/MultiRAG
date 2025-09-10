@@ -516,7 +516,7 @@ class CandidateForm(BaseModel):
 
 
 class RecognizeIntentRequest(BaseModel):
-    user_text: str = Field(..., max_length=900, description="用户的自然语言输入")
+    user_text: str = Field(..., description="用户的自然语言输入")
     candidate_forms: list[CandidateForm] = Field(
         ..., description="候选表单列表，建议 ≤ 10 个"
     )
@@ -542,7 +542,7 @@ class FieldMeta(BaseModel):
 
 
 class FillFieldsRequest(BaseModel):
-    user_text: str = Field(..., max_length=900, description="用户的自然语言输入")
+    user_text: str = Field(..., description="用户的自然语言输入")
     fields: list[FieldMeta]
     llm_name: str = Field(..., description="调用的对话模型名称")
     gen_conf: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0.0})
