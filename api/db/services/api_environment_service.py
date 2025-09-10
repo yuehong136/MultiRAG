@@ -9,7 +9,6 @@
 import logging
 import re
 from datetime import datetime
-from typing import Optional
 from sqlalchemy import and_, or_, func, desc
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
