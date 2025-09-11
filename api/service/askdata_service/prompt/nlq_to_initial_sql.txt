@@ -30,7 +30,7 @@
                 * `在最终输出的JSON中，将顶层 'status' 字段设置为 '"failed"'。`
                 * `将 'errorCode' 字段设置为 '"CRITICAL_PERMISSION_DENIED"'。`
                 * `在 'errorMessage' 字段中，生成一条清晰的、面向用户的错误信息，说明因为哪个核心字段没有权限而导致查询失败。例如：“无法生成SQL，因为执行此查询所必需的核心维度[字段中文名]无权访问。”`
-                * `所有与SQL相关的字段（'sql', 'usedModels', 'queryComplexity', 'sqlComponents'）必须设置为空值（null, [], 或空对象/字符串）。`
+                * `所有与SQL相关的字段（'sql', 'usedModels', 'queryComplexity'）必须设置为空值（null, [], 或空对象/字符串）。`
             * `**如果该字段不是“核心条件”（即可选信息）：**`
                 * `你必须继续生成SQL，但在查询中**静默地忽略**对该无权限字段的请求。不要在 'SELECT' 或任何其他子句中使用它。`
                 * `在最终输出的JSON中，将顶层 'status' 字段设置为 '"success"'。`
@@ -157,15 +157,6 @@
     *   `"queryComplexity"`: (字符串类型)
         *   当 `"status"` 为 `"success"` 时，根据**指南#5**的评估结果，包含 `"simple"` 或 `"complex"`。
         *   当 `"status"` 为 `"failed"` 时，此字段**必须**为空字符串 `""`。
-    *   `"sqlComponents"`: (对象类型)
-        *   当 `"status"` 为 `"success"` 且查询为 `"simple"` 时，包含分解后的SQL查询的各个组成部分。如果某个部分不存在，其值应为空字符串 `""`。
-        *   在其他任何情况下（`"status"` 为 `"failed"` 或查询为 `"complex"`），此对象中的所有值都**必须**设置为空字符串 (`""`)。
-        *   `"select"`: 完整的 `SELECT` 子句。
-        *   `"from"`: 完整的 `FROM` 和 `JOIN` 子句。
-        *   `"where"`: 完整的 `WHERE` 子句。
-        *   `"groupBy"`: 完整的 `GROUP BY` 子句。
-        *   `"orderBy"`: 完整的 `ORDER BY` 子句。
-        *   `"limit"`: 完整的 `LIMIT` 子句。
     *   `"warnings"`: (字符串数组类型, 可选)
         *   当 `"status"` 为 `"success"` 但在生成SQL过程中因权限问题忽略了某些**可选字段**时，此数组应包含相应的警告信息。例如：`["由于权限限制，已忽略对[电子邮箱]维度的查询请求。"]`。
         *   如果没有任何警告，可以省略此字段或返回空数组 `[]`。

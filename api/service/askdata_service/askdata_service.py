@@ -14,6 +14,8 @@ from api.service.askdata_service.async_llm_service import AsyncLLMService
 from api.service.askdata_service.event.event_utils import send_event
 from api.service.askdata_service.llm.semantic_field_extractor import SemanticFieldExtractor
 from api.service.askdata_service.llm.semantic_relevance_filter import SemanticRelevanceFilter
+from api.service.askdata_service.llm.sql_components_extractor import SQLComponentsExtractor
+from api.service.askdata_service.llm.sql_pagination_converter import SQLPaginationConverter
 from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLGenerator
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
 from api.service.askdata_service.query_intent import QueryIntentAnalyzer
@@ -35,7 +37,6 @@ from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
 from api.service.askdata_service.model_dataset_resolver import ModelDatasetResolver
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +53,8 @@ class AskdataService:
         self.semantic_field_extractor = SemanticFieldExtractor(db, user.id, self.prompt_dir)
         self.semantic_relevance_filter = SemanticRelevanceFilter(db, user.id, self.prompt_dir)
         self.model_dataset_resolver = ModelDatasetResolver(self.semantic_api_client)
+        self.sql_components_extractor = SQLComponentsExtractor(db, user.id, self.prompt_dir)
+        self.sql_pagination_converter = SQLPaginationConverter(db, user.id, self.prompt_dir)
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
                                       userid: str, llm_name: str = None,

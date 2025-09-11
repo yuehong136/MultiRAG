@@ -51,10 +51,6 @@
      - **修复策略**: 如果原始SQL因标识符引用格式错误而失败，根据 $database_type 的值调整为正确格式
      - **兼容性优先**: 当标识符不含特殊字符且非保留关键字时，优先使用无引号格式以确保跨数据库兼容性
    * **数据库特定语法适配**:
-     - **分页语法**:
-       * MySQL/PostgreSQL: 使用 LIMIT
-       * SQL Server: 使用 TOP (SQL Server 2008及以前) 或 OFFSET/FETCH (SQL Server 2012+)
-       * Oracle: 使用 ROWNUM 或 OFFSET/FETCH
      - **日期函数**: 根据数据库类型使用正确的日期时间函数
      - **字符串函数**: 注意不同数据库的字符串处理函数差异
      - **类型转换**: 使用对应数据库的类型转换语法
@@ -65,13 +61,6 @@
    * **JSON对象必须包含以下键：**
      * `"sql"`: (字符串) 修复后的完整SQL查询语句，确保可正确执行
      * `"usedModels"`: (字符串数组) 修复后SQL中使用的所有模型名称（来自`dataModels.name`）
-     * `"sqlComponents"`: (对象) 修复后SQL的各个组成部分
-       * `"select"`: 完整的SELECT子句（如：`"SELECT t1.teacher_id, t1.name"`）
-       * `"from"`: 完整的FROM和JOIN子句（如：`"FROM gx_test_teachers AS t1"`）
-       * `"where"`: 完整的WHERE子句（如：`"WHERE t1.department = '计算机科学与技术学院'"`）
-       * `"groupBy"`: 完整的GROUP BY子句（没有则为空字符串`""`）
-       * `"orderBy"`: 完整的ORDER BY子句（没有则为空字符串`""`）
-       * `"limit"`: 完整的LIMIT子句（没有则为空字符串`""`）
 
 ---
 
