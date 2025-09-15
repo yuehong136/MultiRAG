@@ -10,6 +10,7 @@ import logging
 import random
 import time
 from datetime import datetime
+from typing import Any
 
 import trio
 import xxhash
@@ -329,6 +330,566 @@ class DocumentService(CommonService):
             query = query.filter(cls.model.type.in_(types))
 
         return int(query.scalar()) or 0
+
+    @classmethod
+    def preview_document_chunks(
+        cls,
+        db: Session,
+        doc_id: str,
+        parser_config_override: dict | None = None,
+        limit: int | None = None,
+        override_parser_id: str | None = None,
+    ) -> list[str]:
+        """
+        仅执行文档切片，不进行向量化/入库，返回切片后的纯文本列表。
+
+        - 根据文档的 parser_id 与 parser_config，调用对应 parser 的 chunk() 实现
+        - 统一转为文本列表返回：若 parser 返回 dict 列表，则提取 content_with_weight
+        - 不修改数据库状态，不写入向量库
+        """
+        # 基础校验
+        doc = cls.get_by_id(db, doc_id)
+        if not doc:
+            raise LookupError("Document not found")
+
+        # 读取租户/语言/解析配置
+        chunking_cfg = cls.get_chunking_config(db, doc_id)
+        if not chunking_cfg:
+            raise LookupError("Chunking config not found")
+
+        tenant_id = chunking_cfg.get("tenant_id")
+        language = chunking_cfg.get("language") or "Chinese"
+        parser_id = doc.parser_id
+        filename = doc.name
+
+        # 读取文件二进制
+        from api.db.services.file2document_service import File2DocumentService
+        bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_id)
+        file_bin = STORAGE_IMPL.get(bucket, name)
+
+        # 合并解析配置
+        from api.utils.api_utils import get_parser_config
+
+        base_cfg = get_parser_config(parser_id, doc.parser_config)
+        if parser_config_override:
+            # 递归合并，以覆盖为主
+            def _deep_merge(a: dict, b: dict) -> dict:
+                for k, v in (b or {}).items():
+                    if isinstance(v, dict) and isinstance(a.get(k), dict):
+                        _deep_merge(a[k], v)
+                    else:
+                        a[k] = v
+                return a
+
+            base_cfg = _deep_merge(base_cfg or {}, parser_config_override or {})
+
+        # 解析页区间（优先 parser_config），兼容 pdf/table/文本等
+        effective_from = 0
+        effective_to = 100000
+        try:
+            if isinstance(base_cfg, dict):
+                if "from_page" in base_cfg:
+                    effective_from = int(base_cfg.get("from_page", 0))
+                if "to_page" in base_cfg:
+                    effective_to = int(base_cfg.get("to_page", 100000))
+                # 若提供 pages 列表，则按其最小/最大范围覆盖
+                pages = base_cfg.get("pages")
+                if isinstance(pages, list) and pages:
+                    try:
+                        starts = [int(p[0]) for p in pages if isinstance(p, (list, tuple)) and len(p) >= 1]
+                        ends = [int(p[1]) for p in pages if isinstance(p, (list, tuple)) and len(p) >= 2]
+                        if starts:
+                            effective_from = min(effective_from, min(starts) - 1)
+                        if ends:
+                            effective_to = max(effective_to, max(ends))
+                    except Exception:
+                        pass
+        except Exception:
+            effective_from, effective_to = 0, 100000
+
+        # 选择解析器模块（支持用户覆盖，且校验文件类型允许列表）
+        module, parser_id = cls._resolve_parser_for_filename(filename, override_parser_id or parser_id)
+
+        # 空回调
+        def _noop(prog=None, msg=""):
+            return None
+
+        # 执行切片
+        result = module.chunk(
+            doc.name,
+            binary=file_bin,
+            from_page=effective_from,
+            to_page=effective_to,
+            lang=language,
+            callback=_noop,
+            parser_config=base_cfg or {},
+            tenant_id=tenant_id,
+        )
+
+        # 统一为文本列表
+        chunks_text: list[str] = []
+        if isinstance(result, list):
+            if not result:
+                chunks_text = []
+            else:
+                first = result[0]
+                if isinstance(first, dict) and "content_with_weight" in first:
+                    chunks_text = [d.get("content_with_weight", "") for d in result]
+                elif isinstance(first, str):
+                    chunks_text = result
+                else:
+                    chunks_text = [str(x) for x in result]
+        else:
+            chunks_text = [str(result)]
+
+        if isinstance(limit, int) and limit > 0:
+            chunks_text = chunks_text[:limit]
+        return chunks_text
+
+    @classmethod
+    def preview_document_chunks_batched(
+        cls,
+        db: Session,
+        doc_id: str,
+        parser_config_override: dict | None = None,
+        batch_size: int = 50,
+        batch_id: str | None = None,
+        session_ttl: int = 1800,
+        override_parser_id: str | None = None,
+        batch_index: int | None = None,
+    ) -> dict:
+        """
+        仅切片预览的批次化接口：
+        - 首次调用（无 batch_id）：计算切片、创建预览会话，返回首批数据与 batch_id。
+        - 后续调用（带 batch_id）：从会话中读取下一批数据，直到结束删除会话。
+        - 会话存储于 Redis，TTL 默认 30 分钟。
+        返回：{"batch_id", "chunks", "count", "total", "has_more"}
+        """
+        import json
+
+        # 生成会话摘要，确保不同配置/区间/文档变化对应不同会话
+        doc = cls.get_by_id(db, doc_id)
+        if not doc:
+            raise LookupError("Document not found")
+
+        # 使用已有方法获取合并后的解析配置以计算摘要
+        chunking_cfg = cls.get_chunking_config(db, doc_id) or {}
+        merged_cfg = chunking_cfg.get("parser_config") or {}
+        if parser_config_override:
+            def _deep_merge(a: dict, b: dict) -> dict:
+                for k, v in (b or {}).items():
+                    if isinstance(v, dict) and isinstance(a.get(k), dict):
+                        _deep_merge(a[k], v)
+                    else:
+                        a[k] = v
+                return a
+            merged_cfg = _deep_merge(json.loads(json.dumps(merged_cfg)), parser_config_override or {})
+
+        # 解析有效页区间
+        effective_from = int(merged_cfg.get("from_page", 0)) if isinstance(merged_cfg, dict) else 0
+        effective_to = int(merged_cfg.get("to_page", 100000)) if isinstance(merged_cfg, dict) else 100000
+        if isinstance(merged_cfg, dict):
+            pages = merged_cfg.get("pages")
+            if isinstance(pages, list) and pages:
+                try:
+                    starts = [int(p[0]) for p in pages if isinstance(p, (list, tuple)) and len(p) >= 1]
+                    ends = [int(p[1]) for p in pages if isinstance(p, (list, tuple)) and len(p) >= 2]
+                    if starts:
+                        effective_from = min(effective_from, min(starts) - 1)
+                    if ends:
+                        effective_to = max(effective_to, max(ends))
+                except Exception:
+                    pass
+
+        hasher = xxhash.xxh64()
+        hasher.update(str(doc_id).encode("utf-8"))
+        hasher.update(str(effective_from).encode("utf-8"))
+        hasher.update(str(effective_to).encode("utf-8"))
+        # 解析器选择（合入摘要）
+        try:
+            filename = doc.name
+            _, eff_parser = cls._resolve_parser_for_filename(filename, override_parser_id or doc.parser_id)
+            hasher.update(str(eff_parser).encode("utf-8"))
+        except Exception:
+            pass
+        try:
+            hasher.update(json.dumps(merged_cfg, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+        except Exception:
+            hasher.update(str(merged_cfg).encode("utf-8"))
+        # 加入文档更新时间，确保文档变化会生成新会话
+        hasher.update(str(getattr(doc, "update_time", "")).encode("utf-8"))
+        digest = hasher.hexdigest()
+
+        # 规范 batch_size
+        try:
+            bs = int(batch_size)
+            if bs <= 0:
+                bs = 50
+        except Exception:
+            bs = 50
+
+        # 会话 key
+        session_key = None
+        session = None
+        if batch_id:
+            session_key = f"preview:session:{batch_id}"
+            try:
+                payload = REDIS_CONN.get(session_key)
+                if payload:
+                    session = json.loads(payload)
+            except Exception:
+                session = None
+
+        # 如果无会话或摘要不匹配，则创建新会话
+        if not session or session.get("digest") != digest:
+            # 重新切片
+            all_chunks = cls.preview_document_chunks(
+                db,
+                doc_id=doc_id,
+                parser_config_override=parser_config_override,
+                limit=None,
+                override_parser_id=override_parser_id,
+            )
+
+            batch_id = get_uuid()
+            session_key = f"preview:session:{batch_id}"
+            session = {
+                "digest": digest,
+                "doc_id": doc_id,
+                "from": effective_from,
+                "to": effective_to,
+                "total": len(all_chunks),
+                "offset": 0,
+                "chunks": all_chunks,
+            }
+            REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
+
+        # 计算返回批次
+        start = int(session.get("offset", 0))
+        total = int(session.get("total", 0))
+        if isinstance(batch_index, int) and batch_index >= 0:
+            start = min(batch_index * bs, total)
+        end = min(start + bs, total)
+        batch = session.get("chunks", [])[start:end]
+        has_more = end < total
+        current_batch_index = (start // bs) if bs > 0 else 0
+        total_batches = (total + bs - 1) // bs if bs > 0 else 0
+
+        # 更新或删除会话
+        if batch_index is None:
+            # 顺序模式：按 offset 推进；最后一批删除会话
+            if has_more:
+                session["offset"] = end
+                REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
+            else:
+                REDIS_CONN.delete(session_key)
+        else:
+            # 并发批次模式：如果已经取到最后一批（has_more=false），立即删除会话
+            if not has_more:
+                REDIS_CONN.delete(session_key)
+
+        return {
+            "batch_id": batch_id,
+            "chunks": batch,
+            "count": len(batch),
+            "total": total,
+            "has_more": has_more,
+            "batch_index": current_batch_index,
+            "total_batches": total_batches,
+        }
+
+    @classmethod
+    def _get_allowed_parsers_for_filename(cls, filename: str) -> set[str]:
+        from api.db import ParserType
+        import re
+        f = (filename or "").lower()
+        if re.search(r"\.pdf$", f):
+            return {
+                ParserType.NAIVE.value, ParserType.MANUAL.value, ParserType.PAPER.value,
+                ParserType.BOOK.value, ParserType.LAWS.value, ParserType.PRESENTATION.value,
+                ParserType.ONE.value, ParserType.QA.value
+            }
+        if re.search(r"\.(doc|docx)$", f):
+            return {
+                ParserType.NAIVE.value, ParserType.BOOK.value, ParserType.LAWS.value,
+                ParserType.ONE.value, ParserType.QA.value, ParserType.MANUAL.value
+            }
+        if re.search(r"\.(xlsx?|xls)$", f):
+            return {ParserType.NAIVE.value, ParserType.QA.value, ParserType.TABLE.value, ParserType.ONE.value}
+        if re.search(r"\.(ppt|pptx)$", f):
+            return {ParserType.PRESENTATION.value}
+        if re.search(r"\.(jpg|jpeg|png|gif|bmp|tif|tiff|webp|svg|ico)$", f):
+            return {ParserType.PICTURE.value}
+        if re.search(r"\.txt$", f):
+            return {ParserType.NAIVE.value, ParserType.BOOK.value, ParserType.LAWS.value, ParserType.ONE.value, ParserType.QA.value, ParserType.TABLE.value}
+        if re.search(r"\.csv$", f):
+            return {ParserType.NAIVE.value, ParserType.BOOK.value, ParserType.LAWS.value, ParserType.ONE.value, ParserType.QA.value, ParserType.TABLE.value}
+        if re.search(r"\.(md|markdown)$", f):
+            return {ParserType.NAIVE.value, ParserType.QA.value}
+        if re.search(r"\.(json|jsonl|ldjson)$", f):
+            return {ParserType.NAIVE.value}
+        if re.search(r"\.eml$", f):
+            return {ParserType.EMAIL.value}
+        from api.db import ParserType as PT
+        return {PT.NAIVE.value}
+
+    @classmethod
+    def _get_module_by_parser_id(cls, parser_id: str):
+        from api.db import ParserType
+        from core.app import (
+            naive,
+            paper,
+            book,
+            presentation,
+            manual,
+            laws,
+            qa,
+            table,
+            resume,
+            picture,
+            one,
+            audio,
+            email,
+            tag,
+        )
+        PARSER_FACTORY = {
+            "general": naive,
+            ParserType.NAIVE.value: naive,
+            ParserType.PAPER.value: paper,
+            ParserType.BOOK.value: book,
+            ParserType.PRESENTATION.value: presentation,
+            ParserType.MANUAL.value: manual,
+            ParserType.LAWS.value: laws,
+            ParserType.QA.value: qa,
+            ParserType.TABLE.value: table,
+            ParserType.RESUME.value: resume,
+            ParserType.PICTURE.value: picture,
+            ParserType.ONE.value: one,
+            ParserType.AUDIO.value: audio,
+            ParserType.EMAIL.value: email,
+            ParserType.KG.value: naive,
+            ParserType.TAG.value: tag,
+        }
+        return PARSER_FACTORY.get(parser_id, naive)
+
+    @classmethod
+    def _resolve_parser_for_filename(cls, filename: str, requested_parser_id: str | None):
+        allowed = cls._get_allowed_parsers_for_filename(filename)
+        if requested_parser_id:
+            if requested_parser_id not in allowed:
+                raise ValueError(f"Unsupported parser_id '{requested_parser_id}' for file '{filename}'. Allowed: {sorted(list(allowed))}")
+            return cls._get_module_by_parser_id(requested_parser_id), requested_parser_id
+        # 默认按扩展名推断
+        import re
+        f = (filename or "").lower()
+        from api.db import ParserType
+        if re.search(r"\.(ppt|pptx)$", f):
+            return cls._get_module_by_parser_id(ParserType.PRESENTATION.value), ParserType.PRESENTATION.value
+        if re.search(r"\.(csv|xlsx?|xls)$", f):
+            return cls._get_module_by_parser_id(ParserType.TABLE.value), ParserType.TABLE.value
+        if re.search(r"\.(jpg|jpeg|png|gif|bmp|tif|tiff|webp|svg|ico)$", f):
+            return cls._get_module_by_parser_id(ParserType.PICTURE.value), ParserType.PICTURE.value
+        if re.search(r"\.eml$", f):
+            return cls._get_module_by_parser_id(ParserType.EMAIL.value), ParserType.EMAIL.value
+        return cls._get_module_by_parser_id(ParserType.NAIVE.value), ParserType.NAIVE.value
+
+    @classmethod
+    def preview_file_chunks(
+        cls,
+        db: Session,
+        filename: str,
+        file_bytes: bytes,
+        parser_config_override: dict | None = None,
+        override_parser_id: str | None = None,
+        language: str | None = None,
+    ) -> list[str]:
+        """
+        仅对上传文件执行切片预览，不落库、不向量化。
+        """
+        language = language or "Chinese"
+
+        module, method = cls._resolve_parser_for_filename(filename, override_parser_id)
+
+        from api.utils.api_utils import get_parser_config
+
+        base_cfg = get_parser_config(method, {})
+        if parser_config_override:
+            def _deep_merge(a: dict, b: dict) -> dict:
+                for k, v in (b or {}).items():
+                    if isinstance(v, dict) and isinstance(a.get(k), dict):
+                        _deep_merge(a[k], v)
+                    else:
+                        a[k] = v
+                return a
+            base_cfg = _deep_merge(base_cfg or {}, parser_config_override or {})
+
+        # 解析页区间（仅对部分解析器有效）
+        effective_from = 0
+        effective_to = 100000
+        try:
+            if isinstance(base_cfg, dict):
+                if "from_page" in base_cfg:
+                    effective_from = int(base_cfg.get("from_page", 0))
+                if "to_page" in base_cfg:
+                    effective_to = int(base_cfg.get("to_page", 100000))
+                pages = base_cfg.get("pages")
+                if isinstance(pages, list) and pages:
+                    try:
+                        starts = [int(p[0]) for p in pages if isinstance(p, (list, tuple)) and len(p) >= 1]
+                        ends = [int(p[1]) for p in pages if isinstance(p, (list, tuple)) and len(p) >= 2]
+                        if starts:
+                            effective_from = min(effective_from, min(starts) - 1)
+                        if ends:
+                            effective_to = max(effective_to, max(ends))
+                    except Exception:
+                        pass
+        except Exception:
+            effective_from, effective_to = 0, 100000
+
+        def _noop(prog=None, msg=""):
+            return None
+
+        result = module.chunk(
+            filename,
+            binary=file_bytes,
+            from_page=effective_from,
+            to_page=effective_to,
+            lang=language,
+            callback=_noop,
+            parser_config=base_cfg or {},
+            # 不传 tenant_id，解析器内部会降级跳过视觉增强等
+        )
+
+        # 统一为文本列表
+        chunks_text: list[str] = []
+        if isinstance(result, list):
+            if not result:
+                chunks_text = []
+            else:
+                first = result[0]
+                if isinstance(first, dict) and "content_with_weight" in first:
+                    chunks_text = [d.get("content_with_weight", "") for d in result]
+                elif isinstance(first, str):
+                    chunks_text = result
+                else:
+                    chunks_text = [str(x) for x in result]
+        else:
+            chunks_text = [str(result)]
+        return chunks_text
+
+    @classmethod
+    def preview_file_chunks_batched(
+        cls,
+        db: Session,
+        filename: str,
+        file_bytes: bytes,
+        parser_config_override: dict | None = None,
+        batch_size: int = 50,
+        batch_id: str | None = None,
+        session_ttl: int = 1800,
+        override_parser_id: str | None = None,
+        language: str | None = None,
+        batch_index: int | None = None,
+    ) -> dict:
+        import json
+
+        language = language or "Chinese"
+
+        # 合并配置并计算摘要
+        module, method = cls._resolve_parser_for_filename(filename, override_parser_id)
+        from api.utils.api_utils import get_parser_config
+        base_cfg = get_parser_config(method, {})
+        if parser_config_override:
+            def _deep_merge(a: dict, b: dict) -> dict:
+                for k, v in (b or {}).items():
+                    if isinstance(v, dict) and isinstance(a.get(k), dict):
+                        _deep_merge(a[k], v)
+                    else:
+                        a[k] = v
+                return a
+            base_cfg = _deep_merge(base_cfg or {}, parser_config_override or {})
+
+        hasher = xxhash.xxh64()
+        hasher.update((filename or "").encode("utf-8"))
+        hasher.update(file_bytes)
+        try:
+            hasher.update(json.dumps(base_cfg, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+        except Exception:
+            hasher.update(str(base_cfg).encode("utf-8"))
+        hasher.update((language or "").encode("utf-8"))
+        hasher.update((method or "").encode("utf-8"))
+        digest = hasher.hexdigest()
+
+        # 规范 batch_size
+        try:
+            bs = int(batch_size)
+            if bs <= 0:
+                bs = 50
+        except Exception:
+            bs = 50
+
+        # 会话恢复
+        session_key = None
+        session = None
+        if batch_id:
+            session_key = f"preview:file_session:{batch_id}"
+            try:
+                payload = REDIS_CONN.get(session_key)
+                if payload:
+                    session = json.loads(payload)
+            except Exception:
+                session = None
+
+        if not session or session.get("digest") != digest:
+            all_chunks = cls.preview_file_chunks(
+                db,
+                filename,
+                file_bytes,
+                parser_config_override=base_cfg,
+                override_parser_id=override_parser_id,
+                language=language,
+            )
+            batch_id = get_uuid()
+            session_key = f"preview:file_session:{batch_id}"
+            session = {
+                "digest": digest,
+                "filename": filename,
+                "total": len(all_chunks),
+                "offset": 0,
+                "chunks": all_chunks,
+            }
+            REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
+
+        start = int(session.get("offset", 0))
+        total = int(session.get("total", 0))
+        if isinstance(batch_index, int) and batch_index >= 0:
+            start = min(batch_index * bs, total)
+        end = min(start + bs, total)
+        batch = session.get("chunks", [])[start:end]
+        has_more = end < total
+        current_batch_index = (start // bs) if bs > 0 else 0
+        total_batches = (total + bs - 1) // bs if bs > 0 else 0
+
+        # 同样：顺序模式推进 offset；并发批次模式在最后一批时清理会话
+        if batch_index is None:
+            if has_more:
+                session["offset"] = end
+                REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
+            else:
+                REDIS_CONN.delete(session_key)
+        else:
+            if not has_more:
+                REDIS_CONN.delete(session_key)
+
+        return {
+            "batch_id": batch_id,
+            "chunks": batch,
+            "count": len(batch),
+            "total": total,
+            "has_more": has_more,
+            "batch_index": current_batch_index,
+            "total_batches": total_batches,
+        }
 
     @classmethod
     def get_by_doc_id(cls, db: Session, doc_id: str) -> dict | None:
@@ -881,6 +1442,58 @@ class DocumentService(CommonService):
     def get_kb_doc_count(cls, db: Session, kb_id: str):
         query = db.query(cls.model.id).filter_by(kb_id=kb_id)
         return query.count()
+
+    @classmethod
+    def parse_web_by_provider(
+        cls,
+        provider: str,
+        url: str,
+        options: dict[str, Any] | None,
+        credentials: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        统一的网页解析服务入口，根据 provider 调用不同适配器。
+
+        返回统一结构：
+        {
+          "provider": str,
+          "url": str,
+          "texts": list[str],
+          "raw": dict[str, Any]   # 原始响应，用于排障/扩展
+        }
+        """
+        provider_lc = (provider or "").strip().lower()
+        if provider_lc == "tavily":
+            from core.utils.tavily_conn import Tavily
+
+            if not credentials or not credentials.get("api_key"):
+                raise ValueError("Tavily requires credentials.api_key")
+
+            client = Tavily(api_key=credentials["api_key"])
+
+            # 透传 options 到 tavily extract。Thin 封装已在 conn 层生效
+            kwargs: dict[str, Any] = {"urls": url}
+            if options:
+                # 映射兼容：如果上层传了 format/extract_depth/include_images/include_favicon/timeout
+                for k in ["include_images", "extract_depth", "format", "timeout", "include_favicon"]:
+                    if k in options:
+                        kwargs[k] = options[k]
+
+            raw = client.extract(**kwargs)
+            texts: list[str] = []
+            for item in raw.get("results", []) or []:
+                txt = item.get("raw_content") or ""
+                if txt:
+                    texts.append(txt)
+            return {"provider": provider_lc, "url": url, "texts": texts, "raw": raw}
+
+        elif provider_lc == "jinareader":
+            # 预留：未来在 core/utils/jina_conn.py 中实现后在此对接
+            # 暂时抛出明确错误，提示尚未集成
+            raise NotImplementedError("Provider 'jinareader' is not integrated yet. Please add core/utils/jina_conn.py and wire here.")
+
+        else:
+            raise ValueError(f"Unsupported provider: {provider}")
 
     @classmethod
     def do_cancel(cls, db: Session, doc_id):

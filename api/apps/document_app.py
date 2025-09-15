@@ -13,9 +13,9 @@ import pathlib
 import re
 from pathlib import Path
 from io import BytesIO
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form, Body, Request
 from fastapi.responses import StreamingResponse
 from pymilvus import MilvusException
 from sqlalchemy.orm import Session
@@ -42,7 +42,7 @@ from core.nlp import search
 from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 router = APIRouter()
 
@@ -106,6 +106,74 @@ class FilterRequest(BaseModel):
     suffix: list[str] = Field(default=[], description="文件后缀过滤")
     run_status: list[str] = Field(default=[], description="运行状态过滤")
     types: list[str] = Field(default=[], description="文件类型过滤")
+
+
+class PreviewChunksRequest(BaseModel):
+    doc_id: str | None = Field(default=None, description="文档ID（与 file 二选一）")
+    parser_config: dict | None = Field(default=None, description="解析配置覆盖（可选）")
+    limit: int | None = Field(default=50, description="最多返回的切片条数（可选，非批次模式）")
+    batch_size: int | None = Field(default=None, description="批次大小（启用批次模式时必填）")
+    batch_id: str | None = Field(default=None, description="批次会话ID（续取时携带）")
+    parser_id: str | None = Field(default=None, description="手动指定解析器（可选，受文件类型支持列表校验）")
+    batch_index: int | None = Field(default=None, description="并发批次号（从0开始）；指定则按批次号取片段，不推进会话offset")
+
+
+class WebParseOptions(BaseModel):
+    # 通用站点抓取选项（为未来 provider 预留）
+    crawl_sub_pages: bool | None = Field(default=None)
+    only_main_content: bool | None = Field(default=None)
+    includes: str | None = Field(default=None)
+    excludes: str | None = Field(default=None)
+    limit: int | None = Field(default=None, description="抓取的最大页面数量（仅部分 provider 支持）")
+    max_depth: int | None = Field(default=None, description="抓取子页面的最大深度（仅部分 provider 支持）")
+    use_sitemap: bool | None = Field(default=None)
+    # Tavily Extract 专属可选项（与 core/utils/tavily_conn.py 对齐）
+    include_images: bool | None = Field(default=None, description="是否在响应中包含图片URL列表（默认 False）")
+    extract_depth: Literal["basic", "advanced"] | None = Field(
+        default=None,
+        description=(
+            "提取深度：basic（默认，低延迟，成功率适中，1信用/成功5URL）| advanced（更高成功率与数据量，如表格/嵌入内容，2信用/成功5URL）"
+        ),
+    )
+    format: Literal["markdown", "text"] | None = Field(
+        default=None,
+        description="提取内容格式：markdown（默认）| text（纯文本，可能增加延迟）",
+    )
+    timeout: int | None = Field(
+        default=None, ge=1, le=60,
+        description="超时时间（秒），1~60。未指定时：basic=10s，advanced=30s",
+    )
+    include_favicon: bool | None = Field(default=None, description="是否包含 favicon（默认 False）")
+
+    @field_validator("limit", "max_depth", "timeout", mode="before")
+    @classmethod
+    def _empty_str_to_none_and_cast_int(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, str):
+            vv = v.strip()
+            if vv == "":
+                return None
+            try:
+                return int(vv)
+            except ValueError:
+                return v
+        return v
+
+
+class WebParseCredentials(BaseModel):
+    # 针对不同 provider 的凭据，如 Tavily 的 api_key
+    api_key: str | None = Field(default=None)
+
+
+class WebParseRequest(BaseModel):
+    url: str = Field(..., description="要解析的网页 URL")
+    provider: Literal["tavily", "jinareader"] = Field(
+        ..., description="解析提供方：tavily | jinareader（后者待集成）"
+    )
+    options: WebParseOptions | None = Field(default=None, description="解析选项")
+    credentials: WebParseCredentials | None = Field(default=None, description="第三方凭据，如 API Key")
+
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
 async def upload(
@@ -1092,6 +1160,140 @@ def get_filter(
         return get_json_result(data={"total": total, "filter": filter_data})
     except Exception as e:
         return server_error_response(e)
+
+
+@router.post("/web_parse", summary="解析网页（按 provider 调用）", response_description="返回网页文本与原始响应")
+def web_parse(
+        request: WebParseRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    ### POST `/web_parse` 解析网页（多 Provider）
+
+    **功能描述**:
+    按 `provider` 调用对应的网页解析能力，将网页内容解析为文本并返回，同时附带原始响应数据，便于排障与二次处理。
+
+    ---
+
+    ### 请求体 (Request Body)
+
+    | 字段          | 类型                                   | 必填 | 描述                                                                 |
+    |---------------|----------------------------------------|------|----------------------------------------------------------------------|
+    | `url`         | `string`                               | 是   | 要解析的网页 URL                                                      |
+    | `provider`    | `"tavily" | "jinareader"`              | 是   | 解析提供方。当前已接入 `tavily`；`jinareader` 预留待集成             |
+    | `options`     | `WebParseOptions`                      | 否   | 解析选项。通用字段 + 各 provider 专属字段（见下表）                   |
+    | `credentials` | `WebParseCredentials`                  | 否   | 第三方凭据。`tavily` 需 `api_key`。未来可从凭据表自动读取（可不传）   |
+
+    #### WebParseOptions（通用 + Tavily 专属）
+    | 字段               | 类型                           | 默认值     | 说明                                                                                   |
+    |--------------------|--------------------------------|------------|----------------------------------------------------------------------------------------|
+    | `crawl_sub_pages`  | `boolean`                      | `null`     | 是否抓取子页面（部分 provider 支持）                                                   |
+    | `only_main_content`| `boolean`                      | `null`     | 仅解析主内容（部分 provider 支持）                                                     |
+    | `includes`         | `string`                       | `null`     | 包含匹配（部分 provider 支持）                                                         |
+    | `excludes`         | `string`                       | `null`     | 排除匹配（部分 provider 支持）                                                         |
+    | `limit`            | `int`                          | `null`     | 抓取的最大页面数量（部分 provider 支持）                                               |
+    | `max_depth`        | `int`                          | `null`     | 抓取子页面的最大深度（部分 provider 支持）                                             |
+    | `use_sitemap`      | `boolean`                      | `null`     | 是否使用 sitemap（部分 provider 支持）                                                 |
+    | `include_images`   | `boolean`                      | `False`    | Tavily：是否在响应中包含图片 URL 列表                                                   |
+    | `extract_depth`    | `"basic" | "advanced"`        | `basic`    | Tavily：提取深度。basic 低延迟/1信用/成功5URL；advanced 成功率更高/更多数据/2信用/5URL |
+    | `format`           | `"markdown" | "text"`        | `markdown`| Tavily：返回格式。markdown 更快；text 为纯文本，可能增加延迟                            |
+    | `timeout`          | `int (1~60)`                   | `自动`     | Tavily：最大等待秒数。未指定时：basic=10s，advanced=30s                                 |
+    | `include_favicon`  | `boolean`                      | `False`    | Tavily：是否包含 favicon                                                                |
+
+    #### WebParseCredentials
+    | 字段       | 类型     | 必填 | 说明                          |
+    |------------|----------|------|-------------------------------|
+    | `api_key`  | `string` | 否   | 第三方 API Key（Tavily 需要） |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "success",
+      "data": {
+        "provider": "tavily",
+        "url": "https://example.com",
+        "texts": ["解析出的纯文本1", "解析出的纯文本2"],
+        "raw": {
+          "results": [
+            {"url": "https://example.com", "raw_content": "...", "images": [], "favicon": "..."}
+          ],
+          "failed_results": [],
+          "response_time": 1.23,
+          "request_id": "uuid"
+        }
+      }
+    }
+    ```
+
+    #### 错误响应
+    - **400: 参数错误/未配置凭据**
+      ```json
+      {"retcode": 400, "retmsg": "Tavily requires credentials.api_key", "data": false}
+      ```
+    - **400: 不支持的 provider**
+      ```json
+      {"retcode": 400, "retmsg": "Unsupported provider: xxx", "data": false}
+      ```
+    - **500: 上游服务错误或内部错误**
+      ```json
+      {"retcode": 500, "retmsg": "具体错误信息", "data": false}
+      ```
+
+    ---
+
+    ### 主要流程
+    1. 解析请求体，校验 `provider`。
+    2. Service 层根据 `provider` 调用对应适配器（当前支持 Tavily Extract）。
+    3. 透传 `options` 中与该 provider 相关的字段；凭据来自 `credentials.api_key`。
+    4. 统一组装输出：`texts` 为纯文本数组，`raw` 为原始响应（含 `request_id/response_time/failed_results`）。
+
+    ---
+
+    ### 使用示例
+    ```json
+    {
+      "url": "https://jw.dhu.edu.cn/2025/0623/c22070a363167/page.htm",
+      "provider": "tavily",
+      "options": {
+        "extract_depth": "advanced",
+        "format": "markdown",
+        "include_images": false,
+        "include_favicon": false,
+        "timeout": 20
+      },
+      "credentials": {"api_key": "tvly-***"}
+    }
+    ```
+
+    ---
+
+    ### 注意事项
+    - `provider = tavily` 需有效 `api_key`；未来支持从凭据表自动注入后可不在请求体传递。
+    - `extract_depth/format/timeout` 语义遵循 Tavily 官方文档；`timeout` 范围 1~60 秒。
+    - `texts` 返回的是清洗后的纯文本；原始字段请在 `raw.results[*].raw_content` 获取。
+    - `jinareader` 为预留 provider，集成后在同一接口下直接可用。
+    """
+    try:
+        url = request.url
+        provider = request.provider
+        options = request.options.model_dump(exclude_none=True) if request.options else None
+        credentials = request.credentials.model_dump(exclude_none=True) if request.credentials else None
+
+        result = DocumentService.parse_web_by_provider(
+            provider=provider,
+            url=url,
+            options=options,
+            credentials=credentials,
+        )
+        return get_json_result(data=result)
+    except Exception as e:
+        return construct_error_response(e)
 
 
 @router.post('/infos', summary="获取文档信息", response_description="成功获取文档信息")
@@ -2321,3 +2523,254 @@ def set_meta(
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
+
+
+@router.post("/preview_chunks", summary="仅切片预览（不向量化/不入库，支持批次与直传文件）")
+async def preview_chunks(
+        request_body: PreviewChunksRequest | None = Body(None),
+        request_form: str | None = Form(None, alias="request", description="请求JSON（multipart时使用）"),
+        file: UploadFile | None = File(None, description="直传单文件（可选）"),
+        raw_req: Request = None,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    ### POST `/preview_chunks` 仅切片预览接口（支持批次）
+
+    **功能描述**:
+    该接口对指定文档执行“解析+切片”，仅返回切片后的文本内容用于预览与调参验证。
+    不进行向量化、也不写入向量库/数据库，不改变任何统计字段。
+
+    ---
+
+    ### 请求体 (Request Body)
+
+    | 字段            | 类型      | 必填 | 描述                                                                 |
+    |-----------------|-----------|------|----------------------------------------------------------------------|
+    | `doc_id`        | `string`  | 否   | 文档ID；与 `file` 二选一                                            |
+    | `parser_config` | `object`  | 否   | 解析配置覆盖（与文档配置合并，含 from_page/to_page 等）             |
+    | `limit`         | `int`     | 否   | 最多返回的切片条数，默认 `50`（非批次模式使用）                      |
+    | `batch_size`    | `int`     | 否   | 批次大小；若传入则启用批次模式                                      |
+    | `batch_id`      | `string`  | 否   | 批次会话ID；续取下一批时传入                                         |
+    | `file`          | `file`    | 否   | 直传单个文件；与 `doc_id` 二选一                                      |
+    | `parser_id`     | `string`  | 否   | 手动指定解析器，如 `naive`/`paper` 等；会校验与文件类型兼容性         |
+    | `batch_index`   | `int`     | 否   | 并发批次号（0-based）；指定则按批次号取片段，不推进offset            |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200) 非批次模式
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "success",
+      "data": {
+        "chunks": ["切片文本1", "切片文本2", "..."],
+        "count": 2
+      }
+    }
+    ```
+
+    #### 成功响应 (200) 批次模式
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "success",
+      "data": {
+        "batch_id": "2f7e...",
+        "chunks": ["切片文本1", "切片文本2"],
+        "count": 2,
+        "total": 2000,
+        "has_more": true,
+        "batch_index": 3,
+        "total_batches": 100
+      }
+    }
+    ```
+
+    #### 错误响应
+
+    - **403: 权限不足**
+      ```json
+      {
+        "retcode": 403,
+        "retmsg": "No authorization.",
+        "data": false
+      }
+      ```
+
+    - **404: 文档不存在**（或资源不可用）
+      ```json
+      {
+        "retcode": 404,
+        "retmsg": "Document not found.",
+        "data": false
+      }
+      ```
+
+    - **500: 服务器错误**
+      ```json
+      {
+        "retcode": 500,
+        "retmsg": "Internal Server Error",
+        "data": false
+      }
+      ```
+
+    ---
+
+    ### 支持的模式
+
+    1) 非批次模式（不传 `batch_size`）：
+       - 适合小文档或快速预览；一次性返回全部切片（可结合 `limit` 截断）。
+       - 不创建会话，无 Redis 残留。
+
+    2) 批次顺序模式（传 `batch_size`，不传 `batch_index`）：
+       - 首次请求返回 `batch_id` 及首批数据，内部按 offset 依次推进。
+       - 当本次响应 `has_more=false`（最后一批）时，服务端立即删除 Redis 会话。
+
+    3) 批次并发模式（传 `batch_size` + `batch_index`）：
+       - 可用相同 `batch_id` 并发拉取不同 `batch_index` 的批次。
+       - 当任一请求返回 `has_more=false`（该批为最后一批）时，服务端立即删除 Redis 会话。
+
+    4) 文件直传 vs. doc_id：
+       - 直传文件：`file` + `request`（表单字段，JSON 字符串）或纯 JSON + multipart 混用。
+       - doc_id：只需 `doc_id` + `parser_config`（可选），不上传文件。
+
+    ---
+
+    ### 主要流程
+
+    1. **权限验证**：
+       - 若提供 `doc_id`：校验文档访问权限；
+       - 若提供 `file`：跳过文档权限校验，直接对该文件执行解析切片（不落库）。
+    2. **读取原文件**：
+       - `doc_id` 路径：从对象存储拉取对应原始二进制内容；
+       - `file` 路径：读取上传的文件二进制。
+    3. **合并解析配置**：将 `parser_config` 与文档已有配置合并（调用 `get_parser_config`）。
+    4. **执行切片**：按 `parser_id` 选择解析器，进行解析与切片（仅内存处理）。
+    5. **提取文本**：统一提取 `content_with_weight` 作为文本切片。
+    6. **结果限制/批次**：
+       - 非批次：若传入 `limit`，仅返回前 `limit` 条切片。
+       - 批次：按 `batch_size` 返回一批，并返回 `batch_id` 与 `has_more`。
+
+    ---
+
+    ### 使用示例
+
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/preview_chunks" \
+      -H "Content-Type: application/json" \
+      -d '{
+            "doc_id": "doc_123",
+            "parser_config": {"chunk_token_num": 512, "delimiter": "\n!?。；！？"},
+            "limit": 50
+          }'
+
+    # 批次模式（首次，不带 batch_id）
+    curl -X POST "http://api.example.com/v1/document/preview_chunks" \
+      -H "Content-Type: application/json" \
+      -d '{
+            "doc_id": "doc_123",
+            "parser_config": {"chunk_token_num": 512},
+            "batch_size": 100
+          }'
+
+    # 批次模式（续取，带 batch_id）
+    curl -X POST "http://api.example.com/v1/document/preview_chunks" \
+      -H "Content-Type: application/json" \
+      -d '{
+            "doc_id": "doc_123",
+            "batch_size": 100,
+            "batch_id": "2f7e..."
+          }'
+    ```
+
+    ---
+
+    ### 注意事项
+
+    - 本接口不会触发向量化与入库，也不会修改文档/知识库的 `chunk_num`、`token_num` 等统计。
+    - 页/行范围与具体解析器有关：PDF 为页区间，表格/文本等为行或分段区间。
+    - `parser_config` 的键需与对应解析器支持的配置项一致，未识别的键将被忽略。
+    - 返回仅包含文本切片；如需图像/表格截图等，请通过其他接口获取对应图片资源。
+    - 批次会话存活时间默认 30 分钟；超时将被清理，需重新发起首批请求。
+    """
+    try:
+        # 统一解析请求：multipart 用 request_form，application/json 用 request_body
+        if request_form is not None:
+            req = PreviewChunksRequest.model_validate_json(request_form)
+        elif request_body is not None:
+            req = request_body
+        else:
+            # 兜底：当路径同时声明了 File/Form 时，部分客户端以 application/json 发送会导致 request_body 为空
+            # 这里直接从原始请求解析 JSON
+            try:
+                data = await raw_req.json()
+                req = PreviewChunksRequest.model_validate(data)
+            except Exception:
+                req = PreviewChunksRequest()
+        # 参数校验：二选一
+        if file is None and not req.doc_id:
+            return get_json_result(
+                data=False,
+                retmsg='Either `doc_id` or `file` is required.',
+                retcode=settings.RetCode.ARGUMENT_ERROR
+            )
+
+        # 分支一：直传文件
+        if file is not None:
+            content = await file.read()
+            filename = file.filename or "uploaded"
+            # 批次模式（文件）
+            if req.batch_size:
+                data = DocumentService.preview_file_chunks_batched(
+                    db,
+                    filename,
+                    content,
+                    parser_config_override=req.parser_config,
+                    batch_size=req.batch_size or 50,
+                    batch_id=req.batch_id,
+                    override_parser_id=req.parser_id,
+                    batch_index=req.batch_index,
+                )
+                return construct_json_result(data=data)
+            # 非批次模式（文件）
+            chunks = DocumentService.preview_file_chunks(
+                db,
+                filename,
+                content,
+                parser_config_override=req.parser_config,
+                override_parser_id=req.parser_id,
+            )
+            return construct_json_result(data={"chunks": chunks, "count": len(chunks)})
+
+        # 分支二：基于 doc_id
+        if not DocumentService.accessible(db, req.doc_id, user.id):
+            return get_json_result(
+                data=False,
+                retmsg='No authorization.',
+                retcode=settings.RetCode.AUTHENTICATION_ERROR
+            )
+        if req.batch_size:
+            data = DocumentService.preview_document_chunks_batched(
+                db,
+                doc_id=req.doc_id,
+                parser_config_override=req.parser_config,
+                batch_size=req.batch_size or 50,
+                batch_id=req.batch_id,
+                override_parser_id=req.parser_id,
+                batch_index=req.batch_index,
+            )
+            return construct_json_result(data=data)
+        chunks = DocumentService.preview_document_chunks(
+            db,
+            doc_id=req.doc_id,
+            parser_config_override=req.parser_config,
+            limit=req.limit,
+            override_parser_id=req.parser_id,
+        )
+        return construct_json_result(data={"chunks": chunks, "count": len(chunks)})
+    except Exception as e:
+        return construct_error_response(e)
