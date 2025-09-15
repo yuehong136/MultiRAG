@@ -838,7 +838,7 @@ class StatelessSlotExtractionService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请按照要求输出"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 500}
+                gen_conf={"temperature": 0.1}
             )
 
             # 解析JSON结果
@@ -927,7 +927,7 @@ class StatelessSlotExtractionService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请按照要求输出参数"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 500}
+                gen_conf={"temperature": 0.1}
             )
 
             # 解析结果
@@ -1015,7 +1015,7 @@ class StatelessSlotExtractionService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请按照要求输出"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 500}
+                gen_conf={"temperature": 0.1}
             )
 
             # 解析JSON结果
@@ -1191,7 +1191,7 @@ class StatelessSlotExtractionService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请按照要求输出参数"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 500}
+                gen_conf={"temperature": 0.1}
             )
 
             # 解析结果
@@ -1299,7 +1299,7 @@ class ClarificationService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "按照要求输出内容"}],
-                gen_conf={"temperature": 0.7, "max_tokens": 200}
+                gen_conf={"temperature": 0.7}
             )
 
             return response.strip()
@@ -1610,7 +1610,7 @@ class LLMScoringService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请开始评分"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 1500}
+                gen_conf={"temperature": 0.1}
             )
 
             # 解析LLM响应
@@ -1808,7 +1808,7 @@ class RAGService:
             answer = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请按照要求回答"}],
-                gen_conf={"temperature": 0.3, "max_tokens": 1000}
+                gen_conf={"temperature": 0.3}
             )
 
             # 计算置信度（基于检索结果的平均分数）
@@ -1928,7 +1928,7 @@ class LLMScoringServiceV2:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": f"{user_input}\n请严格按照格式要求进行评分"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 8000}
+                gen_conf={"temperature": 0.1}
             )
 
             # V2强化版响应解析
