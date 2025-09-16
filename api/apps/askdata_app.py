@@ -495,6 +495,7 @@ class ReQueryRequest(BaseModel):
     sql_components: Dict[str, Any] = Field(..., description="SQL组件")
     model_table_alias_mapping_list: List[Dict[str, Any]] = Field(..., description="模型表别名映射列表")
     dataset_id: str = Field(..., description="数据集ID")
+    pagination_info: Optional[Dict[str, Any]] = Field(None, description="分页信息")
 
     class Config:
         protected_namespaces = ()
@@ -516,26 +517,50 @@ async def re_query(
         f"re-query chart_type: {body.chart_type}\n table_config: {body.table_config} \n sql_components: {body.sql_components} \n model_table_alias_mapping_list: {body.model_table_alias_mapping_list}")
 
     try:
-        sql, params = await service.generate_requery_sql(body.chart_type, body.table_config,
+        requery_sql_result = await service.generate_requery_sql(body.chart_type, body.table_config,
                                                          sql_components=body.sql_components,
-                                                         model_table_alias_mapping_list=body.model_table_alias_mapping_list)
+                                                         model_table_alias_mapping_list=body.model_table_alias_mapping_list,
+                                                                                      pagination_info=body.pagination_info)
 
-        logger.info(f"sql:{sql}")
-        logger.info(f"params:{params}")
-
-        result = await query_data_with_params(sql, int(body.dataset_id), params)
-        if result["status"] == "error":
-            logger.error(f"查询数据失败: {result['message']}")
+        if body.pagination_info:
+            result = await query_data_with_params(requery_sql_result["count_sql"], int(body.dataset_id), requery_sql_result["count_sql_params"])
+            if result["status"] == "error":
+                logger.error(f"查询数据失败: {result['message']}")
+                return ResponseSchema(
+                    status=StatusEnum.ERROR,
+                    message=f"查询数据失败: {result['message']}"
+                )
+            count = result.get("data", {}).get("data",[])[0].get("count",{})
+            result = await query_data_with_params(requery_sql_result["sql"], int(body.dataset_id), requery_sql_result["params"])
+            if result["status"] == "error":
+                logger.error(f"查询数据失败: {result['message']}")
+                return ResponseSchema(
+                    status=StatusEnum.ERROR,
+                    message=f"查询数据失败: {result['message']}"
+                )
             return ResponseSchema(
-                status=StatusEnum.ERROR,
-                message=f"查询数据失败: {result['message']}"
+                status=StatusEnum.SUCCESS,
+                message="生成re-query SQL成功",
+                data={"result": result["data"], "pagination_info": {
+                    "page_size": body.pagination_info["page_size"],
+                    "page_index": body.pagination_info["page_index"],
+                    "data_count": count
+                }}
             )
+        else:
+            result = await query_data_with_params(requery_sql_result["sql"], int(body.dataset_id), requery_sql_result["params"])
+            if result["status"] == "error":
+                logger.error(f"查询数据失败: {result['message']}")
+                return ResponseSchema(
+                    status=StatusEnum.ERROR,
+                    message=f"查询数据失败: {result['message']}"
+                )
 
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="生成re-query SQL成功",
-            data={"result": result["data"]}
-        )
+            return ResponseSchema(
+                status=StatusEnum.SUCCESS,
+                message="生成re-query SQL成功",
+                data={"result": result["data"]}
+            )
 
     except Exception as e:
         logger.exception("生成re-query SQL失败")

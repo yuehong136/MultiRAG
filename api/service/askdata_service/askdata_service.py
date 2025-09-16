@@ -405,7 +405,8 @@ class AskdataService:
         return list(set(d.get('domainId') for d in dataset_details if d.get('domainId')))
 
     async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], sql_components: Dict[str, Any],
-                                   model_table_alias_mapping_list: List[Dict[str, Any]]):
+                                   model_table_alias_mapping_list: List[Dict[str, Any]],
+                                   pagination_info: Optional[Dict[str, Any]]):
         """生成重新查询的SQL语句。"""
         base_from = sql_components["from"]
         from_sentence = ""
@@ -448,8 +449,40 @@ class AskdataService:
                     if raw_condition:
                         assembler.add_raw_where(raw_condition)
                     else:
-                        assembler.add_raw_where(
-                            sql_condition=f"{filter['sql_column']} {filter['operator']} {filter['value']}")
+                        sql_column = filter['sql_column']
+                        operator = filter['operator']
+                        value = filter['value']
+
+                        # 处理不同的操作符
+                        if operator.upper() in ['IS NULL', 'IS NOT NULL']:
+                            # NULL 检查不需要参数
+                            assembler.add_raw_where(f"{sql_column} {operator}")
+                        elif operator.upper() in ['IN', 'NOT IN']:
+                            # IN 操作符需要特殊处理
+                            if isinstance(value, str):
+                                # 如果是字符串，尝试解析为列表
+                                import json
+                                try:
+                                    value_list = json.loads(value)
+                                except:
+                                    # 如果不是 JSON，尝试分割
+                                    value_list = [v.strip().strip("'\"") for v in value.split(',')]
+                            else:
+                                value_list = value if isinstance(value, list) else [value]
+
+                            placeholders = ','.join(['%s'] * len(value_list))
+                            assembler.add_parameterized_where(
+                                f"{sql_column} {operator} ({placeholders})",
+                                value_list
+                            )
+                        elif operator.upper() == 'BETWEEN':
+                            # BETWEEN 需要两个值
+                            # 这里假设 value 包含两个值，可能需要根据实际情况调整
+                            assembler.add_raw_where(f"{sql_column} BETWEEN %s AND %s",
+                                                    [value, filter.get('value2', value)])
+                        else:
+                            # 普通操作符，使用参数化查询
+                            assembler.add_parameterized_where(f"{sql_column} {operator} %s", [value])
 
             for order_by in table_config["order_by"]:
                 if order_by["is_semantic_field"]:
@@ -460,13 +493,27 @@ class AskdataService:
                     direction = order_by["direction"]
                     assembler.add_order_by(column_name, OrderDirection.from_value(direction))
                 else:
-                    assembler.add_order_by(order_by["sql_column"], order_by["direction"])
+                    assembler.add_order_by(order_by["sql_column"], OrderDirection.from_value(order_by["direction"]))
 
-            limit = table_config["limit"]
-            if limit:
-                assembler.set_limit(int(limit) if isinstance(limit, str) else limit)
+            if pagination_info:
+                count_sql, count_sql_params = assembler.build_count_sql_for_jdbc()
+                page_size = int(pagination_info["page_size"])
+                page_index = int(pagination_info["page_index"])
+                assembler.set_pagination(page_index, page_size)
+                sql, params = assembler.build_sql_for_jdbc()
+                return {
+                    "sql": sql,
+                    "params": params,
+                    "count_sql": count_sql,
+                    "count_sql_params": count_sql_params,
+                }
+            else:
+                sql, params = assembler.build_sql_for_jdbc()
+                return {
+                    "sql": sql,
+                    "params": params
+                }
 
-            return assembler.build_sql_for_jdbc()
         elif chart_type == "table-aggr" or chart_type == "bar" or chart_type == "pie" or chart_type == "line" or chart_type == "area" or chart_type == "matrix" or chart_type == "bubble":
             for dimension in table_config["dimensions"]:
                 if dimension["is_semantic_field"]:
@@ -495,7 +542,7 @@ class AskdataService:
                         column_name = f"{table_alias}.{field_name}"
                         aggr_type = metric["type"]
                         if aggr_type == "COUNT_DISTINCT":
-                            alias = f"COUNT_DISTINCT_{model_name}_{{semantic_field['field_detail']['metricEnName']}}"
+                            alias = f"COUNT_DISTINCT_{model_name}_{semantic_field['field_detail']['metricEnName']}"
                             assembler.add_raw_column(f"COUNT(DISTINCT {column_name})",
                                                      alias)
                         else:
@@ -527,10 +574,63 @@ class AskdataService:
                         # 普通情况
                         assembler.add_filter(column_name, FilterOperator.from_value(operator), converted_value)
                 else:
-                    if where_condition.get("sql_column", None):
-                        assembler.add_raw_where(where_condition["sql_column"])
+                    raw_condition = where_condition.get("raw_condition", None)
+                    sql_column = where_condition.get("sql_column", None)
+
+                    if raw_condition:
+                        # 如果有 raw_condition，直接使用
+                        assembler.add_raw_where(raw_condition)
+                    elif sql_column:
+                        # 如果有 sql_column，需要解析并参数化
+                        # sql_column 可能包含完整的条件表达式
+                        # 尝试解析操作符和值
+                        import re
+
+                        # 尝试匹配常见的 SQL 条件模式
+                        patterns = [
+                            (r'^(.+?)\s+(IS\s+NULL|IS\s+NOT\s+NULL)\s*$', lambda m: (m.group(1), m.group(2), None)),
+                            (r'^(.+?)\s+(IN|NOT\s+IN)\s*\((.+)\)\s*$', lambda m: (m.group(1), m.group(2), m.group(3))),
+                            (r'^(.+?)\s+(BETWEEN)\s+(.+?)\s+AND\s+(.+)\s*$',
+                             lambda m: (m.group(1), m.group(2), (m.group(3), m.group(4)))),
+                            (r'^(.+?)\s*(=|!=|<>|>=|<=|>|<|LIKE|NOT\s+LIKE)\s*(.+)\s*$',
+                             lambda m: (m.group(1), m.group(2), m.group(3))),
+                        ]
+
+                        matched = False
+                        for pattern, extractor in patterns:
+                            match = re.match(pattern, sql_column, re.IGNORECASE)
+                            if match:
+                                result = extractor(match)
+                                if len(result) == 3:
+                                    field, op, val = result
+
+                                    if op.upper() in ['IS NULL', 'IS NOT NULL']:
+                                        assembler.add_raw_where(f"{field} {op}")
+                                    elif op.upper() in ['IN', 'NOT IN']:
+                                        # 解析 IN 列表
+                                        val_list = [v.strip().strip("'\"") for v in val.split(',')]
+                                        placeholders = ','.join(['%s'] * len(val_list))
+                                        assembler.add_parameterized_where(f"{field} {op} ({placeholders})", val_list)
+                                    elif op.upper() == 'BETWEEN':
+                                        # BETWEEN 有两个值
+                                        val1, val2 = val
+                                        val1 = val1.strip().strip("'\"")
+                                        val2 = val2.strip().strip("'\"")
+                                        assembler.add_parameterized_where(f"{field} BETWEEN %s AND %s", [val1, val2])
+                                    else:
+                                        # 普通比较操作符
+                                        val = val.strip().strip("'\"")
+                                        assembler.add_parameterized_where(f"{field} {op} %s", [val])
+
+                                    matched = True
+                                    break
+
+                        if not matched:
+                            logger.warning(f"无法解析 where 条件，将作为原始 SQL 添加: {sql_column}")
+                            assembler.add_raw_where(sql_column)
                     else:
-                        assembler.add_raw_where(where_condition["raw_condition"])
+                        # 既没有 raw_condition 也没有 sql_column，跳过
+                        pass
 
             for having_condition in table_config.get("having_conditions", []):
                 if having_condition["is_semantic_field"]:
@@ -560,10 +660,24 @@ class AskdataService:
                 else:
                     assembler.add_order_by(order_by["sql_column"], order_by["direction"])
 
-            if len(sql_components["limit"]) > 0:
-                assembler.set_limit(int(sql_components["limit"]))
-
-            return assembler.build_sql_for_jdbc()
+            if pagination_info:
+                count_sql, count_sql_params = assembler.build_count_sql_for_jdbc()
+                page_size = int(pagination_info["page_size"])
+                page_index = int(pagination_info["page_index"])
+                assembler.set_pagination(page_index, page_size)
+                sql, params = assembler.build_sql_for_jdbc()
+                return {
+                    "sql": sql,
+                    "params": params,
+                    "count_sql": count_sql,
+                    "count_sql_params": count_sql_params,
+                }
+            else:
+                sql, params = assembler.build_sql_for_jdbc()
+                return {
+                    "sql": sql,
+                    "params": params
+                }
 
     async def get_hc_dim_values_by_dim_value(
             self,
