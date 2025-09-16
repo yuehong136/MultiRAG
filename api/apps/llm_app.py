@@ -12,6 +12,8 @@ import json
 import re
 from datetime import datetime
 from typing import Any
+import base64
+from array import array
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
@@ -493,6 +495,15 @@ class ChatRequest(BaseModel):
     files: list[str] = []
     # 结构化输出控制
     structured_output: bool = False  # 是否使用结构化的SSE消息格式
+
+
+class EmbeddingsRequest(BaseModel):
+    """2025标准向量化接口请求体（对齐OpenAI v1/embeddings风格）"""
+    model: str | None = Field(default=None, description="嵌入模型名称，不填则使用租户默认")
+    input: list[str] | str = Field(..., description="要向量化的文本或文本数组")
+    input_type: str = Field(default="document", description="document|query（部分模型对查询向量有专项优化）")
+    encoding_format: str = Field(default="float", description="float|base64")
+    user: str | None = Field(default=None, description="可选的用户标识")
 
 
 class FinePromptRequest(BaseModel):
@@ -1184,6 +1195,193 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
         return get_json_result(data=res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post('/embeddings', summary="文本向量化服务（2025标准）", response_description="返回OpenAI风格的embedding结果")
+def embeddings_api(request: EmbeddingsRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    ### POST `/v1/llm/embeddings` 文本向量化服务（2025标准）
+
+**功能描述**:
+此接口提供标准化的文本向量化服务。支持按租户默认嵌入模型或显式指定模型进行编码，兼容查询场景与文档场景两类输入，并返回与 OpenAI Embeddings 接口一致的响应结构（object=list, data=[...], model, usage）。
+
+---
+
+### 请求体 (Request Body)
+
+| 字段              | 类型                  | 必填 | 默认值     | 描述                                                                 |
+|-------------------|-----------------------|------|-----------|----------------------------------------------------------------------|
+| `model`           | `string`              | 否   | 租户默认   | 嵌入模型名称；不填则使用当前租户的默认嵌入模型（`Tenant.embd_id`）。 |
+| `input`           | `string or string[]`  | 是   | -         | 待向量化文本；支持单条或批量。                                       |
+| `input_type`      | `string`              | 否   | `document`| `document` 或 `query`；部分模型会对查询向量做专项优化。              |
+| `encoding_format` | `string`              | 否   | `float`   | `float` 返回浮点数组；`base64` 返回 float32 打包后的 base64 字符串。  |
+| `user`            | `string`              | 否   | -         | 可选的用户标识，用于审计或配额统计。                                  |
+
+---
+
+### 请求示例
+
+#### 批量文档向量（返回 float 数组）
+```json
+{
+  "model": "text-embedding-3-small",
+  "input": ["hello world", "multirag"],
+  "input_type": "document",
+  "encoding_format": "float"
+}
+```
+
+#### 单条查询向量（返回 base64 编码）
+```json
+{
+  "model": "text-embedding-3-small",
+  "input": "what is multirag?",
+  "input_type": "query",
+  "encoding_format": "base64"
+}
+```
+
+---
+
+### 成功响应 (Response 200)
+
+#### 返回 float 数组
+```json
+{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [0.0123, -0.0456, 0.0789] },
+    { "object": "embedding", "index": 1, "embedding": [0.0021, -0.0345, 0.0678] }
+  ],
+  "model": "text-embedding-3-small",
+  "usage": { "prompt_tokens": 42, "total_tokens": 42 }
+}
+```
+
+#### 返回 base64 字符串
+```json
+{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": "AAABP0AAAD8..." }
+  ],
+  "model": "text-embedding-3-small",
+  "usage": { "prompt_tokens": 21, "total_tokens": 21 }
+}
+```
+
+---
+
+### 错误响应
+
+- **404: Tenant not found**
+  ```json
+  { "detail": "Tenant not found!" }
+  ```
+
+- **404: Embedding model not available**（模型不可用或未授权）
+  ```json
+  { "detail": "Embedding model not available: <reason>" }
+  ```
+
+- **500: Internal Server Error**（生成向量失败或其他内部错误）
+  ```json
+  { "detail": "Embedding generation failed: <error>" }
+  ```
+
+---
+
+### 主要流程
+
+1. 解析请求体，确定 `model`、`input`、`input_type`、`encoding_format`。
+2. 若未显式指定 `model`，使用当前租户配置的默认嵌入模型。
+3. 根据 `input_type`：
+   - `document` 调用批量 `encode(inputs)`
+   - `query` 单条调用 `encode_queries(text)`；多条查询按条调用以保留模型的查询优化路径
+4. 根据 `encoding_format` 将向量以 `float` 或 `base64(float32)` 的形式返回。
+5. 统一返回 OpenAI 风格响应，包含 `data`、`model` 与 `usage`。
+
+---
+
+### 注意事项
+
+- 若 `input` 为字符串则自动转为单元素数组处理。
+- `usage.prompt_tokens` 与 `usage.total_tokens` 返回底层模型统计的已用 token 数。
+- `base64` 编码采用 float32 打包后再进行 base64 编码，便于网络传输和前端存储。
+    """
+    req = request.model_dump()
+
+    tenants = TenantService.get_info_by(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+    tenant_id = tenants[0]["tenant_id"]
+
+    raw_input = req["input"]
+    inputs = raw_input if isinstance(raw_input, list) else [raw_input]
+    model_name = req.get("model")
+    input_type = (req.get("input_type") or "document").lower()
+    encoding_format = (req.get("encoding_format") or "float").lower()
+
+    try:
+        emb_bundle = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, model_name)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Embedding model not available: {str(e)}")
+
+    try:
+        if input_type == "query":
+            if len(inputs) == 1:
+                vec, used_tokens = emb_bundle.encode_queries(inputs[0])
+                vectors = [vec]
+            else:
+                vectors = []
+                total_tokens = 0
+                for q in inputs:
+                    v, tk = emb_bundle.encode_queries(q)
+                    vectors.append(v)
+                    total_tokens += tk
+                used_tokens = total_tokens
+        else:
+            vectors, used_tokens = emb_bundle.encode(inputs)
+    except Exception as e:
+        logging.exception("Embedding generation failed")
+        raise HTTPException(status_code=500, detail=f"Embedding generation failed: {str(e)}")
+
+    def to_base64(v) -> str:
+        try:
+            seq = v.tolist()
+        except AttributeError:
+            seq = list(v)
+        arr = array('f', [float(x) for x in seq])
+        return base64.b64encode(arr.tobytes()).decode('ascii')
+
+    data_items = []
+    for idx, v in enumerate(vectors):
+        if encoding_format == "base64":
+            embedding_value = to_base64(v)
+        else:
+            try:
+                embedding_value = v.tolist()
+            except AttributeError:
+                embedding_value = [float(x) for x in v]
+        data_items.append({
+            "object": "embedding",
+            "index": idx,
+            "embedding": embedding_value
+        })
+
+    try:
+        used = int(used_tokens)
+    except Exception:
+        used = used_tokens
+
+    result = {
+        "object": "list",
+        "data": data_items,
+        "model": getattr(emb_bundle, "llm_name", model_name) or "",
+        "usage": {"prompt_tokens": used, "total_tokens": used}
+    }
+
+    return get_json_result(data=result)
 
 
 @router.get('/list', summary="列出所有模型", response_description="成功列出所有模型")
