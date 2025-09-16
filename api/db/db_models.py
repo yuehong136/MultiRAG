@@ -715,6 +715,7 @@ class ApiEnvironment(BaseModel):
     tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
     name = Column(String(100), index=True, nullable=False, doc="环境名称")
     description = Column(Text, index=False, nullable=True, doc="环境描述")
+    base_url = Column(String(500), index=True, nullable=False, doc="前置URL/基础URL")
     is_default = Column(Boolean, index=True, nullable=False, default=False, doc="是否默认环境")
     is_global = Column(Boolean, index=True, nullable=False, default=False, doc="是否全局环境")
     status = Column(String(1), index=True, nullable=False, default="1", doc="状态(0:禁用,1:启用)")
@@ -725,6 +726,7 @@ class ApiEnvironment(BaseModel):
             "tenant_id": self.tenant_id,
             "name": self.name,
             "description": self.description,
+            "base_url": self.base_url,
             "is_default": self.is_default,
             "is_global": self.is_global,
             "status": self.status,
