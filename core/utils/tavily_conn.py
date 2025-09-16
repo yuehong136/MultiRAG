@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 import logging
+from typing import Any, Literal
 from tavily import TavilyClient
 from api.utils import get_uuid
 from core.nlp import rag_tokenizer
@@ -23,7 +24,7 @@ class Tavily:
     def __init__(self, api_key: str):
         self.tavily_client = TavilyClient(api_key=api_key)
 
-    def search(self, query):
+    def search(self, query: str) -> list[dict[str, Any]]:
         try:
             response = self.tavily_client.search(
                 query=query,
@@ -36,7 +37,36 @@ class Tavily:
 
         return []
 
-    def retrieve_chunks(self, question):
+    def extract(
+        self,
+        urls: str | list[str],
+        include_images: bool = False,
+        extract_depth: Literal["basic", "advanced"] = "basic",
+        format: Literal["markdown", "text"] = "markdown",
+        timeout: int | None = None,
+        include_favicon: bool = False,
+    ) -> dict[str, Any]:
+        """Thin wrapper around TavilyClient.extract: no local validation, direct passthrough."""
+        try:
+            kwargs = {
+                "urls": urls,
+                "include_images": include_images,
+                "extract_depth": extract_depth,
+                "format": format,
+                "include_favicon": include_favicon,
+            }
+            # 仅在非空时传入 timeout，避免 SDK 内部对 None 执行 min()
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+
+            response = self.tavily_client.extract(**kwargs)
+            return response
+        except Exception as e:
+            logging.exception(e)
+            return {"results": [], "failed_results": [], "response_time": 0.0, "request_id": ""}
+
+
+    def retrieve_chunks(self, question: str) -> dict[str, Any]:
         chunks = []
         aggs = []
         logging.info("[Tavily]Q: " + question)
