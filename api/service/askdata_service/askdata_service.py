@@ -60,10 +60,23 @@ class AskdataService:
                                       userid: str, llm_name: str = None,
                                       event_id: Optional[str] = None, enable_deep_search: bool = False):
 
-        # 1. 先获取dataset_details（只获取一次）
-        dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list)
+        # 1. 第一批并行任务：获取dataset_details和用户权限（完全独立，可以同时开始）
+        dataset_details_task = time_task(
+            self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list),
+            name="获取数据集详情"
+        )
+        user_permissions_task = time_task(
+            self.semantic_api_client.get_user_semantic_permissions_async(
+                userid, dataset_id_list),
+            name="获取用户语义权限"
+        )
 
-        # 2. 定义三个主要的并行任务
+        dataset_details, user_semantic_permissions = await asyncio.gather(
+            dataset_details_task,
+            user_permissions_task
+        )
+
+        # 2. 第二批并行任务：定义三个主要的并行任务（依赖dataset_details）
 
         async def llm_extraction_task():
             """LLM提取语义字段，静默执行，不发送事件"""
@@ -187,14 +200,7 @@ class AskdataService:
 
         all_metric_ids = [metric["metricId"] for metric in all_metrics]
 
-        # 5. 获取用户权限
-        user_semantic_permissions = await time_task(
-            self.semantic_api_client.get_user_semantic_permissions_async(
-                userid, dataset_id_list
-            ),
-            name="获取用户语义权限"
-        )
-
+        # 5. 使用已经获取的用户权限进行过滤
         # 过滤权限
         allowed_dimension_ids, prohibited_dimension_ids = filter_dimensions_by_permissions(
             all_dimension_ids, user_semantic_permissions
