@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from pymilvus import MilvusException
 from sqlalchemy.orm import Session
 from urllib.parse import quote
+from starlette.status import HTTP_415_UNSUPPORTED_MEDIA_TYPE
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, ParserType, FileSource, db_models
@@ -2772,5 +2773,15 @@ async def preview_chunks(
             override_parser_id=req.parser_id,
         )
         return get_json_result(data={"chunks": chunks, "count": len(chunks)})
+    except HTTPException:
+        raise
+    except NotImplementedError as e:
+        response = get_json_result(
+            retcode=HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            retmsg=str(e),
+            data=None
+        )
+        response.status_code = HTTP_415_UNSUPPORTED_MEDIA_TYPE
+        return response
     except Exception as e:
         return get_json_result(retmsg=str(e))
