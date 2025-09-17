@@ -2735,7 +2735,7 @@ async def preview_chunks(
                     override_parser_id=req.parser_id,
                     batch_index=req.batch_index,
                 )
-                return construct_json_result(data=data)
+                return get_json_result(data=data)
             # 非批次模式（文件）
             chunks = DocumentService.preview_file_chunks(
                 db,
@@ -2744,7 +2744,7 @@ async def preview_chunks(
                 parser_config_override=req.parser_config,
                 override_parser_id=req.parser_id,
             )
-            return construct_json_result(data={"chunks": chunks, "count": len(chunks)})
+            return get_json_result(data={"chunks": chunks, "count": len(chunks)})
 
         # 分支二：基于 doc_id
         if not DocumentService.accessible(db, req.doc_id, user.id):
@@ -2763,7 +2763,7 @@ async def preview_chunks(
                 override_parser_id=req.parser_id,
                 batch_index=req.batch_index,
             )
-            return construct_json_result(data=data)
+            return get_json_result(data=data)
         chunks = DocumentService.preview_document_chunks(
             db,
             doc_id=req.doc_id,
@@ -2771,6 +2771,6 @@ async def preview_chunks(
             limit=req.limit,
             override_parser_id=req.parser_id,
         )
-        return construct_json_result(data={"chunks": chunks, "count": len(chunks)})
+        return get_json_result(data={"chunks": chunks, "count": len(chunks)})
     except Exception as e:
-        return construct_error_response(e)
+        return get_json_result(retmsg=str(e))
