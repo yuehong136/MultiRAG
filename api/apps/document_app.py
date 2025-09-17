@@ -20,7 +20,12 @@ from fastapi.responses import StreamingResponse
 from pymilvus import MilvusException
 from sqlalchemy.orm import Session
 from urllib.parse import quote
-from starlette.status import HTTP_415_UNSUPPORTED_MEDIA_TYPE
+from starlette.status import (
+    HTTP_400_BAD_REQUEST,
+    HTTP_404_NOT_FOUND,
+    HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    HTTP_500_INTERNAL_SERVER_ERROR,
+)
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, ParserType, FileSource, db_models
@@ -43,7 +48,7 @@ from core.nlp import search
 from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 router = APIRouter()
 
@@ -2592,6 +2597,15 @@ async def preview_chunks(
 
     #### 错误响应
 
+    - **400: 参数错误 / 解析器不兼容**
+      ```json
+      {
+        "retcode": 101,
+        "retmsg": "Invalid JSON: ... 或 Unsupported parser_id ...",
+        "data": false
+      }
+      ```
+
     - **403: 权限不足**
       ```json
       {
@@ -2601,11 +2615,20 @@ async def preview_chunks(
       }
       ```
 
-    - **404: 文档不存在**（或资源不可用）
+    - **404: 文档或文件缺失**
       ```json
       {
         "retcode": 404,
         "retmsg": "Document not found.",
+        "data": false
+      }
+      ```
+
+    - **415: 文件类型不支持**
+      ```json
+      {
+        "retcode": 415,
+        "retmsg": "file type not supported yet(...)",
         "data": false
       }
       ```
@@ -2698,6 +2721,11 @@ async def preview_chunks(
     - 返回仅包含文本切片；如需图像/表格截图等，请通过其他接口获取对应图片资源。
     - 批次会话存活时间默认 30 分钟；超时将被清理，需重新发起首批请求。
     """
+    def _error_response(retcode: int, retmsg: str, status_code: int, data: Any = False):
+        response = get_json_result(retcode=retcode, retmsg=retmsg, data=data)
+        response.status_code = status_code
+        return response
+
     try:
         # 统一解析请求：multipart 用 request_form，application/json 用 request_body
         if request_form is not None:
@@ -2709,16 +2737,50 @@ async def preview_chunks(
             # 这里直接从原始请求解析 JSON
             try:
                 data = await raw_req.json()
-                req = PreviewChunksRequest.model_validate(data)
+            except json.JSONDecodeError as e:
+                return _error_response(settings.RetCode.ARGUMENT_ERROR, f"Invalid JSON: {e.msg}", HTTP_400_BAD_REQUEST)
             except Exception:
                 req = PreviewChunksRequest()
-        # 参数校验：二选一
-        if file is None and not req.doc_id:
+            else:
+                try:
+                    req = PreviewChunksRequest.model_validate(data)
+                except ValidationError as e:
+                    return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
+                except Exception as e:
+                    return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
+        # 参数校验：二选一，但支持仅 batch_id 续取
+        if file is None and not req.doc_id and not req.batch_id:
             return get_json_result(
                 data=False,
-                retmsg='Either `doc_id` or `file` is required.',
+                retmsg='Either `doc_id` or `file` or `batch_id` is required.',
                 retcode=settings.RetCode.ARGUMENT_ERROR
             )
+
+        # 分支 0：仅 batch_id 续取（不带 doc_id / file）
+        if req.batch_id and file is None and not req.doc_id:
+            # 优先按文档会话续取，不存在则回退到文件会话
+            try:
+                data = DocumentService.preview_document_chunks_batched(
+                    db,
+                    doc_id=None,
+                    parser_config_override=req.parser_config,
+                    batch_size=req.batch_size,
+                    batch_id=req.batch_id,
+                    override_parser_id=req.parser_id,
+                    batch_index=req.batch_index,
+                )
+            except LookupError:
+                data = DocumentService.preview_file_chunks_batched(
+                    db,
+                    filename=None,
+                    file_bytes=None,
+                    parser_config_override=req.parser_config,
+                    batch_size=req.batch_size,
+                    batch_id=req.batch_id,
+                    override_parser_id=req.parser_id,
+                    batch_index=req.batch_index,
+                )
+            return get_json_result(data=data)
 
         # 分支一：直传文件
         if file is not None:
@@ -2776,12 +2838,17 @@ async def preview_chunks(
     except HTTPException:
         raise
     except NotImplementedError as e:
-        response = get_json_result(
-            retcode=HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            retmsg=str(e),
-            data=None
+        return _error_response(
+            HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            str(e),
+            HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            data=False,
         )
-        response.status_code = HTTP_415_UNSUPPORTED_MEDIA_TYPE
-        return response
+    except (LookupError, FileNotFoundError) as e:
+        return _error_response(settings.RetCode.NOT_FOUND, str(e), HTTP_404_NOT_FOUND)
+    except ValueError as e:
+        return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
+    except ValidationError as e:
+        return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
     except Exception as e:
-        return get_json_result(retmsg=str(e))
+        return _error_response(settings.RetCode.SERVER_ERROR, str(e), HTTP_500_INTERNAL_SERVER_ERROR)

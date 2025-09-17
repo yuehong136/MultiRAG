@@ -450,7 +450,7 @@ class DocumentService(CommonService):
     def preview_document_chunks_batched(
         cls,
         db: Session,
-        doc_id: str,
+        doc_id: str | None = None,
         parser_config_override: dict | None = None,
         batch_size: int = 50,
         batch_id: str | None = None,
@@ -466,6 +466,68 @@ class DocumentService(CommonService):
         返回：{"batch_id", "chunks", "count", "total", "has_more"}
         """
         import json
+
+        # 优先：若提供了 batch_id，则尝试恢复会话（支持仅凭 batch_id 续取）
+        session_key = None
+        session = None
+        if batch_id:
+            session_key = f"preview:session:{batch_id}"
+            try:
+                payload = REDIS_CONN.get(session_key)
+                if payload:
+                    session = json.loads(payload)
+            except Exception:
+                session = None
+
+        # 如会话存在且未提供 doc_id，则直接使用会话续取
+        if session and not doc_id:
+            # 规范 batch_size：优先使用请求值，其次会话内保存的 batch_size，最后默认 50
+            try:
+                bs = int(batch_size) if batch_size is not None else int(session.get("batch_size", 50))
+                if bs <= 0:
+                    bs = int(session.get("batch_size", 50)) or 50
+            except Exception:
+                bs = int(session.get("batch_size", 50)) if session.get("batch_size") else 50
+
+            start = int(session.get("offset", 0))
+            total = int(session.get("total", 0))
+            if isinstance(batch_index, int) and batch_index >= 0:
+                start = min(batch_index * bs, total)
+            end = min(start + bs, total)
+            batch = session.get("chunks", [])[start:end]
+            has_more = end < total
+            current_batch_index = (start // bs) if bs > 0 else 0
+            total_batches = (total + bs - 1) // bs if bs > 0 else 0
+
+            # 顺序模式推进 offset；并发批次模式在最后一批时清理会话
+            if batch_index is None:
+                if has_more:
+                    session["offset"] = end
+                    # 确保会话保存 batch_size 以便后续续取沿用
+                    try:
+                        session["batch_size"] = bs
+                    except Exception:
+                        pass
+                    REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
+                else:
+                    REDIS_CONN.delete(session_key)
+            else:
+                if not has_more:
+                    REDIS_CONN.delete(session_key)
+
+            return {
+                "batch_id": batch_id,
+                "chunks": batch,
+                "count": len(batch),
+                "total": total,
+                "has_more": has_more,
+                "batch_index": current_batch_index,
+                "total_batches": total_batches,
+            }
+
+        # 若未能从会话恢复，则必须提供 doc_id 以初始化新会话
+        if not doc_id:
+            raise LookupError("Preview session not found or expired. Please provide doc_id to initialize a new session.")
 
         # 生成会话摘要，确保不同配置/区间/文档变化对应不同会话
         doc = cls.get_by_id(db, doc_id)
@@ -520,25 +582,13 @@ class DocumentService(CommonService):
         hasher.update(str(getattr(doc, "update_time", "")).encode("utf-8"))
         digest = hasher.hexdigest()
 
-        # 规范 batch_size
+        # 规范 batch_size（若已有会话对象，尽量沿用其中的 batch_size）
         try:
             bs = int(batch_size)
             if bs <= 0:
-                bs = 50
+                bs = int(session.get("batch_size", 50)) if session else 50
         except Exception:
-            bs = 50
-
-        # 会话 key
-        session_key = None
-        session = None
-        if batch_id:
-            session_key = f"preview:session:{batch_id}"
-            try:
-                payload = REDIS_CONN.get(session_key)
-                if payload:
-                    session = json.loads(payload)
-            except Exception:
-                session = None
+            bs = int(session.get("batch_size", 50)) if session else 50
 
         # 如果无会话或摘要不匹配，则创建新会话
         if not session or session.get("digest") != digest:
@@ -561,6 +611,7 @@ class DocumentService(CommonService):
                 "total": len(all_chunks),
                 "offset": 0,
                 "chunks": all_chunks,
+                "batch_size": bs,
             }
             REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
 
@@ -781,8 +832,8 @@ class DocumentService(CommonService):
     def preview_file_chunks_batched(
         cls,
         db: Session,
-        filename: str,
-        file_bytes: bytes,
+        filename: str | None = None,
+        file_bytes: bytes | None = None,
         parser_config_override: dict | None = None,
         batch_size: int = 50,
         batch_id: str | None = None,
@@ -794,6 +845,65 @@ class DocumentService(CommonService):
         import json
 
         language = language or "Chinese"
+
+        # 会话恢复优先（支持仅 batch_id 续取）
+        session_key = None
+        session = None
+        if batch_id:
+            session_key = f"preview:file_session:{batch_id}"
+            try:
+                payload = REDIS_CONN.get(session_key)
+                if payload:
+                    session = json.loads(payload)
+            except Exception:
+                session = None
+
+        # 如果有会话且未提供文件，则直接续取
+        if session and (filename is None or file_bytes is None):
+            try:
+                bs = int(batch_size) if batch_size is not None else int(session.get("batch_size", 50))
+                if bs <= 0:
+                    bs = int(session.get("batch_size", 50)) or 50
+            except Exception:
+                bs = int(session.get("batch_size", 50)) if session.get("batch_size") else 50
+
+            start = int(session.get("offset", 0))
+            total = int(session.get("total", 0))
+            if isinstance(batch_index, int) and batch_index >= 0:
+                start = min(batch_index * bs, total)
+            end = min(start + bs, total)
+            batch = session.get("chunks", [])[start:end]
+            has_more = end < total
+            current_batch_index = (start // bs) if bs > 0 else 0
+            total_batches = (total + bs - 1) // bs if bs > 0 else 0
+
+            if batch_index is None:
+                if has_more:
+                    session["offset"] = end
+                    try:
+                        session["batch_size"] = bs
+                    except Exception:
+                        pass
+                    REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
+                else:
+                    REDIS_CONN.delete(session_key)
+            else:
+                if not has_more:
+                    REDIS_CONN.delete(session_key)
+
+            return {
+                "batch_id": batch_id,
+                "chunks": batch,
+                "count": len(batch),
+                "total": total,
+                "has_more": has_more,
+                "batch_index": current_batch_index,
+                "total_batches": total_batches,
+            }
+
+        # 否则需要文件以初始化/重建会话
+        if filename is None or file_bytes is None:
+            raise LookupError("Preview file session not found or expired. Please upload file again to initialize.")
 
         # 合并配置并计算摘要
         module, method = cls._resolve_parser_for_filename(filename, override_parser_id)
@@ -820,25 +930,13 @@ class DocumentService(CommonService):
         hasher.update((method or "").encode("utf-8"))
         digest = hasher.hexdigest()
 
-        # 规范 batch_size
+        # 规范 batch_size（新建会话时保存）
         try:
             bs = int(batch_size)
             if bs <= 0:
                 bs = 50
         except Exception:
             bs = 50
-
-        # 会话恢复
-        session_key = None
-        session = None
-        if batch_id:
-            session_key = f"preview:file_session:{batch_id}"
-            try:
-                payload = REDIS_CONN.get(session_key)
-                if payload:
-                    session = json.loads(payload)
-            except Exception:
-                session = None
 
         if not session or session.get("digest") != digest:
             all_chunks = cls.preview_file_chunks(
@@ -857,6 +955,7 @@ class DocumentService(CommonService):
                 "total": len(all_chunks),
                 "offset": 0,
                 "chunks": all_chunks,
+                "batch_size": bs,
             }
             REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
 
@@ -870,7 +969,7 @@ class DocumentService(CommonService):
         current_batch_index = (start // bs) if bs > 0 else 0
         total_batches = (total + bs - 1) // bs if bs > 0 else 0
 
-        # 同样：顺序模式推进 offset；并发批次模式在最后一批时清理会话
+        # 顺序/并发模式会话推进
         if batch_index is None:
             if has_more:
                 session["offset"] = end
