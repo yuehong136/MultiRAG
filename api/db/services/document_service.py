@@ -457,6 +457,7 @@ class DocumentService(CommonService):
         session_ttl: int = 1800,
         override_parser_id: str | None = None,
         batch_index: int | None = None,
+        tenant_id: str | None = None,
     ) -> dict:
         """
         仅切片预览的批次化接口：
@@ -753,6 +754,7 @@ class DocumentService(CommonService):
         parser_config_override: dict | None = None,
         override_parser_id: str | None = None,
         language: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[str]:
         """
         仅对上传文件执行切片预览，不落库、不向量化。
@@ -808,7 +810,7 @@ class DocumentService(CommonService):
             lang=language,
             callback=_noop,
             parser_config=base_cfg or {},
-            # 不传 tenant_id，解析器内部会降级跳过视觉增强等
+            tenant_id=tenant_id,
         )
 
         # 统一为文本列表
@@ -841,6 +843,7 @@ class DocumentService(CommonService):
         override_parser_id: str | None = None,
         language: str | None = None,
         batch_index: int | None = None,
+        tenant_id: str | None = None,
     ) -> dict:
         import json
 
@@ -860,6 +863,8 @@ class DocumentService(CommonService):
 
         # 如果有会话且未提供文件，则直接续取
         if session and (filename is None or file_bytes is None):
+            if tenant_id and session.get("tenant_id") not in (None, tenant_id):
+                raise LookupError("Preview file session not found or expired for current tenant.")
             try:
                 bs = int(batch_size) if batch_size is not None else int(session.get("batch_size", 50))
                 if bs <= 0:
@@ -928,6 +933,8 @@ class DocumentService(CommonService):
             hasher.update(str(base_cfg).encode("utf-8"))
         hasher.update((language or "").encode("utf-8"))
         hasher.update((method or "").encode("utf-8"))
+        if tenant_id:
+            hasher.update(str(tenant_id).encode("utf-8"))
         digest = hasher.hexdigest()
 
         # 规范 batch_size（新建会话时保存）
@@ -946,6 +953,7 @@ class DocumentService(CommonService):
                 parser_config_override=base_cfg,
                 override_parser_id=override_parser_id,
                 language=language,
+                tenant_id=tenant_id,
             )
             batch_id = get_uuid()
             session_key = f"preview:file_session:{batch_id}"
@@ -956,6 +964,7 @@ class DocumentService(CommonService):
                 "offset": 0,
                 "chunks": all_chunks,
                 "batch_size": bs,
+                "tenant_id": tenant_id,
             }
             REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
 

@@ -2748,7 +2748,7 @@ async def preview_chunks(
                     return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
                 except Exception as e:
                     return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
-        # 参数校验：二选一，但支持仅 batch_id 续取
+        # 参数校验：支持 doc_id、文件上传或批次续取
         if file is None and not req.doc_id and not req.batch_id:
             return get_json_result(
                 data=False,
@@ -2756,56 +2756,41 @@ async def preview_chunks(
                 retcode=settings.RetCode.ARGUMENT_ERROR
             )
 
-        # 分支 0：仅 batch_id 续取（不带 doc_id / file）
-        if req.batch_id and file is None and not req.doc_id:
-            # 优先按文档会话续取，不存在则回退到文件会话
-            try:
-                data = DocumentService.preview_document_chunks_batched(
+        # 分支一：文件预览（直传或批次续取）
+        if not req.doc_id:
+            # 批次模式（首次或续取）
+            if req.batch_size or req.batch_id:
+                file_bytes = await file.read() if file is not None else None
+                filename = file.filename or "uploaded" if file is not None else None
+                data = DocumentService.preview_file_chunks_batched(
                     db,
-                    doc_id=None,
+                    filename=filename,
+                    file_bytes=file_bytes,
                     parser_config_override=req.parser_config,
                     batch_size=req.batch_size,
                     batch_id=req.batch_id,
                     override_parser_id=req.parser_id,
                     batch_index=req.batch_index,
-                )
-            except LookupError:
-                data = DocumentService.preview_file_chunks_batched(
-                    db,
-                    filename=None,
-                    file_bytes=None,
-                    parser_config_override=req.parser_config,
-                    batch_size=req.batch_size,
-                    batch_id=req.batch_id,
-                    override_parser_id=req.parser_id,
-                    batch_index=req.batch_index,
-                )
-            return get_json_result(data=data)
-
-        # 分支一：直传文件
-        if file is not None:
-            content = await file.read()
-            filename = file.filename or "uploaded"
-            # 批次模式（文件）
-            if req.batch_size:
-                data = DocumentService.preview_file_chunks_batched(
-                    db,
-                    filename,
-                    content,
-                    parser_config_override=req.parser_config,
-                    batch_size=req.batch_size or 50,
-                    batch_id=req.batch_id,
-                    override_parser_id=req.parser_id,
-                    batch_index=req.batch_index,
+                    tenant_id=user.id,
                 )
                 return get_json_result(data=data)
-            # 非批次模式（文件）
+
+            if file is None:
+                return get_json_result(
+                    data=False,
+                    retmsg='Either supply `file` for preview or provide `batch_id/batch_size` for batch mode.',
+                    retcode=settings.RetCode.ARGUMENT_ERROR
+                )
+
+            file_bytes = await file.read()
+            filename = file.filename or "uploaded"
             chunks = DocumentService.preview_file_chunks(
                 db,
                 filename,
-                content,
+                file_bytes,
                 parser_config_override=req.parser_config,
                 override_parser_id=req.parser_id,
+                tenant_id=user.id,
             )
             return get_json_result(data={"chunks": chunks, "count": len(chunks)})
 
@@ -2816,7 +2801,7 @@ async def preview_chunks(
                 retmsg='No authorization.',
                 retcode=settings.RetCode.AUTHENTICATION_ERROR
             )
-        if req.batch_size:
+        if req.batch_size or req.batch_id:
             data = DocumentService.preview_document_chunks_batched(
                 db,
                 doc_id=req.doc_id,
