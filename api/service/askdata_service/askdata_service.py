@@ -270,6 +270,8 @@ class AskdataService:
         await send_event(event_id, {"message": "获取模型信息", "action": "complete"}, "message")
         await send_event(event_id, {"message": "模型信息", "data": model_mappings}, "data")
 
+        domain_ids = self._extract_unique_domain_ids(dataset_details)
+
         model_details_task = time_task(
             self.semantic_api_client.get_model_detail_async(model_ids=model_ids),
             name="获取模型详情"
@@ -278,17 +280,17 @@ class AskdataService:
             self.semantic_api_client.get_model_relationships_async(model_ids=model_ids),
             name="获取模型关系"
         )
-
-        model_details, model_relations = await asyncio.gather(
-            model_details_task,
-            model_relations_task
+        business_term_task = time_task(
+            self.semantic_api_client.get_business_term_info_async(
+                keyword=segmented_words,
+                domain_ids=domain_ids),
+            name="获取业务术语"
         )
 
-        # 8. 获取业务术语
-        domain_ids = self._extract_unique_domain_ids(dataset_details)
-        business_term_rows = await self.semantic_api_client.get_business_term_info_async(
-            keyword=segmented_words,
-            domain_ids=domain_ids
+        model_details, model_relations, business_term_rows = await asyncio.gather(
+            model_details_task,
+            model_relations_task,
+            business_term_task
         )
 
         # 9. 构建最终的语义层
