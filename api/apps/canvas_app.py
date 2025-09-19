@@ -505,7 +505,7 @@ def getversion(version_id: str, db: Session = Depends(get_db), user=Depends(mana
 
 
 @router.get("/listteam", summary="获取团队/共享空间下的 Canvas")
-def list_kbs(
+def list_canvas(
     keywords: str = Query("", description="关键词"),
     page: int = Query(1, ge=1),
     page_size: int = Query(150, ge=1, le=500),
@@ -517,7 +517,7 @@ def list_kbs(
     try:
         tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
         tenant_ids = [m["tenant_id"] for m in tenants]
-        kbs, total = UserCanvasService.get_by_tenant_ids(
+        canvas, total = UserCanvasService.get_by_tenant_ids(
             db,
             tenant_ids,
             user.id,
@@ -527,7 +527,7 @@ def list_kbs(
             desc,
             keywords
         )
-        return get_json_result(data={"kbs": kbs, "total": total})
+        return get_json_result(data={"canvas": canvas, "total": total})
     except Exception as e:
         return server_error_response(e)
 
