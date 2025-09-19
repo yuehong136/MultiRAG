@@ -344,7 +344,11 @@ async def build_chunks(task, progress_callback, db: Session):
                         converted_image = d["image"].convert("RGB")
                         d["image"].close()  # Close original image
                         d["image"] = converted_image
-                    d["image"].save(output_buffer, format='JPEG')
+                    try:
+                        d["image"].save(output_buffer, format='JPEG')
+                    except OSError as e:
+                        logging.warning(
+                            "Saving image of chunk {}/{}/{} got exception, ignore: {}".format(task["location"], task["name"], d["id"], str(e)))
 
                 async with minio_limiter:
                     await trio.to_thread.run_sync(
