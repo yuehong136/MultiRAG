@@ -206,7 +206,7 @@ class ChatAgentAdapter:
 
                 # 直接调用Agent的_react_with_tools_streamly方法，监控工具调用
                 previous_tool_count = 0
-                for delta_ans, _ in self.agent._react_with_tools_streamly(msg, use_tools):
+                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools):
                     # 检查是否有新的工具调用
                     if len(use_tools) > previous_tool_count:
                         # 显示新的工具调用
@@ -303,7 +303,7 @@ class ChatAgentAdapter:
                 previous_tool_count = 0
                 call_id_counter = 0
                 
-                for delta_ans, _ in self.agent._react_with_tools_streamly(msg, use_tools):
+                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools):
                     # 检查是否有新的工具调用
                     if len(use_tools) > previous_tool_count:
                         new_tools = use_tools[previous_tool_count:]
