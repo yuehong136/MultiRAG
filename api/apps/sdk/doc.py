@@ -141,8 +141,8 @@ async def upload_documents(
         if len(file_obj.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
             return get_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=settings.RetCode.ARGUMENT_ERROR)
     
-    e, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not e:
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
         raise HTTPException(status_code=404, detail=f"Can't find the dataset with ID {dataset_id}!")
     
     err, uploaded_files = FileService.upload_document(db, kb, files, tenant_id)
