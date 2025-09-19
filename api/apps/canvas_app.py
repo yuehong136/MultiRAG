@@ -13,11 +13,8 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
-    Form,
     Header,
-    HTTPException,
     Query,
-    Request,
     UploadFile
 )
 from fastapi.responses import StreamingResponse
@@ -36,14 +33,13 @@ from api.db.services.canvas_service import (
 from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.user_canvas_version import UserCanvasVersionService
-from api.db.services.user_service import TenantService, UserTenantService
+from api.db.services.user_service import TenantService
 from api.settings import RetCode
 from api.utils import get_uuid
 from api.utils.api_utils import (
     get_json_result,
     get_data_error_result,
-    server_error_response,
-    get_error_data_result
+    server_error_response
 )
 from api.utils.file_utils import filename_type, read_potential_broken_pdf
 from core.utils.redis_conn import REDIS_CONN
