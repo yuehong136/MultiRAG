@@ -31,11 +31,11 @@ from api.db import FileType
 from api.db.services.canvas_service import (
     CanvasTemplateService,
     UserCanvasService,
-    # UserCanvasVersionService,
     API4ConversationService
 )
 from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
+from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.settings import RetCode
 from api.utils import get_uuid
@@ -124,6 +124,7 @@ def templates(db: Session = Depends(get_db), user=Depends(manager)):
     except Exception as e:
         return server_error_response(e)
 
+
 @router.get("/list", summary="获取我的Canvas列表")
 def canvas_list(db: Session = Depends(get_db), user=Depends(manager)):
     try:
@@ -133,11 +134,12 @@ def canvas_list(db: Session = Depends(get_db), user=Depends(manager)):
     except Exception as e:
         return server_error_response(e)
 
+
 @router.post("/rm", summary="删除Canvas（批量）")
 def rm(request: RemoveCanvasRequest, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         for cid in request.canvas_ids:
-            if not UserCanvasService.query(db, user_id=user.id, id=cid):
+            if not UserCanvasService.accessible(db, cid, tenant_id=user.id):
                 return get_json_result(
                     data=False,
                     retmsg="Only owner of canvas authorized for this operation.",
@@ -147,6 +149,7 @@ def rm(request: RemoveCanvasRequest, db: Session = Depends(get_db), user=Depends
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
+
 
 @router.post("/set", summary="创建/更新 Canvas")
 def save(request: SetCanvasRequest, db: Session = Depends(get_db), user=Depends(manager)):
@@ -167,7 +170,7 @@ def save(request: SetCanvasRequest, db: Session = Depends(get_db), user=Depends(
                 return get_data_error_result(retmsg="Fail to save canvas.")
         else:
             # 更新
-            if not UserCanvasService.query(db, user_id=user.id, id=req["id"]):
+            if not UserCanvasService.accessible(db, req["id"], user.id):
                 return get_json_result(
                     data=False,
                     retmsg="Only owner of canvas authorized for this operation.",
@@ -189,13 +192,14 @@ def save(request: SetCanvasRequest, db: Session = Depends(get_db), user=Depends(
     except Exception as e:
         return server_error_response(e)
 
+
 @router.get("/get/{canvas_id}", summary="获取 Canvas 详情")
 def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    e, c = UserCanvasService.get_by_tenant_id(db, canvas_id)
-    tids = [t.tenant_id for t in UserTenantService.query(db, user_id=user.id)]
-    if not e or (c["user_id"] != user.id and c["user_id"]  not in tids):
+    if not UserCanvasService.accessible(db, canvas_id, user.id):
         return get_data_error_result(retmsg="canvas not found.")
+    e, c = UserCanvasService.get_by_tenant_id(db, canvas_id)
     return get_json_result(data=c)
+
 
 @router.get("/getsse/{canvas_id}", summary="SSE获取（供外部token使用）")
 def getsse(
@@ -221,6 +225,7 @@ def getsse(
     except Exception as e:
         return server_error_response(e)
 
+
 @router.post("/completion", summary="运行 Canvas（SSE）")
 def run(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     try:
@@ -233,12 +238,17 @@ def run(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(
         e, cvs = UserCanvasService.get_by_id(db, req["id"])
         if not e:
             return get_data_error_result(retmsg="canvas not found.")
-        if not UserCanvasService.query(db, user_id=user.id, id=req["id"]):
+
+        if not UserCanvasService.accessible(db, req["id"], user.id):
             return get_json_result(
                 data=False,
                 retmsg="Only owner of canvas authorized for this operation.",
                 retcode=RetCode.OPERATING_ERROR
             )
+
+        e, cvs = UserCanvasService.get_by_id(db, req["id"])
+        if not e:
+            return get_data_error_result(retmsg="canvas not found.")
 
         dsl_str = cvs.dsl if isinstance(cvs.dsl, str) else json.dumps(cvs.dsl, ensure_ascii=False)
 
@@ -270,18 +280,18 @@ def run(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(
     except Exception as e:
         return server_error_response(e)
 
+
 @router.post("/reset", summary="重置 Canvas 状态")
 def reset(request: ResetRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    if not UserCanvasService.accessible(db, request.id, user.id):
+        return get_json_result(
+            data=False, retmsg='Only owner of canvas authorized for this operation.',
+            retcode=RetCode.OPERATING_ERROR)
     try:
         e, user_canvas = UserCanvasService.get_by_id(db, request.id)
         if not e:
             return get_data_error_result(retmsg="canvas not found.")
-        if not UserCanvasService.query(db, user_id=user.id, id=request.id):
-            return get_json_result(
-                data=False,
-                retmsg="Only owner of canvas authorized for this operation.",
-                retcode=RetCode.OPERATING_ERROR
-            )
+
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id)
         canvas.reset()
         new_dsl = json.loads(str(canvas))
@@ -289,6 +299,7 @@ def reset(request: ResetRequest, db: Session = Depends(get_db), user=Depends(man
         return get_json_result(data=new_dsl)
     except Exception as e:
         return server_error_response(e)
+
 
 @router.post("/upload/{canvas_id}", summary="上传文件/URL到 Canvas")
 async def upload(
@@ -373,6 +384,7 @@ async def upload(
     except Exception as e:
         return server_error_response(e)
 
+
 @router.get("/input_form", summary="获取组件输入表单描述")
 def input_form(
     id: str = Query(..., description="canvas id"),
@@ -396,19 +408,15 @@ def input_form(
     except Exception as e:
         return server_error_response(e)
 
+
 @router.post("/debug", summary="组件调试执行")
 def debug(request: DebugRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    if not UserCanvasService.accessible(db, request.id, user.id):
+        return get_json_result(
+            data=False, retmsg='Only owner of canvas authorized for this operation.',
+            retcode=RetCode.OPERATING_ERROR)
     try:
         e, user_canvas = UserCanvasService.get_by_id(db, request.id)
-        if not e:
-            return get_data_error_result(retmsg="canvas not found.")
-        if not UserCanvasService.query(db, user_id=user.id, id=request.id):
-            return get_json_result(
-                data=False,
-                retmsg="Only owner of canvas authorized for this operation.",
-                retcode=RetCode.OPERATING_ERROR
-            )
-
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id)
         canvas.reset()
         canvas.message_id = get_uuid()
@@ -431,6 +439,7 @@ def debug(request: DebugRequest, db: Session = Depends(get_db), user=Depends(man
         return get_json_result(data=outputs)
     except Exception as e:
         return server_error_response(e)
+
 
 @router.post("/test_db_connect", summary="测试数据库连通性")
 def test_db_connect(request: TestDBConnectRequest, user=Depends(manager)):
@@ -475,6 +484,7 @@ def test_db_connect(request: TestDBConnectRequest, user=Depends(manager)):
     except Exception as e:
         return server_error_response(e)
 
+
 @router.get("/getlistversion/{canvas_id}", summary="获取 Canvas 版本列表")
 def getlistversion(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
@@ -486,6 +496,7 @@ def getlistversion(canvas_id: str, db: Session = Depends(get_db), user=Depends(m
     except Exception as e:
         return get_data_error_result(retmsg=f"Error getting history files: {e}")
 
+
 @router.get("/getversion/{version_id}", summary="获取指定版本")
 def getversion(version_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
@@ -495,6 +506,7 @@ def getversion(version_id: str, db: Session = Depends(get_db), user=Depends(mana
         return get_json_result(data=None)
     except Exception as e:
         return get_json_result(data=f"Error getting history file: {e}")
+
 
 @router.get("/listteam", summary="获取团队/共享空间下的 Canvas")
 def list_kbs(
@@ -523,11 +535,18 @@ def list_kbs(
     except Exception as e:
         return server_error_response(e)
 
+
 @router.post("/setting", summary="更新 Canvas 基本设置")
 def setting(request: SettingRequest, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         req = request.model_dump()
         req["user_id"] = user.id
+
+        if not UserCanvasService.accessible(db, req["id"], user.id):
+            return get_json_result(
+                data=False, retmsg='Only owner of canvas authorized for this operation.',
+                retcode=RetCode.OPERATING_ERROR)
+
         e, flow = UserCanvasService.get_by_id(db, req["id"])
         if not e:
             return get_data_error_result(retmsg="canvas not found.")
@@ -540,16 +559,11 @@ def setting(request: SettingRequest, db: Session = Depends(get_db), user=Depends
         if req.get("avatar"):
             flow_dict["avatar"] = req["avatar"]
 
-        if not UserCanvasService.query(db, user_id=user.id, id=req["id"]):
-            return get_json_result(
-                data=False,
-                retmsg="Only owner of canvas authorized for this operation.",
-                retcode=RetCode.OPERATING_ERROR
-            )
         num = UserCanvasService.update_by_id(db, req["id"], flow_dict)
         return get_json_result(data=num)
     except Exception as e:
         return server_error_response(e)
+
 
 @router.get("/trace", summary="获取运行链路追踪日志")
 def trace(
@@ -565,6 +579,7 @@ def trace(
     except Exception as e:
         logging.exception(e)
         return server_error_response(e)
+
 
 @router.get("/{canvas_id}/sessions", summary="分页获取会话记录")
 def sessions(
@@ -583,8 +598,10 @@ def sessions(
 ):
     try:
         tenant_id = user.id
-        if not UserCanvasService.query(db, user_id=tenant_id, id=canvas_id):
-            return get_error_data_result(retmsg=f"You don't own the agent {canvas_id}.")
+        if not UserCanvasService.accessible(db, canvas_id, tenant_id):
+            return get_json_result(
+                data=False, retmsg='Only owner of canvas authorized for this operation.',
+                retcode=RetCode.OPERATING_ERROR)
 
         include_dsl = dsl  # 与原逻辑一致：除 false/False 外均为 True
         total, sess = API4ConversationService.get_list(

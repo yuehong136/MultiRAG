@@ -482,6 +482,7 @@ class Task(BaseModel):
     chunk_ids = Column(Text, index=False, nullable=True, default="", doc="chunk ids")
     priority = Column(Integer, index=False, nullable=False, default=0)
 
+
 class Dialog(BaseModel):
     __tablename__ = "t_ai_dialogs"
     __table_args__ = {"schema": "usr_ai"}
@@ -969,6 +970,18 @@ class SensitiveFilterStats(BaseModel):
             "create_time": self.create_time,
             "update_time": self.update_time
         }
+
+
+class UserCanvasVersion(BaseModel):
+    __tablename__ = "t_ai_user_canvas_version"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    user_canvas_id = Column(String(255), index=True, nullable=False, doc="user_canvas_id")
+
+    title = Column(String(255), index=False, nullable=True, doc="Canvas title")
+    description = Column(Text, index=False, nullable=True, doc="Canvas description")
+    dsl = Column(JSONB, index=False, nullable=True, default={})
 
 
 class MCPServer(BaseModel):
