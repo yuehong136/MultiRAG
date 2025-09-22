@@ -114,6 +114,7 @@ async def create_environment(
     
     可以同时创建环境和关联的变量：
     - 环境名称在同一用户下必须唯一
+    - base_url: 可选的前置URL，如 https://api.example.com
     - 如果设为默认环境，会自动取消其他环境的默认状态
     - 变量名在同一环境下必须唯一
     """

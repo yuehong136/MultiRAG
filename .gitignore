@@ -198,3 +198,6 @@ dist
 
 # SvelteKit build / generate output
 .svelte-kit
+
+# warp
+WARP.md

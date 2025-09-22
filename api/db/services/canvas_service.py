@@ -243,11 +243,24 @@ class UserCanvasService(SACommonService):
         rows = db.execute(stmt).mappings().all()
         return [dict(r) for r in rows], total
 
+    @classmethod
+    def accessible(cls, db: Session, canvas_id: str, tenant_id: str) -> bool:
+        """Check whether the given tenant can access the canvas."""
+        from api.db.services.user_service import UserTenantService
+
+        exists, canvas = UserCanvasService.get_by_tenant_id(db, canvas_id)
+        if not exists or not canvas:
+            return False
+
+        tenant_ids = [t.tenant_id for t in UserTenantService.query(db=db, user_id=tenant_id)]
+        if canvas["user_id"] != canvas_id and canvas["user_id"] not in tenant_ids:
+            return False
+        return True
+
 
 # ---------------------------
 # 推理流程（SSE / OpenAI 兼容）
 # ---------------------------
-
 def completion(
     db: Session,
     tenant_id: str,

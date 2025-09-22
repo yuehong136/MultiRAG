@@ -7,7 +7,7 @@
 @desc: 环境管理相关模型定义
 """
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from datetime import datetime
 
@@ -23,7 +23,7 @@ class EnvironmentVariableBase(BaseModel):
     """环境变量基础模型"""
     key_name: str = Field(..., description="变量名", min_length=1, max_length=100)
     key_value: str = Field(..., description="变量值")
-    description: Optional[str] = Field(None, description="变量描述")
+    description: str | None = Field(None, description="变量描述")
     is_secret: bool = Field(False, description="是否敏感信息")
     variable_type: VariableType = Field(VariableType.STRING, description="变量类型")
 
@@ -43,11 +43,11 @@ class EnvironmentVariableCreate(EnvironmentVariableBase):
 
 class EnvironmentVariableUpdate(BaseModel):
     """更新环境变量请求模型"""
-    key_name: Optional[str] = Field(None, description="变量名", min_length=1, max_length=100)
-    key_value: Optional[str] = Field(None, description="变量值")
-    description: Optional[str] = Field(None, description="变量描述")
-    is_secret: Optional[bool] = Field(None, description="是否敏感信息")
-    variable_type: Optional[VariableType] = Field(None, description="变量类型")
+    key_name: str | None = Field(None, description="变量名", min_length=1, max_length=100)
+    key_value: str | None = Field(None, description="变量值")
+    description: str | None = Field(None, description="变量描述")
+    is_secret: bool | None = Field(None, description="是否敏感信息")
+    variable_type: VariableType | None = Field(None, description="变量类型")
 
 
 class EnvironmentVariableResponse(EnvironmentVariableBase):
@@ -66,9 +66,24 @@ class EnvironmentVariableResponse(EnvironmentVariableBase):
 class EnvironmentBase(BaseModel):
     """环境基础模型"""
     name: str = Field(..., description="环境名称", min_length=1, max_length=100)
-    description: Optional[str] = Field(None, description="环境描述")
+    description: str | None = Field(None, description="环境描述")
+    base_url: str | None = Field(None, description="前置URL/基础URL", max_length=500)
     is_default: bool = Field(False, description="是否默认环境")
     is_global: bool = Field(False, description="是否全局环境")
+
+    @field_validator('base_url')
+    @classmethod
+    def validate_base_url(cls, v: str | None) -> str | None:
+        """验证基础URL格式"""
+        if v is not None and v.strip():
+            v = v.strip()
+            # 简单的URL格式验证
+            if not (v.startswith('http://') or v.startswith('https://') or v.startswith('{{') or '://' in v):
+                raise ValueError("base_url必须是有效的URL格式，如: https://api.example.com 或包含变量 {{baseUrl}}")
+            # 移除末尾的斜杠以保持一致性
+            if v.endswith('/') and not v.endswith('://'):
+                v = v.rstrip('/')
+        return v
 
 
 class EnvironmentCreate(EnvironmentBase):
@@ -78,9 +93,10 @@ class EnvironmentCreate(EnvironmentBase):
 
 class EnvironmentUpdate(BaseModel):
     """更新环境请求模型"""
-    name: Optional[str] = Field(None, description="环境名称", min_length=1, max_length=100)
-    description: Optional[str] = Field(None, description="环境描述")
-    is_default: Optional[bool] = Field(None, description="是否默认环境")
+    name: str | None = Field(None, description="环境名称", min_length=1, max_length=100)
+    description: str | None = Field(None, description="环境描述")
+    base_url: str | None = Field(None, description="前置URL/基础URL", max_length=500)
+    is_default: bool | None = Field(None, description="是否默认环境")
 
 
 class EnvironmentListResponse(EnvironmentBase):
@@ -136,8 +152,8 @@ class VariableResolveResponse(BaseModel):
 class GlobalEnvironmentBase(BaseModel):
     """全局环境基础模型"""
     name: str = Field(..., description="环境名称", min_length=1, max_length=100)
-    description: Optional[str] = Field(None, description="环境描述")
-    server_url: Optional[str] = Field(None, description="服务器URL")
+    description: str | None = Field(None, description="环境描述")
+    server_url: str | None = Field(None, description="服务器URL")
     variables: dict[str, Any] = Field(default_factory=dict, description="预设变量")
     is_active: bool = Field(True, description="是否启用")
 
@@ -158,8 +174,8 @@ class EnvironmentQueryParams(BaseModel):
     """环境查询参数模型"""
     page: int = Field(1, description="页码", ge=1)
     page_size: int = Field(20, description="每页数量", ge=1, le=100)
-    search: Optional[str] = Field(None, description="搜索关键字")
-    is_default: Optional[bool] = Field(None, description="筛选默认环境")
+    search: str | None = Field(None, description="搜索关键字")
+    is_default: bool | None = Field(None, description="筛选默认环境")
 
 
 class PaginatedEnvironmentResponse(BaseModel):

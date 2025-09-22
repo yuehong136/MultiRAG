@@ -7,11 +7,14 @@
 @desc:
 """
 import asyncio
+import threading
 import logging
 import json
 import re
 from datetime import datetime
 from typing import Any
+import base64
+from array import array
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
@@ -203,7 +206,7 @@ class ChatAgentAdapter:
 
                 # 直接调用Agent的_react_with_tools_streamly方法，监控工具调用
                 previous_tool_count = 0
-                for delta_ans, _ in self.agent._react_with_tools_streamly(msg, use_tools):
+                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools):
                     # 检查是否有新的工具调用
                     if len(use_tools) > previous_tool_count:
                         # 显示新的工具调用
@@ -300,7 +303,7 @@ class ChatAgentAdapter:
                 previous_tool_count = 0
                 call_id_counter = 0
                 
-                for delta_ans, _ in self.agent._react_with_tools_streamly(msg, use_tools):
+                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools):
                     # 检查是否有新的工具调用
                     if len(use_tools) > previous_tool_count:
                         new_tools = use_tools[previous_tool_count:]
@@ -495,6 +498,15 @@ class ChatRequest(BaseModel):
     structured_output: bool = False  # 是否使用结构化的SSE消息格式
 
 
+class EmbeddingsRequest(BaseModel):
+    """2025标准向量化接口请求体（对齐OpenAI v1/embeddings风格）"""
+    model: str | None = Field(default=None, description="嵌入模型名称，不填则使用租户默认")
+    input: list[str] | str = Field(..., description="要向量化的文本或文本数组")
+    input_type: str = Field(default="document", description="document|query（部分模型对查询向量有专项优化）")
+    encoding_format: str = Field(default="float", description="float|base64")
+    user: str | None = Field(default=None, description="可选的用户标识")
+
+
 class FinePromptRequest(BaseModel):
     prompt: str
     llm_name: str
@@ -516,7 +528,7 @@ class CandidateForm(BaseModel):
 
 
 class RecognizeIntentRequest(BaseModel):
-    user_text: str = Field(..., max_length=900, description="用户的自然语言输入")
+    user_text: str = Field(..., description="用户的自然语言输入")
     candidate_forms: list[CandidateForm] = Field(
         ..., description="候选表单列表，建议 ≤ 10 个"
     )
@@ -542,7 +554,7 @@ class FieldMeta(BaseModel):
 
 
 class FillFieldsRequest(BaseModel):
-    user_text: str = Field(..., max_length=900, description="用户的自然语言输入")
+    user_text: str = Field(..., description="用户的自然语言输入")
     fields: list[FieldMeta]
     llm_name: str = Field(..., description="调用的对话模型名称")
     gen_conf: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0.0})
@@ -1184,6 +1196,193 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
         return get_json_result(data=res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post('/embeddings', summary="文本向量化服务（2025标准）", response_description="返回OpenAI风格的embedding结果")
+def embeddings_api(request: EmbeddingsRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    ### POST `/v1/llm/embeddings` 文本向量化服务（2025标准）
+
+**功能描述**:
+此接口提供标准化的文本向量化服务。支持按租户默认嵌入模型或显式指定模型进行编码，兼容查询场景与文档场景两类输入，并返回与 OpenAI Embeddings 接口一致的响应结构（object=list, data=[...], model, usage）。
+
+---
+
+### 请求体 (Request Body)
+
+| 字段              | 类型                  | 必填 | 默认值     | 描述                                                                 |
+|-------------------|-----------------------|------|-----------|----------------------------------------------------------------------|
+| `model`           | `string`              | 否   | 租户默认   | 嵌入模型名称；不填则使用当前租户的默认嵌入模型（`Tenant.embd_id`）。 |
+| `input`           | `string or string[]`  | 是   | -         | 待向量化文本；支持单条或批量。                                       |
+| `input_type`      | `string`              | 否   | `document`| `document` 或 `query`；部分模型会对查询向量做专项优化。              |
+| `encoding_format` | `string`              | 否   | `float`   | `float` 返回浮点数组；`base64` 返回 float32 打包后的 base64 字符串。  |
+| `user`            | `string`              | 否   | -         | 可选的用户标识，用于审计或配额统计。                                  |
+
+---
+
+### 请求示例
+
+#### 批量文档向量（返回 float 数组）
+```json
+{
+  "model": "text-embedding-3-small",
+  "input": ["hello world", "multirag"],
+  "input_type": "document",
+  "encoding_format": "float"
+}
+```
+
+#### 单条查询向量（返回 base64 编码）
+```json
+{
+  "model": "text-embedding-3-small",
+  "input": "what is multirag?",
+  "input_type": "query",
+  "encoding_format": "base64"
+}
+```
+
+---
+
+### 成功响应 (Response 200)
+
+#### 返回 float 数组
+```json
+{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [0.0123, -0.0456, 0.0789] },
+    { "object": "embedding", "index": 1, "embedding": [0.0021, -0.0345, 0.0678] }
+  ],
+  "model": "text-embedding-3-small",
+  "usage": { "prompt_tokens": 42, "total_tokens": 42 }
+}
+```
+
+#### 返回 base64 字符串
+```json
+{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": "AAABP0AAAD8..." }
+  ],
+  "model": "text-embedding-3-small",
+  "usage": { "prompt_tokens": 21, "total_tokens": 21 }
+}
+```
+
+---
+
+### 错误响应
+
+- **404: Tenant not found**
+  ```json
+  { "detail": "Tenant not found!" }
+  ```
+
+- **404: Embedding model not available**（模型不可用或未授权）
+  ```json
+  { "detail": "Embedding model not available: <reason>" }
+  ```
+
+- **500: Internal Server Error**（生成向量失败或其他内部错误）
+  ```json
+  { "detail": "Embedding generation failed: <error>" }
+  ```
+
+---
+
+### 主要流程
+
+1. 解析请求体，确定 `model`、`input`、`input_type`、`encoding_format`。
+2. 若未显式指定 `model`，使用当前租户配置的默认嵌入模型。
+3. 根据 `input_type`：
+   - `document` 调用批量 `encode(inputs)`
+   - `query` 单条调用 `encode_queries(text)`；多条查询按条调用以保留模型的查询优化路径
+4. 根据 `encoding_format` 将向量以 `float` 或 `base64(float32)` 的形式返回。
+5. 统一返回 OpenAI 风格响应，包含 `data`、`model` 与 `usage`。
+
+---
+
+### 注意事项
+
+- 若 `input` 为字符串则自动转为单元素数组处理。
+- `usage.prompt_tokens` 与 `usage.total_tokens` 返回底层模型统计的已用 token 数。
+- `base64` 编码采用 float32 打包后再进行 base64 编码，便于网络传输和前端存储。
+    """
+    req = request.model_dump()
+
+    tenants = TenantService.get_info_by(db, user.id)
+    if not tenants:
+        raise HTTPException(status_code=404, detail="Tenant not found!")
+    tenant_id = tenants[0]["tenant_id"]
+
+    raw_input = req["input"]
+    inputs = raw_input if isinstance(raw_input, list) else [raw_input]
+    model_name = req.get("model")
+    input_type = (req.get("input_type") or "document").lower()
+    encoding_format = (req.get("encoding_format") or "float").lower()
+
+    try:
+        emb_bundle = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, model_name)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Embedding model not available: {str(e)}")
+
+    try:
+        if input_type == "query":
+            if len(inputs) == 1:
+                vec, used_tokens = emb_bundle.encode_queries(inputs[0])
+                vectors = [vec]
+            else:
+                vectors = []
+                total_tokens = 0
+                for q in inputs:
+                    v, tk = emb_bundle.encode_queries(q)
+                    vectors.append(v)
+                    total_tokens += tk
+                used_tokens = total_tokens
+        else:
+            vectors, used_tokens = emb_bundle.encode(inputs)
+    except Exception as e:
+        logging.exception("Embedding generation failed")
+        raise HTTPException(status_code=500, detail=f"Embedding generation failed: {str(e)}")
+
+    def to_base64(v) -> str:
+        try:
+            seq = v.tolist()
+        except AttributeError:
+            seq = list(v)
+        arr = array('f', [float(x) for x in seq])
+        return base64.b64encode(arr.tobytes()).decode('ascii')
+
+    data_items = []
+    for idx, v in enumerate(vectors):
+        if encoding_format == "base64":
+            embedding_value = to_base64(v)
+        else:
+            try:
+                embedding_value = v.tolist()
+            except AttributeError:
+                embedding_value = [float(x) for x in v]
+        data_items.append({
+            "object": "embedding",
+            "index": idx,
+            "embedding": embedding_value
+        })
+
+    try:
+        used = int(used_tokens)
+    except Exception:
+        used = used_tokens
+
+    result = {
+        "object": "list",
+        "data": data_items,
+        "model": getattr(emb_bundle, "llm_name", model_name) or "",
+        "usage": {"prompt_tokens": used, "total_tokens": used}
+    }
+
+    return get_json_result(data=result)
 
 
 @router.get('/list', summary="列出所有模型", response_description="成功列出所有模型")
@@ -2208,47 +2407,73 @@ async def enhanced_chat_service_sse(
 
         # 流式响应
         async def sse_stream():
-            try:
-                # 根据structured_output参数选择输出格式
-                if request.structured_output:
-                    # 使用结构化格式输出
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue[str | None] = asyncio.Queue()
+            stop_event = threading.Event()
+
+            def safe_put(value: str | None) -> None:
+                if stop_event.is_set():
+                    return
+                future = asyncio.run_coroutine_threadsafe(queue.put(value), loop)
+                try:
+                    future.result()
+                except Exception as exc:  # noqa: BLE001 - 捕获线程间通信异常
+                    stop_event.set()
+                    logging.debug(f"Failed to enqueue SSE payload: {exc}")
+
+            def stream_structured() -> None:
+                try:
                     stream_generator = chat_agent.chat_with_tools_stream_structured(
                         query=request.messages[-1]["content"] if request.messages else "",
                         messages=request.messages[:-1] if request.messages else [],
                         knowledge_context=knowledge_context,
                         files=request.files
                     )
-                    
-                    # 输出结构化消息，保持原有的包装格式
+
                     for message in stream_generator:
-                        # 将结构化消息包装成原有格式
+                        if stop_event.is_set():
+                            break
                         wrapped_message = {
                             "retcode": 0,
                             "retmsg": "",
-                            "data": message  # 整个结构化消息作为data
+                            "data": message
                         }
-                        yield f"data: {json.dumps(wrapped_message, ensure_ascii=False)}\n\n"
-                    
-                    # 发送结束标记（与原格式保持一致）
+                        safe_put(f"data: {json.dumps(wrapped_message, ensure_ascii=False)}\n\n")
+
+                    if not stop_event.is_set():
+                        end_data = {
+                            "retcode": 0,
+                            "retmsg": "Stream completed",
+                            "data": True
+                        }
+                        safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
+                except Exception as e:
+                    logging.exception(f"Stream error (structured): {e}")
+                    error_data = {
+                        "retcode": 500,
+                        "retmsg": str(e),
+                        "data": {"answer": f"**ERROR**: {str(e)}"}
+                    }
+                    safe_put(f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n")
                     end_data = {
                         "retcode": 0,
-                        "retmsg": "Stream completed",
+                        "retmsg": "",
                         "data": True
                     }
-                    yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
-                else:
-                    # 使用原始格式输出（向后兼容）
-                    accumulated_content = ""
+                    safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
+                finally:
+                    safe_put(None)
 
-                    # 开始标记
+            def stream_unstructured() -> None:
+                accumulated_content = ""
+                try:
                     start_data = {
                         "retcode": 0,
                         "retmsg": "Chat started",
                         "data": ""
                     }
-                    yield f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n"
+                    safe_put(f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n")
 
-                    # 流式对话
                     stream_generator = chat_agent.chat_with_tools_stream(
                         query=request.messages[-1]["content"] if request.messages else "",
                         messages=request.messages[:-1] if request.messages else [],
@@ -2256,79 +2481,85 @@ async def enhanced_chat_service_sse(
                         files=request.files
                     )
 
-                    # 简化流式输出处理
                     for delta in stream_generator:
-                        if delta:  # 只有非空内容才输出
+                        if stop_event.is_set():
+                            break
+                        if delta:
                             accumulated_content += delta
-
                             response_data = {
                                 "retcode": 0,
                                 "retmsg": "",
                                 "data": accumulated_content
                             }
-                            yield f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
+                            safe_put(f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n")
 
-                    # 如果启用详细模式，显示工具调用统计（仅在非结构化模式下）
-                    if request.verbose_tool_use and chat_agent.agent.tools:
+                    if (
+                        not stop_event.is_set()
+                        and request.verbose_tool_use
+                        and chat_agent.agent.tools
+                    ):
                         use_tools = getattr(chat_agent.agent, '_last_use_tools', [])
                         if use_tools:
                             tools_summary = f"\n\n📊 **本次对话使用了 {len(use_tools)} 个工具调用**"
-
-                        # tools_summary = "\n\n**工具调用历史（仅展示最近3个工具调用）**:\n"
-                        # for i, tool_call in enumerate(use_tools[-3:], 1):  # 最近3个工具调用
-                        #     tool_name = tool_call.get('name', 'Unknown')
-                        #     tool_args = tool_call.get('arguments', {})
-                        #     tool_results = tool_call.get('results', '')
-                        #
-                        #     # 格式化参数显示
-                        #     args_str = ""
-                        #     if isinstance(tool_args, dict) and tool_args:
-                        #         args_items = []
-                        #         for k, v in list(tool_args.items())[:3]:  # 只显示前3个参数
-                        #             if isinstance(v, str) and len(v) > 50:
-                        #                 v = v[:50] + "..."
-                        #             args_items.append(f"{k}={v}")
-                        #         args_str = f"({', '.join(args_items)})"
-                        #
-                        #     # 格式化结果显示，保留更多内容
-                        #     results_str = str(tool_results)
-                        #     if len(results_str) > 500:  # 增加到500字符
-                            #         results_str = results_str[:500] + "..."
-                            #
-                            #     tools_summary += f"\n**{i}. {tool_name}**{args_str}:\n```\n{results_str}\n```\n"
-
                             accumulated_content += tools_summary
                             final_data = {
                                 "retcode": 0,
                                 "retmsg": "",
                                 "data": accumulated_content
                             }
-                            yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
+                            safe_put(f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n")
 
-                    # 结束标记（仅在非结构化模式下）
+                    if not stop_event.is_set():
+                        end_data = {
+                            "retcode": 0,
+                            "retmsg": "Stream completed",
+                            "data": True
+                        }
+                        safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
+                except Exception as e:
+                    logging.exception(f"Stream error: {e}")
+                    error_data = {
+                        "retcode": 500,
+                        "retmsg": str(e),
+                        "data": {"answer": f"**ERROR**: {str(e)}"}
+                    }
+                    safe_put(f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n")
                     end_data = {
                         "retcode": 0,
-                        "retmsg": "Stream completed",
+                        "retmsg": "",
                         "data": True
                     }
-                    yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
+                    safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
+                finally:
+                    safe_put(None)
 
-            except Exception as e:
-                logging.exception(f"Stream error: {e}")
-                error_data = {
-                    "retcode": 500,
-                    "retmsg": str(e),
-                    "data": {"answer": f"**ERROR**: {str(e)}"}
-                }
-                yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+            producer = loop.run_in_executor(
+                executor,
+                stream_structured if request.structured_output else stream_unstructured
+            )
 
-                # 错误后的结束标记
-                end_data = {
-                    "retcode": 0,
-                    "retmsg": "",
-                    "data": True
-                }
-                yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        break
+                    yield item
+            except asyncio.CancelledError:
+                stop_event.set()
+                try:
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
+                raise
+            finally:
+                stop_event.set()
+                if not producer.done():
+                    producer.cancel()
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
 
         return StreamingResponse(
             sse_stream(),

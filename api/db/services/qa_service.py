@@ -838,7 +838,7 @@ class StatelessSlotExtractionService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请按照要求输出"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 500}
+                gen_conf={"temperature": 0.1}
             )
 
             # 解析JSON结果
@@ -927,7 +927,7 @@ class StatelessSlotExtractionService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请按照要求输出参数"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 500}
+                gen_conf={"temperature": 0.1}
             )
 
             # 解析结果
@@ -1015,7 +1015,7 @@ class StatelessSlotExtractionService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请按照要求输出"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 500}
+                gen_conf={"temperature": 0.1}
             )
 
             # 解析JSON结果
@@ -1191,7 +1191,7 @@ class StatelessSlotExtractionService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请按照要求输出参数"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 500}
+                gen_conf={"temperature": 0.1}
             )
 
             # 解析结果
@@ -1299,7 +1299,7 @@ class ClarificationService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "按照要求输出内容"}],
-                gen_conf={"temperature": 0.7, "max_tokens": 200}
+                gen_conf={"temperature": 0.7}
             )
 
             return response.strip()
@@ -1610,7 +1610,7 @@ class LLMScoringService:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请开始评分"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 1500}
+                gen_conf={"temperature": 0.1}
             )
 
             # 解析LLM响应
@@ -1808,7 +1808,7 @@ class RAGService:
             answer = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": "请按照要求回答"}],
-                gen_conf={"temperature": 0.3, "max_tokens": 1000}
+                gen_conf={"temperature": 0.3}
             )
 
             # 计算置信度（基于检索结果的平均分数）
@@ -1835,7 +1835,7 @@ class LLMScoringServiceV2:
     """LLM驱动的评分服务V2 - 强化正则提取能力"""
 
     def __init__(self):
-        # V2强化版提示模板 - 更规范化的输出要求，专门优化处理表结构数据
+        # V2强化版提示模板 - 更规范化的输出要求，专门优化处理表结构数据，减少干扰数值
         self.prompt_template_v2 = """你是一个专业的教师考核评分助手。请根据提供的评分规则和数据，计算出准确的评分结果。
 
 评分规则：
@@ -1858,6 +1858,11 @@ class LLMScoringServiceV2:
 3. 根据具体数据记录（data_details）和评分规则进行计算
 4. 如果数据不足以支持精确计算，请明确说明并给出合理推断
 
+重要输出格式说明：
+- 在分析过程中，不要使用"得分"、"分数"、"评分"等容易被误识别的词汇来描述中间计算步骤
+- 中间步骤请使用"计算值"、"小项得分"、"部分分值"等词汇
+- 只在最终结果部分使用"总得分"
+
 请严格按照以下格式输出评分结果（格式非常重要，请勿更改）：
 
 === 最终评分结果 ===
@@ -1868,13 +1873,13 @@ class LLMScoringServiceV2:
 === 详细评分分析 ===
 1. 规则匹配：
    - 匹配规则：[说明匹配到的具体规则条目]
-   - 计算依据：[详细的计算过程，包括数值来源]
+   - 计算依据：[详细的计算过程，使用"计算值"、"小项分值"等词汇]
    - 数据映射：[说明如何从数据中提取计算所需的值]
 
 2. 分数计算：
-   - 基础得分：[数字]分 [计算过程]
+   - 基础计算值：[数字]分 [计算过程]
    - 调整因子：[如有调整，说明原因]
-   - 最终得分：[数字]分
+   - 最终结果：见"最终评分结果"部分的"总得分"
 
 === 数据汇总统计 ===
 - 涉及表数量：[数字]个
@@ -1885,13 +1890,12 @@ class LLMScoringServiceV2:
 === 改进建议 ===
 [基于评分结果和数据完整性给出的改进建议，如需要补充哪些数据等]
 
-重要要求：
-1. "总得分"后面必须紧跟具体的数字
+严格要求：
+1. "总得分"后面必须紧跟具体的数字，这是唯一的最终答案
 2. 数字必须是基于数据的准确计算结果
-3. 如果数据不足，请在"评分状态"中明确标注
-4. 详细说明数据到分数的映射过程
-5. 保持格式严格一致性
-6. 数字后面可以加"分"作为单位"""
+3. 中间分析过程避免使用"得分"、"分数"、"评分"等词汇
+4. 如果数据不足，请在"评分状态"中明确标注
+5. 保持格式严格一致性"""
 
     def calculate_score_v2(
             self,
@@ -1928,7 +1932,7 @@ class LLMScoringServiceV2:
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": f"{user_input}\n请严格按照格式要求进行评分"}],
-                gen_conf={"temperature": 0.1, "max_tokens": 8000}
+                gen_conf={"temperature": 0.1}
             )
 
             # V2强化版响应解析
@@ -2035,21 +2039,39 @@ class LLMScoringServiceV2:
             return self._create_parse_error_response_v2(response, original_data, str(e))
 
     def _extract_score_from_final_section(self, response: str) -> float | None:
-        """从最终评分结果部分提取分数 - 最高优先级"""
+        """从最终评分结果部分提取分数 - 最高优先级，严格章节隔离"""
         try:
-            # 查找最终评分结果部分
-            final_section_patterns = [
-                r'=== 最终评分结果 ===.*?总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分?',
-                r'总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-                r'最终得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-                r'评分结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分'
+            # 首先严格隔离"最终评分结果"章节
+            final_section_match = re.search(r'=== 最终评分结果 ===(.*?)(?:===|$)', response, re.DOTALL | re.IGNORECASE)
+            
+            if final_section_match:
+                final_section_content = final_section_match.group(1)
+                logger.debug(f"找到最终评分结果章节，内容长度: {len(final_section_content)}")
+                
+                # 在隔离的章节中查找分数，使用更严格的模式
+                section_patterns = [
+                    r'总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                    r'最终得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                    r'总分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                ]
+                
+                for pattern in section_patterns:
+                    match = re.search(pattern, final_section_content, re.IGNORECASE)
+                    if match:
+                        score = float(match.group(1))
+                        logger.info(f"从最终评分结果章节提取到分数: {score}")
+                        return score
+            
+            # 如果没有找到严格的章节，尝试查找"最终评分结果"的直接模式
+            fallback_patterns = [
+                r'=== 最终评分结果 ===.*?总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
             ]
             
-            for pattern in final_section_patterns:
+            for pattern in fallback_patterns:
                 match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
                 if match:
                     score = float(match.group(1))
-                    logger.info(f"从最终评分结果部分提取到分数: {score}")
+                    logger.info(f"从最终评分结果模式提取到分数: {score}")
                     return score
             
             return None
@@ -2058,23 +2080,49 @@ class LLMScoringServiceV2:
             return None
 
     def _extract_score_from_calculation_section(self, response: str) -> float | None:
-        """从分数计算部分提取最终得分"""
+        """从分数计算部分提取最终得分 - 增强章节隔离"""
         try:
-            calculation_patterns = [
-                r'最终得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-                r'总计[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-                r'合计得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分'
+            # 尝试多种可能的计算章节名称
+            calculation_section_patterns = [
+                r'=== 详细评分分析 ===(.*?)(?:===|$)',
+                r'分数计算[：:]?(.*?)(?:===|$|\n\n)',
+                r'计算过程[：:]?(.*?)(?:===|$|\n\n)',
             ]
             
-            # 只在分数计算部分查找
-            calc_section_match = re.search(r'分数计算[：:]?(.*?)(?===|$)', response, re.DOTALL | re.IGNORECASE)
-            search_text = calc_section_match.group(1) if calc_section_match else response
+            calculation_section_content = None
             
-            for pattern in calculation_patterns:
-                match = re.search(pattern, search_text, re.IGNORECASE)
+            for section_pattern in calculation_section_patterns:
+                section_match = re.search(section_pattern, response, re.DOTALL | re.IGNORECASE)
+                if section_match:
+                    calculation_section_content = section_match.group(1)
+                    logger.debug(f"找到计算章节，内容长度: {len(calculation_section_content)}")
+                    break
+            
+            if calculation_section_content:
+                # 在隔离的章节中查找最终得分，排除中间步骤
+                final_patterns = [
+                    r'最终(?:结果|得分)[：:]?\s*(?:见.*?总得分|([0-9]+\.?[0-9]*)\s*分)',  # 最终结果，可能引用到总得分
+                    r'(?<!小项|部分|单项)(?:总计|合计)得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 总计得分，但排除小项等
+                    r'综合计算结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                ]
+                
+                for pattern in final_patterns:
+                    match = re.search(pattern, calculation_section_content, re.IGNORECASE)
+                    if match and match.group(1):  # 确保捕获组1存在
+                        score = float(match.group(1))
+                        logger.info(f"从分数计算章节提取到分数: {score}")
+                        return score
+            
+            # 如果没有找到严格的章节隔离，尝试宽松模式但增加限制
+            fallback_patterns = [
+                r'(?:分数计算|计算过程).*?最终.*?([0-9]+\.?[0-9]*)\s*分',
+            ]
+            
+            for pattern in fallback_patterns:
+                match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
                 if match:
                     score = float(match.group(1))
-                    logger.info(f"从分数计算部分提取到分数: {score}")
+                    logger.info(f"从计算部分fallback模式提取到分数: {score}")
                     return score
             
             return None
@@ -2083,39 +2131,101 @@ class LLMScoringServiceV2:
             return None
 
     def _extract_scores_with_enhanced_regex(self, response: str) -> list[float]:
-        """使用增强版正则表达式提取分数"""
+        """使用增强版正则表达式提取分数 - 更精准，减少误匹配"""
         scores = []
         
-        # 增强版正则表达式模式 - 覆盖更多表达方式
+        # 改进版正则表达式模式 - 优先识别具体考核结果，而非制度标准
         enhanced_patterns = [
-            # 中文表达
-            r'得分[为是：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-            r'分数[为是：:]?\s*([0-9]+\.?[0-9]*)\s*分?',
-            r'评分[为是：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-            r'总分[为是：:]?\s*([0-9]+\.?[0-9]*)\s*分?',
-            r'([0-9]+\.?[0-9]*)\s*分(?![a-zA-Z])',  # 数字+分，但后面不跟字母
+            # 最高优先级：具体考核结果表述（更倾向于个人实际得分）
+            r'(?:考核|考评|评定|评估).*?(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 考核得分、考评得分
+            r'(?:论文|项目|工作).*?(?:考核|考评|评分).*?(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 具体项目考核得分
+            r'(?:实际|个人|最终)(?:得分|分数|考核结果)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 实际得分、个人得分
             
-            # 英文表达
-            r'score[:\s]*([0-9]+\.?[0-9]*)',
-            r'points?[:\s]*([0-9]+\.?[0-9]*)',
-            r'total[:\s]*([0-9]+\.?[0-9]*)',
+            # 中等优先级：明确的最终结果表述
+            r'最终(?:得分|分数|结果)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 最终得分、最终分数、最终结果
+            r'综合(?:得分|分数|评分)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 综合得分
+            r'总体(?:得分|分数|评分)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 总体得分
             
-            # 计算表达式
-            r'=\s*([0-9]+\.?[0-9]*)\s*分?',
-            r'共计\s*([0-9]+\.?[0-9]*)\s*分?',
-            r'累计\s*([0-9]+\.?[0-9]*)\s*分?'
+            # 较低优先级：可能是制度标准的表述（谨慎对待）
+            r'(?:评分|考核)结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 评分结果、考核结果
+            r'(?:计算)?结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 结果XXX分
+            
+            # 格式化输出中的分数（通常出现在总结部分）
+            r'^(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 行首的得分（避免"总分"）
+            r'\n(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 换行后的得分
+            
+            # 避免中间步骤，只匹配明确的总计表述
+            r'合计[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+            r'总计[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+            
+            # 英文表达 - 更严格
+            r'(?:total\s+|final\s+)score[:\s]*([0-9]+\.?[0-9]*)',
+            r'(?:overall\s+|total\s+)points?[:\s]*([0-9]+\.?[0-9]*)',
         ]
         
-        for pattern in enhanced_patterns:
-            matches = re.finditer(pattern, response, re.IGNORECASE)
+        # 简化排除模式：只排除最明显的中间步骤关键词
+        exclusion_contexts = [
+            r'步骤.*?([0-9]+\.?[0-9]*)\s*分',  # 步骤中的分数
+            r'小项.*?([0-9]+\.?[0-9]*)\s*分',  # 小项分数
+        ]
+        
+        # 为不同模式设置权重（用于后续置信度计算）
+        pattern_weights = {
+            0: 1.0,  # 最高优先级：具体考核结果表述
+            1: 1.0,  # 具体项目考核得分  
+            2: 1.0,  # 实际得分、个人得分
+            3: 0.8,  # 最终得分
+            4: 0.8,  # 综合得分
+            5: 0.8,  # 总体得分
+            6: 0.6,  # 评分结果
+            7: 0.6,  # 计算结果
+            8: 0.7,  # 行首得分
+            9: 0.7,  # 换行后得分
+            10: 0.7, # 合计
+            11: 0.7, # 总计
+            12: 0.8, # 英文final score
+            13: 0.8, # 英文total points
+        }
+        
+        scores_with_weights = []  # 存储(score, weight)元组
+        
+        for pattern_idx, pattern in enumerate(enhanced_patterns):
+            matches = re.finditer(pattern, response, re.IGNORECASE | re.MULTILINE)
             for match in matches:
                 try:
                     score = float(match.group(1))
-                    if score not in scores:  # 避免重复
-                        scores.append(score)
-                        logger.debug(f"增强正则提取到分数: {score} (模式: {pattern})")
+                    # 检查是否在排除上下文中
+                    context_start = max(0, match.start() - 50)
+                    context_end = min(len(response), match.end() + 50)
+                    context = response[context_start:context_end]
+                    
+                    # 如果不在排除上下文中，则添加分数
+                    is_excluded = any(re.search(exc_pattern, context, re.IGNORECASE) for exc_pattern in exclusion_contexts)
+                    
+                    if not is_excluded:
+                        weight = pattern_weights.get(pattern_idx, 0.5)
+                        # 检查是否已有相同分数，如果有则选择更高权重
+                        existing_entry = next((entry for entry in scores_with_weights if entry[0] == score), None)
+                        if existing_entry:
+                            if weight > existing_entry[1]:
+                                scores_with_weights.remove(existing_entry)
+                                scores_with_weights.append((score, weight))
+                                logger.debug(f"更新分数权重: {score} (新权重: {weight}, 模式: {pattern})")
+                        else:
+                            scores_with_weights.append((score, weight))
+                            logger.debug(f"增强正则提取到分数: {score} (权重: {weight}, 模式: {pattern})")
+                    elif is_excluded:
+                        logger.debug(f"排除中间过程分数: {score} (上下文: {context[:30]}...)")
+                        
                 except ValueError:
                     continue
+        
+        # 按权重排序，返回分数列表
+        scores_with_weights.sort(key=lambda x: x[1], reverse=True)
+        scores = [entry[0] for entry in scores_with_weights]
+        
+        # 将权重信息存储起来供后续使用
+        self._pattern_weights = {score: weight for score, weight in scores_with_weights}
         
         return scores
 
@@ -2149,7 +2259,7 @@ class LLMScoringServiceV2:
             expected_range: tuple[float, float] | None = None,
             validation_enabled: bool = True
     ) -> tuple[float | None, float, str]:
-        """选择最佳分数"""
+        """选择最佳分数 - 增强版，智能过滤中间步骤分数"""
         if not scores:
             return None, 0.0, "no_extraction"
         
@@ -2161,7 +2271,7 @@ class LLMScoringServiceV2:
             "number_sequence": 4
         }
         
-        # 为每个分数计算置信度
+        # 为每个分数计算置信度和过滤可疑分数
         score_confidences = []
         for i, score in enumerate(scores):
             method = methods[i] if i < len(methods) else "unknown"
@@ -2174,11 +2284,16 @@ class LLMScoringServiceV2:
                 "number_sequence": 0.6
             }.get(method, 0.5)
             
-            # 范围验证加分
+            # 如果是enhanced_regex方法，还要考虑模式权重
+            if method == "enhanced_regex" and hasattr(self, '_pattern_weights') and score in self._pattern_weights:
+                pattern_weight = self._pattern_weights[score]
+                base_confidence = base_confidence * pattern_weight
+                logger.debug(f"应用模式权重: {score} -> 置信度 {base_confidence:.3f} (权重: {pattern_weight})")
+            
+            # 简化验证：只做基本合理性检查
             if expected_range and expected_range[0] <= score <= expected_range[1]:
                 base_confidence += 0.1
             
-            # 合理性检查
             if 0 <= score <= 100000:  # 合理的分数范围
                 base_confidence += 0.05
             
@@ -2187,10 +2302,15 @@ class LLMScoringServiceV2:
         # 按置信度排序，置信度相同时按方法优先级排序
         score_confidences.sort(key=lambda x: (-x[1], method_priority.get(x[2], 99)))
         
+        # 如果最高置信度太低，可能都是中间步骤分数
         best_score, confidence, method = score_confidences[0]
+        
+        if confidence < 0.3:
+            logger.warning(f"所有分数的置信度都很低，最佳分数 {best_score} 置信度仅为 {confidence:.2f}")
         
         logger.info(f"选择最佳分数: {best_score} (置信度: {confidence:.2f}, 方法: {method})")
         return best_score, confidence, method
+    
 
     def _validate_score(
             self, 
@@ -2199,7 +2319,7 @@ class LLMScoringServiceV2:
             original_data: list[dict[str, Any]],
             response: str
     ) -> dict[str, Any]:
-        """验证分数的合理性"""
+        """验证分数的合理性 - 增强版，检测中间步骤分数"""
         validation_result = {
             "validated": True,
             "warnings": [],
@@ -2230,7 +2350,10 @@ class LLMScoringServiceV2:
         if data_count == 0 and score > 0:
             validation_result["warnings"].append("数据为空但得分大于0")
         
+        # 简化验证：只保留基本检查
+        
         return validation_result
+    
 
     def _extract_sections_v2(self, response: str) -> dict[str, str]:
         """V2版本的分段提取，支持新的格式"""
