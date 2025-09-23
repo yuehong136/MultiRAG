@@ -119,6 +119,10 @@ class DialogRequest(BaseModel):
         default=None,
         description="重新排序模型的ID，用于对检索结果进行重新排序"
     )
+    meta_data_filter: dict[str, Any] | None = Field(
+        default={},
+        description="元数据过滤器，用于过滤知识库中的条目"
+    )
     similarity_threshold: float = Field(
         default=0.1,
         ge=0.0,
@@ -356,11 +360,12 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
             ],
             "empty_response": "Sorry! 知识库中未找到相关内容！"
         }
+
+        prompt_config = request.prompt_config or default_prompt_config
+
         is_create = not request.dialog_id
         if not is_create:
-            # 使用提供的配置或默认配置
-            prompt_config = request.prompt_config or default_prompt_config
-
+            # 针对更新逻辑的特殊校验
             if not request.kb_ids and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config['system']:
                 return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no knowledge base/Tavily used here.")
 
@@ -397,6 +402,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
                 "llm_id": llm_id,
                 "llm_setting": request.llm_setting,
                 "prompt_config": prompt_config,
+                "meta_data_filter": request.meta_data_filter,
                 "top_n": request.top_n,
                 "top_k": request.top_k,
                 "rerank_id": request.rerank_id,
@@ -431,6 +437,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
             return get_json_result(data=dia)
     except Exception as e:
         return server_error_response(e)
+
 
 @router.get('/get', summary="获取对话", response_description="成功获取对话")
 async def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):

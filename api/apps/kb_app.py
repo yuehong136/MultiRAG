@@ -11,7 +11,7 @@ import logging
 import os
 import re
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -501,3 +501,34 @@ def delete_knowledge_graph(kb_id, db: Session = Depends(get_db), user=Depends(ma
     settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id, [kb.name]), kb_id)
 
     return get_json_result(data=True)
+
+
+@router.get("/get_meta", summary="查询知识库元数据聚合", response_description="元数据聚合结果")
+def get_meta(
+        kb_ids: str = Query(default="", description="知识库ID列表，逗号分隔"),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """汇总指定知识库中文档元数据字段的取值分布，便于在 Apifox 等工具中查看筛选项。
+
+    - **kb_ids**: 多个知识库ID，使用英文逗号分隔。
+    - **返回值**: 形如 `{meta_key: {meta_value: [doc_id, ...]}}` 的嵌套映射。
+    """
+    kb_id_list = [kb_id.strip() for kb_id in kb_ids.split(",") if kb_id.strip()]
+
+    if not kb_id_list:
+        return get_json_result(data={})
+
+    for kb_id in kb_id_list:
+        if not KnowledgebaseService.accessible(db, kb_id, user.id):
+            return get_json_result(
+                data=False,
+                retmsg='No authorization.',
+                retcode=settings.RetCode.AUTHENTICATION_ERROR
+            )
+
+    try:
+        meta = DocumentService.get_meta_by_kbs(db, kb_id_list)
+        return get_json_result(data=meta)
+    except Exception as e:
+        return server_error_response(e)

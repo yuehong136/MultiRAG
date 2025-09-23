@@ -18,7 +18,7 @@ class ConversationService(CommonService):
     model = Conversation
 
     @classmethod
-    def get_list(cls, db: Session, dialog_id, page_number, items_per_page, orderby, desc, id=None, name=None):
+    def get_list(cls, db: Session, dialog_id, page_number, items_per_page, orderby, is_desc, id=None, name=None, user_id=None):
         # 使用 SQLAlchemy 的 query 方法开始查询
         query = db.query(cls.model).filter(cls.model.dialog_id == dialog_id)
 
@@ -27,13 +27,11 @@ class ConversationService(CommonService):
             query = query.filter(cls.model.id == id)
         if name:
             query = query.filter(cls.model.name == name)
-
+        if user_id:
+            query = query.filter(cls.model.user_id == user_id)
         # 根据 desc 参数确定排序方式
-        order_clause = getattr(cls.model, orderby)
-        if desc:
-            query = query.order_by(desc(order_clause))
-        else:
-            query = query.order_by(asc(order_clause))
+        order_col = getattr(cls.model, orderby)
+        query = query.order_by(order_col.desc() if is_desc else order_col.asc())
 
         # 应用分页
         query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
@@ -79,10 +77,11 @@ def completion(db, tenant_id, chat_id, question, name="New session", session_id=
     if not session_id:
         session_id = get_uuid()
         conv = {
-            "id":session_id ,
+            "id": session_id ,
             "dialog_id": chat_id,
             "name": name,
             "message": [{"role": "assistant", "content": dia[0].prompt_config.get("prologue"), "created_at": time.time()}],
+            "user_id": kwargs.get("user_id", "")
         }
         ConversationService.save(**conv)
         if stream:

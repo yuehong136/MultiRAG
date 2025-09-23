@@ -1477,6 +1477,25 @@ class DocumentService(CommonService):
         return cls.update_by_id(db, doc_id, {"meta_fields": meta_fields})
 
     @classmethod
+    def get_meta_by_kbs(cls, db: Session, kb_ids):
+        stmt = (
+            select(cls.model.id, cls.model.meta_fields)
+            .where(cls.model.kb_id.in_(kb_ids))
+        )
+
+        meta = {}
+        for row in db.execute(stmt).mappings():
+            doc_id = row["id"]
+            fields = row.get("meta_fields") or {}
+            if not isinstance(fields, dict):
+                continue
+            for key, value in fields.items():
+                value_str = str(value)
+                meta.setdefault(key, {}).setdefault(value_str, []).append(doc_id)
+
+        return meta
+
+    @classmethod
     def update_progress(cls, db: Session):
         docs = cls.get_unfinished_docs(db)
         for d in docs:

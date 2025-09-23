@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from api.db import LLMType, StatusEnum, ParserType
 from api.db.db_models import Dialog, Conversation, db_connection
 from api.db.services.common_service import CommonService
+from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMService, TenantLLMService, LLMBundle
@@ -35,7 +36,7 @@ from core.app.tag import label_question
 from core.nlp import extract_between
 from core.nlp.search import index_name
 from core.prompts.prompts import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
-    citation_prompt, cross_languages
+    citation_prompt, cross_languages, gen_meta_filter
 from core.utils import rmSpace, num_tokens_from_string
 from core.utils.tavily_conn import Tavily
 
@@ -111,7 +112,7 @@ class DialogService(CommonService):
             raise e
 
     @classmethod
-    def get_list(cls, db: Session, tenant_id, page_number, items_per_page, orderby, desc, id, name):
+    def get_list(cls, db: Session, tenant_id, page_number, items_per_page, orderby, is_desc, id, name):
 
         query = db.query(cls.model)
 
@@ -125,9 +126,9 @@ class DialogService(CommonService):
             (cls.model.status == StatusEnum.VALID.value)
         )
 
-        # Order by specified field in ascending or descending order
-        order_clause = getattr(cls.model, orderby)
-        query = query.order_by(desc(order_clause) if desc else asc(order_clause))
+        # 根据 desc 参数确定排序方式
+        order_col = getattr(cls.model, orderby)
+        query = query.order_by(order_col.desc() if is_desc else order_col.asc())
 
         # Apply pagination
         query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
@@ -315,6 +316,46 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
     return answer, idx
 
 
+def meta_filter(metas: dict, filters: list[dict]):
+    doc_ids = []
+    def filter_out(v2docs, operator, value):
+        nonlocal doc_ids
+        for input,docids in v2docs.items():
+            try:
+                input = float(input)
+                value = float(value)
+            except Exception:
+                input = str(input)
+                value = str(value)
+
+            for conds in [
+                    (operator == "contains", str(value).lower() in str(input).lower()),
+                    (operator == "not contains", str(value).lower() not in str(input).lower()),
+                    (operator == "start with", str(input).lower().startswith(str(value).lower())),
+                    (operator == "end with", str(input).lower().endswith(str(value).lower())),
+                    (operator == "empty", not input),
+                    (operator == "not empty", input),
+                    (operator == "=", input == value),
+                    (operator == "≠", input != value),
+                    (operator == ">", input > value),
+                    (operator == "<", input < value),
+                    (operator == "≥", input >= value),
+                    (operator == "≤", input <= value),
+                ]:
+                try:
+                    if all(conds):
+                        doc_ids.extend(docids)
+                except Exception:
+                    pass
+
+    for k, v2docs in metas.items():
+        for f in filters:
+            if k != f["key"]:
+                continue
+            filter_out(v2docs, f["op"], f["value"])
+    return doc_ids
+
+
 def chat(dialog, messages, db, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
@@ -357,9 +398,10 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     retriever = settings.retrievaler
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
-    attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None
+    attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
     if "doc_ids" in messages[-1]:
         attachments = messages[-1]["doc_ids"]
+
     prompt_config = dialog.prompt_config
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
     # 如果字段映射存在，尝试使用SQL检索答案
@@ -390,6 +432,14 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
     if prompt_config.get("cross_languages"):
         questions = [cross_languages(db, dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
+
+    if dialog.meta_data_filter:
+        metas = DocumentService.get_meta_by_kbs(db, dialog.kb_ids)
+        if dialog.meta_data_filter.get("method") == "auto":
+            filters = gen_meta_filter(chat_mdl, metas, questions[-1])
+            attachments.extend(meta_filter(metas, filters))
+        elif dialog.meta_data_filter.get("method") == "manual":
+            attachments.extend(meta_filter(metas, dialog.meta_data_filter["manual"]))
 
     if prompt_config.get("keyword", False):
         questions[-1] += keyword_extraction(chat_mdl, questions[-1])

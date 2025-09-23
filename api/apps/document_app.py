@@ -2502,6 +2502,12 @@ def set_meta(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
+    """为指定文档写入自定义元数据键值对。
+
+    - **request.doc_id**: 文档ID。
+    - **request.meta**: 仅支持字符串、整数、浮点数类型的 value。
+    - **返回值**: `true` 表示写入成功。
+    """
     req = request.model_dump()
     if not DocumentService.accessible(db, req["doc_id"], user.id):
         return get_json_result(
@@ -2514,6 +2520,14 @@ def set_meta(
         return get_json_result(
             data=False, retmsg='Meta data should be in Json map format, like {"key": "value"}',
             retcode=settings.RetCode.ARGUMENT_ERROR)
+
+    for value in req["meta"].values():
+        if not isinstance(value, (str, int, float)):
+            return get_json_result(
+                data=False,
+                retmsg=f"The type is not supported: {value}",
+                retcode=settings.RetCode.ARGUMENT_ERROR,
+            )
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])

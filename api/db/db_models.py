@@ -502,6 +502,7 @@ class Dialog(BaseModel):
                            default={"system": "", "prologue": "Hi! I'm your assistant, what can I do for you?",
                                     "parameters": [],
                                     "empty_response": "Sorry! No relevant content was found in the knowledge base!"})
+    meta_data_filter = Column(JSONB,index=False, nullable=True, default={})
     similarity_threshold = Column(Float, index=False, nullable=False, default=0.2)
     vector_similarity_weight = Column(Float, index=False, nullable=False, default=0.3)
     top_n = Column(Integer, index=False, nullable=False, default=6)

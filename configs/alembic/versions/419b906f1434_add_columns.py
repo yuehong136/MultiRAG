@@ -1,7 +1,7 @@
 """add columns
 
 Revision ID: 419b906f1434
-Revises: 39957f66d1e6
+Revises: b362b0a788fb
 Create Date: 2025-09-03 11:16:25.654563
 
 """
