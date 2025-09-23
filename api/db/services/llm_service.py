@@ -147,7 +147,7 @@ class TenantLLMService(CommonService):
     @classmethod
     def model_instance(cls, db: Session, tenant_id, llm_type, llm_name=None, lang="Chinese", **kwargs):
         model_config = TenantLLMService.get_model_config(db, tenant_id, llm_type, llm_name)
-
+        kwargs.update({"provider": model_config["llm_factory"]})
         if llm_type == LLMType.EMBEDDING.value:
             if model_config["llm_factory"] not in EmbeddingModel:
                 logging.info(f"Debug: Embedding model factory not supported: {model_config['llm_factory']}")

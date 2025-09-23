@@ -653,6 +653,7 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
     req = request.model_dump()
     chat_passed, embd_passed, rerank_passed = False, False, False
     factory = req["llm_factory"]
+    extra = {"provider": factory}
     msg = ""
     for llm in LLMService.query(db, fid=factory):
         if not embd_passed and llm.mdl_type == LLMType.EMBEDDING.value:
@@ -667,7 +668,7 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
                 msg += f"\nFail to access embedding model({llm.llm_name}) using this api key." + str(e)
         elif not chat_passed and llm.mdl_type == LLMType.CHAT.value:
             assert factory in ChatModel, f"Chat model from {factory} is not supported yet."
-            mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
+            mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"), **extra)
             try:
                 m, tc = mdl.chat("", [{"role": "user", "content": "Hello! How are you doing!"}],
                                  {"temperature": 0.9, 'max_tokens': 50})
@@ -887,6 +888,7 @@ POST
 
     msg = ""
     mdl_nm = llm["llm_name"].split("___")[0]
+    extra = {"provider": factory}
     if llm["mdl_type"] == LLMType.EMBEDDING.value:
         assert factory in EmbeddingModel, f"Embedding model from {factory} is not supported yet."
         mdl = EmbeddingModel[factory](
@@ -904,7 +906,8 @@ POST
         mdl = ChatModel[factory](
             key=llm['api_key'],
             model_name=mdl_nm,
-            base_url=llm["api_base"]
+            base_url=llm["api_base"],
+            **extra,
         )
         try:
             m, tc = mdl.chat("", [{"role": "user", "content": "Hello! How are you doing!"}],
