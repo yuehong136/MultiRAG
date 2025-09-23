@@ -688,8 +688,12 @@ class AskDataHistory(BaseModel):
     conversation_id = Column(String(32), index=True, nullable=False, doc="conversation_id")
     ask_id = Column(String(32), index=True, nullable=False, doc="ask_id")
     user_id = Column(String(32), index=True, nullable=True, doc="user_id")
-    data = Column(Text, index=False, nullable=False, doc="data")
+    data = Column(Text, index=False, nullable=False, doc="data") # 前端用于展示的数据
     status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+    user_question = Column(Text, index=False, nullable=True, doc="用户问题")
+    round_id = Column(String(32), index=True, nullable=False, doc="用于标识对话轮次的ID")
+    processed_semantic_layer = Column(Text, index=False, nullable=True, doc="该问题构建的语义层")
+    sql_info = Column(Text, index=False, nullable=True, doc="生成的SQL及执行SQL的结果还有其他信息")
 
     def to_dict(self):
         """序列化方法"""
@@ -701,7 +705,11 @@ class AskDataHistory(BaseModel):
             "data": self.data,
             "status": self.status,
             "create_time": self.create_time,
-            "update_time": self.update_time
+            "update_time": self.update_time,
+            "user_question": self.user_question,
+            "round_id": self.round_id,
+            "processed_semantic_layer": self.processed_semantic_layer,
+            "sql_info": self.sql_info
         }
 
 
