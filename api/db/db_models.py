@@ -1006,6 +1006,16 @@ class MCPServer(BaseModel):
     headers = Column(JSONB, index=False, nullable=True, default=dict, doc="MCP Server additional request headers")
 
 
+class ToolsData(BaseModel):
+    __tablename__ = "tools_data"
+    __table_args__ = {"schema": "usr_ai"}
+
+    flow_id = Column(String(255), primary_key=True, index=True, nullable=False)
+    user_id = Column(String(255), primary_key=True, index=True, nullable=False)
+    meta_data = Column(Text, nullable=True)
+    final_data = Column(Text, nullable=True)
+
+
 class Search(BaseModel):
     """
     搜索配置表
