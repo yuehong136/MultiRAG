@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 
 class SQLComponentsParser:
@@ -18,7 +18,10 @@ class SQLComponentsParser:
                     'groupBy': 'GROUP BY ...',
                     'having': 'HAVING ...',
                     'orderBy': 'ORDER BY ...',
-                    'limit': 'LIMIT ...'
+                    'pagination': {
+                        'limit': '10',
+                        'offset': '20'
+                    }
                 }
         """
         self.components = sql_components
@@ -251,21 +254,55 @@ class SQLComponentsParser:
 
         return fields
 
+    def parse_pagination(self) -> Tuple[Optional[int], Optional[int]]:
+        """
+        解析分页信息
+
+        Returns:
+            Tuple[Optional[int], Optional[int]]: (limit, offset) 值的元组
+        """
+        pagination = self.components.get('pagination', {})
+
+        limit = None
+        offset = None
+
+        if isinstance(pagination, dict):
+            # 解析limit
+            limit_str = pagination.get('limit', '').strip()
+            if limit_str and limit_str.isdigit():
+                limit = int(limit_str)
+
+            # 解析offset
+            offset_str = pagination.get('offset', '').strip()
+            if offset_str and offset_str.isdigit():
+                offset = int(offset_str)
+
+        return limit, offset
+
     def parse_limit(self) -> Optional[int]:
-        """解析LIMIT值"""
-        limit_clause = self.components.get('limit', '')
-        if not limit_clause:
-            return None
+        """
+        解析LIMIT值（保持向后兼容）
 
-        # 提取数字
-        match = re.search(r'\b(\d+)\b', limit_clause)
-        if match:
-            return int(match.group(1))
+        Returns:
+            Optional[int]: LIMIT值，如果没有则返回None
+        """
+        limit, _ = self.parse_pagination()
+        return limit
 
-        return None
+    def parse_offset(self) -> Optional[int]:
+        """
+        解析OFFSET值
+
+        Returns:
+            Optional[int]: OFFSET值，如果没有则返回None
+        """
+        _, offset = self.parse_pagination()
+        return offset
 
     def parse_all(self) -> Dict:
         """解析所有组件"""
+        limit, offset = self.parse_pagination()
+
         return {
             'select_columns': self.parse_select_columns(),
             'from_tables': self.parse_from_tables(),
@@ -274,7 +311,12 @@ class SQLComponentsParser:
             'group_by': self.parse_group_by(),
             'having_conditions': self.parse_having_conditions(),
             'order_by': self.parse_order_by(),
-            'limit': self.parse_limit()
+            'limit': limit,
+            'offset': offset,
+            'pagination': {
+                'limit': limit,
+                'offset': offset
+            }
         }
 
     # 辅助方法
@@ -457,14 +499,18 @@ def format_parsed_components(parsed: Dict) -> None:
         for i, order in enumerate(parsed['order_by'], 1):
             print(f"   {i}. {order['field']} {order['direction']}")
 
-    # LIMIT
-    if parsed['limit'] is not None:
-        print(f"\n8. LIMIT: {parsed['limit']}")
+    # 分页信息
+    if parsed['limit'] is not None or parsed['offset'] is not None:
+        print("\n8. 分页信息：")
+        if parsed['limit'] is not None:
+            print(f"   LIMIT: {parsed['limit']}")
+        if parsed['offset'] is not None:
+            print(f"   OFFSET: {parsed['offset']}")
 
 
 # 使用示例
 if __name__ == "__main__":
-    # 测试用例1：包含HAVING子句的查询
+    # 测试用例1：包含完整pagination的查询
     sql_components1 = {
         'select': 'SELECT department_id, COUNT(*) as emp_count, AVG(salary) as avg_salary',
         'from': 'FROM employees e JOIN departments d ON e.dept_id = d.id',
@@ -472,16 +518,19 @@ if __name__ == "__main__":
         'groupBy': 'GROUP BY department_id',
         'having': 'HAVING COUNT(*) > 5 AND AVG(salary) > 50000',
         'orderBy': 'ORDER BY avg_salary DESC',
-        'limit': 'LIMIT 10'
+        'pagination': {
+            'limit': '10',
+            'offset': '20'
+        }
     }
 
-    print("测试用例 1 (包含HAVING子句):")
+    print("测试用例 1 (包含完整pagination):")
     print("-" * 60)
     parser1 = SQLComponentsParser(sql_components1)
     result1 = parser1.parse_all()
     format_parsed_components(result1)
 
-    # 测试用例2：HAVING子句包含OR条件
+    # 测试用例2：只有limit，没有offset
     sql_components2 = {
         'select': 'SELECT category_id, SUM(revenue) as total_revenue, COUNT(*) as product_count',
         'from': 'FROM products p',
@@ -489,95 +538,80 @@ if __name__ == "__main__":
         'groupBy': 'GROUP BY category_id',
         'having': 'HAVING SUM(revenue) > 100000 OR COUNT(*) > 50 OR AVG(price) < 10',
         'orderBy': 'ORDER BY total_revenue DESC',
-        'limit': ''
+        'pagination': {
+            'limit': '50',
+            'offset': ''
+        }
     }
 
-    print("\n\n测试用例 2 (HAVING包含OR条件):")
+    print("\n\n测试用例 2 (只有limit):")
     print("-" * 60)
     parser2 = SQLComponentsParser(sql_components2)
     result2 = parser2.parse_all()
     format_parsed_components(result2)
 
-    # 测试用例3：复杂的HAVING条件（包含函数和多个条件）
+    # 测试用例3：没有分页信息
     sql_components3 = {
-        'select': 'SELECT store_id, YEAR(sale_date) as sale_year, SUM(amount) as total_sales, MAX(amount) as max_sale',
+        'select': 'SELECT store_id, YEAR(sale_date) as sale_year, SUM(amount) as total_sales',
         'from': 'FROM sales s INNER JOIN stores st ON s.store_id = st.id',
         'where': 'WHERE st.region = "North" AND s.sale_date >= "2023-01-01"',
         'groupBy': 'GROUP BY store_id, YEAR(sale_date)',
-        'having': 'HAVING SUM(amount) > 50000 AND MAX(amount) > 1000 AND COUNT(*) >= 100',
+        'having': 'HAVING SUM(amount) > 50000 AND MAX(amount) > 1000',
         'orderBy': 'ORDER BY sale_year DESC, total_sales DESC',
-        'limit': 'LIMIT 20'
+        'pagination': {
+            'limit': '',
+            'offset': ''
+        }
     }
 
-    print("\n\n测试用例 3 (复杂HAVING条件):")
+    print("\n\n测试用例 3 (没有分页信息):")
     print("-" * 60)
     parser3 = SQLComponentsParser(sql_components3)
     result3 = parser3.parse_all()
     format_parsed_components(result3)
 
-    # 测试用例4：HAVING子句中包含NULL条件
+    # 测试用例4：向后兼容性测试（旧格式）
     sql_components4 = {
-        'select': 'SELECT manager_id, COUNT(*) as employee_count, AVG(performance_score) as avg_performance',
+        'select': 'SELECT manager_id, COUNT(*) as employee_count',
         'from': 'FROM employees e',
         'where': 'WHERE e.department_id = 10',
         'groupBy': 'GROUP BY manager_id',
-        'having': 'HAVING AVG(performance_score) IS NOT NULL AND COUNT(*) > 3',
-        'orderBy': 'ORDER BY avg_performance DESC',
-        'limit': ''
+        'having': 'HAVING COUNT(*) > 3',
+        'orderBy': 'ORDER BY employee_count DESC',
+        # 没有pagination键
     }
 
-    print("\n\n测试用例 4 (HAVING包含NULL条件):")
+    print("\n\n测试用例 4 (向后兼容，没有pagination键):")
     print("-" * 60)
     parser4 = SQLComponentsParser(sql_components4)
     result4 = parser4.parse_all()
     format_parsed_components(result4)
 
-    # 测试用例5：没有HAVING子句的查询（向后兼容）
+    # 测试用例5：只有offset的特殊情况
     sql_components5 = {
-        'from': 'FROM gx_test_teachers AS t1 JOIN gx_test_teacher_performance AS t2 ON t1.teacher_id = t2.teacher_id',
+        'select': 'SELECT * ',
+        'from': 'FROM users',
+        'where': '',
         'groupBy': '',
-        'limit': '',
-        'orderBy': '',
-        'select': 'SELECT t1.teacher_id, t1.name, t2.total_score',
-        'where': "WHERE t2.evaluation_year = 2023 AND t2.total_score > 82"
+        'having': '',
+        'orderBy': 'ORDER BY created_at DESC',
+        'pagination': {
+            'limit': '',
+            'offset': '100'
+        }
     }
 
-    print("\n\n测试用例 5 (没有HAVING子句，向后兼容):")
+    print("\n\n测试用例 5 (只有offset):")
     print("-" * 60)
     parser5 = SQLComponentsParser(sql_components5)
     result5 = parser5.parse_all()
     format_parsed_components(result5)
 
-    # 测试用例6：HAVING子句包含LIKE操作符
-    sql_components6 = {
-        'select': 'SELECT customer_name, GROUP_CONCAT(product_name) as products',
-        'from': 'FROM orders o JOIN customers c ON o.customer_id = c.id',
-        'where': 'WHERE o.order_date > "2023-01-01"',
-        'groupBy': 'GROUP BY customer_name',
-        'having': 'HAVING GROUP_CONCAT(product_name) LIKE "%laptop%" AND COUNT(*) > 2',
-        'orderBy': 'ORDER BY customer_name',
-        'limit': 'LIMIT 50'
-    }
-
-    print("\n\n测试用例 6 (HAVING包含LIKE操作符):")
+    # 测试用例6：测试单独的方法
+    print("\n\n测试用例 6 (测试单独的解析方法):")
     print("-" * 60)
-    parser6 = SQLComponentsParser(sql_components6)
-    result6 = parser6.parse_all()
-    format_parsed_components(result6)
+    parser6 = SQLComponentsParser(sql_components1)
 
-    # 测试用例7：HAVING子句包含IN操作符
-    sql_components7 = {
-        'select': 'SELECT region, COUNT(DISTINCT customer_id) as customer_count',
-        'from': 'FROM sales s',
-        'where': 'WHERE s.year = 2023',
-        'groupBy': 'GROUP BY region',
-        'having': 'HAVING COUNT(DISTINCT customer_id) IN (100, 200, 300) AND SUM(amount) > 10000',
-        'orderBy': 'ORDER BY customer_count DESC',
-        'limit': ''
-    }
-
-    print("\n\n测试用例 7 (HAVING包含IN操作符):")
-    print("-" * 60)
-    parser7 = SQLComponentsParser(sql_components7)
-    result7 = parser7.parse_all()
-    format_parsed_components(result7)
+    print("单独解析LIMIT:", parser6.parse_limit())
+    print("单独解析OFFSET:", parser6.parse_offset())
+    print("单独解析分页信息:", parser6.parse_pagination())

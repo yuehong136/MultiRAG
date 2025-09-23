@@ -6,7 +6,6 @@ from enum import Enum
 from typing import Any, List, Dict, Optional, Tuple, Set
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
-
 from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.ask_data_history_service import AskDataHistoryService
@@ -14,6 +13,8 @@ from api.service.askdata_service.async_llm_service import AsyncLLMService
 from api.service.askdata_service.event.event_utils import send_event
 from api.service.askdata_service.llm.semantic_field_extractor import SemanticFieldExtractor
 from api.service.askdata_service.llm.semantic_relevance_filter import SemanticRelevanceFilter
+from api.service.askdata_service.llm.sql_components_extractor import SQLComponentsExtractor
+from api.service.askdata_service.llm.sql_pagination_converter import SQLPaginationConverter
 from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLGenerator
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
 from api.service.askdata_service.query_intent import QueryIntentAnalyzer
@@ -29,12 +30,12 @@ from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_va
 from api.service.askdata_service.util.semantic_filter_processor import apply_semantic_filter
 from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
     filter_metrics_by_permissions
+from api.service.askdata_service.util.timer import time_task
 from api.service.askdata_service.util.wide_table_sql_generator import WideTableSQLGenerator
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
 from api.service.askdata_service.model_dataset_resolver import ModelDatasetResolver
-
 
 logger = logging.getLogger(__name__)
 
@@ -52,23 +53,44 @@ class AskdataService:
         self.semantic_field_extractor = SemanticFieldExtractor(db, user.id, self.prompt_dir)
         self.semantic_relevance_filter = SemanticRelevanceFilter(db, user.id, self.prompt_dir)
         self.model_dataset_resolver = ModelDatasetResolver(self.semantic_api_client)
+        self.sql_components_extractor = SQLComponentsExtractor(db, user.id, self.prompt_dir)
+        self.sql_pagination_converter = SQLPaginationConverter(db, user.id, self.prompt_dir)
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
                                       userid: str, llm_name: str = None,
                                       event_id: Optional[str] = None, enable_deep_search: bool = False):
+        await send_event(event_id, {"current_step": 0, "total_steps": 13}, "progress_total")
 
-        # 1. 先获取dataset_details（只获取一次）
-        dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list)
+        # 1. 第一批并行任务：获取dataset_details和用户权限（完全独立，可以同时开始）
+        dataset_details_task = time_task(
+            self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list, event_id=event_id),
+            name="获取数据集详情"
+        )
+        user_permissions_task = time_task(
+            self.semantic_api_client.get_user_semantic_permissions_async(
+                userid, dataset_id_list, event_id=event_id),
+            name="获取用户语义权限"
+        )
 
-        # 2. 定义三个主要的并行任务
+        dataset_details, user_semantic_permissions = await asyncio.gather(
+            dataset_details_task,
+            user_permissions_task
+        )
+
+        # 2. 第二批并行任务：定义三个主要的并行任务（依赖dataset_details）
 
         async def llm_extraction_task():
             """LLM提取语义字段，静默执行，不发送事件"""
+            await send_event(event_id, {"task_name": "LLM提取语义字段", "task_status": "working"}, "task")
+
             try:
-                extracted_fields = await self.semantic_field_extractor.extract_semantic_fields(
-                    user_query=user_query,
-                    dataset_info=dataset_details,
-                    llm_name=llm_name
+                extracted_fields = await time_task(
+                    self.semantic_field_extractor.extract_semantic_fields(
+                        user_query=user_query,
+                        dataset_info=dataset_details,
+                        llm_name=llm_name
+                    ),
+                    name="LLM提取语义字段"
                 )
 
                 logger.info(f"LLM提取到的语义字段：{extracted_fields}")
@@ -76,6 +98,12 @@ class AskdataService:
                 llm_dimension_ids = [field["dimension_id"] for field in extracted_fields if "dimension_id" in field]
                 llm_metric_ids = [field["metric_id"] for field in extracted_fields if "metric_id" in field]
 
+                await send_event(event_id, {"task_name": "LLM提取语义字段", "task_data": {
+                    "dimension_info_list": [field for field in extracted_fields if "dimension_name" in field],
+                    "metric_info_list": [field for field in extracted_fields if "metric_name" in field]
+                }}, "task_data")
+                await send_event(event_id, {"task_name": "LLM提取语义字段", "task_status": "completed"}, "task")
+                await send_event(event_id, {}, "progress_up")
                 return llm_dimension_ids, llm_metric_ids
             except Exception as e:
                 logger.warning(f"LLM extraction failed: {e}")
@@ -84,25 +112,33 @@ class AskdataService:
         async def keyword_search_and_semantic_layer_task():
             """分词检索和语义层构建"""
             # 1. 分词
-            await send_event(event_id, {"message": "分词", "action": "start"}, "message")
+            await send_event(event_id, {"task_name": "分词", "task_status": "working"}, "task")
             segmented_words = await custom_tokenize_with_semantic_words(
                 text=user_query,
                 dataset_id_list=dataset_id_list
             )
-            await send_event(event_id, {"message": "分词", "action": "complete"}, "message")
-            await send_event(event_id, {"message": "分词结果", "data": segmented_words}, "data")
+            await send_event(event_id, {"task_name": "分词", "task_data": {"segmented_words": segmented_words}},
+                             "task_data")
+            await send_event(event_id, {"task_name": "分词", "task_status": "completed"}, "task")
+            await send_event(event_id, {}, "progress_up")
 
             # 2. 开始获取维度信息
-            await send_event(event_id, {"message": "获取维度信息", "action": "start"}, "message")
-
             # 并行获取维度相关信息
-            dimensions_by_keyword_task = self.semantic_api_client.get_dimension_info_by_keyword_async(
-                keyword=segmented_words,
-                dataset_ids=dataset_id_list
+            dimensions_by_keyword_task = time_task(
+                self.semantic_api_client.get_dimension_info_by_keyword_async(
+                    keyword=segmented_words,
+                    dataset_ids=dataset_id_list,
+                    event_id=event_id
+                ),
+                name="按关键字获取维度"
             )
-            dimensions_by_value_task = self.semantic_api_client.get_dimension_by_dimension_value_async(
-                keyword=segmented_words,
-                dataset_ids=dataset_id_list
+            dimensions_by_value_task = time_task(
+                self.semantic_api_client.get_dimension_by_dimension_value_async(
+                    keyword=segmented_words,
+                    dataset_ids=dataset_id_list,
+                    event_id=event_id
+                ),
+                name="按维度值获取维度"
             )
 
             dimensions_by_keyword, dimensions_by_value = await asyncio.gather(
@@ -115,20 +151,26 @@ class AskdataService:
             # 高基数维度检索（如果启用）
             hc_dim_ids = []
             if enable_deep_search:
-                hc_dimensions_by_value = await self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
-                    keyword_list=segmented_words,
-                    dataset_ids=dataset_id_list,
-                    exclude_dim_ids=keyword_dimension_ids
-                )
+                hc_dimensions_by_value = await time_task(
+                    self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
+                        keyword_list=segmented_words,
+                        dataset_ids=dataset_id_list,
+                        exclude_dim_ids=keyword_dimension_ids,
+                        event_id=event_id
+                    ), name="获取高基数维度信息")
                 hc_dim_ids = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
 
             keyword_dimension_ids.extend(hc_dim_ids)
 
             # 3. 获取指标信息
             await send_event(event_id, {"message": "获取指标信息", "action": "start"}, "message")
-            keyword_metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
-                keyword=segmented_words,
-                dataset_ids=dataset_id_list
+            keyword_metrics = await time_task(
+                self.semantic_api_client.get_metric_info_by_keyword_async(
+                    keyword=segmented_words,
+                    dataset_ids=dataset_id_list,
+                    event_id=event_id
+                ),
+                name="按关键字获取指标"
             )
 
             return keyword_dimension_ids, keyword_metrics, segmented_words
@@ -164,16 +206,14 @@ class AskdataService:
         # 如果有新的指标ID，需要单独查询
         all_metrics = keyword_metrics
         if new_metric_ids:
-            new_metrics = await self.semantic_api_client.get_metric_info_by_id_async(metric_ids=new_metric_ids)
+            new_metrics = await time_task(
+                self.semantic_api_client.get_metric_info_by_id_async(metric_ids=new_metric_ids, event_id=event_id),
+                name="获取LLM提取的指标信息")
             all_metrics.extend(new_metrics)
 
         all_metric_ids = [metric["metricId"] for metric in all_metrics]
 
-        # 5. 获取用户权限
-        user_semantic_permissions = await self.semantic_api_client.get_user_semantic_permissions_async(
-            userid, dataset_id_list
-        )
-
+        # 5. 使用已经获取的用户权限进行过滤
         # 过滤权限
         allowed_dimension_ids, prohibited_dimension_ids = filter_dimensions_by_permissions(
             all_dimension_ids, user_semantic_permissions
@@ -183,11 +223,17 @@ class AskdataService:
         )
 
         # 6. 获取维度值和维度详情（并行）
-        dimension_values_task = self.semantic_api_client.get_dimension_values_async(
-            dimension_ids=allowed_dimension_ids
+        dimension_values_task = time_task(
+            self.semantic_api_client.get_dimension_values_async(
+                dimension_ids=allowed_dimension_ids, event_id=event_id
+            ),
+            name="获取维度值"
         )
-        dimensions_task = self.semantic_api_client.get_dimension_info_by_id_async(
-            dimension_ids=all_dimension_ids
+        dimensions_task = time_task(
+            self.semantic_api_client.get_dimension_info_by_id_async(
+                dimension_ids=all_dimension_ids, event_id=event_id
+            ),
+            name="获取维度详情"
         )
 
         dimension_values, dimensions = await asyncio.gather(
@@ -197,11 +243,18 @@ class AskdataService:
 
         # 将维度和指标简化后进行合并，为交给LLM进一步排除冗余语义做准备
         merged_dimensions_and_metrics = merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics)
-        exclude_dim_and_metric = await self.semantic_relevance_filter.filter_irrelevant_fields(
-            user_query=user_query,
-            dataset_info=merged_dimensions_and_metrics,
-            llm_name=llm_name
+
+        await send_event(event_id, {"task_name": "LLM过滤不相关的维度和指标", "task_status": "working"}, "task")
+        exclude_dim_and_metric = await time_task(
+            self.semantic_relevance_filter.filter_irrelevant_fields(
+                user_query=user_query,
+                dataset_info=merged_dimensions_and_metrics,
+                llm_name=llm_name
+            ),
+            name="LLM过滤不相关的维度和指标"
         )
+        await send_event(event_id, {"task_name": "LLM过滤不相关的维度和指标", "task_status": "completed"}, "task")
+        await send_event(event_id, {}, "progress_up")
 
         dimensions, all_metrics, excluded_details = apply_semantic_filter(
             dimensions=dimensions,
@@ -219,34 +272,49 @@ class AskdataService:
             if metric["metricId"] in prohibited_metric_ids:
                 metric["hasPermission"] = False
 
-        # 完成维度信息获取
-        await send_event(event_id, {"message": "获取维度信息", "action": "complete"}, "message")
-        await send_event(event_id, {"message": "维度信息", "data": dimensions}, "data")
-
-        # 完成指标信息获取
-        await send_event(event_id, {"message": "获取指标信息", "action": "complete"}, "message")
-        await send_event(event_id, {"message": "指标信息", "data": all_metrics}, "data")
-
-        # 7. 获取模型信息
-        await send_event(event_id, {"message": "获取模型信息", "action": "start"}, "message")
-
         model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
-        await send_event(event_id, {"message": "获取模型信息", "action": "complete"}, "message")
-        await send_event(event_id, {"message": "模型信息", "data": model_mappings}, "data")
+        await send_event(event_id, {"message": "最终模型信息", "data": {
+            "model_info_list": model_mappings,
+            "dimension_info_list": [
+                {
+                    "dimension_id": item.get("dimensionId"),
+                    "dimension_name": item.get("dimensionName"),
+                    "model_name": item.get("modelName", None),
+                    "has_permission": item.get("hasPermission", True)
+                }
+                for item in dimensions],
+            "metric_info_list": [
+                {
+                    "metric_id": item.get("metricId"),
+                    "metric_name": item.get("metricName"),
+                    "model_name": item.get("modelName", None),
+                    "has_permission": item.get("hasPermission", True)
+                }
+                for item in all_metrics]
+        }},
+                         "final_data")
 
-        model_details_task = self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
-        model_relations_task = self.semantic_api_client.get_model_relationships_async(model_ids=model_ids)
+        domain_ids = self._extract_unique_domain_ids(dataset_details)
 
-        model_details, model_relations = await asyncio.gather(
-            model_details_task,
-            model_relations_task
+        model_details_task = time_task(
+            self.semantic_api_client.get_model_detail_async(model_ids=model_ids),
+            name="获取模型详情"
+        )
+        model_relations_task = time_task(
+            self.semantic_api_client.get_model_relationships_async(model_ids=model_ids),
+            name="获取模型关系"
+        )
+        business_term_task = time_task(
+            self.semantic_api_client.get_business_term_info_async(
+                keyword=segmented_words,
+                domain_ids=domain_ids),
+            name="获取业务术语"
         )
 
-        # 8. 获取业务术语
-        domain_ids = self._extract_unique_domain_ids(dataset_details)
-        business_term_rows = await self.semantic_api_client.get_business_term_info_async(
-            keyword=segmented_words,
-            domain_ids=domain_ids
+        model_details, model_relations, business_term_rows = await asyncio.gather(
+            model_details_task,
+            model_relations_task,
+            business_term_task
         )
 
         # 9. 构建最终的语义层
@@ -402,7 +470,8 @@ class AskdataService:
         return list(set(d.get('domainId') for d in dataset_details if d.get('domainId')))
 
     async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], sql_components: Dict[str, Any],
-                                   model_table_alias_mapping_list: List[Dict[str, Any]]):
+                                   model_table_alias_mapping_list: List[Dict[str, Any]],
+                                   pagination_info: Optional[Dict[str, Any]]):
         """生成重新查询的SQL语句。"""
         base_from = sql_components["from"]
         from_sentence = ""
@@ -445,8 +514,40 @@ class AskdataService:
                     if raw_condition:
                         assembler.add_raw_where(raw_condition)
                     else:
-                        assembler.add_raw_where(
-                            sql_condition=f"{filter['sql_column']} {filter['operator']} {filter['value']}")
+                        sql_column = filter['sql_column']
+                        operator = filter['operator']
+                        value = filter['value']
+
+                        # 处理不同的操作符
+                        if operator.upper() in ['IS NULL', 'IS NOT NULL']:
+                            # NULL 检查不需要参数
+                            assembler.add_raw_where(f"{sql_column} {operator}")
+                        elif operator.upper() in ['IN', 'NOT IN']:
+                            # IN 操作符需要特殊处理
+                            if isinstance(value, str):
+                                # 如果是字符串，尝试解析为列表
+                                import json
+                                try:
+                                    value_list = json.loads(value)
+                                except:
+                                    # 如果不是 JSON，尝试分割
+                                    value_list = [v.strip().strip("'\"") for v in value.split(',')]
+                            else:
+                                value_list = value if isinstance(value, list) else [value]
+
+                            placeholders = ','.join(['%s'] * len(value_list))
+                            assembler.add_parameterized_where(
+                                f"{sql_column} {operator} ({placeholders})",
+                                value_list
+                            )
+                        elif operator.upper() == 'BETWEEN':
+                            # BETWEEN 需要两个值
+                            # 这里假设 value 包含两个值，可能需要根据实际情况调整
+                            assembler.add_raw_where(f"{sql_column} BETWEEN %s AND %s",
+                                                    [value, filter.get('value2', value)])
+                        else:
+                            # 普通操作符，使用参数化查询
+                            assembler.add_parameterized_where(f"{sql_column} {operator} %s", [value])
 
             for order_by in table_config["order_by"]:
                 if order_by["is_semantic_field"]:
@@ -457,13 +558,27 @@ class AskdataService:
                     direction = order_by["direction"]
                     assembler.add_order_by(column_name, OrderDirection.from_value(direction))
                 else:
-                    assembler.add_order_by(order_by["sql_column"], order_by["direction"])
+                    assembler.add_order_by(order_by["sql_column"], OrderDirection.from_value(order_by["direction"]))
 
-            limit = table_config["limit"]
-            if limit:
-                assembler.set_limit(int(limit) if isinstance(limit, str) else limit)
+            if pagination_info:
+                count_sql, count_sql_params = assembler.build_count_sql_for_jdbc()
+                page_size = int(pagination_info["page_size"])
+                page_index = int(pagination_info["page_index"])
+                assembler.set_pagination(page_index, page_size)
+                sql, params = assembler.build_sql_for_jdbc()
+                return {
+                    "sql": sql,
+                    "params": params,
+                    "count_sql": count_sql,
+                    "count_sql_params": count_sql_params,
+                }
+            else:
+                sql, params = assembler.build_sql_for_jdbc()
+                return {
+                    "sql": sql,
+                    "params": params
+                }
 
-            return assembler.build_sql_for_jdbc()
         elif chart_type == "table-aggr" or chart_type == "bar" or chart_type == "pie" or chart_type == "line" or chart_type == "area" or chart_type == "matrix" or chart_type == "bubble":
             for dimension in table_config["dimensions"]:
                 if dimension["is_semantic_field"]:
@@ -492,7 +607,7 @@ class AskdataService:
                         column_name = f"{table_alias}.{field_name}"
                         aggr_type = metric["type"]
                         if aggr_type == "COUNT_DISTINCT":
-                            alias = f"COUNT_DISTINCT_{model_name}_{{semantic_field['field_detail']['metricEnName']}}"
+                            alias = f"COUNT_DISTINCT_{model_name}_{semantic_field['field_detail']['metricEnName']}"
                             assembler.add_raw_column(f"COUNT(DISTINCT {column_name})",
                                                      alias)
                         else:
@@ -524,10 +639,63 @@ class AskdataService:
                         # 普通情况
                         assembler.add_filter(column_name, FilterOperator.from_value(operator), converted_value)
                 else:
-                    if where_condition.get("sql_column", None):
-                        assembler.add_raw_where(where_condition["sql_column"])
+                    raw_condition = where_condition.get("raw_condition", None)
+                    sql_column = where_condition.get("sql_column", None)
+
+                    if raw_condition:
+                        # 如果有 raw_condition，直接使用
+                        assembler.add_raw_where(raw_condition)
+                    elif sql_column:
+                        # 如果有 sql_column，需要解析并参数化
+                        # sql_column 可能包含完整的条件表达式
+                        # 尝试解析操作符和值
+                        import re
+
+                        # 尝试匹配常见的 SQL 条件模式
+                        patterns = [
+                            (r'^(.+?)\s+(IS\s+NULL|IS\s+NOT\s+NULL)\s*$', lambda m: (m.group(1), m.group(2), None)),
+                            (r'^(.+?)\s+(IN|NOT\s+IN)\s*\((.+)\)\s*$', lambda m: (m.group(1), m.group(2), m.group(3))),
+                            (r'^(.+?)\s+(BETWEEN)\s+(.+?)\s+AND\s+(.+)\s*$',
+                             lambda m: (m.group(1), m.group(2), (m.group(3), m.group(4)))),
+                            (r'^(.+?)\s*(=|!=|<>|>=|<=|>|<|LIKE|NOT\s+LIKE)\s*(.+)\s*$',
+                             lambda m: (m.group(1), m.group(2), m.group(3))),
+                        ]
+
+                        matched = False
+                        for pattern, extractor in patterns:
+                            match = re.match(pattern, sql_column, re.IGNORECASE)
+                            if match:
+                                result = extractor(match)
+                                if len(result) == 3:
+                                    field, op, val = result
+
+                                    if op.upper() in ['IS NULL', 'IS NOT NULL']:
+                                        assembler.add_raw_where(f"{field} {op}")
+                                    elif op.upper() in ['IN', 'NOT IN']:
+                                        # 解析 IN 列表
+                                        val_list = [v.strip().strip("'\"") for v in val.split(',')]
+                                        placeholders = ','.join(['%s'] * len(val_list))
+                                        assembler.add_parameterized_where(f"{field} {op} ({placeholders})", val_list)
+                                    elif op.upper() == 'BETWEEN':
+                                        # BETWEEN 有两个值
+                                        val1, val2 = val
+                                        val1 = val1.strip().strip("'\"")
+                                        val2 = val2.strip().strip("'\"")
+                                        assembler.add_parameterized_where(f"{field} BETWEEN %s AND %s", [val1, val2])
+                                    else:
+                                        # 普通比较操作符
+                                        val = val.strip().strip("'\"")
+                                        assembler.add_parameterized_where(f"{field} {op} %s", [val])
+
+                                    matched = True
+                                    break
+
+                        if not matched:
+                            logger.warning(f"无法解析 where 条件，将作为原始 SQL 添加: {sql_column}")
+                            assembler.add_raw_where(sql_column)
                     else:
-                        assembler.add_raw_where(where_condition["raw_condition"])
+                        # 既没有 raw_condition 也没有 sql_column，跳过
+                        pass
 
             for having_condition in table_config.get("having_conditions", []):
                 if having_condition["is_semantic_field"]:
@@ -557,10 +725,24 @@ class AskdataService:
                 else:
                     assembler.add_order_by(order_by["sql_column"], order_by["direction"])
 
-            if len(sql_components["limit"]) > 0:
-                assembler.set_limit(int(sql_components["limit"]))
-
-            return assembler.build_sql_for_jdbc()
+            if pagination_info:
+                count_sql, count_sql_params = assembler.build_count_sql_for_jdbc()
+                page_size = int(pagination_info["page_size"])
+                page_index = int(pagination_info["page_index"])
+                assembler.set_pagination(page_index, page_size)
+                sql, params = assembler.build_sql_for_jdbc()
+                return {
+                    "sql": sql,
+                    "params": params,
+                    "count_sql": count_sql,
+                    "count_sql_params": count_sql_params,
+                }
+            else:
+                sql, params = assembler.build_sql_for_jdbc()
+                return {
+                    "sql": sql,
+                    "params": params
+                }
 
     async def get_hc_dim_values_by_dim_value(
             self,

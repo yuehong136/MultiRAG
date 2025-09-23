@@ -1,6 +1,6 @@
 # sql_retry_handler.py
 import logging
-from typing import Callable, Dict, Any, List
+from typing import Callable, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,6 @@ class SQLRetryHandler:
             包含执行结果和元信息的字典
         """
         current_sql = sql
-        current_components = fix_params.get("sql_components")
         current_used_models = fix_params.get("used_models")
         execution_history = []
 
@@ -58,7 +57,6 @@ class SQLRetryHandler:
                     "status": "success",
                     "data": result["data"],
                     "final_sql": current_sql,
-                    "sql_components": current_components,
                     "used_models": current_used_models,
                     "was_fixed": attempt > 0,
                     "retry_times": attempt,
@@ -72,7 +70,6 @@ class SQLRetryHandler:
                     "status": "error",
                     "message": result["message"],
                     "final_sql": current_sql,
-                    "sql_components": current_components,
                     "used_models": current_used_models,
                     "was_fixed": attempt > 0,
                     "retry_times": attempt,
@@ -97,7 +94,6 @@ class SQLRetryHandler:
                     "status": "error",
                     "message": f"SQL修复失败: {result['message']}",
                     "final_sql": current_sql,
-                    "sql_components": current_components,
                     "used_models": current_used_models,
                     "was_fixed": attempt > 0,
                     "retry_times": attempt,
@@ -106,7 +102,6 @@ class SQLRetryHandler:
 
             # 更新SQL和相关组件
             current_sql = fix_result["sql"]
-            current_components = fix_result.get("sqlComponents", current_components)
             current_used_models = fix_result.get("usedModels", current_used_models)
             logger.info(f"修复成功，新SQL: {current_sql}")
 

@@ -86,7 +86,6 @@ async def get_sql_and_table_config(
 
         sql = sql_generation_result["sql"]
         used_models = sql_generation_result["usedModels"]
-        sql_components = sql_generation_result["sqlComponents"]
         query_complexity = sql_generation_result["queryComplexity"]
 
         # 构建使用到的模型和表的详情字典
@@ -119,7 +118,6 @@ async def get_sql_and_table_config(
             "user_query": body.user_query,
             "semantic_layer": body.semantic_layer.get('processed_semantic_layer', {}),
             "llm_name": body.llm_name,
-            "sql_components": sql_components,
             "used_models": used_models
         }
 
@@ -140,9 +138,9 @@ async def get_sql_and_table_config(
                 message=f"查询数据失败（尝试{execution_result['retry_times'] + 1}次）: {execution_result['message']}"
             )
 
-        # 更新变量为最终版本
         sql = execution_result["final_sql"]
         result_data = execution_result["data"]
+        data_count = len(result_data.get('data', []))
 
         # 如果SQL被修复过且used_models发生变化，重新构建模型详情
         if execution_result.get("was_fixed") and execution_result.get("used_models"):
@@ -166,10 +164,6 @@ async def get_sql_and_table_config(
                 dataset_id = list(new_intersection_dataset_ids)[0]
                 used_models = final_used_models
 
-        # 更新sql_components（如果被修复过）
-        if execution_result.get("sql_components"):
-            sql_components = execution_result["sql_components"]
-
         # 复杂查询，直接返回结果
         if query_complexity == "complex":
             logger.info(f"当前SQL查询复杂度为：{query_complexity}")
@@ -187,6 +181,31 @@ async def get_sql_and_table_config(
                 data=response_data
             )
 
+        page_size = 20
+        pagination_sql = None
+        pagination_info = None
+        # 数据量过大就需要进行分页
+        if data_count > page_size:
+            # 生成分页的sql
+            pagination_sql = await service.sql_pagination_converter.convert_to_pagination(sql,
+                                                                                          database_type="PostgreSQL",
+                                                                                          llm_name=body.llm_name)
+            sql_components = await service.sql_components_extractor.extract_sql_components(pagination_sql,
+                                                                                           body.llm_name)
+            pass
+        else:
+            sql_components = await service.sql_components_extractor.extract_sql_components(sql, body.llm_name)
+            pass
+
+        if pagination_sql:
+            result = await query_data_with_params(pagination_sql, int(dataset_id), [])
+            result_data = result["data"]
+            pagination_info = {
+                "data_count": data_count,
+                "page_size": page_size,
+                "page_count": (data_count + page_size - 1) // page_size
+            }
+
         # 2. 生成表格配置
         model_table_alias_mapping_list, table_config = await service.generate_table_config(
             used_table_detail_dict=used_table_detail_dict,
@@ -200,6 +219,7 @@ async def get_sql_and_table_config(
         # 4. 构建返回给前端的数据结构
         response_data = {
             "sql": sql,
+            "pagination_sql": pagination_sql,
             "query_complexity": query_complexity,
             "result": result_data,
             "table_config": table_config,
@@ -208,6 +228,7 @@ async def get_sql_and_table_config(
             "dataset_id": dataset_id,
             "was_fixed": execution_result.get("was_fixed", False),
             "retry_times": execution_result.get("retry_times", 0),
+            "pagination_info": pagination_info,
             # "execution_history": execution_result.get("execution_history", [])  # 可选
         }
 
@@ -474,6 +495,7 @@ class ReQueryRequest(BaseModel):
     sql_components: Dict[str, Any] = Field(..., description="SQL组件")
     model_table_alias_mapping_list: List[Dict[str, Any]] = Field(..., description="模型表别名映射列表")
     dataset_id: str = Field(..., description="数据集ID")
+    pagination_info: Optional[Dict[str, Any]] = Field(None, description="分页信息")
 
     class Config:
         protected_namespaces = ()
@@ -495,26 +517,50 @@ async def re_query(
         f"re-query chart_type: {body.chart_type}\n table_config: {body.table_config} \n sql_components: {body.sql_components} \n model_table_alias_mapping_list: {body.model_table_alias_mapping_list}")
 
     try:
-        sql, params = await service.generate_requery_sql(body.chart_type, body.table_config,
+        requery_sql_result = await service.generate_requery_sql(body.chart_type, body.table_config,
                                                          sql_components=body.sql_components,
-                                                         model_table_alias_mapping_list=body.model_table_alias_mapping_list)
+                                                         model_table_alias_mapping_list=body.model_table_alias_mapping_list,
+                                                                                      pagination_info=body.pagination_info)
 
-        logger.info(f"sql:{sql}")
-        logger.info(f"params:{params}")
-
-        result = await query_data_with_params(sql, int(body.dataset_id), params)
-        if result["status"] == "error":
-            logger.error(f"查询数据失败: {result['message']}")
+        if body.pagination_info:
+            result = await query_data_with_params(requery_sql_result["count_sql"], int(body.dataset_id), requery_sql_result["count_sql_params"])
+            if result["status"] == "error":
+                logger.error(f"查询数据失败: {result['message']}")
+                return ResponseSchema(
+                    status=StatusEnum.ERROR,
+                    message=f"查询数据失败: {result['message']}"
+                )
+            count = result.get("data", {}).get("data",[])[0].get("count",{})
+            result = await query_data_with_params(requery_sql_result["sql"], int(body.dataset_id), requery_sql_result["params"])
+            if result["status"] == "error":
+                logger.error(f"查询数据失败: {result['message']}")
+                return ResponseSchema(
+                    status=StatusEnum.ERROR,
+                    message=f"查询数据失败: {result['message']}"
+                )
             return ResponseSchema(
-                status=StatusEnum.ERROR,
-                message=f"查询数据失败: {result['message']}"
+                status=StatusEnum.SUCCESS,
+                message="生成re-query SQL成功",
+                data={"result": result["data"], "pagination_info": {
+                    "page_size": body.pagination_info["page_size"],
+                    "page_index": body.pagination_info["page_index"],
+                    "data_count": count
+                }}
             )
+        else:
+            result = await query_data_with_params(requery_sql_result["sql"], int(body.dataset_id), requery_sql_result["params"])
+            if result["status"] == "error":
+                logger.error(f"查询数据失败: {result['message']}")
+                return ResponseSchema(
+                    status=StatusEnum.ERROR,
+                    message=f"查询数据失败: {result['message']}"
+                )
 
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="生成re-query SQL成功",
-            data={"result": result["data"]}
-        )
+            return ResponseSchema(
+                status=StatusEnum.SUCCESS,
+                message="生成re-query SQL成功",
+                data={"result": result["data"]}
+            )
 
     except Exception as e:
         logger.exception("生成re-query SQL失败")

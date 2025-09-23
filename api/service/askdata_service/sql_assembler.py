@@ -67,7 +67,11 @@ class DatabaseDialect:
 
     @staticmethod
     def escape_identifier(identifier: str, db_type: DatabaseType) -> str:
-        """根据数据库类型转义标识符"""
+        """
+        根据数据库类型转义标识符
+
+        改进版本：能够智能处理已经部分或完全转义的标识符
+        """
         if not identifier or identifier.strip() == '':
             return identifier
 
@@ -76,17 +80,67 @@ class DatabaseDialect:
 
         left_quote, right_quote = DatabaseDialect.get_identifier_quote(db_type)
 
+        # 检查标识符是否已经被完全转义
+        def is_fully_quoted(s: str) -> bool:
+            """检查字符串是否已经被引号包围"""
+            if not s:
+                return False
+            # 检查是否被当前数据库的引号包围
+            if s.startswith(left_quote) and s.endswith(right_quote):
+                return True
+            # 也检查其他常见的引号
+            quote_pairs = [('`', '`'), ('"', '"'), ('[', ']')]
+            for lq, rq in quote_pairs:
+                if s.startswith(lq) and s.endswith(rq):
+                    return True
+            return False
+
+        def clean_quotes(s: str) -> str:
+            """移除字符串两端的引号"""
+            if not s:
+                return s
+            # 移除各种可能的引号
+            quote_pairs = [('`', '`'), ('"', '"'), ('[', ']')]
+            for lq, rq in quote_pairs:
+                if s.startswith(lq) and s.endswith(rq):
+                    return s[len(lq):-len(rq)]
+            return s
+
+        def add_quotes(s: str) -> str:
+            """给字符串添加适当的引号"""
+            if not s:
+                return s
+            return f'{left_quote}{s}{right_quote}'
+
         # 处理复合标识符（如 table.column）
         if '.' in identifier:
             parts = identifier.split('.')
             escaped_parts = []
+
             for part in parts:
                 part = part.strip()
-                if part:  # 确保不是空字符串
-                    escaped_parts.append(f'{left_quote}{part}{right_quote}')
+                if not part:  # 跳过空部分
+                    continue
+
+                # 如果这部分已经被引号包围，先移除旧引号
+                if is_fully_quoted(part):
+                    # 对于已经有引号的部分，检查是否需要更换引号类型
+                    clean_part = clean_quotes(part)
+                    escaped_parts.append(add_quotes(clean_part))
+                else:
+                    # 没有引号的部分，直接添加引号
+                    escaped_parts.append(add_quotes(part))
+
             return '.'.join(escaped_parts)
         else:
-            return f'{left_quote}{identifier}{right_quote}'
+            # 单个标识符
+            if is_fully_quoted(identifier):
+                # 如果已经有引号，可能需要更换引号类型
+                clean_identifier = clean_quotes(identifier)
+                return add_quotes(clean_identifier)
+            else:
+                # 没有引号，直接添加
+                return add_quotes(identifier)
 
 
 class SQLFragment(ABC):
@@ -616,8 +670,19 @@ class FlexibleSQLAssembler:
         return self
 
     # ============ ORDER BY相关方法 ============
-    def add_order_by(self, field: str, direction: OrderDirection = OrderDirection.ASC) -> 'FlexibleSQLAssembler':
-        """添加标准排序"""
+    def add_order_by(self, field: str,
+                     direction: Union[OrderDirection, str] = OrderDirection.ASC) -> 'FlexibleSQLAssembler':
+        """
+        添加标准排序
+
+        Args:
+            field: 排序字段，可以是简单字段名或包含表别名的复合字段
+            direction: 排序方向，可以是OrderDirection枚举或字符串
+        """
+        # 处理direction参数
+        if isinstance(direction, str):
+            direction = OrderDirection.from_value(direction.upper())
+
         order_clause = OrderByClause(field, direction)
         self.order_by_parts.append(order_clause)
         return self
@@ -663,6 +728,75 @@ class FlexibleSQLAssembler:
         """设置LIMIT和OFFSET"""
         self.limit_count = limit
         self.offset_count = offset if offset > 0 else None
+        return self
+
+    def set_offset(self, offset: int) -> 'FlexibleSQLAssembler':
+        """
+        单独设置OFFSET值
+
+        Args:
+            offset: 偏移量，必须为非负整数
+
+        Returns:
+            self: 返回自身以支持链式调用
+
+        Raises:
+            ValueError: 如果offset为负数
+
+        Example:
+            >>> assembler = FlexibleSQLAssembler("users")
+            >>> assembler.set_limit(10).set_offset(20)  # 获取第21-30条记录
+            >>> assembler.set_offset(50)  # 单独设置offset
+        """
+        if offset < 0:
+            raise ValueError("OFFSET值不能为负数")
+
+        self.offset_count = offset if offset > 0 else None
+        return self
+
+    def set_pagination(self, page: int, page_size: int) -> 'FlexibleSQLAssembler':
+        """
+        便捷的分页设置方法
+
+        Args:
+            page: 页码，从1开始
+            page_size: 每页记录数
+
+        Returns:
+            self: 返回自身以支持链式调用
+
+        Raises:
+            ValueError: 如果page小于1或page_size小于等于0
+
+        Example:
+            >>> assembler = FlexibleSQLAssembler("users")
+            >>> assembler.set_pagination(3, 20)  # 获取第3页，每页20条
+            # 相当于 LIMIT 20 OFFSET 40
+        """
+        if page < 1:
+            raise ValueError("页码必须从1开始")
+        if page_size <= 0:
+            raise ValueError("每页记录数必须大于0")
+
+        offset = (page - 1) * page_size
+        self.limit_count = page_size
+        self.offset_count = offset if offset > 0 else None
+        return self
+
+    def clear_pagination(self) -> 'FlexibleSQLAssembler':
+        """
+        清除分页设置（LIMIT和OFFSET）
+
+        Returns:
+            self: 返回自身以支持链式调用
+
+        Example:
+            >>> assembler = FlexibleSQLAssembler("users")
+            >>> assembler.set_limit(10).set_offset(20)
+            >>> assembler.clear_pagination()  # 清除limit和offset设置
+        """
+        self.limit_count = None
+        self.offset_count = None
         return self
 
     def add_clause(self, clause_name: str, sql_content: str) -> 'FlexibleSQLAssembler':
@@ -740,11 +874,54 @@ class FlexibleSQLAssembler:
 
         # 构建LIMIT子句
         limit_clause = ""
-        if self.limit_count is not None:
-            if self.offset_count is not None:
-                limit_clause = f"LIMIT {self.offset_count}, {self.limit_count}"
-            else:
-                limit_clause = f"LIMIT {self.limit_count}"
+        if self.limit_count is not None or self.offset_count is not None:
+            if self.db_type == DatabaseType.MYSQL:
+                # MySQL支持两种格式：
+                # 1. LIMIT limit
+                # 2. LIMIT limit OFFSET offset （推荐，更清晰）
+                # 3. LIMIT offset, limit （旧格式，容易混淆）
+                if self.limit_count is not None and self.offset_count is not None:
+                    # 使用更清晰的格式：LIMIT limit OFFSET offset
+                    limit_clause = f"LIMIT {self.limit_count} OFFSET {self.offset_count}"
+                elif self.limit_count is not None:
+                    limit_clause = f"LIMIT {self.limit_count}"
+                elif self.offset_count is not None:
+                    # 仅有offset时，MySQL需要一个很大的limit值
+                    limit_clause = f"LIMIT 18446744073709551615 OFFSET {self.offset_count}"
+
+            elif self.db_type in [DatabaseType.POSTGRESQL, DatabaseType.SQLITE]:
+                # PostgreSQL/SQLite: LIMIT limit OFFSET offset
+                parts = []
+                if self.limit_count is not None:
+                    parts.append(f"LIMIT {self.limit_count}")
+                if self.offset_count is not None:
+                    parts.append(f"OFFSET {self.offset_count}")
+                limit_clause = " ".join(parts)
+
+            elif self.db_type == DatabaseType.SQL_SERVER:
+                # SQL Server 2012+: 使用OFFSET...FETCH（需要ORDER BY）
+                if self.order_by_parts:
+                    offset_val = self.offset_count if self.offset_count is not None else 0
+                    limit_clause = f"OFFSET {offset_val} ROWS"
+                    if self.limit_count is not None:
+                        limit_clause += f" FETCH NEXT {self.limit_count} ROWS ONLY"
+                elif self.limit_count is not None:
+                    # 没有ORDER BY时，使用TOP
+                    # 注意：这需要在SELECT后面添加，不是在末尾
+                    # 这里暂时使用标准格式，实际使用时可能需要调整
+                    print("警告：SQL Server在没有ORDER BY时使用OFFSET/FETCH需要ORDER BY子句")
+
+            elif self.db_type == DatabaseType.ORACLE:
+                # Oracle 12c+: 使用OFFSET...FETCH
+                if self.offset_count is not None or self.limit_count is not None:
+                    offset_val = self.offset_count if self.offset_count is not None else 0
+                    if offset_val > 0:
+                        limit_clause = f"OFFSET {offset_val} ROWS"
+                    if self.limit_count is not None:
+                        if offset_val > 0:
+                            limit_clause += f" FETCH NEXT {self.limit_count} ROWS ONLY"
+                        else:
+                            limit_clause = f"FETCH FIRST {self.limit_count} ROWS ONLY"
 
         # 组装完整SQL
         sql_parts = [select_clause, from_clause]
@@ -768,6 +945,37 @@ class FlexibleSQLAssembler:
         jdbc_sql = sql.replace('%s', '?')
         return jdbc_sql, params
 
+    def build_count_sql_for_jdbc(self) -> Tuple[str, List[Any]]:
+        """
+        构建用于获取总数的JDBC格式SQL语句
+        将当前SQL作为子查询，外层包装COUNT(*)
+
+        Returns:
+            (JDBC格式的COUNT SQL, 参数列表)
+        """
+        # 临时保存并清除limit设置（确保子查询中没有limit）
+        temp_limit = self.limit_count
+        temp_offset = self.offset_count
+        self.limit_count = None
+        self.offset_count = None
+
+        try:
+            # 构建内部子查询SQL
+            inner_sql, params = self.build_sql()
+
+            # 将%s替换为?（JDBC格式）
+            jdbc_inner_sql = inner_sql.replace('%s', '?')
+
+            # 构建COUNT查询，将原SQL作为子查询
+            count_sql = f"SELECT COUNT(*) FROM ({jdbc_inner_sql}) AS count_subquery"
+
+            return count_sql, params
+
+        finally:
+            # 恢复limit设置
+            self.limit_count = temp_limit
+            self.offset_count = temp_offset
+
     def clear_all(self) -> 'FlexibleSQLAssembler':
         """清空所有设置"""
         self.select_parts.clear()
@@ -779,262 +987,3 @@ class FlexibleSQLAssembler:
         self.limit_count = None
         self.offset_count = None
         return self
-
-
-# 使用示例
-if __name__ == "__main__":
-    # 示例1：基本的GROUP BY和HAVING使用
-    print("=== 示例1：基本的GROUP BY和HAVING ===")
-    assembler = FlexibleSQLAssembler(
-        "orders o INNER JOIN customers c ON o.customer_id = c.id",
-        DatabaseType.MYSQL
-    )
-
-    sql1, params1 = (assembler
-                     .add_column("c.country")
-                     .add_raw_column("COUNT(*)", "order_count")
-                     .add_raw_column("SUM(o.total_amount)", "total_revenue")
-                     .add_filter("o.status", FilterOperator.EQUALS, "completed")
-                     .add_group_by("c.country")
-                     .add_having("COUNT(*)", FilterOperator.GREATER_THAN, 10)
-                     .add_having("SUM(o.total_amount)", FilterOperator.GREATER_THAN, 50000)
-                     .add_order_by("total_revenue", OrderDirection.DESC)
-                     .build_sql())
-
-    print(f"SQL: {sql1}")
-    print(f"参数: {params1}")
-    print()
-
-    # 示例2：复杂的GROUP BY（按表达式分组）
-    print("=== 示例2：按表达式分组 ===")
-    assembler.clear_all()
-
-    sql2, params2 = (assembler
-                     .add_raw_column("YEAR(o.created_at)", "order_year")
-                     .add_raw_column("MONTH(o.created_at)", "order_month")
-                     .add_raw_column("COUNT(*)", "monthly_orders")
-                     .add_raw_column("AVG(o.total_amount)", "avg_order_value")
-                     .add_filter("o.created_at", FilterOperator.GREATER_EQUAL, "2023-01-01")
-                     .add_raw_group_by("YEAR(o.created_at), MONTH(o.created_at)")
-                     .add_having("COUNT(*)", FilterOperator.GREATER_THAN, 100)
-                     .add_order_by("order_year", OrderDirection.DESC)
-                     .add_order_by("order_month", OrderDirection.DESC)
-                     .build_sql())
-
-    print(f"SQL: {sql2}")
-    print(f"参数: {params2}")
-    print()
-
-    # 示例3：多字段分组
-    print("=== 示例3：多字段分组 ===")
-    assembler.clear_all()
-
-    sql3, params3 = (assembler
-                     .add_column("c.country")
-                     .add_column("c.city")
-                     .add_column("o.product_category")
-                     .add_raw_column("COUNT(DISTINCT o.customer_id)", "unique_customers")
-                     .add_raw_column("SUM(o.quantity)", "total_quantity")
-                     .add_multiple_group_by(["c.country", "c.city", "o.product_category"])
-                     .add_having("SUM(o.quantity)", FilterOperator.BETWEEN, 100, 1000)
-                     .build_sql())
-
-    print(f"SQL: {sql3}")
-    print(f"参数: {params3}")
-    print()
-
-    # 示例4：参数化的HAVING条件
-    print("=== 示例4：参数化的HAVING条件 ===")
-    assembler.clear_all()
-
-    min_orders = 5
-    min_revenue = 10000
-    max_revenue = 100000
-
-    sql4, params4 = (assembler
-                     .add_column("c.customer_id")
-                     .add_column("c.customer_name")
-                     .add_raw_column("COUNT(o.order_id)", "total_orders")
-                     .add_raw_column("SUM(o.total_amount)", "lifetime_value")
-                     .add_group_by("c.customer_id")
-                     .add_group_by("c.customer_name")
-                     .add_parameterized_having(
-        "COUNT(o.order_id) >= %s AND SUM(o.total_amount) BETWEEN %s AND %s",
-        [min_orders, min_revenue, max_revenue]
-    )
-                     .add_order_by("lifetime_value", OrderDirection.DESC)
-                     .set_limit(10)
-                     .build_sql())
-
-    print(f"SQL: {sql4}")
-    print(f"参数: {params4}")
-    print()
-
-    # 示例5：原始HAVING条件
-    print("=== 示例5：复杂的原始HAVING条件 ===")
-    assembler.clear_all()
-
-    sql5, params5 = (assembler
-                     .add_column("o.product_id")
-                     .add_raw_column("COUNT(*)", "sale_count")
-                     .add_raw_column("AVG(o.unit_price)", "avg_price")
-                     .add_raw_column("STDDEV(o.unit_price)", "price_variance")
-                     .add_group_by("o.product_id")
-                     .add_raw_having(
-        "COUNT(*) > 20 AND (AVG(o.unit_price) > 100 OR STDDEV(o.unit_price) < 10)"
-    )
-                     .build_sql())
-
-    print(f"SQL: {sql5}")
-    print(f"参数: {params5}")
-    print()
-
-    # 示例6：带ROLLUP的GROUP BY（MySQL特性）
-    print("=== 示例6：带ROLLUP的GROUP BY ===")
-    assembler.clear_all()
-
-    sql6, params6 = (assembler
-                     .add_column("c.region")
-                     .add_column("c.country")
-                     .add_raw_column("SUM(o.total_amount)", "total_sales")
-                     .add_raw_column("COUNT(DISTINCT o.customer_id)", "customer_count")
-                     .add_raw_group_by("c.region, c.country WITH ROLLUP")
-                     .build_sql())
-
-    print(f"SQL: {sql6}")
-    print(f"参数: {params6}")
-    print()
-
-    # 示例7：综合示例 - 销售分析报表
-    print("=== 示例7：综合销售分析报表 ===")
-    assembler.clear_all()
-
-    current_year = 2024
-
-    sql7, params7 = (assembler
-                     .add_raw_column("DATE_FORMAT(o.created_at, '%Y-%m')", "month")
-                     .add_column("p.category")
-                     .add_raw_column("COUNT(DISTINCT o.order_id)", "order_count")
-                     .add_raw_column("COUNT(DISTINCT o.customer_id)", "customer_count")
-                     .add_raw_column("SUM(o.quantity)", "units_sold")
-                     .add_raw_column("SUM(o.total_amount)", "revenue")
-                     .add_raw_column("AVG(o.total_amount)", "avg_order_value")
-                     .add_raw_column("SUM(o.total_amount) / COUNT(DISTINCT o.customer_id)", "revenue_per_customer")
-                     .add_clause("additional_joins", "INNER JOIN products p ON o.product_id = p.id")
-                     .add_parameterized_where("YEAR(o.created_at) = %s", [current_year])
-                     .add_filter("o.status", FilterOperator.IN, ["completed", "shipped"])
-                     .add_raw_group_by("DATE_FORMAT(o.created_at, '%Y-%m'), p.category")
-                     .add_having("SUM(o.total_amount)", FilterOperator.GREATER_THAN, 10000)
-                     .add_raw_having("COUNT(DISTINCT o.customer_id) >= 50")
-                     .add_raw_order_by("DATE_FORMAT(o.created_at, '%Y-%m')")
-                     .add_order_by("revenue", OrderDirection.DESC)
-                     .build_sql())
-
-    print(f"SQL: {sql7}")
-    print(f"参数: {params7}")
-    print()
-
-    # 示例8：HAVING中使用IN操作符
-    print("=== 示例8：HAVING中使用IN操作符 ===")
-    assembler.clear_all()
-
-    target_counts = [10, 20, 30, 40, 50]
-
-    sql8, params8 = (assembler
-                     .add_column("c.customer_id")
-                     .add_raw_column("COUNT(o.order_id)", "order_count")
-                     .add_group_by("c.customer_id")
-                     .add_having("COUNT(o.order_id)", FilterOperator.IN, target_counts)
-                     .build_sql_for_jdbc())  # 使用JDBC格式
-
-    print(f"JDBC SQL: {sql8}")
-    print(f"参数: {params8}")
-    print()
-
-    print("=== 总结：GROUP BY和HAVING的使用方式 ===")
-    print("1. 标准分组 -> 使用 add_group_by()")
-    print("2. 表达式分组 -> 使用 add_raw_group_by()")
-    print("3. 多字段分组 -> 使用 add_multiple_group_by()")
-    print("4. 标准HAVING -> 使用 add_having()")
-    print("5. 复杂HAVING -> 使用 add_raw_having()")
-    print("6. 参数化HAVING -> 使用 add_parameterized_having()")
-
-    print("=== 测试增强的raw方法 ===")
-
-    assembler = FlexibleSQLAssembler("users u", DatabaseType.MYSQL)
-
-    # 测试1: 用户误传入WHERE关键字
-    print("\n测试1: 误传入WHERE关键字")
-    try:
-        assembler.add_raw_where("WHERE u.age > 18")
-        assembler.add_raw_where("u.status = 'active'")  # 正确格式
-        sql, params = assembler.build_sql()
-        print(f"生成的SQL: {sql}")
-    except ValueError as e:
-        print(f"错误: {e}")
-
-    assembler.clear_all()
-
-    # 测试2: 用户误传入HAVING关键字
-    print("\n测试2: 误传入HAVING关键字")
-    try:
-        assembler.add_raw_column("COUNT(*)", "user_count")
-        assembler.add_group_by("u.department")
-        assembler.add_raw_having("HAVING COUNT(*) > 5")  # 会被清理
-        assembler.add_raw_having("SUM(u.salary) > 100000")  # 正确格式
-        sql, params = assembler.build_sql()
-        print(f"生成的SQL: {sql}")
-    except ValueError as e:
-        print(f"错误: {e}")
-
-    assembler.clear_all()
-
-    # 测试3: 用户传入空条件
-    print("\n测试3: 传入空条件")
-    try:
-        assembler.add_raw_where("")
-    except ValueError as e:
-        print(f"预期错误: {e}")
-
-    # 测试4: 用户传入只有关键字的条件
-    print("\n测试4: 传入只有关键字的条件")
-    try:
-        assembler.add_raw_where("WHERE")
-    except ValueError as e:
-        print(f"预期错误: {e}")
-
-    # 测试5: 测试ORDER BY和GROUP BY的清理
-    print("\n测试5: ORDER BY和GROUP BY关键字清理")
-    assembler.clear_all()
-    try:
-        assembler.add_raw_group_by("GROUP BY DATE(u.created_at)")
-        assembler.add_raw_order_by("ORDER BY u.name ASC")
-        assembler.add_raw_column("COUNT(*)", "count")
-        sql, params = assembler.build_sql()
-        print(f"生成的SQL: {sql}")
-    except ValueError as e:
-        print(f"错误: {e}")
-
-    # 测试6: 智能条件添加方法
-    print("\n测试6: 智能条件添加")
-    assembler.clear_all()
-    try:
-        # 使用字符串
-        assembler.add_where_condition("u.age > 18")
-        # 使用FilterCondition对象
-        condition = FilterCondition("u.status", FilterOperator.EQUALS, "active")
-        assembler.add_where_condition(condition)
-
-        sql, params = assembler.build_sql()
-        print(f"生成的SQL: {sql}")
-        print(f"参数: {params}")
-    except ValueError as e:
-        print(f"错误: {e}")
-
-    print("\n=== 改进总结 ===")
-    print("1. 自动检测并移除用户误传入的关键字（WHERE、HAVING、ORDER BY、GROUP BY）")
-    print("2. 提供友好的警告信息，告知用户已进行自动清理")
-    print("3. 增加内容验证，确保条件不为空且语法基本正确")
-    print("4. 提供可选的验证开关，允许用户跳过验证")
-    print("5. 添加智能条件添加方法，支持多种输入类型")
-    print("6. 增强错误处理，提供更详细的错误信息")

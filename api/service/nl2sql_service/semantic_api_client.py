@@ -14,6 +14,7 @@ import aiohttp
 from typing import List, Dict, Any, Optional, Union, Callable
 from urllib.parse import urljoin
 
+from api.service.askdata_service.event.event_utils import send_event
 from api.settings import DCS_SERVER_PROTOCOL, DCS_SERVER_HOST, DCS_SERVER_PORT
 
 # 配置日志
@@ -254,7 +255,8 @@ class SemanticApiClient:
             max_pages: int = 100,
             extract_rows: bool = True,
             max_concurrent: int = 5,
-            deduplicate_by_dimension_id: bool = True
+            deduplicate_by_dimension_id: bool = True,
+            event_id: Optional[str] = None
     ) -> Union[Dict, List[Dict]]:
         """
         异步获取所有维度信息（支持多关键词，自动分页，并发请求，支持维度ID去重）
@@ -277,6 +279,8 @@ class SemanticApiClient:
         """
         logger.info(f"\n=== 根据维度名称搜索维度信息 ===")
         logger.info(f"dataset_ids: {dataset_ids}")
+        if event_id:
+            await send_event(event_id, {"task_name": "分词获取维度信息", "task_status": "working"}, "task")
         # 转换单个关键词为列表
         if isinstance(keyword, str):
             keywords = [keyword]
@@ -460,6 +464,20 @@ class SemanticApiClient:
                         f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
                     all_results = final_unique_results
 
+            if event_id:
+                await send_event(event_id, {"task_name": "分词获取维度信息", "task_data": {
+                    "dimension_info_list": [
+                        {
+                            "dimension_id": item.get("dimensionId"),
+                            "dimension_name": item.get("dimensionName"),
+                            "model_name": item.get("modelName", None)
+                        }
+                        for item in all_results
+                    ]
+                }}, "task_data")
+                await send_event(event_id, {"task_name": "分词获取维度信息", "task_status": "completed"}, "task")
+                await send_event(event_id, {}, "progress_up")
+
             return all_results
 
         except Exception as e:
@@ -478,7 +496,8 @@ class SemanticApiClient:
             max_pages: int = 100,
             extract_rows: bool = True,
             max_concurrent: int = 5,
-            deduplicate_by_dimension_id: bool = True
+            deduplicate_by_dimension_id: bool = True,
+            event_id: Optional[str] = None
     ) -> Union[Dict, List[Dict]]:
         """
         异步搜索维度值（支持多关键词，自动分页，并发请求，支持维度ID去重）
@@ -502,6 +521,8 @@ class SemanticApiClient:
         """
         logger.info(f"\n=== 根据维度值名称搜索维度信息 ===")
         logger.info(f"dataset_ids: {dataset_ids}")
+        if event_id:
+            await send_event(event_id, {"task_name": "维度值匹配维度", "task_status": "working"}, "task")
         # 转换单个关键词为列表
         if isinstance(keyword, str):
             keywords = [keyword]
@@ -693,6 +714,19 @@ class SemanticApiClient:
                         f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
                     all_results = final_unique_results
 
+            if event_id:
+                await send_event(event_id, {"task_name": "维度值匹配维度", "task_data": {
+                    "dimension_info_list": [
+                        {
+                            "dimension_id": item.get("dimensionId"),
+                            "dimension_name": item.get("dimensionName"),
+                            "model_name": item.get("modelName", None)
+                        }
+                        for item in all_results
+                    ]
+                }}, "task_data")
+                await send_event(event_id, {"task_name": "维度值匹配维度", "task_status": "completed"}, "task")
+                await send_event(event_id, {}, "progress_up")
             return all_results
 
         except Exception as e:
@@ -707,7 +741,8 @@ class SemanticApiClient:
             keyword_list: List[str],
             dataset_ids: List[str],
             exclude_dim_ids: List[str] = None,
-            fuzzy_match: bool = True
+            fuzzy_match: bool = True,
+            event_id: Optional[str] = None
     ) -> List[Dict]:
         """
         异步获取HC维度信息（通过维度值搜索）
@@ -717,6 +752,8 @@ class SemanticApiClient:
         logger.info(f"数据集ID: {dataset_ids}")
         logger.info(f"排除维度ID: {exclude_dim_ids}")
         logger.info(f"模糊匹配: {fuzzy_match}")
+        if event_id:
+            await send_event(event_id, {"task_name": "维度值匹配高基数维度", "task_status": "working"}, "task")
 
         # 参数验证
         if not keyword_list:
@@ -761,7 +798,19 @@ class SemanticApiClient:
                     logger.info(f"    数据对象={dataobject}, 匹配关键词={matched_keywords}")
             else:
                 logger.info("未获取到任何HC维度信息")
-
+            if event_id:
+                await send_event(event_id, {"task_name": "维度值匹配高基数维度", "task_data": {
+                    "dimension_info_list": [
+                        {
+                            "dimension_id": item.get("dimensionId"),
+                            "dimension_name": item.get("dimensionName"),
+                            "model_name": item.get("modelName", None)
+                        }
+                        for item in hc_dimensions
+                    ]
+                }}, "task_data")
+                await send_event(event_id, {"task_name": "维度值匹配高基数维度", "task_status": "completed"}, "task")
+                await send_event(event_id, {}, "progress_up")
             return hc_dimensions
 
         except SemanticApiError as e:
@@ -782,7 +831,8 @@ class SemanticApiClient:
             max_pages: int = 100,
             extract_rows: bool = True,
             max_concurrent: int = 5,
-            deduplicate_by_metric_id: bool = True
+            deduplicate_by_metric_id: bool = True,
+            event_id: Optional[str] = None
     ) -> Union[Dict, List[Dict]]:
         """
         异步获取指标信息（支持多关键词，自动分页，并发请求，支持指标ID去重）
@@ -806,6 +856,8 @@ class SemanticApiClient:
         """
         logger.info(f"\n=== 根据指标名称搜索指标信息 ===")
         logger.info(f"dataset_ids: {dataset_ids}")
+        if event_id:
+            await send_event(event_id, {"task_name": "按关键字获取指标", "task_status": "working"}, "task")
         # 转换单个关键词为列表
         if isinstance(keyword, str):
             keywords = [keyword]
@@ -998,7 +1050,19 @@ class SemanticApiClient:
                     logger.warning(
                         f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
                     all_results = final_unique_results
-
+            if event_id:
+                await send_event(event_id, {"task_name": "按关键字获取指标", "task_data": {
+                    "metric_info_list": [
+                        {
+                            "metric_id": item.get("metricId"),
+                            "metric_name": item.get("metricName"),
+                            "model_name": item.get("modelName", None)
+                        }
+                        for item in all_results
+                    ]
+                }}, "task_data")
+                await send_event(event_id, {"task_name": "按关键字获取指标", "task_status": "completed"}, "task")
+                await send_event(event_id, {}, "progress_up")
             return all_results
 
         except Exception as e:
@@ -1011,7 +1075,8 @@ class SemanticApiClient:
     async def get_dimension_info_by_id_async(
             self,
             dimension_ids: Union[str, List[str]],
-            max_concurrent: int = 5
+            max_concurrent: int = 5,
+            event_id: Optional[str] = None
     ) -> List[Dict]:
         """
         异步获取维度详情信息（支持单个ID或ID列表，并发请求）
@@ -1028,6 +1093,8 @@ class SemanticApiClient:
             ApiResponseError: API响应错误（业务状态码非0）
         """
         logger.info(f"\n=== 根据维度ID获取维度详情 ===")
+        if event_id:
+            await send_event(event_id, {"task_name": "按id获取维度信息", "task_status": "working"}, "task")
 
         if not dimension_ids:
             return []
@@ -1121,6 +1188,9 @@ class SemanticApiClient:
 
             # 返回所有结果
             logger.info(f"总共获取到 {len(all_results)} 条维度详情信息")
+            if event_id:
+                await send_event(event_id, {"task_name": "按id获取维度信息", "task_status": "completed"}, "task")
+                await send_event(event_id, {}, "progress_up")
             return all_results
 
         except Exception as e:
@@ -1136,7 +1206,8 @@ class SemanticApiClient:
     async def get_metric_info_by_id_async(
             self,
             metric_ids: Union[str, List[str]],
-            max_concurrent: int = 5
+            max_concurrent: int = 5,
+            event_id: Optional[str] = None
     ) -> List[Dict]:
         """
         异步获取指标详情信息（支持单个ID或ID列表，并发请求）
@@ -1153,6 +1224,8 @@ class SemanticApiClient:
             ApiResponseError: API响应错误（业务状态码非0）
         """
         logger.info(f"\n=== 根据指标ID获取指标详情 ===")
+        if event_id:
+            await send_event(event_id, {"task_name": "按id获取指标", "task_status": "working"}, "task")
 
         if not metric_ids:
             return []
@@ -1246,6 +1319,19 @@ class SemanticApiClient:
 
             # 返回所有结果
             logger.info(f"总共获取到 {len(all_results)} 条指标详情信息")
+            if event_id:
+                await send_event(event_id, {"task_name": "按id获取指标", "task_data": {
+                    "metric_info_list": [
+                        {
+                            "metric_id": item.get("metricId"),
+                            "metric_name": item.get("metricName"),
+                            "model_name": item.get("modelName", None)
+                        }
+                        for item in all_results
+                    ]
+                }}, "task_data")
+                await send_event(event_id, {"task_name": "按id获取指标", "task_status": "completed"}, "task")
+                await send_event(event_id, {}, "progress_up")
             return all_results
 
         except Exception as e:
@@ -1557,7 +1643,8 @@ class SemanticApiClient:
     async def get_dataset_detail_async(
             self,
             dataset_ids: Union[str, List[str]],
-            max_concurrent: int = 5
+            max_concurrent: int = 5,
+            event_id: Optional[str] = None
     ) -> List[Dict]:
         """
         异步获取数据集详情信息（支持单个ID或ID列表，并发请求）
@@ -1575,6 +1662,8 @@ class SemanticApiClient:
             ApiNetworkError: 网络连接错误
         """
         logger.info(f"\n=== 根据数据集ID获取数据集详情 ===")
+        if event_id:
+            await send_event(event_id, {"task_name": "获取数据集详情", "task_status": "working"}, "task")
 
         # 确保API路径已添加
         if "get_dataset_detail" not in self.api_paths:
@@ -1696,6 +1785,10 @@ class SemanticApiClient:
                 if "models" not in result or not isinstance(result["models"], list):
                     logger.warning(
                         f"数据集 {result.get('datasetName', result.get('requested_dataset_id', '未知ID'))} 的模型信息格式不正确")
+
+            if event_id:
+                await send_event(event_id, {"task_name": "获取数据集详情", "task_status": "completed"}, "task")
+                await send_event(event_id, {}, "progress_up")
 
             return all_results
 
@@ -1985,7 +2078,8 @@ class SemanticApiClient:
             dimension_ids: Union[str, List[str]],
             page_size: int = 100,
             max_pages: int = 100,
-            max_concurrent: int = 5
+            max_concurrent: int = 5,
+            event_id: Optional[str] = None
     ) -> Dict[str, List[Dict]]:
         """
         异步获取维度值列表（支持单个维度ID或维度ID列表，自动分页，并发请求）
@@ -2005,6 +2099,8 @@ class SemanticApiClient:
             ApiNetworkError: 网络连接错误
         """
         logger.info(f"\n=== 获取维度值列表 ===")
+        if event_id:
+            await send_event(event_id, {"task_name": "获取维度值列表", "task_status": "working"}, "task")
 
         if not dimension_ids:
             return {}
@@ -2145,7 +2241,9 @@ class SemanticApiClient:
                     for idx, value in enumerate(values):
                         if 'value' not in value or not value['value']:
                             logger.warning(f"维度ID '{dim_id}' 的第 {idx + 1} 个维度值缺少value字段")
-
+            if event_id:
+                await send_event(event_id, {"task_name": "获取维度值列表", "task_status": "completed"}, "task")
+                await send_event(event_id, {}, "progress_up")
             return dimension_values_dict
 
         except SemanticApiError as e:
@@ -2329,11 +2427,14 @@ class SemanticApiClient:
     async def get_user_semantic_permissions_async(
             self,
             user_id: str,
-            dataset_id_list: List[str]
+            dataset_id_list: List[str],
+            event_id: Optional[str] = None
     ) -> Optional[Dict]:
         logger.info(f"\n=== 获取用户语义权限信息 ===")
         logger.info(f"用户ID: {user_id}")
         logger.info(f"数据集ID列表: {dataset_id_list}")
+        if event_id:
+            await send_event(event_id, {"task_name": "获取用户语义权限信息", "task_status": "working"}, "task")
 
         # 参数验证
         if not user_id:
@@ -2411,6 +2512,11 @@ class SemanticApiClient:
 
                         if len(allowed_fields) > sample_size:
                             logger.info(f"      ...以及其他 {len(allowed_fields) - sample_size} 个字段")
+
+                if event_id:
+                    await send_event(event_id, {"task_name": "获取用户语义权限信息", "task_status": "completed"},
+                                     "task")
+                    await send_event(event_id, {}, "progress_up")
 
                 return permission_data
             else:
