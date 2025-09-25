@@ -11,6 +11,7 @@ from api.db.db_models import get_db
 from api.db.services.ask_data_history_service import AskDataHistoryService
 from api.service.askdata_service.async_llm_service import AsyncLLMService
 from api.service.askdata_service.event.event_utils import send_event
+from api.service.askdata_service.llm.conversation_query_rewriter import ConversationQueryRewriter
 from api.service.askdata_service.llm.semantic_field_extractor import SemanticFieldExtractor
 from api.service.askdata_service.llm.semantic_relevance_filter import SemanticRelevanceFilter
 from api.service.askdata_service.llm.sql_components_extractor import SQLComponentsExtractor
@@ -52,9 +53,24 @@ class AskdataService:
         self.query_intent_analyzer = QueryIntentAnalyzer(db, user.id, self.prompt_dir)
         self.semantic_field_extractor = SemanticFieldExtractor(db, user.id, self.prompt_dir)
         self.semantic_relevance_filter = SemanticRelevanceFilter(db, user.id, self.prompt_dir)
+        self.conversation_query_rewriter = ConversationQueryRewriter(db, user.id, self.prompt_dir)
         self.model_dataset_resolver = ModelDatasetResolver(self.semantic_api_client)
         self.sql_components_extractor = SQLComponentsExtractor(db, user.id, self.prompt_dir)
         self.sql_pagination_converter = SQLPaginationConverter(db, user.id, self.prompt_dir)
+
+    async def rewrite_conversation_question(
+            self,
+            conversation_history: Optional[List[Dict[str, Any]]],
+            new_user_question: str,
+            llm_name: str
+    ) -> Dict[str, Any]:
+        """调用会话查询改写器，对用户追问进行改写。"""
+        history_payload = conversation_history or []
+        return await self.conversation_query_rewriter.rewrite_question(
+            history_payload,
+            new_user_question,
+            llm_name
+        )
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
                                       userid: str, llm_name: str = None,
