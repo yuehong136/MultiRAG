@@ -140,3 +140,41 @@ class AskDataHistoryService(CommonService):
         except Exception as e:
             logging.error(f"Failed to fetch history for conversation_id {conversation_id}: {e}")
             raise
+
+    @classmethod
+    def get_by_round_id(cls, db: Session, round_id: str, status: str = "1") -> list[dict]:
+        """
+        根据round_id获取历史记录并按时间升序排列，最早的记录在前。
+
+        参数:
+        - db: 数据库会话
+        - round_id: 对话轮次ID
+        - status: 记录状态，默认为"1"
+
+        返回:
+        - list[dict]: 包含user_question、round_id、processed_semantic_layer、sql_info的字典列表
+        """
+        logging.info(f"Fetching history for round_id: {round_id}")
+        try:
+            records = (
+                db.query(cls.model)
+                .filter(
+                    cls.model.round_id == round_id,
+                    cls.model.status == status
+                )
+                .order_by(asc(cls.model.create_time))
+                .all()
+            )
+
+            return [
+                {
+                    "user_question": record.user_question,
+                    "round_id": record.round_id,
+                    "processed_semantic_layer": record.processed_semantic_layer,
+                    "sql_info": record.sql_info
+                }
+                for record in records
+            ]
+        except Exception as e:
+            logging.error(f"Failed to fetch history for round_id {round_id}: {e}")
+            raise

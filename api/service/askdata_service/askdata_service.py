@@ -433,6 +433,10 @@ class AskdataService:
         """根据对话ID获取问数历史记录。"""
         return self.history_service.get_history_by_conversation_id(self.db, conversation_id)
 
+    async def get_ask_data_history_by_round(self, round_id: str) -> list[dict]:
+        """根据轮次ID获取问数历史记录，按时间从早到晚排列。"""
+        return self.history_service.get_by_round_id(self.db, round_id)
+
     def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> Tuple[
         List[str], List[Dict[str, str]]]:
         """从维度和指标数据中提取所有modelId并去重，同时返回模型详细信息。
