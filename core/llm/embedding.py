@@ -13,12 +13,14 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import base64
 import json
 import logging
 import os
 import re
 import threading
 from abc import ABC
+from typing import Annotated, Any, Iterable, Mapping, Sequence, Literal
 from urllib.parse import urljoin
 
 import dashscope
@@ -28,6 +30,7 @@ import requests
 from huggingface_hub import snapshot_download
 from ollama import Client
 from openai import OpenAI
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from zhipuai import ZhipuAI
 
 from api import settings
@@ -905,15 +908,365 @@ class HuggingFaceEmbed(Base):
             raise Exception(f"Error: {response.status_code} - {response.text}")
 
 
-class VolcEngineEmbed(OpenAIEmbed):
+# class VolcEngineEmbed(OpenAIEmbed):
+#     _FACTORY_NAME = "VolcEngine"
+#
+#     def __init__(self, key, model_name, base_url="https://ark.cn-beijing.volces.com/api/v3"):
+#         if not base_url:
+#             base_url = "https://ark.cn-beijing.volces.com/api/v3"
+#         ark_api_key = json.loads(key).get("ark_api_key", "")
+#         model_name = json.loads(key).get("ep_id", "") + json.loads(key).get("endpoint_id", "")
+#         super().__init__(ark_api_key, model_name, base_url)
+
+
+class _VolcEngineImageURL(BaseModel):
+    url: str
+
+    @field_validator("url")
+    @classmethod
+    def _not_empty(cls, value: str) -> str:
+        if not value:
+            raise ValueError("image_url.url 不能为空")
+        return value
+
+
+class _VolcEngineVideoURL(BaseModel):
+    url: str
+
+    @field_validator("url")
+    @classmethod
+    def _not_empty(cls, value: str) -> str:
+        if not value:
+            raise ValueError("video_url.url 不能为空")
+        return value
+
+
+class _VolcEngineTextContent(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def _validate_text(cls, value: str) -> str:
+        if not value:
+            raise ValueError("文本内容不能为空")
+        return value
+
+
+class _VolcEngineImageContent(BaseModel):
+    type: Literal["image_url"] = "image_url"
+    image_url: _VolcEngineImageURL
+
+
+class _VolcEngineVideoContent(BaseModel):
+    type: Literal["video_url"] = "video_url"
+    video_url: _VolcEngineVideoURL
+
+
+VolcEngineContent = Annotated[
+    _VolcEngineTextContent | _VolcEngineImageContent | _VolcEngineVideoContent,
+    Field(discriminator="type"),
+]
+
+VOLC_ENGINE_CONTENT_ADAPTER = TypeAdapter(VolcEngineContent)
+
+
+class VolcEngineEmbeddingRequest(BaseModel):
+    model: str
+    input: list[VolcEngineContent]
+    encoding_format: str = "float"
+    dimensions: int | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="after")
+    def _validate_input(self):  # type: ignore[override]
+        if not self.input:
+            raise ValueError("input 内容不能为空")
+        return self
+
+
+class VolcEngineEmbed(Base):
     _FACTORY_NAME = "VolcEngine"
 
-    def __init__(self, key, model_name, base_url="https://ark.cn-beijing.volces.com/api/v3"):
-        if not base_url:
-            base_url = "https://ark.cn-beijing.volces.com/api/v3"
-        ark_api_key = json.loads(key).get("ark_api_key", "")
-        model_name = json.loads(key).get("ep_id", "") + json.loads(key).get("endpoint_id", "")
-        super().__init__(ark_api_key, model_name, base_url)
+    def __init__(self, key, model_name, base_url="https://ark.cn-beijing.volces.com/api/v3", **kwargs):
+        base_url = base_url or "https://ark.cn-beijing.volces.com/api/v3"
+        key_payload: dict[str, Any]
+        if isinstance(key, str):
+            try:
+                key_payload = json.loads(key)
+            except json.JSONDecodeError as exc:
+                raise ValueError("VolcEngine 的 key 必须是 JSON 字符串，且包含 ark_api_key") from exc
+        elif isinstance(key, dict):
+            key_payload = key
+        else:
+            raise ValueError("VolcEngine 的 key 类型不支持")
+
+        self.api_key = key_payload.get("ark_api_key", "").strip()
+        if not self.api_key:
+            raise ValueError("缺少 ark_api_key")
+
+        ep_id = key_payload.get("ep_id", "")
+        endpoint_id = key_payload.get("endpoint_id", "")
+        derived_model_name = f"{ep_id}{endpoint_id}".strip()
+        self.model_name = derived_model_name or model_name
+        if not self.model_name:
+            raise ValueError("VolcEngine 模型名称缺失，请配置 ep_id + endpoint_id 或显式传入 model_name")
+
+        self.base_url = base_url.rstrip("/")
+        self.multimodal_endpoint = urljoin(f"{self.base_url}/", "embeddings/multimodal")
+        self.text_endpoint = urljoin(f"{self.base_url}/", "embeddings")
+        self.timeout = kwargs.get("timeout", 30)
+        self.default_dimensions = kwargs.get("dimensions") or key_payload.get("dimensions")
+        self.default_encoding_format = kwargs.get("encoding_format") or key_payload.get("encoding_format") or "float"
+        self.session = requests.Session()
+        model_lower = self.model_name.lower()
+        self.force_multimodal = bool(
+            key_payload.get("force_multimodal")
+            or kwargs.get("force_multimodal")
+            or ("vision" in model_lower or "multimodal" in model_lower)
+        )
+        if key_payload.get("force_text_endpoint") or kwargs.get("force_text_endpoint"):
+            self.force_multimodal = False
+
+    def encode(self, texts: list):
+        if not texts:
+            return np.array([]), 0
+
+        if all(isinstance(item, str) for item in texts) and not self.force_multimodal:
+            embeddings, total_tokens = self._request_text_embeddings(list(texts), self.model_name, self.default_encoding_format)
+            return np.array(embeddings), total_tokens
+
+        if all(isinstance(item, str) for item in texts):
+            payload = self._build_multimodal_payload(self.model_name, texts, self.default_dimensions, self.default_encoding_format)
+            embedding, total_tokens = self._request_multimodal_embedding(payload)
+            return np.array([embedding]), total_tokens
+
+        if len(texts) == 1 and self._is_text_request(texts[0]) and not self.force_multimodal:
+            text_inputs, model_name, encoding_format = self._extract_text_request(texts[0])
+            embeddings, total_tokens = self._request_text_embeddings(text_inputs, model_name, encoding_format)
+            return np.array(embeddings), total_tokens
+
+        requests_payload = [self._prepare_multimodal_request(item) for item in texts]
+        embeddings = []
+        total_tokens = 0
+        for payload in requests_payload:
+            embedding, usage_tokens = self._request_multimodal_embedding(payload)
+            embeddings.append(embedding)
+            total_tokens += usage_tokens
+        return np.array(embeddings), total_tokens
+
+    def encode_queries(self, text):
+        if isinstance(text, str) and not self.force_multimodal:
+            text_inputs, model_name, encoding_format = self._extract_text_request(text)
+            embeddings, usage_tokens = self._request_text_embeddings(text_inputs, model_name, encoding_format)
+            return np.array(embeddings[0]), usage_tokens
+
+        if isinstance(text, str):
+            payload = self._build_multimodal_payload(self.model_name, [text], self.default_dimensions, self.default_encoding_format)
+            embedding, usage_tokens = self._request_multimodal_embedding(payload)
+            return np.array(embedding), usage_tokens
+
+        if self._is_text_request(text) and not self.force_multimodal:
+            text_inputs, model_name, encoding_format = self._extract_text_request(text)
+            embeddings, usage_tokens = self._request_text_embeddings(text_inputs, model_name, encoding_format)
+            return np.array(embeddings[0]), usage_tokens
+
+        payload = self._prepare_multimodal_request(text)
+        embedding, usage_tokens = self._request_multimodal_embedding(payload)
+        return np.array(embedding), usage_tokens
+
+    def _prepare_multimodal_request(self, item) -> VolcEngineEmbeddingRequest:
+        if isinstance(item, VolcEngineEmbeddingRequest):
+            return item
+
+        encoding_format = self.default_encoding_format
+        dimensions = self.default_dimensions
+        model_name = self.model_name
+
+        if isinstance(item, BaseModel):
+            item = item.model_dump(by_alias=True)
+
+        normalized_input: list[VolcEngineContent] = []
+
+        if isinstance(item, Mapping) and ("input" in item or "media" in item):
+            model_name = item.get("model", model_name)
+            encoding_format = item.get("encoding_format", encoding_format)
+            dimensions = item.get("dimensions", dimensions)
+            raw_input = item.get("input", [])
+            raw_media = item.get("media", [])
+            normalized_input.extend(self._normalize_contents(self._coerce_to_sequence(raw_input)))
+            normalized_input.extend(self._normalize_contents(self._coerce_to_sequence(raw_media)))
+        elif isinstance(item, Mapping):
+            normalized_input = self._normalize_contents([item])
+        elif isinstance(item, str):
+            normalized_input = self._normalize_contents([item])
+        elif isinstance(item, Sequence) and not isinstance(item, (bytes, bytearray, str)):
+            normalized_input = self._normalize_contents(list(item))
+        else:
+            raise TypeError("不支持的 VolcEngine 输入类型")
+
+        normalized_input = [content for content in normalized_input if content]
+
+        payload_dict = {
+            "model": model_name,
+            "input": normalized_input,
+        }
+
+        if dimensions is not None:
+            payload_dict["dimensions"] = dimensions
+        if encoding_format is not None:
+            payload_dict["encoding_format"] = encoding_format
+
+        try:
+            return VolcEngineEmbeddingRequest.model_validate(payload_dict)
+        except ValidationError as exc:
+            raise ValueError(f"VolcEngine 输入参数校验失败: {exc}") from exc
+
+    def _normalize_contents(self, items: Iterable[Any]) -> list[VolcEngineContent]:
+        normalized: list[VolcEngineContent] = []
+        for element in items:
+            if element is None:
+                continue
+            if isinstance(element, BaseModel):
+                element = element.model_dump(by_alias=True)
+            if isinstance(element, str):
+                normalized.append(VOLC_ENGINE_CONTENT_ADAPTER.validate_python({"type": "text", "text": element}))
+            else:
+                try:
+                    normalized.append(VOLC_ENGINE_CONTENT_ADAPTER.validate_python(element))
+                except ValidationError as exc:
+                    raise ValueError(f"无法解析的 VolcEngine input 元素: {exc}") from exc
+        return normalized
+
+    def _coerce_to_sequence(self, value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, (str, bytes, bytearray)):
+            return [value]
+        if isinstance(value, Sequence):
+            return list(value)
+        return [value]
+
+    def _build_multimodal_payload(self, model_name: str, contents: Sequence[Any], dimensions: int | None, encoding_format: str | None) -> VolcEngineEmbeddingRequest:
+        payload_dict: dict[str, Any] = {
+            "model": model_name,
+            "input": self._normalize_contents(contents),
+        }
+        if dimensions is not None:
+            payload_dict["dimensions"] = dimensions
+        if encoding_format is not None:
+            payload_dict["encoding_format"] = encoding_format
+        try:
+            return VolcEngineEmbeddingRequest.model_validate(payload_dict)
+        except ValidationError as exc:
+            raise ValueError(f"VolcEngine 输入参数校验失败: {exc}") from exc
+
+    def _request_multimodal_embedding(self, payload: VolcEngineEmbeddingRequest) -> tuple[list[float], int]:
+        data = self._post(self.multimodal_endpoint, payload.model_dump(by_alias=True, exclude_none=True))
+        embedding = self._extract_multimodal_embedding(data)
+        usage_tokens = self.total_token_count(data)
+        return embedding, usage_tokens
+
+    def _request_text_embeddings(self, inputs: list[str], model_name: str, encoding_format: str | None) -> tuple[list[list[float]], int]:
+        payload: dict[str, Any] = {
+            "model": model_name,
+            "input": inputs,
+        }
+        if encoding_format is not None:
+            payload["encoding_format"] = encoding_format
+
+        data = self._post(self.text_endpoint, payload)
+        embeddings = self._extract_text_embeddings(data)
+        usage_tokens = self.total_token_count(data)
+        return embeddings, usage_tokens
+
+    def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self.session.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=self.timeout,
+        )
+        try:
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:  # noqa: BLE001
+            log_exception(exc, response.text if hasattr(response, "text") else response)
+            raise
+
+    def _extract_multimodal_embedding(self, data: dict[str, Any]) -> list[float]:
+        container = data.get("data")
+        if isinstance(container, list):
+            if not container:
+                raise ValueError("VolcEngine 多模态响应 data 为空列表")
+            raw_embedding = container[0].get("embedding")
+        elif isinstance(container, dict):
+            raw_embedding = container.get("embedding")
+        else:
+            raise ValueError("VolcEngine 多模态响应格式异常")
+
+        return self._decode_embedding(raw_embedding, data)
+
+    def _extract_text_embeddings(self, data: dict[str, Any]) -> list[list[float]]:
+        container = data.get("data")
+        if not isinstance(container, list):
+            raise ValueError("VolcEngine 文本向量化响应格式异常")
+
+        embeddings: list[list[float]] = []
+        for item in container:
+            raw_embedding = item.get("embedding")
+            embeddings.append(self._decode_embedding(raw_embedding, data))
+        return embeddings
+
+    def _decode_embedding(self, raw_embedding: Any, context: dict[str, Any]) -> list[float]:
+        if isinstance(raw_embedding, list):
+            return raw_embedding
+        if isinstance(raw_embedding, str):
+            try:
+                decoded = base64.b64decode(raw_embedding)
+            except Exception as exc:  # noqa: BLE001
+                log_exception(exc, {"raw": raw_embedding, "context": context})
+                raise ValueError("Base64 解码失败") from exc
+            return np.frombuffer(decoded, dtype="float32").tolist()
+        raise TypeError("未知的 embedding 数据类型")
+
+    def _is_text_request(self, item: Any) -> bool:
+        if isinstance(item, str):
+            return True
+        if isinstance(item, BaseModel):
+            item = item.model_dump(by_alias=True)
+        if isinstance(item, dict) and "input" in item:
+            inputs = item.get("input")
+            if isinstance(inputs, str):
+                return True
+            if isinstance(inputs, Sequence) and all(isinstance(elem, str) for elem in inputs):
+                return True
+        return False
+
+    def _extract_text_request(self, item: Any) -> tuple[list[str], str, str | None]:
+        encoding_format = self.default_encoding_format
+        model_name = self.model_name
+
+        if isinstance(item, str):
+            return [item], model_name, encoding_format
+
+        if isinstance(item, BaseModel):
+            item = item.model_dump(by_alias=True)
+
+        if isinstance(item, Mapping):
+            model_name = item.get("model", model_name)
+            encoding_format = item.get("encoding_format", encoding_format)
+            inputs = item.get("input")
+            if isinstance(inputs, str):
+                return [inputs], model_name, encoding_format
+            if isinstance(inputs, Sequence) and all(isinstance(elem, str) for elem in inputs):
+                return list(inputs), model_name, encoding_format
+
+        raise ValueError("文本向量化请求的输入格式不正确")
 
 
 class GPUStackEmbed(OpenAIEmbed):

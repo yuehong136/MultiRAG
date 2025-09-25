@@ -12,7 +12,7 @@ import logging
 import json
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 import base64
 from array import array
 
@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from api.apps import manager, executor
 from agent.component.agent_with_tools import Agent, AgentParam
@@ -501,10 +501,44 @@ class ChatRequest(BaseModel):
 class EmbeddingsRequest(BaseModel):
     """2025标准向量化接口请求体（对齐OpenAI v1/embeddings风格）"""
     model: str | None = Field(default=None, description="嵌入模型名称，不填则使用租户默认")
-    input: list[str] | str = Field(..., description="要向量化的文本或文本数组")
+    input: list[str] | str | None = Field(default=None, description="要向量化的文本或文本数组；多模态场景可为空")
     input_type: str = Field(default="document", description="document|query（部分模型对查询向量有专项优化）")
     encoding_format: str = Field(default="float", description="float|base64")
     user: str | None = Field(default=None, description="可选的用户标识")
+
+
+class VolcEmbeddingMedia(BaseModel):
+    type: Literal["text", "image_url", "video_url"] = Field(description="内容类型")
+    text: str | None = Field(default=None, description="当 type=text 时必填")
+    image_url: dict[str, str] | None = Field(default=None, description="当 type=image_url 时必填，包含 url")
+    video_url: dict[str, str] | None = Field(default=None, description="当 type=video_url 时必填，包含 url")
+
+    @field_validator("text")
+    @classmethod
+    def _check_text(cls, value: str | None, info):
+        if info.data.get("type") == "text" and not value:
+            raise ValueError("当 type=text 时，text 字段必填")
+        return value
+
+    @field_validator("image_url")
+    @classmethod
+    def _check_image(cls, value: dict[str, str] | None, info):
+        if info.data.get("type") == "image_url":
+            if not value or not value.get("url"):
+                raise ValueError("当 type=image_url 时，image_url.url 必填")
+        return value
+
+    @field_validator("video_url")
+    @classmethod
+    def _check_video(cls, value: dict[str, str] | None, info):
+        if info.data.get("type") == "video_url":
+            if not value or not value.get("url"):
+                raise ValueError("当 type=video_url 时，video_url.url 必填")
+        return value
+
+
+class EmbeddingsMultiModalRequest(EmbeddingsRequest):
+    media: list[VolcEmbeddingMedia] | None = Field(default=None, description="多模态输入，按火山格式提供；与 input 同时存在时会分批调用")
 
 
 class FinePromptRequest(BaseModel):
@@ -1201,13 +1235,13 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/embeddings', summary="文本向量化服务（2025标准）", response_description="返回OpenAI风格的embedding结果")
-def embeddings_api(request: EmbeddingsRequest, db: Session = Depends(get_db), user=Depends(manager)):
+@router.post('/embeddings', summary="文本/多模态向量化（2025标准）", response_description="返回OpenAI风格的embedding结果")
+def embeddings_api(request: EmbeddingsMultiModalRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/v1/llm/embeddings` 文本向量化服务（2025标准）
 
 **功能描述**:
-此接口提供标准化的文本向量化服务。支持按租户默认嵌入模型或显式指定模型进行编码，兼容查询场景与文档场景两类输入，并返回与 OpenAI Embeddings 接口一致的响应结构（object=list, data=[...], model, usage）。
+此接口提供标准化的文本与多模态向量化服务。支持按租户默认嵌入模型或显式指定模型进行编码，可同时提交纯文本、图片 URL、视频 URL 组合内容，并返回与 OpenAI Embeddings 接口一致的响应结构（object=list, data=[...], model, usage）。
 
 ---
 
@@ -1216,7 +1250,8 @@ def embeddings_api(request: EmbeddingsRequest, db: Session = Depends(get_db), us
 | 字段              | 类型                  | 必填 | 默认值     | 描述                                                                 |
 |-------------------|-----------------------|------|-----------|----------------------------------------------------------------------|
 | `model`           | `string`              | 否   | 租户默认   | 嵌入模型名称；不填则使用当前租户的默认嵌入模型（`Tenant.embd_id`）。 |
-| `input`           | `string or string[]`  | 是   | -         | 待向量化文本；支持单条或批量。                                       |
+| `input`           | `string or string[]`  | 否   | -         | 待向量化文本；支持单条或批量，纯多模态场景可为空。                   |
+| `media`           | `object[]`            | 否   | -         | 多模态输入列表，元素支持 `type=text|image_url|video_url`。若与 `input` 同时出现，将融合为单个向量。 |
 | `input_type`      | `string`              | 否   | `document`| `document` 或 `query`；部分模型会对查询向量做专项优化。              |
 | `encoding_format` | `string`              | 否   | `float`   | `float` 返回浮点数组；`base64` 返回 float32 打包后的 base64 字符串。  |
 | `user`            | `string`              | 否   | -         | 可选的用户标识，用于审计或配额统计。                                  |
@@ -1242,6 +1277,32 @@ def embeddings_api(request: EmbeddingsRequest, db: Session = Depends(get_db), us
   "input": "what is multirag?",
   "input_type": "query",
   "encoding_format": "base64"
+}
+```
+
+#### 同时包含文本 + 图片 + 视频的多模态向量
+```json
+{
+  "model": "doubao-embedding-vision-250615",
+  "input": ["这是一段辅助描述"],
+  "media": [
+    {
+      "type": "image_url",
+      "image_url": {
+        "url": "https://ark-project.tos-cn-beijing.volces.com/doc_image/tower.png"
+      }
+    },
+    {
+      "type": "video_url",
+      "video_url": {
+        "url": "https://ark-project.tos-cn-beijing.volces.com/doc_video/ark_vlm_video_input.mp4"
+      }
+    },
+    {
+      "type": "text",
+      "text": "视频和图片里有什么?"
+    }
+  ]
 }
 ```
 
@@ -1299,17 +1360,19 @@ def embeddings_api(request: EmbeddingsRequest, db: Session = Depends(get_db), us
 
 1. 解析请求体，确定 `model`、`input`、`input_type`、`encoding_format`。
 2. 若未显式指定 `model`，使用当前租户配置的默认嵌入模型。
-3. 根据 `input_type`：
-   - `document` 调用批量 `encode(inputs)`
-   - `query` 单条调用 `encode_queries(text)`；多条查询按条调用以保留模型的查询优化路径
-4. 根据 `encoding_format` 将向量以 `float` 或 `base64(float32)` 的形式返回。
-5. 统一返回 OpenAI 风格响应，包含 `data`、`model` 与 `usage`。
+3. 若存在 `media`，会与 `input` 文本合并后调用多模态接口，**整个提交仅返回一个融合向量**。
+4. 无 `media` 时根据 `input_type`：
+   - `document` 调用批量 `encode(inputs)`。
+   - `query` 单条调用 `encode_queries(text)`；多条查询按条调用以保留模型的查询优化路径。
+5. 根据 `encoding_format` 将向量以 `float` 或 `base64(float32)` 的形式返回。
+6. 统一返回 OpenAI 风格响应，包含 `data`、`model` 与 `usage`。
 
 ---
 
 ### 注意事项
 
 - 若 `input` 为字符串则自动转为单元素数组处理。
+- 多模态请求会将 `input` 与 `media` 合并为单个输入列表，返回一个融合后的向量。
 - `usage.prompt_tokens` 与 `usage.total_tokens` 返回底层模型统计的已用 token 数。
 - `base64` 编码采用 float32 打包后再进行 base64 编码，便于网络传输和前端存储。
     """
@@ -1320,8 +1383,13 @@ def embeddings_api(request: EmbeddingsRequest, db: Session = Depends(get_db), us
         raise HTTPException(status_code=404, detail="Tenant not found!")
     tenant_id = tenants[0]["tenant_id"]
 
-    raw_input = req["input"]
-    inputs = raw_input if isinstance(raw_input, list) else [raw_input]
+    raw_input = req.get("input", [])
+    if raw_input is None:
+        inputs = []
+    else:
+        inputs = raw_input if isinstance(raw_input, list) else [raw_input]
+        inputs = [item for item in inputs if isinstance(item, str) and item]
+    media_items: list[VolcEmbeddingMedia] = request.media or []
     model_name = req.get("model")
     input_type = (req.get("input_type") or "document").lower()
     encoding_format = (req.get("encoding_format") or "float").lower()
@@ -1332,7 +1400,19 @@ def embeddings_api(request: EmbeddingsRequest, db: Session = Depends(get_db), us
         raise HTTPException(status_code=404, detail=f"Embedding model not available: {str(e)}")
 
     try:
-        if input_type == "query":
+        vectors: list[Any]
+        used_tokens: int
+
+        if media_items:
+            normalized_media = [media.model_dump(by_alias=True) if isinstance(media, VolcEmbeddingMedia) else media for media in media_items]
+            combined_inputs: list[Any] = [ {"type": "text", "text": text} for text in inputs ] + normalized_media
+            payload = {
+                "model": req.get("model") or emb_bundle.llm_name or getattr(emb_bundle.mdl, "model_name", None),
+                "input": combined_inputs,
+            }
+            embedding, used_tokens = emb_bundle.encode([payload])
+            vectors = [embedding[0] if isinstance(embedding, (list, tuple)) else embedding]
+        elif input_type == "query":
             if len(inputs) == 1:
                 vec, used_tokens = emb_bundle.encode_queries(inputs[0])
                 vectors = [vec]
