@@ -435,6 +435,10 @@ class AddHistoryRequest(BaseModel):
     conversation_id: str = Field(..., description="会话ID")
     ask_id: str = Field(..., description="询问ID")
     data: str = Field(..., description="历史记录内容, 可以是JSON字符串")
+    round_id: str = Field("", description="对话轮次ID")
+    user_origin_question: str = Field("", description="用户原始问题")
+    rewritten_question: str = Field("", description="用户改写问题")
+    processed_semantic_layer: str = Field("", description="处理后的语义层")
 
 
 @router.post("/add-history", response_model=ResponseSchema, summary="新增历史记录")
@@ -449,7 +453,11 @@ async def add_history(
         result = await service.add_ask_data_history(
             conversation_id=body.conversation_id,
             ask_id=body.ask_id,
-            data=body.data
+            data=body.data,
+            round_id=body.round_id,
+            user_origin_question=body.user_origin_question,
+            rewritten_question=body.rewritten_question,
+            processed_semantic_layer=body.processed_semantic_layer
         )
         return ResponseSchema(
             status=StatusEnum.SUCCESS,

@@ -1,3 +1,4 @@
+import json
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import asc
@@ -15,7 +16,8 @@ class AskDataHistoryService(CommonService):
 
     @classmethod
     def insert_record(cls, db: Session, conversation_id: str, ask_id: str, data: str,
-                      user_id: str = None, status: str = "1") -> AskDataHistory:
+                      user_id: str = None, status: str = "1", round_id: str = None, user_question: str = "",
+                      processed_semantic_layer: str = None, sql_info: str = None) -> AskDataHistory:
         """
         插入一条新的询问数据历史记录
 
@@ -37,7 +39,11 @@ class AskDataHistoryService(CommonService):
                 "ask_id": ask_id,
                 "user_id": user_id,
                 "data": data,
-                "status": status
+                "status": status,
+                "round_id": round_id,
+                "user_question": user_question,
+                "processed_semantic_layer": processed_semantic_layer,
+                "sql_info": sql_info
             }
 
             # 使用CommonService的insert方法，它会自动处理时间字段
@@ -90,7 +96,9 @@ class AskDataHistoryService(CommonService):
 
     # 新增的插入方法
     @classmethod
-    def add_history(cls, db: Session, conversation_id: str, ask_id: str, data: str, user_id: str) -> AskDataHistory:
+    def add_history(cls, db: Session, conversation_id: str, ask_id: str, data: str, user_id: str, round_id: str = None,
+                    user_origin_question: str = "", rewritten_question: str = "",
+                    processed_semantic_layer: str = "") -> AskDataHistory:
         """
         新增一条历史记录
 
@@ -105,13 +113,30 @@ class AskDataHistoryService(CommonService):
         - AskDataHistory: 创建的记录对象
         """
         logging.info(f"Adding history for conversation_id: {conversation_id}, ask_id: {ask_id}")
+        json_data = json.loads(data, )
+        user_question = {
+            "user_original_question": user_origin_question,
+            "rewritten_question": rewritten_question,
+        }
+        sql_info = {
+            "sql": json_data.get("row").get("data").get("sql"),
+            "pagination_sql": json_data.get("row").get("data").get("pagination_sql"),
+            "sql_result_sample": json_data.get("row").get("data").get("result").get("data")[0:3],
+            "sql_components": json_data.get("row").get("data").get("sql_components"),
+            "model_table_alias_mapping_list": json_data.get("row").get("data").get("model_table_alias_mapping_list"),
+        }
+
         try:
             history_record = cls.insert_record(
                 db=db,
                 conversation_id=conversation_id,
                 ask_id=ask_id,
                 data=data,
-                user_id=user_id
+                user_id=user_id,
+                round_id=round_id,
+                user_question=json.dumps(user_question, ensure_ascii=False),
+                processed_semantic_layer=processed_semantic_layer,
+                sql_info=json.dumps(sql_info, ensure_ascii=False)
             )
             logging.info(f"Successfully added history record with id: {history_record.id}")
             return history_record
