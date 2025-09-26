@@ -12,13 +12,14 @@ from sqlalchemy import inspect
 
 from api import settings
 from api.db import UserTenantRole, StatusEnum
-from api.db.db_models import UserTenant, get_db
+from api.db.db_models import UserTenant, TenantLLM, Tenant, File, User, get_db
+from api.db.services.file_service import FileService
 from api.utils import get_uuid, delta_seconds
 from api.apps import manager
-# from api.db.database import get_db
 from api.utils.api_utils import server_error_response, get_data_error_result
 from sqlalchemy.orm import Session
-from api.db.services.user_service import UserTenantService, UserService
+from api.db.services.llm_service import TenantLLMService
+from api.db.services.user_service import UserTenantService, UserService, TenantService
 from api.utils.api_utils import get_json_result
 
 router = APIRouter()
@@ -142,13 +143,29 @@ def rm(tenant_id, user_id, db: Session = Depends(get_db), user=Depends(manager))
     返回:
         JSON 响应，指示操作是否成功。
     """
-    if user.id != tenant_id and user.id != user_id:
+    actor_membership = UserTenantService.filter_by_tenant_and_user_id(db, tenant_id=tenant_id, user_id=user.id)
+    target_membership = UserTenantService.filter_by_tenant_and_user_id(db, tenant_id=tenant_id, user_id=user_id)
+    target_role = target_membership.role if target_membership else None
+    is_self = user.id == user_id
+    is_manager = actor_membership and actor_membership.role in {UserTenantRole.OWNER, UserTenantRole.ADMIN}
+    if not is_self and not is_manager:
         return get_json_result(
             data=False,
             retmsg='No authorization.',
             retcode=settings.RetCode.AUTHENTICATION_ERROR)
     try:
+        if target_role == UserTenantRole.OWNER and not is_self:
+            return get_json_result(
+                data=False,
+                retmsg='Owner cannot be removed by others.',
+                retcode=settings.RetCode.AUTHENTICATION_ERROR)
         UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id, UserTenant.user_id == user_id])
+        if target_role == UserTenantRole.OWNER:
+            UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id])
+            TenantLLMService.filter_delete(db, [TenantLLM.tenant_id == tenant_id])
+            TenantService.filter_delete(db, [Tenant.id == tenant_id])
+            UserService.filter_delete(db, [User.id == user_id])
+            FileService.filter_delete(db, [File.tenant_id == tenant_id])
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
