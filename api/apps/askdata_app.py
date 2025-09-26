@@ -384,6 +384,16 @@ class SemanticLayerRequest(BaseModel):
         title="用户ID",
         description="用户ID，后续需要去获取该用户语义层的权限。"
     )
+    enable_multi_rounds_question: bool = Field(
+        False,
+        title="启用多轮问答",
+        description="是否启用多轮问答功能"
+    )
+    round_id: str = Field(
+        "",
+        title="多轮对话的分组ID",
+        description="如果是多轮对话，那么同一组对话所享有的ID"
+    )
 
 
 @router.post("/get-semantic-layer-streaming/{custom_event_id}", response_model=ResponseSchema,
@@ -401,9 +411,21 @@ async def get_semantic_layer_streaming(
 ) -> ResponseSchema:
     logger.info(f"使用自定义事件ID {custom_event_id} 获得语义层信息，参数：{body}")
 
+    original_user_query = body.user_query
+    final_user_query = original_user_query
+    llm_rewritten_question = None
+
+    if body.enable_multi_rounds_question:
+        # 将历史提问改写逻辑下沉到Service，保持路由层简洁
+        final_user_query, llm_rewritten_question = await service.prepare_user_query_for_semantic_layer(
+            round_id=body.round_id,
+            original_user_query=original_user_query,
+            llm_name=body.llm_name
+        )
+
     try:
         processed_semantic_layer, model_ids, recommended_chart, recommendation_reason = await service.generate_semantic_layer(
-            user_query=body.user_query,
+            user_query=final_user_query,
             dataset_id_list=body.dataset_id_list,
             userid=body.userid,
             event_id=custom_event_id,
@@ -418,7 +440,9 @@ async def get_semantic_layer_streaming(
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
             message="获得语义层信息成功",
-            data={"processed_semantic_layer": processed_semantic_layer, "model_ids": model_ids,
+            data={"processed_semantic_layer": processed_semantic_layer,
+                  "model_ids": model_ids,
+                  "rewritten_question": llm_rewritten_question,
                   "recommended_chart": recommended_chart,
                   "recommendation_reason": recommendation_reason}
         )

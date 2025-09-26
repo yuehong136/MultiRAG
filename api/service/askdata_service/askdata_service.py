@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import logging
 from datetime import date
@@ -71,6 +72,64 @@ class AskdataService:
             new_user_question,
             llm_name
         )
+
+    async def prepare_user_query_for_semantic_layer(
+            self,
+            round_id: Optional[str],
+            original_user_query: str,
+            llm_name: Optional[str]
+    ) -> Tuple[str, Optional[str]]:
+        """根据历史对话改写用户提问，返回用于语义层生成的最终问题和改写后的问题。"""
+        # 未配置多轮参数或缺少模型名称时，直接返回原始问题
+        if not round_id or not llm_name:
+            return original_user_query, None
+
+        try:
+            chat_history = await self.get_ask_data_history_by_round(round_id)
+        except Exception as history_error:
+            logger.warning("获取历史对话失败，使用原始问题: %s", history_error)
+            return original_user_query, None
+
+        round_chat_list: List[Dict[str, Any]] = []
+        for chat in chat_history:
+            user_original_question = chat.get("user_original_question")
+            rewritten_question = chat.get("rewritten_question") or ""
+
+            sql_info_raw = chat.get("sql_info")
+            sql_value = None
+            if isinstance(sql_info_raw, str):
+                try:
+                    sql_info_raw = json.loads(sql_info_raw)
+                except Exception as parse_error:
+                    logger.debug("解析sql_info失败，忽略该记录: %s", parse_error)
+                    sql_info_raw = None
+            if isinstance(sql_info_raw, dict):
+                sql_value = sql_info_raw.get("sql")
+
+            if sql_value and (user_original_question or rewritten_question):
+                # 为改写器组装历史上下文
+                round_chat_list.append({
+                    "user_query": user_original_question or rewritten_question,
+                    "rewritten_question": rewritten_question,
+                    "sql": sql_value
+                })
+
+        if not round_chat_list:
+            return original_user_query, None
+
+        rewrite_result = await self.rewrite_conversation_question(
+            round_chat_list,
+            original_user_query,
+            llm_name
+        )
+
+        if rewrite_result.get("is_related") and rewrite_result.get("rewritten_question"):
+            rewritten_question = rewrite_result["rewritten_question"]
+            logger.info("多轮问题改写成功，原始问题：%s，改写后的问题：%s", original_user_query, rewritten_question)
+            return rewritten_question, rewritten_question
+
+        logger.info("多轮问题改写失败或判定不相关，继续使用原始查询")
+        return original_user_query, None
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
                                       userid: str, llm_name: str = None,
