@@ -439,8 +439,12 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         if dialog.meta_data_filter.get("method") == "auto":
             filters = gen_meta_filter(chat_mdl, metas, questions[-1])
             attachments.extend(meta_filter(metas, filters))
+            if not attachments:
+                attachments = None
         elif dialog.meta_data_filter.get("method") == "manual":
             attachments.extend(meta_filter(metas, dialog.meta_data_filter["manual"]))
+            if not attachments:
+                attachments = None
 
     if prompt_config.get("keyword", False):
         questions[-1] += keyword_extraction(chat_mdl, questions[-1])
@@ -449,18 +453,16 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
     thought = ""
     kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
+    knowledges = []
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
-    if "knowledge" not in [p["key"] for p in prompt_config["parameters"]]:
-        # 如果不包含，则初始化知识信息为一个空的字典
-        knowledges = []
-    else:
+    if attachments is not None and "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
         knowledges = []
         if prompt_config.get("reasoning", False):
             reasoner = DeepResearcher(
                 chat_mdl,
                 prompt_config,
-                partial(retriever.retrieval, filter_exp="", embd_mdl=embd_mdl, tenant_id=dialog.tenant_id, kb_names=kb_names, page=1, page_size=dialog.top_n, similarity_threshold=0.2, vector_similarity_weight=0.3, search_mode=dialog.search_mode)
+                partial(retriever.retrieval, filter_exp="", embd_mdl=embd_mdl, tenant_id=dialog.tenant_id, kb_names=kb_names, page=1, page_size=dialog.top_n, similarity_threshold=0.2, vector_similarity_weight=0.3, doc_ids=attachments, search_mode=dialog.search_mode)
             )
 
             for think in reasoner.thinking(kbinfos, " ".join(questions)):
