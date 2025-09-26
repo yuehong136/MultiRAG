@@ -111,11 +111,17 @@ user_default_llm:
   api_key: '622531847aa342ad9da7e62b83930d56.mV8uJ8BoWMa8lfra'
   base_url: ''
   default_models:
-    chat_model: 'glm-4-airx'
-    embedding_model: 'BAAI/bge-large-zh-v1.5@BAAI'
-    rerank_model: ''
-    asr_model: ''
-    image2text_model: ''
+    chat_model:
+      name: 'glm-4.5-airx'
+      factory: 'ZHIPU-AI'
+      api_key: '622531847aa342ad9da7e62b83930d56.mV8uJ8BoWMa8lfra'
+      base_url: ''
+    embedding_model:
+      name: 'BAAI/bge-large-zh-v1.5@BAAI'
+    rerank_model: 'BAAI/bge-reranker-v2-m3'
+    asr_model:
+      model: 'whisper-large-v3' # alias of name
+    image2text_model: 'glm-4.5v'
 
 oauth:
   oauth2:

@@ -48,7 +48,44 @@ def init_superuser(db: Session):
         "invited_by": user_info["id"],
         "role": UserTenantRole.OWNER
     }
+
+    user_id = user_info
     tenant_llm = []
+
+    seen = set()
+    factory_configs = []
+    for factory_config in [
+        settings.CHAT_CFG["factory"],
+        settings.EMBEDDING_CFG["factory"],
+        settings.ASR_CFG["factory"],
+        settings.IMAGE2TEXT_CFG["factory"],
+        settings.RERANK_CFG["factory"],
+    ]:
+        factory_name = factory_config["factory"]
+        if factory_name not in seen:
+            seen.add(factory_name)
+            factory_configs.append(factory_config)
+
+    for factory_config in factory_configs:
+        for llm in LLMService.query(db, fid=factory_config["factory"]):
+            tenant_llm.append(
+                {
+                    "tenant_id": user_id,
+                    "llm_factory": factory_config["factory"],
+                    "llm_name": llm.llm_name,
+                    "mdl_type": llm.mdl_type,
+                    "api_key": factory_config["api_key"],
+                    "api_base": factory_config["base_url"],
+                    "max_tokens": llm.max_tokens if llm.max_tokens else 8192,
+                }
+            )
+
+    unique = {}
+    for item in tenant_llm:
+        key = (item["tenant_id"], item["llm_factory"], item["llm_name"])
+        if key not in unique:
+            unique[key] = item
+    tenant_llm = list(unique.values())
     for llm in LLMService.query(db, fid=settings.LLM_FACTORY):
         tenant_llm.append(
             {
@@ -60,18 +97,15 @@ def init_superuser(db: Session):
                 "api_base": settings.LLM_BASE_URL
             }
         )
-    # print(tenant_llm)
+
     if not UserService.save(db, **user_info):
-        # print("\033[93m【ERROR】\033[0mcan't init admin.")
         logging.error("can't init admin.")
         return
     TenantService.insert(db, **tenant)
     UserTenantService.insert(db, **usr_tenant)
     TenantLLMService.insert_many(db, tenant_llm)
-    # print(
-    #     "【INFO】Super user initialized. \033[93memail: admin@datav.com, password: admin\033[0m. Changing the password after logging in is strongly recommended.")
-    logging.info(
-        "Super user initialized. email: admin@datav.com, password: admin. Changing the password after login is strongly recommended.")
+
+    logging.info("Super user initialized. email: admin@datav.com, password: admin. Changing the password after login is strongly recommended.")
 
     try:
         chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])

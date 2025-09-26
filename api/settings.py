@@ -22,6 +22,11 @@ EMBEDDING_MDL = ""
 RERANK_MDL = ""
 ASR_MDL = ""
 IMAGE2TEXT_MDL = ""
+CHAT_CFG = ""
+EMBEDDING_CFG = ""
+RERANK_CFG = ""
+ASR_CFG = ""
+IMAGE2TEXT_CFG = ""
 API_KEY = None
 PARSERS = None
 HOST_IP = None
@@ -71,11 +76,9 @@ def get_or_create_secret_key():
 
     # Generate a new secure key and warn about it
     import logging
+
     new_key = secrets.token_hex(32)
-    logging.warning(
-        "SECURITY WARNING: Using auto-generated SECRET_KEY. "
-        f"Generated key: {new_key}"
-    )
+    logging.warning(f"SECURITY WARNING: Using auto-generated SECRET_KEY. Generated key: {new_key}")
     return new_key
 
 
@@ -89,11 +92,10 @@ def init_settings():
     # LLM_BASE_URL = LLM.get("base_url")
     global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, FACTORY_LLM_INFOS, REGISTER_ENABLED
     LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
-    LLM = get_base_config("user_default_llm", {})
-    LLM_DEFAULT_MODELS = LLM.get("default_models", {})
-    # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
-    LLM_FACTORY = LLM.get("factory")
-    LLM_BASE_URL = LLM.get("base_url")
+    LLM = get_base_config("user_default_llm", {}) or {}
+    LLM_DEFAULT_MODELS = LLM.get("default_models", {}) or {}
+    LLM_FACTORY = LLM.get("factory", "") or ""
+    LLM_BASE_URL = LLM.get("base_url", "") or ""
     try:
         REGISTER_ENABLED = int(os.environ.get("REGISTER_ENABLED", "1"))
     except Exception:
@@ -106,6 +108,7 @@ def init_settings():
         FACTORY_LLM_INFOS = []
 
     global CHAT_MDL, EMBEDDING_MDL, RERANK_MDL, ASR_MDL, IMAGE2TEXT_MDL
+    global CHAT_CFG, EMBEDDING_CFG, RERANK_CFG, ASR_CFG, IMAGE2TEXT_CFG
     if not LIGHTEN:
         EMBEDDING_MDL = BUILTIN_EMBEDDING_MODELS[0]
 
@@ -116,18 +119,29 @@ def init_settings():
         ASR_MDL = LLM_DEFAULT_MODELS.get("asr_model", ASR_MDL)
         IMAGE2TEXT_MDL = LLM_DEFAULT_MODELS.get("image2text_model", IMAGE2TEXT_MDL)
 
-        # factory can be specified in the config name with "@". LLM_FACTORY will be used if not specified
-        CHAT_MDL = CHAT_MDL + (f"@{LLM_FACTORY}" if "@" not in CHAT_MDL and CHAT_MDL != "" else "")
-        EMBEDDING_MDL = EMBEDDING_MDL + (f"@{LLM_FACTORY}" if "@" not in EMBEDDING_MDL and EMBEDDING_MDL != "" else "")
-        RERANK_MDL = RERANK_MDL + (f"@{LLM_FACTORY}" if "@" not in RERANK_MDL and RERANK_MDL != "" else "")
-        ASR_MDL = ASR_MDL + (f"@{LLM_FACTORY}" if "@" not in ASR_MDL and ASR_MDL != "" else "")
-        IMAGE2TEXT_MDL = IMAGE2TEXT_MDL + (f"@{LLM_FACTORY}" if "@" not in IMAGE2TEXT_MDL and IMAGE2TEXT_MDL != "" else "")
-
     global API_KEY, PARSERS, HOST_IP, HOST_PORT, SECRET_KEY
     API_KEY = LLM.get("api_key", "")
     PARSERS = LLM.get(
         "parsers", "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"
     )
+
+    chat_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("chat_model", CHAT_MDL))
+    embedding_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("embedding_model", EMBEDDING_MDL))
+    rerank_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("rerank_model", RERANK_MDL))
+    asr_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("asr_model", ASR_MDL))
+    image2text_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("image2text_model", IMAGE2TEXT_MDL))
+
+    CHAT_CFG = _resolve_per_model_config(chat_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    EMBEDDING_CFG = _resolve_per_model_config(embedding_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    RERANK_CFG = _resolve_per_model_config(rerank_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    ASR_CFG = _resolve_per_model_config(asr_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    IMAGE2TEXT_CFG = _resolve_per_model_config(image2text_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+
+    CHAT_MDL = CHAT_CFG.get("model", "") or ""
+    EMBEDDING_MDL = EMBEDDING_CFG.get("model", "") or ""
+    RERANK_MDL = RERANK_CFG.get("model", "") or ""
+    ASR_MDL = ASR_CFG.get("model", "") or ""
+    IMAGE2TEXT_MDL = IMAGE2TEXT_CFG.get("model", "") or ""
 
     HOST_IP = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("host", "127.0.0.1")
     HOST_PORT = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("http_port")
@@ -162,6 +176,7 @@ def init_settings():
 
     retrievaler = search.Dealer(docStoreConn)
     from graphrag import search as kg_search
+
     kg_retrievaler = kg_search.KGSearch(docStoreConn)
 
     if int(os.environ.get("SANDBOX_ENABLED", "0")):
@@ -202,6 +217,37 @@ class RetCode(IntEnum, CustomEnum):
     SERVER_ERROR = 500
     FORBIDDEN = 403
     NOT_FOUND = 404
+
+
+def _parse_model_entry(entry):
+    if isinstance(entry, str):
+        return {"name": entry, "factory": None, "api_key": None, "base_url": None}
+    if isinstance(entry, dict):
+        name = entry.get("name") or entry.get("model") or ""
+        return {
+            "name": name,
+            "factory": entry.get("factory"),
+            "api_key": entry.get("api_key"),
+            "base_url": entry.get("base_url"),
+        }
+    return {"name": "", "factory": None, "api_key": None, "base_url": None}
+
+
+def _resolve_per_model_config(entry_dict, backup_factory, backup_api_key, backup_base_url):
+    name = (entry_dict.get("name") or "").strip()
+    m_factory = entry_dict.get("factory") or backup_factory or ""
+    m_api_key = entry_dict.get("api_key") or backup_api_key or ""
+    m_base_url = entry_dict.get("base_url") or backup_base_url or ""
+
+    if name and "@" not in name and m_factory:
+        name = f"{name}@{m_factory}"
+
+    return {
+        "model": name,
+        "factory": m_factory,
+        "api_key": m_api_key,
+        "base_url": m_base_url,
+    }
 
 
 # AIFORBI

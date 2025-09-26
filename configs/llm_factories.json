@@ -551,6 +551,13 @@
                     "is_tools": true
                },
                {
+                    "llm_name": "glm-4.5-x",
+                    "tags": "LLM,CHAT,128K",
+                    "max_tokens": 128000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+               },
+               {
                     "llm_name": "glm-4.5v",
                     "tags": "LLM,CHAT,IMAGE2TEXT",
                     "max_tokens": 128000,
@@ -586,20 +593,6 @@
                     "is_tools": true
                 },
                 {
-                    "llm_name": "glm-4-0520",
-                    "tags": "LLM,CHAT,",
-                    "max_tokens": 128000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "glm-4",
-                    "tags": "LLM,CHAT,",
-                    "max_tokens": 128000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
                     "llm_name": "glm-4-airx",
                     "tags": "LLM,CHAT,",
                     "max_tokens": 8000,
@@ -614,14 +607,7 @@
                     "is_tools": true
                 },
                 {
-                    "llm_name": "glm-4-flash",
-                    "tags": "LLM,CHAT,",
-                    "max_tokens": 128000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "glm-4-flashx",
+                    "llm_name": "glm-4.5-flash",
                     "tags": "LLM,CHAT,",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
@@ -635,31 +621,10 @@
                     "is_tools": true
                 },
                 {
-                    "llm_name": "glm-3-turbo",
-                    "tags": "LLM,CHAT,",
-                    "max_tokens": 128000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "glm-4v",
-                    "tags": "LLM,CHAT,IMAGE2TEXT",
-                    "max_tokens": 2000,
-                    "mdl_type": "image2text",
-                    "is_tools": true
-                },
-                {
                     "llm_name": "glm-4v-plus-0111",
                     "tags": "LLM,CHAT,IMAGE2TEXT",
                     "max_tokens": 8192,
                    "mdl_type": "image2text",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "glm-4-9b",
-                    "tags": "LLM,CHAT,",
-                    "max_tokens": 8192,
-                    "mdl_type": "chat",
                     "is_tools": true
                 },
                 {
