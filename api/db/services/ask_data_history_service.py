@@ -191,15 +191,32 @@ class AskDataHistoryService(CommonService):
                 .all()
             )
 
-            return [
-                {
-                    "user_question": record.user_question,
+            result = []
+            for record in records:
+                user_original_question = None
+                rewritten_question = None
+
+                if record.user_question:
+                    try:
+                        question_payload = json.loads(record.user_question)
+                        user_original_question = question_payload.get("user_original_question")
+                        rewritten_question = question_payload.get("rewritten_question")
+                    except (TypeError, ValueError) as parse_error:
+                        logging.warning(
+                            "Failed to parse user_question JSON for record %s: %s",
+                            record.id,
+                            parse_error
+                        )
+
+                result.append({
+                    "user_original_question": user_original_question,
+                    "rewritten_question": rewritten_question,
                     "round_id": record.round_id,
                     "processed_semantic_layer": record.processed_semantic_layer,
                     "sql_info": record.sql_info
-                }
-                for record in records
-            ]
+                })
+
+            return result
         except Exception as e:
             logging.error(f"Failed to fetch history for round_id {round_id}: {e}")
             raise
