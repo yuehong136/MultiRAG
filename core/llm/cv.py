@@ -25,7 +25,7 @@ from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from zhipuai import ZhipuAI
 from core.nlp import is_english
-from core.prompts import vision_llm_describe_prompt
+from core.prompts.prompts import vision_llm_describe_prompt
 from core.utils import num_tokens_from_string
 
 
