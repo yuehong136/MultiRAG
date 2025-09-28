@@ -209,27 +209,38 @@ class WideTableSQLGenerator:
         model_map = {m["modelId"]: m for m in models}
         main_table = model_map[main_model_id]["tableName"]
 
-        # 生成表别名
-        table_aliases = self._generate_table_aliases(models)
+        # 收集所有已经JOIN的表（包括主表）
+        joined_model_ids = {main_model_id}
+        for join in join_graph["joins"]:
+            joined_model_ids.add(join["right_model_id"])
+            # 如果是反向JOIN，也要包括left_model_id
+            if "left_model_id" in join:
+                joined_model_ids.add(join["left_model_id"])
+
+        # 生成表别名（只为已JOIN的表生成别名）
+        joined_models = [m for m in models if m["modelId"] in joined_model_ids]
+        table_aliases = self._generate_table_aliases(joined_models)
 
         # 构建SELECT子句
         select_fields = []
 
-        # 添加维度字段
+        # 添加维度字段（只选择已JOIN表的字段）
         for dim in filtered_fields["dimensions"]:
-            table_name = model_map[dim["modelId"]]["tableName"]
-            alias = table_aliases[table_name]
-            field_name = dim["dimname_en"]
-            field_label = dim["dimensionname"]
-            select_fields.append(f"{alias}.{field_name} AS \"{field_label}\"")
+            if dim["modelId"] in joined_model_ids:  # 检查表是否已JOIN
+                table_name = model_map[dim["modelId"]]["tableName"]
+                alias = table_aliases[table_name]
+                field_name = dim["dimname_en"]
+                field_label = dim["dimensionname"]
+                select_fields.append(f"{alias}.{field_name} AS \"{field_label}\"")
 
-        # 添加指标字段
+        # 添加指标字段（只选择已JOIN表的字段）
         for metric in filtered_fields["metrics"]:
-            table_name = model_map[metric["modelId"]]["tableName"]
-            alias = table_aliases[table_name]
-            field_name = metric["indname_en"]
-            field_label = metric["metricname"]
-            select_fields.append(f"{alias}.{field_name} AS \"{field_label}\"")
+            if metric["modelId"] in joined_model_ids:  # 检查表是否已JOIN
+                table_name = model_map[metric["modelId"]]["tableName"]
+                alias = table_aliases[table_name]
+                field_name = metric["indname_en"]
+                field_label = metric["metricname"]
+                select_fields.append(f"{alias}.{field_name} AS \"{field_label}\"")
 
         # 如果没有字段，至少选择一个
         if not select_fields:
@@ -252,9 +263,9 @@ class WideTableSQLGenerator:
             )
             join_clauses.append(join_clause)
 
-        # 构建WHERE子句（行权限）
+        # 构建WHERE子句（只为已JOIN的表构建）
         where_clauses = self._build_where_clauses(
-            models,
+            joined_models,  # 只传递已JOIN的模型
             table_aliases,
             user_permissions
         )
@@ -274,8 +285,14 @@ class WideTableSQLGenerator:
 
         sql = "\n".join(sql_parts)
 
-        # 记录生成的SQL
+        # 记录生成的SQL和未包含的表
         logger.info(f"生成的宽表SQL:\n{sql}")
+
+        # 记录未能JOIN的表（可选）
+        unjoined_model_ids = set(m["modelId"] for m in models) - joined_model_ids
+        if unjoined_model_ids:
+            unjoined_tables = [model_map[mid]["modelName"] for mid in unjoined_model_ids if mid in model_map]
+            logger.warning(f"以下表由于缺少关联关系未被包含在查询中: {', '.join(unjoined_tables)}")
 
         return sql
 
