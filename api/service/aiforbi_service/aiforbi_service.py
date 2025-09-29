@@ -5,7 +5,8 @@ import pandas as pd
 from fastapi import HTTPException
 
 from api.db import LLMType
-from api.db.services.llm_service import LLMBundle, TenantLLMService
+from api.db.services.llm_service import LLMBundle
+from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService
 from api.service.aiforbi_service.echarts_temp import load_chart_template
 from api.service.aiforbi_service.llm_prompts import PromptTemplateLoader

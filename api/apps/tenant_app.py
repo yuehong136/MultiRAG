@@ -18,7 +18,7 @@ from api.utils import get_uuid, delta_seconds
 from api.apps import manager
 from api.utils.api_utils import server_error_response, get_data_error_result
 from sqlalchemy.orm import Session
-from api.db.services.llm_service import TenantLLMService
+from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService, UserService, TenantService
 from api.utils.api_utils import get_json_result
 

@@ -27,7 +27,7 @@ from core.prompts.prompts import keyword_extraction, cross_languages
 from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import TenantLLMService, LLMBundle
+from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.db.services.document_service import DocumentService
