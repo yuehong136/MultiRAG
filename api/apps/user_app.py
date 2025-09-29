@@ -19,9 +19,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-# from api.db.database import get_db
 from api.db.db_models import TenantLLM, get_db
-from api.db.services.llm_service import TenantLLMService, LLMService
+from api.db.services.llm_service import TenantLLMService, get_init_tenant_llm
 from api.db.services.user_service import UserService, TenantService, UserTenantService#, pwd_context
 from api.db.services.file_service import FileService
 from api.db import UserTenantRole, FileType
@@ -625,57 +624,59 @@ def user_register(db: Session, user_id: str, user: dict):
         "size": 0,
         "location": "",
     }
-    tenant_llm = []
 
-    seen = set()
-    factory_configs = []
-    for factory_config in [
-        settings.CHAT_CFG,
-        settings.EMBEDDING_CFG,
-        settings.ASR_CFG,
-        settings.IMAGE2TEXT_CFG,
-        settings.RERANK_CFG,
-    ]:
-        factory_name = factory_config["factory"]
-        if factory_name not in seen:
-            seen.add(factory_name)
-            factory_configs.append(factory_config)
-
-    for factory_config in factory_configs:
-        for llm in LLMService.query(db, fid=factory_config["factory"]):
-            tenant_llm.append(
-                {
-                    "tenant_id": user_id,
-                    "llm_factory": factory_config["factory"],
-                    "llm_name": llm.llm_name,
-                    "mdl_type": llm.mdl_type,
-                    "api_key": factory_config["api_key"],
-                    "api_base": factory_config["base_url"],
-                    "max_tokens": llm.max_tokens if llm.max_tokens else 8192,
-                }
-            )
-
-    if settings.LIGHTEN != 1:
-        for buildin_embedding_model in settings.BUILTIN_EMBEDDING_MODELS:
-            mdlnm, fid = TenantLLMService.split_model_name_and_factory(buildin_embedding_model)
-            tenant_llm.append(
-                {
-                    "tenant_id": user_id,
-                    "llm_factory": fid,
-                    "llm_name": mdlnm,
-                    "mdl_type": "embedding",
-                    "api_key": "",
-                    "api_base": "",
-                    "max_tokens": 1024 if buildin_embedding_model == "BAAI/bge-large-zh-v1.5@BAAI" else 512,
-                }
-            )
-
-    unique = {}
-    for item in tenant_llm:
-        key = (item["tenant_id"], item["llm_factory"], item["llm_name"])
-        if key not in unique:
-            unique[key] = item
-    tenant_llm = list(unique.values())
+    tenant_llm = get_init_tenant_llm(db, user_id)
+    # tenant_llm = []
+    #
+    # seen = set()
+    # factory_configs = []
+    # for factory_config in [
+    #     settings.CHAT_CFG,
+    #     settings.EMBEDDING_CFG,
+    #     settings.ASR_CFG,
+    #     settings.IMAGE2TEXT_CFG,
+    #     settings.RERANK_CFG,
+    # ]:
+    #     factory_name = factory_config["factory"]
+    #     if factory_name not in seen:
+    #         seen.add(factory_name)
+    #         factory_configs.append(factory_config)
+    #
+    # for factory_config in factory_configs:
+    #     for llm in LLMService.query(db, fid=factory_config["factory"]):
+    #         tenant_llm.append(
+    #             {
+    #                 "tenant_id": user_id,
+    #                 "llm_factory": factory_config["factory"],
+    #                 "llm_name": llm.llm_name,
+    #                 "mdl_type": llm.mdl_type,
+    #                 "api_key": factory_config["api_key"],
+    #                 "api_base": factory_config["base_url"],
+    #                 "max_tokens": llm.max_tokens if llm.max_tokens else 8192,
+    #             }
+    #         )
+    #
+    # if settings.LIGHTEN != 1:
+    #     for buildin_embedding_model in settings.BUILTIN_EMBEDDING_MODELS:
+    #         mdlnm, fid = TenantLLMService.split_model_name_and_factory(buildin_embedding_model)
+    #         tenant_llm.append(
+    #             {
+    #                 "tenant_id": user_id,
+    #                 "llm_factory": fid,
+    #                 "llm_name": mdlnm,
+    #                 "mdl_type": "embedding",
+    #                 "api_key": "",
+    #                 "api_base": "",
+    #                 "max_tokens": 1024 if buildin_embedding_model == "BAAI/bge-large-zh-v1.5@BAAI" else 512,
+    #             }
+    #         )
+    #
+    # unique = {}
+    # for item in tenant_llm:
+    #     key = (item["tenant_id"], item["llm_factory"], item["llm_name"])
+    #     if key not in unique:
+    #         unique[key] = item
+    # tenant_llm = list(unique.values())
 
     try:
         if not UserService.save(db, **user):

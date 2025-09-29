@@ -24,7 +24,9 @@ from pydantic import BaseModel, Field, field_validator
 
 from api.apps import manager, executor
 from agent.component.agent_with_tools import Agent, AgentParam
-from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService, LLMBundle
+# from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService, LLMBundle
+from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
+from api.db.services.llm_service import LLMService, LLMBundle
 from api.db.services.user_service import TenantService
 from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
@@ -163,6 +165,7 @@ class ChatAgentAdapter:
 
         # 准备历史记录 - 保持字典格式，但添加当前查询
         history = []
+        
         if messages:
             # 保持字典格式的消息
             history = messages.copy()
@@ -197,6 +200,11 @@ class ChatAgentAdapter:
                 # 有工具时，使用Agent的完整流式工具调用能力
                 # 直接复用Agent的stream_output_with_tools方法
                 prompt, msg = self.agent._prepare_prompt_variables()
+                
+                # 重要：像 _invoke 方法一样，将 system 消息添加到 msg 中
+                # 这样 _react_with_tools_streamly 中的 hist 才会包含 system 消息
+                from core.prompts.prompts import message_fit_in
+                _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.agent.chat_mdl.max_length * 0.97))
 
                 # 创建用于收集工具使用历史的列表
                 use_tools = []
@@ -270,6 +278,7 @@ class ChatAgentAdapter:
         # 处理历史消息
         messages = messages or []
         history = []
+        
         for msg in messages:
             history.append({
                 "role": msg.get("role", "user"),
@@ -285,6 +294,9 @@ class ChatAgentAdapter:
             self.agent._param.sys_prompt = self.agent._param.sys_prompt + "\n" + knowledge_context
         
         try:
+            # 更新 canvas_mock 的历史记录
+            self.canvas_mock.history = history
+            
             # 准备提示词
             self.agent._param.prompts = history
             prompt, msg = self.agent._prepare_prompt_variables()
@@ -294,6 +306,10 @@ class ChatAgentAdapter:
             
             # 检查是否有工具可用
             if self.agent.tools:
+                # 重要：像 _invoke 方法一样，将 system 消息添加到 msg 中
+                from core.prompts.prompts import message_fit_in
+                _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.agent.chat_mdl.max_length * 0.97))
+                
                 use_tools = []
                 
                 # 发送工具分析开始消息

@@ -194,7 +194,8 @@ def full_question(db: Session, tenant_id=None, llm_id=None, messages=None, langu
         messages = []
     from api.db import LLMType
     from api.db.services.llm_service import LLMBundle
-    from api.db.services.llm_service import TenantLLMService
+    from api.db.services.tenant_llm_service import TenantLLMService
+
     if not chat_mdl:
         if TenantLLMService.llm_id2llm_type(llm_id) == "image2text":
             chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
@@ -227,7 +228,7 @@ def full_question(db: Session, tenant_id=None, llm_id=None, messages=None, langu
 def cross_languages(db, tenant_id, llm_id, query, languages=None):
     from api.db import LLMType
     from api.db.services.llm_service import LLMBundle
-    from api.db.services.llm_service import TenantLLMService
+    from api.db.services.tenant_llm_service import TenantLLMService
 
     if languages is None:
         languages = []
@@ -341,9 +342,9 @@ def analyze_task(chat_mdl, prompt, task_name, tools_description: list[dict]):
     tools_desc = tool_schema(tools_description)
     context = ""
 
-    template = PROMPT_JINJA_ENV.from_string(ANALYZE_TASK_USER)
+    template = PROMPT_JINJA_ENV.from_string(ANALYZE_TASK_SYSTEM + "\n\n" + ANALYZE_TASK_USER)
     context = template.render(task=task_name, context=context, agent_prompt=prompt, tools_desc=tools_desc)
-    kwd = chat_mdl.chat(ANALYZE_TASK_SYSTEM,[{"role": "user", "content": context}], {})
+    kwd = chat_mdl.chat(context, [{"role": "user", "content": "Please analyze it."}], {})
     if isinstance(kwd, tuple):
         kwd = kwd[0]
     kwd = re.sub(r"^.*</think>", "", kwd, flags=re.DOTALL)

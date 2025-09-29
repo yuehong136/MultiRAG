@@ -34,7 +34,9 @@ import requests
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api import settings
-from api.db.services.llm_service import TenantLLMService, LLMService
+# from api.db.services.llm_service import TenantLLMService, LLMService
+from api.db.services.llm_service import LLMService
+from api.db.services.tenant_llm_service import TenantLLMService
 from api.utils import HTTP_STATUS_CODES, get_uuid
 from api.constants import REQUEST_WAIT_SEC, REQUEST_MAX_WAIT_SEC
 

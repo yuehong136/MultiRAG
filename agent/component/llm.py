@@ -22,7 +22,9 @@ from typing import Any, Generator
 import json_repair
 from copy import deepcopy
 from functools import partial
-from api.db.services.llm_service import LLMBundle, TenantLLMService
+# from api.db.services.llm_service import LLMBundle, TenantLLMService
+from api.db.services.llm_service import LLMBundle
+from api.db.services.tenant_llm_service import TenantLLMService
 from agent.component.base import ComponentBase, ComponentParamBase
 from api.utils.api_utils import timeout
 from core.prompts.prompts import tool_call_summary, message_fit_in, citation_prompt

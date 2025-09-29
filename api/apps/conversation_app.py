@@ -20,9 +20,10 @@ from api.db.db_models import APIToken, get_db
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, chat, ask
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMBundle, TenantService
+# from api.db.services.llm_service import LLMBundle, TenantService
+from api.db.services.llm_service import LLMBundle
+from api.db.services.user_service import UserTenantService, TenantService
 from api.db import LLMType
-from api.db.services.user_service import UserTenantService
 from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
