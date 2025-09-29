@@ -175,6 +175,7 @@ class SemanticRelevanceFilter:
             self,
             user_query: str,
             dataset_info: List[Dict],
+            model_relations: List[Dict],
             llm_name: str
     ) -> Dict[str, List[str]]:
         """
@@ -206,7 +207,8 @@ class SemanticRelevanceFilter:
             # 准备模板参数
             template_values = {
                 "user_query": user_query,
-                "semantic_layer": json.dumps(dataset_info, ensure_ascii=False, indent=2)
+                "semantic_layer": json.dumps(dataset_info, ensure_ascii=False, indent=2),
+                "model_relations": json.dumps(model_relations, ensure_ascii=False, indent=2)
             }
 
             # 填充模板

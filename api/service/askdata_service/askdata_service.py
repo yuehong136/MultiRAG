@@ -27,6 +27,7 @@ from api.service.askdata_service.table_config_generator import TableConfigGenera
 from api.service.askdata_service.util.add_table_alias_to_fields import add_table_alias_to_fields
 from api.service.askdata_service.util.convert_aggregation_value import convert_aggregation_value
 from api.service.askdata_service.util.convert_where_condition_value import process_where_condition
+from api.service.askdata_service.util.filter_model_relations_by_ids import filter_model_relations_by_ids
 from api.service.askdata_service.util.merge_dimensions_and_metrics import merge_dimensions_and_metrics
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
 from api.service.askdata_service.util.semantic_filter_processor import apply_semantic_filter
@@ -316,6 +317,31 @@ class AskdataService:
             dimensions_task
         )
 
+        model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
+
+        domain_ids = self._extract_unique_domain_ids(dataset_details)
+
+        model_details_task = time_task(
+            self.semantic_api_client.get_model_detail_async(model_ids=model_ids),
+            name="获取模型详情"
+        )
+        model_relations_task = time_task(
+            self.semantic_api_client.get_model_relationships_async(model_ids=model_ids),
+            name="获取模型关系"
+        )
+        business_term_task = time_task(
+            self.semantic_api_client.get_business_term_info_async(
+                keyword=segmented_words,
+                domain_ids=domain_ids),
+            name="获取业务术语"
+        )
+
+        model_details, model_relations, business_term_rows = await asyncio.gather(
+            model_details_task,
+            model_relations_task,
+            business_term_task
+        )
+
         # 将维度和指标简化后进行合并，为交给LLM进一步排除冗余语义做准备
         merged_dimensions_and_metrics = merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics)
 
@@ -324,6 +350,7 @@ class AskdataService:
             self.semantic_relevance_filter.filter_irrelevant_fields(
                 user_query=user_query,
                 dataset_info=merged_dimensions_and_metrics,
+                model_relations=model_relations,
                 llm_name=llm_name
             ),
             name="LLM过滤不相关的维度和指标"
@@ -369,28 +396,7 @@ class AskdataService:
         }},
                          "final_data")
 
-        domain_ids = self._extract_unique_domain_ids(dataset_details)
-
-        model_details_task = time_task(
-            self.semantic_api_client.get_model_detail_async(model_ids=model_ids),
-            name="获取模型详情"
-        )
-        model_relations_task = time_task(
-            self.semantic_api_client.get_model_relationships_async(model_ids=model_ids),
-            name="获取模型关系"
-        )
-        business_term_task = time_task(
-            self.semantic_api_client.get_business_term_info_async(
-                keyword=segmented_words,
-                domain_ids=domain_ids),
-            name="获取业务术语"
-        )
-
-        model_details, model_relations, business_term_rows = await asyncio.gather(
-            model_details_task,
-            model_relations_task,
-            business_term_task
-        )
+        model_relations = filter_model_relations_by_ids(model_ids, model_relations)
 
         # 9. 构建最终的语义层
         semantic_layer_original = dict(

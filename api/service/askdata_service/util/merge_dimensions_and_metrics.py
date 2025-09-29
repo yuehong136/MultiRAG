@@ -21,6 +21,7 @@ def merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics):
             'dimname_en': dim.get('dimensionEnName'),
             'description': dim.get('description'),
             'modelName': dim.get('modelName'),
+            'modelId': dim.get('modelId'),
             'dataobject': dim.get('dataobject')
         }
 
@@ -43,6 +44,7 @@ def merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics):
             'metricEnName': metric.get('metricEnName'),
             'description': metric.get('description'),
             'modelName': metric.get('modelName'),
+            'modelId': metric.get('modelId'),
             'dataobject': metric.get('dataobject')
         }
         processed_metrics.append(cleaned_metric)
