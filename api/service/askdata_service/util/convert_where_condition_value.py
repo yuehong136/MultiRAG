@@ -94,7 +94,10 @@ def process_where_condition(where_condition: dict, semantic_field: dict, table_a
         tuple: (column_name, operator, converted_value, needs_special_handling, special_sql)
     """
     field_type = semantic_field['field_detail']['dataType']
-    column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+    if semantic_field["semantic_type"] == "metric":
+        column_name = f"{table_alias}.{semantic_field.get('semantic_field_name','').split('.')[1]}"
+    else:
+        column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
 
     # 如果有原始SQL组件，使用它
     if where_condition.get("original_sql_component", {}).get("field"):

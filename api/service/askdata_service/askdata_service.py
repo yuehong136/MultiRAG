@@ -576,7 +576,10 @@ class AskdataService:
                     semantic_field = self._find_semantic_field(column["id"], all_semantic_fields)
                     table_alias = self._find_table_alias(semantic_field["from_model_id"],
                                                          model_table_alias_mapping_list)
-                    column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
+                    if semantic_field["semantic_type"] == "metric":
+                        column_name = f"{table_alias}.{semantic_field.get("semantic_field_name","").split(".")[1]}"
+                    else:
+                        column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
                     assembler.add_column(column_name)
                 else:
                     column_name = column["sql_column"]
