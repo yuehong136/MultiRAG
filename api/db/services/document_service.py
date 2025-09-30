@@ -426,28 +426,29 @@ class DocumentService(CommonService):
             tenant_id=tenant_id,
         )
 
-        # 统一为文本列表
-        chunks_text: list[str] = []
+        # 统一为chunk列表（保留元数据）
+        chunks_list: list[dict | str] = []
         if isinstance(result, list):
             if not result:
-                chunks_text = []
+                chunks_list = []
             else:
                 first = result[0]
                 if isinstance(first, dict) and "content_with_weight" in first:
-                    chunks_text = [d.get("content_with_weight", "") for d in result]
+                    # 保留完整的chunk对象，包含页码等元数据
+                    chunks_list = result
                 elif isinstance(first, str):
-                    chunks_text = result
+                    chunks_list = result
                 else:
-                    chunks_text = [str(x) for x in result]
+                    chunks_list = [str(x) for x in result]
         else:
-            chunks_text = [str(result)]
+            chunks_list = [str(result)]
 
         if isinstance(limit, int) and limit > 0:
-            chunks_text = chunks_text[:limit]
-        return chunks_text
+            chunks_list = chunks_list[:limit]
+        return chunks_list
 
     @classmethod
-    def preview_document_chunks_batched(
+    async def preview_document_chunks_batched(
         cls,
         db: Session,
         doc_id: str | None = None,
@@ -491,17 +492,91 @@ class DocumentService(CommonService):
                 bs = int(session.get("batch_size", 50)) if session.get("batch_size") else 50
 
             start = int(session.get("offset", 0))
-            total = int(session.get("total", 0))
+            # 支持渐进式解析
+            current_chunks = session.get("chunks", [])
+            current_total = len(current_chunks)
+            parsing_status = session.get("status", "completed")
+            estimated_total = int(session.get("estimated_total", current_total))
+            
             if isinstance(batch_index, int) and batch_index >= 0:
-                start = min(batch_index * bs, total)
-            end = min(start + bs, total)
-            batch = session.get("chunks", [])[start:end]
-            has_more = end < total
+                start = min(batch_index * bs, current_total)
+            end = min(start + bs, current_total)
+            batch = current_chunks[start:end]
+            
+            # 关键修复：如果batch为空且还在解析中，等待直到有新数据
+            if not batch and parsing_status == "parsing":
+                import asyncio
+                import logging
+                logging.info(f"[preview_chunks] {batch_id} - offset已达当前总数，等待后台解析新数据...")
+                
+                check_interval = 0.5
+                while True:
+                    await asyncio.sleep(check_interval)
+                    
+                    try:
+                        payload = REDIS_CONN.get(session_key)
+                        if not payload:
+                            logging.warning(f"[preview_chunks] {batch_id} - 会话丢失")
+                            break
+                        
+                        temp_session = json.loads(payload)
+                        temp_chunks = temp_session.get("chunks", [])
+                        temp_total = len(temp_chunks)
+                        temp_status = temp_session.get("status", "completed")
+                        
+                        # 如果有新数据，更新session并退出等待
+                        if temp_total > current_total:
+                            session = temp_session
+                            current_chunks = temp_chunks
+                            current_total = temp_total
+                            parsing_status = temp_status
+                            batch = current_chunks[start:min(start + bs, current_total)]
+                            logging.info(f"[preview_chunks] {batch_id} - 新数据就绪，从{start}返回{len(batch)}个chunks")
+                            break
+                        
+                        # 如果解析完成但仍无新数据，退出
+                        if temp_status == "completed":
+                            session = temp_session
+                            parsing_status = temp_status
+                            logging.info(f"[preview_chunks] {batch_id} - 解析完成，无更多数据")
+                            break
+                        
+                        # 如果解析失败，退出
+                        if temp_status == "error":
+                            session = temp_session
+                            parsing_status = temp_status
+                            logging.error(f"[preview_chunks] {batch_id} - 解析失败")
+                            break
+                    except Exception as e:
+                        logging.error(f"[preview_chunks] {batch_id} - 等待新数据失败: {e}")
+                        await asyncio.sleep(1)
+                
+                # 重新计算end（可能有新数据了）
+                end = min(start + bs, current_total)
+                batch = current_chunks[start:end]
+            
+            # 提取纯文本（用户只需要文本，不需要元数据）
+            batch_texts = []
+            for chunk in batch:
+                if isinstance(chunk, dict):
+                    batch_texts.append(chunk.get("content_with_weight", ""))
+                elif isinstance(chunk, str):
+                    batch_texts.append(chunk)
+                else:
+                    batch_texts.append(str(chunk))
+            
+            has_more = (end < current_total) or (parsing_status == "parsing")
             current_batch_index = (start // bs) if bs > 0 else 0
-            total_batches = (total + bs - 1) // bs if bs > 0 else 0
+            
+            if parsing_status == "completed":
+                total_batches = (current_total + bs - 1) // bs if bs > 0 else 0
+            else:
+                total_batches = (estimated_total + bs - 1) // bs if bs > 0 and estimated_total > 0 else None
 
             # 顺序模式推进 offset；并发批次模式在最后一批时清理会话
             if batch_index is None:
+                # 关键修复：无论status是什么，只要有更多数据，就更新offset
+                # 避免用户晚点续取时跳过中间chunks
                 if has_more:
                     session["offset"] = end
                     # 确保会话保存 batch_size 以便后续续取沿用
@@ -511,19 +586,26 @@ class DocumentService(CommonService):
                         pass
                     REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
                 else:
+                    # 没有更多数据了，删除会话（无论status）
                     REDIS_CONN.delete(session_key)
             else:
+                # 并发模式：最后一批时删除会话
                 if not has_more:
                     REDIS_CONN.delete(session_key)
 
+            # 简化字段：只保留必要的
             return {
                 "batch_id": batch_id,
-                "chunks": batch,
-                "count": len(batch),
-                "total": total,
+                "chunks": batch_texts,  # 返回纯文本数组
+                "count": len(batch_texts),  # 当前批次数量
+                "total": current_total,  # 当前实际总数（简化，不再区分预估/实际）
                 "has_more": has_more,
                 "batch_index": current_batch_index,
-                "total_batches": total_batches,
+                "total_batches": (current_total + bs - 1) // bs if bs > 0 else 0,  # 基于当前实际数量计算
+                "status": parsing_status,  # parsing | completed | error
+                "progress": session.get("progress", 1.0 if parsing_status == "completed" else 0.0),  # 解析进度 0.0-1.0
+                "parsed_page_range": session.get("parsed_page_range", ""),  # 已解析的页面范围（如"0-24"）
+                "total_pages": session.get("total_pages", 0),  # 总页数（PDF专用）
             }
 
         # 若未能从会话恢复，则必须提供 doc_id 以初始化新会话
@@ -593,61 +675,260 @@ class DocumentService(CommonService):
 
         # 如果无会话或摘要不匹配，则创建新会话
         if not session or session.get("digest") != digest:
-            # 重新切片
-            all_chunks = cls.preview_document_chunks(
-                db,
-                doc_id=doc_id,
-                parser_config_override=parser_config_override,
-                limit=None,
-                override_parser_id=override_parser_id,
-            )
-
+            import re
             batch_id = get_uuid()
             session_key = f"preview:session:{batch_id}"
-            session = {
-                "digest": digest,
-                "doc_id": doc_id,
-                "from": effective_from,
-                "to": effective_to,
-                "total": len(all_chunks),
-                "offset": 0,
-                "chunks": all_chunks,
-                "batch_size": bs,
-            }
-            REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
+            
+            # 判断是否是PDF文档（需要渐进式解析）
+            filename = doc.name
+            is_pdf = re.search(r"\.pdf$", filename or "", re.IGNORECASE) is not None
+            
+            if is_pdf:
+                # ===== PDF文档：渐进式解析 =====
+                import threading
+                from deepdoc.parser import PdfParser
+                from api.db.services.file2document_service import File2DocumentService
+                
+                # 读取文件
+                bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_id)
+                file_bin = STORAGE_IMPL.get(bucket, name)
+                
+                # 获取PDF总页数
+                try:
+                    total_pages = PdfParser.total_page_number(filename, file_bin)
+                    if total_pages is None:
+                        total_pages = 0
+                except Exception:
+                    total_pages = 0
+                
+                effective_to = min(effective_to, total_pages)
+                estimated_chunks = (effective_to - effective_from) * 4
+                
+                # 创建会话（状态：parsing）
+                session = {
+                    "digest": digest,
+                    "doc_id": doc_id,
+                    "from": effective_from,
+                    "to": effective_to,
+                    "total": 0,
+                    "estimated_total": estimated_chunks,
+                    "offset": 0,
+                    "chunks": [],
+                    "batch_size": bs,
+                    "status": "parsing",
+                    "progress": 0.0,
+                    "parsed_page_range": f"{effective_from}-{effective_from}",  # 初始范围
+                    "total_pages": effective_to,
+                }
+                REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
+                
+                # 后台线程：分批解析
+                def progressive_parse_pdf_doc():
+                    import logging
+                    logging.info(f"[preview_chunks] {batch_id} - 开始渐进式解析PDF文档 {doc_id}，共{effective_to - effective_from}页")
+                    
+                    # 定义每批解析的页数（遵循原生逻辑）
+                    page_batch_size = merged_cfg.get("task_page_size") or 12
+                    if override_parser_id == "paper" or doc.parser_id == "paper":
+                        page_batch_size = merged_cfg.get("task_page_size") or 22
+                    # 如果是特殊解析器或非DeepDOC布局，不分批（一次性解析）
+                    do_layout = merged_cfg.get("layout_recognize", "DeepDOC")
+                    if override_parser_id in ["one", "knowledge_graph"] or doc.parser_id in ["one", "knowledge_graph"] or do_layout != "DeepDOC":
+                        page_batch_size = 10**9  # 相当于全部一次性解析
+                    
+                    current_from = effective_from
+                    
+                    try:
+                        while current_from < effective_to:
+                            current_to = min(current_from + page_batch_size, effective_to)
+                            
+                            # 创建临时配置
+                            temp_cfg_override = parser_config_override.copy() if parser_config_override else {}
+                            temp_cfg_override["from_page"] = current_from
+                            temp_cfg_override["to_page"] = current_to
+                            
+                            # 解析这批页面
+                            logging.info(f"[preview_chunks] {batch_id} - 解析文档第 {current_from}-{current_to} 页")
+                            batch_chunks = cls.preview_document_chunks(
+                                db,
+                                doc_id=doc_id,
+                                parser_config_override=temp_cfg_override,
+                                limit=None,
+                                override_parser_id=override_parser_id,
+                            )
+                            
+                            # 更新Redis会话
+                            try:
+                                payload = REDIS_CONN.get(session_key)
+                                if not payload:
+                                    logging.warning(f"[preview_chunks] {batch_id} - 会话已过期，停止解析")
+                                    break
+                                
+                                current_session = json.loads(payload)
+                                current_session["chunks"].extend(batch_chunks)
+                                current_session["total"] = len(current_session["chunks"])
+                                current_session["parsed_page_range"] = f"{effective_from}-{current_to}"  # 已解析的页面范围
+                                current_session["progress"] = (current_to - effective_from) / (effective_to - effective_from)
+                                
+                                REDIS_CONN.set_obj(session_key, current_session, exp=session_ttl)
+                                logging.info(f"[preview_chunks] {batch_id} - 已解析页面{effective_from}-{current_to}，累计{len(current_session['chunks'])}个chunks")
+                            except Exception as e:
+                                logging.error(f"[preview_chunks] {batch_id} - 更新Redis失败: {e}")
+                                break
+                            
+                            current_from = current_to
+                        
+                        # 解析完成
+                        try:
+                            payload = REDIS_CONN.get(session_key)
+                            if payload:
+                                final_session = json.loads(payload)
+                                final_session["status"] = "completed"
+                                final_session["progress"] = 1.0
+                                final_session["parsed_page_range"] = f"{effective_from}-{effective_to}"  # 最终页面范围
+                                REDIS_CONN.set_obj(session_key, final_session, exp=session_ttl)
+                                logging.info(f"[preview_chunks] {batch_id} - PDF文档解析完成（页面{effective_from}-{effective_to}），共{len(final_session['chunks'])}个chunks")
+                        except Exception as e:
+                            logging.error(f"[preview_chunks] {batch_id} - 更新最终状态失败: {e}")
+                    
+                    except Exception as e:
+                        logging.error(f"[preview_chunks] {batch_id} - 解析失败: {e}", exc_info=True)
+                        try:
+                            payload = REDIS_CONN.get(session_key)
+                            if payload:
+                                error_session = json.loads(payload)
+                                error_session["status"] = "error"
+                                error_session["error"] = str(e)
+                                REDIS_CONN.set_obj(session_key, error_session, exp=session_ttl)
+                        except:
+                            pass
+                
+                # 启动后台线程
+                parse_thread = threading.Thread(target=progressive_parse_pdf_doc, daemon=True, name=f"pdf-doc-parse-{batch_id[:8]}")
+                parse_thread.start()
+                
+                # 等待直到有数据再返回（避免返回空数组破坏调用者逻辑）
+                # 不设置超时，无论多久都要等到真实数据
+                import asyncio
+                import logging
+                check_interval = 0.5  # 每500ms检查一次
+                
+                logging.info(f"[preview_chunks] {batch_id} - 等待首批解析结果...")
+                
+                while True:
+                    await asyncio.sleep(check_interval)
+                    
+                    try:
+                        payload = REDIS_CONN.get(session_key)
+                        if not payload:
+                            # 会话已被删除或过期，可能是后台线程异常退出
+                            logging.warning(f"[preview_chunks] {batch_id} - 会话丢失，停止等待")
+                            break
+                        
+                        temp_session = json.loads(payload)
+                        
+                        # 如果已有数据，立即返回
+                        if temp_session.get("chunks") and len(temp_session["chunks"]) > 0:
+                            session = temp_session
+                            logging.info(f"[preview_chunks] {batch_id} - 首批数据就绪，共{len(temp_session['chunks'])}个chunks")
+                            break
+                        
+                        # 如果解析失败，也立即返回
+                        if temp_session.get("status") == "error":
+                            session = temp_session
+                            logging.error(f"[preview_chunks] {batch_id} - 解析失败: {temp_session.get('error')}")
+                            break
+                        
+                        # 如果已完成但没有数据（空文档），也返回
+                        if temp_session.get("status") == "completed":
+                            session = temp_session
+                            logging.info(f"[preview_chunks] {batch_id} - 解析完成（空文档）")
+                            break
+                    except Exception as e:
+                        logging.error(f"[preview_chunks] {batch_id} - 检查会话状态失败: {e}")
+                        await asyncio.sleep(1)  # 出错时等待更长时间
+            
+            else:
+                # ===== 非PDF文档：原有逻辑 =====
+                all_chunks = cls.preview_document_chunks(
+                    db,
+                    doc_id=doc_id,
+                    parser_config_override=parser_config_override,
+                    limit=None,
+                    override_parser_id=override_parser_id,
+                )
+                session = {
+                    "digest": digest,
+                    "doc_id": doc_id,
+                    "from": effective_from,
+                    "to": effective_to,
+                    "total": len(all_chunks),
+                    "estimated_total": len(all_chunks),
+                    "offset": 0,
+                    "chunks": all_chunks,
+                    "batch_size": bs,
+                    "status": "completed",
+                    "progress": 1.0,
+                }
+                REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
 
         # 计算返回批次
         start = int(session.get("offset", 0))
-        total = int(session.get("total", 0))
+        current_chunks = session.get("chunks", [])
+        current_total = len(current_chunks)
+        parsing_status = session.get("status", "completed")
+        estimated_total = int(session.get("estimated_total", current_total))
+        
         if isinstance(batch_index, int) and batch_index >= 0:
-            start = min(batch_index * bs, total)
-        end = min(start + bs, total)
-        batch = session.get("chunks", [])[start:end]
-        has_more = end < total
+            start = min(batch_index * bs, current_total)
+        end = min(start + bs, current_total)
+        batch = current_chunks[start:end]
+        
+        # 提取纯文本（用户只需要文本，不需要元数据）
+        batch_texts = []
+        for chunk in batch:
+            if isinstance(chunk, dict):
+                batch_texts.append(chunk.get("content_with_weight", ""))
+            elif isinstance(chunk, str):
+                batch_texts.append(chunk)
+            else:
+                batch_texts.append(str(chunk))
+        
+        has_more = (end < current_total) or (parsing_status == "parsing")
         current_batch_index = (start // bs) if bs > 0 else 0
-        total_batches = (total + bs - 1) // bs if bs > 0 else 0
+        
+        if parsing_status == "completed":
+            total_batches = (current_total + bs - 1) // bs if bs > 0 else 0
+        else:
+            total_batches = (estimated_total + bs - 1) // bs if bs > 0 and estimated_total > 0 else None
 
         # 更新或删除会话
         if batch_index is None:
-            # 顺序模式：按 offset 推进；最后一批删除会话
+            # 关键修复：无论status是什么，只要有更多数据，就更新offset
+            # 避免用户晚点续取时跳过中间chunks
             if has_more:
                 session["offset"] = end
                 REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
             else:
+                # 没有更多数据了，删除会话（无论status）
                 REDIS_CONN.delete(session_key)
         else:
-            # 并发批次模式：如果已经取到最后一批（has_more=false），立即删除会话
+            # 并发模式：最后一批时删除会话
             if not has_more:
                 REDIS_CONN.delete(session_key)
 
         return {
             "batch_id": batch_id,
-            "chunks": batch,
-            "count": len(batch),
-            "total": total,
+            "chunks": batch_texts,  # 返回纯文本数组
+            "count": len(batch_texts),  # 当前批次数量
+            "total": current_total,  # 当前已解析的chunks总数（动态增长）
             "has_more": has_more,
             "batch_index": current_batch_index,
-            "total_batches": total_batches,
+            "total_batches": (current_total + bs - 1) // bs if bs > 0 else 0,  # 基于当前total计算
+            "status": parsing_status,  # parsing | completed | error
+            "progress": session.get("progress", 1.0 if parsing_status == "completed" else 0.0),  # 解析进度 0.0-1.0
+            "parsed_page_range": session.get("parsed_page_range", ""),  # 已解析的页面范围（如"0-24"）
+            "total_pages": session.get("total_pages", 0),  # 总页数（PDF专用）
         }
 
     @classmethod
@@ -813,7 +1094,7 @@ class DocumentService(CommonService):
             tenant_id=tenant_id,
         )
 
-        # 统一为文本列表
+        # 统一为文本列表（只提取文本内容）
         chunks_text: list[str] = []
         if isinstance(result, list):
             if not result:
@@ -821,6 +1102,7 @@ class DocumentService(CommonService):
             else:
                 first = result[0]
                 if isinstance(first, dict) and "content_with_weight" in first:
+                    # 提取文本内容（保证顺序）
                     chunks_text = [d.get("content_with_weight", "") for d in result]
                 elif isinstance(first, str):
                     chunks_text = result
@@ -830,8 +1112,28 @@ class DocumentService(CommonService):
             chunks_text = [str(result)]
         return chunks_text
 
+    # 类级别的信号量：限制并发解析数量
+    _pdf_parse_semaphore = None
+    _semaphore_lock = None
+    
     @classmethod
-    def preview_file_chunks_batched(
+    def _get_pdf_parse_semaphore(cls):
+        """获取PDF解析信号量（单例模式）"""
+        if cls._pdf_parse_semaphore is None:
+            import threading
+            if cls._semaphore_lock is None:
+                cls._semaphore_lock = threading.Lock()
+            with cls._semaphore_lock:
+                if cls._pdf_parse_semaphore is None:
+                    import os
+                    # 从环境变量读取，默认最多5个PDF并发解析
+                    max_concurrent = int(os.getenv("MAX_CONCURRENT_PDF_PARSE", "5"))
+                    import asyncio
+                    cls._pdf_parse_semaphore = asyncio.Semaphore(max_concurrent)
+        return cls._pdf_parse_semaphore
+    
+    @classmethod
+    async def preview_file_chunks_batched(
         cls,
         db: Session,
         filename: str | None = None,
@@ -846,6 +1148,7 @@ class DocumentService(CommonService):
         tenant_id: str | None = None,
     ) -> dict:
         import json
+        import re
 
         language = language or "Chinese"
 
@@ -873,16 +1176,95 @@ class DocumentService(CommonService):
                 bs = int(session.get("batch_size", 50)) if session.get("batch_size") else 50
 
             start = int(session.get("offset", 0))
-            total = int(session.get("total", 0))
+            # 获取当前已解析的chunk总数
+            current_chunks = session.get("chunks", [])
+            current_total = len(current_chunks)
+            
+            # 检查解析状态
+            parsing_status = session.get("status", "completed")  # parsing | completed | error
+            estimated_total = int(session.get("estimated_total", current_total))
+            
             if isinstance(batch_index, int) and batch_index >= 0:
-                start = min(batch_index * bs, total)
-            end = min(start + bs, total)
-            batch = session.get("chunks", [])[start:end]
-            has_more = end < total
+                start = min(batch_index * bs, current_total)
+            end = min(start + bs, current_total)
+            batch = current_chunks[start:end]
+            
+            # 关键修复：如果batch为空且还在解析中，等待直到有新数据
+            if not batch and parsing_status == "parsing":
+                import asyncio
+                import logging
+                logging.info(f"[preview_chunks] {batch_id} - offset已达当前总数，等待后台解析新数据...")
+                
+                check_interval = 0.5
+                while True:
+                    await asyncio.sleep(check_interval)
+                    
+                    try:
+                        payload = REDIS_CONN.get(session_key)
+                        if not payload:
+                            logging.warning(f"[preview_chunks] {batch_id} - 会话丢失")
+                            break
+                        
+                        temp_session = json.loads(payload)
+                        temp_chunks = temp_session.get("chunks", [])
+                        temp_total = len(temp_chunks)
+                        temp_status = temp_session.get("status", "completed")
+                        
+                        # 如果有新数据，更新session并退出等待
+                        if temp_total > current_total:
+                            session = temp_session
+                            current_chunks = temp_chunks
+                            current_total = temp_total
+                            parsing_status = temp_status
+                            batch = current_chunks[start:min(start + bs, current_total)]
+                            logging.info(f"[preview_chunks] {batch_id} - 新数据就绪，从{start}返回{len(batch)}个chunks")
+                            break
+                        
+                        # 如果解析完成但仍无新数据，退出
+                        if temp_status == "completed":
+                            session = temp_session
+                            parsing_status = temp_status
+                            logging.info(f"[preview_chunks] {batch_id} - 解析完成，无更多数据")
+                            break
+                        
+                        # 如果解析失败，退出
+                        if temp_status == "error":
+                            session = temp_session
+                            parsing_status = temp_status
+                            logging.error(f"[preview_chunks] {batch_id} - 解析失败")
+                            break
+                    except Exception as e:
+                        logging.error(f"[preview_chunks] {batch_id} - 等待新数据失败: {e}")
+                        await asyncio.sleep(1)
+                
+                # 重新计算end（可能有新数据了）
+                end = min(start + bs, current_total)
+                batch = current_chunks[start:end]
+            
+            # 提取纯文本（用户只需要文本，不需要元数据）
+            batch_texts = []
+            for chunk in batch:
+                if isinstance(chunk, dict):
+                    batch_texts.append(chunk.get("content_with_weight", ""))
+                elif isinstance(chunk, str):
+                    batch_texts.append(chunk)
+                else:
+                    batch_texts.append(str(chunk))
+            
+            # 如果还在解析中，或者还有未读取的chunks，则has_more=True
+            has_more = (end < current_total) or (parsing_status == "parsing")
             current_batch_index = (start // bs) if bs > 0 else 0
-            total_batches = (total + bs - 1) // bs if bs > 0 else 0
+            
+            # 计算总批次数
+            if parsing_status == "completed":
+                total_batches = (current_total + bs - 1) // bs if bs > 0 else 0
+            else:
+                # 解析中，基于预估值计算
+                total_batches = (estimated_total + bs - 1) // bs if bs > 0 and estimated_total > 0 else None
 
             if batch_index is None:
+                # 关键修复：无论status是什么，只要有更多数据，就更新offset
+                # 避免用户晚点续取时跳过中间chunks
                 if has_more:
                     session["offset"] = end
                     try:
@@ -891,19 +1273,22 @@ class DocumentService(CommonService):
                         pass
                     REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
                 else:
-                    REDIS_CONN.delete(session_key)
-            else:
-                if not has_more:
+                    # 没有更多数据了，删除会话（无论status）
                     REDIS_CONN.delete(session_key)
 
+            # 简化字段：只保留必要的
             return {
                 "batch_id": batch_id,
-                "chunks": batch,
-                "count": len(batch),
-                "total": total,
+                "chunks": batch_texts,  # 返回纯文本数组
+                "count": len(batch_texts),  # 当前批次数量
+                "total": current_total,  # 当前实际总数（简化，不再区分预估/实际）
                 "has_more": has_more,
                 "batch_index": current_batch_index,
-                "total_batches": total_batches,
+                "total_batches": (current_total + bs - 1) // bs if bs > 0 else 0,  # 基于当前实际数量计算
+                "status": parsing_status,  # parsing | completed | error
+                "progress": session.get("progress", 1.0 if parsing_status == "completed" else 0.0),  # 解析进度 0.0-1.0
+                "parsed_page_range": session.get("parsed_page_range", ""),  # 已解析的页面范围（如"0-24"）
+                "total_pages": session.get("total_pages", 0),  # 总页数（PDF专用）
             }
 
         # 否则需要文件以初始化/重建会话
@@ -945,58 +1330,268 @@ class DocumentService(CommonService):
         except Exception:
             bs = 50
 
+        # 检查是否需要创建新会话
         if not session or session.get("digest") != digest:
-            all_chunks = cls.preview_file_chunks(
-                db,
-                filename,
-                file_bytes,
-                parser_config_override=base_cfg,
-                override_parser_id=override_parser_id,
-                language=language,
-                tenant_id=tenant_id,
-            )
             batch_id = get_uuid()
             session_key = f"preview:file_session:{batch_id}"
-            session = {
-                "digest": digest,
-                "filename": filename,
-                "total": len(all_chunks),
-                "offset": 0,
-                "chunks": all_chunks,
-                "batch_size": bs,
-                "tenant_id": tenant_id,
-            }
-            REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
+            
+            # 判断是否是PDF文件（需要特殊处理）
+            is_pdf = re.search(r"\.pdf$", filename or "", re.IGNORECASE) is not None
+            
+            if is_pdf:
+                # ===== PDF文件：渐进式解析 =====
+                import threading
+                from deepdoc.parser import PdfParser
+                
+                # 获取PDF总页数
+                try:
+                    total_pages = PdfParser.total_page_number(filename, file_bytes)
+                    if total_pages is None:
+                        total_pages = 0
+                except Exception:
+                    total_pages = 0
+                
+                # 解析配置中的页面范围
+                effective_from = int(base_cfg.get("from_page", 0)) if isinstance(base_cfg, dict) else 0
+                effective_to = int(base_cfg.get("to_page", total_pages)) if isinstance(base_cfg, dict) else total_pages
+                effective_to = min(effective_to, total_pages)
+                
+                # 首批只解析前N页（快速返回）
+                initial_pages = min(15, effective_to - effective_from)  # 先解析15页
+                
+                # 预估总chunk数（假设每页平均3-5个chunks）
+                estimated_chunks = (effective_to - effective_from) * 4
+                
+                # 创建会话（状态：parsing）
+                session = {
+                    "digest": digest,
+                    "filename": filename,
+                    "total": 0,  # 初始为0
+                    "estimated_total": estimated_chunks,
+                    "offset": 0,
+                    "chunks": [],
+                    "batch_size": bs,
+                    "tenant_id": tenant_id,
+                    "status": "parsing",
+                    "progress": 0.0,
+                    "current_page": effective_from,
+                    "total_pages": effective_to,
+                    "from_page": effective_from,
+                    "to_page": effective_to,
+                }
+                REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
+                
+                # 后台线程：分批解析PDF
+                def progressive_parse_pdf():
+                    import logging
+                    logging.info(f"[preview_chunks] {batch_id} - 开始渐进式解析PDF，共{effective_to - effective_from}页")
+                    
+                    # 定义每批解析的页数（遵循原生逻辑）
+                    page_batch_size = base_cfg.get("task_page_size") or 12
+                    if override_parser_id == "paper" or method == "paper":
+                        page_batch_size = base_cfg.get("task_page_size") or 22
+                    # 如果是特殊解析器或非DeepDOC布局，不分批（一次性解析）
+                    do_layout = base_cfg.get("layout_recognize", "DeepDOC")
+                    if override_parser_id in ["one", "knowledge_graph"] or do_layout != "DeepDOC":
+                        page_batch_size = 10**9  # 相当于全部一次性解析
+                    
+                    current_from = effective_from
+                    
+                    try:
+                        while current_from < effective_to:
+                            current_to = min(current_from + page_batch_size, effective_to)
+                            
+                            # 创建临时配置，限制解析范围
+                            temp_cfg = base_cfg.copy() if base_cfg else {}
+                            temp_cfg["from_page"] = current_from
+                            temp_cfg["to_page"] = current_to
+                            
+                            # 调用原有的chunk方法解析这一批页面
+                            logging.info(f"[preview_chunks] {batch_id} - 解析第 {current_from}-{current_to} 页")
+                            batch_chunks = cls.preview_file_chunks(
+                                db,
+                                filename,
+                                file_bytes,
+                                parser_config_override=temp_cfg,
+                                override_parser_id=override_parser_id,
+                                language=language,
+                                tenant_id=tenant_id,
+                            )
+                            
+                            # 更新Redis会话：追加新chunks
+                            try:
+                                payload = REDIS_CONN.get(session_key)
+                                if not payload:
+                                    logging.warning(f"[preview_chunks] {batch_id} - 会话已过期，停止解析")
+                                    break
+                                
+                                current_session = json.loads(payload)
+                                current_session["chunks"].extend(batch_chunks)
+                                current_session["total"] = len(current_session["chunks"])
+                                current_session["parsed_page_range"] = f"{effective_from}-{current_to}"  # 已解析的页面范围
+                                current_session["progress"] = (current_to - effective_from) / (effective_to - effective_from)
+                                
+                                REDIS_CONN.set_obj(session_key, current_session, exp=session_ttl)
+                                logging.info(f"[preview_chunks] {batch_id} - 已解析页面{effective_from}-{current_to}，累计{len(current_session['chunks'])}个chunks")
+                            except Exception as e:
+                                logging.error(f"[preview_chunks] {batch_id} - 更新Redis失败: {e}")
+                                break
+                            
+                            current_from = current_to
+                        
+                        # 解析完成，更新最终状态
+                        try:
+                            payload = REDIS_CONN.get(session_key)
+                            if payload:
+                                final_session = json.loads(payload)
+                                final_session["status"] = "completed"
+                                final_session["progress"] = 1.0
+                                final_session["parsed_page_range"] = f"{effective_from}-{effective_to}"  # 最终页面范围
+                                REDIS_CONN.set_obj(session_key, final_session, exp=session_ttl)
+                                logging.info(f"[preview_chunks] {batch_id} - PDF解析完成（页面{effective_from}-{effective_to}），共{len(final_session['chunks'])}个chunks")
+                        except Exception as e:
+                            logging.error(f"[preview_chunks] {batch_id} - 更新最终状态失败: {e}")
+                    
+                    except Exception as e:
+                        # 解析出错
+                        logging.error(f"[preview_chunks] {batch_id} - 解析失败: {e}", exc_info=True)
+                        try:
+                            payload = REDIS_CONN.get(session_key)
+                            if payload:
+                                error_session = json.loads(payload)
+                                error_session["status"] = "error"
+                                error_session["error"] = str(e)
+                                REDIS_CONN.set_obj(session_key, error_session, exp=session_ttl)
+                        except:
+                            pass
+                
+                # 获取信号量，限制并发解析数量
+                semaphore = cls._get_pdf_parse_semaphore()
+                
+                # 启动后台解析线程
+                parse_thread = threading.Thread(target=progressive_parse_pdf, daemon=True, name=f"pdf-parse-{batch_id[:8]}")
+                parse_thread.start()
+                
+                # 等待直到有数据再返回（避免返回空数组破坏调用者逻辑）
+                # 使用信号量控制并发，避免系统过载
+                import asyncio
+                import logging
+                check_interval = 0.5  # 每500ms检查一次
+                
+                async with semaphore:  # ← 限制并发数
+                    logging.info(f"[preview_chunks] {batch_id} - 等待首批解析结果...")
+                    
+                    while True:
+                        await asyncio.sleep(check_interval)
+                        
+                        try:
+                            payload = REDIS_CONN.get(session_key)
+                            if not payload:
+                                # 会话已被删除或过期，可能是后台线程异常退出
+                                logging.warning(f"[preview_chunks] {batch_id} - 会话丢失，停止等待")
+                                break
+                            
+                            temp_session = json.loads(payload)
+                            
+                            # 如果已有数据，立即返回
+                            if temp_session.get("chunks") and len(temp_session["chunks"]) > 0:
+                                session = temp_session
+                                logging.info(f"[preview_chunks] {batch_id} - 首批数据就绪，共{len(temp_session['chunks'])}个chunks")
+                                break
+                            
+                            # 如果解析失败，也立即返回
+                            if temp_session.get("status") == "error":
+                                session = temp_session
+                                logging.error(f"[preview_chunks] {batch_id} - 解析失败: {temp_session.get('error')}")
+                                break
+                            
+                            # 如果已完成但没有数据（空文档），也返回
+                            if temp_session.get("status") == "completed":
+                                session = temp_session
+                                logging.info(f"[preview_chunks] {batch_id} - 解析完成（空文档）")
+                                break
+                        except Exception as e:
+                            logging.error(f"[preview_chunks] {batch_id} - 检查会话状态失败: {e}")
+                            await asyncio.sleep(1)  # 出错时等待更长时间
+            
+            else:
+                # ===== 非PDF文件：原有逻辑（一次性解析） =====
+                all_chunks = cls.preview_file_chunks(
+                    db,
+                    filename,
+                    file_bytes,
+                    parser_config_override=base_cfg,
+                    override_parser_id=override_parser_id,
+                    language=language,
+                    tenant_id=tenant_id,
+                )
+                session = {
+                    "digest": digest,
+                    "filename": filename,
+                    "total": len(all_chunks),
+                    "estimated_total": len(all_chunks),
+                    "offset": 0,
+                    "chunks": all_chunks,
+                    "batch_size": bs,
+                    "tenant_id": tenant_id,
+                    "status": "completed",
+                    "progress": 1.0,
+                }
+                REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
 
+        # 返回当前批次数据
         start = int(session.get("offset", 0))
-        total = int(session.get("total", 0))
+        current_chunks = session.get("chunks", [])
+        current_total = len(current_chunks)
+        parsing_status = session.get("status", "completed")
+        estimated_total = int(session.get("estimated_total", current_total))
+        
         if isinstance(batch_index, int) and batch_index >= 0:
-            start = min(batch_index * bs, total)
-        end = min(start + bs, total)
-        batch = session.get("chunks", [])[start:end]
-        has_more = end < total
+            start = min(batch_index * bs, current_total)
+        end = min(start + bs, current_total)
+        batch = current_chunks[start:end]
+        
+        # 提取纯文本（用户只需要文本，不需要元数据）
+        batch_texts = []
+        for chunk in batch:
+            if isinstance(chunk, dict):
+                batch_texts.append(chunk.get("content_with_weight", ""))
+            elif isinstance(chunk, str):
+                batch_texts.append(chunk)
+            else:
+                batch_texts.append(str(chunk))
+        
+        has_more = (end < current_total) or (parsing_status == "parsing")
         current_batch_index = (start // bs) if bs > 0 else 0
-        total_batches = (total + bs - 1) // bs if bs > 0 else 0
+        
+        if parsing_status == "completed":
+            total_batches = (current_total + bs - 1) // bs if bs > 0 else 0
+        else:
+            total_batches = (estimated_total + bs - 1) // bs if bs > 0 and estimated_total > 0 else None
 
         # 顺序/并发模式会话推进
         if batch_index is None:
+            # 关键修复：无论status是什么，只要有更多数据，就更新offset
+            # 避免用户晚点续取时跳过中间chunks
             if has_more:
                 session["offset"] = end
                 REDIS_CONN.set_obj(session_key, session, exp=session_ttl)
             else:
-                REDIS_CONN.delete(session_key)
-        else:
-            if not has_more:
+                # 没有更多数据了，删除会话（无论status）
                 REDIS_CONN.delete(session_key)
 
         return {
             "batch_id": batch_id,
-            "chunks": batch,
-            "count": len(batch),
-            "total": total,
+            "chunks": batch_texts,  # 返回纯文本数组
+            "count": len(batch_texts),  # 当前批次数量
+            "total": current_total,  # 当前已解析的chunks总数（动态增长）
             "has_more": has_more,
             "batch_index": current_batch_index,
-            "total_batches": total_batches,
+            "total_batches": (current_total + bs - 1) // bs if bs > 0 else 0,  # 基于当前total计算
+            "status": parsing_status,  # parsing | completed | error
+            "progress": session.get("progress", 1.0 if parsing_status == "completed" else 0.0),  # 解析进度 0.0-1.0
+            "parsed_page_range": session.get("parsed_page_range", ""),  # 已解析的页面范围（如"0-24"）
+            "total_pages": session.get("total_pages", 0),  # 总页数（PDF专用）
         }
 
     @classmethod
