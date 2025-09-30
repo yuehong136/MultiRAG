@@ -147,7 +147,7 @@ class TableConfigGenerator:
             table_name = table_alias_mapping[table_alias]
             table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
             for metric in table_detail['dimsAndMetrics']['metrics']:
-                if metric['expression'].lower() == column_name.lower():
+                if metric['expression'].lower() == table_name+'.'+column_name.lower():
                     filter_columns.append(
                         {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
                          "metric_name": metric["metricName"], "operator": operator, "value": value,
@@ -343,12 +343,12 @@ class TableConfigGenerator:
                     {"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"],
                      "from_model": model_name,
                      "from_model_id": model_id, "metric_name": metric["metricName"], "wid": str(uuid.uuid4())})
-                available_metrics.append(
-                    {"is_allow_use": True, "semantic_type": "measure", "id": metric["metricId"],
-                     "from_model": model_name,
-                     "from_model_id": model_id, "metric_name": metric["metricName"], "wid": str(uuid.uuid4())})
+                whereable_fields.append(
+                    {"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"], "from_model": model_name,
+                     "from_model_id": model_id,
+                     "metric_name": metric["metricName"], "wid": str(uuid.uuid4())})
                 havingable_fields.append(
-                    {"is_allow_use": True, "semantic_type": "measure", "id": metric["metricId"],
+                    {"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"],
                      "from_model": model_name,
                      "from_model_id": model_id, "metric_name": metric["metricName"], "wid": str(uuid.uuid4())})
                 sortable_fields.append({"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"],
@@ -407,7 +407,7 @@ class TableConfigGenerator:
                 if is_matched_semantic_field:
                     continue
                 for metric in table_detail['dimsAndMetrics']['metrics']:
-                    if metric['expression'].lower() == column_name.lower():
+                    if metric['expression'].lower() == table_name+'.'+column_name.lower():
                         selected_columns.append(
                             {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
                              "metric_name": metric["metricName"], "wid": str(uuid.uuid4())}
@@ -485,7 +485,7 @@ class TableConfigGenerator:
             if is_matched_semantic_field:
                 continue
             for metric in table_detail['dimsAndMetrics']['metrics']:
-                if metric['expression'].lower() == column_name.lower():
+                if metric['expression'].lower() == table_name+'.'+column_name.lower():
                     filter_columns.append(
                         {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
                          "metric_name": metric["metricName"], "operator": operator, "value": value,
@@ -519,7 +519,7 @@ class TableConfigGenerator:
                 continue
             table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
             for metric in table_detail['dimsAndMetrics']['metrics']:
-                if metric['expression'].lower() == column_name.lower():
+                if metric['expression'].lower() == table_name+'.'+column_name.lower():
                     order_by_columns.append(
                         {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
                          "metric_name": metric["metricName"], "direction": direction, "wid": str(uuid.uuid4()),
