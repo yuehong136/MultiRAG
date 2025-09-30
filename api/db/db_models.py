@@ -379,6 +379,198 @@ class TenantLangfuse(BaseModel):
         }
 
 
+# ===== AI Guard domain models =====
+
+
+class GuardService(BaseModel):
+    __tablename__ = "t_guard_services"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    code = Column(String(128), index=True, nullable=False, unique=True)
+    name = Column(String(128), index=True, nullable=False)
+    description = Column(Text, index=False, nullable=True)
+    service_type = Column(String(32), index=True, nullable=False)
+    enabled_dimensions = Column(JSONB, index=False, nullable=False, default=list)
+    enabled_labels = Column(JSONB, index=False, nullable=False, default=list)
+    policy_config = Column(JSONB, index=False, nullable=False, default=dict)
+    cache_enabled = Column(Boolean, index=True, nullable=False, default=True)
+    timeout_ms = Column(Integer, index=True, nullable=False, default=1000)
+    total_requests = Column(Integer, index=True, nullable=False, default=0)
+    blocked_requests = Column(Integer, index=True, nullable=False, default=0)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardServiceLibrary(BaseModel):
+    __tablename__ = "t_guard_service_libraries"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    service_id = Column(String(32), index=True, nullable=False)
+    library_id = Column(String(32), index=True, nullable=False)
+    enabled = Column(Boolean, index=True, nullable=False, default=True)
+    priority = Column(Integer, index=True, nullable=False, default=0)
+    library_type = Column(String(32), index=True, nullable=True)
+    apply_to_dimensions = Column(JSONB, index=False, nullable=False, default=list)
+    apply_to_labels = Column(JSONB, index=False, nullable=False, default=list)
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardRule(BaseModel):
+    __tablename__ = "t_guard_rules"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    label_id = Column(String(32), index=True, nullable=False)
+    rule_type = Column(String(32), index=True, nullable=False)
+    content = Column(Text, index=True, nullable=False)
+    content_hash = Column(String(64), index=True, nullable=False)
+    match_mode = Column(String(16), index=True, nullable=False)
+    case_sensitive = Column(Boolean, index=True, nullable=False, default=False)
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    weight = Column(Float, index=True, nullable=False, default=0.0)
+    priority = Column(Integer, index=True, nullable=False, default=0)
+    source = Column(String(64), index=True, nullable=True)
+    description = Column(Text, index=False, nullable=True)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardLog(BaseModel):
+    __tablename__ = "t_guard_logs"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    service_id = Column(String(32), index=True, nullable=False)
+    service_code = Column(String(128), index=True, nullable=True)
+    request_id = Column(String(64), index=True, nullable=True)
+    chat_id = Column(String(64), index=True, nullable=True)
+    user_id = Column(String(32), index=True, nullable=True)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    content = Column(Text, index=False, nullable=True)
+    content_hash = Column(String(64), index=True, nullable=False)
+    content_length = Column(Integer, index=True, nullable=False, default=0)
+    content_preview = Column(String(500), index=False, nullable=True)
+    is_blocked = Column(Boolean, index=True, nullable=False, default=False)
+    risk_score = Column(Float, index=True, nullable=False, default=0.0)
+    content_risk_level = Column(String(16), index=True, nullable=True)
+    content_results = Column(JSONB, index=False, nullable=False, default=dict)
+    sensitive_level = Column(String(8), index=True, nullable=True)
+    sensitive_results = Column(JSONB, index=False, nullable=False, default=dict)
+    attack_level = Column(String(16), index=True, nullable=True)
+    attack_results = Column(JSONB, index=False, nullable=False, default=dict)
+    customized_hits = Column(JSONB, index=False, nullable=False, default=list)
+    risk_words = Column(JSONB, index=False, nullable=False, default=list)
+    sensitive_data = Column(JSONB, index=False, nullable=False, default=list)
+    action_taken = Column(String(32), index=True, nullable=True)
+    action_detail = Column(JSONB, index=False, nullable=False, default=dict)
+    source_type = Column(String(64), index=True, nullable=True)
+    source_id = Column(String(255), index=True, nullable=True)
+    client_ip = Column(String(64), index=True, nullable=True)
+    user_agent = Column(Text, index=False, nullable=True)
+    process_time_ms = Column(Integer, index=True, nullable=True)
+    cloud_service_used = Column(Boolean, index=True, nullable=False, default=False)
+
+
+class GuardLibraryItem(BaseModel):
+    __tablename__ = "t_guard_library_items"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    library_id = Column(String(32), index=True, nullable=False)
+    content = Column(Text, index=True, nullable=False)
+    content_hash = Column(String(64), index=True, nullable=False)
+    content_type = Column(String(32), index=True, nullable=False)
+    item_metadata = Column(JSONB, index=False, nullable=False, default=dict)
+    hit_count = Column(Integer, index=True, nullable=False, default=0)
+    last_hit_time = Column(DateTime, index=True, nullable=True)
+    sort_order = Column(Integer, index=True, nullable=False, default=0)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardLibrary(BaseModel):
+    __tablename__ = "t_guard_libraries"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    library_type = Column(String(32), index=True, nullable=False)
+    name = Column(String(128), index=True, nullable=False)
+    description = Column(Text, index=False, nullable=True)
+    category = Column(String(64), index=True, nullable=True)
+    tags = Column(JSONB, index=False, nullable=False, default=list)
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    item_count = Column(Integer, index=True, nullable=False, default=0)
+    hit_count = Column(Integer, index=True, nullable=False, default=0)
+    last_hit_time = Column(DateTime, index=True, nullable=True)
+    version = Column(Integer, index=True, nullable=False, default=1)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardLabel(BaseModel):
+    __tablename__ = "t_guard_labels"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    dimension_id = Column(String(32), index=True, nullable=False)
+    code = Column(String(64), index=True, nullable=False, unique=True)
+    name = Column(String(128), index=True, nullable=False)
+    description = Column(Text, index=False, nullable=True)
+    cloud_label = Column(String(64), index=True, nullable=True)
+    cloud_label_type = Column(String(16), index=True, nullable=False)
+    detection_ranges = Column(JSONB, index=False, nullable=False, default=list)
+    enabled = Column(Boolean, index=True, nullable=False, default=True)
+    risk_score = Column(Float, index=True, nullable=False, default=0.0)
+    risk_level = Column(Integer, index=True, nullable=False, default=0)
+    sensitive_level = Column(String(8), index=True, nullable=True)
+    action = Column(String(32), index=True, nullable=False)
+    action_config = Column(JSONB, index=False, nullable=False, default=dict)
+    sort_order = Column(Integer, index=True, nullable=False, default=0)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardLabelLibrary(BaseModel):
+    __tablename__ = "t_guard_label_libraries"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    label_id = Column(String(32), index=True, nullable=False)
+    library_id = Column(String(32), index=True, nullable=False)
+    enabled = Column(Boolean, index=True, nullable=False, default=True)
+    priority = Column(Integer, index=True, nullable=False, default=0)
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    conditions = Column(JSONB, index=False, nullable=False, default=dict)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardDimension(BaseModel):
+    __tablename__ = "t_guard_dimensions"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    code = Column(String(64), index=True, nullable=False, unique=True)
+    name = Column(String(128), index=True, nullable=False)
+    description = Column(Text, index=False, nullable=True)
+    enabled = Column(Boolean, index=True, nullable=False, default=True)
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    sort_order = Column(Integer, index=True, nullable=False, default=0)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
 class Knowledgebase(BaseModel):
     __tablename__ = "t_ai_knowledgebases"
     __table_args__ = {"schema": "usr_ai"}

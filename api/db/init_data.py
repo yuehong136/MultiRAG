@@ -22,6 +22,8 @@ from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
 # from api.db.database import SessionLocal
 from api.utils.file_utils import get_project_base_directory
+from api.db.db_models import GuardDimension
+from scripts.init_ai_guard_system import init_ai_guard_system
 
 
 
@@ -252,15 +254,66 @@ def add_graph_templates(db: Session):
             db.rollback()  # 回滚事务
 
 
+def init_guard_system_wrapper(db: Session, tenant_id: str, user_id: str):
+    """
+    初始化AI安全护栏系统（仅在未初始化时执行）
+
+    Args:
+        db: 数据库会话
+        tenant_id: 租户ID
+        user_id: 用户ID
+    """
+    try:
+        # 检查是否已有任何租户初始化过（由于code字段全局唯一，只能初始化一次）
+        existing_dimensions = db.query(GuardDimension).count()
+
+        if existing_dimensions > 0:
+            logging.info(f"AI安全护栏系统已初始化（发现 {existing_dimensions} 个维度），跳过初始化")
+            return
+
+        logging.info(f"开始初始化AI安全护栏系统，租户: {tenant_id}, 用户: {user_id}")
+
+        # 使用 init_ai_guard_system 进行初始化
+        init_ai_guard_system(tenant_id=tenant_id, created_by=user_id)
+
+        logging.info(f"✅ AI安全护栏系统初始化完成")
+
+    except Exception as e:
+        logging.error(f"初始化AI安全护栏系统失败: {e}")
+        raise
+
+
 def init_web_data(db: Session = SessionLocal()):
     start_time = time.time()
 
     init_llm_factory(db)
-    # print(len(UserService().get_all(db)))
-    if len(UserService.get_all(db)) == 0:
+
+    # 获取所有用户（只查询一次）
+    all_users = UserService.get_all(db)
+
+    # 如果没有用户，创建超级用户
+    if len(all_users) == 0:
         init_superuser(db)
+        # 重新获取用户列表
+        all_users = UserService.get_all(db)
 
     add_graph_templates(db)
+
+    # 初始化AI安全护栏系统
+    # 检查是否已有guard数据
+    existing_guard_data = db.query(GuardDimension).count()
+    if existing_guard_data == 0:
+        # 未初始化，查找超级用户
+        superuser = next((user for user in all_users if user.is_superuser), None)
+
+        if superuser:
+            logging.info(f"使用超级用户 {superuser.id} 初始化AI安全护栏系统")
+            init_guard_system_wrapper(db, tenant_id=superuser.id, user_id=superuser.id)
+        else:
+            logging.warning("未找到超级用户，跳过AI安全护栏系统初始化")
+    else:
+        logging.info(f"AI安全护栏系统已存在数据，跳过初始化")
+
     logging.info("init web data success:{}".format(time.time() - start_time))
 
 
