@@ -22,6 +22,8 @@ from timeit import default_timer as timer
 
 from docx import Document
 from docx.image.exceptions import InvalidImageStreamError, UnexpectedEndOfFileError, UnrecognizedImageError
+from docx.opc.pkgreader import _SerializedRelationships, _SerializedRelationship
+from docx.opc.oxml import parse_xml
 from markdown import markdown
 from PIL import Image
 from tika import parser
@@ -48,8 +50,8 @@ class Docx(DocxParser):
         if not embed:
             return None
         embed = embed[0]
-        related_part = document.part.related_parts[embed]
         try:
+            related_part = document.part.related_parts[embed]
             image_blob = related_part.image.blob
         except UnrecognizedImageError:
             logging.info("Unrecognized image format. Skipping image.")
@@ -61,6 +63,9 @@ class Docx(DocxParser):
             logging.info("The recognized image stream appears to be corrupted. Skipping image.")
             return None
         except UnicodeDecodeError:
+            logging.info("The recognized image stream appears to be corrupted. Skipping image.")
+            return None
+        except Exception:
             logging.info("The recognized image stream appears to be corrupted. Skipping image.")
             return None
         try:
@@ -362,6 +367,22 @@ class Markdown(MarkdownParser):
         return sections, tbls
 
 
+def load_from_xml_v2(baseURI, rels_item_xml):
+    """
+    Return |_SerializedRelationships| instance loaded with the
+    relationships contained in *rels_item_xml*. Returns an empty
+    collection if *rels_item_xml* is |None|.
+    """
+    srels = _SerializedRelationships()
+    if rels_item_xml is not None:
+        rels_elm = parse_xml(rels_item_xml)
+        for rel_elm in rels_elm.Relationship_lst:
+            if rel_elm.target_ref in ('../NULL', 'NULL'):
+                continue
+            srels._srels.append(_SerializedRelationship(baseURI, rel_elm))
+    return srels
+
+
 def chunk(filename, binary=None, from_page=0, to_page=100000,
           lang="Chinese", callback=None, **kwargs):
     """
@@ -393,6 +414,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         except Exception:
             vision_model = None
 
+        # fix "There is no item named 'word/NULL' in the archive", referring to https://github.com/python-openxml/python-docx/issues/1105#issuecomment-1298075246
+        _SerializedRelationships.load_from_xml = load_from_xml_v2
         sections, tables = Docx()(filename, binary)
 
         if vision_model:
