@@ -515,7 +515,7 @@ class AskdataService:
 
     async def get_ask_data_history(self, conversation_id: str) -> list[dict]:
         """根据对话ID获取问数历史记录。"""
-        return self.history_service.get_history_by_conversation_id(self.db, conversation_id)
+        return self.history_service.get_history_by_conversation_id(self.db, conversation_id, self.user.id)
 
     async def get_ask_data_history_by_round(self, round_id: str) -> list[dict]:
         """根据轮次ID获取问数历史记录，按时间从早到晚排列。"""

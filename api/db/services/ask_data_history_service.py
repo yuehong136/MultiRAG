@@ -55,16 +55,30 @@ class AskDataHistoryService(CommonService):
 
     @classmethod
     def get_by_conversation_id(cls, db: Session, conversation_id: str,
-                               status: str = "1") -> list[AskDataHistory]:
+                               user_id: str = None, status: str = "1") -> list[AskDataHistory]:
         """
-        根据conversation_id获取记录列表，按插入时间升序排列
-        ...
+        根据conversation_id和user_id获取记录列表，按插入时间升序排列
+
+        参数:
+        - db: 数据库会话对象
+        - conversation_id: 对话ID
+        - user_id: 用户ID（可选）
+        - status: 记录状态，默认为"1"（有效）
+
+        返回:
+        - list[AskDataHistory]: 记录列表
         """
         try:
             query = db.query(cls.model).filter(
                 cls.model.conversation_id == conversation_id,
                 cls.model.status == status
-            ).order_by(asc(cls.model.create_time))
+            )
+
+            # 如果提供了user_id，添加user_id过滤条件
+            if user_id is not None:
+                query = query.filter(cls.model.user_id == user_id)
+
+            query = query.order_by(asc(cls.model.create_time))
 
             return query.all()  # type: ignore
 
@@ -74,20 +88,21 @@ class AskDataHistoryService(CommonService):
 
     @classmethod
     def get_by_conversation_id_as_dict(cls, db: Session, conversation_id: str,
-                                       status: str = "1") -> list[dict]:
+                                       user_id: str = None, status: str = "1") -> list[dict]:
         """
-        根据conversation_id获取记录列表（字典格式），按插入时间升序排列
+        根据conversation_id和user_id获取记录列表（字典格式），按插入时间升序排列
 
         参数:
         - db: 数据库会话对象
         - conversation_id: 对话ID
+        - user_id: 用户ID（可选）
         - status: 记录状态，默认为"1"（有效）
 
         返回:
         - list[dict]: 记录字典列表，第一条是最早的，最后一条是最新的
         """
         try:
-            records = cls.get_by_conversation_id(db, conversation_id, status)
+            records = cls.get_by_conversation_id(db, conversation_id, user_id, status)
             return [record.to_dict() for record in records]
 
         except Exception as e:
@@ -146,24 +161,26 @@ class AskDataHistoryService(CommonService):
 
     # 新增的查询方法
     @classmethod
-    def get_history_by_conversation_id(cls, db: Session, conversation_id: str) -> list[dict]:
+    def get_history_by_conversation_id(cls, db: Session, conversation_id: str, user_id: str) -> list[dict]:
         """
-        根据对话ID获取历史记录
+        根据对话ID和用户ID获取历史记录
 
         参数:
         - db: 数据库会话
         - conversation_id: 对话ID
+        - user_id: 用户ID
 
         返回:
         - list[dict]: 历史记录字典列表
         """
-        logging.info(f"Fetching history for conversation_id: {conversation_id}")
+        logging.info(f"Fetching history for conversation_id: {conversation_id}, user_id: {user_id}")
         try:
-            history_records = cls.get_by_conversation_id_as_dict(db, conversation_id)
-            logging.info(f"Found {len(history_records)} records for conversation_id: {conversation_id}")
+            history_records = cls.get_by_conversation_id_as_dict(db, conversation_id, user_id)
+            logging.info(
+                f"Found {len(history_records)} records for conversation_id: {conversation_id}, user_id: {user_id}")
             return history_records
         except Exception as e:
-            logging.error(f"Failed to fetch history for conversation_id {conversation_id}: {e}")
+            logging.error(f"Failed to fetch history for conversation_id {conversation_id}, user_id {user_id}: {e}")
             raise
 
     @classmethod
