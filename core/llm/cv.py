@@ -401,6 +401,15 @@ class OllamaCV(Base):
             img = img.split(";base64,")[1]
         return img
 
+    def _clean_img(self, img):
+        if not isinstance(img, str):
+            return img
+
+        #remove the header like "data/*;base64,"
+        if img.startswith("data:") and ";base64," in img:
+            img = img.split(";base64,")[1]
+        return img
+
     def _clean_conf(self, gen_conf):
         options = {}
         if "temperature" in gen_conf:
@@ -413,7 +422,9 @@ class OllamaCV(Base):
             options["frequency_penalty"] = gen_conf["frequency_penalty"]
         return options
 
-    def _form_history(self, system, history, images=[]):
+    def _form_history(self, system, history, images=None):
+        if images is None:
+            images = []
         hist = deepcopy(history)
         if system and hist[0]["role"] == "user":
             hist.insert(0, {"role": "system", "content": system})
