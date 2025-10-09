@@ -691,7 +691,7 @@ class Dialog(BaseModel):
                                   "max_tokens": 512})
     prompt_type = Column(String(16), index=True, nullable=False, default="simple", doc="simple|advanced")
     prompt_config = Column(JSONB, index=False, nullable=False,
-                           default={"system": "", "prologue": "Hi! I'm your assistant, what can I do for you?",
+                           default={"system": "", "prologue": "Hi! I'm your assistant. What can I do for you?",
                                     "parameters": [],
                                     "empty_response": "Sorry! No relevant content was found in the knowledge base!"})
     meta_data_filter = Column(JSONB,index=False, nullable=True, default={})
