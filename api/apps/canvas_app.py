@@ -151,10 +151,10 @@ def rm(request: RemoveCanvasRequest, db: Session = Depends(get_db), user=Depends
 def save(request: SetCanvasRequest, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         req = request.model_dump()
-        req["user_id"] = user.id
         dsl_obj = req["dsl"]  # 已在 validator 中转为 dict
 
         if "id" not in req or not req["id"]:
+            req["user_id"] = user.id
             # 新建
             if UserCanvasService.query(db, user_id=user.id, title=req["title"].strip()):
                 return get_data_error_result(retmsg=f"{req['title'].strip()} already exists.")
