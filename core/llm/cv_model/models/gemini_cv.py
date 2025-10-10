@@ -60,11 +60,11 @@ class GeminiCV(Base):
     def chat(self, system, history, gen_conf, images=None):
         if images is None:
             images = []
-        from transformers import GenerationConfig
+        generation_config = dict(temperature=gen_conf.get("temperature", 0.3), top_p=gen_conf.get("top_p", 0.7))
         try:
             response = self.model.generate_content(
                 self._form_history(system, history, images),
-                generation_config=GenerationConfig(temperature=gen_conf.get("temperature", 0.3), top_p=gen_conf.get("top_p", 0.7)))
+                generation_config=generation_config)
             ans = response.text
             return ans, response.usage_metadata.total_token_count
         except Exception as e:
@@ -73,13 +73,13 @@ class GeminiCV(Base):
     def chat_streamly(self, system, history, gen_conf, images=None):
         if images is None:
             images = []
-        from transformers import GenerationConfig
         ans = ""
         response = None
         try:
+            generation_config = dict(temperature=gen_conf.get("temperature", 0.3), top_p=gen_conf.get("top_p", 0.7))
             response = self.model.generate_content(
                 self._form_history(system, history, images),
-                generation_config=GenerationConfig(temperature=gen_conf.get("temperature", 0.3), top_p=gen_conf.get("top_p", 0.7)),
+                generation_config=generation_config,
                 stream=True,
             )
 
