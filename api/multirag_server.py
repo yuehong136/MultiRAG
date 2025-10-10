@@ -61,11 +61,14 @@ def update_progress():
                 db = SessionLocal()  # 创建数据库会话
                 DocumentService.update_progress(db)  # 更新文档服务进度
                 redis_lock.release()
-            stop_event.wait(6)
         except Exception:
             logging.exception("update_progress exception")
         finally:
-            redis_lock.release()
+            try:
+                redis_lock.release()
+            except Exception:
+                logging.exception("update_progress exception")
+            stop_event.wait(6)
             if db:
                 db.close()
 
