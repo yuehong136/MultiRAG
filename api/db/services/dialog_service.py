@@ -321,9 +321,10 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
 
 def meta_filter(metas: dict, filters: list[dict]):
     doc_ids = []
+
     def filter_out(v2docs, operator, value):
         nonlocal doc_ids
-        for input,docids in v2docs.items():
+        for input, docids in v2docs.items():
             try:
                 input = float(input)
                 value = float(value)
@@ -464,7 +465,19 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             reasoner = DeepResearcher(
                 chat_mdl,
                 prompt_config,
-                partial(retriever.retrieval, filter_exp="", embd_mdl=embd_mdl, tenant_id=dialog.tenant_id, kb_names=kb_names, page=1, page_size=dialog.top_n, similarity_threshold=0.2, vector_similarity_weight=0.3, doc_ids=attachments, search_mode=dialog.search_mode)
+                partial(
+                    retriever.retrieval,
+                    filter_exp="",
+                    embd_mdl=embd_mdl,
+                    tenant_id=dialog.tenant_id,
+                    kb_names=kb_names,
+                    page=1,
+                    page_size=dialog.top_n,
+                    similarity_threshold=0.2,
+                    vector_similarity_weight=0.3,
+                    doc_ids=attachments,
+                    search_mode=dialog.search_mode
+                )
             )
 
             for think in reasoner.thinking(kbinfos, " ".join(questions)):

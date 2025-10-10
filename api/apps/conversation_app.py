@@ -22,7 +22,8 @@ from api.db.services.dialog_service import DialogService, chat, ask
 from api.db.services.knowledgebase_service import KnowledgebaseService
 # from api.db.services.llm_service import LLMBundle, TenantService
 from api.db.services.llm_service import LLMBundle
-from api.db.services.user_service import UserTenantService, TenantService
+from api.db.services.tenant_llm_service import TenantLLMService
+from api.db.services.user_service import TenantService, UserTenantService
 from api.db import LLMType
 from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
@@ -88,6 +89,24 @@ class CompletionRequest(BaseModel):
 
     filter_condition: str | None = ""
     """过滤条件，可以根据实际需求自定义结构。"""
+
+    llm_id: str | None = None
+    """大语言模型的ID，如果不指定则使用默认模型。"""
+
+    temperature: float | None = None
+    """温度参数，控制生成文本的随机性。"""
+
+    top_p: float | None = None
+    """Top-p采样参数，控制生成文本的多样性。"""
+
+    frequency_penalty: float | None = None
+    """频率惩罚参数，降低重复内容的可能性。"""
+
+    presence_penalty: float | None = None
+    """存在惩罚参数，鼓励生成新内容。"""
+
+    max_tokens: int | None = None
+    """最大生成token数。"""
 
 
 class RemoveConversationRequest(BaseModel):
@@ -433,21 +452,160 @@ async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=
 @router.post('/completion', summary="生成对话", response_description="成功生成对话")
 def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-        完成会话
+    # 生成对话响应
 
-        该接口用于完成指定会话，生成对话内容。
+    该接口用于在指定会话中生成 AI 对话回复，支持流式和非流式输出，可自定义 LLM 模型及其参数。
 
-        参数:
-        - request: CompletionRequest对象，包含会话的详细信息
-            - conversation_id: str 会话的唯一标识符
-            - messages: List[dict] 消息列表，每个消息包含角色和内容
-            - stream: Optional[bool] 是否使用流式响应，默认值为 True
-            - filter_condition: Optional[dict] 过滤条件
+    ## 请求参数
 
-        返回:
-        - 成功时返回生成的对话内容
-        - 失败时返回错误信息
-        """
+    ### 基础参数
+    - **conversation_id** `string` *required*
+      - 会话的唯一标识符
+      - 用于关联历史对话记录
+
+    - **messages** `array` *required*
+      - 消息列表，每个消息包含以下字段：
+        - `role`: 消息角色，可选值：`user`, `assistant`, `system`
+        - `content`: 消息内容
+        - `id`: 消息唯一标识符（可选）
+      - 示例：
+        ```json
+        [
+          {"role": "user", "content": "你好"},
+          {"role": "assistant", "content": "您好，有什么可以帮您的？"}
+        ]
+        ```
+
+    ### 输出配置
+    - **stream** `boolean` *optional*
+      - 是否使用流式响应（Server-Sent Events）
+      - 默认值：`true`
+      - `true`: 实时流式返回，适合长文本生成
+      - `false`: 一次性返回完整结果
+
+    - **filter_condition** `string` *optional*
+      - 自定义过滤条件
+      - 默认值：`""`
+
+    ### 模型配置
+    - **llm_id** `string` *optional*
+      - 指定使用的大语言模型 ID
+      - 不指定则使用对话配置的默认模型
+      - 示例：`"gpt-4"`, `"claude-3-sonnet"`
+
+    - **temperature** `float` *optional*
+      - 温度参数，控制生成文本的随机性
+      - 取值范围：`0.0 ~ 2.0`
+      - 较低值（如 0.2）：更确定、保守的输出
+      - 较高值（如 0.8）：更有创造性、多样化的输出
+
+    - **top_p** `float` *optional*
+      - 核采样参数（nucleus sampling）
+      - 取值范围：`0.0 ~ 1.0`
+      - 控制生成文本的多样性
+      - 建议与 temperature 二选一使用
+
+    - **frequency_penalty** `float` *optional*
+      - 频率惩罚系数
+      - 取值范围：`-2.0 ~ 2.0`
+      - 正值：降低重复词汇出现的频率
+      - 负值：增加重复词汇出现的频率
+
+    - **presence_penalty** `float` *optional*
+      - 存在惩罚系数
+      - 取值范围：`-2.0 ~ 2.0`
+      - 正值：鼓励模型探讨新主题
+      - 负值：鼓励模型深入当前主题
+
+    - **max_tokens** `integer` *optional*
+      - 生成文本的最大 token 数量
+      - 限制回复的最大长度
+
+    ## 响应格式
+
+    ### 流式响应 (stream=true)
+    返回 `text/event-stream` 格式的 SSE 流：
+    ```
+    data: {"retcode": 0, "retmsg": "", "data": {"answer": "部分回答...", "reference": [...]}}
+
+    data: {"retcode": 0, "retmsg": "", "data": {"answer": "继续回答...", "reference": [...]}}
+
+    data: {"retcode": 0, "retmsg": "", "data": true}
+    ```
+
+    ### 非流式响应 (stream=false)
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "",
+      "data": {
+        "answer": "完整的回答内容",
+        "reference": [
+          {
+            "chunks": [...],
+            "doc_aggs": [...]
+          }
+        ],
+        "id": "message_id"
+      }
+    }
+    ```
+
+    ## 使用示例
+
+    ### 基础调用
+    ```json
+    {
+      "conversation_id": "conv_123456",
+      "messages": [
+        {"role": "user", "content": "介绍一下人工智能"}
+      ],
+      "stream": true
+    }
+    ```
+
+    ### 自定义模型参数
+    ```json
+    {
+      "conversation_id": "conv_123456",
+      "messages": [
+        {"role": "user", "content": "写一首关于春天的诗"}
+      ],
+      "llm_id": "gpt-4",
+      "temperature": 0.8,
+      "max_tokens": 500,
+      "presence_penalty": 0.6,
+      "stream": false
+    }
+    ```
+
+    ## 错误码
+
+    | 错误码 | 说明 |
+    |-------|------|
+    | 0 | 成功 |
+    | 400 | 参数错误（缺少必需参数或参数格式不正确） |
+    | 404 | 会话或对话不存在 |
+    | 500 | 服务器内部错误 |
+
+    ## 注意事项
+
+    1. **消息处理逻辑**
+       - 系统消息（`role: system`）会被自动过滤
+       - 连续的助手消息会被合并处理
+
+    2. **模型切换**
+       - 使用 `llm_id` 参数可以临时切换模型
+       - 需确保指定的模型已在租户配置中设置 API Key
+
+    3. **流式响应**
+       - 推荐用于长文本生成场景
+       - 客户端需要支持 SSE (Server-Sent Events)
+
+    4. **性能优化**
+       - 合理设置 `max_tokens` 避免过长响应
+       - 根据场景调整 `temperature` 平衡质量和多样性
+    """
     req = request.model_dump()
     if not req.get("conversation_id") or not req.get("messages"):
         return get_data_error_result(retmsg="Missing conversation_id or messages!")
@@ -467,6 +625,21 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
     if not msg:
         return get_data_error_result(retmsg="No valid messages found!")
 
+    chat_model_id = req.get("llm_id", "")
+    req.pop("llm_id", None)
+
+    chat_model_config = {}
+    for model_config in [
+        "temperature",
+        "top_p",
+        "frequency_penalty",
+        "presence_penalty",
+        "max_tokens",
+    ]:
+        config = req.get(model_config)
+        if config:
+            chat_model_config[model_config] = config
+
     try:
         conv = ConversationService.get_by_id(db, req["conversation_id"])
         if not conv:
@@ -485,6 +658,16 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
             conv.reference = []
         conv.reference = [r for r in conv.reference if r]
         conv.reference.append({"chunks": [], "doc_aggs": []})
+
+        if chat_model_id:
+            if not TenantLLMService.get_api_key(db, tenant_id=dia.tenant_id, model_name=chat_model_id):
+                req.pop("chat_model_id", None)
+                req.pop("chat_model_config", None)
+                return get_data_error_result(retmsg=f"Cannot use specified model {chat_model_id}.")
+            dia.llm_id = chat_model_id
+            dia.llm_setting = chat_model_config
+
+        is_embedded = bool(chat_model_id)
 
         def stream_response():
             nonlocal dia, msg, db, req, conv
@@ -506,7 +689,8 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
             conv = deepcopy(conv)  # 深拷贝 conv，否则会导致后续更新数据时，无法更新引用
             for ans in chat(dia, msg, db, **req):
                 answer = structure_answer(conv, ans, message_id, conv.id)
-                ConversationService.update_by_id(db, conv.id, conv.to_dict())
+                if not is_embedded:
+                    ConversationService.update_by_id(db, conv.id, conv.to_dict())
                 break
             return get_json_result(data=answer)
     except Exception as e:
