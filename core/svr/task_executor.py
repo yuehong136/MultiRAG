@@ -718,7 +718,7 @@ async def run_raptor(row, chat_mdl, embd_mdl, vector_size, callback=None):
     return res, tk_count
 
 
-@timeout(60*60, 1)
+@timeout(60*60*2, 1)
 async def do_handle_task(db, task):
     # 将 Row 转换为字典，确保可以修改字段
     task = task._asdict() if hasattr(task, "_asdict") else dict(task)
