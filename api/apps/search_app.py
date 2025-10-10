@@ -15,7 +15,6 @@ from api.constants import DATASET_NAME_LIMIT
 from api.db import StatusEnum
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
-from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.utils import get_uuid
@@ -151,7 +150,7 @@ def create(request: CreateSearchRequest, db: Session = Depends(get_db), user=Dep
         return get_data_error_result(retmsg="Authorization identity.")
 
     search_name = search_name.strip()
-    search_name = duplicate_name(KnowledgebaseService.query, name=search_name, tenant_id=user.id, status=StatusEnum.VALID.value)
+    search_name = duplicate_name(SearchService.query, db=db, name=search_name, tenant_id=user.id, status=StatusEnum.VALID.value)
 
     # # 检查重复名称
     # existing_search = SearchService.query(
