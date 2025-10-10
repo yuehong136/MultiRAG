@@ -38,7 +38,7 @@ from core.app.tag import label_question
 from core.nlp import extract_between
 from core.nlp.search import index_name
 from core.prompts.prompts import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
-    citation_prompt, cross_languages, gen_meta_filter
+    citation_prompt, cross_languages, gen_meta_filter, PROMPT_JINJA_ENV, ASK_SUMMARY
 from core.utils import rmSpace, num_tokens_from_string
 from core.utils.tavily_conn import Tavily
 
@@ -848,26 +848,12 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
         search_mode=None #todo 无法传递应用里的配置，所以只能使用一种默认检索模式
     )
     knowledges = kb_prompt(kbinfos, max_tokens)
-    prompt = """
-    Role: You're a smart assistant. Your name is Miss R.
-    Task: Summarize the information from knowledge bases and answer user's question.
-    Requirements and restriction:
-      - DO NOT make things up, especially for numbers.
-      - If the information from knowledge is irrelevant with user's question, JUST SAY: Sorry, no relevant information provided.
-      - Answer with markdown format text.
-      - Answer in language of user's question.
-      - DO NOT make things up, especially for numbers.
+    sys_prompt = PROMPT_JINJA_ENV.from_string(ASK_SUMMARY).render(knowledge="\n".join(knowledges))
 
-    ### Information from knowledge bases
-    %s
-
-    The above is information from knowledge bases.
-
-    """ % "\n".join(knowledges)
     msg = [{"role": "user", "content": question}]
 
     def decorate_answer(answer):
-        nonlocal knowledges, kbinfos, prompt
+        nonlocal knowledges, kbinfos, sys_prompt
         answer, idx = retriever.insert_citations(answer, [ck["content_ltks"] for ck in kbinfos["chunks"]], [ck["vector"] for ck in kbinfos["chunks"]], embd_mdl, tkweight=0.7, vtweight=0.3)
         idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
         recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
@@ -885,7 +871,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
         return {"answer": answer, "reference": refs}
 
     answer = ""
-    for ans in chat_mdl.chat_streamly(prompt, msg, {"temperature": 0.1}):
+    for ans in chat_mdl.chat_streamly(sys_prompt, msg, {"temperature": 0.1}):
         answer = ans
         yield {"answer": answer, "reference": {}}
     yield decorate_answer(answer)
