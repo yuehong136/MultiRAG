@@ -32,6 +32,7 @@ from errors.exceptions import AITranslateException
 from api.constants import API_VERSION
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 from workflow_v2.workflow_state_manager import workflow_state_manager
+from fastapi_mail import FastMail
 
 description = """
 Multi-RAG API helps you do awesome stuff. 🚀
@@ -76,6 +77,9 @@ tags_metadata = [
 # 在模块顶部（路由定义之前）创建线程池
 executor = ThreadPoolExecutor(max_workers=20)  # 可以根据服务器性能调整
 
+# FastMail instance for sending emails
+smtp_mail_server = FastMail
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -88,6 +92,30 @@ async def lifespan(app: FastAPI):
     logging.info("Starting update_progress thread via lifespan")
     update_progress_thread = threading.Thread(target=update_progress, daemon=True)
     update_progress_thread.start()
+
+    # 初始化SMTP邮件服务
+    global smtp_mail_server
+    if settings.SMTP_CONF:
+        try:
+            from fastapi_mail import ConnectionConfig
+
+            mail_config = ConnectionConfig(
+                MAIL_USERNAME=settings.MAIL_USERNAME,
+                MAIL_PASSWORD=settings.MAIL_PASSWORD,
+                MAIL_FROM=settings.MAIL_DEFAULT_SENDER[1] if settings.MAIL_DEFAULT_SENDER else settings.MAIL_USERNAME,
+                MAIL_FROM_NAME=settings.MAIL_DEFAULT_SENDER[0] if settings.MAIL_DEFAULT_SENDER else "MultiRAG",
+                MAIL_PORT=settings.MAIL_PORT,
+                MAIL_SERVER=settings.MAIL_SERVER,
+                MAIL_STARTTLS=settings.MAIL_USE_TLS,
+                MAIL_SSL_TLS=settings.MAIL_USE_SSL,
+                USE_CREDENTIALS=True,
+                VALIDATE_CERTS=True
+            )
+            smtp_mail_server = FastMail(mail_config)
+            logging.info("SMTP mail server initialized successfully")
+        except Exception as e:
+            logging.error(f"Failed to initialize SMTP mail server: {e}")
+            smtp_mail_server = None
 
     yield  # 这里暂停执行，等待应用程序运行
 

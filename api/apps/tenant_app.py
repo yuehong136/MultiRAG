@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import inspect
 
 from api import settings
+from api.apps import smtp_mail_server
 from api.db import UserTenantRole, StatusEnum
 from api.db.db_models import UserTenant, TenantLLM, Tenant, File, User, get_db
 from api.db.services.file_service import FileService
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService, UserService, TenantService
 from api.utils.api_utils import get_json_result
+from api.utils.web_utils import send_invite_email
 
 router = APIRouter()
 
@@ -74,7 +76,7 @@ def user_list(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post('/<tenant_id>/user', summary="新增租户下用户", response_model=dict)
-def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager)):
+async def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager)):
     """
     添加新用户到指定租户。
 
@@ -116,6 +118,25 @@ def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager
         role=UserTenantRole.INVITE,
         invited_by=user.id,  # 默认当前操作的用户是邀请人
         status=StatusEnum.VALID.value)
+
+    # Send invitation email if SMTP is configured
+    import asyncio
+
+    if smtp_mail_server and settings.SMTP_CONF:
+        user_name = ""
+        _, inviter_user = UserService.get_by_id(db, user.id)
+        if inviter_user:
+            user_name = inviter_user.nickname
+
+        # Send email asynchronously in background
+        asyncio.create_task(
+            send_invite_email(
+                invite_user_email,
+                settings.MAIL_FRONTEND_URL,
+                tenant_id,
+                user_name or user.email
+            )
+        )
 
     # usr = list(usrs.dicts())[0]
     # usr = {k: v for k, v in usr.items() if k in ["id", "avatar", "email", "nickname"]}

@@ -149,6 +149,8 @@ if __name__ == '__main__':
     # 进度更新线程现在通过 FastAPI lifespan 事件启动
     # 参见 api/apps/__init__.py 中的 lifespan 函数
 
+    # init smtp server (moved to lifespan in apps/__init__.py for FastAPI compatibility)
+
     # 使用 uvicorn 启动 FastAPI 应用
     try:
         logging.info("MultiRAG HTTP server start...")

@@ -167,6 +167,18 @@ permission:
   # 是否启用数据集权限检查
   dataset: false
 
+smtp:
+  mail_server: ""
+  mail_port: 465
+  mail_use_ssl: true
+  mail_use_tls: false
+  mail_username: ""
+  mail_password: ""
+  mail_default_sender:
+    - "MultiRAG" # display name
+    - "xxx@163.com" # sender email address
+  mail_frontend_url: "https://your-frontend.example.com"
+
 script_scheduler:
   # 如果源码部署，则使用localhost，如果docker部署，则使用宿主机的ip
   host: localhost

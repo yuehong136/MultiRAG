@@ -104,6 +104,15 @@ wheels = [
 ]
 
 [[package]]
+name = "aiosmtplib"
+version = "2.0.2"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/8f/66/64d78bcb36c0a3da4610d5564c0422cb726051fb5dbd136a8839d8b91574/aiosmtplib-2.0.2.tar.gz", hash = "sha256:138599a3227605d29a9081b646415e9e793796ca05322a78f69179f0135016a3" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/66/be/6902c91523a5faedee22e260e17fc23521fd63b2fec46dd5e5fcda62da8f/aiosmtplib-2.0.2-py3-none-any.whl", hash = "sha256:1e631a7a3936d3e11c6a144fb8ffd94bb4a99b714f2cb433e825d88b698e37bc" },
+]
+
+[[package]]
 name = "aiosqlite"
 version = "0.20.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -1300,6 +1309,24 @@ wheels = [
 ]
 
 [[package]]
+name = "fastapi-mail"
+version = "1.4.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "aiosmtplib" },
+    { name = "blinker" },
+    { name = "email-validator" },
+    { name = "jinja2" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "starlette" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/5f/94/9fc53e33436368973071979bdb8cc31455e67daed4fbc301885459853d53/fastapi_mail-1.4.1.tar.gz", hash = "sha256:9095b713bd9d3abb02fe6d7abb637502aaf680b52e177d60f96273ef6bc8bb70" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/89/a3/c94fac41f430dd1a5586061aed04c5f1f6478b488a581d0b7c0b7c95ea76/fastapi_mail-1.4.1-py3-none-any.whl", hash = "sha256:fa5ef23b2dea4d3ba4587f4bbb53f8f15274124998fb4e40629b3b636c76c398" },
+]
+
+[[package]]
 name = "fastavro"
 version = "1.10.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2232,7 +2259,7 @@ wheels = [
 
 [[package]]
 name = "infinity-sdk"
-version = "0.6.0.dev3"
+version = "0.6.0.dev5"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "numpy" },
@@ -2249,7 +2276,7 @@ dependencies = [
     { name = "thrift" },
 ]
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/fc/2c/5d93a6200e8022549d07c2609f89e81b96fe78383409881ca210f16736e1/infinity_sdk-0.6.0.dev3-py3-none-any.whl", hash = "sha256:e9f528446f21debbd1d15d11f42a5da4f38d62ad4537faacfdda6b2d295bf8fd" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/fe/a4/6079bf9790f16badc01e7b79a28c90bec407cfcaa8a2ed37e4a68120f87a/infinity_sdk-0.6.0.dev5-py3-none-any.whl", hash = "sha256:510ac408d5cd9d3d4df33c7c0877f55c5ae8a6019e465190c86d58012a319179" },
 ]
 
 [[package]]
@@ -3094,6 +3121,7 @@ dependencies = [
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "fastapi-login" },
+    { name = "fastapi-mail" },
     { name = "fastembed", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
     { name = "filelock" },
@@ -3248,6 +3276,7 @@ requires-dist = [
     { name = "email-validator", specifier = ">=2.2.0" },
     { name = "fastapi", specifier = ">=0.111.0" },
     { name = "fastapi-login", specifier = ">=1.10.1" },
+    { name = "fastapi-mail", specifier = ">=1.4.1" },
     { name = "fastembed", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'", specifier = ">=0.3.6,<0.4.0" },
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = ">=0.3.6,<0.4.0" },
     { name = "filelock", specifier = "==3.15.4" },
@@ -3264,7 +3293,7 @@ requires-dist = [
     { name = "httpx", extras = ["socks"], specifier = "==0.27.2" },
     { name = "huggingface-hub", specifier = ">=0.25.0,<0.26.0" },
     { name = "infinity-emb", specifier = ">=0.0.66,<0.0.67" },
-    { name = "infinity-sdk", specifier = "==0.6.0.dev3" },
+    { name = "infinity-sdk", specifier = "==0.6.0.dev5" },
     { name = "itsdangerous", specifier = "==2.1.2" },
     { name = "jieba", specifier = ">=0.42.1" },
     { name = "json-repair", specifier = "==0.35.0" },

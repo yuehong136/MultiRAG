@@ -63,6 +63,16 @@ STRONG_TEST_COUNT = int(os.environ.get("STRONG_TEST_COUNT", "8"))
 
 BUILTIN_EMBEDDING_MODELS = ["BAAI/bge-large-zh-v1.5@BAAI", "maidalun1020/bce-embedding-base_v1@Youdao"]
 
+SMTP_CONF = None
+MAIL_SERVER = ""
+MAIL_PORT = 000
+MAIL_USE_SSL= True
+MAIL_USE_TLS = False
+MAIL_USERNAME = ""
+MAIL_PASSWORD = ""
+MAIL_DEFAULT_SENDER = ()
+MAIL_FRONTEND_URL = ""
+
 
 def get_or_create_secret_key():
     secret_key = os.environ.get("MULTI_RAG_SERVICE_NAME")
@@ -183,6 +193,21 @@ def init_settings():
         global SANDBOX_HOST
         SANDBOX_HOST = os.environ.get("SANDBOX_HOST", "sandbox-executor-manager")
 
+    global SMTP_CONF, MAIL_SERVER, MAIL_PORT, MAIL_USE_SSL, MAIL_USE_TLS
+    global MAIL_USERNAME, MAIL_PASSWORD, MAIL_DEFAULT_SENDER, MAIL_FRONTEND_URL
+    SMTP_CONF = get_base_config("smtp", {})
+
+    MAIL_SERVER = SMTP_CONF.get("mail_server", "")
+    MAIL_PORT = SMTP_CONF.get("mail_port", 000)
+    MAIL_USE_SSL = SMTP_CONF.get("mail_use_ssl", True)
+    MAIL_USE_TLS = SMTP_CONF.get("mail_use_tls", False)
+    MAIL_USERNAME = SMTP_CONF.get("mail_username", "")
+    MAIL_PASSWORD = SMTP_CONF.get("mail_password", "")
+    mail_default_sender = SMTP_CONF.get("mail_default_sender", [])
+    if mail_default_sender and len(mail_default_sender) >= 2:
+        MAIL_DEFAULT_SENDER = (mail_default_sender[0], mail_default_sender[1])
+    MAIL_FRONTEND_URL = SMTP_CONF.get("mail_frontend_url", "")
+
 
 class CustomEnum(Enum):
     @classmethod
@@ -269,181 +294,3 @@ DCS_SERVER_BASE_CONFIG = get_base_config("dcs_server", {})
 DCS_SERVER_PROTOCOL = DCS_SERVER_BASE_CONFIG.get("protocol")
 DCS_SERVER_HOST = DCS_SERVER_BASE_CONFIG.get("host")
 DCS_SERVER_PORT = DCS_SERVER_BASE_CONFIG.get("port")
-
-# LLM = get_base_config("user_default_llm", {})
-# LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
-# LLM_BASE_URL = LLM.get("base_url")
-#
-# if not LIGHTEN:
-#     default_llm = {
-#         "Tongyi-Qianwen": {
-#             "chat_model": "qwen-plus",
-#             "embedding_model": "text-embedding-v2",
-#             "image2text_model": "qwen-vl-max",
-#             "asr_model": "paraformer-realtime-8k-v1",
-#         },
-#         "OpenAI": {
-#             "chat_model": "gpt-3.5-turbo",
-#             "embedding_model": "text-embedding-ada-002",
-#             "image2text_model": "gpt-4-vision-preview",
-#             "asr_model": "whisper-1",
-#         },
-#         "Azure-OpenAI": {
-#             "chat_model": "gpt-35-turbo",
-#             "embedding_model": "text-embedding-ada-002",
-#             "image2text_model": "gpt-4-vision-preview",
-#             "asr_model": "whisper-1",
-#         },
-#         "ZHIPU-AI": {
-#             "chat_model": "glm-4-plus",
-#             "embedding_model": "embedding-2",
-#             "image2text_model": "glm-4v-plus",
-#             "asr_model": "",
-#         },
-#         "Ollama": {
-#             "chat_model": "qwen-14B-chat",
-#             "embedding_model": "flag-embedding",
-#             "image2text_model": "",
-#             "asr_model": "",
-#         },
-#         "Moonshot": {
-#             "chat_model": "moonshot-v1-8k",
-#             "embedding_model": "",
-#             "image2text_model": "",
-#             "asr_model": "",
-#         },
-#         "DeepSeek": {
-#             "chat_model": "deepseek-chat",
-#             "embedding_model": "",
-#             "image2text_model": "",
-#             "asr_model": "",
-#         },
-#         "VolcEngine": {
-#             "chat_model": "",
-#             "embedding_model": "",
-#             "image2text_model": "",
-#             "asr_model": "",
-#         },
-#         "BAAI": {
-#             "chat_model": "",
-#             "embedding_model": "BAAI/bge-large-zh-v1.5",
-#             "image2text_model": "",
-#             "asr_model": "",
-#             "rerank_model": "BAAI/bge-reranker-v2-m3",
-#         }
-#     }
-#
-#     CHAT_MDL = default_llm[LLM_FACTORY]["chat_model"]
-#     EMBEDDING_MDL = default_llm["BAAI"]["embedding_model"]
-#     RERANK_MDL = default_llm["BAAI"]["rerank_model"]
-#     ASR_MDL = default_llm[LLM_FACTORY]["asr_model"]
-#     IMAGE2TEXT_MDL = default_llm[LLM_FACTORY]["image2text_model"]
-# else:
-#     CHAT_MDL = EMBEDDING_MDL = RERANK_MDL = ASR_MDL = IMAGE2TEXT_MDL = ""
-#
-# API_KEY = LLM.get("api_key", "")
-# PARSERS = LLM.get(
-#     "parsers",
-#     "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email")
-#
-# HOST = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("host", "127.0.0.1")
-# HTTP_PORT = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("http_port")
-#
-# SECRET_KEY = get_base_config(
-#     MULTI_RAG_SERVICE_NAME,
-#     {}).get("secret_key", str(date.today()))
-# # SECRET_KEY = get_base_config(
-# #     MULTI_RAG_SERVICE_NAME,
-# #     {}).get(
-# #         "secret_key",
-# #     "multirag_secret_key")
-#
-# DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
-# DATABASE = decrypt_database_config(name="postgresql")
-#
-# # authentication
-# AUTHENTICATION_CONF = get_base_config("authentication", {})
-#
-# # client
-# CLIENT_AUTHENTICATION = AUTHENTICATION_CONF.get(
-#     "client", {}).get(
-#     "switch", False)
-# HTTP_APP_KEY = AUTHENTICATION_CONF.get("client", {}).get("http_app_key")
-# GITHUB_OAUTH = get_base_config("oauth", {}).get("github")
-# FEISHU_OAUTH = get_base_config("oauth", {}).get("feishu")
-#
-# retrievaler = search.Dealer(MILVUS_CONNECTION)
-# kg_retrievaler = kg_search.KGSearch(MILVUS_CONNECTION)
-#
-# # AIFORBI
-# AIFORBI_BASE_CONFIG = get_base_config("aiforbi", {})
-# AIFORBI_BASE_URL = AIFORBI_BASE_CONFIG.get("base_url")
-# AIFORBI_API_KEY = AIFORBI_BASE_CONFIG.get("api_key")
-# AIFORBI_MODEL_ID = AIFORBI_BASE_CONFIG.get("model_id")
-#
-# AI_TRANSLATE_BASE_CONFIG = get_base_config("ai_translate", {})
-# AI_TRANSLATE_BASE_URL = AI_TRANSLATE_BASE_CONFIG.get("base_url")
-# AI_TRANSLATE_API_KEY = AI_TRANSLATE_BASE_CONFIG.get("api_key")
-# AI_TRANSLATE_MODEL_ID = AI_TRANSLATE_BASE_CONFIG.get("model_id")
-#
-#
-# class CustomEnum(Enum):
-#     @classmethod
-#     def valid(cls, value):
-#         try:
-#             cls(value)
-#             return True
-#         except BaseException:
-#             return False
-#
-#     @classmethod
-#     def values(cls):
-#         return [member.value for member in cls.__members__.values()]
-#
-#     @classmethod
-#     def names(cls):
-#         return [member.name for member in cls.__members__.values()]
-#
-#
-# class PythonDependenceName(CustomEnum):
-#     Rag_Source_Code = "python"
-#     Python_Env = "miniconda"
-#
-#
-# class ModelStorage(CustomEnum):
-#     REDIS = "redis"
-#     MYSQL = "mysql"
-#
-#
-# class RetCode(IntEnum, CustomEnum):
-#     SUCCESS = 0
-#     NOT_EFFECTIVE = 10
-#     EXCEPTION_ERROR = 100
-#     ARGUMENT_ERROR = 101
-#     DATA_ERROR = 102
-#     OPERATING_ERROR = 103
-#     CONNECTION_ERROR = 105
-#     RUNNING = 106
-#     PERMISSION_ERROR = 108
-#     AUTHENTICATION_ERROR = 109
-#     UNAUTHORIZED = 401
-#     SERVER_ERROR = 500
-#     FORBIDDEN = 403
-#     NOT_FOUND = 404
-
-
-# from api.utils.log_utils import LoggerFactory, getLogger
-
-# # Logger
-# LoggerFactory.set_directory(
-#     os.path.join(
-#         get_project_base_directory(),
-#         "logs",
-#         "api"))
-# # {CRITICAL: 50, FATAL:50, ERROR:40, WARNING:30, WARN:30, INFO:20, DEBUG:10, NOTSET:0}
-# LoggerFactory.LEVEL = 30
-#
-# stat_logger = getLogger("stat")
-# access_logger = getLogger("access")
-# database_logger = getLogger("database")
-# chat_logger = getLogger("chat")
