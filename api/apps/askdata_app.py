@@ -458,6 +458,7 @@ async def get_semantic_layer_streaming(
 class AddHistoryRequest(BaseModel):
     conversation_id: str = Field(..., description="会话ID")
     ask_id: str = Field(..., description="询问ID")
+    userid: str = Field(..., description="用户ID")
     data: str = Field(..., description="历史记录内容, 可以是JSON字符串")
     round_id: str = Field("", description="对话轮次ID")
     user_origin_question: str = Field("", description="用户原始问题")
@@ -477,6 +478,7 @@ async def add_history(
         result = await service.add_ask_data_history(
             conversation_id=body.conversation_id,
             ask_id=body.ask_id,
+            user_id=body.userid,
             data=body.data,
             round_id=body.round_id,
             user_origin_question=body.user_origin_question,
@@ -496,16 +498,24 @@ async def add_history(
         )
 
 
-@router.get("/get-history/{conversation_id}", response_model=ResponseSchema, summary="查询历史记录")
+class GetHistoryRequest(BaseModel):
+    userid: str = Field(..., description="用户ID")
+
+
+@router.post("/get-history/{conversation_id}", response_model=ResponseSchema, summary="查询历史记录")
 async def get_history(
         conversation_id: str,
+        body: GetHistoryRequest = Body(
+            ...,
+            title="查询历史记录"
+        ),
         service: AskdataService = Depends(get_askdata_service)
 ):
     """
     根据对话ID查询相关的历史记录。
     """
     try:
-        history_records = await service.get_ask_data_history(conversation_id)
+        history_records = await service.get_ask_data_history(conversation_id, body.userid)
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
             message="历史记录查询成功",

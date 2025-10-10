@@ -506,16 +506,17 @@ class AskdataService:
             model_ids, used_models, dataset_id_list
         )
 
-    async def add_ask_data_history(self, conversation_id: str, ask_id: str, data: str, round_id: str = None,
+    async def add_ask_data_history(self, conversation_id: str, ask_id: str, user_id: str, data: str,
+                                   round_id: str = None,
                                    user_origin_question: str = None, rewritten_question: str = None,
                                    processed_semantic_layer: str = None):
         """添加一条问数历史记录。"""
-        return self.history_service.add_history(self.db, conversation_id, ask_id, data, self.user.id, round_id,
+        return self.history_service.add_history(self.db, conversation_id, ask_id, data, user_id, round_id,
                                                 user_origin_question, rewritten_question, processed_semantic_layer)
 
-    async def get_ask_data_history(self, conversation_id: str) -> list[dict]:
+    async def get_ask_data_history(self, conversation_id: str, user_id: str) -> list[dict]:
         """根据对话ID获取问数历史记录。"""
-        return self.history_service.get_history_by_conversation_id(self.db, conversation_id, self.user.id)
+        return self.history_service.get_history_by_conversation_id(self.db, conversation_id, user_id)
 
     async def get_ask_data_history_by_round(self, round_id: str) -> list[dict]:
         """根据轮次ID获取问数历史记录，按时间从早到晚排列。"""
