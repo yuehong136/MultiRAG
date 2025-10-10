@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+import trio
 
 from agent.canvas import Canvas
 from api import settings
@@ -29,6 +30,7 @@ from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_
 from core.app.tag import label_question
 from core.prompts.prompt_template import load_prompt
 from core.prompts.prompts import cross_languages, keyword_extraction, chunks_format#, gen_meta_filter
+from graphrag.general.mind_map_extractor import MindMapExtractor
 
 router = APIRouter()
 
@@ -1015,7 +1017,7 @@ def ask_searchbot(request: SearchBotAskRequest, db: Session = Depends(get_db)):
     def stream():
         nonlocal req, uid
         try:
-            for ans in ask(req["question"], req["kb_ids"], uid, search_config=search_config):
+            for ans in ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
                 yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
@@ -1136,7 +1138,7 @@ def get_searchbot_related_questions(request: SearchBotRelatedQuestionsRequest, d
     question = req["question"]
 
     chat_id = search_config.get("chat_id", "")
-    chat_mdl = LLMBundle(tenant_id, LLMType.CHAT, chat_id)
+    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_id)
 
     gen_conf = search_config.get("llm_setting", {"temperature": 0.9})
     prompt = load_prompt("related_question")
@@ -1184,15 +1186,74 @@ def get_searchbot_detail(search_id: str = Query(...), db: Session = Depends(get_
 @router.post("/searchbots/mindmap", summary="生成搜索机器人思维导图")
 def generate_searchbot_mindmap(request: SearchBotMindmapRequest, db: Session = Depends(get_db)):
     req = request.model_dump()
-    
-    # TODO: 需要重构token验证方式以符合FastAPI模式
-    # TODO: 需要获取正确的tenant_id
-    tenant_id = "default"  # 临时解决方案
+    token = request.headers.get("Authorization").split()
+    if len(token) != 2:
+        return get_error_data_result(retmsg='Authorization is not valid!"')
+    token = token[1]
+    objs = APIToken.query(beta=token)
+    if not objs:
+        return get_error_data_result(retmsg='Authentication error: API key is invalid!"')
+
+    tenant_id = objs[0].tenant_id
 
     search_id = req.get("search_id", "")
-    search_app = SearchService.get_detail(db, search_id) if search_id else {}
+    search_config = {}
+    if search_id:
+        if search_app := SearchService.get_detail(search_id):
+            search_config = search_app.get("search_config", {})
 
-    mind_map = gen_mindmap(req["question"], req["kb_ids"], tenant_id, search_app.get("search_config", {}))
+    kb_ids = req["kb_ids"]
+    if search_config.get("kb_ids", []):
+        kb_ids = search_config.get("kb_ids", [])
+    e, kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
+    if not e:
+        return get_error_data_result(retmsg="Knowledgebase not found!")
+
+    chat_id = ""
+    similarity_threshold = 0.3,
+    vector_similarity_weight = 0.3,
+    top = 1024,
+    doc_ids = []
+    rerank_id = ""
+    rerank_mdl = None
+
+    if search_config:
+        if search_config.get("chat_id", ""):
+            chat_id = search_config.get("chat_id", "")
+        if search_config.get("similarity_threshold", 0.2):
+            similarity_threshold = search_config.get("similarity_threshold", 0.2)
+        if search_config.get("vector_similarity_weight", 0.3):
+            vector_similarity_weight = search_config.get("vector_similarity_weight", 0.3)
+        if search_config.get("top_k", 1024):
+            top = search_config.get("top_k", 1024)
+        if search_config.get("doc_ids", []):
+            doc_ids = search_config.get("doc_ids", [])
+        if search_config.get("rerank_id", ""):
+            rerank_id = search_config.get("rerank_id", "")
+
+    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=chat_id)
+    if rerank_id:
+        rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
+    question = req["question"]
+    ranks = settings.retrievaler.retrieval(
+        question=question,
+        embd_mdl=embd_mdl,
+        tenant_ids=tenant_id,
+        kb_ids=kb_ids,
+        page=1,
+        page_size=12,
+        similarity_threshold=similarity_threshold,
+        vector_similarity_weight=vector_similarity_weight,
+        top=top,
+        doc_ids=doc_ids,
+        aggs=False,
+        rerank_mdl=rerank_mdl,
+        rank_feature=label_question(db, question, [kb]),
+    )
+    mindmap = MindMapExtractor(chat_mdl)
+    mind_map = trio.run(mindmap, [c["content_with_weight"] for c in ranks["chunks"]])
+    mind_map = mind_map.output
     if "error" in mind_map:
         return server_error_response(Exception(mind_map["error"]))
     return get_json_result(data=mind_map)

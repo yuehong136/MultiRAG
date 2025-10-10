@@ -789,7 +789,32 @@ def tts(tts_mdl, text):
     return binascii.hexlify(bin).decode("utf-8")
 
 
-def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None):
+def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
+    if search_config is None:
+        search_config = {}
+    similarity_threshold = 0.1,
+    vector_similarity_weight = 0.3,
+    top = 1024,
+    doc_ids = []
+    rerank_id = ""
+    rerank_mdl = None
+
+    if search_config:
+        if search_config.get("kb_ids", []):
+            kb_ids = search_config.get("kb_ids", [])
+        if search_config.get("chat_id", ""):
+            chat_llm_name = search_config.get("chat_id", "")
+        if search_config.get("similarity_threshold", 0.1):
+            similarity_threshold = search_config.get("similarity_threshold", 0.1)
+        if search_config.get("vector_similarity_weight", 0.3):
+            vector_similarity_weight = search_config.get("vector_similarity_weight", 0.3)
+        if search_config.get("top_k", 1024):
+            top = search_config.get("top_k", 1024)
+        if search_config.get("doc_ids", []):
+            doc_ids = search_config.get("doc_ids", [])
+        if search_config.get("rerank_id", ""):
+            rerank_id = search_config.get("rerank_id", "")
+
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     embedding_list = list(set([kb.embd_id for kb in kbs]))
 
@@ -798,12 +823,30 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None):
 
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_llm_name)
+    if rerank_id:
+        rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
     max_tokens = chat_mdl.max_length
     tenant_ids = list([kb.tenant_id for kb in kbs])
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
-    kbinfos = retriever.retrieval(question, filter_exp, embd_mdl, tenant_ids, kb_names, 1, 12, 0.1, 0.3, aggs=False, rank_feature=label_question(db, question, kbs), search_mode=None) #todo 无法传递应用里的配置，所以只能使用一种默认检索模式
+    kbinfos = retriever.retrieval(
+        question=question,
+        filter_exp=filter_exp,
+        embd_mdl=embd_mdl,
+        tenant_id=tenant_ids,
+        kb_names=kb_names,
+        page=1,
+        page_size=12,
+        similarity_threshold=similarity_threshold,
+        vector_similarity_weight=vector_similarity_weight,
+        top=top,
+        doc_ids=doc_ids,
+        aggs=False,
+        rerank_mdl=rerank_mdl,
+        rank_feature=label_question(db, question, kbs),
+        search_mode=None #todo 无法传递应用里的配置，所以只能使用一种默认检索模式
+    )
     knowledges = kb_prompt(kbinfos, max_tokens)
     prompt = """
     Role: You're a smart assistant. Your name is Miss R.
