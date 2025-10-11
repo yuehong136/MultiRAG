@@ -424,15 +424,34 @@ class AskdataService:
         return processed_semantic_layer, model_ids, recommended_chart, recommendation_reason
 
     async def analyze_user_query_stream(
-            self, event_id: str, user_query: str, semantic_layer: Dict[str, Any],
+            self, event_id: str, user_query: str, rewritten_question: Optional[str], round_id: Optional[str],
+            semantic_layer: Dict[str, Any],
             llm_name: Optional[str], tenant_id: str, recommended_chart: str, recommendation_reason: str
     ):
         """分析用户问题并流式返回结果。"""
+        round_chat_list: List[Dict[str, Any]] = []
+        if round_id:
+            chat_history = await self.get_ask_data_history_by_round(round_id)
+            for round_chat in chat_history:
+                round_user_original_question = round_chat.get("user_original_question")
+                round_rewritten_question = round_chat.get("rewritten_question", None)
+                if round_rewritten_question:
+                    round_chat_list.append({
+                        "user_query": round_user_original_question or round_rewritten_question,
+                        "rewritten_question": round_rewritten_question,
+                    })
+                else:
+                    round_chat_list.append({
+                        "user_query": round_user_original_question,
+                    })
+
         llm_service = AsyncLLMService(self.db)
         template_path = os.path.join(self.prompt_dir, "analyze_user_query.txt")
         prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
         prompt = PromptTemplateUtil.fill_template(prompt_template,
-                                                  {"user_query": user_query, "semantic_layer": semantic_layer,
+                                                  {"user_query": user_query, "rewritten_question": rewritten_question,
+                                                   "semantic_layer": semantic_layer,
+                                                   "conversation_history": round_chat_list,
                                                    "recommended_chart": recommended_chart,
                                                    "recommendation_reason": recommendation_reason,
                                                    "current_date": date.today().strftime("%Y-%m-%d")})

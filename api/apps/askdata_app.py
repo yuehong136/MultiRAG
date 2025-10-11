@@ -268,6 +268,9 @@ class AnalyzeUserQueryRequest(BaseModel):
     llm_name: Optional[str] = Field(default=None, description="指定使用的模型名称")
     dataset_id_list: List[str] = Field([], title="数据集ID列表", description="数据集ID列表")
     semantic_layer: Dict[str, Any] = Field(..., title="语义层", description="语义层")
+    round_id: Optional[str] = Field(None, title="多轮对话的分组ID",
+                                    description="如果是多轮对话，那么同一组对话所享有的ID")
+    rewritten_question: Optional[str] = Field(None, title="重写的问题", description="重写的问题")
 
 
 class AnalyzeUserQueryResponse(BaseModel):
@@ -291,7 +294,9 @@ async def analyze_user_query_background_task(
         await service.analyze_user_query_stream(
             event_id=event_id,
             user_query=request.user_query,
+            rewritten_question=request.rewritten_question,
             semantic_layer=request.semantic_layer["processed_semantic_layer"],
+            round_id=request.round_id,
             llm_name=request.llm_name,
             tenant_id=user.id,
             recommended_chart=request.semantic_layer["recommended_chart"],
@@ -389,7 +394,7 @@ class SemanticLayerRequest(BaseModel):
         title="启用多轮问答",
         description="是否启用多轮问答功能"
     )
-    round_id: str = Field(
+    round_id: Optional[str] = Field(
         "",
         title="多轮对话的分组ID",
         description="如果是多轮对话，那么同一组对话所享有的ID"
