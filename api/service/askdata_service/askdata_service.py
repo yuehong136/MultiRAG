@@ -518,6 +518,14 @@ class AskdataService:
         """根据对话ID获取问数历史记录。"""
         return self.history_service.get_history_by_conversation_id(self.db, conversation_id, user_id)
 
+    async def delete_ask_data_history_by_conversation(self, conversation_id: str, user_id: str) -> int:
+        """根据对话ID和用户ID删除问数历史记录。"""
+        return self.history_service.delete_by_conversation_id(self.db, conversation_id, user_id)
+
+    async def delete_ask_data_history_by_ask_id(self, ask_id: str, user_id: str) -> int:
+        """根据询问ID和用户ID删除问数历史记录。"""
+        return self.history_service.delete_by_ask_id(self.db, ask_id, user_id)
+
     async def get_ask_data_history_by_round(self, round_id: str) -> list[dict]:
         """根据轮次ID获取问数历史记录，按时间从早到晚排列。"""
         return self.history_service.get_by_round_id(self.db, round_id)

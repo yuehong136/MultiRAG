@@ -529,6 +529,68 @@ async def get_history(
         )
 
 
+class DeleteHistoryByConversationRequest(BaseModel):
+    conversation_id: str = Field(..., description="对话ID")
+    userid: str = Field(..., description="用户ID")
+
+
+@router.post("/delete-history/conversation", response_model=ResponseSchema, summary="根据对话ID删除历史记录")
+async def delete_history_by_conversation(
+        body: DeleteHistoryByConversationRequest = Body(
+            ...,
+            title="根据对话ID删除历史记录"
+        ),
+        service: AskdataService = Depends(get_askdata_service)
+):
+    """
+    根据对话ID和用户ID删除相关的历史记录（软删除）。
+    """
+    try:
+        deleted_count = await service.delete_ask_data_history_by_conversation(body.conversation_id, body.userid)
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message=f"历史记录删除成功，共删除 {deleted_count} 条记录",
+            data={"deleted_count": deleted_count}
+        )
+    except Exception as e:
+        logger.exception(f"删除历史记录失败 (conversation_id: {body.conversation_id})")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"删除历史记录失败: {e}"
+        )
+
+
+class DeleteHistoryByAskIdRequest(BaseModel):
+    ask_id: str = Field(..., description="问题ID")
+    userid: str = Field(..., description="用户ID")
+
+
+@router.post("/delete-history/ask", response_model=ResponseSchema, summary="根据询问ID删除历史记录")
+async def delete_history_by_ask_id(
+        body: DeleteHistoryByAskIdRequest = Body(
+            ...,
+            title="根据询问ID删除历史记录"
+        ),
+        service: AskdataService = Depends(get_askdata_service)
+):
+    """
+    根据询问ID和用户ID删除相关的历史记录（软删除）。
+    """
+    try:
+        deleted_count = await service.delete_ask_data_history_by_ask_id(body.ask_id, body.userid)
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message=f"历史记录删除成功，共删除 {deleted_count} 条记录",
+            data={"deleted_count": deleted_count}
+        )
+    except Exception as e:
+        logger.exception(f"删除历史记录失败 (ask_id: {body.ask_id})")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"删除历史记录失败: {e}"
+        )
+
+
 class ReQueryRequest(BaseModel):
     conversation_id: str = Field(..., description="会话ID")
     ask_id: str = Field(..., description="用户的提问ID")

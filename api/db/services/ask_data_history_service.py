@@ -1,5 +1,7 @@
 import json
 import logging
+from typing import Optional
+
 from sqlalchemy.orm import Session
 from sqlalchemy import asc
 
@@ -112,7 +114,7 @@ class AskDataHistoryService(CommonService):
     # 新增的插入方法
     @classmethod
     def add_history(cls, db: Session, conversation_id: str, ask_id: str, data: str, user_id: str, round_id: str = None,
-                    user_origin_question: str = "", rewritten_question: str = "",
+                    user_origin_question: str = "", rewritten_question: Optional[str] = "",
                     processed_semantic_layer: str = "") -> AskDataHistory:
         """
         新增一条历史记录
@@ -181,6 +183,72 @@ class AskDataHistoryService(CommonService):
             return history_records
         except Exception as e:
             logging.error(f"Failed to fetch history for conversation_id {conversation_id}, user_id {user_id}: {e}")
+            raise
+
+    @classmethod
+    def delete_by_conversation_id(cls, db: Session, conversation_id: str, user_id: str) -> int:
+        """
+        根据conversation_id和user_id软删除记录（将status设置为0）
+
+        参数:
+        - db: 数据库会话
+        - conversation_id: 对话ID
+        - user_id: 用户ID
+
+        返回:
+        - int: 被删除的记录数量
+        """
+        logging.info(f"Soft deleting records for conversation_id: {conversation_id}, user_id: {user_id}")
+        try:
+            updated_count = (
+                db.query(cls.model)
+                .filter(
+                    cls.model.conversation_id == conversation_id,
+                    cls.model.user_id == user_id,
+                    cls.model.status == "1"
+                )
+                .update({"status": "0"}, synchronize_session=False)
+            )
+            db.commit()
+            logging.info(
+                f"Successfully soft deleted {updated_count} records for conversation_id: {conversation_id}, user_id: {user_id}")
+            return updated_count
+        except Exception as e:
+            db.rollback()
+            logging.error(
+                f"Failed to soft delete records for conversation_id {conversation_id}, user_id {user_id}: {e}")
+            raise
+
+    @classmethod
+    def delete_by_ask_id(cls, db: Session, ask_id: str, user_id: str) -> int:
+        """
+        根据ask_id和user_id软删除记录（将status设置为0）
+
+        参数:
+        - db: 数据库会话
+        - ask_id: 询问ID
+        - user_id: 用户ID
+
+        返回:
+        - int: 被删除的记录数量
+        """
+        logging.info(f"Soft deleting records for ask_id: {ask_id}, user_id: {user_id}")
+        try:
+            updated_count = (
+                db.query(cls.model)
+                .filter(
+                    cls.model.ask_id == ask_id,
+                    cls.model.user_id == user_id,
+                    cls.model.status == "1"
+                )
+                .update({"status": "0"}, synchronize_session=False)
+            )
+            db.commit()
+            logging.info(f"Successfully soft deleted {updated_count} records for ask_id: {ask_id}, user_id: {user_id}")
+            return updated_count
+        except Exception as e:
+            db.rollback()
+            logging.error(f"Failed to soft delete records for ask_id {ask_id}, user_id {user_id}: {e}")
             raise
 
     @classmethod
