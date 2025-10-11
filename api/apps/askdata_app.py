@@ -462,7 +462,7 @@ class AddHistoryRequest(BaseModel):
     data: str = Field(..., description="历史记录内容, 可以是JSON字符串")
     round_id: str = Field("", description="对话轮次ID")
     user_origin_question: str = Field("", description="用户原始问题")
-    rewritten_question: str = Field("", description="用户改写问题")
+    rewritten_question: Optional[str] = Field("", description="重写后的问题")
     processed_semantic_layer: str = Field("", description="处理后的语义层")
 
 
@@ -622,20 +622,22 @@ async def re_query(
 
     try:
         requery_sql_result = await service.generate_requery_sql(body.chart_type, body.table_config,
-                                                         sql_components=body.sql_components,
-                                                         model_table_alias_mapping_list=body.model_table_alias_mapping_list,
-                                                                                      pagination_info=body.pagination_info)
+                                                                sql_components=body.sql_components,
+                                                                model_table_alias_mapping_list=body.model_table_alias_mapping_list,
+                                                                pagination_info=body.pagination_info)
 
         if body.pagination_info:
-            result = await query_data_with_params(requery_sql_result["count_sql"], int(body.dataset_id), requery_sql_result["count_sql_params"])
+            result = await query_data_with_params(requery_sql_result["count_sql"], int(body.dataset_id),
+                                                  requery_sql_result["count_sql_params"])
             if result["status"] == "error":
                 logger.error(f"查询数据失败: {result['message']}")
                 return ResponseSchema(
                     status=StatusEnum.ERROR,
                     message=f"查询数据失败: {result['message']}"
                 )
-            count = result.get("data", {}).get("data",[])[0].get("count",{})
-            result = await query_data_with_params(requery_sql_result["sql"], int(body.dataset_id), requery_sql_result["params"])
+            count = result.get("data", {}).get("data", [])[0].get("count", {})
+            result = await query_data_with_params(requery_sql_result["sql"], int(body.dataset_id),
+                                                  requery_sql_result["params"])
             if result["status"] == "error":
                 logger.error(f"查询数据失败: {result['message']}")
                 return ResponseSchema(
@@ -652,7 +654,8 @@ async def re_query(
                 }}
             )
         else:
-            result = await query_data_with_params(requery_sql_result["sql"], int(body.dataset_id), requery_sql_result["params"])
+            result = await query_data_with_params(requery_sql_result["sql"], int(body.dataset_id),
+                                                  requery_sql_result["params"])
             if result["status"] == "error":
                 logger.error(f"查询数据失败: {result['message']}")
                 return ResponseSchema(

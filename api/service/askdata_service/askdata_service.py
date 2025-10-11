@@ -508,7 +508,7 @@ class AskdataService:
 
     async def add_ask_data_history(self, conversation_id: str, ask_id: str, user_id: str, data: str,
                                    round_id: str = None,
-                                   user_origin_question: str = None, rewritten_question: str = None,
+                                   user_origin_question: str = None, rewritten_question: Optional[str] = None,
                                    processed_semantic_layer: str = None):
         """添加一条问数历史记录。"""
         return self.history_service.add_history(self.db, conversation_id, ask_id, data, user_id, round_id,
@@ -586,7 +586,7 @@ class AskdataService:
                     table_alias = self._find_table_alias(semantic_field["from_model_id"],
                                                          model_table_alias_mapping_list)
                     if semantic_field["semantic_type"] == "metric":
-                        column_name = f"{table_alias}.{semantic_field.get("semantic_field_name","").split(".")[1]}"
+                        column_name = f"{table_alias}.{semantic_field.get("semantic_field_name", "").split(".")[1]}"
                     else:
                         column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
                     assembler.add_column(column_name)
