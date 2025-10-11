@@ -20,12 +20,9 @@ class Base(ABC):
         """
         pass
 
-    def transcription(self, audio, **kwargs):
-        transcription = self.client.audio.transcriptions.create(
-            model=self.model_name,
-            file=audio,
-            response_format="text"
-        )
+    def transcription(self, audio_path, **kwargs):
+        audio_file = open(audio_path, "rb")
+        transcription = self.client.audio.transcriptions.create(model=self.model_name, file=audio_file)
         return transcription.text.strip(), num_tokens_from_string(transcription.text.strip())
 
     def audio2base64(self, audio):

@@ -348,6 +348,8 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         }
         ```
         """
+    if DialogService.get_or_none(db, tenant_id=user.id, name=request.name):
+        return get_data_error_result(retmsg=f"Duplicated Dialog name {request.name}.")
     try:
         # 获取默认提示配置
         default_prompt_config = {

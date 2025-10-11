@@ -61,7 +61,7 @@ class GPTSeq2txt(Base):
 class QWenSeq2txt(Base):
     _FACTORY_NAME = "Tongyi-Qianwen"
 
-    def __init__(self, key, model_name="qwen-audio-asr", **kwargs):
+    def __init__(self, key, model_name="qwen3-asr-flash", **kwargs):
         import dashscope
 
         dashscope.api_key = key
@@ -76,6 +76,12 @@ class QWenSeq2txt(Base):
         audio_path = f"file://{audio_path}"
         messages = [
             {
+                "role": "system",
+                "content": [
+                    {"text": ""},  # 用于上下文增强
+                ]
+            },
+            {
                 "role": "user",
                 "content": [{"audio": audio_path}],
             }
@@ -84,12 +90,28 @@ class QWenSeq2txt(Base):
         response = None
         full_content = ""
         try:
-            response = MultiModalConversation.call(model="qwen-audio-asr", messages=messages, result_format="message", stream=True)
-            for response in response:
+            response_stream = MultiModalConversation.call(
+                model=self.model_name,
+                messages=messages,
+                result_format="message",
+                stream=True,
+                asr_options={
+                    "enable_lid": True,  # 启用语种识别
+                    "enable_itn": False,  # 逆文本规范化
+                }
+            )
+            # 流式响应已自动累加，获取最后一个响应即可
+            last_response = None
+            for response in response_stream:
+                last_response = response
+            
+            # 从最后一个响应提取完整内容
+            if last_response:
                 try:
-                    full_content += response["output"]["choices"][0]["message"].content[0]["text"]
+                    full_content = last_response["output"]["choices"][0]["message"].content[0]["text"]
                 except Exception:
                     pass
+            
             return full_content, num_tokens_from_string(full_content)
         except Exception as e:
             return "**ERROR**: " + str(e), 0
