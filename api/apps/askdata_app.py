@@ -455,8 +455,13 @@ async def get_semantic_layer_streaming(
     except Exception as e:
         logger.exception("获得语义层信息失败")
         return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"启动聊天失败：{str(e)}"
+            # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
+            status=StatusEnum.SUCCESS,
+            message=f"获得语义层信息失败：{str(e)}",
+            data={
+                "status": StatusEnum.ERROR,
+                "message": str(e),
+            }
         )
 
 

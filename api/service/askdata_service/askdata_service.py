@@ -318,6 +318,8 @@ class AskdataService:
         )
 
         model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
+        if len(model_ids) == 0:
+            raise ValueError("没有检索到任何与当前问题相关的语义信息，请换个问题，或者检查语义层数据集。")
 
         domain_ids = self._extract_unique_domain_ids(dataset_details)
 
