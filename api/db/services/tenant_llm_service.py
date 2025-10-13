@@ -186,20 +186,11 @@ class TenantLLMService(CommonService):
 
     @classmethod
     def increase_usage(cls, db: Session, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str | None = None):
-        # # 检查数据库连接状态并在需要时重新连接
-        # try:
-        #     # 尝试执行简单查询来测试连接
-        #     db.execute(text("SELECT 1"))
-        # except Exception:
-        #     logging.warning("Database connection appears to be dead, attempting to reconnect...")
-        #     try:
-        #         # 回滚任何挂起的事务
-        #         db.rollback()
-        #         # 关闭当前连接
-        #         db.close()
-        #         # SQLAlchemy会在下次操作时自动重新连接
-        #     except Exception:
-        #         logging.exception("Failed to reset database connection")
+        """增加LLM使用量
+
+        逻辑: 仅执行UPDATE操作,不创建新记录
+        重试: 处理索引损坏等临时错误,最多重试3次
+        """
         tenant = TenantService.get_by_id(db, tenant_id)
         if not tenant:
             logging.error(f"Tenant not found: {tenant_id}")
@@ -219,48 +210,58 @@ class TenantLLMService(CommonService):
             logging.error(f"LLM type error: {llm_type}")
             return 0
 
-
         llm_name, llm_factory = TenantLLMService.split_model_name_and_factory(mdlnm)
 
-        try:
-            # 简化更新逻辑 - 直接更新增加的令牌数
-            stmt = (
-                update(cls.model)
-                .where(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.llm_name == llm_name,
-                    cls.model.llm_factory == llm_factory if llm_factory else True
+        # 重试机制: 处理索引损坏等临时错误
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # 执行UPDATE操作 (与参考代码逻辑一致)
+                stmt = (
+                    update(cls.model)
+                    .where(
+                        cls.model.tenant_id == tenant_id,
+                        cls.model.llm_name == llm_name,
+                        cls.model.llm_factory == llm_factory if llm_factory else True
+                    )
+                    .values(used_tokens=cls.model.used_tokens + used_tokens)
                 )
-                .values(used_tokens=cls.model.used_tokens + used_tokens)
-            )
-            result = db.execute(stmt)
-            db.commit()
-            num = result.rowcount
-
-            # 如果没有更新任何行，创建新记录
-            if num == 0:
-                if not llm_factory:
-                    llm_factory = mdlnm
-                new_tenant_llm = cls.model(
-                    tenant_id=tenant_id,
-                    mdl_type=llm_type,
-                    llm_factory=llm_factory,
-                    llm_name=llm_name,
-                    used_tokens=used_tokens
-                )
-                db.add(new_tenant_llm)
+                result = db.execute(stmt)
                 db.commit()
-                num = 1
+                return result.rowcount
 
-        except SQLAlchemyError:
-            db.rollback()
-            logging.exception(
-                "TenantLLMService.increase_usage 出现异常，为tenant_id=%s, llm_name=%s更新used_tokens失败",
-                tenant_id, llm_name
-            )
-            return 0
+            except SQLAlchemyError as e:
+                db.rollback()
+                error_msg = str(e)
 
-        return num
+                # 索引损坏错误: 重试
+                if "IndexCorrupted" in error_msg or "invalid duplicate tuple" in error_msg:
+                    if attempt < max_retries - 1:
+                        logging.warning(
+                            f"索引损坏错误,正在重试 ({attempt + 1}/{max_retries}): "
+                            f"tenant_id={tenant_id}, llm_name={llm_name}"
+                        )
+                        import time
+                        time.sleep(0.1 * (2 ** attempt))  # 指数退避: 0.1s, 0.2s, 0.4s
+                        continue
+                    else:
+                        logging.error(
+                            f"索引损坏持续存在,需要数据库维护: "
+                            f"tenant_id={tenant_id}, llm_name={llm_name}\n"
+                            "PostgreSQL: REINDEX INDEX usr_ai.ix_usr_ai_t_ai_tenant_llms_api_key;\n"
+                            "MySQL: REPAIR TABLE usr_ai.t_ai_tenant_llms;"
+                        )
+                        return 0
+
+                # 其他错误: 记录日志并返回
+                else:
+                    logging.exception(
+                        "TenantLLMService.increase_usage 出现异常，"
+                        f"tenant_id={tenant_id}, llm_name={llm_name}"
+                    )
+                    return 0
+
+        return 0
 
     @classmethod
     def get_openai_models(cls, db: Session):
