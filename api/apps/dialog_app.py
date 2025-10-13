@@ -348,8 +348,6 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         }
         ```
         """
-    if DialogService.get_or_none(db, tenant_id=user.id, name=request.name):
-        return get_data_error_result(retmsg=f"Duplicated Dialog name {request.name}.")
     try:
         # 获取默认提示配置
         default_prompt_config = {
@@ -367,6 +365,10 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         prompt_config = request.prompt_config or default_prompt_config
 
         is_create = not request.dialog_id
+
+        if is_create and DialogService.get_or_none(db, tenant_id=user.id, name=request.name):
+            return get_data_error_result(retmsg=f"Duplicated Dialog name {request.name}.")
+
         if not is_create:
             # 针对更新逻辑的特殊校验
             if not request.kb_ids and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config['system']:
