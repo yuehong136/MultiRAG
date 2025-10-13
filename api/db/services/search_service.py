@@ -76,7 +76,7 @@ class SearchService(CommonService):
                 "nickname": result.nickname,
                 "tenant_avatar": result.tenant_avatar,
             }
-        return None
+        return {}
 
     @classmethod
     def get_by_tenant_ids(cls, db: Session, joined_tenant_ids: list, user_id: str, 

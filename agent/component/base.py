@@ -468,7 +468,7 @@ class ComponentBase(ABC):
 
     def get_input_elements_from_text(self, txt: str) -> dict[str, dict[str, str]]:
         res = {}
-        for r in re.finditer(self.variable_ref_patt, txt, flags=re.IGNORECASE):
+        for r in re.finditer(self.variable_ref_patt, txt, flags=re.IGNORECASE|re.DOTALL):
             exp = r.group(1)
             cpn_id, var_nm = exp.split("@") if exp.find("@")>0 else ("", exp)
             res[exp] = {

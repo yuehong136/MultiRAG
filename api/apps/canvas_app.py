@@ -214,6 +214,12 @@ def getsse(
         if not objs:
             return get_data_error_result(retmsg='Authentication error: API key is invalid!"')
         tenant_id = objs[0].tenant_id
+        if not UserCanvasService.query(db, user_id=tenant_id, id=canvas_id):
+            return get_json_result(
+                data=False,
+                retmsg='Only owner of canvas authorized for this operation.',
+                retcode=RetCode.OPERATING_ERROR
+            )
         e, c = UserCanvasService.get_by_id(db, canvas_id)
         if not e or c.user_id != tenant_id:
             return get_data_error_result(retmsg="canvas not found.")

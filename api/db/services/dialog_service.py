@@ -15,6 +15,7 @@ import re
 from copy import deepcopy
 from timeit import default_timer as timer
 
+import trio
 from langfuse import Langfuse
 
 from agentic_reasoning import DeepResearcher
@@ -28,11 +29,11 @@ from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
-# from api.db.services.llm_service import TenantLLMService, LLMBundle
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api import settings
 from api.utils import current_timestamp, datetime_format
+from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
 from core.nlp import extract_between
@@ -875,3 +876,54 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
         answer = ans
         yield {"answer": answer, "reference": {}}
     yield decorate_answer(answer)
+
+
+def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
+    if search_config is None:
+        search_config = {}
+    meta_data_filter = search_config.get("meta_data_filter", {})
+    doc_ids = search_config.get("doc_ids", [])
+    kb_ids = search_config.get("doc_ids", kb_ids)
+    rerank_id = search_config.get("rerank_id", "")
+    rerank_mdl = None
+    kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
+    embedding_list = list(set([kb.embd_id for kb in kbs]))
+    tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+    kb_names = list(set([kb.name for kb in kbs]))
+
+    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, llm_name=embedding_list[0])
+    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
+    if rerank_id:
+        rerank_mdl = LLMBundle(tenant_id, LLMType.RERANK, rerank_id)
+
+    if meta_data_filter:
+        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        if meta_data_filter.get("method") == "auto":
+            filters = gen_meta_filter(chat_mdl, metas, question)
+            doc_ids.extend(meta_filter(metas, filters))
+            if not doc_ids:
+                doc_ids = None
+        elif meta_data_filter.get("method") == "manual":
+            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"]))
+            if not doc_ids:
+                doc_ids = None
+
+    ranks = settings.retrievaler.retrieval(
+        question=question,
+        filter_exp="",
+        embd_mdl=embd_mdl,
+        tenant_id=tenant_ids,
+        kb_names=kb_names,
+        page=1,
+        page_size=12,
+        similarity_threshold=search_config.get("similarity_threshold", 0.2),
+        vector_similarity_weight=search_config.get("vector_similarity_weight", 0.3),
+        top=search_config.get("top_k", 1024),
+        doc_ids=doc_ids,
+        aggs=False,
+        rerank_mdl=rerank_mdl,
+        rank_feature=label_question(db, question, kbs),
+    )
+    mindmap = MindMapExtractor(chat_mdl)
+    mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
+    return mind_map.output

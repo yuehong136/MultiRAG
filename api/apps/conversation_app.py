@@ -9,7 +9,7 @@
 import json
 import re
 from copy import deepcopy
-import trio
+# import trio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -18,8 +18,8 @@ from typing import Generator, Literal, Annotated, Any
 
 from api.db.db_models import APIToken, get_db
 from api.db.services.conversation_service import ConversationService, structure_answer
-from api.db.services.dialog_service import DialogService, chat, ask
-from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.dialog_service import DialogService, chat, ask, gen_mindmap
+# from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
@@ -30,8 +30,8 @@ from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
 from api.apps import manager
-from graphrag.general.mind_map_extractor import MindMapExtractor
-from core.app.tag import label_question
+# from graphrag.general.mind_map_extractor import MindMapExtractor
+# from core.app.tag import label_question
 from core.prompts.prompt_template import load_prompt
 from core.prompts.prompts import chunks_format
 
@@ -1042,75 +1042,82 @@ def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends
     req = request.model_dump()
 
     search_id = req.get("search_id", "")
-    search_app = None
-    search_config = {}
-    if search_id:
-        search_app = SearchService.get_detail(db, search_id)
-    if search_app:
-        search_config = search_app.get("search_config", {})
 
-    kb_ids = req["kb_ids"]
-    if search_config.get("kb_ids", []):
-        kb_ids = search_config.get("kb_ids", [])
-    kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
-    if not kb:
-        return get_data_error_result(retmsg="Knowledgebase not found!")
+    search_app = SearchService.get_detail(db, search_id) if search_id else {}
+    search_config = search_app.get("search_config", {}) if search_app else {}
+    kb_ids = search_config.get("kb_ids", req["kb_ids"])
 
-    chat_id = ""
-    similarity_threshold = 0.3,
-    vector_similarity_weight = 0.3,
-    top = 1024,
-    doc_ids = []
-    rerank_id = ""
-    rerank_mdl = None
+    mind_map = gen_mindmap(db, req["question"], kb_ids, search_app.get("tenant_id", user.id), search_config)
 
-    if search_config:
-        if search_config.get("chat_id", ""):
-            chat_id = search_config.get("chat_id", "")
-        if search_config.get("similarity_threshold", 0.2):
-            similarity_threshold = search_config.get("similarity_threshold", 0.2)
-        if search_config.get("vector_similarity_weight", 0.3):
-            vector_similarity_weight = search_config.get("vector_similarity_weight", 0.3)
-        if search_config.get("top_k", 1024):
-            top = search_config.get("top_k", 1024)
-        if search_config.get("doc_ids", []):
-            doc_ids = search_config.get("doc_ids", [])
-        if search_config.get("rerank_id", ""):
-            rerank_id = search_config.get("rerank_id", "")
-
-    tenant_id = kb.tenant_id
-    if search_app and search_app.get("tenant_id", ""):
-        tenant_id = search_app.get("tenant_id", "")
-
-    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
-    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=chat_id)
-    if rerank_id:
-        rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
-    filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
-    kb_names = list([kb.name])
-
-    search_mode_dict = request.get_search_mode_dict()
-
-    ranks = settings.retrievaler.retrieval(
-        question=req["question"],
-        filter_exp=filter_exp,
-        embd_mdl=embd_mdl,
-        tenant_id=tenant_id,
-        kb_names=kb_names,
-        page=1,
-        page_size=12,
-        similarity_threshold=similarity_threshold,
-        vector_similarity_weight=vector_similarity_weight,
-        top=top,
-        doc_ids=doc_ids,
-        aggs=False,
-        rerank_mdl=rerank_mdl,
-        rank_feature=label_question(db, req["question"], [kb]),
-        search_mode=search_mode_dict
-    )
-    mindmap = MindMapExtractor(chat_mdl)
-    mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
-    mind_map = mind_map.output
+    # search_app = None
+    # search_config = {}
+    # if search_id:
+    #     search_app = SearchService.get_detail(db, search_id)
+    # if search_app:
+    #     search_config = search_app.get("search_config", {})
+    #
+    # kb_ids = req["kb_ids"]
+    # if search_config.get("kb_ids", []):
+    #     kb_ids = search_config.get("kb_ids", [])
+    # kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
+    # if not kb:
+    #     return get_data_error_result(retmsg="Knowledgebase not found!")
+    #
+    # chat_id = ""
+    # similarity_threshold = 0.3,
+    # vector_similarity_weight = 0.3,
+    # top = 1024,
+    # doc_ids = []
+    # rerank_id = ""
+    # rerank_mdl = None
+    #
+    # if search_config:
+    #     if search_config.get("chat_id", ""):
+    #         chat_id = search_config.get("chat_id", "")
+    #     if search_config.get("similarity_threshold", 0.2):
+    #         similarity_threshold = search_config.get("similarity_threshold", 0.2)
+    #     if search_config.get("vector_similarity_weight", 0.3):
+    #         vector_similarity_weight = search_config.get("vector_similarity_weight", 0.3)
+    #     if search_config.get("top_k", 1024):
+    #         top = search_config.get("top_k", 1024)
+    #     if search_config.get("doc_ids", []):
+    #         doc_ids = search_config.get("doc_ids", [])
+    #     if search_config.get("rerank_id", ""):
+    #         rerank_id = search_config.get("rerank_id", "")
+    #
+    # tenant_id = kb.tenant_id
+    # if search_app and search_app.get("tenant_id", ""):
+    #     tenant_id = search_app.get("tenant_id", "")
+    #
+    # embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+    # chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=chat_id)
+    # if rerank_id:
+    #     rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
+    # filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
+    # kb_names = list([kb.name])
+    #
+    # search_mode_dict = request.get_search_mode_dict()
+    #
+    # ranks = settings.retrievaler.retrieval(
+    #     question=req["question"],
+    #     filter_exp=filter_exp,
+    #     embd_mdl=embd_mdl,
+    #     tenant_id=tenant_id,
+    #     kb_names=kb_names,
+    #     page=1,
+    #     page_size=12,
+    #     similarity_threshold=similarity_threshold,
+    #     vector_similarity_weight=vector_similarity_weight,
+    #     top=top,
+    #     doc_ids=doc_ids,
+    #     aggs=False,
+    #     rerank_mdl=rerank_mdl,
+    #     rank_feature=label_question(db, req["question"], [kb]),
+    #     search_mode=search_mode_dict
+    # )
+    # mindmap = MindMapExtractor(chat_mdl)
+    # mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
+    # mind_map = mind_map.output
     if "error" in mind_map:
         return server_error_response(Exception(mind_map["error"]))
     return get_json_result(data=mind_map)
