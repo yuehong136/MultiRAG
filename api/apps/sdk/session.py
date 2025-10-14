@@ -551,55 +551,33 @@ def agents_completion_openai_compatibility(
 
 @router.post("/agents/{agent_id}/completions", summary="代理补全")
 def agent_completions(
-    agent_id: str, 
-    request: AgentCompletionRequest, 
-    db: Session = Depends(get_db), 
+    agent_id: str,
+    request: AgentCompletionRequest,
+    db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     req = request.model_dump()
 
     if req.get("stream", True):
-        def generate():
-            for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
-                if isinstance(answer, str):
-                    try:
-                        ans = json.loads(answer[5:])  # remove "data:"
-                    except Exception:
-                        continue
-
-                if ans.get("event") not in ["message", "message_end"]:
-                    continue
-
-                yield answer
-
-            yield "data:[DONE]\n\n"
-
-        resp = StreamingResponse(generate(), media_type="text/event-stream")
+        resp = StreamingResponse(agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req), media_type="text/event-stream")
         resp.headers["Cache-control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
         resp.headers["X-Accel-Buffering"] = "no"
         resp.headers["Content-Type"] = "text/event-stream; charset=utf-8"
         return resp
 
-    full_content = ""
-    reference = {}
-    final_ans = ""
+    result = {}
     for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
         try:
-            ans = json.loads(answer[5:])
-
-            if ans["event"] == "message":
-                full_content += ans["data"]["content"]
-
-            if ans.get("data", {}).get("reference", None):
-                reference.update(ans["data"]["reference"])
-
-            final_ans = ans
+            ans = json.loads(answer[5:])  # remove "data:"
+            if not result:
+                result = ans.copy()
+            else:
+                result["data"]["content"] += ans["data"]["content"]
+                result["data"]["reference"] = ans["data"].get("reference", [])
         except Exception as e:
-            return get_result(data=f"**ERROR**: {str(e)}")
-    final_ans["data"]["content"] = full_content
-    final_ans["data"]["reference"] = reference
-    return get_result(data=final_ans)
+            return get_error_data_result(str(e))
+    return result
 
 
 @router.get("/chats/{chat_id}/sessions", summary="获取聊天会话列表")
