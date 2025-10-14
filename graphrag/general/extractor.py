@@ -26,7 +26,7 @@ from graphrag.general.graph_prompt import SUMMARIZE_DESCRIPTIONS_PROMPT
 from graphrag.utils import get_llm_cache, set_llm_cache, handle_single_entity_extraction, \
     handle_single_relationship_extraction, split_string_by_multi_markers, flat_uniq_list, chat_limiter, get_from_to, GraphChange
 from core.llm.chat_model.base import Base as CompletionLLM
-from core.prompts import message_fit_in
+from core.prompts.prompts import message_fit_in
 from core.utils import truncate
 
 GRAPH_FIELD_SEP = "<SEP>"
@@ -47,7 +47,7 @@ class Extractor:
         self._language = language
         self._entity_types = entity_types or DEFAULT_ENTITY_TYPES
 
-    @timeout(60 * 5)
+    @timeout(60*20)
     def _chat(self, system, history, gen_conf=None):
         if gen_conf is None:
             gen_conf = {}
