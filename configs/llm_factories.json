@@ -590,9 +590,9 @@
                {
                     "llm_name": "glm-4.5v",
                     "tags": "LLM,CHAT,IMAGE2TEXT",
-                    "max_tokens": 128000,
+                    "max_tokens": 64000,
                     "mdl_type": "image2text",
-                    "is_tools": true
+                    "is_tools": false
                 },
                 {
                     "llm_name": "glm-z1-air",
@@ -617,7 +617,7 @@
                 },
                 {
                     "llm_name": "glm-4-plus",
-                    "tags": "LLM,CHAT,",
+                    "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
