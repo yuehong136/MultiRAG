@@ -3207,6 +3207,7 @@ dependencies = [
     { name = "setuptools" },
     { name = "shapely" },
     { name = "six" },
+    { name = "sqladmin" },
     { name = "sse-starlette" },
     { name = "streamlit" },
     { name = "strenum" },
@@ -3375,6 +3376,7 @@ requires-dist = [
     { name = "setuptools", specifier = ">=75.2.0,<76.0.0" },
     { name = "shapely", specifier = "==2.0.5" },
     { name = "six", specifier = "==1.16.0" },
+    { name = "sqladmin", specifier = ">=0.21.0" },
     { name = "sse-starlette", specifier = ">=2.2.1" },
     { name = "streamlit", specifier = ">=1.37.1" },
     { name = "strenum", specifier = "==0.4.15" },
@@ -5590,6 +5592,22 @@ wheels = [
 ]
 
 [[package]]
+name = "sqladmin"
+version = "0.21.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "jinja2" },
+    { name = "python-multipart" },
+    { name = "sqlalchemy" },
+    { name = "starlette" },
+    { name = "wtforms" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/5b/0c/614041e1b544e0de1f43b58f0105b3e2795b80369d5b0ff7412882d42fff/sqladmin-0.21.0.tar.gz", hash = "sha256:cb455b79eb79ef7d904680dd83817bf7750675147400b5b7cc401d04bda7ef2c" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/ed/8d/81b2a48cc6f5479cb1148292518e3006ec8f5fbe3b0829ef165984e9d7b9/sqladmin-0.21.0-py3-none-any.whl", hash = "sha256:2b1802c49bdd3128c6452625705693cf32d5d33e7db30e63f409bd20a9c05b53" },
+]
+
+[[package]]
 name = "sqlalchemy"
 version = "2.0.39"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -6386,6 +6404,18 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/c9/4a/44d3c295350d776427904d73c189e10aeae66d7f555bb2feee16d1e4ba5a/wsproto-1.2.0.tar.gz", hash = "sha256:ad565f26ecb92588a3e43bc3d96164de84cd9902482b130d0ddbaa9664a85065" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/78/58/e860788190eba3bcce367f74d29c4675466ce8dddfba85f7827588416f01/wsproto-1.2.0-py3-none-any.whl", hash = "sha256:b9acddd652b585d75b20477888c56642fdade28bdfd3579aa24a4d2c037dd736" },
+]
+
+[[package]]
+name = "wtforms"
+version = "3.1.2"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "markupsafe" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/6a/c7/96d10183c3470f1836846f7b9527d6cb0b6c2226ebca40f36fa29f23de60/wtforms-3.1.2.tar.gz", hash = "sha256:f8d76180d7239c94c6322f7990ae1216dae3659b7aa1cee94b6318bdffb474b9" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/18/19/c3232f35e24dccfad372e9f341c4f3a1166ae7c66e4e1351a9467c921cc1/wtforms-3.1.2-py3-none-any.whl", hash = "sha256:bf831c042829c8cdbad74c27575098d541d039b1faa74c771545ecac916f2c07" },
 ]
 
 [[package]]

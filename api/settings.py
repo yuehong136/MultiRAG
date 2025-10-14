@@ -33,6 +33,7 @@ HOST_IP = None
 HOST_PORT = None
 SECRET_KEY = None
 FACTORY_LLM_INFOS = None
+ADMIN_REQUIRE_SUPERUSER = None
 
 # DATABASE_TYPE = os.getenv("DB_TYPE", "postgresql")
 # DATABASE = decrypt_database_config(name=DATABASE_TYPE)
@@ -158,6 +159,10 @@ def init_settings():
 
     # SECRET_KEY = get_or_create_secret_key()
     SECRET_KEY = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("secret_key", str(date.today()))
+    
+    # 管理后台权限配置
+    global ADMIN_REQUIRE_SUPERUSER
+    ADMIN_REQUIRE_SUPERUSER = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("admin_require_superuser", False)
 
     global AUTHENTICATION_CONF, CLIENT_AUTHENTICATION, HTTP_APP_KEY, GITHUB_OAUTH, FEISHU_OAUTH, OAUTH_CONFIG
     # authentication

@@ -175,6 +175,7 @@ dependencies = [
     "python-calamine>=0.4.0",
     "litellm>=1.74.15.post1",
     "fastapi-mail>=1.4.1",
+    "sqladmin>=0.21.0"
 ]
 
 [tool.uv]

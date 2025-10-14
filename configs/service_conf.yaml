@@ -6,6 +6,8 @@ multirag:
   http_port: 8123
   # multirag服务的SECRET_KEY
   secret_key: 'multirag'
+  # 管理后台是否需要超级管理员权限 (true: 仅超级管理员, false: 所有激活用户)
+  admin_require_superuser: false
 
 postgresql:
   # 数据库的类型

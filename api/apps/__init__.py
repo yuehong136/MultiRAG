@@ -151,7 +151,34 @@ app = FastAPI(
     redoc_url=None,
     lifespan=lifespan
 )
-# 添加处理CORS（跨域资源共享）的中间件
+settings.init_settings()
+
+# ⚠️ 重要：SQLAdmin 必须在添加中间件之前初始化！
+# 这样 SQLAdmin 才能正确注册其路由和内部中间件
+try:
+    from api.admin.admin_config import setup_admin
+    admin = setup_admin(app)
+    logging.info("SQLAdmin管理后台已初始化")
+except Exception as e:
+    logging.exception(f"SQLAdmin管理后台初始化失败: {e}")
+
+# 中间件添加顺序很重要！
+# FastAPI 按照相反顺序执行，所以：
+# 1. 最先添加的最后执行（外层）
+# 2. 最后添加的最先执行（内层）
+
+# 添加Session中间件（最先添加，确保在外层处理 Cookie）
+# Session 配置对于 SQLAdmin 认证至关重要
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.SECRET_KEY,
+    session_cookie="multirag_session",  # 自定义 cookie 名称
+    max_age=86400,  # Session 有效期：24小时
+    same_site="lax",  # 允许跨站但有限制
+    https_only=False,  # 开发环境设置为 False，生产环境应该是 True
+)
+
+# 添加处理CORS（跨域资源共享）的中间件（后添加，在内层）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 允许所有来源的请求
@@ -159,10 +186,6 @@ app.add_middleware(
     allow_methods=["*"],  # 允许所有HTTP方法
     allow_headers=["*"],  # 允许所有请求头
 )
-settings.init_settings()
-
-# 添加Session中间件，使用项目的SECRET_KEY
-app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 
 # # 添加敏感词过滤中间件
 # try:
