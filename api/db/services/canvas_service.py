@@ -321,6 +321,7 @@ def completion(
             "message": [],
             "source": "agent",
             "dsl": dsl_str,
+            "reference": []
         }
         # save 并转实体
         API4ConversationService.save(db, **conv_dict)
