@@ -883,10 +883,11 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
         search_config = {}
     meta_data_filter = search_config.get("meta_data_filter", {})
     doc_ids = search_config.get("doc_ids", [])
-    kb_ids = search_config.get("doc_ids", kb_ids)
     rerank_id = search_config.get("rerank_id", "")
     rerank_mdl = None
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
+    if not kbs:
+        return {"error": "No KB selected"}
     embedding_list = list(set([kb.embd_id for kb in kbs]))
     tenant_ids = list(set([kb.tenant_id for kb in kbs]))
     kb_names = list(set([kb.name for kb in kbs]))

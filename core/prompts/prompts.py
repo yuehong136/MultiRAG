@@ -447,7 +447,7 @@ def rank_memories(chat_mdl, goal: str, sub_goal: str, tool_call_summaries: list[
     return re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
 
 
-def gen_meta_filter(chat_mdl, meta_data:dict, query: str) -> list:
+def gen_meta_filter(chat_mdl, meta_data: dict, query: str) -> list:
     sys_prompt = PROMPT_JINJA_ENV.from_string(META_FILTER).render(
         current_date=datetime.datetime.today().strftime('%Y-%m-%d'),
         metadata_keys=json.dumps(meta_data),

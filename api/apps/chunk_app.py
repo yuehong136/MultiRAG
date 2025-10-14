@@ -20,10 +20,12 @@ from pydantic import BaseModel, Field, Discriminator, model_validator
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db
+from api.db.services.dialog_service import meta_filter
+from api.db.services.search_service import SearchService
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
-from core.prompts.prompts import keyword_extraction, cross_languages
+from core.prompts.prompts import keyword_extraction, cross_languages, gen_meta_filter
 from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -142,6 +144,7 @@ class RetrievalTestRequest(BaseModel):
     keyword: bool = False
     search_mode: SearchModeType | None = None
     cross_languages: list[str] | None = None
+    search_id: str | None = None
 
     def get_search_mode_dict(self) -> dict[str, Any] | None:
         """将搜索模式转换为字典格式供底层函数使用"""
@@ -1243,6 +1246,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
     - **highlight**: 是否高亮显示匹配文本，默认为False
     - **keyword**: 是否进行关键词提取增强，默认为False。启用后会自动提取问题关键词
     - **cross_languages**: 跨语言翻译列表，可选。指定要将问题翻译成的目标语言列表，如["English", "French"]
+    - **search_id**: 检索配置记录表的唯一id
 
     ### 搜索模式 (search_mode)
     搜索模式决定了使用哪种检索策略，支持以下四种类型：
@@ -1424,6 +1428,24 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
     3. **选择合适的搜索模式**: 根据查询类型选择最优的检索策略
     4. **使用重排序**: 对于对质量要求高的场景，建议使用rerank_id
     """
+    doc_ids = request.doc_ids
+    kb_ids = request.kb_ids
+    question = request.question
+    if request.search_id:
+        search_config = SearchService.get_detail(db, request.get("search_id", "")).get("search_config", {})
+        meta_data_filter = search_config.get("meta_data_filter", {})
+        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        if meta_data_filter.get("method") == "auto":
+            chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
+            filters = gen_meta_filter(chat_mdl, metas, question)
+            doc_ids.extend(meta_filter(metas, filters))
+            if not doc_ids:
+                doc_ids = None
+        elif meta_data_filter.get("method") == "manual":
+            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"]))
+            if not doc_ids:
+                doc_ids = None
+
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
         for kid in request.kb_ids:
@@ -1440,7 +1462,6 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
         if not kb:
             return get_data_error_result(retmsg="Knowledgebase not found!")
 
-        question = request.question
         if request.cross_languages:
             from core.prompts import cross_languages
             question = cross_languages(db, kb.tenant_id, None, question, request.cross_languages)
@@ -1462,7 +1483,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
         # 当调用retrieval函数时，传递维度信息
         ranks = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
                                request.size, request.similarity_threshold, request.vector_similarity_weight,
-                               request.top_k, request.doc_ids, rerank_mdl=rerank_mdl, highlight=request.highlight,
+                               request.top_k, doc_ids, rerank_mdl=rerank_mdl, highlight=request.highlight,
                                rank_feature=labels, search_mode=search_mode_dict)
         if request.use_kg:
             ck = settings.kg_retrievaler.retrieval(question,
