@@ -8,6 +8,7 @@
 """
 import asyncio
 import logging
+import os
 import queue
 import json
 import random
@@ -687,7 +688,10 @@ def timeout(
 
             for a in range(attempts):
                 try:
-                    result = result_queue.get(timeout=seconds)
+                    if os.environ.get("ENABLE_TIMEOUT_ASSERTION"):
+                        result = result_queue.get(timeout=seconds)
+                    else:
+                        result = result_queue.get()
                     if isinstance(result, Exception):
                         raise result
                     return result
@@ -702,7 +706,10 @@ def timeout(
 
             for a in range(attempts):
                 try:
-                    with trio.fail_after(seconds):
+                    if os.environ.get("ENABLE_TIMEOUT_ASSERTION"):
+                        with trio.fail_after(seconds):
+                            return await func(*args, **kwargs)
+                    else:
                         return await func(*args, **kwargs)
                 except trio.TooSlowError:
                     if a < attempts - 1:
