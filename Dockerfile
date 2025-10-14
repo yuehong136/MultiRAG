@@ -20,6 +20,18 @@ RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/root 
 
 #禁用交互式模式
 ENV DEBIAN_FRONTEND=noninteractive
+
+# 配置 Locale 支持中文 (必须在安装其他软件包之前)
+RUN apt update && apt -y install locales && \
+    locale-gen zh_CN.UTF-8 && \
+    locale-gen en_US.UTF-8 && \
+    update-locale LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8
+
+# 设置环境变量: 系统级 UTF-8 编码
+ENV LANG=zh_CN.UTF-8 \
+    LC_ALL=zh_CN.UTF-8 \
+    LANGUAGE=zh_CN:zh:en_US:en
+
 # 设置apt镜像并安装依赖
 RUN apt update && apt -y install ca-certificates && \
     mv /etc/apt/sources.list /etc/apt/sources.list.bak && \
@@ -36,7 +48,7 @@ RUN apt update && apt -y install ca-certificates && \
     build-essential libglib2.0-0 libglx-mesa0 pkg-config libicu-dev libatk-bridge2.0-0 \
     libpython3-dev libjemalloc-dev nginx ghostscript \
     libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus  python3-pip pipx tcl-dev pkg-config \
-    ffmpeg && \
+    fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg && \
     # 安装uv
     pip3 config set global.index-url https://mirrors.aliyun.com/pypi/simple && \
     pip3 config set global.trusted-host mirrors.aliyun.com; \
@@ -140,7 +152,11 @@ USER root
 WORKDIR /multirag
 
 # 设置环境变量
-ENV HF_ENDPOINT=https://hf-mirror.com
+ENV HF_ENDPOINT=https://hf-mirror.com \
+    LANG=zh_CN.UTF-8 \
+    LC_ALL=zh_CN.UTF-8 \
+    LANGUAGE=zh_CN:zh:en_US:en \
+    PYTHONIOENCODING=utf-8
 ENV VIRTUAL_ENV=/multirag/.venv
 COPY --from=builder ${VIRTUAL_ENV} ${VIRTUAL_ENV}
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
