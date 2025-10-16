@@ -149,7 +149,38 @@ RANK_MEMORY = load_prompt("rank_memory")
 META_FILTER = load_prompt("meta_filter")
 ASK_SUMMARY = load_prompt("ask_summary")
 
+# Document Analysis Prompts
+CLUSTER_SUMMARY_PROMPT_TEMPLATE = load_prompt("cluster_summary_prompt")
+CLUSTER_KEYWORD_PROMPT_TEMPLATE = load_prompt("cluster_keyword_prompt")
+GLOBAL_TAG_PROMPT_TEMPLATE = load_prompt("global_tag_prompt")
+GLOBAL_SUMMARY_PROMPT_TEMPLATE = load_prompt("global_summary_prompt")
+
 PROMPT_JINJA_ENV = jinja2.Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
+
+
+# Document Analysis Prompt Rendering Functions
+def cluster_summary_prompt(cluster_content: str) -> str:
+    """渲染聚类摘要提示"""
+    template = PROMPT_JINJA_ENV.from_string(CLUSTER_SUMMARY_PROMPT_TEMPLATE)
+    return template.render(cluster_content=cluster_content)
+
+
+def cluster_keyword_prompt(cluster_content: str) -> str:
+    """渲染聚类关键词提取提示"""
+    template = PROMPT_JINJA_ENV.from_string(CLUSTER_KEYWORD_PROMPT_TEMPLATE)
+    return template.render(cluster_content=cluster_content)
+
+
+def global_tag_prompt(cluster_keywords: str) -> str:
+    """渲染全局标签提示"""
+    template = PROMPT_JINJA_ENV.from_string(GLOBAL_TAG_PROMPT_TEMPLATE)
+    return template.render(cluster_keywords=cluster_keywords)
+
+
+def global_summary_prompt(section_summaries: str) -> str:
+    """渲染全局摘要提示"""
+    template = PROMPT_JINJA_ENV.from_string(GLOBAL_SUMMARY_PROMPT_TEMPLATE)
+    return template.render(section_summaries=section_summaries)
 
 
 def citation_prompt() -> str:

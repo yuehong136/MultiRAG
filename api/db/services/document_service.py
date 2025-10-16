@@ -339,12 +339,12 @@ class DocumentService(CommonService):
         parser_config_override: dict | None = None,
         limit: int | None = None,
         override_parser_id: str | None = None,
-    ) -> list[str]:
+    ) -> list[dict | str]:
         """
-        仅执行文档切片，不进行向量化/入库，返回切片后的纯文本列表。
+        仅执行文档切片，不进行向量化/入库，返回切片列表（可能包含元数据）。
 
         - 根据文档的 parser_id 与 parser_config，调用对应 parser 的 chunk() 实现
-        - 统一转为文本列表返回：若 parser 返回 dict 列表，则提取 content_with_weight
+        - 返回格式：若 parser 返回 dict 列表（包含页码等元数据），则保留完整结构；否则返回字符串列表
         - 不修改数据库状态，不写入向量库
         """
         # 基础校验

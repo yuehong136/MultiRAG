@@ -32,6 +32,7 @@ from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, Pa
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
+from api.db.services.document_analysis_service import DocumentAnalysisService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -179,6 +180,25 @@ class WebParseRequest(BaseModel):
     )
     options: WebParseOptions | None = Field(default=None, description="解析选项")
     credentials: WebParseCredentials | None = Field(default=None, description="第三方凭据，如 API Key")
+
+
+class RaptorConfig(BaseModel):
+    """RAPTOR配置"""
+    max_cluster: int = Field(default=64, ge=1, le=128, description="最大聚类数")
+    max_token: int = Field(default=512, ge=128, le=2048, description="摘要最大token数")
+    threshold: float = Field(default=0.1, ge=0.0, le=1.0, description="聚类阈值")
+    random_seed: int = Field(default=42, description="随机种子")
+    prompt: str | None = Field(default=None, description="自定义prompt")
+
+
+class DocumentAnalysisRequest(BaseModel):
+    """文档分析请求"""
+    doc_id: str = Field(..., description="文档ID")
+    include_summary: bool = Field(default=True, description="是否生成摘要")
+    include_tags: bool = Field(default=True, description="是否生成标签")
+    summary_type: str = Field(default="short", description="摘要类型: short|long")
+    raptor_config: RaptorConfig | None = Field(default=None, description="RAPTOR配置")
+    use_cache: bool = Field(default=True, description="是否使用缓存")
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
@@ -3184,3 +3204,350 @@ async def preview_chunks(
         return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
     except Exception as e:
         return _error_response(settings.RetCode.SERVER_ERROR, str(e), HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.post("/analyze", summary="文档智能分析", response_description="成功分析文档")
+async def analyze_document(
+    doc_id: str | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+    kb_id: str | None = Form(default=None),
+    include_summary: bool = Form(default=True),
+    include_tags: bool = Form(default=True),
+    summary_type: str = Form(default="short"),
+    raptor_config: str | None = Form(default=None),  # JSON字符串
+    use_cache: bool = Form(default=True),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    ### POST `/analyze` 文档智能分析接口
+
+    **功能描述**:
+    对已解析的文档或上传的文件进行智能分析，生成语义标签、词频标签和文档摘要。
+
+    ---
+
+    ### 功能特性
+
+    1. **语义标签生成**: 使用LLM生成2-3个高质量语义标签
+    2. **词频标签提取**: 提取文档中Top 5高频关键词
+    3. **文档摘要生成**: 支持短摘要(150-200词)和长摘要(300-500词)
+    4. **智能聚合**:
+       - 短文档(≤10 chunks): 直接合并处理
+       - 长文档(>10 chunks): 使用RAPTOR分层聚类
+    5. **自适应数据源**:
+       - 已向量化文档: 从Milvus获取(性能优10-15倍)
+       - 未向量化文档: 重新解析文件
+       - 直传文件: 临时解析(不入库)
+
+    ---
+
+    ### 请求参数 (三种模式)
+
+    #### 模式1: doc_id (已上传的文档)
+
+    | 参数名 | 类型 | 必填 | 默认值 | 描述 |
+    |--------|------|------|--------|------|
+    | `doc_id` | string | 是 | - | 文档ID |
+    | `kb_id` | string | 是 | - | 知识库ID |
+    | `include_summary` | boolean | 否 | true | 是否生成摘要 |
+    | `include_tags` | boolean | 否 | true | 是否生成标签 |
+    | `summary_type` | string | 否 | "short" | 摘要类型: short/long |
+    | `raptor_config` | string(JSON) | 否 | null | RAPTOR配置(可选) |
+    | `use_cache` | boolean | 否 | true | 是否使用缓存 |
+
+    #### 模式2: file (直传文件,临时分析)
+
+    | 参数名 | 类型 | 必填 | 默认值 | 描述 |
+    |--------|------|------|--------|------|
+    | `file` | file | 是 | - | 上传的文件 |
+    | `include_summary` | boolean | 否 | true | 是否生成摘要 |
+    | `include_tags` | boolean | 否 | true | 是否生成标签 |
+    | `summary_type` | string | 否 | "short" | 摘要类型: short/long |
+    | `raptor_config` | string(JSON) | 否 | null | RAPTOR配置(可选) |
+    | `use_cache` | boolean | 否 | true | 是否使用缓存 |
+
+    #### RAPTOR配置参数 (JSON字符串)
+
+    ```json
+    {
+        "max_cluster": 64,
+        "max_token": 512,
+        "threshold": 0.1,
+        "random_seed": 42,
+        "prompt": "..."
+    }
+    ```
+
+    ---
+
+    ### 响应示例
+
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "doc_id": "abc123",
+            "doc_name": "深度学习入门.pdf",
+            "semantic_tags": ["深度学习", "神经网络", "计算机视觉"],
+            "frequency_tags": ["模型", "训练", "数据", "算法", "网络"],
+            "combined_tags": ["深度学习", "神经网络", "计算机视觉", "训练", "数据"],
+            "short_summary": "本文系统介绍了深度学习的基础概念...",
+            "metadata": {
+                "chunk_count": 156,
+                "use_raptor": true,
+                "cluster_summary_count": 8,
+                "processing_time_seconds": 12.5
+            }
+        }
+    }
+    ```
+
+    ---
+
+    ### 使用示例
+
+    #### 模式1: 分析已上传的文档
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/analyze" \
+        -H "Authorization: Bearer YOUR_TOKEN" \
+        -F "doc_id=abc123" \
+        -F "kb_id=kb_456" \
+        -F "include_summary=true" \
+        -F "include_tags=true"
+    ```
+
+    #### 模式2: 直传文件临时分析
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/analyze" \
+        -H "Authorization: Bearer YOUR_TOKEN" \
+        -F "file=@document.pdf" \
+        -F "include_summary=true" \
+        -F "include_tags=true"
+    ```
+
+    #### 自定义RAPTOR参数
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/analyze" \
+        -H "Authorization: Bearer YOUR_TOKEN" \
+        -F "doc_id=abc123" \
+        -F "kb_id=kb_456" \
+        -F 'raptor_config={"max_cluster":32,"max_token":400}'
+    ```
+    """
+    try:
+        # 参数验证
+        if not doc_id and not file:
+            raise HTTPException(
+                status_code=400,
+                detail="Must provide either doc_id or file"
+            )
+
+        if doc_id and file:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot provide both doc_id and file"
+            )
+
+        if doc_id and not kb_id:
+            raise HTTPException(
+                status_code=400,
+                detail="kb_id is required when using doc_id"
+            )
+
+        # doc_id模式: 验证文档状态
+        if doc_id:
+            doc = DocumentService.get_by_id(db, doc_id)
+            if not doc:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            if doc.status != "1":
+                raise HTTPException(status_code=400, detail="Document not ready")
+
+        # 解析RAPTOR配置
+        raptor_config_dict = None
+        if raptor_config:
+            try:
+                raptor_config_dict = json.loads(raptor_config)
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Invalid raptor_config JSON")
+
+        # 调用分析服务
+        analysis_service = DocumentAnalysisService(db, user.id)
+        result = await analysis_service.analyze_document(
+            doc_id=doc_id,
+            file=file,
+            kb_id=kb_id,
+            include_summary=include_summary,
+            include_tags=include_tags,
+            summary_type=summary_type,
+            raptor_config=raptor_config_dict,
+            use_cache=use_cache
+        )
+
+        return construct_json_result(data=result, code=200)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Document analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{doc_id}/tags", summary="获取文档标签", response_description="成功获取文档标签")
+async def get_document_tags(
+    doc_id: str,
+    kb_id: str = Query(..., description="知识库ID"),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    ### GET `/{doc_id}/tags` 快速获取文档标签
+
+    **功能描述**:
+    快速获取文档的语义标签和词频标签，不生成摘要。
+
+    ---
+
+    ### 路径参数
+
+    | 参数名 | 类型 | 必填 | 描述 |
+    |--------|------|------|------|
+    | `doc_id` | string | 是 | 文档ID |
+
+    ### 查询参数
+
+    | 参数名 | 类型 | 必填 | 描述 |
+    |--------|------|------|------|
+    | `kb_id` | string | 是 | 知识库ID |
+
+    ---
+
+    ### 响应示例
+
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "doc_id": "abc123",
+            "semantic_tags": ["深度学习", "神经网络"],
+            "frequency_tags": ["模型", "训练", "数据", "算法", "网络"],
+            "combined_tags": ["深度学习", "神经网络", "训练", "数据", "算法"]
+        }
+    }
+    ```
+
+    ---
+
+    ### 使用示例
+
+    ```bash
+    curl -X GET "http://api.example.com/v1/document/abc123/tags?kb_id=kb_456" \
+        -H "Authorization: Bearer YOUR_TOKEN"
+    ```
+    """
+    try:
+        analysis_service = DocumentAnalysisService(db, user.id)
+        result = await analysis_service.analyze_document(
+            doc_id=doc_id,
+            kb_id=kb_id,
+            include_summary=False,
+            include_tags=True
+        )
+
+        return construct_json_result(
+            data={
+                "doc_id": doc_id,
+                "semantic_tags": result.get("semantic_tags"),
+                "frequency_tags": result.get("frequency_tags"),
+                "combined_tags": result.get("combined_tags")
+            }
+        )
+
+    except Exception as e:
+        logging.exception(f"Get document tags failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{doc_id}/summary", summary="获取文档摘要", response_description="成功获取文档摘要")
+async def get_document_summary(
+    doc_id: str,
+    kb_id: str = Query(..., description="知识库ID"),
+    summary_type: str = Query(default="short", pattern="^(short|long)$"),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    ### GET `/{doc_id}/summary` 快速获取文档摘要
+
+    **功能描述**:
+    快速获取文档摘要，不生成标签。
+
+    ---
+
+    ### 路径参数
+
+    | 参数名 | 类型 | 必填 | 描述 |
+    |--------|------|------|------|
+    | `doc_id` | string | 是 | 文档ID |
+
+    ### 查询参数
+
+    | 参数名 | 类型 | 必填 | 默认值 | 描述 |
+    |--------|------|------|--------|------|
+    | `kb_id` | string | 是 | - | 知识库ID |
+    | `summary_type` | string | 否 | "short" | 摘要类型: short/long |
+
+    ---
+
+    ### 响应示例
+
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "doc_id": "abc123",
+            "summary": "本文系统介绍了深度学习的基础概念..."
+        }
+    }
+    ```
+
+    ---
+
+    ### 使用示例
+
+    #### 获取短摘要
+    ```bash
+    curl -X GET "http://api.example.com/v1/document/abc123/summary?kb_id=kb_456" \
+        -H "Authorization: Bearer YOUR_TOKEN"
+    ```
+
+    #### 获取长摘要
+    ```bash
+    curl -X GET "http://api.example.com/v1/document/abc123/summary?kb_id=kb_456&summary_type=long" \
+        -H "Authorization: Bearer YOUR_TOKEN"
+    ```
+    """
+    try:
+        analysis_service = DocumentAnalysisService(db, user.id)
+        result = await analysis_service.analyze_document(
+            doc_id=doc_id,
+            kb_id=kb_id,
+            include_summary=True,
+            include_tags=False,
+            summary_type=summary_type
+        )
+
+        return construct_json_result(
+            data={
+                "doc_id": doc_id,
+                "summary": result.get("short_summary") if summary_type == "short" else result.get("long_summary")
+            }
+        )
+
+    except Exception as e:
+        logging.exception(f"Get document summary failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

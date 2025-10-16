@@ -378,9 +378,13 @@ class LLMBundle(LLM4Tenant):
             generation = self.langfuse.start_generation(trace_context=self.trace_context, name="encode", model=self.llm_name, input={"texts": texts})
 
         embeddings, used_tokens = self.mdl.encode(texts)
-        llm_name = getattr(self, "llm_name", None)
-        if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, llm_name):
-            logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
+        
+        # ⚠️ 线程安全：只在有 db session 时记录 usage
+        # 在 trio 等多线程环境中，db 可能为 None 以避免跨线程 session 冲突
+        if self.db is not None:
+            llm_name = getattr(self, "llm_name", None)
+            if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, llm_name):
+                logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
 
         if self.langfuse:
             generation.update(usage_details={"total_tokens": used_tokens})
@@ -523,8 +527,10 @@ class LLMBundle(LLM4Tenant):
         if not self.verbose_tool_use:
             txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
 
-        if isinstance(used_tokens, int) and not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
-            logging.error("LLMBundle.chat can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, used_tokens))
+        # ⚠️ 线程安全：只在有 db session 时记录 usage
+        if self.db is not None and isinstance(used_tokens, int):
+            if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+                logging.error("LLMBundle.chat can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, used_tokens))
 
         if self.langfuse:
             generation.update(output={"output": txt}, usage_details={"total_tokens": used_tokens})
