@@ -1836,15 +1836,12 @@ class LLMScoringServiceV2:
 
     def __init__(self):
         # V2强化版提示模板 - 采用双星号包裹的**总得分**格式，全局唯一，便于精确提取
-        self.prompt_template_v2 = """你是一个专业的教师考核评分助手。请根据提供的评分规则和数据，计算出准确的评分结果。
+        self.prompt_template_v2 = """# ！最高优先级注意事项：优先输出详细分析过程，最后根据分析过程按评分结果格式输出评分结果
+
+你是一个专业的教师考核评分助手。请根据提供的评分规则和数据，计算出准确的评分结果。
 
 评分规则：
 {rule_description}
-
-数据说明：
-提供的数据包含多个表的信息，每个表都有以下结构：
-- table: 表的元数据信息（表名、描述、字段结构）
-- data_details: 表中的具体数据记录
 
 数据内容：
 {data_json}
@@ -1853,18 +1850,13 @@ class LLMScoringServiceV2:
 {context_info}
 
 数据分析指导：
-1. 请仔细分析每个表的结构和用途（table_desc字段）
-2. 理解字段含义（column_desc字段）
-3. 根据具体数据记录（data_details）和评分规则进行计算
+1. 请仔细分析每个表的结构和用途
+2. 理解字段含义
+3. 根据具体数据记录和评分规则进行计算
 4. 如果数据不足以支持精确计算，请明确说明并给出合理推断
 
 
 请严格按照以下格式输出评分结果（格式非常重要，请勿更改）：
-
-=== 最终评分结果 ===
-**总得分**：[数字]分
-评分状态：[完成/部分完成/数据不足/无法评分]
-数据完整性：[完整/部分/不足]
 
 === 详细评分分析 ===
 1. 规则匹配：
@@ -1875,7 +1867,7 @@ class LLMScoringServiceV2:
 2. 分数计算：
    - 基础计算值：[数字]分 [计算过程]
    - 调整因子：[如有调整，说明原因]
-   - 最终结果：见"最终评分结果"部分的"**总得分**"
+   - **总得分**：[数字]分 [这是最终的总得分，必须在此处明确标注]
 
 === 数据汇总统计 ===
 - 涉及表数量：[数字]个
@@ -1885,6 +1877,11 @@ class LLMScoringServiceV2:
 
 === 改进建议 ===
 [基于评分结果和数据完整性给出的改进建议，如需要补充哪些数据等]
+
+=== 最终评分结果 ===
+**总得分**：[从"详细评分分析"中提取最后一次出现的"**总得分**"的数字]分
+评分状态：[完成/部分完成/数据不足/无法评分]
+数据完整性：[完整/部分/不足]
 
 严格要求：
 1. "**总得分**"后面必须紧跟具体的数字，这是唯一的最终答案
@@ -1899,7 +1896,7 @@ class LLMScoringServiceV2:
             db: Session,
             user_input: str,
             rule_description: str,
-            data: list[dict[str, Any]],
+            data: list[dict[str, Any]] | str,
             context: dict[str, Any] | None = None,
             tenant_id: str = "",
             llm_name: str | None = None,
@@ -1914,7 +1911,11 @@ class LLMScoringServiceV2:
                 return self._create_empty_data_response()
 
             # 准备数据
-            data_json = json.dumps(data, ensure_ascii=False, indent=2)
+            # 如果data已经是字符串，直接使用；否则序列化为JSON
+            if isinstance(data, str):
+                data_json = data
+            else:
+                data_json = json.dumps(data, ensure_ascii=False, indent=2)
             context_info = json.dumps(context or {}, ensure_ascii=False, indent=2)
 
             # 构建V2强化版提示词
@@ -1951,7 +1952,7 @@ class LLMScoringServiceV2:
     def _parse_score_response_v2(
             self, 
             response: str, 
-            original_data: list[dict[str, Any]],
+            original_data: list[dict[str, Any]] | str,
             enable_multi_extraction: bool = True,
             score_validation: bool = True,
             expected_score_range: tuple[float, float] | None = None,
@@ -2363,7 +2364,7 @@ class LLMScoringServiceV2:
             self, 
             score: float | None, 
             expected_range: tuple[float, float] | None,
-            original_data: list[dict[str, Any]],
+            original_data: list[dict[str, Any]] | str,
             response: str
     ) -> dict[str, Any]:
         """验证分数的合理性 - 增强版，检测中间步骤分数"""
@@ -2434,10 +2435,19 @@ class LLMScoringServiceV2:
 
         return sections
 
-    def _generate_data_summary_v2(self, data: list[dict[str, Any]]) -> dict[str, Any]:
+    def _generate_data_summary_v2(self, data: list[dict[str, Any]] | str) -> dict[str, Any]:
         """V2版本的数据汇总，增加更多统计信息，专门处理表结构数据"""
         if not data:
             return {"total_records": 0, "version": "v2"}
+
+        # 如果data是字符串，返回字符串长度汇总
+        if isinstance(data, str):
+            return {
+                "total_records": 1,
+                "data_type": "string",
+                "string_length": len(data),
+                "version": "v2"
+            }
 
         summary = {
             "total_records": len(data),
@@ -2615,14 +2625,16 @@ class LLMScoringServiceV2:
             "raw_response": ""
         }
 
-    def _create_error_response_v2(self, data: list[dict[str, Any]], error_msg: str) -> dict[str, Any]:
+    def _create_error_response_v2(self, data: list[dict[str, Any]] | str, error_msg: str) -> dict[str, Any]:
         """创建V2错误响应"""
+        # 计算记录数，如果是字符串则为1，否则为列表长度
+        total_records = 1 if isinstance(data, str) else len(data)
         return {
             "score": None,
             "score_text": f"评分计算失败：{error_msg}",
             "analysis": "系统在处理评分请求时发生错误",
             "suggestions": "请检查输入数据和规则描述，稍后重试",
-            "data_summary": {"total_records": len(data), "error": error_msg, "version": "v2"},
+            "data_summary": {"total_records": total_records, "error": error_msg, "version": "v2"},
             "extraction_details": {
                 "all_extracted_scores": [],
                 "extraction_methods_used": [],
@@ -2635,14 +2647,16 @@ class LLMScoringServiceV2:
             "raw_response": ""
         }
 
-    def _create_parse_error_response_v2(self, response: str, data: list[dict[str, Any]], error_msg: str) -> dict[str, Any]:
+    def _create_parse_error_response_v2(self, response: str, data: list[dict[str, Any]] | str, error_msg: str) -> dict[str, Any]:
         """创建V2解析错误响应"""
+        # 计算记录数，如果是字符串则为1，否则为列表长度
+        total_records = 1 if isinstance(data, str) else len(data)
         return {
             "score": None,
             "score_text": response,  # 返回原始响应
             "analysis": f"响应解析失败：{error_msg}",
             "suggestions": "请查看原始响应内容",
-            "data_summary": {"total_records": len(data), "parse_error": error_msg, "version": "v2"},
+            "data_summary": {"total_records": total_records, "parse_error": error_msg, "version": "v2"},
             "extraction_details": {
                 "all_extracted_scores": [],
                 "extraction_methods_used": [],
