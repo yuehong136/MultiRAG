@@ -258,24 +258,6 @@ class UserCanvasService(SACommonService):
         return True
 
 
-def structure_answer(conv, ans, message_id, session_id):
-    if not conv:
-        return ans
-    content = ""
-    if ans["event"] == "message":
-        if ans["data"].get("start_to_think") is True:
-            content = "<think>"
-        elif ans["data"].get("end_to_think") is True:
-            content = "</think>"
-        else:
-            content = ans["data"]["content"]
-
-    reference = ans["data"].get("reference")
-    result = {"id": message_id, "session_id": session_id, "answer": content}
-    if reference:
-        result["reference"] = [reference]
-    return result
-
 # ---------------------------
 # 推理流程（SSE / OpenAI 兼容）
 # ---------------------------
@@ -336,17 +318,16 @@ def completion(
     # 流式运行
     txt = ""
     for ans in canvas.run(query=query, files=files, user_id=user_id, inputs=inputs):
-        ans = structure_answer(conv, ans, message_id, session_id)
-        txt += ans["answer"]
-        if ans.get("answer") or ans.get("reference"):
-            yield "data:" + json.dumps({"code": 0, "data": ans},
-                                       ensure_ascii=False) + "\n\n"
+        ans["session_id"] = session_id
+        if ans["event"] == "message":
+            txt += ans["data"]["content"]
+        yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
 
     # 结束：写入 assistant 消息、引用、错误，并更新持久层
     conv.message.append(
         {"role": "assistant", "content": txt, "created_at": time.time(), "id": message_id}
     )
-    conv.reference.append(canvas.get_reference())
+    conv.reference = canvas.get_reference()
     conv.errors = canvas.error
     conv.dsl = str(canvas)
 
@@ -600,10 +581,10 @@ def completion_openai_adapter(
                         continue
 
                 # 检查是否有答案内容
-                if not ans.get("data", {}).get("answer"):
+                if ans.get("event") != "message" or not ans.get("data", {}).get("reference", None):
                     continue
 
-                content_piece = ans["data"]["answer"]
+                content_piece = ans["data"]["content"]
                 completion_tokens += len(enc.encode(content_piece))
 
                 yield "data: " + json.dumps(
@@ -656,10 +637,10 @@ def completion_openai_adapter(
                         logging.exception(f"Canvas OpenAI adapter parse answer failed: {e}")
                         continue
 
-                if not ans.get("data", {}).get("answer"):
+                if ans.get("event") != "message" or not ans.get("data", {}).get("reference", None):
                     continue
 
-                all_content += ans["data"]["answer"]
+                all_content += ans["data"]["content"]
 
             completion_tokens = len(enc.encode(all_content))
 

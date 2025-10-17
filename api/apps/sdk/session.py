@@ -559,25 +559,43 @@ def agent_completions(
     req = request.model_dump()
 
     if req.get("stream", True):
-        resp = StreamingResponse(agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req), media_type="text/event-stream")
+        def generate():
+            ans = {}
+            for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
+                if isinstance(answer, str):
+                    try:
+                        ans = json.loads(answer[5:])  # remove "data:"
+                    except Exception:
+                        continue
+
+                if ans.get("event") != "message" or not ans.get("data", {}).get("reference", None):
+                    continue
+
+                yield answer
+
+            yield "data:[DONE]\n\n"
+
+        resp = StreamingResponse(generate(), media_type="text/event-stream")
         resp.headers["Cache-control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
         resp.headers["X-Accel-Buffering"] = "no"
         resp.headers["Content-Type"] = "text/event-stream; charset=utf-8"
         return resp
 
-    result = {}
+    full_content = ""
     for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
         try:
             ans = json.loads(answer[5:])  # remove "data:"
-            if not result:
-                result = ans.copy()
-            else:
-                result["data"]["content"] += ans["data"]["content"]
-                result["data"]["reference"] = ans["data"].get("reference", [])
+
+            if ans["event"] == "message":
+                full_content += ans["data"]["content"]
+
+            if ans.get("data", {}).get("reference", None):
+                ans["data"]["content"] = full_content
+                return get_result(data=ans)
         except Exception as e:
-            return get_error_data_result(str(e))
-    return result
+            return get_result(data=f"**ERROR**: {str(e)}")
+    return get_result(data=ans)
 
 
 @router.get("/chats/{chat_id}/sessions", summary="获取聊天会话列表")
