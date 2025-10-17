@@ -12,6 +12,7 @@ from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
 from api.service.askdata_service.event.event_handlers import create_sse_response
 from api.service.askdata_service.util.sql_retry_handler import SQLRetryHandler
+from api.service.askdata_service.stop_request_manager import stop_request_manager
 from api.service.nl2sql_service.query_data_from_zt_by_sql import query_data_with_params
 
 router = APIRouter()
@@ -57,6 +58,7 @@ async def get_sql_and_table_config(
             llm_name=body.llm_name,
             semantic_layer=body.semantic_layer.get('processed_semantic_layer', {}),
             recommended_chart=body.semantic_layer.get('recommended_chart'),
+            ask_id=body.ask_id
         )
 
         if not sql_generation_result:
@@ -95,6 +97,22 @@ async def get_sql_and_table_config(
                 used_models=used_models,
                 dataset_id_list=body.dataset_id_list
             )
+
+        # 检查是否在构建模型详情后被停止（如果未被停止异常捕获）
+        if body.ask_id:
+            try:
+                service._check_if_stopped(body.ask_id)
+            except Exception as e:
+                if "已被用户停止" in str(e):
+                    return ResponseSchema(
+                        # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
+                        status=StatusEnum.SUCCESS,
+                        message=f"SQL生成失败: {str(e)}",
+                        data={
+                            "status": StatusEnum.ERROR,
+                            "message": str(e),
+                        }
+                    )
 
         # 确定数据集ID
         if not intersection_dataset_ids:
@@ -206,6 +224,22 @@ async def get_sql_and_table_config(
                 "page_count": (data_count + page_size - 1) // page_size
             }
 
+        # 检查是否在SQL执行完成后被停止
+        if body.ask_id:
+            try:
+                service._check_if_stopped(body.ask_id)
+            except Exception as e:
+                if "已被用户停止" in str(e):
+                    return ResponseSchema(
+                        # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
+                        status=StatusEnum.SUCCESS,
+                        message=f"SQL生成失败: {str(e)}",
+                        data={
+                            "status": StatusEnum.ERROR,
+                            "message": str(e),
+                        }
+                    )
+
         # 2. 生成表格配置
         model_table_alias_mapping_list, table_config = await service.generate_table_config(
             used_table_detail_dict=used_table_detail_dict,
@@ -241,8 +275,13 @@ async def get_sql_and_table_config(
     except Exception as e:
         logger.exception("get-sql-and-table-config 发生异常")
         return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"处理请求失败：{str(e)}"
+            # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
+            status=StatusEnum.SUCCESS,
+            message=f"SQL生成失败: {str(e)}",
+            data={
+                "status": StatusEnum.ERROR,
+                "message": str(e),
+            }
         )
 
 
@@ -300,7 +339,8 @@ async def analyze_user_query_background_task(
             llm_name=request.llm_name,
             tenant_id=user.id,
             recommended_chart=request.semantic_layer["recommended_chart"],
-            recommendation_reason=request.semantic_layer["recommendation_reason"]
+            recommendation_reason=request.semantic_layer["recommendation_reason"],
+            ask_id=request.ask_id
         )
 
     except Exception as e:
@@ -435,7 +475,8 @@ async def get_semantic_layer_streaming(
             userid=body.userid,
             event_id=custom_event_id,
             enable_deep_search=body.enable_deep_search,
-            llm_name=body.llm_name)
+            llm_name=body.llm_name,
+            ask_id=body.ask_id)
 
         logger.info(f"processed_semantic_layer:{processed_semantic_layer}")
         logger.info(f"model_ids:{model_ids}")
@@ -819,4 +860,53 @@ async def generate_wide_table_sql(
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"处理请求失败：{str(e)}"
+        )
+
+
+@router.post("/stop-request/{ask_id}", response_model=ResponseSchema, summary="停止请求处理")
+async def stop_request(ask_id: str) -> ResponseSchema:
+    """
+    停止指定ask_id的请求处理
+
+    Args:
+        ask_id: 要停止的请求ID
+
+    Returns:
+        ResponseSchema: 停止操作的结果
+    """
+    logger.info(f"收到停止请求，ask_id: {ask_id}")
+
+    if not ask_id or not ask_id.strip():
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message="ask_id不能为空"
+        )
+
+    try:
+        # 调用停止请求管理器停止请求
+        success = stop_request_manager.stop_request(ask_id.strip())
+
+        if success:
+            logger.info(f"请求 {ask_id} 已成功标记为停止")
+            return ResponseSchema(
+                status=StatusEnum.SUCCESS,
+                message=f"请求 {ask_id} 已停止",
+                data={
+                    "ask_id": ask_id,
+                    "stopped": True,
+                    "timestamp": None  # 可以添加时间戳如果需要
+                }
+            )
+        else:
+            logger.warning(f"停止请求 {ask_id} 失败")
+            return ResponseSchema(
+                status=StatusEnum.ERROR,
+                message=f"停止请求 {ask_id} 失败"
+            )
+
+    except Exception as e:
+        logger.exception(f"停止请求 {ask_id} 时发生异常")
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"停止请求失败：{str(e)}"
         )

@@ -35,6 +35,7 @@ from api.service.askdata_service.util.semantic_permissions_filter import filter_
     filter_metrics_by_permissions
 from api.service.askdata_service.util.timer import time_task
 from api.service.askdata_service.util.wide_table_sql_generator import WideTableSQLGenerator
+from api.service.askdata_service.stop_request_manager import stop_request_manager
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
@@ -59,6 +60,50 @@ class AskdataService:
         self.model_dataset_resolver = ModelDatasetResolver(self.semantic_api_client)
         self.sql_components_extractor = SQLComponentsExtractor(db, user.id, self.prompt_dir)
         self.sql_pagination_converter = SQLPaginationConverter(db, user.id, self.prompt_dir)
+
+    def _check_if_stopped(self, ask_id: str) -> bool:
+        """
+        检查指定ask_id的请求是否已被停止
+
+        Args:
+            ask_id: 要检查的请求ID
+
+        Returns:
+            bool: 如果请求已被停止返回True，否则返回False
+
+        Raises:
+            Exception: 如果检测到请求已被停止
+        """
+        if not ask_id:
+            return False
+
+        try:
+            is_stopped = stop_request_manager.is_stopped(ask_id)
+            if is_stopped:
+                logger.info(f"检测到请求 {ask_id} 已被停止")
+                raise Exception(f"请求已被用户停止")
+            return False
+        except Exception as e:
+            if "已被用户停止" in str(e):
+                raise e
+            else:
+                logger.warning(f"检查停止状态时发生错误: {str(e)}")
+                return False
+
+    async def _async_check_if_stopped(self, ask_id: str) -> bool:
+        """
+        异步版本的停止检查方法
+
+        Args:
+            ask_id: 要检查的请求ID
+
+        Returns:
+            bool: 如果请求已被停止返回True，否则返回False
+
+        Raises:
+            Exception: 如果检测到请求已被停止
+        """
+        return self._check_if_stopped(ask_id)
 
     async def rewrite_conversation_question(
             self,
@@ -134,7 +179,17 @@ class AskdataService:
 
     async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
                                       userid: str, llm_name: str = None,
-                                      event_id: Optional[str] = None, enable_deep_search: bool = False):
+                                      event_id: Optional[str] = None, enable_deep_search: bool = False, ask_id: str = None):
+        """
+        生成语义层信息
+
+        Args:
+            ask_id: 请求ID，用于停止检查
+        """
+        # 在开始处理前检查是否被停止
+        if ask_id:
+            await self._async_check_if_stopped(ask_id)
+
         await send_event(event_id, {"current_step": 0, "total_steps": 13}, "progress_total")
 
         # 1. 第一批并行任务：获取dataset_details和用户权限（完全独立，可以同时开始）
@@ -152,6 +207,10 @@ class AskdataService:
             dataset_details_task,
             user_permissions_task
         )
+
+        # 检查是否在获取基础数据后被停止
+        if ask_id:
+            await self._async_check_if_stopped(ask_id)
 
         # 2. 第二批并行任务：定义三个主要的并行任务（依赖dataset_details）
 
@@ -271,6 +330,10 @@ class AskdataService:
             chart_recommendation_task()
         )
 
+        # 检查是否在并行任务完成后被停止
+        if ask_id:
+            await self._async_check_if_stopped(ask_id)
+
         # 4. 合并LLM提取和关键字检索的结果
         # 合并维度ID（去重）
         all_dimension_ids = list(set(keyword_dim_ids + llm_dim_ids))
@@ -343,6 +406,10 @@ class AskdataService:
             model_relations_task,
             business_term_task
         )
+
+        # 检查是否在获取模型详情后被停止
+        if ask_id:
+            await self._async_check_if_stopped(ask_id)
 
         # 将维度和指标简化后进行合并，为交给LLM进一步排除冗余语义做准备
         merged_dimensions_and_metrics = merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics)
@@ -428,9 +495,14 @@ class AskdataService:
     async def analyze_user_query_stream(
             self, event_id: str, user_query: str, rewritten_question: Optional[str], round_id: Optional[str],
             semantic_layer: Dict[str, Any],
-            llm_name: Optional[str], tenant_id: str, recommended_chart: str, recommendation_reason: str
+            llm_name: Optional[str], tenant_id: str, recommended_chart: str, recommendation_reason: str,
+            ask_id: Optional[str] = None
     ):
         """分析用户问题并流式返回结果。"""
+        # 在开始流式分析前检查是否被停止
+        if ask_id:
+            await self._async_check_if_stopped(ask_id)
+
         round_chat_list: List[Dict[str, Any]] = []
         if round_id:
             chat_history = await self.get_ask_data_history_by_round(round_id)
@@ -460,16 +532,28 @@ class AskdataService:
         history = [{"role": "user", "content": prompt}]
         gen_conf = {"temperature": 0.7, "max_tokens": 2048}
 
+        # 在开始LLM流式处理前最后检查一次是否被停止
+        if ask_id:
+            await self._async_check_if_stopped(ask_id)
+
         await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
                                             llm_name=llm_name)
 
     async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any],
-                                 recommended_chart: str) -> Optional[
+                                 recommended_chart: str, ask_id: str = None) -> Optional[
         Dict[str, Any]]:
         """
         从自然语言生成初始SQL，返回包含组件的完整字典。
+
+        Args:
+            ask_id: 请求ID，用于停止检查
         """
         logger.info(f"开始为查询 '{user_query}' 生成初始SQL。")
+
+        # 检查请求是否已被停止
+        if ask_id:
+            await self._async_check_if_stopped(ask_id)
+
         # 调用更新后的方法
         result = await self.nlq_to_initial_sql_generator.generate_sql_query_with_components(
             user_query, semantic_layer, llm_name, recommended_chart
@@ -486,10 +570,17 @@ class AskdataService:
         return result
 
     async def fix_sql_query_with_components(self, user_query: str, original_sql: str, error_message: str,
-                                            semantic_layer: Dict[str, Any], llm_name: str) -> Optional[Dict[str, Any]]:
+                                            semantic_layer: Dict[str, Any], llm_name: str, ask_id: str = None) -> Optional[Dict[str, Any]]:
         """
         修复执行失败的SQL查询
+
+        Args:
+            ask_id: 请求ID，用于停止检查
         """
+        # 检查请求是否已被停止
+        if ask_id:
+            await self._async_check_if_stopped(ask_id)
+
         result = await self.nlq_to_initial_sql_generator.fix_sql_query_with_components(
             user_query, original_sql, error_message, semantic_layer, llm_name
         )
@@ -530,8 +621,12 @@ class AskdataService:
     async def add_ask_data_history(self, conversation_id: str, ask_id: str, user_id: str, data: str,
                                    round_id: str = None,
                                    user_origin_question: str = None, rewritten_question: Optional[str] = None,
-                                   processed_semantic_layer: str = None):
+                                   processed_semantic_layer: str = None, request_ask_id: Optional[str] = None):
         """添加一条问数历史记录。"""
+        # 在保存历史记录前检查是否被停止
+        if request_ask_id:
+            await self._async_check_if_stopped(request_ask_id)
+
         return self.history_service.add_history(self.db, conversation_id, ask_id, data, user_id, round_id,
                                                 user_origin_question, rewritten_question, processed_semantic_layer)
 
