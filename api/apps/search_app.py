@@ -555,8 +555,9 @@ def list_search_app(
     try:
         if not owner_ids:
             # 获取用户加入的租户
-            tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
-            tenants = [m["tenant_id"] for m in tenants]
+            # tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
+            # tenants = [m["tenant_id"] for m in tenants]
+            tenants = []
             search_apps, total = SearchService.get_by_tenant_ids(
                 db, tenants, user.id, page, page_size, orderby, desc, keywords
             )
