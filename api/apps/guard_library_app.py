@@ -701,6 +701,91 @@ def delete_library_items(
         return server_error_response(e)
 
 
+@router.put('/items/status', summary="批量更新词库项状态")
+def update_items_status(
+    request: UpdateItemsStatusRequest,
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+) -> dict[str, Any]:
+    """
+    ### PUT `/items/status` 批量更新词库项状态
+    
+    **功能描述**:
+    此接口用于批量更新词库项的启用/禁用状态。
+    支持单个或多个词库项状态更新，使用数组形式传入ID列表。
+    状态值："1"表示启用，"0"表示禁用。
+    
+    ---
+    ### 请求体 (Request Body)
+    | 字段       | 类型         | 必填 | 描述                          |
+    |------------|-------------|------|-------------------------------|
+    | `item_ids` | `list[string]` | 是   | 词库项ID列表                  |
+    | `status`   | `string`    | 是   | 状态值: "1"-启用, "0"-禁用     |
+    
+    **启用示例**:
+    ```json
+    {
+        "item_ids": [
+            "uuid-item-id-1",
+            "uuid-item-id-2"
+        ],
+        "status": "1"
+    }
+    ```
+    
+    **禁用示例**:
+    ```json
+    {
+        "item_ids": ["uuid-item-id-1"],
+        "status": "0"
+    }
+    ```
+    
+    ---
+    ### 响应 (Response)
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "success_count": 2,
+            "failed_count": 0,
+            "total": 2
+        }
+    }
+    ```
+    
+    #### 部分失败响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "success_count": 1,
+            "failed_count": 1,
+            "total": 2
+        }
+    }
+    ```
+    """
+    try:
+        if not request.item_ids:
+            return get_data_error_result(retmsg="词库项ID列表不能为空")
+        
+        if request.status not in ["0", "1"]:
+            return get_data_error_result(retmsg="状态值必须是 '0' 或 '1'")
+        
+        result = GuardLibraryItemService.update_items_status(
+            db, request.item_ids, request.status, user.id
+        )
+        
+        return get_json_result(data=result)
+            
+    except Exception as e:
+        return server_error_response(e)
+
+
 @router.put('/items/{item_id}', summary="根据ID更新词库项")
 def update_library_item_by_id(
     item_id: str,
@@ -785,91 +870,6 @@ def update_library_item_by_id(
             return get_json_result(data=True)
         else:
             return get_data_error_result(retmsg="更新词库项失败")
-            
-    except Exception as e:
-        return server_error_response(e)
-
-
-@router.put('/items/status', summary="批量更新词库项状态")
-def update_items_status(
-    request: UpdateItemsStatusRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
-    """
-    ### PUT `/items/status` 批量更新词库项状态
-    
-    **功能描述**:
-    此接口用于批量更新词库项的启用/禁用状态。
-    支持单个或多个词库项状态更新，使用数组形式传入ID列表。
-    状态值："1"表示启用，"0"表示禁用。
-    
-    ---
-    ### 请求体 (Request Body)
-    | 字段       | 类型         | 必填 | 描述                          |
-    |------------|-------------|------|-------------------------------|
-    | `item_ids` | `list[string]` | 是   | 词库项ID列表                  |
-    | `status`   | `string`    | 是   | 状态值: "1"-启用, "0"-禁用     |
-    
-    **启用示例**:
-    ```json
-    {
-        "item_ids": [
-            "uuid-item-id-1",
-            "uuid-item-id-2"
-        ],
-        "status": "1"
-    }
-    ```
-    
-    **禁用示例**:
-    ```json
-    {
-        "item_ids": ["uuid-item-id-1"],
-        "status": "0"
-    }
-    ```
-    
-    ---
-    ### 响应 (Response)
-    #### 成功响应 (200)
-    ```json
-    {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": {
-            "success_count": 2,
-            "failed_count": 0,
-            "total": 2
-        }
-    }
-    ```
-    
-    #### 部分失败响应 (200)
-    ```json
-    {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": {
-            "success_count": 1,
-            "failed_count": 1,
-            "total": 2
-        }
-    }
-    ```
-    """
-    try:
-        if not request.item_ids:
-            return get_data_error_result(retmsg="词库项ID列表不能为空")
-        
-        if request.status not in ["0", "1"]:
-            return get_data_error_result(retmsg="状态值必须是 '0' 或 '1'")
-        
-        result = GuardLibraryItemService.update_items_status(
-            db, request.item_ids, request.status, user.id
-        )
-        
-        return get_json_result(data=result)
             
     except Exception as e:
         return server_error_response(e)
