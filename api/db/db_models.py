@@ -771,8 +771,8 @@ class CanvasTemplate(BaseModel):
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
-    title = Column(String(255), index=False, nullable=True, doc="Canvas title")
-    description = Column(Text, index=False, nullable=True, doc="Canvas description")
+    title = Column(JSONB, index=False, nullable=True, default=dict, doc="Canvas title")
+    description = Column(JSONB, index=False, nullable=True, default=dict, doc="Canvas description")
     canvas_type = Column(String(32), index=True, nullable=True, doc="Canvas type")
     dsl = Column(JSONB, index=False, nullable=True, default={})
 
