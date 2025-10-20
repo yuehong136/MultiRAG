@@ -14,7 +14,7 @@ from api import settings
 from api.db import LLMType, StatusEnum
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import API4ConversationService
-from api.db.services.canvas_service import UserCanvasService#, completionOpenAI
+from api.db.services.canvas_service import UserCanvasService, completionOpenAI  # , completionOpenAI
 from api.db.services.canvas_service import completion as agent_completion
 from api.db.services.conversation_service import ConversationService, iframe_completion
 from api.db.services.conversation_service import completion as rag_completion
@@ -520,6 +520,7 @@ def agents_completion_openai_compatibility(
     if stream:
         resp = StreamingResponse(
             completionOpenAI(
+                db,
                 tenant_id,
                 agent_id,
                 question,
@@ -538,6 +539,7 @@ def agents_completion_openai_compatibility(
         # For non-streaming, just return the response directly
         response = next(
             completionOpenAI(
+                db,
                 tenant_id,
                 agent_id,
                 question,
@@ -568,7 +570,7 @@ def agent_completions(
                     except Exception:
                         continue
 
-                if ans.get("event") != "message" or not ans.get("data", {}).get("reference", None):
+                if ans.get("event") not in ["message", "message_end"]:
                     continue
 
                 yield answer
@@ -583,19 +585,24 @@ def agent_completions(
         return resp
 
     full_content = ""
+    reference = {}
+    final_ans = ""
     for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
         try:
-            ans = json.loads(answer[5:])  # remove "data:"
+            ans = json.loads(answer[5:])
 
             if ans["event"] == "message":
                 full_content += ans["data"]["content"]
 
             if ans.get("data", {}).get("reference", None):
-                ans["data"]["content"] = full_content
-                return get_result(data=ans)
+                reference.update(ans["data"]["reference"])
+
+            final_ans = ans
         except Exception as e:
             return get_result(data=f"**ERROR**: {str(e)}")
-    return get_result(data=ans)
+    final_ans["data"]["content"] = full_content
+    final_ans["data"]["reference"] = reference
+    return get_result(data=final_ans)
 
 
 @router.get("/chats/{chat_id}/sessions", summary="获取聊天会话列表")

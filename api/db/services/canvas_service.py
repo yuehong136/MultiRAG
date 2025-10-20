@@ -334,213 +334,7 @@ def completion(
     API4ConversationService.append_message(db, conv.id, conv.to_dict())
 
 
-def completion_openai(
-    db: Session,
-    tenant_id: str,
-    agent_id: str,
-    question: str,
-    session_id: str | None = None,
-    stream: bool = True,
-    **kwargs,
-) -> Iterable[str | dict]:
-    """
-    OpenAI 兼容输出（SSE/non-SSE）。
-    - 流模式下：yield 带 "data: {...}\n\n" 的块，最后 "data: [DONE]\n\n"
-    - 非流模式：yield 最终完整对象（非 data: 包装）
-    """
-    enc = tiktoken.get_encoding("cl100k_base")
-
-    ok, cvs = UserCanvasService.get_by_id(db, agent_id)
-    if not ok:
-        yield get_data_openai(id=session_id, model=agent_id, content="**ERROR**: Agent not found.")
-        return
-    if cvs.user_id != tenant_id:
-        yield get_data_openai(id=session_id, model=agent_id, content="**ERROR**: You do not own the agent")
-        return
-
-    dsl_str = cvs.dsl if isinstance(cvs.dsl, str) else json.dumps(cvs.dsl, ensure_ascii=False)
-    canvas = Canvas(dsl_str, tenant_id)
-    canvas.reset()
-    message_id = str(uuid4())
-
-    # 新会话：处理 preset param，写入 prologue
-    if not session_id:
-        query_params = canvas.get_preset_param()
-        if query_params:
-            for ele in query_params:
-                if not ele.get("optional"):
-                    if not kwargs.get(ele["key"]):
-                        text = f"`{ele['key']}` is required"
-                        yield get_data_openai(
-                            id=None,
-                            model=agent_id,
-                            content=text,
-                            completion_tokens=len(enc.encode(text)),
-                            prompt_tokens=len(enc.encode(question or "")),
-                        )
-                        return
-                    ele["value"] = kwargs[ele["key"]]
-                else:
-                    if kwargs.get(ele["key"]):
-                        ele["value"] = kwargs[ele["key"]]
-                    else:
-                        if "value" in ele:
-                            ele.pop("value")
-
-        # 刷新 DSL & 创建会话
-        cvs_dsl_json = json.loads(str(canvas))
-        session_id = get_uuid()
-        conv_dict = {
-            "id": session_id,
-            "dialog_id": cvs.id,
-            "user_id": kwargs.get("user_id", "") if isinstance(kwargs, dict) else "",
-            "message": [{"role": "assistant", "content": canvas.get_prologue(), "created_at": time.time()}],
-            "source": "agent",
-            "dsl": cvs_dsl_json,
-        }
-        API4ConversationService.save(db, **conv_dict)
-        ok, conv = API4ConversationService.get_by_id(db, session_id)
-
-        if not conv.message:
-            conv.message = []
-        conv.message.append({"role": "user", "content": question, "id": message_id})
-
-        canvas.messages.append({"role": "user", "content": question, "id": message_id})
-        canvas.add_user_input(question)
-
-        if not conv.reference:
-            conv.reference = []
-        conv.reference.append({"chunks": [], "doc_aggs": []})
-
-    else:
-        ok, conv = API4ConversationService.get_by_id(db, session_id)
-        if not ok:
-            yield get_data_openai(id=session_id, model=agent_id, content="**ERROR**: Session not found!")
-            return
-
-        canvas = Canvas(json.dumps(conv.dsl), tenant_id)
-        canvas.messages.append({"role": "user", "content": question, "id": message_id})
-        canvas.add_user_input(question)
-
-        if not conv.message:
-            conv.message = []
-        conv.message.append({"role": "user", "content": question, "id": message_id})
-
-        if not conv.reference:
-            conv.reference = []
-        conv.reference.append({"chunks": [], "doc_aggs": []})
-
-    final_ans = {"reference": [], "content": ""}
-    prompt_tokens = len(enc.encode(str(question)))
-
-    if stream:
-        completion_tokens = 0
-        try:
-            for ans in canvas.run(stream=True, bypass_begin=True):
-                if ans.get("running_status"):
-                    # 增量内容
-                    delta = ans.get("content", "")
-                    if not delta:
-                        continue
-                    completion_tokens += len(enc.encode(delta))
-                    yield "data: " + json.dumps(
-                        get_data_openai(
-                            id=session_id,
-                            model=agent_id,
-                            content=delta,
-                            object="chat.completion.chunk",
-                            completion_tokens=completion_tokens,
-                            prompt_tokens=prompt_tokens,
-                        ),
-                        ensure_ascii=False,
-                    ) + "\n\n"
-                    continue
-
-                # 最终块（含 content/reference 等）
-                for k in ans.keys():
-                    final_ans[k] = ans[k]
-
-            # 写回会话：assistant 内容/引用/DSL
-            canvas.messages.append(
-                {"role": "assistant", "content": final_ans["content"], "created_at": time.time(), "id": message_id}
-            )
-            canvas.history.append(("assistant", final_ans["content"]))
-            if final_ans.get("reference"):
-                canvas.reference.append(final_ans["reference"])
-
-            # 更新 DSL & 持久化
-            conv.dsl = json.loads(str(canvas))
-            API4ConversationService.append_message(db, conv.id, conv.to_dict())
-
-            yield "data: [DONE]\n\n"
-
-        except Exception as e:
-            traceback.print_exc()
-            conv.dsl = json.loads(str(canvas))
-            API4ConversationService.append_message(db, conv.id, conv.to_dict())
-            err_text = f"**ERROR**: {str(e)}"
-            yield "data: " + json.dumps(
-                get_data_openai(
-                    id=session_id,
-                    model=agent_id,
-                    content=err_text,
-                    finish_reason="stop",
-                    completion_tokens=len(enc.encode(err_text)),
-                    prompt_tokens=prompt_tokens,
-                ),
-                ensure_ascii=False,
-            ) + "\n\n"
-            yield "data: [DONE]\n\n"
-
-    else:
-        # 非流：聚合完整文本后一次性返回
-        try:
-            for answer in canvas.run(stream=False, bypass_begin=True):
-                if answer.get("running_status"):
-                    continue
-                # 累积内容和引用
-                if "content" in answer:
-                    content = "\n".join(answer["content"]) if isinstance(answer["content"], list) else answer["content"]
-                    final_ans["content"] += content
-                if "reference" in answer:
-                    final_ans["reference"] = answer.get("reference", [])
-
-            # 写回
-            canvas.messages.append(
-                {"role": "assistant", "content": final_ans["content"], "created_at": time.time(), "id": message_id}
-            )
-            canvas.history.append(("assistant", final_ans["content"]))
-            if final_ans.get("reference"):
-                canvas.reference.append(final_ans["reference"])
-            conv.dsl = json.loads(str(canvas))
-            API4ConversationService.append_message(db, conv.id, conv.to_dict())
-
-            yield get_data_openai(
-                id=session_id,
-                model=agent_id,
-                content=final_ans["content"],
-                finish_reason="stop",
-                completion_tokens=len(enc.encode(final_ans["content"])),
-                prompt_tokens=prompt_tokens,
-                param=canvas.get_preset_param(),
-            )
-
-        except Exception as e:
-            traceback.print_exc()
-            conv.dsl = json.loads(str(canvas))
-            API4ConversationService.append_message(db, conv.id, conv.to_dict())
-            err_text = f"**ERROR**: {str(e)}"
-            yield get_data_openai(
-                id=session_id,
-                model=agent_id,
-                content=err_text,
-                finish_reason="stop",
-                completion_tokens=len(enc.encode(err_text)),
-                prompt_tokens=prompt_tokens,
-            )
-
-
-def completion_openai_adapter(
+def completionOpenAI(
     db: Session,
     tenant_id: str,
     agent_id: str,
@@ -556,7 +350,7 @@ def completion_openai_adapter(
     - 流模式：yield "data: {...}\\n\\n"，最后 "data: [DONE]\\n\\n"
     - 非流模式：yield 最终完整对象
     """
-    enc = tiktoken.get_encoding("cl100k_base")
+    tiktokenenc = tiktoken.get_encoding("cl100k_base")
     prompt_tokens = len(enc.encode(str(question)))
     user_id = kwargs.get("user_id", "")
 
@@ -581,27 +375,33 @@ def completion_openai_adapter(
                         continue
 
                 # 检查是否有答案内容
-                if ans.get("event") != "message" or not ans.get("data", {}).get("reference", None):
+                if ans.get("event") not in ["message", "message_end"]:
                     continue
 
-                content_piece = ans["data"]["content"]
-                completion_tokens += len(enc.encode(content_piece))
+                content_piece = ""
+                if ans["event"] == "message":
+                    content_piece = ans["data"]["content"]
 
-                yield "data: " + json.dumps(
-                    get_data_openai(
+                completion_tokens += len(tiktokenenc.encode(content_piece))
+
+                openai_data = get_data_openai(
                         id=session_id or str(uuid4()),
                         model=agent_id,
                         content=content_piece,
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
-                        stream=True,
-                    ),
-                    ensure_ascii=False,
-                ) + "\n\n"
+                        stream=True
+                    )
+
+                if ans.get("data", {}).get("reference", None):
+                    openai_data["choices"][0]["delta"]["reference"] = ans["data"]["reference"]
+
+                yield "data: " + json.dumps(openai_data, ensure_ascii=False) + "\n\n"
 
             yield "data: [DONE]\n\n"
 
         except Exception as e:
+            logging.exception(e)
             err_text = f"**ERROR**: {str(e)}"
             yield "data: " + json.dumps(
                 get_data_openai(
@@ -621,6 +421,7 @@ def completion_openai_adapter(
         # 非流模式：聚合所有内容后一次性返回
         try:
             all_content = ""
+            reference = {}
             for ans in completion(
                 db=db,
                 tenant_id=tenant_id,
@@ -631,30 +432,34 @@ def completion_openai_adapter(
                 **kwargs,
             ):
                 if isinstance(ans, str):
-                    try:
-                        ans = json.loads(ans[5:])
-                    except Exception as e:
-                        logging.exception(f"Canvas OpenAI adapter parse answer failed: {e}")
-                        continue
-
-                if ans.get("event") != "message" or not ans.get("data", {}).get("reference", None):
+                    ans = json.loads(ans[5:])
+                if ans.get("event") not in ["message", "message_end"]:
                     continue
 
-                all_content += ans["data"]["content"]
+                if ans["event"] == "message":
+                    all_content += ans["data"]["content"]
 
-            completion_tokens = len(enc.encode(all_content))
+                if ans.get("data", {}).get("reference", None):
+                    reference.update(ans["data"]["reference"])
 
-            yield get_data_openai(
+            completion_tokens = len(tiktokenenc.encode(all_content))
+
+            openai_data = get_data_openai(
                 id=session_id or str(uuid4()),
                 model=agent_id,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 content=all_content,
                 finish_reason="stop",
-                param=None,
+                param=None
             )
 
+            if reference:
+                openai_data["choices"][0]["message"]["reference"] = reference
+
+            yield openai_data
         except Exception as e:
+            logging.exception(e)
             err_text = f"**ERROR**: {str(e)}"
             yield get_data_openai(
                 id=session_id or str(uuid4()),
