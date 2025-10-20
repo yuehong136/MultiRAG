@@ -91,7 +91,8 @@ class ChatAgentAdapter:
                     },
                     "history": [],
                     "path": [],
-                    "retrieval": [],
+                    "retrieval": {"chunks": [], "doc_aggs": []},
+                    "memory": [],
                     "globals": {
                         "sys.query": "",
                         "sys.user_id": tenant_id,
@@ -102,7 +103,7 @@ class ChatAgentAdapter:
                 super().__init__(minimal_dsl, tenant_id=tenant_id)
                 self._tenant_id = tenant_id
                 self.history = []
-                self.retrieval = {"chunks": {}, "doc_aggs": {}}
+                self.retrieval = {"chunks": [], "doc_aggs": []}
                 self.memory = []
                 self.globals = {
                     "sys.query": "",

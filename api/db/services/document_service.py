@@ -1886,6 +1886,11 @@ class DocumentService(CommonService):
         return query.tenant_id if query else None
 
     @classmethod
+    def get_knowledgebase_id(cls, db, doc_id):
+        result = db.query(cls.model.kb_id).filter(cls.model.id == doc_id).first()
+        return result.kb_id if result else None
+
+    @classmethod
     def get_tenant_id_by_name(cls, db: Session, name: str):
         query = db.query(Knowledgebase.tenant_id).join(Knowledgebase, cls.model.kb_id == Knowledgebase.id
                                                        ).filter(

@@ -150,6 +150,12 @@ class UserService(CommonService):
             db.rollback()
             raise e
 
+    @classmethod
+    def is_admin(cls, db: Session, user_id):
+        return db.query(cls.model).filter(
+            cls.model.id == user_id,
+            cls.model.is_superuser == 1).count() > 0
+
 
 class TenantService(CommonService):
     model = Tenant

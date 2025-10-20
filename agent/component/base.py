@@ -402,8 +402,8 @@ class ComponentBase(ABC):
         )
 
     def __init__(self, canvas, id, param: ComponentParamBase):
-        from agent.canvas import Canvas  # Local import to avoid cyclic dependency
-        assert isinstance(canvas, Canvas), "canvas must be an instance of Canvas"
+        from agent.canvas import Graph  # Local import to avoid cyclic dependency
+        assert isinstance(canvas, Graph), "canvas must be an instance of Canvas"
         self._canvas = canvas
         self._id = id
         self._param = param
@@ -517,6 +517,10 @@ class ComponentBase(ABC):
         cpn_nms = self._canvas.get_component(self._id)['upstream']
         return cpn_nms
 
+    def get_downstream(self) -> List[str]:
+        cpn_nms = self._canvas.get_component(self._id)['downstream']
+        return cpn_nms
+
     @staticmethod
     def string_format(content: str, kv: dict[str, str]) -> str:
         for n, v in kv.items():
@@ -537,3 +541,8 @@ class ComponentBase(ABC):
     def get_exception_default_value(self):
         return self._param.exception_default_value
 
+    def set_exception_default_value(self):
+        self.set_output("result", self.get_exception_default_value())
+
+    def thoughts(self) -> str:
+        raise NotImplementedError()
