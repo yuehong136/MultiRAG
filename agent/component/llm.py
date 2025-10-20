@@ -136,9 +136,9 @@ class LLM(ComponentBase):
         for m in msg:
             m["content"] = self.string_format(m["content"], args)
         if self._param.cite and self._canvas.get_reference()["chunks"]:
-            prompt += citation_prompt()
+            sys_prompt += citation_prompt()
 
-        return prompt, msg
+        return sys_prompt, msg
 
     def _generate(self, msg: list[dict], **kwargs) -> str:
         if not self.imgs:
