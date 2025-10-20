@@ -974,7 +974,7 @@ POST
                 model_name=mdl_nm,
                 base_url=llm["api_base"]
             )
-            arr, tc = mdl.similarity("Hello~ Multirager!", ["Hi, there!", "Ohh, my friend!"])
+            arr, tc = mdl.similarity("Hello~ MultiRAGer!", ["Hi, there!", "Ohh, my friend!"])
             if len(arr) == 0:
                 raise Exception("Not known.")
         except KeyError:
@@ -1001,7 +1001,7 @@ POST
             key=llm["api_key"], model_name=mdl_nm, base_url=llm["api_base"]
         )
         try:
-            for resp in mdl.tts("Hello~ Multirager!"):
+            for resp in mdl.tts("Hello~ MultiRAGer!"):
                 pass
         except RuntimeError as e:
             msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)

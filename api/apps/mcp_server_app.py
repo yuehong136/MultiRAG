@@ -469,10 +469,10 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
         return get_data_error_result(retmsg="Unsupported MCP server type.")
     server_name = req_data.get("name", mcp_server.name)
     if server_name and len(server_name.encode("utf-8")) > 255:
-        return get_data_error_result(retmsg=f"Invaild MCP name or length is {len(server_name)} which is large than 255.")
+        return get_data_error_result(retmsg=f"Invalid MCP name or length is {len(server_name)} which is large than 255.")
     url = req_data.get("url", mcp_server.url)
     if not url:
-        return get_data_error_result(retmsg="Invaild url.")
+        return get_data_error_result(retmsg="Invalid url.")
 
     headers = safe_json_parse(req_data.get("headers", mcp_server.headers))
     req_data["headers"] = headers
@@ -713,7 +713,7 @@ def import_multiple(request: ImportMCPServerRequest, db: Session = Depends(get_d
                 continue
 
             if not server_name or len(server_name.encode("utf-8")) > 255:
-                results.append({"server": server_name, "success": False, "message": f"Invaild MCP name or length is {len(server_name)} which is large than 255."})
+                results.append({"server": server_name, "success": False, "message": f"Invalid MCP name or length is {len(server_name)} which is large than 255."})
                 continue
 
             base_name = server_name
@@ -1414,7 +1414,7 @@ def test_mcp(request: TestMCPRequest, db: Session = Depends(get_db), user=Depend
 
     url = req_data.get("url", "")
     if not url:
-        return get_data_error_result(retmsg="Invaild MCP url.")
+        return get_data_error_result(retmsg="Invalid MCP url.")
 
     server_type = req_data.get("server_type", "")
     if server_type not in VALID_MCP_SERVER_TYPES:

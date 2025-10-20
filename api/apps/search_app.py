@@ -147,7 +147,7 @@ def create(request: CreateSearchRequest, db: Session = Depends(get_db), user=Dep
     # 验证租户
     tenant = TenantService.get_by_id(db, user.id)
     if not tenant:
-        return get_data_error_result(retmsg="Authorization identity.")
+        return get_data_error_result(retmsg="Authorized identity.")
 
     search_name = search_name.strip()
     search_name = duplicate_name(SearchService.query, db=db, name=search_name, tenant_id=user.id, status=StatusEnum.VALID.value)
@@ -291,7 +291,7 @@ def update(request: UpdateSearchRequest, db: Session = Depends(get_db), user=Dep
     # 验证租户
     tenant = TenantService.get_by_id(db, tenant_id)
     if not tenant:
-        return get_data_error_result(retmsg="Authorization identity.")
+        return get_data_error_result(retmsg="Authorized identity.")
 
     # 检查权限
     if not SearchService.accessible4deletion(db, search_id, user.id):

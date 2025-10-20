@@ -512,6 +512,7 @@ def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     ```
     """
     try:
+        chunk = None
         tenants = UserTenantService.query(db, user_id=user.id)
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
