@@ -5,41 +5,87 @@ from typing import List, Dict, Any
 def filter_dimension_values_by_segmented_words(dimension_values: List[Dict[str, Any]], segmented_words: List[str]) -> \
 List[Dict[str, Any]]:
     """
-    根据分词列表对维度值进行模糊匹配过滤
+    根据分词列表对维度值进行模糊匹配、评分和排序
 
     Args:
         dimension_values: 维度值列表，包含 value 和可能的 synonyms
         segmented_words: 分词列表
 
     Returns:
-        过滤后的维度值列表
+        过滤并按相关性排序后的维度值列表
     """
     if not segmented_words:
         # 如果没有分词，返回原始数据
         return dimension_values
 
-    filtered_values = []
+    scored_values = []
 
     for dim_value in dimension_values:
         value = dim_value.get('value', '')
         synonyms = dim_value.get('synonyms', [])
 
-        # 检查 value 是否与任何分词匹配
-        value_matched = any(word in value or value in word for word in segmented_words)
+        # 将 value 和 synonyms 放入一个列表中统一处理
+        texts_to_check = [value] + (synonyms or [])
 
-        # 检查 synonyms 是否与任何分词匹配
-        synonyms_matched = False
-        if synonyms:
-            for synonym in synonyms:
-                if any(word in synonym or synonym in word for word in segmented_words):
-                    synonyms_matched = True
-                    break
+        max_score = 0
+        matched = False
 
-        # 如果 value 或 synonyms 中任何一个匹配，则保留该维度值
-        if value_matched or synonyms_matched:
-            filtered_values.append(dim_value)
+        # 对每个文本计算得分，取最高分
+        for text in texts_to_check:
+            if not text:
+                continue
 
-    return filtered_values
+            current_score = 0
+            matched_words = set()  # 使用set避免重复计分
+            text_matched = False
+
+            # 计算基础得分：根据匹配到的关键词长度
+            for word in segmented_words:
+                if word in text:
+                    text_matched = True
+                    matched_words.add(word)
+                    # 核心优化：长度平方加权，长关键词权重更高
+                    current_score += len(word) ** 1.5  # 使用1.5次方，平衡线性和平方
+
+            if text_matched:
+                matched = True
+
+                # 优化1：覆盖度奖励 - 如果匹配了所有关键词
+                if len(matched_words) == len(segmented_words):
+                    current_score += 10  # 全覆盖奖励
+
+                # 优化2：部分覆盖度奖励
+                coverage_ratio = len(matched_words) / len(segmented_words)
+                current_score += coverage_ratio * 5
+
+                # 优化3：完全匹配奖励 - 如果文本完全等于某个关键词
+                if text in segmented_words:
+                    current_score += 15
+
+                # 优化4：长度适中奖励 - 避免过短或过长的干扰
+                if 2 <= len(text) <= 30:
+                    current_score += 2
+                elif len(text) > 50:  # 过长文本轻微惩罚
+                    current_score *= 0.95
+
+                # 优化5：value比synonyms权重稍高
+                if text == value:
+                    current_score *= 1.1
+
+                max_score = max(max_score, current_score)
+
+        # 如果有任何匹配，则将其及得分加入列表
+        if matched:
+            scored_values.append({
+                "score": max_score,
+                "data": dim_value
+            })
+
+    # 根据得分从高到低排序
+    sorted_values = sorted(scored_values, key=lambda x: x['score'], reverse=True)
+
+    # 返回排序后的数据
+    return [item['data'] for item in sorted_values]
 
 
 def process_data_models(
