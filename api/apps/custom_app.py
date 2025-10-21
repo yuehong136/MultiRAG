@@ -171,6 +171,128 @@ async def process_docx(file: UploadFile = File(...)):
         # 保留中文字符、数字和下划线
         return re.sub(r'[^\u4e00-\u9fa5_\d]', '', key)
 
+    # 工具方法：生成JSON合法的完整键名
+    def generate_full_placeholder_key(top_content: str) -> str:
+        """
+        基于完整的顶部内容生成JSON合法的占位符键名
+        处理换行符、引号等特殊字符，确保JSON合法性
+        """
+        if not top_content or not top_content.strip():
+            return ""
+
+        # 1. 移除或替换冒号（通常在内容末尾）
+        content = top_content.replace("：", "").replace(":", "")
+
+        # 2. 将双引号替换为单引号
+        content = content.replace('"', "'")
+
+        # 3. 将换行符替换为分隔符，保持可读性
+        content = content.replace('\n', ' | ')
+
+        # 4. 清理多余的空格
+        content = re.sub(r'\s+', ' ', content).strip()
+
+        # 5. 移除其他可能导致JSON问题的字符
+        # 保留中文、英文、数字、常用标点符号
+        content = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s\'\(\)\[\]\{\}，。！？；、|（）【】《》]', '', content)
+
+        # 6. 控制长度，避免键名过长（保留前200个字符）
+        if len(content) > 200:
+            content = content[:200] + "..."
+
+        # 7. 确保不为空
+        if not content.strip():
+            return "未命名内容"
+
+        return content.strip()
+
+    # 工具方法：判断非空单元格是否需要处理
+    def should_process_non_empty_cell(cell_text: str) -> bool:
+        """
+        判断非空单元格是否需要添加占位符
+        条件：包含"："且不包含排除关键词
+        """
+        if not cell_text or not cell_text.strip():
+            return False
+
+        # 必须包含冒号
+        if "：" not in cell_text:
+            return False
+
+        # 排除关键词列表
+        exclude_keywords = ["√", "负责人签字", "盖章"]
+
+        # 如果包含任何排除关键词，则不处理
+        for keyword in exclude_keywords:
+            if keyword in cell_text:
+                return False
+
+        return True
+
+    # 工具方法：提取单元格顶部内容
+    def extract_top_content(cell_text: str) -> str:
+        """
+        提取单元格的顶部内容
+        通过换行符判断，取第一部分作为顶部内容
+        """
+        if not cell_text or not cell_text.strip():
+            return ""
+
+        # 按换行符分割
+        lines = cell_text.split('\n')
+
+        # 找到连续空行的位置，连续空行前的内容作为顶部
+        top_content_lines = []
+        consecutive_empty_count = 0
+
+        for line in lines:
+            if line.strip() == "":
+                consecutive_empty_count += 1
+                # 如果连续遇到2个或以上空行，认为顶部内容结束
+                if consecutive_empty_count >= 2:
+                    break
+            else:
+                # 遇到非空行，重置计数并添加到顶部内容
+                consecutive_empty_count = 0
+                top_content_lines.append(line)
+
+        # 如果没有找到连续空行，说明整个内容都是顶部内容
+        if not top_content_lines:
+            top_content_lines = [line for line in lines if line.strip()]
+
+        return '\n'.join(top_content_lines).strip()
+
+    # 工具方法：智能插入占位符，保持原有格式
+    def insert_placeholder_smartly(cell_text: str, placeholder: str) -> str:
+        """
+        在单元格文本中智能插入占位符，保持原有格式
+        在顶部内容后的第一个合适位置插入占位符
+        """
+        if not cell_text or not cell_text.strip():
+            return cell_text
+
+        lines = cell_text.split('\n')
+        top_content = extract_top_content(cell_text)
+
+        if not top_content:
+            return cell_text
+
+        # 找到顶部内容在原文中的结束位置
+        top_lines = top_content.split('\n')
+        top_line_count = len(top_lines)
+
+        # 在顶部内容后寻找合适的插入位置
+        insert_position = top_line_count
+
+        # 如果顶部内容后面有空行，在第一个空行的位置插入
+        if insert_position < len(lines) and lines[insert_position].strip() == "":
+            # 跳过一个空行，在下一行插入
+            insert_position += 1
+
+        # 插入占位符
+        new_lines = lines[:insert_position] + [placeholder] + lines[insert_position:]
+        return '\n'.join(new_lines)
+
     # 工具方法：标准化所有占位符
     def normalize_all_placeholders(matrix):
         key_map = {}
@@ -341,6 +463,56 @@ async def process_docx(file: UploadFile = File(...)):
                 if is_placeholder_format(val):
                     key = val.strip("{").strip("}")
                     placeholders[key] = ""
+
+    # --- 以上是对空单元格的处理，总是以左侧、上方是否有单元格且单元格中有内容来判断要对当前空单元格要填什么内容 ---
+    # --- 有些单元格中是有内容的，内容本身就提示了填充内容，现在要对有内容的单元格做处理 ---
+    processed_cells = set()  # 用于跟踪已处理的合并单元格，避免重复处理
+
+    for table_idx, table in enumerate(input_doc.tables):
+        rows = table.rows
+        for row_idx, row in enumerate(rows):
+            cells = row.cells
+            for cell_idx, cell in enumerate(cells):
+                # 创建单元格的唯一标识
+                cell_id = (table_idx, id(cell._element))
+
+                # 如果这个单元格已经被处理过（可能是合并单元格），跳过
+                if cell_id in processed_cells:
+                    continue
+
+                cell_text = cell.text
+
+                # 判断是否需要处理这个非空单元格
+                if should_process_non_empty_cell(cell_text):
+                    # 提取顶部内容
+                    top_content = extract_top_content(cell_text)
+
+                    if top_content:
+                        # 使用新的完整键名生成函数
+                        placeholder_key = generate_full_placeholder_key(top_content)
+
+                        if placeholder_key:  # 确保键名不为空
+                            # 生成占位符
+                            placeholder_value = wrap_placeholder(placeholder_key)
+
+                            # 使用智能插入函数，保持原有格式
+                            new_cell_content = insert_placeholder_smartly(cell_text, placeholder_value)
+
+                            # 更新单元格内容
+                            cell.text = new_cell_content
+
+                            # 将新生成的占位符添加到placeholders字典中
+                            placeholders[placeholder_key] = ""
+
+                            # 标记这个单元格已处理
+                            processed_cells.add(cell_id)
+
+                            # 如果是合并单元格，标记所有相关单元格为已处理
+                            # 通过检查同一行中是否有相同的单元格对象来判断合并单元格
+                            for other_cell_idx, other_cell in enumerate(cells):
+                                if other_cell._element is cell._element and other_cell_idx != cell_idx:
+                                    other_cell_id = (table_idx, id(other_cell._element))
+                                    processed_cells.add(other_cell_id)
 
     # Step 5: 返回处理后的文档和占位符
     output_stream = BytesIO()
