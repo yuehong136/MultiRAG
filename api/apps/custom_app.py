@@ -400,6 +400,54 @@ async def process_docx(file: UploadFile = File(...)):
                             matrix[r][c] = f"{{{{{raw_key}_{suffix_index}}}}}"
         return matrix
 
+    def _replace_paragraph_text(paragraph, value: str):
+        """
+        更新单个段落的文本，同时保留段落级格式。
+        仅替换文本内容；段落及其属性保持不变。
+        """
+        if value is None:
+            value = ""
+
+        runs = list(paragraph.runs)
+        if runs:
+            for extra_run in runs[1:]:
+                extra_run._element.getparent().remove(extra_run._element)
+            runs[0].text = value
+        else:
+            paragraph.add_run(value)
+
+    def update_cell_text_preserving_format(cell, text: str):
+        """
+        安全地更新单元格的文本内容，而不会破坏其段落结构或格式元数据（对齐、间距等）。
+        """
+        if text is None:
+            text = ""
+
+        lines = text.split('\n')
+        paragraphs = list(cell.paragraphs)
+
+        if not paragraphs:
+            base_style = None
+            new_paragraph = cell.add_paragraph('')
+            paragraphs.append(new_paragraph)
+        else:
+            base_style = paragraphs[-1].style
+
+        # Ensure we have enough paragraphs to accommodate all lines
+        while len(paragraphs) < len(lines):
+            new_paragraph = cell.add_paragraph('')
+            if base_style:
+                new_paragraph.style = base_style
+            paragraphs.append(new_paragraph)
+
+        # Update existing paragraphs with new text
+        for idx, line in enumerate(lines):
+            _replace_paragraph_text(paragraphs[idx], line)
+
+        # Clear any remaining paragraphs to keep spacing while removing stale text
+        for idx in range(len(lines), len(paragraphs)):
+            _replace_paragraph_text(paragraphs[idx], "")
+
     # Step 1: 读取文件
     file_content = await file.read()
     input_doc = Document(BytesIO(file_content))
@@ -453,7 +501,7 @@ async def process_docx(file: UploadFile = File(...)):
         result_matrix = all_tables_result[t_idx]
         for r_idx, row in enumerate(table.rows):
             for c_idx, cell in enumerate(row.cells):
-                cell.text = result_matrix[r_idx][c_idx]
+                update_cell_text_preserving_format(cell, result_matrix[r_idx][c_idx])
 
     # Step 4: 收集占位符 JSON 数据
     for result_matrix in all_tables_result:
