@@ -124,22 +124,38 @@ async def process_docx(file: UploadFile = File(...)):
 
     # 工具方法：获取表格上方段落的描述
     def get_table_above_paragraphs(input_doc, table_idx):
-        paragraphs = input_doc.paragraphs
-        tables = input_doc.tables
-        target_table = tables[table_idx]
-        table_pos = None
-        for idx, paragraph in enumerate(paragraphs):
-            if target_table._element in paragraph._element.iter():
-                table_pos = idx
-                break
-        if table_pos is not None:
-            above_paragraphs = []
-            for p_idx in range(table_pos - 1, -1, -1):
-                paragraph_text = paragraphs[p_idx].text.strip()
-                if paragraph_text:
-                    above_paragraphs.append(paragraph_text)
-            return above_paragraphs[::-1]
-        return []
+        # 边界检查
+        if table_idx < 0 or table_idx >= len(input_doc.tables):
+            return []
+
+        target_table = input_doc.tables[table_idx]
+        tbl_elm = target_table._element
+        parent = tbl_elm.getparent()
+        if parent is None:
+            return []
+
+        # 在父容器中找到该表格的块级位置
+        children = list(parent.iterchildren())
+        try:
+            pos = children.index(tbl_elm)
+        except ValueError:
+            return []
+
+        # 建立一个从段落底层元素到其文本的映射，加速查找
+        para_map = {id(p._element): p.text.strip() for p in input_doc.paragraphs}
+
+        above_paragraphs = []
+        # 向上回溯收集非空段落文本
+        for j in range(pos - 1, -1, -1):
+            child = children[j]
+            # w:p 段落
+            if child.tag.endswith('}p'):
+                text = para_map.get(id(child), '')
+                if text:
+                    above_paragraphs.append(text)
+
+        # 还原为阅读顺序（上->下）
+        return above_paragraphs[::-1]
 
     # 工具方法：判断是否是占位符格式
     def is_placeholder_format(value: str) -> bool:
@@ -296,19 +312,6 @@ async def process_docx(file: UploadFile = File(...)):
         all_tables_result.append(filled_matrix)
 
         # 将向下填充的单元格列表添加到所有向下填充单元格的列表中
-        all_down_filled_cells.append(down_filled_cells)
-
-    # 遍历所有原始表格内容，进行处理
-    for idx, table in enumerate(input_doc.tables):
-        # 提取表格内容为矩阵
-        original_matrix = [[cell.text.strip() for cell in row.cells] for row in table.rows]
-        all_tables_original.append(original_matrix)
-
-        above_paragraphs = get_table_above_paragraphs(input_doc, idx)
-
-        # 调用 fill_table 并传入当前表格对象
-        result_matrix, down_filled_cells = fill_table(original_matrix, table, above_paragraphs)
-        all_tables_result.append(result_matrix)
         all_down_filled_cells.append(down_filled_cells)
 
     # 遍历所有表格结果和向下填充的单元格，按列添加序列后缀
