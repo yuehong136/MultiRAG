@@ -72,7 +72,7 @@ def upgrade() -> None:
     ix_cat = f"ix_{SCHEMA}_{TBL_USER_CANVAS}_canvas_category"
 
     if not _has_index(insp, TBL_USER_CANVAS, ix_cat):
-        op.create_index(ix_cat, f"{SCHEMA}.{TBL_USER_CANVAS}", ["canvas_category"], unique=False, schema=SCHEMA)
+        op.create_index(ix_cat, TBL_USER_CANVAS, ["canvas_category"], unique=False, schema=SCHEMA)
 
     # ===== t_ai_canvas_templates：新增 avatar / canvas_type / canvas_category / dsl =====
     tpl_cols = {c["name"] for c in insp.get_columns(TBL_CANVAS_TEMPLATE, schema=SCHEMA)}
@@ -86,7 +86,7 @@ def upgrade() -> None:
     # 索引
     ix_tpl_cat  = f"ix_{SCHEMA}_{TBL_CANVAS_TEMPLATE}_canvas_category"
     if not _has_index(insp, TBL_CANVAS_TEMPLATE, ix_tpl_cat):
-        op.create_index(ix_tpl_cat, f"{SCHEMA}.{TBL_CANVAS_TEMPLATE}", ["canvas_category"], unique=False, schema=SCHEMA)
+        op.create_index(ix_tpl_cat, TBL_CANVAS_TEMPLATE, ["canvas_category"], unique=False, schema=SCHEMA)
 
 
 def downgrade() -> None:
