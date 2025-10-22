@@ -212,10 +212,11 @@ class AiGuardEngineService:
         Returns:
             处理结果
         """
-        # 直接查询词库项，不过滤status（因为改为硬删除）
+        # 只查询启用的词库项（status="1"）
         from api.db.db_models import GuardLibraryItem
         library_items = db.query(GuardLibraryItem).filter(
-            GuardLibraryItem.library_id == library_info["id"]
+            GuardLibraryItem.library_id == library_info["id"],
+            GuardLibraryItem.status == "1"
         ).all()
         
         matched_words = []
@@ -254,12 +255,13 @@ class AiGuardEngineService:
         Returns:
             处理结果
         """
-        # 直接查询词库项，不过滤status（因为改为硬删除）
+        # 只查询启用的词库项（status="1"），确保禁用的词不会被检测
         from api.db.db_models import GuardLibraryItem
         library_items = db.query(GuardLibraryItem).filter(
-            GuardLibraryItem.library_id == library_info["id"]
+            GuardLibraryItem.library_id == library_info["id"],
+            GuardLibraryItem.status == "1"
         ).all()
-        logging.info(f"黑名单词库 {library_info.get('name')} 包含 {len(library_items)} 个词汇")
+        logging.info(f"黑名单词库 {library_info.get('name')} 包含 {len(library_items)} 个启用的词汇")
         
         matched_words = []
         

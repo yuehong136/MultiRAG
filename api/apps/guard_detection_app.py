@@ -1175,9 +1175,12 @@ def test_library_matching(
             if not library or library.tenant_id != user.id:
                 continue
             
-            library_items = GuardLibraryItemService.get_items_by_library(
-                db, library_id, status="1"
+            # 获取词库项，只测试启用的项
+            result = GuardLibraryItemService.get_items_by_library(
+                db, library_id, page=1, page_size=10000
             )
+            # 过滤出启用的词库项
+            library_items = [item for item in result["items"] if item.status == "1"]
             
             matched_words = []
             for item in library_items:

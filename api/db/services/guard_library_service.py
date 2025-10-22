@@ -137,8 +137,7 @@ class GuardLibraryService(CommonService):
         try:
             query = db.query(cls.model).filter(
                 and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.status == "1"
+                    cls.model.tenant_id == tenant_id
                 )
             )
             

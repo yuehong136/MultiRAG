@@ -91,11 +91,12 @@ class GuardLibraryItemService(CommonService):
             词库项对象或None
         """
         try:
+            # 移除status过滤，避免重复添加已禁用的词库项
+            # 用户应该通过更新status来启用已禁用的词，而不是添加新的
             return db.query(cls.model).filter(
                 and_(
                     cls.model.library_id == library_id,
-                    cls.model.content_hash == content_hash,
-                    cls.model.status == "1"
+                    cls.model.content_hash == content_hash
                 )
             ).first()
         except Exception as e:
@@ -118,11 +119,9 @@ class GuardLibraryItemService(CommonService):
             包含项列表和分页信息的字典
         """
         try:
+            # 移除status过滤，让前端能展示所有词库项（包括禁用的）
             query = db.query(cls.model).filter(
-                and_(
-                    cls.model.library_id == library_id,
-                    cls.model.status == "1"
-                )
+                cls.model.library_id == library_id
             ).order_by(cls.model.sort_order.asc(), cls.model.create_time.desc())
             
             total = query.count()
@@ -152,11 +151,9 @@ class GuardLibraryItemService(CommonService):
             词库项列表
         """
         try:
+            # 移除status过滤，让前端能导出所有词库项（包括禁用的）
             return db.query(cls.model).filter(
-                and_(
-                    cls.model.library_id == library_id,
-                    cls.model.status == "1"
-                )
+                cls.model.library_id == library_id
             ).order_by(cls.model.sort_order.asc()).all()
         except Exception as e:
             logging.error(f"获取词库所有项失败: {e}")
@@ -177,11 +174,9 @@ class GuardLibraryItemService(CommonService):
             词库项列表
         """
         try:
+            # 移除status过滤，让前端能批量获取所有词库项（包括禁用的）
             query = db.query(cls.model).filter(
-                and_(
-                    cls.model.id.in_(item_ids),
-                    cls.model.status == "1"
-                )
+                cls.model.id.in_(item_ids)
             )
             
             # 如果提供了tenant_id，添加租户过滤
@@ -210,11 +205,11 @@ class GuardLibraryItemService(CommonService):
             包含搜索结果和分页信息的字典
         """
         try:
+            # 移除status过滤，让前端能搜索所有词库项（包括禁用的）
             query = db.query(cls.model).filter(
                 and_(
                     cls.model.library_id == library_id,
-                    cls.model.content.contains(keyword),
-                    cls.model.status == "1"
+                    cls.model.content.contains(keyword)
                 )
             ).order_by(cls.model.create_time.desc())
             
