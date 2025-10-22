@@ -3,7 +3,6 @@ import json
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from io import BytesIO
 from docx import Document
-from docxtpl import DocxTemplate
 import re
 import base64
 
@@ -11,7 +10,62 @@ from api.utils.api_utils import get_json_result
 
 router = APIRouter()
 
-@router.post("/process_docx", summary="Word 文档占位符处理接口", response_description="返回处理后的文档和占位符 JSON 数据")
+
+def _replace_paragraph_text(paragraph, value: str):
+    """
+    更新单个段落的文本，同时保留段落级格式。
+    仅替换文本内容；段落及其属性保持不变。
+    """
+    if value is None:
+        value = ""
+
+    runs = list(paragraph.runs)
+    if runs:
+        for extra_run in runs[1:]:
+            extra_run._element.getparent().remove(extra_run._element)
+        runs[0].text = value
+    else:
+        paragraph.add_run(value)
+
+
+def update_cell_text_preserving_format(cell, text: str):
+    """
+    安全地更新单元格的文本内容，而不会破坏其段落结构或格式元数据（对齐、间距等）。
+    """
+    if text is None:
+        text = ""
+
+    lines = text.split('\n')
+    paragraphs = list(cell.paragraphs)
+
+    if not paragraphs:
+        base_style = None
+        new_paragraph = cell.add_paragraph('')
+        paragraphs.append(new_paragraph)
+    else:
+        base_style = paragraphs[-1].style
+
+    # Ensure we have enough paragraphs to accommodate all lines
+    while len(paragraphs) < len(lines):
+        new_paragraph = cell.add_paragraph('')
+        if base_style:
+            new_paragraph.style = base_style
+        paragraphs.append(new_paragraph)
+
+    # Update existing paragraphs with new text
+    for idx, line in enumerate(lines):
+        _replace_paragraph_text(paragraphs[idx], line)
+
+    # Clear any remaining paragraphs to keep spacing while removing stale text
+    for idx in range(len(lines), len(paragraphs)):
+        _replace_paragraph_text(paragraphs[idx], "")
+
+
+PLACEHOLDER_PATTERN = re.compile(r'\{\{([^{}]+)\}\}')
+
+
+@router.post("/process_docx", summary="Word 文档占位符处理接口",
+             response_description="返回处理后的文档和占位符 JSON 数据")
 async def process_docx(file: UploadFile = File(...)):
     """
     ### POST `/v1/document/process_docx` Word 文档占位符处理接口
@@ -369,54 +423,6 @@ async def process_docx(file: UploadFile = File(...)):
                             matrix[r][c] = f"{{{{{raw_key}_{suffix_index}}}}}"
         return matrix
 
-    def _replace_paragraph_text(paragraph, value: str):
-        """
-        更新单个段落的文本，同时保留段落级格式。
-        仅替换文本内容；段落及其属性保持不变。
-        """
-        if value is None:
-            value = ""
-
-        runs = list(paragraph.runs)
-        if runs:
-            for extra_run in runs[1:]:
-                extra_run._element.getparent().remove(extra_run._element)
-            runs[0].text = value
-        else:
-            paragraph.add_run(value)
-
-    def update_cell_text_preserving_format(cell, text: str):
-        """
-        安全地更新单元格的文本内容，而不会破坏其段落结构或格式元数据（对齐、间距等）。
-        """
-        if text is None:
-            text = ""
-
-        lines = text.split('\n')
-        paragraphs = list(cell.paragraphs)
-
-        if not paragraphs:
-            base_style = None
-            new_paragraph = cell.add_paragraph('')
-            paragraphs.append(new_paragraph)
-        else:
-            base_style = paragraphs[-1].style
-
-        # Ensure we have enough paragraphs to accommodate all lines
-        while len(paragraphs) < len(lines):
-            new_paragraph = cell.add_paragraph('')
-            if base_style:
-                new_paragraph.style = base_style
-            paragraphs.append(new_paragraph)
-
-        # Update existing paragraphs with new text
-        for idx, line in enumerate(lines):
-            _replace_paragraph_text(paragraphs[idx], line)
-
-        # Clear any remaining paragraphs to keep spacing while removing stale text
-        for idx in range(len(lines), len(paragraphs)):
-            _replace_paragraph_text(paragraphs[idx], "")
-
     def insert_placeholder_preserving_layout(cell, placeholder: str):
         """
         将占位符插入到单元格中，尽量复用现有段落并保持原有对齐和样式。
@@ -713,11 +719,26 @@ async def fill_docx(
 
         # Step 2: 读取上传的文件
         file_content = await file.read()
-        input_doc = BytesIO(file_content)
-        doc = DocxTemplate(input_doc)
+        doc = Document(BytesIO(file_content))
 
-        # Step 3: 使用数据填充文档
-        doc.render(fill_data)
+        # Step 3: 遍历表格，替换整格占位符
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    cell_text = cell.text
+                    if not cell_text:
+                        continue
+
+                    def replace_placeholder(match):
+                        key = match.group(1).strip()
+                        value = fill_data.get(key, "")
+                        if value is None:
+                            value = ""
+                        return str(value)
+
+                    replaced_text, replaced_count = PLACEHOLDER_PATTERN.subn(replace_placeholder, cell_text)
+                    if replaced_count > 0:
+                        update_cell_text_preserving_format(cell, replaced_text)
 
         # Step 4: 保存填充后的文档到内存流
         output_stream = BytesIO()
