@@ -420,7 +420,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
         logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
-        ans = use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True))
+        ans = use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
         if ans:
             yield ans
             return
@@ -664,7 +664,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         yield res
 
 
-def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True):
+def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_ids=None):
     sys_prompt = "You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question."
     user_prompt = """
     Table name: {};
@@ -705,7 +705,12 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True):
                     flds.append(k)
                 sql = "select doc_id,docnm_kwd," + ",".join(flds) + sql[8:]
 
-        print(f"“{question}” get SQL(refined): {sql}")
+        if kb_ids:
+            kb_filter = "(" + " OR ".join([f"kb_id = '{kb_id}'" for kb_id in kb_ids]) + ")"
+            if "where" not in sql.lower():
+                sql += f" WHERE {kb_filter}"
+            else:
+                sql += f" AND {kb_filter}"
 
         logging.debug(f"{question} get SQL(refined): {sql}")
         tried_times += 1
@@ -741,7 +746,6 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True):
         logging.debug("TRY it again: {}".format(sql))
 
     logging.debug("GET table: {}".format(tbl))
-    print(tbl)
     if tbl.get("error") or len(tbl["rows"]) == 0:
         return None
 
