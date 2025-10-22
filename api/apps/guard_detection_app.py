@@ -109,6 +109,31 @@ class BatchItemResult(BaseModel):
     detection_result: Dict[str, Any] = Field(default_factory=dict, description="完整检测结果")
 
 
+class CreateServiceRequest(BaseModel):
+    """创建检测服务请求模型"""
+    code: str = Field(..., description="服务代码，唯一标识", min_length=1, max_length=100)
+    name: str = Field(..., description="服务名称", min_length=1, max_length=200)
+    description: str | None = Field(None, description="服务描述")
+    service_type: str = Field("api", description="服务类型")
+    enabled_dimensions: list[str] = Field(default_factory=list, description="启用的维度列表")
+    enabled_labels: list[str] = Field(default_factory=list, description="启用的标签列表")
+    policy_config: dict[str, Any] = Field(default_factory=dict, description="策略配置")
+    cache_enabled: bool = Field(True, description="是否启用缓存")
+    timeout_ms: int = Field(1000, description="超时时间（毫秒）", ge=100, le=30000)
+
+
+class UpdateServiceRequest(BaseModel):
+    """更新检测服务请求模型"""
+    name: str | None = Field(None, description="服务名称", min_length=1, max_length=200)
+    description: str | None = Field(None, description="服务描述")
+    service_type: str | None = Field(None, description="服务类型")
+    enabled_dimensions: list[str] | None = Field(None, description="启用的维度列表")
+    enabled_labels: list[str] | None = Field(None, description="启用的标签列表")
+    policy_config: dict[str, Any] | None = Field(None, description="策略配置")
+    cache_enabled: bool | None = Field(None, description="是否启用缓存")
+    timeout_ms: int | None = Field(None, description="超时时间（毫秒）", ge=100, le=30000)
+
+
 class ChunkDetectionResult(BaseModel):
     """单个切片检测结果"""
     chunk_id: str = Field(..., description="切片唯一ID（基于内容哈希）")
@@ -1547,13 +1572,294 @@ def get_available_services(
         return server_error_response(e)
 
 
+@router.post('/services', summary="创建检测服务")
+def create_detection_service(
+    request: CreateServiceRequest,
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+) -> dict[str, Any]:
+    """
+    ### POST `/services` 创建检测服务
+    
+    **功能描述**:
+    创建一个新的检测服务配置，用于后续的内容安全检测。
+    
+    ---
+    ### 请求体 (Request Body)
+    | 字段                  | 类型        | 必填 | 默认值 | 描述                           |
+    |----------------------|-------------|------|--------|--------------------------------|
+    | `code`               | `string`    | 是   | -      | 服务代码，唯一标识             |
+    | `name`               | `string`    | 是   | -      | 服务名称                       |
+    | `description`        | `string`    | 否   | null   | 服务描述                       |
+    | `service_type`       | `string`    | 否   | "api"  | 服务类型                       |
+    | `enabled_dimensions` | `list[str]` | 否   | []     | 启用的维度列表                 |
+    | `enabled_labels`     | `list[str]` | 否   | []     | 启用的标签列表                 |
+    | `policy_config`      | `dict`      | 否   | {}     | 策略配置                       |
+    | `cache_enabled`      | `bool`      | 否   | true   | 是否启用缓存                   |
+    | `timeout_ms`         | `int`       | 否   | 1000   | 超时时间（毫秒），范围100-30000|
+    
+    **请求示例**:
+    ```json
+    {
+        "code": "custom_security_check",
+        "name": "自定义安全检测",
+        "description": "用于特定场景的安全检测服务",
+        "service_type": "api",
+        "enabled_dimensions": ["CONTENT_COMPLIANCE"],
+        "enabled_labels": ["political_entity"],
+        "policy_config": {
+            "risk_threshold": 70,
+            "default_action": "block"
+        },
+        "cache_enabled": true,
+        "timeout_ms": 1500
+    }
+    ```
+    
+    ---
+    ### 响应 (Response)
+    #### 成功响应 (200)
+    ```json
+    {
+        "code": 200,
+        "data": {
+            "service_id": "newly_created_service_id",
+            "message": "服务创建成功"
+        }
+    }
+    ```
+    
+    #### 失败响应 (400)
+    ```json
+    {
+        "code": 400,
+        "retmsg": "服务代码已存在"
+    }
+    ```
+    """
+    try:
+        # 创建服务
+        service_id = GuardServiceService.create_service(
+            db=db,
+            code=request.code,
+            name=request.name,
+            description=request.description,
+            tenant_id=user.id,
+            created_by=user.id,
+            service_type=request.service_type,
+            enabled_dimensions=request.enabled_dimensions,
+            enabled_labels=request.enabled_labels,
+            policy_config=request.policy_config,
+            cache_enabled=request.cache_enabled,
+            timeout_ms=request.timeout_ms
+        )
+        
+        if not service_id:
+            return get_data_error_result(retmsg=f"服务代码 {request.code} 已存在")
+        
+        return get_json_result(data={
+            "service_id": service_id,
+            "message": "服务创建成功"
+        })
+        
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.put('/services/{service_id}', summary="修改检测服务")
+def update_detection_service(
+    service_id: str,
+    request: UpdateServiceRequest,
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+) -> dict[str, Any]:
+    """
+    ### PUT `/services/{service_id}` 修改检测服务
+    
+    **功能描述**:
+    修改指定检测服务的配置信息。只需要提供需要修改的字段，未提供的字段保持不变。
+    
+    **注意**: 
+    - `code` 字段不可修改（业务主键，与历史日志关联）
+    - 如需修改 code，建议删除后重建服务
+    
+    ---
+    ### 路径参数 (Path Parameters)
+    | 参数         | 类型     | 必填 | 描述       |
+    |--------------|----------|------|------------|
+    | `service_id` | `string` | 是   | 服务ID     |
+    
+    ---
+    ### 请求体 (Request Body)
+    | 字段                  | 类型        | 必填 | 描述                           |
+    |----------------------|-------------|------|--------------------------------|
+    | `name`               | `string`    | 否   | 服务名称                       |
+    | `description`        | `string`    | 否   | 服务描述                       |
+    | `service_type`       | `string`    | 否   | 服务类型                       |
+    | `enabled_dimensions` | `list[str]` | 否   | 启用的维度列表                 |
+    | `enabled_labels`     | `list[str]` | 否   | 启用的标签列表                 |
+    | `policy_config`      | `dict`      | 否   | 策略配置                       |
+    | `cache_enabled`      | `bool`      | 否   | 是否启用缓存                   |
+    | `timeout_ms`         | `int`       | 否   | 超时时间（毫秒），范围100-30000|
+    
+    **请求示例**:
+    ```json
+    {
+        "name": "更新后的服务名称",
+        "description": "更新后的服务描述",
+        "policy_config": {
+            "risk_threshold": 80,
+            "default_action": "warn"
+        }
+    }
+    ```
+    
+    ---
+    ### 响应 (Response)
+    #### 成功响应 (200)
+    ```json
+    {
+        "code": 200,
+        "data": {
+            "message": "服务更新成功"
+        }
+    }
+    ```
+    
+    #### 失败响应 (404)
+    ```json
+    {
+        "code": 404,
+        "retmsg": "服务不存在"
+    }
+    ```
+    
+    #### 失败响应 (403)
+    ```json
+    {
+        "code": 403,
+        "retmsg": "无权限访问该服务"
+    }
+    ```
+    """
+    try:
+        # 验证服务存在性和权限
+        service = GuardServiceService.get_by_id(db, service_id)
+        if not service:
+            return get_data_error_result(retmsg="服务不存在", retcode=404)
+        
+        if service.tenant_id != user.id:
+            return get_data_error_result(retmsg="无权限访问该服务", retcode=403)
+        
+        # 构建更新数据（只包含提供的字段）
+        update_data = {}
+        if request.name is not None:
+            update_data["name"] = request.name
+        if request.description is not None:
+            update_data["description"] = request.description
+        if request.service_type is not None:
+            update_data["service_type"] = request.service_type
+        if request.enabled_dimensions is not None:
+            update_data["enabled_dimensions"] = request.enabled_dimensions
+        if request.enabled_labels is not None:
+            update_data["enabled_labels"] = request.enabled_labels
+        if request.policy_config is not None:
+            update_data["policy_config"] = request.policy_config
+        if request.cache_enabled is not None:
+            update_data["cache_enabled"] = request.cache_enabled
+        if request.timeout_ms is not None:
+            update_data["timeout_ms"] = request.timeout_ms
+        
+        # 检查是否有数据需要更新
+        if not update_data:
+            return get_data_error_result(retmsg="没有提供需要更新的数据")
+        
+        # 执行更新
+        success = GuardServiceService.update_service(db, service_id, update_data)
+        
+        if not success:
+            return get_data_error_result(retmsg="服务更新失败")
+        
+        return get_json_result(data={"message": "服务更新成功"})
+        
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.delete('/services/{service_id}', summary="删除检测服务")
+def delete_detection_service(
+    service_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+) -> dict[str, Any]:
+    """
+    ### DELETE `/services/{service_id}` 删除检测服务
+    
+    **功能描述**:
+    删除指定的检测服务。这是逻辑删除，实际上是将服务状态标记为已删除。
+    
+    ---
+    ### 路径参数 (Path Parameters)
+    | 参数         | 类型     | 必填 | 描述       |
+    |--------------|----------|------|------------|
+    | `service_id` | `string` | 是   | 服务ID     |
+    
+    ---
+    ### 响应 (Response)
+    #### 成功响应 (200)
+    ```json
+    {
+        "code": 200,
+        "data": {
+            "message": "服务删除成功"
+        }
+    }
+    ```
+    
+    #### 失败响应 (404)
+    ```json
+    {
+        "code": 404,
+        "retmsg": "服务不存在"
+    }
+    ```
+    
+    #### 失败响应 (403)
+    ```json
+    {
+        "code": 403,
+        "retmsg": "无权限访问该服务"
+    }
+    ```
+    """
+    try:
+        # 验证服务存在性和权限
+        service = GuardServiceService.get_by_id(db, service_id)
+        if not service:
+            return get_data_error_result(retmsg="服务不存在", retcode=404)
+        
+        if service.tenant_id != user.id:
+            return get_data_error_result(retmsg="无权限访问该服务", retcode=403)
+        
+        # 逻辑删除（将状态设置为 "0"）
+        success = GuardServiceService.update_service(db, service_id, {"status": "0"})
+        
+        if not success:
+            return get_data_error_result(retmsg="服务删除失败")
+        
+        return get_json_result(data={"message": "服务删除成功"})
+        
+    except Exception as e:
+        return server_error_response(e)
+
+
 @router.get('/logs', summary="获取检测日志")
 def get_detection_logs(
     page: int = 1,
     page_size: int = 50,
     start_date: str | None = None,
     end_date: str | None = None,
-    service_id: str | None = None,
+    service_code: str | None = None,
     is_blocked: bool | None = None,
     db: Session = Depends(get_db),
     user=Depends(manager)
@@ -1572,9 +1878,10 @@ def get_detection_logs(
             - 格式: "YYYY-MM-DD" 或 "YYYY-MM-DDTHH:MM:SS"  
             - 示例: "2025-07-14" 或 "2025-07-14T23:59:59"
             - 如果不提供，则不限制结束时间
-        service_id (str, optional): 服务ID过滤
-            - 示例: "service_uuid_123"
+        service_code (str, optional): 服务代码过滤（如 "query_security_check"）
+            - 示例: "query_security_check"
             - 如果不提供，则返回所有服务的日志
+            - 注意：使用 service_code 而非 service_id 以提高查询性能
         is_blocked (bool, optional): 是否被拦截过滤
             - True: 只返回被拦截的记录
             - False: 只返回未被拦截的记录
@@ -1628,7 +1935,7 @@ def get_detection_logs(
             page_size=page_size,
             start_date=start_date,
             end_date=end_date,
-            service_id=service_id,
+            service_code=service_code,
             is_blocked=is_blocked
         )
         

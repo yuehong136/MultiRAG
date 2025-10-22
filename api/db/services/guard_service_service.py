@@ -122,7 +122,7 @@ class GuardServiceService(CommonService):
 
     @classmethod
     def update_service(cls, db: Session, service_id: str, 
-                      update_data: Dict[str, Any]) -> bool:
+                      update_data: Dict[str, Any]) -> int:
         """
         更新服务配置
         
@@ -132,17 +132,17 @@ class GuardServiceService(CommonService):
             update_data: 更新数据
             
         Returns:
-            更新成功返回True，失败返回False
+            返回受影响的行数，失败返回0
         """
         try:
             return cls.update_by_id(db, service_id, update_data)
         except Exception as e:
             logging.error(f"更新服务配置失败: {e}")
-            return False
+            return 0
 
     @classmethod
     def increment_request_count(cls, db: Session, service_id: str, 
-                              blocked: bool = False) -> bool:
+                              blocked: bool = False) -> int:
         """
         增加请求统计
         
@@ -152,12 +152,12 @@ class GuardServiceService(CommonService):
             blocked: 是否被拦截
             
         Returns:
-            更新成功返回True，失败返回False
+            返回受影响的行数，服务不存在或失败返回0
         """
         try:
             service = cls.get_by_id(db, service_id)
             if not service:
-                return False
+                return 0
                 
             update_data = {
                 "total_requests": service.total_requests + 1
@@ -166,12 +166,10 @@ class GuardServiceService(CommonService):
             if blocked:
                 update_data["blocked_requests"] = service.blocked_requests + 1
 
-            # 将返回值转换为布尔值
-            result = cls.update_by_id(db, service_id, update_data)
-            return bool(result)  # 或者写成: return result > 0
+            return cls.update_by_id(db, service_id, update_data)
         except Exception as e:
             logging.error(f"更新请求统计失败: {e}")
-            return False
+            return 0
 
     @classmethod
     def init_default_services(cls, db: Session, tenant_id: str, 
