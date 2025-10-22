@@ -436,6 +436,14 @@ def create_library_item(
     ```
     """
     try:
+        # 先验证词库的所有权
+        library = GuardLibraryService.get_by_id(db, library_id)
+        if not library:
+            return get_data_error_result(retmsg="词库不存在")
+        
+        if library.tenant_id != user.id:
+            return get_data_error_result(retmsg="无权访问此词库")
+        
         item_id = GuardLibraryItemService.create_item(
             db=db,
             library_id=library_id,
@@ -524,6 +532,14 @@ def get_library_items(
     ```
     """
     try:
+        # 先验证词库的所有权
+        library = GuardLibraryService.get_by_id(db, library_id)
+        if not library:
+            return get_data_error_result(retmsg="词库不存在")
+        
+        if library.tenant_id != user.id:
+            return get_data_error_result(retmsg="无权访问此词库")
+        
         if keyword:
             result = GuardLibraryItemService.search_items(
                 db, library_id, keyword, page, page_size
@@ -607,6 +623,14 @@ def batch_create_items(
     ```
     """
     try:
+        # 先验证词库的所有权
+        library = GuardLibraryService.get_by_id(db, library_id)
+        if not library:
+            return get_data_error_result(retmsg="词库不存在")
+        
+        if library.tenant_id != user.id:
+            return get_data_error_result(retmsg="无权访问此词库")
+        
         result = GuardLibraryItemService.batch_create_items(
             db=db,
             library_id=library_id,
@@ -1083,6 +1107,14 @@ def export_library_items(
     ```
     """
     try:
+        # 先验证词库的所有权
+        library = GuardLibraryService.get_by_id(db, library_id)
+        if not library:
+            return get_data_error_result(retmsg="词库不存在")
+        
+        if library.tenant_id != user.id:
+            return get_data_error_result(retmsg="无权访问此词库")
+        
         items = GuardLibraryItemService.get_all_items_by_library(db, library_id)
         
         # 转换为字典格式
