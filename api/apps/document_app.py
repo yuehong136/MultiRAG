@@ -2136,7 +2136,7 @@ def run(
                 else:
                     return get_data_error_result(retmsg="Cannot cancel a task that is not in RUNNING status")
 
-            if str(req["run"]) == TaskStatus.RUNNING.value and str(d["run"]) == TaskStatus.DONE.value:
+            if all([("delete" not in req or req["delete"]), str(req["run"]) == TaskStatus.RUNNING.value, str(d["run"]) == TaskStatus.DONE.value]):
                 DocumentService.clear_chunk_num_when_rerun(db, d["id"])
 
             DocumentService.update_by_id(db, id, info)
