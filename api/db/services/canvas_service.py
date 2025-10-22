@@ -16,7 +16,7 @@ from sqlalchemy.sql import desc as sa_desc
 
 from agent.canvas import Canvas
 from agent.component.llm import LLM
-from api.db import TenantPermission
+from api.db import TenantPermission, CanvasCategory
 from api.db.db_models import (
     CanvasTemplate,
     User,
@@ -30,80 +30,28 @@ from api.utils.api_utils import get_data_openai
 
 
 # ---------------------------
-# 通用 Service（SQLAlchemy）
-# ---------------------------
-class SACommonService(CommonService):
-    """
-    继承你现有的 CommonService，但将默认实现改成 SQLAlchemy 版本。
-    需要你项目里的 CommonService 支持 __init__(model)，或者你可以直接把这里当独立基类。
-    """
-    def __init__(self, model):
-        super().__init__(model)
-        self.model = model
-
-    @classmethod
-    def get_by_id(cls, db: Session, id_: str):
-        obj = db.get(cls.model, id_)
-        return (obj is not None), obj
-
-    @classmethod
-    def save(cls, db: Session, **kwargs):
-        obj = cls.model(**kwargs)
-        db.add(obj)
-        db.commit()
-        db.refresh(obj)
-        return obj
-
-    @classmethod
-    def update_by_id(cls, db: Session, id_: str, values: dict):
-        obj = db.get(cls.model, id_)
-        if not obj:
-            return 0
-        for k, v in values.items():
-            setattr(obj, k, v)
-        db.add(obj)
-        db.commit()
-        return 1
-
-    @classmethod
-    def delete_by_id(cls, db: Session, id_: str):
-        obj = db.get(cls.model, id_)
-        if not obj:
-            return 0
-        db.delete(obj)
-        db.commit()
-        return 1
-
-    @classmethod
-    def query(cls, db: Session, **filters):
-        stmt = select(cls.model)
-        for k, v in filters.items():
-            if v is None:
-                continue
-            stmt = stmt.where(getattr(cls.model, k) == v)
-        rows = db.execute(stmt).scalars().all()
-        return rows
-
-
-# ---------------------------
 # CanvasTemplateService
 # ---------------------------
-class CanvasTemplateService(SACommonService):
+class CanvasTemplateService(CommonService):
     model = CanvasTemplate
 
     def __init__(self):
         super().__init__(CanvasTemplate)
 
-    @classmethod
-    def get_all(cls, db: Session):
-        stmt = select(cls.model)
-        return db.execute(stmt).scalars().all()
 
+class DataFlowTemplateService(CommonService):
+    """
+    Alias of CanvasTemplateService
+    """
+    model = CanvasTemplate
+
+    def __init__(self):
+        super().__init__(CanvasTemplate)
 
 # ---------------------------
 # UserCanvasService
 # ---------------------------
-class UserCanvasService(SACommonService):
+class UserCanvasService(CommonService):
     model = UserCanvas
 
     def __init__(self):
@@ -120,30 +68,20 @@ class UserCanvasService(SACommonService):
         desc: bool,
         id: str | None,
         title: str | None,
+        canvas_category=CanvasCategory.Agent
     ):
         """
         等价 Peewee 版本：按 user_id(tenant) 过滤，支持 id/title 精确过滤，排序+分页，返回字典行。
         """
-        # 选择列（与 Peewee dicts() 相当）
-        fields = [
-            cls.model.id,
-            cls.model.avatar,
-            cls.model.title,
-            cls.model.dsl,
-            cls.model.description,
-            cls.model.permission,
-            cls.model.update_time,
-            cls.model.user_id,
-            cls.model.create_time,
-            cls.model.create_date,
-            cls.model.update_date,
-        ]
+        # 选择列（与 Peewee dicts() 默认返回所有字段等价）
+        columns = list(cls.model.__table__.columns)
 
-        base = select(*fields).select_from(cls.model).where(cls.model.user_id == tenant_id)
+        base = select(*columns).select_from(cls.model).where(cls.model.user_id == tenant_id)
         if id:
             base = base.where(cls.model.id == id)
         if title:
             base = base.where(cls.model.title == title)
+        base = base.where(cls.model.canvas_category == canvas_category)
 
         order_col = getattr(cls.model, orderby)
         base = base.order_by(sa_desc(order_col) if desc else asc(order_col))
@@ -173,6 +111,7 @@ class UserCanvasService(SACommonService):
                 cls.model.create_time,
                 cls.model.create_date,
                 cls.model.update_date,
+                cls.model.canvas_category,
                 User.nickname,
                 User.avatar.label("tenant_avatar"),
             ]
@@ -201,6 +140,7 @@ class UserCanvasService(SACommonService):
         orderby: str,
         desc: bool,
         keywords: str | None,
+        canvas_category=CanvasCategory.Agent,
     ):
         """
         TEAM 可见 + 自己的；支持 keywords（title 模糊）；排序+分页；返回(列表, 总数)
@@ -215,6 +155,7 @@ class UserCanvasService(SACommonService):
             User.nickname,
             User.avatar.label("tenant_avatar"),
             cls.model.update_time,
+            cls.model.canvas_category,
         ]
 
         cond_team = (cls.model.user_id.in_(joined_tenant_ids)) & (
@@ -231,6 +172,8 @@ class UserCanvasService(SACommonService):
 
         if keywords:
             base = base.where(func.lower(cls.model.title).contains(keywords.lower()))
+
+        base = base.where(cls.model.canvas_category == canvas_category)
 
         order_col = getattr(cls.model, orderby)
         base = base.order_by(sa_desc(order_col) if desc else asc(order_col))
@@ -351,7 +294,7 @@ def completionOpenAI(
     - 非流模式：yield 最终完整对象
     """
     tiktokenenc = tiktoken.get_encoding("cl100k_base")
-    prompt_tokens = len(enc.encode(str(question)))
+    prompt_tokens = len(tiktokenenc.encode(str(question)))
     user_id = kwargs.get("user_id", "")
 
     if stream:
@@ -410,7 +353,7 @@ def completionOpenAI(
                     content=err_text,
                     finish_reason="stop",
                     prompt_tokens=prompt_tokens,
-                    completion_tokens=len(enc.encode(err_text)),
+                    completion_tokens=len(tiktokenenc.encode(err_text)),
                     stream=True,
                 ),
                 ensure_ascii=False,
@@ -465,7 +408,7 @@ def completionOpenAI(
                 id=session_id or str(uuid4()),
                 model=agent_id,
                 prompt_tokens=prompt_tokens,
-                completion_tokens=len(enc.encode(err_text)),
+                completion_tokens=len(tiktokenenc.encode(err_text)),
                 content=err_text,
                 finish_reason="stop",
                 param=None,

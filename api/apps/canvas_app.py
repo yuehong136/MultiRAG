@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from api import settings
 from api.apps import manager  # 你现有的登录依赖，返回当前用户对象
 from api.db.db_models import get_db, APIToken
-from api.db import FileType
+from api.db import FileType, CanvasCategory
 from api.db.services.canvas_service import (
     CanvasTemplateService,
     UserCanvasService,
@@ -115,7 +115,7 @@ class SettingRequest(BaseModel):
 @router.get("/templates", summary="获取Canvas模板列表")
 def templates(db: Session = Depends(get_db), user=Depends(manager)):
     try:
-        data = [c.to_dict() for c in CanvasTemplateService.get_all(db)]
+        data = [c.to_dict() for c in CanvasTemplateService.query(db, canvas_category=CanvasCategory.Agent)]
         return get_json_result(data=data)
     except Exception as e:
         return server_error_response(e)
@@ -124,7 +124,7 @@ def templates(db: Session = Depends(get_db), user=Depends(manager)):
 @router.get("/list", summary="获取我的Canvas列表")
 def canvas_list(db: Session = Depends(get_db), user=Depends(manager)):
     try:
-        kbs = [c.to_dict() for c in UserCanvasService.query(db, user_id=user.id)]
+        kbs = [c.to_dict() for c in UserCanvasService.query(db, user_id=user.id, canvas_category=CanvasCategory.Agent)]
         kbs_sorted = sorted(kbs, key=lambda x: x["update_time"] * -1)
         return get_json_result(data=kbs_sorted)
     except Exception as e:
@@ -156,7 +156,7 @@ def save(request: SetCanvasRequest, db: Session = Depends(get_db), user=Depends(
         if "id" not in req or not req["id"]:
             req["user_id"] = user.id
             # 新建
-            if UserCanvasService.query(db, user_id=user.id, title=req["title"].strip()):
+            if UserCanvasService.query(db, user_id=user.id, title=req["title"].strip(), canvas_category=CanvasCategory.Agent):
                 return get_data_error_result(retmsg=f"{req['title'].strip()} already exists.")
             req["id"] = get_uuid()
             # 存储 dsl 需要序列化为原库约定格式

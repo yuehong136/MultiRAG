@@ -85,10 +85,19 @@ class FileSource(StrEnum):
     S3 = "s3"
 
 
+class CanvasCategory(StrEnum):
+    Agent = "agent_canvas"
+    DataFlow = "dataflow_canvas"
+
+VALID_CAVAS_CATEGORIES = {CanvasCategory.Agent, CanvasCategory.DataFlow}
+
+
 class MCPServerType(StrEnum):
     SSE = "sse"
     STREAMABLE_HTTP = "streamable-http"
 
+
 VALID_MCP_SERVER_TYPES = {MCPServerType.SSE, MCPServerType.STREAMABLE_HTTP}
 
-KNOWLEDGEBASE_FOLDER_NAME = ".knowledgebase"
+
+KNOWLEDGEBASE_FOLDER_NAME=".knowledgebase"

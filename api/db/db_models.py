@@ -762,6 +762,7 @@ class UserCanvas(BaseModel):
     permission = Column(String(16), index=True, nullable=False, default="me", doc="me|team")
     description = Column(Text, index=False, nullable=True, doc="Canvas description")
     canvas_type = Column(String(32), index=True, nullable=True, doc="Canvas type")
+    canvas_category = Column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")
     dsl = Column(JSONB, index=False, nullable=True, default={})
 
 
@@ -774,6 +775,7 @@ class CanvasTemplate(BaseModel):
     title = Column(JSONB, index=False, nullable=True, default=dict, doc="Canvas title")
     description = Column(JSONB, index=False, nullable=True, default=dict, doc="Canvas description")
     canvas_type = Column(String(32), index=True, nullable=True, doc="Canvas type")
+    canvas_category = Column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")
     dsl = Column(JSONB, index=False, nullable=True, default={})
 
 
