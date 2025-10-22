@@ -262,37 +262,6 @@ async def process_docx(file: UploadFile = File(...)):
 
         return '\n'.join(top_content_lines).strip()
 
-    # 工具方法：智能插入占位符，保持原有格式
-    def insert_placeholder_smartly(cell_text: str, placeholder: str) -> str:
-        """
-        在单元格文本中智能插入占位符，保持原有格式
-        在顶部内容后的第一个合适位置插入占位符
-        """
-        if not cell_text or not cell_text.strip():
-            return cell_text
-
-        lines = cell_text.split('\n')
-        top_content = extract_top_content(cell_text)
-
-        if not top_content:
-            return cell_text
-
-        # 找到顶部内容在原文中的结束位置
-        top_lines = top_content.split('\n')
-        top_line_count = len(top_lines)
-
-        # 在顶部内容后寻找合适的插入位置
-        insert_position = top_line_count
-
-        # 如果顶部内容后面有空行，在第一个空行的位置插入
-        if insert_position < len(lines) and lines[insert_position].strip() == "":
-            # 跳过一个空行，在下一行插入
-            insert_position += 1
-
-        # 插入占位符
-        new_lines = lines[:insert_position] + [placeholder] + lines[insert_position:]
-        return '\n'.join(new_lines)
-
     # 工具方法：标准化所有占位符
     def normalize_all_placeholders(matrix):
         key_map = {}
@@ -448,6 +417,65 @@ async def process_docx(file: UploadFile = File(...)):
         for idx in range(len(lines), len(paragraphs)):
             _replace_paragraph_text(paragraphs[idx], "")
 
+    def insert_placeholder_preserving_layout(cell, placeholder: str):
+        """
+        将占位符插入到单元格中，尽量复用现有段落并保持原有对齐和样式。
+        逻辑：识别顶部内容段落数量，并在其后的第一个合适位置插入新的段落。
+        """
+        if not placeholder:
+            return
+
+        paragraphs = list(cell.paragraphs)
+        if not paragraphs:
+            new_para = cell.add_paragraph('')
+            _replace_paragraph_text(new_para, placeholder)
+            return
+
+        paragraph_texts = [p.text for p in paragraphs]
+        aggregated_text = "\n".join(paragraph_texts)
+        if placeholder in aggregated_text:
+            return
+
+        top_content = extract_top_content(aggregated_text)
+
+        if not top_content:
+            target_paragraph = paragraphs[0].insert_paragraph_before('')
+            head_style = paragraphs[0].style
+            if head_style:
+                target_paragraph.style = head_style
+            if paragraphs[0].alignment is not None:
+                target_paragraph.alignment = paragraphs[0].alignment
+            else:
+                target_paragraph.alignment = None
+            _replace_paragraph_text(target_paragraph, placeholder)
+            return
+
+        lines = paragraph_texts
+        top_lines = top_content.split('\n')
+        insert_index = len(top_lines)
+
+        if insert_index < len(lines) and lines[insert_index].strip() == "":
+            insert_index += 1
+
+        base_idx = max(0, min(len(paragraphs) - 1, len(top_lines) - 1))
+        base_paragraph = paragraphs[base_idx]
+        base_style = base_paragraph.style
+        base_alignment = base_paragraph.alignment
+
+        if insert_index >= len(paragraphs):
+            target_paragraph = cell.add_paragraph('')
+        else:
+            target_paragraph = paragraphs[insert_index].insert_paragraph_before('')
+
+        if base_style:
+            target_paragraph.style = base_style
+        if base_alignment is not None:
+            target_paragraph.alignment = base_alignment
+        else:
+            target_paragraph.alignment = None
+
+        _replace_paragraph_text(target_paragraph, placeholder)
+
     # Step 1: 读取文件
     file_content = await file.read()
     input_doc = Document(BytesIO(file_content))
@@ -543,11 +571,8 @@ async def process_docx(file: UploadFile = File(...)):
                             # 生成占位符
                             placeholder_value = wrap_placeholder(placeholder_key)
 
-                            # 使用智能插入函数，保持原有格式
-                            new_cell_content = insert_placeholder_smartly(cell_text, placeholder_value)
-
-                            # 更新单元格内容
-                            cell.text = new_cell_content
+                            # 在保持现有段落布局的同时插入占位符
+                            insert_placeholder_preserving_layout(cell, placeholder_value)
 
                             # 将新生成的占位符添加到placeholders字典中
                             placeholders[placeholder_key] = ""
