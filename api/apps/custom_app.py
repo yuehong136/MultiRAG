@@ -348,6 +348,11 @@ async def process_docx(file: UploadFile = File(...)):
         return vmerge and vmerge[0].get(
             "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") == "restart"
 
+    # 工具方法：判断单元格是否独占整行
+    def is_full_row_cell(row, target_cell):
+        target_element = target_cell._element
+        return all(cell._element is target_element for cell in row.cells)
+
     # 工具方法：填充表格（右填充 + 下填充，检测合并单元格，独立单元格）
     def fill_table(matrix, table, above_paragraphs):
         rows = len(matrix)
@@ -563,6 +568,10 @@ async def process_docx(file: UploadFile = File(...)):
                     continue
 
                 cell_text = cell.text
+
+                # 仅处理独占整行的单元格
+                if not is_full_row_cell(row, cell):
+                    continue
 
                 # 判断是否需要处理这个非空单元格
                 if should_process_non_empty_cell(cell_text):
