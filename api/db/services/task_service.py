@@ -40,6 +40,19 @@ def trim_header_by_lines(text: str, max_length) -> str:
     return text
 
 class TaskService(CommonService):
+    """Service class for managing document processing tasks.
+
+    This class extends CommonService to provide specialized functionality for document
+    processing task management, including task creation, progress tracking, and chunk
+    management. It handles various document types (PDF, Excel, etc.) and manages their
+    processing lifecycle.
+
+    The class implements a robust task queue system with retry mechanisms and progress
+    tracking, supporting both synchronous and asynchronous task execution.
+
+    Attributes:
+        model: The Task model class for database operations.
+    """
     model = Task
 
     @classmethod
@@ -421,3 +434,39 @@ def has_canceled(task_id):
     except Exception as e:
         logging.exception(e)
     return False
+
+
+def queue_dataflow(db: Session, dsl: str, tenant_id: str, doc_id: str, task_id: str, flow_id: str, priority: int, callback=None) -> tuple[bool, str]:
+    """
+    Returns a tuple (success: bool, error_message: str).
+    """
+    _ = callback
+
+    task = dict(
+    id=get_uuid() if not task_id else task_id,
+    doc_id=doc_id,
+    from_page=0,
+    to_page=100000000,
+    task_type="dataflow",
+    priority=priority,
+    )
+
+    TaskService.filter_delete(db, [Task.id == task["id"]])
+    bulk_insert_into_db(db, model=Task, data_source=[task], replace_on_conflict=True)
+
+    kb_id = DocumentService.get_knowledgebase_id(db, doc_id)
+    if not kb_id:
+        return False, f"Can't find KB of this document: {doc_id}"
+
+    task["kb_id"] = kb_id
+    task["tenant_id"] = tenant_id
+    task["task_type"] = "dataflow"
+    task["dsl"] = dsl
+    task["dataflow_id"] = get_uuid() if not flow_id else flow_id
+
+    if not REDIS_CONN.queue_product(
+        get_svr_queue_name(priority), message=task
+    ):
+        return False, "Can't access Redis. Please check the Redis' status."
+
+    return True, ""
