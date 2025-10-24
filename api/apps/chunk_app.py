@@ -1432,6 +1432,9 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
     doc_ids = request.doc_ids
     kb_ids = request.kb_ids
     question = request.question
+    if not kb_ids:
+        return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=settings.RetCode.DATA_ERROR)
+
     if request.search_id:
         search_config = SearchService.get_detail(db, request.get("search_id", "")).get("search_config", {})
         meta_data_filter = search_config.get("meta_data_filter", {})

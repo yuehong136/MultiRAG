@@ -1050,6 +1050,8 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
     kb_ids = req["kb_id"]
     if isinstance(kb_ids, str):
         kb_ids = [kb_ids]
+    if not kb_ids:
+        return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=settings.RetCode.DATA_ERROR)
     doc_ids = req.get("doc_ids", [])
     similarity_threshold = float(req.get("similarity_threshold", 0.0))
     vector_similarity_weight = float(req.get("vector_similarity_weight", 0.3))
