@@ -402,7 +402,7 @@ def next_step(chat_mdl, history: list, tools_description: list[dict], task_desc,
     else:
         hist.append({"role": "user", "content": user_prompt})
     result = chat_mdl.chat(
-        template.render(task_analisys=task_desc, desc=desc, today=datetime.datetime.now().strftime("%Y-%m-%d")),
+        template.render(task_analysis=task_desc, desc=desc, today=datetime.datetime.now().strftime("%Y-%m-%d")),
         hist[1:], stop=["<|stop|>"])
 
     # 处理可能的元组返回值
