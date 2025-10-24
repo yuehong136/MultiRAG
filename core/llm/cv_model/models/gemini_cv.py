@@ -19,9 +19,7 @@ class GeminiCV(Base):
         self.lang = lang
         Base.__init__(self, **kwargs)
 
-    def _form_history(self, system, history, images=None):
-        if images is None:
-            images = []
+    def _form_history(self, system, history, images=[]):
         hist = []
         if system:
             hist.append({"role": "user", "parts": [system, history[0]["content"]]})
@@ -40,26 +38,26 @@ class GeminiCV(Base):
             else "Please describe the content of this picture, like where, when, who, what happen. If it has number data, please extract them out."
         )
         b64 = self.image2base64(image)
-        img = open(BytesIO(base64.b64decode(b64)))
-        input = [prompt, img]
-        res = self.model.generate_content(input)
-        return res.text, res.usage_metadata.total_token_count
+        with BytesIO(base64.b64decode(b64)) as bio:
+            img = open(bio)
+            input = [prompt, img]
+            res = self.model.generate_content(input)
+            img.close()
+            return res.text, res.usage_metadata.total_token_count
 
     def describe_with_prompt(self, image, prompt=None):
         from PIL.Image import open
 
         b64 = self.image2base64(image)
         vision_prompt = prompt if prompt else vision_llm_describe_prompt()
-        img = open(BytesIO(base64.b64decode(b64)))
-        input = [vision_prompt, img]
-        res = self.model.generate_content(
-            input,
-        )
-        return res.text, res.usage_metadata.total_token_count
+        with BytesIO(base64.b64decode(b64)) as bio:
+            img = open(bio)
+            input = [vision_prompt, img]
+            res = self.model.generate_content(input)
+            img.close()
+            return res.text, res.usage_metadata.total_token_count
 
-    def chat(self, system, history, gen_conf, images=None):
-        if images is None:
-            images = []
+    def chat(self, system, history, gen_conf, images=[]):
         generation_config = dict(temperature=gen_conf.get("temperature", 0.3), top_p=gen_conf.get("top_p", 0.7))
         try:
             response = self.model.generate_content(
@@ -70,9 +68,7 @@ class GeminiCV(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system, history, gen_conf, images=None):
-        if images is None:
-            images = []
+    def chat_streamly(self, system, history, gen_conf, images=[]):
         ans = ""
         response = None
         try:
