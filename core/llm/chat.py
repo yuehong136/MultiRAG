@@ -724,14 +724,14 @@ class LocalLLM(Base):
         self.client = Client(port=12345, protocol="grpc", asyncio=True)
 
     def _prepare_prompt(self, system, history, gen_conf):
-        from rag.svr.jina_server import Prompt
+        from core.svr.jina_server import Prompt
 
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
         return Prompt(message=history, gen_conf=gen_conf)
 
     def _stream_response(self, endpoint, prompt):
-        from rag.svr.jina_server import Generation
+        from core.svr.jina_server import Generation
 
         answer = ""
         try:
@@ -1280,6 +1280,15 @@ class GPUStackChat(Base):
         if not base_url:
             raise ValueError("Local llm url cannot be None")
         base_url = urljoin(base_url, "v1")
+        super().__init__(key, model_name, base_url, **kwargs)
+
+
+class MeituanChat(Base):
+    _FACTORY_NAME = "Meituan"
+
+    def __init__(self, key, model_name, base_url="https://api.longcat.chat/openai", **kwargs):
+        if not base_url:
+            base_url = "https://api.longcat.chat/openai"
         super().__init__(key, model_name, base_url, **kwargs)
 
 
