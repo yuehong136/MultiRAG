@@ -456,7 +456,7 @@ def test_db_connect(request: TestDBConnectRequest, user=Depends(manager)):
             )
             db.connect()
             db.close()
-        elif request.db_type == "postgresql":
+        elif request.db_type == "postgres":
             db = PostgresqlDatabase(
                 request.database,
                 user=request.username,
