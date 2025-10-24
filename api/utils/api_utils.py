@@ -220,6 +220,10 @@ def get_json_result(retcode=settings.RetCode.SUCCESS, retmsg='success', data=Non
 
 
 def apikey_required(func: Callable) -> Callable:
+    """
+    装饰器形式的 API Key 验证（已废弃，建议使用 apikey_dependency）
+    保留此函数是为了向后兼容，但建议使用 FastAPI 依赖注入方式
+    """
     @wraps(func)
     async def decorated_function(*args, **kwargs):
         request: Request = kwargs.get('request')  # 从 kwargs 中获取 FastAPI Request 对象
@@ -239,6 +243,55 @@ def apikey_required(func: Callable) -> Callable:
         return await func(*args, **kwargs)
 
     return decorated_function
+
+
+async def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> str:
+    """
+    FastAPI 依赖注入形式的 API Key 验证
+    
+    从请求头中提取并验证 API Key，返回 tenant_id
+    
+    Args:
+        request: FastAPI Request 对象
+        db: 数据库会话
+    
+    Returns:
+        str: 租户ID
+        
+    Raises:
+        HTTPException: 当 API Key 无效或缺失时
+        
+    Example:
+        @router.post("/endpoint")
+        async def endpoint(tenant_id: str = Depends(apikey_dependency)):
+            # 使用 tenant_id
+            pass
+    """
+    authorization_header = request.headers.get('Authorization')
+    
+    if not authorization_header:
+        raise build_error_result(
+            error_msg='Authorization header is missing!', 
+            retcode=settings.RetCode.FORBIDDEN
+        )
+    
+    authorization_list = authorization_header.split()
+    if len(authorization_list) < 2:
+        raise build_error_result(
+            error_msg='Invalid Authorization format!', 
+            retcode=settings.RetCode.FORBIDDEN
+        )
+    
+    token = authorization_list[1]
+    objs = APITokenService.query(db, token=token)
+    
+    if not objs:
+        raise build_error_result(
+            error_msg='API-KEY is invalid!', 
+            retcode=settings.RetCode.FORBIDDEN
+        )
+    
+    return objs[0].tenant_id
 
 
 def build_error_result(retcode=settings.RetCode.FORBIDDEN, error_msg='success'):

@@ -14,10 +14,8 @@ from functools import partial
 import re
 from copy import deepcopy
 from timeit import default_timer as timer
-
 import trio
 from langfuse import Langfuse
-
 from agentic_reasoning import DeepResearcher
 from datetime import datetime
 from sqlalchemy import asc, func
@@ -318,6 +316,23 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
         find_and_replace(pattern)
 
     return answer, idx
+
+
+def convert_conditions(metadata_condition):
+    if metadata_condition is None:
+        metadata_condition = {}
+    op_mapping = {
+        "is": "=",
+        "not is": "≠"
+    }
+    return [
+    {
+        "op": op_mapping.get(cond["comparison_operator"], cond["comparison_operator"]),
+        "key": cond["name"],
+        "value": cond["value"]
+    }
+    for cond in metadata_condition.get("conditions", [])
+]
 
 
 def meta_filter(metas: dict, filters: list[dict]):
