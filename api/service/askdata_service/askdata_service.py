@@ -467,6 +467,31 @@ class AskdataService:
 
         model_relations = filter_model_relations_by_ids(model_ids, model_relations)
 
+        # 这里需要把有关系的模型详情再拉一下（已经存在的模型不需要再次拉），然后放到model_details中
+        # 从model_relations中提取所有涉及的模型ID
+        related_model_ids = set()
+        for relation in model_relations:
+            if relation.get('sourceModelId'):
+                related_model_ids.add(relation['sourceModelId'])
+            if relation.get('targetModelId'):
+                related_model_ids.add(relation['targetModelId'])
+
+        # 找出已存在的模型ID
+        existing_model_ids = {model['modelId'] for model in model_details if 'modelId' in model}
+
+        # 找出需要补充的模型ID
+        missing_model_ids = list(related_model_ids - existing_model_ids)
+
+        # 如果有缺失的模型，获取其详情并合并
+        if missing_model_ids:
+            logger.info(f"发现 {len(missing_model_ids)} 个关联模型需要补充详情")
+            additional_model_details = await time_task(
+                self.semantic_api_client.get_model_detail_async(model_ids=missing_model_ids),
+                name="获取关联模型详情"
+            )
+            model_details.extend(additional_model_details)
+            logger.info(f"已补充 {len(additional_model_details)} 个模型详情")
+
         # 9. 构建最终的语义层
         semantic_layer_original = dict(
             dataset_details=dataset_details,
