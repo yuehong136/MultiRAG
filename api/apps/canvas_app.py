@@ -622,3 +622,16 @@ def sessions(
         return get_json_result(data={"total": total, "sessions": sess})
     except Exception as e:
         return server_error_response(e)
+
+
+@router.get('/prompts', summary="获取项目模版提示词")  # noqa: F821
+def prompts(user=Depends(manager)):
+    from core.prompts.prompts import ANALYZE_TASK_SYSTEM, ANALYZE_TASK_USER, NEXT_STEP, REFLECT, SUMMARY4MEMORY, RANK_MEMORY, CITATION_PROMPT_TEMPLATE
+    return get_json_result(data={
+        "task_analysis": ANALYZE_TASK_SYSTEM + ANALYZE_TASK_USER,
+        "plan_generation": NEXT_STEP,
+        "reflection": REFLECT,
+        "context_summary": SUMMARY4MEMORY,
+        "context_ranking": RANK_MEMORY,
+        "citation_guidelines": CITATION_PROMPT_TEMPLATE
+    })

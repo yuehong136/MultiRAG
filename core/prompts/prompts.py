@@ -183,7 +183,7 @@ def global_summary_prompt(section_summaries: str) -> str:
     return template.render(section_summaries=section_summaries)
 
 
-def citation_prompt() -> str:
+def citation_prompt(user_defined_prompts: dict={}) -> str:
     template = PROMPT_JINJA_ENV.from_string(CITATION_PROMPT_TEMPLATE)
     return template.render()
 
@@ -372,7 +372,7 @@ def form_history(history, limit=-6):
     return context
 
 
-def analyze_task(chat_mdl, prompt, task_name, tools_description: list[dict]):
+def analyze_task(chat_mdl, prompt, task_name, tools_description: list[dict], user_defined_prompts: dict={}):
     tools_desc = tool_schema(tools_description)
     context = ""
 
@@ -387,7 +387,7 @@ def analyze_task(chat_mdl, prompt, task_name, tools_description: list[dict]):
     return kwd
 
 
-def next_step(chat_mdl, history: list, tools_description: list[dict], task_desc):
+def next_step(chat_mdl, history: list, tools_description: list[dict], task_desc, user_defined_prompts: dict={}):
     if not tools_description:
         return ""
     desc = tool_schema(tools_description)
@@ -413,7 +413,7 @@ def next_step(chat_mdl, history: list, tools_description: list[dict], task_desc)
     return json_str, tk_cnt
 
 
-def reflect(chat_mdl, history: list[dict], tool_call_res: list[Tuple]):
+def reflect(chat_mdl, history: list[dict], tool_call_res: list[Tuple], user_defined_prompts: dict={}):
     tool_calls = [{"name": p[0], "result": p[1]} for p in tool_call_res]
     goal = history[1]["content"]
     template = PROMPT_JINJA_ENV.from_string(REFLECT)
@@ -446,7 +446,7 @@ def form_message(system_prompt, user_prompt):
     return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
 
-def tool_call_summary(chat_mdl, name: str, params: dict, result: str) -> str:
+def tool_call_summary(chat_mdl, name: str, params: dict, result: str, user_defined_prompts: dict={}) -> str:
     template = PROMPT_JINJA_ENV.from_string(SUMMARY4MEMORY)
     system_prompt = template.render(name=name,
                                     params=json.dumps(params, ensure_ascii=False, indent=2),
@@ -464,7 +464,7 @@ def tool_call_summary(chat_mdl, name: str, params: dict, result: str) -> str:
     return re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
 
 
-def rank_memories(chat_mdl, goal: str, sub_goal: str, tool_call_summaries: list[str]):
+def rank_memories(chat_mdl, goal: str, sub_goal: str, tool_call_summaries: list[str], user_defined_prompts: dict={}):
     template = PROMPT_JINJA_ENV.from_string(RANK_MEMORY)
     system_prompt = template.render(goal=goal, sub_goal=sub_goal,
                                     results=[{"i": i, "content": s} for i, s in enumerate(tool_call_summaries)])

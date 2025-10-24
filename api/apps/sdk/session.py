@@ -998,7 +998,11 @@ def get_agent_inputs(agent_id: str, db: Session = Depends(get_db)):
     # TODO: 需要获取正确的tenant_id
     tenant_id = "default"  # 临时解决方案
     canvas = Canvas(json.dumps(cvs.dsl), tenant_id)
-    return get_result(data={"title": cvs.title, "avatar": cvs.avatar, "inputs": canvas.get_component_input_form("begin"), "prologue": canvas.get_prologue(), "mode": canvas.get_mode()})
+    return get_result(data={
+        "title": cvs.title,
+        "avatar": cvs.avatar,
+        "inputs": canvas.get_component_input_form("begin")
+    })
 
 
 @router.post("/searchbots/ask", summary="搜索机器人询问")

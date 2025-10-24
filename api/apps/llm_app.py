@@ -128,13 +128,97 @@ class ChatAgentAdapter:
                 self.memory.append((user, assist, summ))
 
             def tool_use_callback(self, component_id, *args, **kwargs):
-                logging.debug(f"Tool callback: {component_id}")
+                logging.debug(f"Tool callback: component_id={component_id}, args={args}")
 
             def get_variable_value(self, var_name):
                 return self.globals.get(var_name, "")
 
             def set_variable_value(self, var_name, value):
                 self.globals[var_name] = value
+
+            def get_component(self, cpn_id):
+                """重写 get_component，返回安全的组件信息"""
+                # 对于 ChatAgentAdapter，我们只有一个虚拟的 Agent 组件
+                # 返回一个不包含 Message 下游组件的配置，避免触发 canvas.py 中的 Message 处理逻辑
+                if cpn_id in self.components:
+                    comp = self.components[cpn_id]
+                    # 确保 downstream 总是空列表，避免触发 Message 组件处理
+                    if "downstream" in comp:
+                        comp["downstream"] = []
+                    return comp
+                # 返回一个默认的组件结构，downstream 为空数组
+                return {
+                    "obj": None,
+                    "downstream": [],
+                    "upstream": [],
+                    "parent_id": ""
+                }
+
+            def get_component_obj(self, cpn_id):
+                """重写 get_component_obj，安全获取组件对象"""
+                cpn = self.get_component(cpn_id)
+                if cpn and "obj" in cpn and cpn["obj"] is not None:
+                    return cpn["obj"]
+                
+                # 返回一个安全的 Mock 对象，避免 None 引用错误
+                class SafeComponentMock:
+                    component_name = "Mock"
+                    def output(self, key=None):
+                        return ""
+                    def error(self):
+                        return None
+                    def set_output(self, key, value):
+                        pass
+                
+                return SafeComponentMock()
+
+            def get_component_name(self, cpn_id):
+                """获取组件名称"""
+                for n in self.dsl.get("graph", {}).get("nodes", []):
+                    if cpn_id == n["id"]:
+                        return n["data"]["name"]
+                # 如果找不到，返回组件ID本身
+                return cpn_id
+
+            def add_reference(self, chunks: list, doc_infos: list):
+                """添加检索参考信息"""
+                if not self.retrieval:
+                    self.retrieval = {"chunks": [], "doc_aggs": []}
+                
+                # 简化版本，直接添加
+                if isinstance(self.retrieval, dict):
+                    if "chunks" not in self.retrieval:
+                        self.retrieval["chunks"] = []
+                    if "doc_aggs" not in self.retrieval:
+                        self.retrieval["doc_aggs"] = []
+                    
+                    if chunks:
+                        self.retrieval["chunks"].extend(chunks)
+                    if doc_infos:
+                        self.retrieval["doc_aggs"].extend(doc_infos)
+
+            def get_component_type(self, cpn_id):
+                """获取组件类型"""
+                cpn_obj = self.get_component_obj(cpn_id)
+                if cpn_obj and hasattr(cpn_obj, 'component_name'):
+                    return cpn_obj.component_name
+                return "Unknown"
+
+            def is_reff(self, exp: str) -> bool:
+                """检查表达式是否是变量引用"""
+                if not exp:
+                    return False
+                exp = exp.strip("{").strip("}")
+                if exp.find("@") < 0:
+                    return exp in self.globals
+                return False
+
+            def run(self, **kwargs):
+                """重写 run 方法，避免触发完整的 workflow 执行逻辑"""
+                # ChatAgentAdapter 不需要完整的 workflow 执行
+                # 直接返回，避免触发 canvas.py 中可能导致 NoneType 错误的代码
+                logging.debug("CanvasMock.run() called but skipped for ChatAgentAdapter")
+                return iter([])  # 返回空迭代器
 
         return CanvasMock(self.tenant_id)
 
@@ -183,10 +267,13 @@ class ChatAgentAdapter:
             self.canvas_mock.globals["sys.files"] = files
 
         # 如果有知识上下文，临时修改系统提示词
-        original_prompt = self.agent._param.sys_prompt
+        original_prompt = self.agent._param.sys_prompt or ""
         if knowledge_context:
             enhanced_prompt = original_prompt + "\n\n" + knowledge_context
             self.agent._param.sys_prompt = enhanced_prompt
+        elif not original_prompt:
+            # 确保 sys_prompt 不为 None
+            self.agent._param.sys_prompt = "You are a helpful AI assistant."
 
         try:
             # 准备Agent调用参数
@@ -200,7 +287,7 @@ class ChatAgentAdapter:
             if self.agent.tools:
                 # 有工具时，使用Agent的完整流式工具调用能力
                 # 直接复用Agent的stream_output_with_tools方法
-                prompt, msg = self.agent._prepare_prompt_variables()
+                prompt, msg, _ = self.agent._prepare_prompt_variables()
                 
                 # 重要：像 _invoke 方法一样，将 system 消息添加到 msg 中
                 # 这样 _react_with_tools_streamly 中的 hist 才会包含 system 消息
@@ -259,7 +346,7 @@ class ChatAgentAdapter:
                 # 没有工具时，直接使用LLM流式输出
                 # 调用Agent的invoke方法获取流式生成器
                 self.agent._param.prompts = [{"role": "user", "content": query}]
-                prompt, msg = self.agent._prepare_prompt_variables()
+                prompt, msg, _ = self.agent._prepare_prompt_variables()
 
                 # 直接使用Agent的_stream_output方法
                 for delta in self.agent._stream_output(prompt, msg):
@@ -268,7 +355,7 @@ class ChatAgentAdapter:
         finally:
             # 恢复原始系统提示词
             if knowledge_context:
-                self.agent._param.sys_prompt = original_prompt
+                self.agent._param.sys_prompt = original_prompt or "You are a helpful AI assistant."
 
     def chat_with_tools_stream_structured(self, query: str, messages: list[dict] = None,
                                          knowledge_context: str = "", files: list[str] = None):
@@ -290,9 +377,12 @@ class ChatAgentAdapter:
             history.append({"role": "user", "content": query})
         
         # 合并知识上下文到系统提示词
-        original_prompt = self.agent._param.sys_prompt
+        original_prompt = self.agent._param.sys_prompt or ""
         if knowledge_context:
-            self.agent._param.sys_prompt = self.agent._param.sys_prompt + "\n" + knowledge_context
+            self.agent._param.sys_prompt = (self.agent._param.sys_prompt or "") + "\n" + knowledge_context
+        elif not original_prompt:
+            # 确保 sys_prompt 不为 None
+            self.agent._param.sys_prompt = "You are a helpful AI assistant."
         
         try:
             # 更新 canvas_mock 的历史记录
@@ -300,7 +390,7 @@ class ChatAgentAdapter:
             
             # 准备提示词
             self.agent._param.prompts = history
-            prompt, msg = self.agent._prepare_prompt_variables()
+            prompt, msg, _ = self.agent._prepare_prompt_variables()
             
             # 累积文本内容（重要：与原实现保持一致）
             accumulated_text = ""
@@ -383,7 +473,7 @@ class ChatAgentAdapter:
             else:
                 # 没有工具时，直接使用LLM流式输出
                 self.agent._param.prompts = [{"role": "user", "content": query}]
-                prompt, msg = self.agent._prepare_prompt_variables()
+                prompt, msg, _ = self.agent._prepare_prompt_variables()
                 
                 for delta in self.agent._stream_output(prompt, msg):
                     if delta:
@@ -409,7 +499,7 @@ class ChatAgentAdapter:
         finally:
             # 恢复原始系统提示词
             if knowledge_context:
-                self.agent._param.sys_prompt = original_prompt
+                self.agent._param.sys_prompt = original_prompt or "You are a helpful AI assistant."
 
 
 

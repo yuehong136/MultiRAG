@@ -134,3 +134,6 @@ class Categorize(LLM, ABC):
         self.set_output("category_name", max_category)
         self.set_output("_next", cpn_ids)
 
+    def thoughts(self) -> str:
+        return "Which should it falls into {}? ...".format(",".join([f"`{c}`" for c, _ in self._param.category_description.items()]))
+

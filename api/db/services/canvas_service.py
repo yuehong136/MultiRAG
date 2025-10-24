@@ -230,15 +230,17 @@ def completion(
         assert ok, "Session not found!"
         if not conv.message:
             conv.message = []
-        canvas = Canvas(json.dumps(conv.dsl), tenant_id, session_id)
+        if not isinstance(conv.dsl, str):
+            conv.dsl = json.dumps(conv.dsl, ensure_ascii=False)
+        canvas = Canvas(conv.dsl, tenant_id, agent_id)
     else:
         ok, cvs = UserCanvasService.get_by_id(db, agent_id)
         assert ok, "Agent not found."
         assert cvs.user_id == tenant_id, "You do not own the agent."
         dsl_str = cvs.dsl if isinstance(cvs.dsl, str) else json.dumps(cvs.dsl, ensure_ascii=False)
         session_id = get_uuid()
-        canvas = Canvas(dsl_str, tenant_id, session_id)
-
+        canvas = Canvas(cvs.dsl, tenant_id, agent_id)
+        canvas.reset()
         conv_dict = {
             "id": session_id,
             "dialog_id": cvs.id,
