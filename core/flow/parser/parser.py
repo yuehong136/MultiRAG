@@ -59,7 +59,9 @@ class ParserParam(ProcessParamBase):
                 "text",
                 "json"
             ],
-            "audio": [],
+            "audio": [
+                "json"
+            ],
             "video": [],
         }
 
@@ -104,7 +106,26 @@ class ParserParam(ProcessParamBase):
                 ],
                 "output_format": "json",
             },
-            "audio": {},
+            "audio": {
+                "suffix":[
+                    "da",
+                    "wave",
+                    "wav",
+                    "mp3",
+                    "aac",
+                    "flac",
+                    "ogg",
+                    "aiff",
+                    "au",
+                    "midi",
+                    "wma",
+                    "realaudio",
+                    "vqf",
+                    "oggvorbis",
+                    "ape"
+                ],
+                "output_format": "json",
+            },
             "video": {},
         }
 
@@ -147,6 +168,12 @@ class ParserParam(ProcessParamBase):
         if text_config:
             text_output_format = text_config.get("output_format", "")
             self.check_valid_value(text_output_format, "Text output format abnormal.", self.allowed_output_format["text"])
+
+        audio_config = self.setups.get("audio", "")
+        if audio_config:
+            self.check_empty(audio_config.get("llm_id"), "VLM")
+            audio_language = audio_config.get("lang", "")
+            self.check_empty(audio_language, "Language")
 
     def get_input_form(self) -> dict[str, dict]:
         return {}
@@ -308,7 +335,8 @@ class Parser(ProcessBase):
 
         else:
             # use VLM to describe the picture
-            cv_model = LLMBundle(self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT, llm_name=conf["llm_id"],lang=lang)
+            with db_connection() as db:
+                cv_model = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT, llm_name=conf["llm_id"],lang=lang)
             img_binary = io.BytesIO()
             img.save(img_binary, format="JPEG")
             img_binary.seek(0)
@@ -316,13 +344,39 @@ class Parser(ProcessBase):
 
         self.set_output("text", txt)
 
+    def _audio(self, from_upstream: ParserFromUpstream):
+        import os
+        import tempfile
+
+        self.callback(random.randint(1, 5) / 100.0, "Start to work on an audio.")
+
+        blob = from_upstream.blob
+        name = from_upstream.name
+        conf = self._param.setups["audio"]
+        self.set_output("output_format", conf["output_format"])
+
+        lang = conf["lang"]
+        _, ext = os.path.splitext(name)
+        tmp_path = ""
+        with tempfile.NamedTemporaryFile(suffix=ext) as tmpf:
+            tmpf.write(blob)
+            tmpf.flush()
+            tmp_path = os.path.abspath(tmpf.name)
+            with db_connection() as db:
+                seq2txt_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.SPEECH2TEXT, lang=lang)
+            txt = seq2txt_mdl.transcription(tmp_path)
+
+            self.set_output("text", txt)
+
     async def _invoke(self, **kwargs):
         function_map = {
             "pdf": self._pdf,
             "markdown": self._markdown,
+            "spreadsheet": self._spreadsheet,
             "word": self._word,
             "text": self._text,
             "image": self._image,
+            "audio": self._audio,
         }
         try:
             from_upstream = ParserFromUpstream.model_validate(kwargs)
