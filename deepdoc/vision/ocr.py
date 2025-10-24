@@ -352,7 +352,8 @@ class TextRecognizer:
     def close(self):
         # close session and release manually
         logging.info('Close TextRecognizer.')
-        del self.predictor
+        if hasattr(self, "predictor"):
+            del self.predictor
         gc.collect()
 
     def __call__(self, img_list):
@@ -492,7 +493,8 @@ class TextDetector:
 
     def close(self):
         logging.info("Close TextDetector.")
-        del self.predictor
+        if hasattr(self, "predictor"):
+            del self.predictor
         gc.collect()
 
     def __call__(self, img):
