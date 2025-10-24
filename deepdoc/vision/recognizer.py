@@ -10,7 +10,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-
+import gc
 import logging
 import os
 import math
@@ -403,6 +403,11 @@ class Recognizer:
             "score": float(scores[i])
         } for i in indices]
 
+    def close(self):
+        logging.info("Close recognizer.")
+        del self.ort_sess
+        gc.collect()
+
     def __call__(self, image_list, thr=0.7, batch_size=16):
         res = []
         images = []
@@ -427,5 +432,5 @@ class Recognizer:
 
         return res
 
-
-
+    def __del__(self):
+        self.close()
