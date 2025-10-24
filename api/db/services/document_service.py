@@ -2231,6 +2231,77 @@ class DocumentService(CommonService):
             pass
         return False
 
+    @classmethod
+    def knowledgebase_basic_info(cls, db: Session, kb_id: str) -> dict[str, int]:
+        """
+        获取知识库的文档处理基本信息统计
+        
+        Args:
+            db: SQLAlchemy Session
+            kb_id: 知识库ID
+            
+        Returns:
+            dict: 包含 processing, finished, failed, cancelled 数量的字典
+        """
+        from sqlalchemy import case
+        
+        # cancelled: run == "2" (TaskStatus.CANCEL)
+        cancelled_query = select(func.count()).select_from(cls.model).where(
+            and_(
+                cls.model.kb_id == kb_id,
+                cls.model.run == TaskStatus.CANCEL
+            )
+        )
+        cancelled = db.execute(cancelled_query).scalar() or 0
+
+        # 统计其他状态的文档
+        stats_query = select(
+            # finished: progress == 1
+            func.coalesce(
+                func.sum(case((cls.model.progress == 1, 1), else_=0)),
+                0
+            ).label("finished"),
+            
+            # failed: progress == -1
+            func.coalesce(
+                func.sum(case((cls.model.progress == -1, 1), else_=0)),
+                0
+            ).label("failed"),
+            
+            # processing: 0 <= progress < 1
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            or_(
+                                cls.model.progress == 0,
+                                and_(cls.model.progress > 0, cls.model.progress < 1)
+                            ),
+                            1
+                        ),
+                        else_=0
+                    )
+                ),
+                0
+            ).label("processing"),
+        ).select_from(cls.model).where(
+            and_(
+                cls.model.kb_id == kb_id,
+                or_(
+                    cls.model.run.is_(None),
+                    cls.model.run != TaskStatus.CANCEL
+                )
+            )
+        )
+        
+        result = db.execute(stats_query).first()
+
+        return {
+            "processing": int(result.processing) if result else 0,
+            "finished": int(result.finished) if result else 0,
+            "failed": int(result.failed) if result else 0,
+            "cancelled": int(cancelled),
+        }
 
 def queue_raptor_o_graphrag_tasks(db, doc, ty, priority):
     chunking_config = DocumentService.get_chunking_config(db, doc["id"])

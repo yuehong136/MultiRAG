@@ -532,3 +532,57 @@ def get_meta(
         return get_json_result(data=meta)
     except Exception as e:
         return server_error_response(e)
+
+
+@router.get("/basic_info", summary="获取知识库文档处理统计信息", response_description="返回文档处理状态统计")
+async def get_basic_info(
+    kb_id: str = Query(..., description="知识库ID"),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    获取知识库的文档处理基本统计信息
+    
+    概要：返回指定知识库中文档的处理状态统计。
+    响应描述：成功返回文档处理状态的统计数据，包括处理中、已完成、失败和已取消的文档数量。
+    
+    参数：
+    - **kb_id**: 知识库ID（必填）
+    
+    返回：
+    - dict: 包含以下字段的统计信息
+        - processing: 正在处理的文档数量
+        - finished: 已完成的文档数量
+        - failed: 处理失败的文档数量
+        - cancelled: 已取消的文档数量
+    
+    功能：
+    1. 验证用户是否有权限访问指定知识库
+    2. 查询知识库中文档的处理状态
+    3. 返回各状态的统计数量
+    
+    权限要求：
+    - 用户必须对该知识库有访问权限
+    
+    异常处理：
+    - 如果用户无权访问，返回 AUTHENTICATION_ERROR 错误
+    - 如果发生其他异常，返回服务器错误
+    
+    注意：
+    - 统计信息基于 Document 表的 progress 和 run 字段
+    """
+    try:
+        # 检查用户权限
+        if not KnowledgebaseService.accessible(db, kb_id, user.id):
+            return get_json_result(
+                data=False,
+                retmsg='No authorization.',
+                retcode=settings.RetCode.AUTHENTICATION_ERROR
+            )
+
+        # 获取统计信息
+        basic_info = DocumentService.knowledgebase_basic_info(db, kb_id)
+
+        return get_json_result(data=basic_info)
+    except Exception as e:
+        return server_error_response(e)
