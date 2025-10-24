@@ -10,7 +10,7 @@ import logging
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Body
+from fastapi import APIRouter, Depends, Body, Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, field_validator, ConfigDict, ValidationError
 from typing import Annotated, Any
@@ -28,6 +28,7 @@ from core.utils.storage_factory import STORAGE_IMPL, STORAGE_IMPL_TYPE
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN
 from api.apps import manager
+from api.utils.health import run_health_checks
 
 router = APIRouter()
 
@@ -196,6 +197,36 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
     res["task_executor_heartbeats"] = task_executor_heartbeats
 
     return get_json_result(data=res)
+
+
+@router.get("/healthz", summary="健康检查", response_description="返回系统健康状态")
+async def healthz(response: Response):
+    """
+    健康检查接口
+    
+    概要：检查系统关键组件的健康状态。
+    响应描述：返回各组件的健康状态，如果所有关键组件正常则返回200状态码，否则返回500。
+    
+    返回：
+    - dict: 包含各组件健康状态的详细信息
+    
+    功能：
+    1. 检查数据库连接状态
+    2. 检查 Redis 连接状态
+    3. 检查文档引擎状态
+    4. 检查存储服务状态
+    5. 检查聊天服务配置
+    
+    状态码：
+    - 200: 所有关键组件正常
+    - 500: 至少一个关键组件异常
+    
+    注意：
+    - 此接口通常用于 Kubernetes 或其他容器编排系统的健康探测
+    """
+    result, all_ok = run_health_checks()
+    response.status_code = 200 if all_ok else 500
+    return result
 
 
 @router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌", response_model=dict[str, Any])
