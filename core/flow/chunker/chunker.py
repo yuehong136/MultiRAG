@@ -17,6 +17,7 @@ import trio
 from api.db import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
+from core.flow.chunker.schema import ChunkerFromUpstream
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 from graphrag.utils import get_llm_cache, chat_limiter, set_llm_cache
 from core.flow.base import ProcessBase, ProcessParamBase
@@ -27,7 +28,23 @@ from core.prompts.prompts import keyword_extraction, question_proposal
 class ChunkerParam(ProcessParamBase):
     def __init__(self):
         super().__init__()
-        self.method_options = ["general", "q&a", "resume", "manual", "table", "paper", "book", "laws", "presentation", "one"]
+        self.method_options = [
+            # General
+            "general",
+            "onetable",
+            # Customer Service
+            "q&a",
+            "manual",
+            # Recruitment
+            "resume",
+            # Education & Research
+            "book",
+            "paper",
+            "laws",
+            "presentation",
+            # Other
+            # "Tag" # TODO: Other method
+        ]
         self.method = "general"
         self.chunk_token_size = 512
         self.delimiter = "\n"
@@ -36,10 +53,7 @@ class ChunkerParam(ProcessParamBase):
         self.auto_keywords = 0
         self.auto_questions = 0
         self.tag_sets = []
-        self.llm_setting = {
-            "llm_name": "",
-            "lang": "Chinese"
-        }
+        self.llm_setting = {"llm_name": "", "lang": "Chinese"}
 
     def check(self):
         self.check_valid_value(self.method.lower(), "Chunk method abnormal.", self.method_options)
@@ -49,27 +63,56 @@ class ChunkerParam(ProcessParamBase):
         self.check_nonnegative_number(self.auto_questions, "Auto-question value: (0, 10]")
         self.check_decimal_float(self.overlapped_percent, "Overlapped percentage: [0, 1)")
 
+    def get_input_form(self) -> dict[str, dict]:
+        return {}
+
 
 class Chunker(ProcessBase):
     component_name = "Chunker"
 
-    def _general(self, **kwargs):
-        self.callback(random.randint(1,5)/100., "Start to chunk via `General`.")
-        if kwargs.get("output_format") in ["markdown", "text"]:
-            cks = naive_merge(kwargs.get(kwargs["output_format"]), self._param.chunk_token_size, self._param.delimiter, self._param.overlapped_percent)
+    def _general(self, from_upstream: ChunkerFromUpstream):
+        self.callback(random.randint(1, 5) / 100.0, "Start to chunk via `General`.")
+        if from_upstream.output_format in ["markdown", "text", "html"]:
+            if from_upstream.output_format == "markdown":
+                payload = from_upstream.markdown_result
+            elif from_upstream.output_format == "text":
+                payload = from_upstream.text_result
+            else:  # == "html"
+                payload = from_upstream.html_result
+
+            if not payload:
+                payload = ""
+
+            cks = naive_merge(
+                payload,
+                self._param.chunk_token_size,
+                self._param.delimiter,
+                self._param.overlapped_percent,
+            )
             return [{"text": c} for c in cks]
 
+        # json
         sections, section_images = [], []
-        for o in kwargs["json"]:
-            sections.append((o["text"], o.get("position_tag","")))
+        for o in from_upstream.json_result or []:
+            sections.append((o.get("text", ""), o.get("position_tag", "")))
             section_images.append(o.get("image"))
 
-        chunks, images = naive_merge_with_images(sections, section_images,self._param.chunk_token_size, self._param.delimiter, self._param.overlapped_percent)
-        return [{
-            "text": RAGFlowPdfParser.remove_tag(c),
-            "image": img,
-            "positions": RAGFlowPdfParser.extract_positions(c)
-        } for c,img in zip(chunks,images)]
+        chunks, images = naive_merge_with_images(
+            sections,
+            section_images,
+            self._param.chunk_token_size,
+            self._param.delimiter,
+            self._param.overlapped_percent,
+        )
+
+        return [
+            {
+                "text": RAGFlowPdfParser.remove_tag(c),
+                "image": img,
+                "positions": RAGFlowPdfParser.extract_positions(c),
+            }
+            for c, img in zip(chunks, images)
+        ]
 
     def _q_and_a(self, **kwargs):
         pass

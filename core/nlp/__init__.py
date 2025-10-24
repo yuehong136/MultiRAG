@@ -504,7 +504,7 @@ def hierarchical_merge(bull, sections, depth):
     return res
 
 
-def naive_merge(sections, chunk_token_num=128, delimiter="\n。；！？", overlapped_percent=0):
+def naive_merge(sections: str | list, chunk_token_num=128, delimiter="\n。；！？", overlapped_percent=0):
     from deepdoc.parser.pdf_parser import RAGFlowPdfParser
     if not sections:
         return []
