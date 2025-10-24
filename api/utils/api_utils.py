@@ -350,6 +350,8 @@ def convert_datetime_to_str(data: dict):
     return data
 
 async def token_required(request: Request, db: Session = Depends(get_db)):
+    if os.environ.get("DISABLE_SDK"):
+        return get_json_result(data=False, retmsg="`Authorization` can't be empty")
     authorization_str = request.headers.get("Authorization")
     if not authorization_str:
         return get_json_result(data=False, retmsg="`Authorization` can't be empty")
