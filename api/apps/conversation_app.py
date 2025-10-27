@@ -8,6 +8,7 @@
 """
 import json
 import re
+import logging
 from copy import deepcopy
 # import trio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
@@ -678,6 +679,7 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
                     yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
                 ConversationService.update_by_id(db, conv.id, conv.to_dict())
             except Exception as e:
+                logging.exception(e)
                 yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e),
                                             "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
                                            ensure_ascii=False) + "\n\n"
