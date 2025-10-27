@@ -27,7 +27,7 @@ from core.llm.chat_model.base import ERROR_PREFIX
 
 class CategorizeParam(LLMParam):
     """
-    Define the Categorize component parameters.
+    Define the categorize component parameters.
     """
 
     def __init__(self):

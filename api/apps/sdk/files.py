@@ -65,7 +65,7 @@ def upload_files(
     pf_id = parent_id
 
     if not pf_id:
-        root_folder = FileService.get_root_folder(tenant_id)
+        root_folder = FileService.get_root_folder(db, tenant_id)
         pf_id = root_folder["id"]
 
     if not files:
@@ -78,7 +78,7 @@ def upload_files(
     file_res = []
 
     try:
-        e, pf_folder = FileService.get_by_id(pf_id)
+        e, pf_folder = FileService.get_by_id(db, pf_id)
         if not e:
             return get_error_data_result(retmsg="Can't find this folder!")
 
@@ -89,20 +89,20 @@ def upload_files(
             file_len = len(file_obj_names)
 
             # 获取文件夹路径ID
-            file_id_list = FileService.get_id_list_by_id(pf_id, file_obj_names, 1, [pf_id])
+            file_id_list = FileService.get_id_list_by_id(db, pf_id, file_obj_names, 1, [pf_id])
             len_id_list = len(file_id_list)
 
             # 创建文件夹结构
             if file_len != len_id_list:
-                e, file = FileService.get_by_id(file_id_list[len_id_list - 1])
-                if not e:
+                file = FileService.get_by_id(db, file_id_list[len_id_list - 1])
+                if not file:
                     return get_error_data_result(retmsg="Folder not found!")
-                last_folder = FileService.create_folder(file, file_id_list[len_id_list - 1], file_obj_names, len_id_list)
+                last_folder = FileService.create_folder(db, file, file_id_list[len_id_list - 1], file_obj_names, len_id_list)
             else:
-                e, file = FileService.get_by_id(file_id_list[len_id_list - 2])
-                if not e:
+                file = FileService.get_by_id(db, file_id_list[len_id_list - 2])
+                if not file:
                     return get_error_data_result(retmsg="Folder not found!")
-                last_folder = FileService.create_folder(file, file_id_list[len_id_list - 2], file_obj_names, len_id_list)
+                last_folder = FileService.create_folder(db, file, file_id_list[len_id_list - 2], file_obj_names, len_id_list)
 
             filetype = filename_type(file_obj_names[file_len - 1])
             location = file_obj_names[file_len - 1]
@@ -121,7 +121,7 @@ def upload_files(
                 "location": location,
                 "size": len(blob),
             }
-            file = FileService.insert(file_data)
+            file = FileService.insert(db, file_data)
             STORAGE_IMPL.put(last_folder.id, location, blob)
             file_res.append(file.to_json())
         return get_result(data=file_res)

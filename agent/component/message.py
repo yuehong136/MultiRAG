@@ -49,7 +49,7 @@ class MessageParam(ComponentParamBase):
 class Message(ComponentBase):
     component_name = "Message"
 
-    def get_kwargs(self, script:str, kwargs:dict = {}, delimiter:str=None) -> tuple[str, dict[str, str | list | Any]]:
+    def get_kwargs(self, script: str, kwargs: dict = {}, delimiter: str=None) -> tuple[str, dict[str, str | list | Any]]:
         for k,v in self.get_input_elements_from_text(script).items():
             if k in kwargs:
                 continue

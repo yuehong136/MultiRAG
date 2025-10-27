@@ -85,8 +85,8 @@ class LLMParam(ComponentParamBase):
 class LLM(ComponentBase):
     component_name = "LLM"
 
-    def __init__(self, canvas, id, param: ComponentParamBase):
-        super().__init__(canvas, id, param)
+    def __init__(self, canvas, component_id, param: ComponentParamBase):
+        super().__init__(canvas, component_id, param)
         from api.db.db_models import db_connection
         with db_connection() as db:
             self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), TenantLLMService.llm_id2llm_type(self._param.llm_id),
@@ -216,7 +216,7 @@ class LLM(ComponentBase):
             return re.sub(r"```\n*$", "", ans, flags=re.DOTALL)
 
         prompt, msg, _ = self._prepare_prompt_variables()
-        error = ""
+        error: str = ""
 
         if self._param.output_structure:
             prompt += "\nThe output MUST follow this JSON format:\n" + json.dumps(self._param.output_structure, ensure_ascii=False, indent=2)
