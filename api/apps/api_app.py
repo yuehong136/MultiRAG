@@ -35,7 +35,7 @@ from api.utils.api_utils import server_error_response, get_data_error_result, ge
 from api.utils.file_utils import filename_type, thumbnail
 from core.utils.storage_factory import STORAGE_IMPL
 from core.app.tag import label_question
-from core.prompts.prompts import keyword_extraction
+from core.prompts.generator import keyword_extraction
 from api.db.services.canvas_service import UserCanvasService
 from agent.canvas import Canvas
 from functools import partial

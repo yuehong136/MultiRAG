@@ -37,7 +37,7 @@ from api.utils.file_utils import get_project_base_directory
 from deepdoc.vision import OCR, AscendLayoutRecognizer, LayoutRecognizer, Recognizer, TableStructureRecognizer
 from core.app.picture import vision_llm_chunk as picture_vision_llm_chunk
 from core.nlp import rag_tokenizer
-from core.prompts.prompts import vision_llm_describe_prompt
+from core.prompts.generator import vision_llm_describe_prompt
 from core.settings import PARALLEL_DEVICES
 
 LOCK_KEY_pdfplumber = "global_shared_lock_pdfplumber"

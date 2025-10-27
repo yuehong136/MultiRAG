@@ -10,7 +10,7 @@ from api.utils.log_utils import init_root_logger, get_project_base_directory
 from graphrag.general.index import run_graphrag
 from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
 from core.flow.pipeline import Pipeline
-from core.prompts.prompts import keyword_extraction, question_proposal, content_tagging
+from core.prompts.generator import keyword_extraction, question_proposal, content_tagging
 
 import logging
 # for module in ["pdfminer"]:

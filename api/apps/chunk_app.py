@@ -25,7 +25,7 @@ from api.db.services.search_service import SearchService
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
-from core.prompts.prompts import keyword_extraction, cross_languages, gen_meta_filter
+from core.prompts.generator import keyword_extraction, cross_languages, gen_meta_filter
 from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService

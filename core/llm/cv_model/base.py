@@ -14,7 +14,7 @@ from typing import Any
 import base64
 from io import BytesIO
 
-from core.prompts.prompts import vision_llm_describe_prompt
+from core.prompts.generator import vision_llm_describe_prompt
 
 
 class Base(ABC):

@@ -27,8 +27,8 @@ from api.db.services.user_service import UserTenantService
 from api.utils import get_uuid
 from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required, validate_request
 from core.app.tag import label_question
-from core.prompts.prompt_template import load_prompt
-from core.prompts.prompts import cross_languages, keyword_extraction, chunks_format
+from core.prompts.template import load_prompt
+from core.prompts.generator import cross_languages, keyword_extraction, chunks_format
 
 router = APIRouter()
 

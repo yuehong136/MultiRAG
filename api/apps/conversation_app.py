@@ -32,8 +32,8 @@ from api.utils.api_utils import get_json_result
 from api.apps import manager
 # from graphrag.general.mind_map_extractor import MindMapExtractor
 # from core.app.tag import label_question
-from core.prompts.prompt_template import load_prompt
-from core.prompts.prompts import chunks_format
+from core.prompts.template import load_prompt
+from core.prompts.generator import chunks_format
 
 
 class SetConversationRequest(BaseModel):

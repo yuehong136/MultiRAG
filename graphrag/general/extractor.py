@@ -37,7 +37,7 @@ from graphrag.utils import (
     split_string_by_multi_markers,
 )
 from core.llm.chat import Base as CompletionLLM
-from core.prompts.prompts import message_fit_in
+from core.prompts.generator import message_fit_in
 from core.utils import truncate
 
 GRAPH_FIELD_SEP = "<SEP>"

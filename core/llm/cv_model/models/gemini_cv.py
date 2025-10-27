@@ -2,7 +2,7 @@ import base64
 from io import BytesIO
 
 from core.llm.cv_model.base import Base
-from core.prompts.prompts import vision_llm_describe_prompt
+from core.prompts.generator import vision_llm_describe_prompt
 
 
 class GeminiCV(Base):

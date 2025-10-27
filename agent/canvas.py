@@ -27,7 +27,7 @@ from agent.component import component_class
 from agent.component.base import ComponentBase
 from api.db.services.file_service import FileService
 from api.utils import get_uuid, hash_str2int
-from core.prompts.prompts import chunks_format
+from core.prompts.generator import chunks_format
 from core.utils.redis_conn import REDIS_CONN
 
 

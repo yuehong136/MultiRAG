@@ -32,7 +32,7 @@ from core.utils import truncate
 from api.utils.api_utils import timeout
 
 # ⭐ 遵循项目规范：从 core.prompts.prompts 导入
-from core.prompts.prompts import (
+from core.prompts.generator import (
     cluster_summary_prompt,
     cluster_keyword_prompt,
     global_tag_prompt,

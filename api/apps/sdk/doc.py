@@ -30,7 +30,7 @@ from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_
 from core.app.qa import beAdoc, rmPrefix
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
-from core.prompts.prompts import cross_languages, keyword_extraction
+from core.prompts.generator import cross_languages, keyword_extraction
 from core.utils import rmSpace
 from core.utils.storage_factory import STORAGE_IMPL
 

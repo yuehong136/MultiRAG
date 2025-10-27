@@ -22,7 +22,7 @@ from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 from graphrag.utils import get_llm_cache, chat_limiter, set_llm_cache
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.nlp import naive_merge, naive_merge_with_images
-from core.prompts.prompts import keyword_extraction, question_proposal
+from core.prompts.generator import keyword_extraction, question_proposal
 
 
 class ChunkerParam(ProcessParamBase):

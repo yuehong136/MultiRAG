@@ -35,7 +35,7 @@ from api.db.db_models import TenantLLM, get_db, db_connection
 from api.utils.base64_image import test_image
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 
-from core.prompts.prompts import kb_prompt
+from core.prompts.generator import kb_prompt
 from core.utils.tavily_conn import Tavily
 from api.db.services.mcp_server_service import MCPServerService
 from core.utils.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
@@ -291,7 +291,7 @@ class ChatAgentAdapter:
                 
                 # 重要：像 _invoke 方法一样，将 system 消息添加到 msg 中
                 # 这样 _react_with_tools_streamly 中的 hist 才会包含 system 消息
-                from core.prompts.prompts import message_fit_in
+                from core.prompts.generator import message_fit_in
                 _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.agent.chat_mdl.max_length * 0.97))
 
                 # 创建用于收集工具使用历史的列表
@@ -398,7 +398,7 @@ class ChatAgentAdapter:
             # 检查是否有工具可用
             if self.agent.tools:
                 # 重要：像 _invoke 方法一样，将 system 消息添加到 msg 中
-                from core.prompts.prompts import message_fit_in
+                from core.prompts.generator import message_fit_in
                 _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.agent.chat_mdl.max_length * 0.97))
                 
                 use_tools = []

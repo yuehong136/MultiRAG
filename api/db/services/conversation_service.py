@@ -12,7 +12,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.dialog_service import DialogService, chat
 from api.utils import get_uuid
 
-from core.prompts.prompts import chunks_format
+from core.prompts.generator import chunks_format
 
 class ConversationService(CommonService):
     model = Conversation
