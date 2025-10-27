@@ -156,6 +156,11 @@ class UserService(CommonService):
             cls.model.id == user_id,
             cls.model.is_superuser == 1).count() > 0
 
+    @classmethod
+    def get_all_users(cls, db: Session):
+        users = db.query(cls.model).all()
+        return users
+
 
 class TenantService(CommonService):
     model = Tenant

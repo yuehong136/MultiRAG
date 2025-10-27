@@ -9,6 +9,10 @@ multirag:
   # 管理后台是否需要超级管理员权限 (true: 仅超级管理员, false: 所有激活用户)
   admin_require_superuser: false
 
+admin:
+  host: 0.0.0.0
+  http_port: 8130
+
 postgresql:
   # 数据库的类型
   name: 'postgresql'
