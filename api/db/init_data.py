@@ -199,9 +199,10 @@ def init_llm_factory(db: Session):
     #         except Exception as e:
     #             pass
     #         break
+    doc_count = DocumentService.get_all_kb_doc_count(db)
     for kb_id in KnowledgebaseService.get_all_ids(db):
         # KnowledgebaseService.update_by_id(db, kb_id, {"doc_num": DocumentService.get_kb_doc_count(db, kb_id)})
-        KnowledgebaseService.update_document_number_in_init(db, kb_id=kb_id, doc_num=DocumentService.get_kb_doc_count(db, kb_id))
+        KnowledgebaseService.update_document_number_in_init(db, kb_id=kb_id, doc_num=doc_count.get(kb_id, 0))
 
 
 def add_graph_templates(db: Session):

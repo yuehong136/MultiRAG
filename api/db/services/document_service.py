@@ -2171,6 +2171,24 @@ class DocumentService(CommonService):
         return query.count()
 
     @classmethod
+    def get_all_kb_doc_count(cls, db: Session):
+        """
+        获取所有知识库的文档数量统计。
+
+        :param db: 数据库会话对象。
+        :return: 字典，键为知识库ID，值为对应的文档数量。
+        """
+        result = {}
+        rows = db.query(
+            cls.model.kb_id,
+            func.count(cls.model.id).label('count')
+        ).group_by(cls.model.kb_id).all()
+        
+        for row in rows:
+            result[row.kb_id] = row.count
+        return result
+
+    @classmethod
     def parse_web_by_provider(
         cls,
         provider: str,
