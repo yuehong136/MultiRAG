@@ -77,7 +77,7 @@ class SearXNGParam(ToolParamBase):
 class SearXNG(ToolBase, ABC):
     component_name = "SearXNG"
 
-    @timeout(os.environ.get("COMPONENT_EXEC_TIMEOUT", 12))
+    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 12)))
     def _invoke(self, **kwargs):
         # Gracefully handle try-run without inputs
         query = kwargs.get("query")
@@ -94,7 +94,6 @@ class SearXNG(ToolBase, ABC):
         last_e = ""
         for _ in range(self._param.max_retries + 1):
             try:
-                # 构建搜索参数
                 search_params = {
                     'q': query,
                     'format': 'json',
@@ -104,7 +103,6 @@ class SearXNG(ToolBase, ABC):
                     'pageno': 1
                 }
 
-                # 发送搜索请求
                 response = requests.get(
                     f"{searxng_url}/search",
                     params=search_params,
@@ -151,6 +149,6 @@ class SearXNG(ToolBase, ABC):
 
     def thoughts(self) -> str:
         return """
-Keywords: {} 
+Keywords: {}
 Searching with SearXNG for relevant results...
                 """.format(self.get_input().get("query", "-_-!"))

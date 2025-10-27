@@ -75,7 +75,7 @@ class RetrievalParam(ToolParamBase):
 class Retrieval(ToolBase, ABC):
     component_name = "Retrieval"
 
-    @timeout(os.environ.get("COMPONENT_EXEC_TIMEOUT", 12))
+    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 12)))
     def _invoke(self, **kwargs):
         if not kwargs.get("query"):
             self.set_output("formalized_content", self._param.empty_response)
@@ -167,7 +167,7 @@ class Retrieval(ToolBase, ABC):
             self.set_output("formalized_content", self._param.empty_response)
             return
 
-            # Format the chunks for JSON output (similar to how other tools do it)
+        # Format the chunks for JSON output (similar to how other tools do it)
         json_output = kbinfos["chunks"].copy()
 
         self._canvas.add_reference(kbinfos["chunks"], kbinfos["doc_aggs"])
@@ -181,6 +181,6 @@ class Retrieval(ToolBase, ABC):
 
     def thoughts(self) -> str:
         return """
-Keywords: {} 
+Keywords: {}
 Looking for the most relevant articles.
         """.format(self.get_input().get("query", "-_-!"))
