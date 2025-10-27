@@ -141,21 +141,30 @@ class Base(ABC):
             return ans + LENGTH_NOTIFICATION_CN
         return ans + LENGTH_NOTIFICATION_EN
 
-    def _exceptions(self, e, attempt):
+    @property
+    def _retryable_errors(self) -> set[str]:
+        return {
+            LLMErrorCode.ERROR_RATE_LIMIT,
+            LLMErrorCode.ERROR_SERVER,
+        }
+
+    def _should_retry(self, error_code: str) -> bool:
+        return error_code in self._retryable_errors
+
+    def _exceptions(self, e, attempt) -> str | None:
         logging.exception("OpenAI chat_with_tools")
         # Classify the error
         error_code = self._classify_error(e)
         if attempt == self.max_retries:
             error_code = LLMErrorCode.ERROR_MAX_RETRIES
 
-        # Check if it's a rate limit error or server error and not the last attempt
-        should_retry = (error_code == LLMErrorCode.ERROR_RATE_LIMIT or error_code == LLMErrorCode.ERROR_SERVER)
-        if not should_retry:
-            return f"{ERROR_PREFIX}: {error_code} - {str(e)}"
+        if self._should_retry(error_code):
+            delay = self._get_delay()
+            logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
+            time.sleep(delay)
+            return None
 
-        delay = self._get_delay()
-        logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
-        time.sleep(delay)
+        return f"{ERROR_PREFIX}: {error_code} - {str(e)}"
 
     def _verbose_tool_use(self, name, args, res):
         return "<tool_call>" + json.dumps({
