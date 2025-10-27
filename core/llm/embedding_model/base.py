@@ -1,4 +1,5 @@
 from abc import ABC
+from core.utils import total_token_count_from_response
 
 
 class Base(ABC):
@@ -17,12 +18,4 @@ class Base(ABC):
         raise NotImplementedError("Please implement encode method!")
 
     def total_token_count(self, resp):
-        try:
-            return resp.usage.total_tokens
-        except Exception:
-            pass
-        try:
-            return resp["usage"]["total_tokens"]
-        except Exception:
-            pass
-        return 0
+        return total_token_count_from_response(resp)

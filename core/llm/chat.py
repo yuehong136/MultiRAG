@@ -36,7 +36,7 @@ from zhipuai import ZhipuAI
 
 from core.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, SupportedLiteLLMProvider
 from core.nlp import is_chinese, is_english
-from core.utils import num_tokens_from_string
+from core.utils import num_tokens_from_string, total_token_count_from_response
 
 
 # Error message constants
@@ -463,15 +463,7 @@ class Base(ABC):
         yield total_tokens
 
     def total_token_count(self, resp):
-        try:
-            return resp.usage.total_tokens
-        except Exception:
-            pass
-        try:
-            return resp["usage"]["total_tokens"]
-        except Exception:
-            pass
-        return 0
+       return total_token_count_from_response(resp)
 
     def _calculate_dynamic_ctx(self, history):
         """Calculate dynamic context window size"""
