@@ -8,7 +8,7 @@
 """
 from datetime import datetime
 
-from sqlalchemy import func, update
+from sqlalchemy import func, update, or_, and_
 from sqlalchemy.orm import Session
 from api.db import StatusEnum, TenantPermission
 from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document
@@ -179,6 +179,64 @@ class KnowledgebaseService(CommonService):
         if count == -1:
             return [kb.to_dict() for kb in kbs[offset:]]
         return [kb.to_dict() for kb in kbs[offset:offset + count]]
+
+    @classmethod
+    def get_all_kb_by_tenant_ids(cls, db: Session, tenant_ids: list, user_id: str):
+        """
+        根据租户ID列表获取所有有权限的知识库
+        
+        Args:
+            db: 数据库会话
+            tenant_ids: 租户ID列表
+            user_id: 用户ID
+            
+        Returns:
+            list: 知识库字典列表
+        """
+        # will get all permitted kb, be cautious.
+        fields = [
+            cls.model.name,
+            cls.model.language,
+            cls.model.permission,
+            cls.model.doc_num,
+            cls.model.token_num,
+            cls.model.chunk_num,
+            cls.model.status,
+            cls.model.create_date,
+            cls.model.update_date
+        ]
+        # find team kb and owned kb
+        query = db.query(*fields).filter(
+            or_(
+                and_(
+                    cls.model.tenant_id.in_(tenant_ids),
+                    cls.model.permission == TenantPermission.TEAM.value
+                ),
+                cls.model.tenant_id == user_id
+            )
+        ).order_by(cls.model.create_time.asc())
+        # maybe cause slow query by deep paginate, optimize later.
+        offset, limit = 0, 50
+        res = []
+        while True:
+            kb_batch = query.offset(offset).limit(limit).all()
+            if not kb_batch:
+                break
+            # 将查询结果转换为字典
+            for kb in kb_batch:
+                res.append({
+                    "name": kb.name,
+                    "language": kb.language,
+                    "permission": kb.permission,
+                    "doc_num": kb.doc_num,
+                    "token_num": kb.token_num,
+                    "chunk_num": kb.chunk_num,
+                    "status": kb.status,
+                    "create_date": kb.create_date,
+                    "update_date": kb.update_date
+                })
+            offset += limit
+        return res
 
     @classmethod
     def get_kb_ids(cls, db: Session, tenant_id):

@@ -8,6 +8,11 @@ class StatusEnum(Enum):
     INVALID = "0"
 
 
+class ActiveEnum(Enum):
+    ACTIVE = True
+    INACTIVE = False
+
+
 class UserTenantRole(StrEnum):
     OWNER = 'owner'
     ADMIN = 'admin'

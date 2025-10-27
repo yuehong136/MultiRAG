@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from routes import admin_router
 from api.utils.log_utils import init_root_logger
 from api.constants import SERVICE_CONF
+from api import settings
 from config import load_configurations, SERVICE_CONFIGS
 from exceptions import setup_exception_handlers
 
@@ -25,6 +26,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     /_/  /_/\__,_/\__/_/_/ |_/_/  |_\____/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/ 
     """)
     
+    # 初始化设置
+    settings.init_settings()
     SERVICE_CONFIGS.configs = load_configurations(SERVICE_CONF)
     logging.info("MultiRAG Admin service started...")
     

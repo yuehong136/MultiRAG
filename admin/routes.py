@@ -1,11 +1,11 @@
+import logging
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 from fastapi import APIRouter
-from sqlalchemy.orm import Session
 
 from auth import AdminAuth
 from responses import APIResponse, success_response, error_response
-from services import UserMgr, ServiceMgr
+from services import UserMgr, ServiceMgr, UserServiceMgr
 from exceptions import AdminException
 
 
@@ -53,6 +53,15 @@ class UserDetail(BaseModel):
     create_date: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ActivateStatusUpdate(BaseModel):
+    """用户激活状态更新请求"""
+    activate_status: str = Field(..., description="激活状态 ('on' 或 'off')")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {"activate_status": "on"}
+    })
 
 
 class ServiceResponse(BaseModel):
@@ -113,18 +122,29 @@ async def create_user(user_data: UserCreate, auth: AdminAuth) -> APIResponse[dic
     """创建新用户"""
     try:
         username, db = auth
-        user = UserMgr.create_user(
+        res = UserMgr.create_user(
             db,
             user_data.username,
             user_data.password,
             user_data.role
         )
-        return success_response(user, "User created successfully", 201)
+        if res["success"]:
+            user_info = res["user_info"]
+            # 移除密码字段（不返回敏感信息）
+            if "password" in user_info:
+                user_info.pop("password")
+            logging.info(f"User created successfully: {user_info}")
+            return success_response(user_info, "User created successfully")
+        else:
+            logging.warning(f"Failed to create user: {res}")
+            return error_response("create user failed")
+
     except AdminException as e:
+        logging.warning(f"AdminException in create_user: {e.message}")
         return error_response(e.message, e.code)
     except Exception as e:
+        logging.exception(f"Exception in create_user: {e}")
         return error_response(str(e), 500)
-
 
 @admin_router.delete(
     "/users/{username}",
@@ -158,8 +178,31 @@ async def change_password(
     """修改用户密码"""
     try:
         admin_username, db = auth
-        UserMgr.update_user_password(db, username, password_data.new_password)
-        return success_response(None, "Password updated successfully")
+        msg = UserMgr.update_user_password(db, username, password_data.new_password)
+        return success_response(None, msg)
+
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.put(
+    "/users/{username}/activate",
+    response_model=APIResponse[None],
+    summary="更新用户激活状态",
+    description="更新指定用户的激活状态（启用/停用）"
+)
+async def alter_user_activate_status(
+    username: str,
+    status_data: ActivateStatusUpdate,
+    auth: AdminAuth
+) -> APIResponse[None]:
+    """更新用户激活状态"""
+    try:
+        admin_username, db = auth
+        msg = UserMgr.update_user_activate_status(db, username, status_data.activate_status)
+        return success_response(None, msg)
     except AdminException as e:
         return error_response(e.message, e.code)
     except Exception as e:
@@ -178,6 +221,42 @@ async def get_user_details(username: str, auth: AdminAuth) -> APIResponse[UserDe
         admin_username, db = auth
         user_details = UserMgr.get_user_details(db, username)
         return success_response(user_details)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/users/{username}/datasets",
+    response_model=APIResponse[list[dict]],
+    summary="获取用户的知识库列表",
+    description="获取指定用户的所有知识库"
+)
+async def get_user_datasets(username: str, auth: AdminAuth) -> APIResponse[list[dict]]:
+    """获取用户的知识库列表"""
+    try:
+        admin_username, db = auth
+        datasets_list = UserServiceMgr.get_user_datasets(db, username)
+        return success_response(datasets_list)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/users/{username}/agents",
+    response_model=APIResponse[list[dict]],
+    summary="获取用户的Agent列表",
+    description="获取指定用户的所有Agent"
+)
+async def get_user_agents(username: str, auth: AdminAuth) -> APIResponse[list[dict]]:
+    """获取用户的Agent列表"""
+    try:
+        admin_username, db = auth
+        agents_list = UserServiceMgr.get_user_agents(db, username)
+        return success_response(agents_list)
     except AdminException as e:
         return error_response(e.message, e.code)
     except Exception as e:

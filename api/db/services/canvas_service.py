@@ -10,7 +10,7 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 import tiktoken
-from sqlalchemy import select, func, asc
+from sqlalchemy import select, func, asc, or_, and_
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import desc as sa_desc
 
@@ -91,6 +91,55 @@ class UserCanvasService(CommonService):
 
         rows = db.execute(stmt).mappings().all()
         return [dict(r) for r in rows]
+
+    @classmethod
+    def get_all_agents_by_tenant_ids(cls, db: Session, tenant_ids: list, user_id: str):
+        """
+        根据租户ID列表获取所有有权限的Agent
+        
+        Args:
+            db: 数据库会话
+            tenant_ids: 租户ID列表
+            user_id: 用户ID
+            
+        Returns:
+            list: Agent字典列表
+        """
+        # will get all permitted agents, be cautious
+        fields = [
+            cls.model.title,
+            cls.model.permission,
+            cls.model.canvas_type,
+            cls.model.canvas_category
+        ]
+        # find team agents and owned agents
+        query = db.query(*fields).filter(
+            or_(
+                and_(
+                    cls.model.user_id.in_(tenant_ids),
+                    cls.model.permission == TenantPermission.TEAM.value
+                ),
+                cls.model.user_id == user_id
+            )
+        ).order_by(cls.model.create_time.asc())
+        
+        # maybe cause slow query by deep paginate, optimize later
+        offset, limit = 0, 50
+        res = []
+        while True:
+            ag_batch = query.offset(offset).limit(limit).all()
+            if not ag_batch:
+                break
+            # 将查询结果转换为字典
+            for agent in ag_batch:
+                res.append({
+                    "title": agent.title,
+                    "permission": agent.permission,
+                    "canvas_type": agent.canvas_type,
+                    "canvas_category": agent.canvas_category
+                })
+            offset += limit
+        return res
 
     @classmethod
     def get_by_tenant_id(cls, db: Session, pid: str):
