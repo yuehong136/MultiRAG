@@ -28,7 +28,7 @@ from core.utils.storage_factory import STORAGE_IMPL, STORAGE_IMPL_TYPE
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN
 from api.apps import manager
-from api.utils.health import run_health_checks
+from api.utils.health_utils import run_health_checks
 
 router = APIRouter()
 
