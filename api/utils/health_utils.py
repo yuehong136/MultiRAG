@@ -3,7 +3,7 @@ from timeit import default_timer as timer
 from sqlalchemy import text
 
 from api import settings
-from api.db.db_models import engine
+from api.db.db_models import engine, get_pool_status
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.storage_factory import STORAGE_IMPL
 
@@ -13,6 +13,7 @@ def _ok_nok(ok: bool) -> str:
 
 
 def check_db() -> tuple[bool, dict]:
+    """检查数据库连接是否正常"""
     st = timer()
     try:
         # lightweight probe; works for MySQL/Postgres
@@ -21,6 +22,40 @@ def check_db() -> tuple[bool, dict]:
         return True, {"elapsed": f"{(timer() - st) * 1000.0:.1f}"}
     except Exception as e:
         return False, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", "error": str(e)}
+
+
+def check_db_pool() -> tuple[bool, dict]:
+    """
+    检查数据库连接池状态
+
+    Returns:
+        tuple[bool, dict]: (是否健康, 连接池状态信息)
+            - 使用率 > 90%: 不健康
+            - 使用率 > 80%: 警告但仍然健康
+            - 使用率 <= 80%: 健康
+    """
+    st = timer()
+    try:
+        pool_status = get_pool_status()
+        elapsed = f"{(timer() - st) * 1000.0:.1f}"
+
+        # 判断连接池健康状态
+        usage_rate = pool_status.get('usage_rate', 0)
+        is_healthy = usage_rate <= 90  # 使用率超过90%认为不健康
+
+        return is_healthy, {
+            "elapsed": elapsed,
+            "pool_size": pool_status.get('pool_size'),
+            "checked_out": pool_status.get('checked_out'),
+            "checked_in": pool_status.get('checked_in'),
+            "usage_rate": f"{usage_rate}%",
+            "status": pool_status.get('status')
+        }
+    except Exception as e:
+        return False, {
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
+            "error": str(e)
+        }
 
 
 def check_redis() -> tuple[bool, dict]:
@@ -62,8 +97,17 @@ def check_chat() -> tuple[bool, dict]:
 
 
 def run_health_checks() -> tuple[dict, bool]:
+    """
+    运行所有健康检查
+
+    Returns:
+        tuple[dict, bool]: (健康检查结果, 是否全部正常)
+            - 结果包含各个组件的状态 (ok/nok)
+            - 如果关键组件（db, chat）都正常，则返回 True
+    """
     result: dict[str, str | dict] = {}
 
+    # 关键组件检查
     db_ok, db_meta = check_db()
     chat_ok, chat_meta = check_chat()
 
@@ -75,7 +119,16 @@ def run_health_checks() -> tuple[dict, bool]:
     if not chat_ok:
         result.setdefault("_meta", {})["chat"] = chat_meta
 
-    # Optional probes (do not change minimal contract but exposed for observability)
+    # 数据库连接池检查（新增）
+    try:
+        pool_ok, pool_meta = check_db_pool()
+        result["db_pool"] = _ok_nok(pool_ok)
+        # 无论是否健康，都显示连接池状态信息
+        result.setdefault("_meta", {})["db_pool"] = pool_meta
+    except Exception:
+        result["db_pool"] = "nok"
+
+    # 可选组件检查（不影响整体健康状态）
     try:
         redis_ok, redis_meta = check_redis()
         result["redis"] = _ok_nok(redis_ok)
@@ -100,6 +153,7 @@ def run_health_checks() -> tuple[dict, bool]:
     except Exception:
         result["storage"] = "nok"
 
+    # 整体健康状态：只要关键组件（db, chat）正常即可
     all_ok = (result.get("db") == "ok") and (result.get("chat") == "ok")
     result["status"] = "ok" if all_ok else "nok"
     return result, all_ok

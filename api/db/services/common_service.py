@@ -1,15 +1,64 @@
 # common_services.py
 import uuid
+import logging
 from datetime import datetime, timezone
 from typing import Any, Type, Generic, TypeVar
 
-from sqlalchemy import Row, desc, asc, text
+from sqlalchemy import Row, desc, asc, text, exc
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from sqlalchemy.exc import NoResultFound, IntegrityError
 from sqlalchemy.orm.attributes import InstrumentedAttribute
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from api.db import db_models
+
+# 配置日志
+logger = logging.getLogger(__name__)
+
+
+def retry_db_operation(max_attempts=3, min_wait=1, max_wait=5):
+    """
+    数据库操作重试装饰器（使用 tenacity）
+
+    自动重试以下数据库错误：
+    - OperationalError: 连接丢失、服务器断开等
+    - DisconnectionError: 连接断开
+    - InterfaceError: 数据库接口错误
+    - TimeoutError: 数据库操作超时
+
+    Args:
+        max_attempts: 最大重试次数（默认3次）
+        min_wait: 最小等待时间（秒，默认1秒）
+        max_wait: 最大等待时间（秒，默认5秒）
+
+    Example:
+        @retry_db_operation(max_attempts=5, max_wait=10)
+        def critical_operation(db, data):
+            # 关键业务操作
+            pass
+    """
+    def decorator(func):
+        @retry(
+            stop=stop_after_attempt(max_attempts),
+            wait=wait_exponential(multiplier=1, min=min_wait, max=max_wait),
+            retry=retry_if_exception_type((
+                exc.OperationalError,      # MySQL/PostgreSQL 操作错误（连接断开等）
+                exc.DisconnectionError,    # 连接断开错误
+                exc.InterfaceError,        # 数据库接口错误
+                exc.TimeoutError,          # 超时错误
+            )),
+            before_sleep=lambda retry_state: logger.warning(
+                f"[DB Retry] {func.__name__} 执行失败，"
+                f"{retry_state.next_action.sleep:.1f}秒后重试 "
+                f"(第 {retry_state.attempt_number}/{max_attempts} 次重试)"
+            ),
+            reraise=True,  # 重试失败后重新抛出异常
+        )
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 # Define a TypeVar bound to db_models.BaseModel for better type hinting
@@ -94,6 +143,7 @@ class CommonService(Generic[ModelType]):
         return db.query(cls.model).filter_by(**kwargs).one_or_none()
 
     @classmethod
+    @retry_db_operation(max_attempts=3)  # 保存操作重试3次
     def save(cls, db: Session, **kwargs) -> ModelType:
         db_item = cls.model(**kwargs)
         db.add(db_item)
@@ -106,6 +156,7 @@ class CommonService(Generic[ModelType]):
         return db_item
 
     @classmethod
+    @retry_db_operation(max_attempts=3)  # 插入操作重试3次
     def insert(cls, db: Session, **kwargs) -> ModelType:
         if "id" not in kwargs:
             kwargs["id"] = str(uuid.uuid4())
@@ -131,6 +182,7 @@ class CommonService(Generic[ModelType]):
     #     db.commit()
 
     @classmethod
+    @retry_db_operation(max_attempts=5, max_wait=10)  # 批量插入重试5次，关键操作
     def insert_many(cls, db: Session, data_list: list[dict[str, Any]], batch_size: int = 100):
         now = cls.current_timestamp()
         now_datetime = cls.current_datetime()
@@ -154,24 +206,19 @@ class CommonService(Generic[ModelType]):
         db.commit()
 
     @classmethod
+    @retry_db_operation(max_attempts=3)  # 更新操作重试3次
     def update_by_id(cls, db: Session, pid: str, data: dict[str, Any]) -> int:
-        # try:
-        #     # 数据库连接健康检查和重连逻辑
-        #     try:
-        #         # 尝试执行一个简单的查询来检查连接是否可用
-        #         db.execute(text("SELECT 1"))
-        #     except Exception:
-        #         # 如果连接不可用，尝试回滚并刷新连接
-        #         try:
-        #             db.rollback()
-        #         except Exception:
-        #             pass
-        #         try:
-        #             # 刷新连接池中的连接
-        #             db.connection().invalidate()
-        #         except Exception:
-        #             pass
+        """
+        通过 ID 更新记录，带自动重试机制
 
+        Args:
+            db: 数据库会话
+            pid: 记录 ID
+            data: 要更新的数据字典
+
+        Returns:
+            更新的记录数量
+        """
         now = cls.current_timestamp()
         now_datetime = cls.current_datetime()
         data["update_time"] = now
@@ -179,9 +226,6 @@ class CommonService(Generic[ModelType]):
         num = db.query(cls.model).filter(cls.model.id == pid).update(data)
         db.commit()
         return num
-        # except Exception as e:
-        #     db.rollback()
-        #     raise
 
     @classmethod
     def get_by_id(cls, db: Session, pid: Any) -> ModelType | None:

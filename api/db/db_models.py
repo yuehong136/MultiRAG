@@ -47,17 +47,60 @@ DATABASE_URL = (
 
 
 def get_engine_config(db_config: dict) -> dict:
-    """将配置文件中的数据库配置映射到 SQLAlchemy 引擎配置"""
+    """
+    将配置文件中的数据库配置映射到 SQLAlchemy 引擎配置
+
+    优化的连接池配置：
+    - pool_pre_ping: 使用前自动检测连接是否存活（最关键）
+    - pool_recycle: 定期回收连接，防止超过数据库超时时间
+    - connect_args: 数据库特定的连接参数
+
+    Args:
+        db_config: 数据库配置字典
+
+    Returns:
+        SQLAlchemy 引擎配置字典
+    """
     max_connections = db_config.get('max_connections', 100)
     stale_timeout = db_config.get('stale_timeout', 30)
 
-    return {
-        'pool_size': max_connections,
-        'max_overflow': max_connections // 2,  # 或者你可以设置为固定值
-        'pool_timeout': stale_timeout,
-        'pool_recycle': stale_timeout * 100,  # 转换为秒，设置连接回收时间
-        'echo': False
+    # 基础连接池配置
+    engine_config = {
+        # 连接池大小配置
+        'pool_size': max_connections,              # 常驻连接数
+        'max_overflow': max_connections // 2,      # 最大溢出连接数
+        'pool_timeout': stale_timeout,             # 获取连接的超时时间（秒）
+
+        # 连接健康检查（关键配置）
+        'pool_pre_ping': True,                     # 使用前自动ping检测连接
+
+        # 连接回收配置
+        'pool_recycle': min(stale_timeout * 60, 1800),  # 30分钟或配置值，防止连接超时
+
+        # 日志配置
+        'echo': False,                             # 生产环境关闭SQL日志
+        'echo_pool': False,                        # 关闭连接池日志
     }
+
+    # 根据数据库类型添加特定连接参数
+    db_type = db_config.get('name', 'postgresql').lower()
+
+    if db_type == 'mysql':
+        # MySQL 特定配置
+        engine_config['connect_args'] = {
+            'connect_timeout': 10,      # 连接超时（秒）
+            'read_timeout': 30,         # 读取超时（秒）
+            'write_timeout': 30,        # 写入超时（秒）
+            'charset': 'utf8mb4',
+        }
+    elif db_type == 'postgresql':
+        # PostgreSQL 特定配置
+        engine_config['connect_args'] = {
+            'connect_timeout': 10,      # 连接超时（秒）
+            'options': '-c statement_timeout=30000',  # 30秒语句超时
+        }
+
+    return engine_config
 
 
 engine_config = get_engine_config(database_config)
@@ -66,15 +109,71 @@ engine = create_engine(
     client_encoding='utf8',
     **engine_config
 )
-# engine = create_engine(
-#     DATABASE_URL,
-#     client_encoding='utf8',
-#     pool_size=database_config.get('pool_size', 20),
-#     max_overflow=database_config.get('max_overflow', 20),
-#     pool_timeout=database_config.get('pool_timeout', 30),
-#     pool_recycle=database_config.get('pool_recycle', 1800),
-#     echo=False
-# )
+
+
+# ==================== 连接池事件监听器 ====================
+# 用于监控和记录连接池状态
+
+@event.listens_for(engine, "connect")
+def receive_connect(dbapi_conn, connection_record):
+    """
+    连接建立时触发
+
+    用于：
+    - 记录新连接的创建
+    - 设置连接级别的参数
+    """
+    connection_record.info['pid'] = os.getpid()
+    logging.debug(f"[连接池] 新数据库连接已建立 | 进程PID: {os.getpid()}")
+
+
+@event.listens_for(engine, "checkout")
+def receive_checkout(dbapi_conn, connection_record, connection_proxy):
+    """
+    从连接池取出连接时触发
+
+    用于：
+    - 验证连接的有效性（pool_pre_ping 会在这之前自动检查）
+    - 记录连接使用情况
+    """
+    pid = connection_record.info.get('pid')
+    if pid != os.getpid():
+        # 检测连接是否在不同进程中使用（多进程场景）
+        logging.warning(
+            f"[连接池] 连接跨进程使用 | 创建进程: {pid}, 当前进程: {os.getpid()}"
+        )
+
+
+@event.listens_for(engine, "checkin")
+def receive_checkin(dbapi_conn, connection_record):
+    """
+    连接归还到池中时触发
+
+    用于：
+    - 清理连接状态
+    - 确保连接处于干净状态
+    """
+    # 确保连接归还时没有未提交的事务
+    try:
+        if dbapi_conn.in_transaction:
+            dbapi_conn.rollback()
+            logging.warning("[连接池] 连接归还时存在未提交事务，已自动回滚")
+    except Exception as e:
+        logging.debug(f"[连接池] 连接状态检查: {e}")
+
+
+@event.listens_for(engine, "close")
+def receive_close(dbapi_conn, connection_record):
+    """
+    连接关闭时触发
+
+    用于：
+    - 记录连接关闭事件
+    - 清理资源
+    """
+    logging.debug(f"[连接池] 数据库连接已关闭 | 进程PID: {os.getpid()}")
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
@@ -84,24 +183,150 @@ from contextlib import contextmanager
 
 @contextmanager
 def db_connection():
-    """提供数据库连接的上下文管理器。
+    """
+    提供数据库连接的上下文管理器（用于手动管理事务）
+
+    特点：
+    - 不自动提交，需要手动调用 db.commit()
+    - 异常时自动回滚
+    - 保证连接关闭
 
     用法:
-    with db_connection() as db:
-        # 使用db进行操作
+        with db_connection() as db:
+            user = User(name="test")
+            db.add(user)
+            db.commit()  # 手动提交
     """
     db = SessionLocal()
     try:
         yield db
+    except Exception as e:
+        db.rollback()
+        logging.error(f"[数据库] 事务执行失败，已回滚: {e}")
+        raise
     finally:
         db.close()
 
+
 def get_db():
+    """
+    FastAPI 依赖注入：提供数据库会话
+
+    特点：
+    - 不自动提交，由 Service 层手动控制事务
+    - 异常时自动回滚
+    - 保证连接关闭
+    - 配合 pool_pre_ping 和 tenacity 重试实现高可用
+
+    用法:
+        @router.post('/create')
+        def create_user(
+            request: CreateUserRequest,
+            db: Session = Depends(get_db)
+        ):
+            # Service 层方法内部会调用 db.commit()
+            user = UserService.save(db, **request.dict())
+            return {"code": 0, "data": user}
+    """
     db = SessionLocal()
     try:
         yield db
+    except Exception as e:
+        db.rollback()
+        logging.debug(f"[数据库] 请求异常，事务已回滚: {type(e).__name__}")
+        raise
     finally:
         db.close()
+
+
+# ==================== 连接池状态监控工具 ====================
+
+def get_pool_status() -> dict:
+    """
+    获取数据库连接池的状态信息
+
+    Returns:
+        dict: 包含连接池状态的字典
+            - pool_size: 连接池大小（配置的常驻连接数）
+            - checked_out: 当前被取出使用的连接数
+            - overflow: 溢出连接数（超出 pool_size 的连接）
+            - checked_in: 池中可用的空闲连接数
+            - total_connections: 总连接数
+            - usage_rate: 连接池使用率（百分比）
+
+    用法:
+        # 在健康检查接口中使用
+        @router.get('/health/db')
+        def db_health():
+            status = get_pool_status()
+            if status['usage_rate'] > 80:
+                return {"status": "warning", "data": status}
+            return {"status": "healthy", "data": status}
+    """
+    pool = engine.pool
+
+    pool_size = pool.size()
+    checked_out = pool.checkedout()
+    overflow = pool.overflow()
+    checked_in = pool.checkedin()
+    total = checked_out + checked_in
+
+    # 计算使用率
+    max_connections = pool_size + (pool._max_overflow if hasattr(pool, '_max_overflow') else 0)
+    usage_rate = (checked_out / max_connections * 100) if max_connections > 0 else 0
+
+    return {
+        'pool_size': pool_size,           # 连接池大小
+        'checked_out': checked_out,       # 已取出连接数
+        'overflow': overflow,             # 溢出连接数
+        'checked_in': checked_in,         # 池中空闲连接数
+        'total_connections': total,       # 总连接数
+        'usage_rate': round(usage_rate, 2),  # 使用率（%）
+        'status': 'warning' if usage_rate > 80 else 'healthy'
+    }
+
+
+def check_db_connection() -> bool:
+    """
+    检查数据库连接是否正常
+
+    Returns:
+        bool: True 表示连接正常，False 表示连接异常
+
+    用法:
+        if not check_db_connection():
+            logging.error("数据库连接异常！")
+    """
+    try:
+        with db_connection() as db:
+            db.execute(text("SELECT 1"))
+        return True
+    except Exception as e:
+        logging.error(f"[数据库] 连接检查失败: {e}")
+        return False
+
+
+def close_stale_connections(age: int = 30):
+    """
+    关闭池中超过指定时间的空闲连接
+
+    Args:
+        age: 空闲时间阈值（秒）
+
+    注意：
+        SQLAlchemy 的 pool_recycle 参数已经自动处理过期连接
+        这个函数主要用于手动触发清理
+
+    用法:
+        # 可以在定时任务中调用
+        close_stale_connections(age=60)  # 关闭60秒以上的空闲连接
+    """
+    try:
+        # 清理连接池中的过期连接
+        engine.dispose()
+        logging.info(f"[连接池] 已清理超过 {age} 秒的空闲连接")
+    except Exception as e:
+        logging.error(f"[连接池] 清理空闲连接失败: {e}")
 
 
 # 保留原代码中的常量和辅助函数

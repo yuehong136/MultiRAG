@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict, ValidationEr
 from typing import Annotated, Any
 
 from api.apps.api_app import generate_confirmation_token
-from api.db.db_models import APIToken, get_db, DATABASE_TYPE
+from api.db.db_models import APIToken, get_db, DATABASE_TYPE, get_pool_status
 from api.db.services.api_service import APITokenService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
@@ -164,6 +164,37 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
     except Exception as e:
         res["database"] = {
             "database": DATABASE_TYPE.lower(),
+            "status": "red",
+            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "error": str(e),
+        }
+
+    # 数据库连接池状态检查（新增）
+    st = timer()
+    try:
+        pool_status = get_pool_status()
+        usage_rate = pool_status.get('usage_rate', 0)
+
+        # 根据使用率判断状态
+        if usage_rate > 90:
+            status = "red"
+        elif usage_rate > 80:
+            status = "yellow"
+        else:
+            status = "green"
+
+        res["database_pool"] = {
+            "status": status,
+            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "pool_size": pool_status.get('pool_size'),
+            "checked_out": pool_status.get('checked_out'),
+            "checked_in": pool_status.get('checked_in'),
+            "overflow": pool_status.get('overflow'),
+            "total_connections": pool_status.get('total_connections'),
+            "usage_rate": f"{usage_rate}%",
+        }
+    except Exception as e:
+        res["database_pool"] = {
             "status": "red",
             "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
             "error": str(e),
