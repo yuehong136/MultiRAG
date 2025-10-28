@@ -28,18 +28,17 @@ import threading
 import uuid
 
 from api.apps import app
-# from api.db.database import SessionLocal
 from api.db.runtime_config import RuntimeConfig
 from api.db.services.document_service import DocumentService
 from api import settings
-from api import utils, validation
+from api import utils
 
 from api.db.db_models import init_database_tables as init_web_db, upgrade_database_tables as upgrade_database, SessionLocal
 from api.db.init_data import init_web_data
 from api.versions import get_multirag_version
 import uvicorn
-from api.utils import show_configs
-from core.settings import print_rag_settings
+# from api.utils.configs import show_configs
+# from core.settings import print_rag_settings
 from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions
 from core.utils.redis_conn import RedisDistributedLock
 

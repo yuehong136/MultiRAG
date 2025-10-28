@@ -26,7 +26,7 @@ from sqlalchemy import create_engine, Column
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 from sqlalchemy.exc import SQLAlchemyError
 
-from api.utils import decrypt_database_config
+from api.utils.configs import decrypt_database_config
 
 from alembic.config import Config
 from alembic import command

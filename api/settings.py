@@ -8,7 +8,7 @@ import core.utils
 import core.utils.milvus_conn
 # import core.utils.infinity_conn, opensearch_conn
 from api.constants import MULTI_RAG_SERVICE_NAME
-from api.utils import get_base_config
+from api.utils.configs import get_base_config
 from api.utils.file_utils import get_project_base_directory
 from core.nlp import search
 
