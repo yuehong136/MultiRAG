@@ -657,7 +657,7 @@ class ReQueryRequest(BaseModel):
 
 
 @router.post("/re-query", response_model=ResponseSchema,
-             summary="获得语义层信息")
+             summary="在前端调整后的查询")
 async def re_query(
         db: Session = Depends(get_db),
         user=Depends(manager),
@@ -676,6 +676,7 @@ async def re_query(
                                                                 sql_components=body.sql_components,
                                                                 model_table_alias_mapping_list=body.model_table_alias_mapping_list,
                                                                 pagination_info=body.pagination_info)
+        logger.info("re-query sql result: {}".format(requery_sql_result))
 
         if body.pagination_info:
             result = await query_data_with_params(requery_sql_result["count_sql"], int(body.dataset_id),
@@ -734,7 +735,12 @@ class GetHCDimValuesByDimValueRequest(BaseModel):
     dimension_id: str = Field(..., title="维度ID", description="高基数维度的ID")
     page_index: int = Field(1, title="页码", description="页码，从1开始", ge=1)
     page_size: int = Field(20, title="页面大小", description="每页返回的记录数", ge=1, le=1000)
-    fuzzy_match: bool = Field(True, title="模糊匹配", description="是否启用模糊匹配")
+    fuzzy_match: Optional[bool] = Field(True, title="模糊匹配", description="是否启用模糊匹配")
+    userid: str = Field(
+        "",
+        title="用户ID",
+        description="用户ID，后续需要去获取该用户语义层的权限。"
+    )
 
 
 @router.post("/get-hc-dim-values-by-dim-value", response_model=ResponseSchema,
@@ -755,7 +761,7 @@ async def get_hc_dim_values_by_dim_value(
     通过提供关键词和维度ID，在指定的高基数维度中搜索匹配的维度值。
     支持模糊匹配和分页查询，只返回指定页面的数据。
     """
-    logger.info(f"收到高基数维度值搜索请求: {body.model_dump_json()}")
+    logger.info(f"收到高基数维度值搜索请求: {body}")
 
     try:
         # 参数验证
@@ -777,7 +783,8 @@ async def get_hc_dim_values_by_dim_value(
             dimension_id=body.dimension_id.strip(),
             page_index=body.page_index,
             page_size=body.page_size,
-            fuzzy_match=body.fuzzy_match
+            fuzzy_match=body.fuzzy_match,
+            user_id=body.userid
         )
 
         # 解析返回结果
