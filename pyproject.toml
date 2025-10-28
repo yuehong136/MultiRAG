@@ -177,7 +177,6 @@ dependencies = [
     "fastapi-mail>=1.4.1",
     "sqladmin>=0.21.0",
     "lark>=1.2.2",
-    "ibm-db>=3.2.7",
 ]
 
 [tool.uv]

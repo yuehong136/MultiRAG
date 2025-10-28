@@ -2165,20 +2165,6 @@ wheels = [
 ]
 
 [[package]]
-name = "ibm-db"
-version = "3.2.7"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/dd/a5/182413f7fe28ee7a67d8be5afa1139ccc60cfb5c13c0e9be81e2205bddbb/ibm_db-3.2.7.tar.gz", hash = "sha256:b3c3b4550364a43bf1daa4519b668e6e00e7c3935291f8c444c4ec989417e861" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/4d/0f/048679ca8516b73f3547c64f968b9654181d79f6cd2706914f37c2486da3/ibm_db-3.2.7-cp312-cp312-macosx_10_15_x86_64.whl", hash = "sha256:24e8a538475997f20569f221247808507b63349df51119fe9b2f8e48a0bf6f9b" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/f0/36/4cc64c70ebc74b2765005cd5357df18512c358cc6f5e87c6b0e70cff4053/ibm_db-3.2.7-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:24a53fb8e3c200bf2a55095f1ae4c065f2136f8be87ca1db89a874bd82d88ea5" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/09/d7/ae63f1257736c5e6a06cd2be133b4bc38f68893504f046b4c850144b65cd/ibm_db-3.2.7-cp312-cp312-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:91f68be7bd0d2940023da43d0a94f196fe267ca825df7874b8174583c8678ea0" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/d9/24/af465d93f549b0dbc944f256cdb2b470574018285e1478b6c50305a609ac/ibm_db-3.2.7-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5d39fe5001c078f2b824d1805ca9737060203a00a9dd9a8fe4b6f6b32b271cb5" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/48/04/c512eed2c701e8762e90f000fd1a768dd749ffb070a62b8cd92722c16327/ibm_db-3.2.7-cp312-cp312-win32.whl", hash = "sha256:20388753f52050e07e845b74146dbbe3f892dcfdfb015638e8f57c2fb2e056b8" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/07/cc/ae978e6d020f3b17f2e68cc2c60fe8381fffd1271608e871b5b4ee6434f2/ibm_db-3.2.7-cp312-cp312-win_amd64.whl", hash = "sha256:6e507ddf93b8406b0b88ff6bf07658a3100ce98cb1e735e5ec8e0a56e30ea856" },
-]
-
-[[package]]
 name = "idna"
 version = "3.10"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -3127,7 +3113,6 @@ dependencies = [
     { name = "html-text" },
     { name = "httpx", extra = ["socks"] },
     { name = "huggingface-hub" },
-    { name = "ibm-db" },
     { name = "infinity-emb" },
     { name = "infinity-sdk" },
     { name = "itsdangerous" },
@@ -3287,7 +3272,6 @@ requires-dist = [
     { name = "html-text", specifier = "==0.6.2" },
     { name = "httpx", extras = ["socks"], specifier = "==0.27.2" },
     { name = "huggingface-hub", specifier = ">=0.25.0,<0.26.0" },
-    { name = "ibm-db", specifier = ">=3.2.7" },
     { name = "infinity-emb", specifier = ">=0.0.66,<0.0.67" },
     { name = "infinity-sdk", specifier = "==0.6.0.dev5" },
     { name = "itsdangerous", specifier = "==2.1.2" },
