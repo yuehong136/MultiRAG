@@ -11,11 +11,15 @@ import json
 import logging
 import asyncio
 import aiohttp
+import time
+import hashlib
+import hmac
 from typing import List, Dict, Any, Optional, Union, Callable
 from urllib.parse import urljoin
 
 from api.service.askdata_service.event.event_utils import send_event
-from api.settings import DCS_SERVER_PROTOCOL, DCS_SERVER_HOST, DCS_SERVER_PORT
+from api.settings import DCS_SERVER_PROTOCOL, DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SEMANTIC_SERVER_ACCESS_KEY, \
+    DCS_SEMANTIC_SERVER_SECRET_KEY
 
 # 配置日志
 logging.basicConfig(
@@ -104,6 +108,26 @@ class SemanticApiClient:
         if self.token:
             self.headers["Authorization"] = f"Bearer {self.token}"
 
+    def _generate_signature(self) -> Dict[str, str]:
+        """生成API请求签名"""
+        timestamp = str(int(time.time()))
+        access_key = DCS_SEMANTIC_SERVER_ACCESS_KEY
+        secret_key = DCS_SEMANTIC_SERVER_SECRET_KEY
+
+        if not access_key or not secret_key:
+            return {}
+
+        # Using HMAC-SHA256 for the signature
+        message = f"{access_key}{timestamp}".encode('utf-8')
+        secret = secret_key.encode('utf-8')
+
+        signature = hmac.new(secret, message, digestmod=hashlib.sha256).hexdigest()
+
+        return {
+            "accessKey": access_key,
+            "timestamp": timestamp,
+            "signature": signature
+        }
     def _make_request(
             self,
             method: str,
@@ -131,6 +155,10 @@ class SemanticApiClient:
         """
         url = urljoin(self.base_url, api_path)
 
+        request_headers = self.headers.copy()
+        signature_headers = self._generate_signature()
+        request_headers.update(signature_headers)
+
         try:
             logger.info(f"发送 {method} 请求到 {url}")
             if data:
@@ -141,7 +169,7 @@ class SemanticApiClient:
                 url=url,
                 params=params,
                 json=data,
-                headers=self.headers,
+                headers=request_headers,
                 timeout=self.timeout
             )
 
@@ -202,6 +230,10 @@ class SemanticApiClient:
         """
         url = urljoin(self.base_url, api_path)
 
+        request_headers = self.headers.copy()
+        signature_headers = self._generate_signature()
+        request_headers.update(signature_headers)
+
         try:
             logger.info(f"异步发送 {method} 请求到 {url}")
             if data:
@@ -213,7 +245,7 @@ class SemanticApiClient:
                         url=url,
                         params=params,
                         json=data,
-                        headers=self.headers,
+                        headers=request_headers,
                         timeout=aiohttp.ClientTimeout(total=self.timeout)
                 ) as response:
                     # 检查HTTP状态码

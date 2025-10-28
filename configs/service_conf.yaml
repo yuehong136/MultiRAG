@@ -195,4 +195,8 @@ dcs_server:
   # 有些功能需要与中台服务通信
   protocol: http
   host: localhost
-  port: 8081
+  port: 8080
+  # 调用语义层接口时，需要使用的认证信息
+  semantic_server:
+    access_key: multirag
+    secret_key: g-Wv5@F]jeBGi^7Q~UWYKnUo)Ki.Q8th
