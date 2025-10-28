@@ -991,7 +991,8 @@ class AskdataService:
             dimension_id: str,
             page_index: int = 1,
             page_size: int = 20,
-            fuzzy_match: bool = True
+            fuzzy_match: bool = True,
+            user_id: str = None
     ) -> Dict[str, Any]:
         """
         根据关键词在高基数维度中搜索维度值
@@ -1016,7 +1017,8 @@ class AskdataService:
                 dimension_id=dimension_id,
                 page_index=page_index,
                 page_size=page_size,
-                fuzzy_match=fuzzy_match
+                fuzzy_match=fuzzy_match,
+                user_id=user_id
             )
 
             # 获取数据部分

@@ -2354,6 +2354,7 @@ class SemanticApiClient:
             self,
             keyword: str,
             dimension_id: str,
+            user_id: str,
             page_index: int = 1,
             page_size: int = 100,
             fuzzy_match: bool = True
@@ -2364,6 +2365,7 @@ class SemanticApiClient:
         Args:
             keyword: 搜索关键词
             dimension_id: 维度ID
+            user_id: 用户ID
             page_index: 页码（从1开始）
             page_size: 每页大小
             fuzzy_match: 是否模糊匹配
@@ -2378,7 +2380,7 @@ class SemanticApiClient:
         """
         logger.info(f"\n=== 根据关键词在高基数维度中搜索维度值 ===")
         logger.info(
-            f"维度ID: {dimension_id}, 关键词: {keyword}, 页码: {page_index}, 页面大小: {page_size}, 模糊匹配: {fuzzy_match}")
+            f"维度ID: {dimension_id}, 关键词: {keyword}, 用户ID: {user_id}, 页码: {page_index}, 页面大小: {page_size}, 模糊匹配: {fuzzy_match}")
 
         # 参数验证
         if not keyword:
@@ -2388,6 +2390,11 @@ class SemanticApiClient:
 
         if not dimension_id:
             error_msg = "维度ID不能为空"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg)
+
+        if not user_id:
+            error_msg = "用户ID不能为空"
             logger.error(error_msg)
             raise ApiRequestError(error_msg)
 
@@ -2408,7 +2415,7 @@ class SemanticApiClient:
                 "POST",
                 self.api_paths["get_hc_dim_values_by_dim_value"],
                 params={"pi": page_index, "ps": page_size},
-                data={"keyword": keyword, "dimensionId": dimension_id, "fuzzyMatch": fuzzy_match}
+                data={"keyword": keyword, "dimensionId": dimension_id, "fuzzyMatch": fuzzy_match, "userId": user_id}
             )
 
             if str(result.get("code", "")) != "0":
