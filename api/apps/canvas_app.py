@@ -480,6 +480,22 @@ def test_db_connect(request: TestDBConnectRequest, user=Depends(manager)):
             cursor.execute("SELECT 1")
             cursor.close()
             db.close()
+        elif request.db_type == 'IBM DB2':
+            import ibm_db
+            conn_str = (
+                f"DATABASE={request.database};"
+                f"HOSTNAME={request.host};"
+                f"PORT={request.port};"
+                f"PROTOCOL=TCPIP;"
+                f"UID={request.username};"
+                f"PWD={request.password};"
+            )
+            logging.info(conn_str)
+            conn = ibm_db.connect(conn_str, "", "")
+            stmt = ibm_db.exec_immediate(conn, "SELECT 1 FROM sysibm.sysdummy1")
+            ibm_db.fetch_assoc(stmt)
+            ibm_db.close(conn)
+            return get_json_result(data="Database Connection Successful!")
         else:
             return server_error_response("Unsupported database type.")
         return get_json_result(data="Database Connection Successful!")

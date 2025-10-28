@@ -1,6 +1,6 @@
 [project]
 name = "multirag"
-version = "0.7.2"
+version = "0.8.0"
 description = "基于RAG、Agent、Workflow体系赋能LLM应用"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -177,6 +177,7 @@ dependencies = [
     "fastapi-mail>=1.4.1",
     "sqladmin>=0.21.0",
     "lark>=1.2.2",
+    "ibm-db>=3.2.7",
 ]
 
 [tool.uv]
