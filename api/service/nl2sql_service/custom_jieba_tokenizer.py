@@ -2,10 +2,14 @@ import jieba
 import aiohttp
 import os
 import logging
+import time
+import hashlib
+import hmac
 from typing import List, Set, Optional, Dict
 from pathlib import Path
 
-from api.settings import DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SERVER_PROTOCOL
+from api.settings import DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SERVER_PROTOCOL, DCS_SEMANTIC_SERVER_ACCESS_KEY, \
+    DCS_SEMANTIC_SERVER_SECRET_KEY
 
 # 配置日志
 logging.basicConfig(
@@ -15,6 +19,28 @@ logging.basicConfig(
 logger = logging.getLogger("tokenizer")
 
 CURRENT_DIR = Path(os.path.dirname(__file__))
+
+
+def _generate_signature() -> Dict[str, str]:
+    """生成API请求签名"""
+    timestamp = str(int(time.time()))
+    access_key = DCS_SEMANTIC_SERVER_ACCESS_KEY
+    secret_key = DCS_SEMANTIC_SERVER_SECRET_KEY
+
+    if not access_key or not secret_key:
+        return {}
+
+    # Using HMAC-SHA256 for the signature
+    message = f"{access_key}{timestamp}".encode('utf-8')
+    secret = secret_key.encode('utf-8')
+
+    signature = hmac.new(secret, message, digestmod=hashlib.sha256).hexdigest()
+
+    return {
+        "accessKey": access_key,
+        "timestamp": timestamp,
+        "signature": signature
+    }
 
 
 def load_stopwords(file_path: Optional[str] = None) -> Set[str]:
@@ -95,8 +121,14 @@ async def custom_tokenize_with_semantic_words(text: str, dataset_id_list: List[s
                         "datasetIds": dataset_id_list
                     }
 
-                    # 发送异步GET请求
-                    async with session.post(api_url, params=params, json=payload) as response:
+                    # 构造请求头
+                    headers = {
+                        "Content-Type": "application/json"
+                    }
+                    headers.update(_generate_signature())
+
+                    # 发送异步POST请求
+                    async with session.post(api_url, params=params, json=payload, headers=headers) as response:
                         response.raise_for_status()
                         result = await response.json()
 
