@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from urllib.parse import urlparse
 
-from api.utils import read_config
+from api.utils.configs import read_config
 
 
 class ServiceConfigs:

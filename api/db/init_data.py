@@ -1,12 +1,10 @@
 import logging
-import base64
 import json
 import os
 import time
 import uuid
 from copy import deepcopy
 
-import bcrypt
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from api.db import LLMType, UserTenantRole
@@ -20,11 +18,10 @@ from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMSer
 from api.db.services.llm_service import LLMService, LLMBundle, get_init_tenant_llm
 from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
-# from api.db.database import SessionLocal
 from api.utils.file_utils import get_project_base_directory
 from api.db.db_models import GuardDimension
 from scripts.init_ai_guard_system import init_ai_guard_system
-
+# from api.common.base64 import encode_to_base64
 
 
 def init_superuser(db: Session):
@@ -34,7 +31,7 @@ def init_superuser(db: Session):
         "nickname": "admin",
         "is_superuser": True,
         "email": "admin@datav.com",
-        # "creator": "system",
+        "creator": "system",
         "status": "1",
     }
     tenant = {
@@ -54,43 +51,6 @@ def init_superuser(db: Session):
     }
 
     tenant_llm = get_init_tenant_llm(db, user_info["id"])
-    # user_id = user_info
-    # tenant_llm = []
-    #
-    # seen = set()
-    # factory_configs = []
-    # for factory_config in [
-    #     settings.CHAT_CFG["factory"],
-    #     settings.EMBEDDING_CFG["factory"],
-    #     settings.ASR_CFG["factory"],
-    #     settings.IMAGE2TEXT_CFG["factory"],
-    #     settings.RERANK_CFG["factory"],
-    # ]:
-    #     factory_name = factory_config["factory"]
-    #     if factory_name not in seen:
-    #         seen.add(factory_name)
-    #         factory_configs.append(factory_config)
-    #
-    # for factory_config in factory_configs:
-    #     for llm in LLMService.query(db, fid=factory_config["factory"]):
-    #         tenant_llm.append(
-    #             {
-    #                 "tenant_id": user_id,
-    #                 "llm_factory": factory_config["factory"],
-    #                 "llm_name": llm.llm_name,
-    #                 "mdl_type": llm.mdl_type,
-    #                 "api_key": factory_config["api_key"],
-    #                 "api_base": factory_config["base_url"],
-    #                 "max_tokens": llm.max_tokens if llm.max_tokens else 8192,
-    #             }
-    #         )
-    #
-    # unique = {}
-    # for item in tenant_llm:
-    #     key = (item["tenant_id"], item["llm_factory"], item["llm_name"])
-    #     if key not in unique:
-    #         unique[key] = item
-    # tenant_llm = list(unique.values())
 
     for llm in LLMService.query(db, fid=settings.LLM_FACTORY):
         tenant_llm.append(
