@@ -27,9 +27,9 @@ postgresql:
   # postgresql数据库的端口
   port: 5432
   # postgresql的最大连接数
-  max_connections: 900
+  max_connections: 100
   # postgresql的过期超时时间
-  stale_timeout: 300
+  stale_timeout: 30
 
 minio:
   # MinIO服务的用户名

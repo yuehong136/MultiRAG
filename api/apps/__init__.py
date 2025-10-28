@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
     # 1. 显示配置信息
     # 注意：settings.init_settings() 已在模块级别执行（见上方）
     # 无需重复初始化，避免资源浪费
-    from api.utils import show_configs
+    from api.utils.configs import show_configs
     from core.settings import print_rag_settings
     show_configs()
     print_rag_settings()
@@ -180,8 +180,8 @@ app = FastAPI(
         "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
     },
     openapi_tags=tags_metadata,
-    # docs_url=None,
-    # redoc_url=None,
+    docs_url=None,
+    redoc_url=None,
     lifespan=lifespan
 )
 

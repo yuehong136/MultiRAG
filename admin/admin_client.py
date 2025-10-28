@@ -3,6 +3,7 @@ from typing import Dict, List, Any
 from lark import Lark, Transformer, Tree
 import requests
 from requests.auth import HTTPBasicAuth
+# from api.common.base64 import encode_to_base64
 
 GRAMMAR = r"""
 start: command
@@ -163,11 +164,6 @@ class AdminTransformer(Transformer):
         return items
 
 
-# def encode_to_base64(input_string):
-#     base64_encoded = base64.b64encode(input_string.encode('utf-8'))
-#     return base64_encoded.decode('utf-8')
-#
-#
 # def encrypt(input_string):
 #     pub = '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArq9XTUSeYr2+N1h3Afl/z8Dse/2yD0ZGrKwx+EEEcdsBLca9Ynmx3nIB5obmLlSfmskLpBo0UACBmB5rEjBp2Q2f3AG3Hjd4B+gNCG6BDaawuDlgANIhGnaTLrIqWrrcm4EMzJOnAOI1fgzJRsOOUEfaS318Eq9OVO3apEyCCt0lOQK6PuksduOjVxtltDav+guVAA068NrPYmRNabVKRNLJpL8w4D44sfth5RvZ3q9t+6RTArpEtc5sh5ChzvqPOzKGMXW83C95TxmXqpbK6olN4RevSfVjEAgCydH6HN6OhtOQEcnrU97r9H0iZOWwbw3pVrZiUkuRD1R56Wzs2wIDAQAB\n-----END PUBLIC KEY-----'
 #     pub_key = RSA.importKey(pub)
