@@ -24,7 +24,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api import settings
-from api.utils.api_utils import construct_json_result, construct_error_response, get_data_error_result
+from api.utils.api_utils import construct_json_result, construct_error_response, get_data_error_result, get_json_result
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type
 from api.utils.web_utils import CONTENT_TYPE_MAP
@@ -357,6 +357,8 @@ async def rm(
                 return get_data_error_result(retmsg="File or Folder not found!")
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
+            if file.tenant_id != user.id:
+                return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
             if file.source_type == FileSource.KNOWLEDGEBASE:
                 continue
 
@@ -412,6 +414,8 @@ async def rename(
         file = FileService.get_by_id(db, req["file_id"])
         if not file:
             return get_data_error_result(retmsg="File not found!")
+        if file.tenant_id != user.id:
+            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
         if file.type != FileType.FOLDER.value \
                 and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
             return construct_json_result(data=False, message="The extension of file can't be changed",
@@ -452,6 +456,8 @@ async def get_file(
         file = FileService.get_by_id(db, file_id)
         if not file:
             return get_data_error_result(retmsg="Document not found!")
+        if file.tenant_id != user.id:
+            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
 
         b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
         file_content = STORAGE_IMPL.get(b, n)
@@ -508,6 +514,8 @@ async def move(
                 return get_data_error_result(retmsg="File or Folder not found!")
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
+            if file.tenant_id != user.id:
+                return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
         fe = FileService.get_by_id(db, parent_id)
         if not fe:
             return get_data_error_result(retmsg="Parent Folder not found!")
