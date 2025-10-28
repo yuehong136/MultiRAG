@@ -142,6 +142,14 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
 
     password = request.password
     user = UserService.query_user(db, email, password)
+
+    if user and hasattr(user, 'is_active') and not user.is_active:
+        return get_json_result(
+            data=False,
+            retcode=settings.RetCode.FORBIDDEN,
+            retmsg="This account has been disabled, please contact the administrator!",
+        )
+
     if user:
         response_data = user.to_dict()
         # 更新数据库会话标识（用于load_user验证）
