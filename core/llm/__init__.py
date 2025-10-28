@@ -1,210 +1,142 @@
-from core.llm.chat_model.models.anthropic_chat import AnthropicChat
-from core.llm.chat_model.models.azure_chat import AzureChat
-from core.llm.chat_model.models.baiduyiyan_chat import BaiduYiyanChat
-from core.llm.chat_model.models.cohere_chat import CoHereChat
-from core.llm.chat_model.models.deepseek_chat import DeepSeekChat
-from core.llm.chat_model.models.gemini_chat import GeminiChat
-from core.llm.chat_model.models.gptturbo import GptTurbo
-from core.llm.chat_model.models.gpustack_chat import GPUStackChat
-from core.llm.chat_model.models.grop_chat import GroqChat
-from core.llm.chat_model.models.huggingface_chat import HuggingFaceChat
-from core.llm.chat_model.models.hunyuan_chat import HunyuanChat
-from core.llm.chat_model.models.lmstudio_chat import LmStudioChat
-from core.llm.chat_model.models.minimax_chat import MiniMaxChat
-from core.llm.chat_model.models.modelscope_chat import ModelScopeChat
-from core.llm.chat_model.models.moonshot_chat import MoonshotChat
-from core.llm.chat_model.models.ollama_chat import OllamaChat
-from core.llm.chat_model.models.openai_api_chat import OpenAI_APIChat
-from core.llm.chat_model.models.openrouter_chat import OpenRouterChat
-from core.llm.chat_model.models.ppio_chat import PPIOChat
-from core.llm.chat_model.models.qwen_chat import QWenChat
-from core.llm.chat_model.models.siliconflow_chat import SILICONFLOWChat
-from core.llm.chat_model.models.spark_chat import SparkChat
-from core.llm.chat_model.models.volcengine_chat import VolcEngineChat
-from core.llm.chat_model.models.xai_chat import xAIChat
-from core.llm.chat_model.models.xinference_chat import XinferenceChat
-from core.llm.chat_model.models.yi_chat import YiChat
-from core.llm.chat_model.models.zhipu_chat import ZhipuChat
-from core.llm.cv_model.models.anthropic_cv import AnthropicCV
-from core.llm.cv_model.models.azuregptv4 import AzureGptV4
-from core.llm.cv_model.models.baiduyiyan_cv import BaiduYiyanCV
-from core.llm.cv_model.models.gemini_cv import GeminiCV
-from core.llm.cv_model.models.gptv4 import GptV4
-from core.llm.cv_model.models.gpustack_cv import GPUStackCV
-from core.llm.cv_model.models.hunyuan_cv import HunyuanCV
-from core.llm.cv_model.models.lmstudio_cv import LmStudioCV
-from core.llm.cv_model.models.local_cv import LocalCV
-from core.llm.cv_model.models.localai_cv import LocalAICV
-from core.llm.cv_model.models.ollama_cv import OllamaCV
-from core.llm.cv_model.models.openai_api_cv import OpenAI_APICV
-from core.llm.cv_model.models.openrouter_cv import OpenRouterCV
-from core.llm.cv_model.models.qwen_cv import QWenCV
-from core.llm.cv_model.models.siliconflow_cv import SILICONFLOWCV
-from core.llm.cv_model.models.stepfun_cv import StepFunCV
-from core.llm.cv_model.models.togetherai_cv import TogetherAICV
-from core.llm.cv_model.models.xai_cv import xAICV
-from core.llm.cv_model.models.xinferencecv import XinferenceCV
-from core.llm.cv_model.models.yi_cv import YiCV
-from core.llm.cv_model.models.zhipu_4v import Zhipu4V
-from core.llm.embedding_model.cohere_embed import CoHereEmbed
-from core.llm.embedding_model.default_embedding import DefaultEmbedding
-from core.llm.embedding_model.gpustack_embed import GPUStackEmbed
-from core.llm.embedding_model.huggingface_embed import HuggingFaceEmbed
-from core.llm.embedding_model.jina_embed import JinaEmbed
-from core.llm.embedding_model.lmstudio_embed import LmStudioEmbed
-from core.llm.embedding_model.localai_embed import LocalAIEmbed
-from core.llm.embedding_model.ollama_embed import OllamaEmbed
-from core.llm.embedding_model.openai_api_embed import OpenAI_APIEmbed
-from core.llm.embedding_model.openai_embed import OpenAIEmbed
-from core.llm.embedding_model.qwen_embed import QWenEmbed
-from core.llm.embedding_model.siliconflow_embed import SILICONFLOWEmbed
-from core.llm.embedding_model.volcengine_embed import VolcEngineEmbed
-from core.llm.embedding_model.voyage_embed import VoyageEmbed
-from core.llm.embedding_model.xinference_embed import XinferenceEmbed
-from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
-from core.llm.embedding_model.zhipu_embed import ZhipuEmbed
-from core.llm.rerank_model.cohere_rerank import CoHereRerank
-from core.llm.rerank_model.default_rerank import DefaultRerank
-from core.llm.rerank_model.gpustack_rerank import GPUStackRerank
-from core.llm.rerank_model.huggingface_rerank import HuggingfaceRerank
-from core.llm.rerank_model.jina_rerank import JinaRerank
-from core.llm.rerank_model.lmstudio_rerank import LmStudioRerank
-from core.llm.rerank_model.localai_rerank import LocalAIRerank
-from core.llm.rerank_model.openai_api_rerank import OpenAI_APIRerank
-from core.llm.rerank_model.qwen_rerank import QWenRerank
-from core.llm.rerank_model.togetherai_rerank import TogetherAIRerank
-from core.llm.rerank_model.xinference_rerank import XInferenceRerank
-from core.llm.rerank_model.youdao_rerank import YoudaoRerank
-from core.llm.sequence2txt_model.azureseq2txt import AzureSeq2txt
-from core.llm.sequence2txt_model.gptseq2txt import GPTSeq2txt
-from core.llm.sequence2txt_model.gpustackseq2txt import GPUStackSeq2txt
-from core.llm.sequence2txt_model.ollamaseq2txt import OllamaSeq2txt
-from core.llm.sequence2txt_model.qwenseq2txt import QWenSeq2txt
-from core.llm.sequence2txt_model.tencentcloudseq2txt import TencentCloudSeq2txt
-from core.llm.sequence2txt_model.xinferenceseq2txt import XinferenceSeq2txt
-from core.llm.tts_model.models.fish_audiotts import FishAudioTTS
-from core.llm.tts_model.models.gpustacktts import GPUStackTTS
-from core.llm.tts_model.models.ollamatts import OllamaTTS
-from core.llm.tts_model.models.openaitts import OpenAITTS
-from core.llm.tts_model.models.qwentts import QwenTTS
-from core.llm.tts_model.models.siliconflowtts import SILICONFLOWTTS
-from core.llm.tts_model.models.sparktts import SparkTTS
-from core.llm.tts_model.models.xinferencetts import XinferenceTTS
+import importlib
+import inspect
+
+from strenum import StrEnum
 
 
-EmbeddingModel = {
-    "Ollama": OllamaEmbed,
-    "LocalAI": LocalAIEmbed,
-    "OpenAI": OpenAIEmbed,
-    "Xinference": XinferenceEmbed,
-    "Tongyi-Qianwen": QWenEmbed,
-    "ZHIPU-AI": ZhipuEmbed,
-    "Youdao": YoudaoEmbed,
-    "GPUStack": GPUStackEmbed,
-    "Jina": JinaEmbed,
-    "SILICONFLOW": SILICONFLOWEmbed,
-    "BAAI": DefaultEmbedding,
-    "LM-Studio": LmStudioEmbed,
-    "OpenAI-API-Compatible": OpenAI_APIEmbed,
-    "VLLM": OpenAI_APIEmbed,
-    "Cohere": CoHereEmbed,
-    "VolcEngine": VolcEngineEmbed,
-    "HuggingFace": HuggingFaceEmbed,
-    "Voyage AI": VoyageEmbed,
-}
+class SupportedLiteLLMProvider(StrEnum):
+    Tongyi_Qianwen = "Tongyi-Qianwen"
+    Dashscope = "Dashscope"
+    Bedrock = "Bedrock"
+    Moonshot = "Moonshot"
+    xAI = "xAI"
+    DeepInfra = "DeepInfra"
+    Groq = "Groq"
+    Cohere = "Cohere"
+    Gemini = "Gemini"
+    DeepSeek = "DeepSeek"
+    Nvidia = "NVIDIA"
+    TogetherAI = "TogetherAI"
+    Anthropic = "Anthropic"
+    Ollama = "Ollama"
+    Meituan = "Meituan"
+    CometAPI = "CometAPI"
+    SILICONFLOW = "SILICONFLOW"
+    OpenRouter = "OpenRouter"
+    StepFun = "StepFun"
+    PPIO = "PPIO"
+    PerfXCloud = "PerfXCloud"
+    Upstage = "Upstage"
+    NovitaAI = "NovitaAI"
+    Lingyi_AI = "01.AI"
+    GiteeAI = "GiteeAI"
+    AI_302 = "302.AI"
 
-CvModel = {
-    "OpenAI": GptV4,
-    "Azure-OpenAI": AzureGptV4,
-    "Ollama": OllamaCV,
-    "Xinference": XinferenceCV,
-    "Tongyi-Qianwen": QWenCV,
-    "ZHIPU-AI": Zhipu4V,
-    'Gemini':GeminiCV,
-    "OpenAI-API-Compatible": OpenAI_APICV,
-    "VLLM": OpenAI_APICV,
-    "Anthropic": AnthropicCV,
-    "SILICONFLOW": SILICONFLOWCV,
-    "BaiduYiyan": BaiduYiyanCV,
-    "LM-Studio": LmStudioCV,
-    "xAI": xAICV,
-    "Tencent Hunyuan": HunyuanCV,
-    "StepFun": StepFunCV,
-    "TogetherAI": TogetherAICV,
-    "01.AI": YiCV,
-    "OpenRouter": OpenRouterCV,
-    "LocalAI": LocalAICV,
-    "GPUStack": GPUStackCV,
-    "Moonshot": LocalCV,
+
+FACTORY_DEFAULT_BASE_URL = {
+    SupportedLiteLLMProvider.Tongyi_Qianwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    SupportedLiteLLMProvider.Dashscope: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    SupportedLiteLLMProvider.Moonshot: "https://api.moonshot.cn/v1",
+    SupportedLiteLLMProvider.Ollama: "",
+    SupportedLiteLLMProvider.Meituan: "https://api.longcat.chat/openai",
+    SupportedLiteLLMProvider.CometAPI: "https://api.cometapi.com/v1",
+    SupportedLiteLLMProvider.SILICONFLOW: "https://api.siliconflow.cn/v1",
+    SupportedLiteLLMProvider.OpenRouter: "https://openrouter.ai/api/v1",
+    SupportedLiteLLMProvider.StepFun: "https://api.stepfun.com/v1",
+    SupportedLiteLLMProvider.PPIO: "https://api.ppinfra.com/v3/openai",
+    SupportedLiteLLMProvider.PerfXCloud: "https://cloud.perfxlab.cn/v1",
+    SupportedLiteLLMProvider.Upstage: "https://api.upstage.ai/v1/solar",
+    SupportedLiteLLMProvider.NovitaAI: "https://api.novita.ai/v3/openai",
+    SupportedLiteLLMProvider.Lingyi_AI: "https://api.lingyiwanwu.com/v1",
+    SupportedLiteLLMProvider.GiteeAI: "https://ai.gitee.com/v1/",
+    SupportedLiteLLMProvider.AI_302: "https://api.302.ai/v1",
+    SupportedLiteLLMProvider.Anthropic: "https://api.anthropic.com/",
 }
 
 
-ChatModel = {
-    "OpenAI": GptTurbo,
-    "Azure-OpenAI": AzureChat,
-    "ZHIPU-AI": ZhipuChat,
-    "Tongyi-Qianwen": QWenChat,
-    "Ollama": OllamaChat,
-    "Xinference": XinferenceChat,
-    "SILICONFLOW": SILICONFLOWChat,
-    "Anthropic": AnthropicChat,
-    "ModelScope": ModelScopeChat,
-    "Groq": GroqChat,
-    "DeepSeek": DeepSeekChat,
-    "VolcEngine": VolcEngineChat,
-    "OpenRouter": OpenRouterChat,
-    "Tencent Hunyuan": HunyuanChat,
-    "BaiduYiyan": BaiduYiyanChat,
-    "Gemini": GeminiChat,
-    "XunFei Spark": SparkChat,
-    "PPIO": PPIOChat,
-    "OpenAI-API-Compatible": OpenAI_APIChat,
-    "VLLM": OpenAI_APIChat,
-    "Cohere": CoHereChat,
-    "HuggingFace": HuggingFaceChat,
-    "GPUStack": GPUStackChat,
-    "LM-Studio": LmStudioChat,
-    "MiniMax": MiniMaxChat,
-    "01.AI": YiChat,
-    "Moonshot": MoonshotChat,
-    "xAI": xAIChat,
+LITELLM_PROVIDER_PREFIX = {
+    SupportedLiteLLMProvider.Tongyi_Qianwen: "dashscope/",
+    SupportedLiteLLMProvider.Dashscope: "dashscope/",
+    SupportedLiteLLMProvider.Bedrock: "bedrock/",
+    SupportedLiteLLMProvider.Moonshot: "moonshot/",
+    SupportedLiteLLMProvider.xAI: "xai/",
+    SupportedLiteLLMProvider.DeepInfra: "deepinfra/",
+    SupportedLiteLLMProvider.Groq: "groq/",
+    SupportedLiteLLMProvider.Cohere: "",  # don't need a prefix
+    SupportedLiteLLMProvider.Gemini: "gemini/",
+    SupportedLiteLLMProvider.DeepSeek: "deepseek/",
+    SupportedLiteLLMProvider.Nvidia: "nvidia_nim/",
+    SupportedLiteLLMProvider.TogetherAI: "together_ai/",
+    SupportedLiteLLMProvider.Anthropic: "",  # don't need a prefix
+    SupportedLiteLLMProvider.Ollama: "ollama_chat/",
+    SupportedLiteLLMProvider.Meituan: "openai/",
+    SupportedLiteLLMProvider.CometAPI: "openai/",
+    SupportedLiteLLMProvider.SILICONFLOW: "openai/",
+    SupportedLiteLLMProvider.OpenRouter: "openai/",
+    SupportedLiteLLMProvider.StepFun: "openai/",
+    SupportedLiteLLMProvider.PPIO: "openai/",
+    SupportedLiteLLMProvider.PerfXCloud: "openai/",
+    SupportedLiteLLMProvider.Upstage: "openai/",
+    SupportedLiteLLMProvider.NovitaAI: "openai/",
+    SupportedLiteLLMProvider.Lingyi_AI: "openai/",
+    SupportedLiteLLMProvider.GiteeAI: "openai/",
+    SupportedLiteLLMProvider.AI_302: "openai/",
 }
 
-RerankModel = {
-    "BAAI": DefaultRerank,
-    "Jina": JinaRerank,
-    "LocalAI": LocalAIRerank,
-    "OpenAI-API-Compatible": OpenAI_APIRerank,
-    "VLLM": CoHereRerank,
-    "Cohere": CoHereRerank,
-    "Youdao": YoudaoRerank,
-    "Xinference": XInferenceRerank,
-    "Tongyi-Qianwen": QWenRerank,
-    "GPUStack": GPUStackRerank,
-    "HuggingFace": HuggingfaceRerank,
-    "LM-Studio": LmStudioRerank,
-    "TogetherAI": TogetherAIRerank,
+ChatModel = globals().get("ChatModel", {})
+CvModel = globals().get("CvModel", {})
+EmbeddingModel = globals().get("EmbeddingModel", {})
+RerankModel = globals().get("RerankModel", {})
+Seq2txtModel = globals().get("Seq2txtModel", {})
+TTSModel = globals().get("TTSModel", {})
+
+
+MODULE_MAPPING = {
+    "chat": ChatModel,
+    "cv": CvModel,
+    "embedding": EmbeddingModel,
+    "rerank": RerankModel,
+    "sequence2txt": Seq2txtModel,
+    "tts": TTSModel,
 }
 
+package_name = __name__
 
-Seq2txtModel = {
-    "Ollama": OllamaSeq2txt,
-    "OpenAI": GPTSeq2txt,
-    "Tongyi-Qianwen": QWenSeq2txt,
-    "Azure-OpenAI": AzureSeq2txt,
-    "Xinference": XinferenceSeq2txt,
-    "Tencent Cloud": TencentCloudSeq2txt,
-    "GPUStack": GPUStackSeq2txt
-}
+for module_name, mapping_dict in MODULE_MAPPING.items():
+    full_module_name = f"{package_name}.{module_name}"
+    module = importlib.import_module(full_module_name)
+
+    base_class = None
+    lite_llm_base_class = None
+    for name, obj in inspect.getmembers(module):
+        if inspect.isclass(obj):
+            if name == "Base":
+                base_class = obj
+            elif name == "LiteLLMBase":
+                lite_llm_base_class = obj
+                assert hasattr(obj, "_FACTORY_NAME"), "LiteLLMbase should have _FACTORY_NAME field."
+                if hasattr(obj, "_FACTORY_NAME"):
+                    if isinstance(obj._FACTORY_NAME, list):
+                        for factory_name in obj._FACTORY_NAME:
+                            mapping_dict[factory_name] = obj
+                    else:
+                        mapping_dict[obj._FACTORY_NAME] = obj
+
+    if base_class is not None:
+        for _, obj in inspect.getmembers(module):
+            if inspect.isclass(obj) and issubclass(obj, base_class) and obj is not base_class and hasattr(obj, "_FACTORY_NAME"):
+                if isinstance(obj._FACTORY_NAME, list):
+                    for factory_name in obj._FACTORY_NAME:
+                        mapping_dict[factory_name] = obj
+                else:
+                    mapping_dict[obj._FACTORY_NAME] = obj
 
 
-TTSModel = {
-    "Fish Audio": FishAudioTTS,
-    "Tongyi-Qianwen": QwenTTS,
-    "OpenAI":OpenAITTS,
-    "XunFei Spark": SparkTTS,
-    "Xinference": XinferenceTTS,
-    "Ollama": OllamaTTS,
-    "GPUStack": GPUStackTTS,
-    "SILICONFLOW": SILICONFLOWTTS,
-}
+__all__ = [
+    "ChatModel",
+    "CvModel",
+    "EmbeddingModel",
+    "RerankModel",
+    "Seq2txtModel",
+    "TTSModel",
+]

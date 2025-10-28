@@ -32,6 +32,7 @@ from errors.exceptions import AITranslateException
 from api.constants import API_VERSION
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 from workflow_v2.workflow_state_manager import workflow_state_manager
+from fastapi_mail import FastMail
 
 description = """
 Multi-RAG API helps you do awesome stuff. 🚀
@@ -76,30 +77,90 @@ tags_metadata = [
 # 在模块顶部（路由定义之前）创建线程池
 executor = ThreadPoolExecutor(max_workers=20)  # 可以根据服务器性能调整
 
+# FastMail instance for sending emails
+smtp_mail_server = FastMail
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动时执行的代码
+    """
+    FastAPI 应用生命周期管理
+    在应用启动时执行初始化，在关闭时执行清理
+    
+    注意：此函数在以下场景会被调用：
+    - 正常启动：python api/multirag_server.py
+    - 热重载：uvicorn --reload 时每次代码变更
+    - 测试环境：TestClient 创建时
+    - 多进程：每个 worker 进程启动时
+    """
+    # ============ 启动时执行的代码 ============
+    logging.info("=" * 80)
+    logging.info("FastAPI application lifecycle starting...")
+    
+    # 1. 显示配置信息
+    # 注意：settings.init_settings() 已在模块级别执行（见上方）
+    # 无需重复初始化，避免资源浪费
+    from api.utils import show_configs
+    from core.settings import print_rag_settings
+    show_configs()
+    print_rag_settings()
+    
+    # 2. 启动工作流状态管理器
+    logging.info("Starting workflow state manager...")
     await workflow_state_manager.start()
 
-    # 启动进度更新线程
+    # 3. 启动进度更新线程
     from api.multirag_server import update_progress, stop_event
     import threading
-    logging.info("Starting update_progress thread via lifespan")
+    logging.info("Starting background progress update thread...")
     update_progress_thread = threading.Thread(target=update_progress, daemon=True)
     update_progress_thread.start()
 
+    # 4. 初始化SMTP邮件服务
+    global smtp_mail_server
+    if settings.SMTP_CONF:
+        try:
+            from fastapi_mail import ConnectionConfig
+
+            mail_config = ConnectionConfig(
+                MAIL_USERNAME=settings.MAIL_USERNAME,
+                MAIL_PASSWORD=settings.MAIL_PASSWORD,
+                MAIL_FROM=settings.MAIL_DEFAULT_SENDER[1] if settings.MAIL_DEFAULT_SENDER else settings.MAIL_USERNAME,
+                MAIL_FROM_NAME=settings.MAIL_DEFAULT_SENDER[0] if settings.MAIL_DEFAULT_SENDER else "MultiRAG",
+                MAIL_PORT=settings.MAIL_PORT,
+                MAIL_SERVER=settings.MAIL_SERVER,
+                MAIL_STARTTLS=settings.MAIL_USE_TLS,
+                MAIL_SSL_TLS=settings.MAIL_USE_SSL,
+                USE_CREDENTIALS=True,
+                VALIDATE_CERTS=True
+            )
+            smtp_mail_server = FastMail(mail_config)
+            logging.info("SMTP mail server initialized successfully")
+        except Exception as e:
+            logging.error(f"Failed to initialize SMTP mail server: {e}")
+            smtp_mail_server = None
+
+    logging.info("=" * 80)
+    logging.info("FastAPI application is ready to accept requests")
+    logging.info("=" * 80)
+
     yield  # 这里暂停执行，等待应用程序运行
 
-    # 关闭时执行的代码
+    # ============ 关闭时执行的代码 ============
+    logging.info("=" * 80)
+    logging.info("FastAPI application lifecycle shutting down...")
     logging.info("Shutting down update_progress thread")
     stop_event.set()
 
-    logging.info("Shutting down MCP sessions")
+    logging.info("Shutting down MCP sessions...")
     from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions
     shutdown_all_mcp_sessions()
 
+    logging.info("Shutting down workflow state manager...")
     await workflow_state_manager.shutdown()
+    
+    logging.info("FastAPI application lifecycle shutdown completed")
+    logging.info("=" * 80)
 
 
 # 创建FastAPI实例
@@ -119,11 +180,40 @@ app = FastAPI(
         "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
     },
     openapi_tags=tags_metadata,
-    docs_url=None,
-    redoc_url=None,
+    # docs_url=None,
+    # redoc_url=None,
     lifespan=lifespan
 )
-# 添加处理CORS（跨域资源共享）的中间件
+
+# 注意：settings.init_settings() 已移到 lifespan 函数中
+# 这样确保在 FastAPI 应用完全启动前完成初始化
+
+# ⚠️ 重要：SQLAdmin 必须在添加中间件之前初始化！
+# 这样 SQLAdmin 才能正确注册其路由和内部中间件
+try:
+    from api.admin.admin_config import setup_admin
+    admin = setup_admin(app)
+    logging.info("SQLAdmin管理后台已初始化")
+except Exception as e:
+    logging.exception(f"SQLAdmin管理后台初始化失败: {e}")
+
+# 中间件添加顺序很重要！
+# FastAPI 按照相反顺序执行，所以：
+# 1. 最先添加的最后执行（外层）
+# 2. 最后添加的最先执行（内层）
+
+# 添加Session中间件（最先添加，确保在外层处理 Cookie）
+# Session 配置对于 SQLAdmin 认证至关重要
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.SECRET_KEY,
+    session_cookie="multirag_session",  # 自定义 cookie 名称
+    max_age=86400,  # Session 有效期：24小时
+    same_site="lax",  # 允许跨站但有限制
+    https_only=False,  # 开发环境设置为 False，生产环境应该是 True
+)
+
+# 添加处理CORS（跨域资源共享）的中间件（后添加，在内层）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 允许所有来源的请求
@@ -131,10 +221,6 @@ app.add_middleware(
     allow_methods=["*"],  # 允许所有HTTP方法
     allow_headers=["*"],  # 允许所有请求头
 )
-settings.init_settings()
-
-# 添加Session中间件，使用项目的SECRET_KEY
-app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 
 # # 添加敏感词过滤中间件
 # try:
@@ -146,6 +232,23 @@ app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 #     logging.info("敏感词过滤中间件已启用")
 # except Exception as e:
 #     logging.warning(f"敏感词过滤中间件启用失败: {e}")
+
+# ============================================================================
+# 模块级别初始化 settings（一次性完成）
+# 
+# 为什么在这里初始化而不是在 lifespan？
+# 1. LoginManager、SQLAdmin 等对象必须在模块级别创建（用于装饰器）
+# 2. 这些对象需要 settings 中的配置（如 SECRET_KEY）
+# 3. 只初始化一次，避免资源浪费
+# 
+# 关于热重载：
+# - 开发模式下使用 uvicorn --reload 时，代码变更会重新导入模块
+# - 模块重新导入 = settings.init_settings() 重新执行
+# - 因此自动支持热重载，无需在 lifespan 中重复初始化
+# ============================================================================
+if settings.SECRET_KEY is None:
+    logging.info("Initializing settings at module level...")
+    settings.init_settings()
 
 # 初始化登录管理器，设置密钥和令牌URL
 manager = LoginManager(settings.SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))
@@ -181,6 +284,44 @@ def load_user(email: str, db: Session = None):
     finally:
         if close_db:
             db.close()
+
+
+# 定义 active_required 依赖函数，用于验证用户激活状态
+async def active_required(user=Depends(manager)):
+    """
+    验证用户是否已激活的依赖函数
+    
+    该函数先通过 manager 验证用户登录状态，然后检查用户是否已激活账号
+    
+    Args:
+        user: 从 manager 获取的已登录用户对象
+    
+    Returns:
+        User: 已激活的用户对象
+        
+    Raises:
+        HTTPException: 当用户未激活时
+        
+    Example:
+        @router.post("/create")
+        def create(
+            request: CreateRequest,
+            db: Session = Depends(get_db),
+            user = Depends(active_required)
+        ):
+            # user 是已登录且已激活的用户对象
+            pass
+    """
+    from fastapi import HTTPException
+    
+    # 检查用户是否激活（is_active 是 Boolean 类型）
+    if not hasattr(user, 'is_active') or not user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="User isn't active, please activate first."
+        )
+    
+    return user
 
 
 # 定义一个函数，用于搜索API和应用页面的路径

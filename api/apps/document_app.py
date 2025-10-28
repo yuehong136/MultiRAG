@@ -32,6 +32,7 @@ from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, Pa
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
+from api.db.services.document_analysis_service import DocumentAnalysisService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -179,6 +180,25 @@ class WebParseRequest(BaseModel):
     )
     options: WebParseOptions | None = Field(default=None, description="解析选项")
     credentials: WebParseCredentials | None = Field(default=None, description="第三方凭据，如 API Key")
+
+
+class RaptorConfig(BaseModel):
+    """RAPTOR配置"""
+    max_cluster: int = Field(default=64, ge=1, le=128, description="最大聚类数")
+    max_token: int = Field(default=512, ge=128, le=2048, description="摘要最大token数")
+    threshold: float = Field(default=0.1, ge=0.0, le=1.0, description="聚类阈值")
+    random_seed: int = Field(default=42, description="随机种子")
+    prompt: str | None = Field(default=None, description="自定义prompt")
+
+
+class DocumentAnalysisRequest(BaseModel):
+    """文档分析请求"""
+    doc_id: str = Field(..., description="文档ID")
+    include_summary: bool = Field(default=True, description="是否生成摘要")
+    include_tags: bool = Field(default=True, description="是否生成标签")
+    summary_type: str = Field(default="short", description="摘要类型: short|long")
+    raptor_config: RaptorConfig | None = Field(default=None, description="RAPTOR配置")
+    use_cache: bool = Field(default=True, description="是否使用缓存")
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
@@ -2116,7 +2136,7 @@ def run(
                 else:
                     return get_data_error_result(retmsg="Cannot cancel a task that is not in RUNNING status")
 
-            if str(req["run"]) == TaskStatus.RUNNING.value and str(d["run"]) == TaskStatus.DONE.value:
+            if all([("delete" not in req or req["delete"]), str(req["run"]) == TaskStatus.RUNNING.value, str(d["run"]) == TaskStatus.DONE.value]):
                 DocumentService.clear_chunk_num_when_rerun(db, d["id"])
 
             DocumentService.update_by_id(db, id, info)
@@ -2502,6 +2522,12 @@ def set_meta(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
+    """为指定文档写入自定义元数据键值对。
+
+    - **request.doc_id**: 文档ID。
+    - **request.meta**: 仅支持字符串、整数、浮点数类型的 value。
+    - **返回值**: `true` 表示写入成功。
+    """
     req = request.model_dump()
     if not DocumentService.accessible(db, req["doc_id"], user.id):
         return get_json_result(
@@ -2514,6 +2540,14 @@ def set_meta(
         return get_json_result(
             data=False, retmsg='Meta data should be in Json map format, like {"key": "value"}',
             retcode=settings.RetCode.ARGUMENT_ERROR)
+
+    for value in req["meta"].values():
+        if not isinstance(value, (str, int, float)):
+            return get_json_result(
+                data=False,
+                retmsg=f"The type is not supported: {value}",
+                retcode=settings.RetCode.ARGUMENT_ERROR,
+            )
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
@@ -2578,19 +2612,23 @@ async def preview_chunks(
     }
     ```
 
-    #### 成功响应 (200) 批次模式
+    #### 成功响应 (200) 批次模式（v2.0）
     ```json
     {
       "retcode": 0,
       "retmsg": "success",
       "data": {
         "batch_id": "2f7e...",
-        "chunks": ["切片文本1", "切片文本2"],
-        "count": 2,
-        "total": 2000,
+        "chunks": ["切片文本1", "切片文本2", ...],
+        "count": 20,                // 当前批次数量
+        "total": 150,               // 当前已解析的chunks总数（动态增长）
         "has_more": true,
         "batch_index": 3,
-        "total_batches": 100
+        "total_batches": 8,         // 基于当前total动态计算（150/20≈8）
+        "status": "parsing",        // parsing | completed | error
+        "progress": 0.35,           // 解析进度 0.0-1.0
+        "parsed_page_range": "0-35",  // 已解析页面范围
+        "total_pages": 100          // 总页数（PDF专用）
       }
     }
     ```
@@ -2644,6 +2682,134 @@ async def preview_chunks(
 
     ---
 
+    ### 响应字段说明（v2.0 渐进式解析）
+
+    #### 核心变化
+    
+    从 v2.0 开始，**PDF文件**支持渐进式解析，边解析边返回数据，无需等待全部解析完成。
+    
+    #### 字段说明
+    
+    | 字段 | 类型 | 说明 | 版本 |
+    |------|------|------|------|
+    | `batch_id` | string | 批次会话ID | v1.0 |
+    | `chunks` | array | 当前批次的切片文本数组 | v1.0 |
+    | `count` | int | 当前批次返回的chunks数量（例如batch_size=20，最后一批可能只有4个） | v1.0 |
+    | `total` | int | 当前已解析的chunks总数（动态增长） | v1.0/v2.0 |
+    | `has_more` | bool | 是否还有更多数据（包括正在解析的） | v1.0 |
+    | `batch_index` | int | 当前批次索引（从0开始） | v1.0 |
+    | `total_batches` | int | 当前总批次数（基于当前total动态计算） | v1.0/v2.0 |
+    | `status` | string | 解析状态：`parsing` / `completed` / `error` | **v2.0** |
+    | `progress` | float | 解析进度（0.0-1.0，基于页数计算） | **v2.0** |
+    | `parsed_page_range` | string | 已解析的页面范围（如"0-24"，表示已解析第0到24页）| **v2.0** |
+    | `total_pages` | int | 总页数（PDF专用） | **v2.0** |
+    
+    #### 📄 chunks字段说明
+    
+    **chunks结构**：返回纯文本数组
+    ```json
+    ["切片文本1", "切片文本2", "切片文本3", ...]
+    ```
+    
+    **顺序保证**：
+    - ✅ chunks数组严格按照PDF原始文档顺序排列
+    - ✅ 第1页的chunks → 第2页的chunks → ... 依次排序
+    - ✅ 每批解析完成后按顺序追加到数组，不会乱序
+    - ✅ 用户通过offset顺序获取，保证不重复、不跳过
+    
+    **页面来源说明**：
+    - 虽然chunks是纯文本，但通过 `parsed_page_range` 可以知道当前所有chunks的来源页面范围
+    - 例如：`parsed_page_range="0-24"` 表示当前所有chunks来自PDF的第0-24页
+    - 如果需要精确的每个chunk的页码，可以考虑后续扩展返回元数据
+    
+    #### 📊 字段详解
+    
+    **`count`（当前批次数量）**：
+    - 表示当前返回的chunks数量
+    - 通常等于 `batch_size`，最后一批可能更少
+    - 示例：`batch_size=20`，最后一批只有4个，则 `count=4`
+    
+    **`total`（当前总数）**：
+    - ⚠️ **重要变化**：v2.0中此字段会动态增长
+    - **解析中**：随着后台解析进度增长（60 → 120 → 62）
+    - **解析完成**：最终确定值（62）
+    - **用途**：配合 `status` 判断，了解当前已有多少chunks可取
+    
+    **`total_batches`（总批次数）**：
+    - 基于当前 `total` 动态计算：`(total + batch_size - 1) / batch_size`
+    - **解析中**：会随着total增长而变化（3批 → 6批 → 4批）
+    - **解析完成**：最终确定值（4批）
+    - **用途**：显示"第X批/共Y批"（但解析中不准确）
+    
+    #### 使用建议
+    
+    **使用示例**：
+    ```javascript
+    // 轮询获取所有chunks
+    let allChunks = [];
+    
+    while (data.has_more) {
+      // 追加当前批次
+      allChunks.push(...data.chunks);
+      
+      // 显示进度
+      if (data.status === "parsing") {
+        console.log(`解析中: ${(data.progress * 100).toFixed(0)}%`);
+        console.log(`已获取: ${allChunks.length}/${data.total} chunks`);
+        console.log(`已解析页面: ${data.parsed_page_range}/${data.total_pages}`);
+        // 输出示例：
+        // 解析中: 24%
+        // 已获取: 40/160 chunks
+        // 已解析页面: 0-24/100
+      } else if (data.status === "completed") {
+        console.log(`解析完成: 共${data.total}个chunks`);
+        console.log(`页面范围: ${data.parsed_page_range}`);
+        // 输出示例：
+        // 解析完成: 共62个chunks
+        // 页面范围: 0-30
+      }
+      
+      // 续取下一批
+      if (data.has_more) {
+        response = await fetch('/api/preview_chunks', {
+          method: 'POST',
+          body: JSON.stringify({ batch_id: data.batch_id, batch_size: 20 })
+        });
+        data = await response.json().data;
+      }
+    }
+    
+    console.log(`最终获取${allChunks.length}个chunks，顺序有保证`);
+    ```
+    
+    #### PDF渐进式解析特性（v2.0最终版）
+    
+    **首次请求行为**：
+    - ⏱️ **等待策略**：首次请求会**等待直到有数据**才返回，保证 `chunks` 非空（避免破坏调用者逻辑）
+    - 📊 **返回时机**：通常等待2-5秒，返回首批已解析的chunks（50-200个）
+    - ✅ **数据保证**：首次返回必有数据，`chunks.length > 0`（除非解析失败或空文档）
+    
+    **后台解析机制**：
+    - 📄 **分批解析**：按配置的 `task_page_size` 分批解析
+      - 默认解析器：12页/批
+      - paper解析器：22页/批
+      - 用户可通过 `parser_config.task_page_size` 自定义
+    - 🔄 **增量存储**：每解析完一批，立即追加到Redis，用户轮询时可获取
+    - 📈 **实时进度**：`progress`、`current_page` 字段实时更新
+    
+    **轮询获取特性**：
+    - ✨ **渐进式获取**：每次轮询都能获取到**新解析的chunks**
+    - 🎯 **offset自动推进**：无论解析是否完成，读取位置都会正确更新
+    - 🚫 **不会跳过数据**：修复了v1.0的bug，保证获取到所有chunks
+    - ⏳ **可随时续取**：用户可以晚点续取（1分钟后），不会丢失中间chunks
+    
+    **特殊情况处理**：
+    - 🔀 **特殊解析器**：`one`、`knowledge_graph` 或非DeepDOC布局自动回退到一次性解析
+    - ❌ **解析失败**：立即返回 `status="error"`，不会一直等待
+    - 📄 **空文档**：立即返回 `status="completed"` + 空数组
+    
+    ---
+
     ### 支持的模式
 
     1) 非批次模式（不传 `batch_size`）：
@@ -2666,22 +2832,86 @@ async def preview_chunks(
 
     ### 主要流程
 
-    1. **权限验证**：
-       - 若提供 `doc_id`：校验文档访问权限；
-       - 若提供 `file`：跳过文档权限校验，直接对该文件执行解析切片（不落库）。
-    2. **读取原文件**：
-       - `doc_id` 路径：从对象存储拉取对应原始二进制内容；
-       - `file` 路径：读取上传的文件二进制。
-    3. **合并解析配置**：将 `parser_config` 与文档已有配置合并（调用 `get_parser_config`）。
-    4. **执行切片**：按 `parser_id` 选择解析器，进行解析与切片（仅内存处理）。
-    5. **提取文本**：统一提取 `content_with_weight` 作为文本切片。
-    6. **结果限制/批次**：
-       - 非批次：若传入 `limit`，仅返回前 `limit` 条切片。
-       - 批次：按 `batch_size` 返回一批，并返回 `batch_id` 与 `has_more`。
+    #### 非PDF文件流程（原有逻辑）
+
+    1. **权限验证**：校验 `doc_id` 权限或接受 `file` 直传
+    2. **读取文件**：从对象存储或上传流中读取文件二进制
+    3. **合并配置**：将 `parser_config` 与默认配置合并
+    4. **一次性解析**：调用对应解析器，完整解析文件
+    5. **提取文本**：统一提取 `content_with_weight` 作为文本切片
+    6. **批次返回**：
+       - 非批次模式：一次性返回全部（可用 `limit` 截断）
+       - 批次模式：按 `batch_size` 分批返回，存储到Redis
+
+    #### PDF文件流程（v2.0渐进式解析）
+
+    **首次请求（创建会话）**：
+
+    1. **权限验证** → 读取PDF文件 → 合并配置
+    2. **获取PDF元信息**：
+       - 总页数（`total_pages`）
+       - 解析页范围（`from_page` - `to_page`）
+       - 分批大小（`task_page_size`，默认12页）
+    3. **创建Redis会话**：
+       ```json
+       {
+         "batch_id": "uuid",
+         "status": "parsing",
+         "chunks": [],           // 初始为空
+         "total": 0,             // 当前已解析数量（动态增长）
+         "progress": 0.0,
+         "parsed_page_range": "0-0",
+         "total_pages": 100
+       }
+       ```
+       内部字段（不返回给用户）：
+       - `estimated_total`: 400（预估总数，仅用于内部计算）
+    4. **启动后台解析线程**：
+       - 每次解析12页（或22页，取决于解析器）
+       - 解析完一批，立即追加到 `session.chunks`
+       - 更新 `progress`、`current_page`
+       - 写回Redis（TTL 30分钟）
+    5. **主线程等待首批数据**：
+       - 每500ms检查一次Redis会话
+       - 当 `chunks.length > 0` 时，立即返回
+       - 返回首批 `batch_size` 个chunks
+       - **关键**：更新 `session.offset = batch_size`
+    
+    **后续请求（续取批次）**：
+    
+    1. **从Redis读取会话**（通过 `batch_id`）
+    2. **读取当前批次**：
+       - `start = session.offset`（上次读到哪里）
+       - `end = start + batch_size`
+       - `batch = session.chunks[start:end]`
+    3. **判断是否还有更多**：
+       - 如果 `end < len(chunks)` → `has_more = true`
+       - 如果 `status == "parsing"` → `has_more = true`（后台还在解析）
+       - 否则 → `has_more = false`
+    4. **更新offset**（关键修复）：
+       - 如果 `has_more == true`：
+         - 更新 `session.offset = end`
+         - 写回Redis（保证下次续取不重复）
+       - 如果 `has_more == false`：
+         - 删除Redis会话（释放资源）
+    5. **返回当前批次**：
+       - `chunks`：当前批次数据
+       - `total`：当前已解析总数
+       - `status`：parsing / completed / error
+       - `progress`：解析进度（0.0-1.0）
+       - `parsed_page_range`：已解析页面范围
+
+    **关键特性**：
+    - ✅ 首次请求保证返回有数据（等待策略）
+    - ✅ offset在parsing期间也会更新（修复了v1.0 bug）
+    - ✅ 用户晚点续取不会跳过chunks（offset正确保存）
+    - ✅ 每次轮询都能获取新解析的chunks（渐进式体验）
 
     ---
 
     ### 使用示例
+
+    #### 示例1：非批次模式（小文档快速预览）
 
     ```bash
     curl -X POST "http://api.example.com/v1/document/preview_chunks" \
@@ -2691,23 +2921,118 @@ async def preview_chunks(
             "parser_config": {"chunk_token_num": 512, "delimiter": "\n!?。；！？"},
             "limit": 50
           }'
+    ```
 
-    # 批次模式（首次，不带 batch_id）
+    #### 示例2：PDF批次模式（v2.0渐进式解析）
+
+    **首次请求（上传100页PDF）**：
+    ```bash
     curl -X POST "http://api.example.com/v1/document/preview_chunks" \
       -H "Content-Type: application/json" \
       -d '{
-            "doc_id": "doc_123",
-            "parser_config": {"chunk_token_num": 512},
-            "batch_size": 100
+            "doc_id": "doc_pdf_100_pages",
+            "batch_size": 50,
+            "parser_config": {"task_page_size": 12}
           }'
+    
+    # 响应（等待2-5秒后返回）：
+    {
+      "retcode": 0,
+      "retmsg": "success",
+      "data": {
+        "batch_id": "abc123-def456",
+        "chunks": [
+          "第1页的内容...",
+          "第2页的内容...",
+          "第3页的内容...",
+          ...  // 共50个纯文本
+        ],
+        "count": 50,
+        "total": 80,               // 当前已解析80个chunks（动态增长）
+        "has_more": true,          // 还有更多数据
+        "batch_index": 0,
+        "total_batches": 4,        // 当前总批次数（基于当前total=80计算）
+        "status": "parsing",       // 正在解析中
+        "progress": 0.12,          // 已解析12%
+        "parsed_page_range": "0-12",  // 📌 已解析页面范围：0-12页
+        "total_pages": 100         // 总共100页
+      }
+    }
+    ```
 
-    # 批次模式（续取，带 batch_id）
+    **第2次请求（1秒后续取）**：
+    ```bash
     curl -X POST "http://api.example.com/v1/document/preview_chunks" \
       -H "Content-Type: application/json" \
       -d '{
-            "doc_id": "doc_123",
+            "batch_id": "abc123-def456",
+            "batch_size": 50
+          }'
+    
+    # 响应（立即返回）：
+    {
+      "data": {
+        "batch_id": "abc123-def456",
+        "chunks": [
+          "第51个chunk...",
+          "第52个chunk...",
+          ...  // 共50个纯文本
+        ],
+        "count": 20,
+        "total": 160,              // 后台已解析到160个chunks（动态增长）
+        "has_more": true,
+        "status": "parsing",
+        "progress": 0.24,          // 已解析24%
+        "parsed_page_range": "0-24",  // 📌 已解析页面范围：0-24页
+        "total_batches": 8         // 基于当前total=160计算（160/20=8批）
+      }
+    }
+    ```
+
+    **第N次请求（解析完成后）**：
+    ```bash
+    # 继续用batch_id续取
+    
+    # 响应：
+    {
+      "data": {
+        "batch_id": "abc123-def456",
+        "chunks": ["最后一批..."],
+        "count": 2,                // 最后一批只有2个（62 % 20 = 2）
+        "total": 62,               // 实际总数62个（确定值）
+        "has_more": false,         // 没有更多了
+        "status": "completed",     // 解析完成
+        "progress": 1.0,           // 100%
+        "parsed_page_range": "0-100",  // 📌 已解析页面范围：0-100页（全部）
+        "total_batches": 4,        // 总共4批（62/20=4批）
+        "total_pages": 100
+      }
+    }
+    ```
+
+    #### 示例3：文件直传 + 批次模式
+
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/preview_chunks" \
+      -F 'file=@/path/to/document.pdf' \
+      -F 'request={"batch_size": 50, "parser_id": "paper"}'
+    
+    # 首次返回batch_id，后续用batch_id续取
+    ```
+
+    #### 示例4：指定解析器和自定义分批大小
+
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/preview_chunks" \
+      -H "Content-Type: application/json" \
+      -d '{
+            "doc_id": "doc_paper",
             "batch_size": 100,
-            "batch_id": "2f7e..."
+            "parser_id": "paper",
+            "parser_config": {
+              "task_page_size": 20,    // 每批解析20页（覆盖默认的22页）
+              "chunk_token_num": 512
+            }
           }'
     ```
 
@@ -2715,11 +3040,53 @@ async def preview_chunks(
 
     ### 注意事项
 
+    **通用注意事项**：
     - 本接口不会触发向量化与入库，也不会修改文档/知识库的 `chunk_num`、`token_num` 等统计。
     - 页/行范围与具体解析器有关：PDF 为页区间，表格/文本等为行或分段区间。
     - `parser_config` 的键需与对应解析器支持的配置项一致，未识别的键将被忽略。
     - 返回仅包含文本切片；如需图像/表格截图等，请通过其他接口获取对应图片资源。
     - 批次会话存活时间默认 30 分钟；超时将被清理，需重新发起首批请求。
+
+    **v2.0 PDF渐进式解析注意事项**：
+    - ⏱️ **首次请求会等待**：首次请求会等待直到有数据才返回（通常2-5秒），不会返回空数组。
+    - 🔄 **需要持续轮询**：用户需要持续用 `batch_id` 轮询获取后续数据，直到 `has_more=false`。
+    - 📊 **实时进度反馈**：通过 `status`、`progress`、`parsed_page_range` 字段可以了解解析进度。
+    - 📄 **页面范围说明**：
+      - `parsed_page_range`（如"0-24"）直观显示已解析页面0到24页的内容
+      - 这比单个数字更清楚，避免误解为"只解析了第24页"
+      - 可通过解析范围获取起止页：`const [from, to] = range.split('-').map(Number)`
+    - 🎯 **offset自动推进**：每次续取后，offset会自动更新，保证不重复、不跳过数据。
+    - ⏳ **可延迟续取**：用户可以晚点续取（例如1分钟后），不会丢失中间chunks。
+    - 🔀 **自动回退**：特殊解析器（`one`、`knowledge_graph`）或非DeepDOC布局会自动回退到一次性解析。
+    - 💾 **Redis存储完整数据**：
+      - 所有已解析的chunks都存储在Redis中，直到会话过期或用户读完删除
+      - ⚠️ **重要**：即使后台解析完成（status=completed），Redis会话仍会保留
+      - 只有当用户读完最后一批（has_more=false）或TTL过期（30分钟）时才删除
+      - 用户可以随时回来继续读取（30分钟内）
+    - 🚀 **并发友好**：使用后台线程解析，不会阻塞API线程池。
+    
+    **兼容性说明**：
+    - ⚠️ **重要变化**：v2.0中 `total` 字段会动态增长（PDF解析中）
+    - ✅ 老客户端可以继续使用，但需注意 `total` 不再是固定值
+    - ✅ 通过 `status` 字段可以判断解析状态
+    - ⚠️ 如果调用者依赖 `chunks` 非空判断，v2.0保证首次返回必有数据（除非解析失败）
+    
+    **chunks顺序性保证（v2.0重要）**：
+    - ✅ **严格有序**：chunks数组严格按照PDF原始文档顺序排列
+    - 🔄 **渐进式追加**：后台解析时，每批解析完成后按顺序追加到Redis
+    - 📄 **页面范围**：通过 `parsed_page_range` 字段可以知道当前所有chunks来自哪些页面
+    - 💡 **使用方式**：
+      ```javascript
+      // 获取页面范围
+      const [fromPage, toPage] = data.parsed_page_range.split('-').map(Number);
+      console.log(`当前${data.total}个chunks来自第${fromPage}-${toPage}页`);
+      // 输出：当前160个chunks来自第0-24页
+      
+      // 直接使用文本（保证顺序）
+      data.chunks.forEach((text, index) => {
+        console.log(`Chunk ${index}: ${text.substring(0, 50)}...`);
+      });
+      ```
     """
     def _error_response(retcode: int, retmsg: str, status_code: int, data: Any = False):
         response = get_json_result(retcode=retcode, retmsg=retmsg, data=data)
@@ -2762,7 +3129,7 @@ async def preview_chunks(
             if req.batch_size or req.batch_id:
                 file_bytes = await file.read() if file is not None else None
                 filename = file.filename or "uploaded" if file is not None else None
-                data = DocumentService.preview_file_chunks_batched(
+                data = await DocumentService.preview_file_chunks_batched(
                     db,
                     filename=filename,
                     file_bytes=file_bytes,
@@ -2802,7 +3169,7 @@ async def preview_chunks(
                 retcode=settings.RetCode.AUTHENTICATION_ERROR
             )
         if req.batch_size or req.batch_id:
-            data = DocumentService.preview_document_chunks_batched(
+            data = await DocumentService.preview_document_chunks_batched(
                 db,
                 doc_id=req.doc_id,
                 parser_config_override=req.parser_config,
@@ -2837,3 +3204,350 @@ async def preview_chunks(
         return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
     except Exception as e:
         return _error_response(settings.RetCode.SERVER_ERROR, str(e), HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.post("/analyze", summary="文档智能分析", response_description="成功分析文档")
+async def analyze_document(
+    doc_id: str | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+    kb_id: str | None = Form(default=None),
+    include_summary: bool = Form(default=True),
+    include_tags: bool = Form(default=True),
+    summary_type: str = Form(default="short"),
+    raptor_config: str | None = Form(default=None),  # JSON字符串
+    use_cache: bool = Form(default=True),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    ### POST `/analyze` 文档智能分析接口
+
+    **功能描述**:
+    对已解析的文档或上传的文件进行智能分析，生成语义标签、词频标签和文档摘要。
+
+    ---
+
+    ### 功能特性
+
+    1. **语义标签生成**: 使用LLM生成2-3个高质量语义标签
+    2. **词频标签提取**: 提取文档中Top 5高频关键词
+    3. **文档摘要生成**: 支持短摘要(150-200词)和长摘要(300-500词)
+    4. **智能聚合**:
+       - 短文档(≤10 chunks): 直接合并处理
+       - 长文档(>10 chunks): 使用RAPTOR分层聚类
+    5. **自适应数据源**:
+       - 已向量化文档: 从Milvus获取(性能优10-15倍)
+       - 未向量化文档: 重新解析文件
+       - 直传文件: 临时解析(不入库)
+
+    ---
+
+    ### 请求参数 (三种模式)
+
+    #### 模式1: doc_id (已上传的文档)
+
+    | 参数名 | 类型 | 必填 | 默认值 | 描述 |
+    |--------|------|------|--------|------|
+    | `doc_id` | string | 是 | - | 文档ID |
+    | `kb_id` | string | 是 | - | 知识库ID |
+    | `include_summary` | boolean | 否 | true | 是否生成摘要 |
+    | `include_tags` | boolean | 否 | true | 是否生成标签 |
+    | `summary_type` | string | 否 | "short" | 摘要类型: short/long |
+    | `raptor_config` | string(JSON) | 否 | null | RAPTOR配置(可选) |
+    | `use_cache` | boolean | 否 | true | 是否使用缓存 |
+
+    #### 模式2: file (直传文件,临时分析)
+
+    | 参数名 | 类型 | 必填 | 默认值 | 描述 |
+    |--------|------|------|--------|------|
+    | `file` | file | 是 | - | 上传的文件 |
+    | `include_summary` | boolean | 否 | true | 是否生成摘要 |
+    | `include_tags` | boolean | 否 | true | 是否生成标签 |
+    | `summary_type` | string | 否 | "short" | 摘要类型: short/long |
+    | `raptor_config` | string(JSON) | 否 | null | RAPTOR配置(可选) |
+    | `use_cache` | boolean | 否 | true | 是否使用缓存 |
+
+    #### RAPTOR配置参数 (JSON字符串)
+
+    ```json
+    {
+        "max_cluster": 64,
+        "max_token": 512,
+        "threshold": 0.1,
+        "random_seed": 42,
+        "prompt": "..."
+    }
+    ```
+
+    ---
+
+    ### 响应示例
+
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "doc_id": "abc123",
+            "doc_name": "深度学习入门.pdf",
+            "semantic_tags": ["深度学习", "神经网络", "计算机视觉"],
+            "frequency_tags": ["模型", "训练", "数据", "算法", "网络"],
+            "combined_tags": ["深度学习", "神经网络", "计算机视觉", "训练", "数据"],
+            "short_summary": "本文系统介绍了深度学习的基础概念...",
+            "metadata": {
+                "chunk_count": 156,
+                "use_raptor": true,
+                "cluster_summary_count": 8,
+                "processing_time_seconds": 12.5
+            }
+        }
+    }
+    ```
+
+    ---
+
+    ### 使用示例
+
+    #### 模式1: 分析已上传的文档
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/analyze" \
+        -H "Authorization: Bearer YOUR_TOKEN" \
+        -F "doc_id=abc123" \
+        -F "kb_id=kb_456" \
+        -F "include_summary=true" \
+        -F "include_tags=true"
+    ```
+
+    #### 模式2: 直传文件临时分析
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/analyze" \
+        -H "Authorization: Bearer YOUR_TOKEN" \
+        -F "file=@document.pdf" \
+        -F "include_summary=true" \
+        -F "include_tags=true"
+    ```
+
+    #### 自定义RAPTOR参数
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/analyze" \
+        -H "Authorization: Bearer YOUR_TOKEN" \
+        -F "doc_id=abc123" \
+        -F "kb_id=kb_456" \
+        -F 'raptor_config={"max_cluster":32,"max_token":400}'
+    ```
+    """
+    try:
+        # 参数验证
+        if not doc_id and not file:
+            raise HTTPException(
+                status_code=400,
+                detail="Must provide either doc_id or file"
+            )
+
+        if doc_id and file:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot provide both doc_id and file"
+            )
+
+        if doc_id and not kb_id:
+            raise HTTPException(
+                status_code=400,
+                detail="kb_id is required when using doc_id"
+            )
+
+        # doc_id模式: 验证文档状态
+        if doc_id:
+            doc = DocumentService.get_by_id(db, doc_id)
+            if not doc:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            if doc.status != "1":
+                raise HTTPException(status_code=400, detail="Document not ready")
+
+        # 解析RAPTOR配置
+        raptor_config_dict = None
+        if raptor_config:
+            try:
+                raptor_config_dict = json.loads(raptor_config)
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Invalid raptor_config JSON")
+
+        # 调用分析服务
+        analysis_service = DocumentAnalysisService(db, user.id)
+        result = await analysis_service.analyze_document(
+            doc_id=doc_id,
+            file=file,
+            kb_id=kb_id,
+            include_summary=include_summary,
+            include_tags=include_tags,
+            summary_type=summary_type,
+            raptor_config=raptor_config_dict,
+            use_cache=use_cache
+        )
+
+        return construct_json_result(data=result, code=200)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Document analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{doc_id}/tags", summary="获取文档标签", response_description="成功获取文档标签")
+async def get_document_tags(
+    doc_id: str,
+    kb_id: str = Query(..., description="知识库ID"),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    ### GET `/{doc_id}/tags` 快速获取文档标签
+
+    **功能描述**:
+    快速获取文档的语义标签和词频标签，不生成摘要。
+
+    ---
+
+    ### 路径参数
+
+    | 参数名 | 类型 | 必填 | 描述 |
+    |--------|------|------|------|
+    | `doc_id` | string | 是 | 文档ID |
+
+    ### 查询参数
+
+    | 参数名 | 类型 | 必填 | 描述 |
+    |--------|------|------|------|
+    | `kb_id` | string | 是 | 知识库ID |
+
+    ---
+
+    ### 响应示例
+
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "doc_id": "abc123",
+            "semantic_tags": ["深度学习", "神经网络"],
+            "frequency_tags": ["模型", "训练", "数据", "算法", "网络"],
+            "combined_tags": ["深度学习", "神经网络", "训练", "数据", "算法"]
+        }
+    }
+    ```
+
+    ---
+
+    ### 使用示例
+
+    ```bash
+    curl -X GET "http://api.example.com/v1/document/abc123/tags?kb_id=kb_456" \
+        -H "Authorization: Bearer YOUR_TOKEN"
+    ```
+    """
+    try:
+        analysis_service = DocumentAnalysisService(db, user.id)
+        result = await analysis_service.analyze_document(
+            doc_id=doc_id,
+            kb_id=kb_id,
+            include_summary=False,
+            include_tags=True
+        )
+
+        return construct_json_result(
+            data={
+                "doc_id": doc_id,
+                "semantic_tags": result.get("semantic_tags"),
+                "frequency_tags": result.get("frequency_tags"),
+                "combined_tags": result.get("combined_tags")
+            }
+        )
+
+    except Exception as e:
+        logging.exception(f"Get document tags failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{doc_id}/summary", summary="获取文档摘要", response_description="成功获取文档摘要")
+async def get_document_summary(
+    doc_id: str,
+    kb_id: str = Query(..., description="知识库ID"),
+    summary_type: str = Query(default="short", pattern="^(short|long)$"),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    ### GET `/{doc_id}/summary` 快速获取文档摘要
+
+    **功能描述**:
+    快速获取文档摘要，不生成标签。
+
+    ---
+
+    ### 路径参数
+
+    | 参数名 | 类型 | 必填 | 描述 |
+    |--------|------|------|------|
+    | `doc_id` | string | 是 | 文档ID |
+
+    ### 查询参数
+
+    | 参数名 | 类型 | 必填 | 默认值 | 描述 |
+    |--------|------|------|--------|------|
+    | `kb_id` | string | 是 | - | 知识库ID |
+    | `summary_type` | string | 否 | "short" | 摘要类型: short/long |
+
+    ---
+
+    ### 响应示例
+
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "doc_id": "abc123",
+            "summary": "本文系统介绍了深度学习的基础概念..."
+        }
+    }
+    ```
+
+    ---
+
+    ### 使用示例
+
+    #### 获取短摘要
+    ```bash
+    curl -X GET "http://api.example.com/v1/document/abc123/summary?kb_id=kb_456" \
+        -H "Authorization: Bearer YOUR_TOKEN"
+    ```
+
+    #### 获取长摘要
+    ```bash
+    curl -X GET "http://api.example.com/v1/document/abc123/summary?kb_id=kb_456&summary_type=long" \
+        -H "Authorization: Bearer YOUR_TOKEN"
+    ```
+    """
+    try:
+        analysis_service = DocumentAnalysisService(db, user.id)
+        result = await analysis_service.analyze_document(
+            doc_id=doc_id,
+            kb_id=kb_id,
+            include_summary=True,
+            include_tags=False,
+            summary_type=summary_type
+        )
+
+        return construct_json_result(
+            data={
+                "doc_id": doc_id,
+                "summary": result.get("short_summary") if summary_type == "short" else result.get("long_summary")
+            }
+        )
+
+    except Exception as e:
+        logging.exception(f"Get document summary failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

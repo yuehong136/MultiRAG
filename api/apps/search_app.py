@@ -15,7 +15,6 @@ from api.constants import DATASET_NAME_LIMIT
 from api.db import StatusEnum
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
-from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.utils import get_uuid
@@ -148,10 +147,10 @@ def create(request: CreateSearchRequest, db: Session = Depends(get_db), user=Dep
     # 验证租户
     tenant = TenantService.get_by_id(db, user.id)
     if not tenant:
-        return get_data_error_result(retmsg="Authorization identity.")
+        return get_data_error_result(retmsg="Authorized identity.")
 
     search_name = search_name.strip()
-    search_name = duplicate_name(KnowledgebaseService.query, name=search_name, tenant_id=user.id, status=StatusEnum.VALID.value)
+    search_name = duplicate_name(SearchService.query, db=db, name=search_name, tenant_id=user.id, status=StatusEnum.VALID.value)
 
     # # 检查重复名称
     # existing_search = SearchService.query(
@@ -292,7 +291,7 @@ def update(request: UpdateSearchRequest, db: Session = Depends(get_db), user=Dep
     # 验证租户
     tenant = TenantService.get_by_id(db, tenant_id)
     if not tenant:
-        return get_data_error_result(retmsg="Authorization identity.")
+        return get_data_error_result(retmsg="Authorized identity.")
 
     # 检查权限
     if not SearchService.accessible4deletion(db, search_id, user.id):
@@ -556,8 +555,9 @@ def list_search_app(
     try:
         if not owner_ids:
             # 获取用户加入的租户
-            tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
-            tenants = [m["tenant_id"] for m in tenants]
+            # tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
+            # tenants = [m["tenant_id"] for m in tenants]
+            tenants = []
             search_apps, total = SearchService.get_by_tenant_ids(
                 db, tenants, user.id, page, page_size, orderby, desc, keywords
             )

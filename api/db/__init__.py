@@ -8,6 +8,11 @@ class StatusEnum(Enum):
     INVALID = "0"
 
 
+class ActiveEnum(Enum):
+    ACTIVE = True
+    INACTIVE = False
+
+
 class UserTenantRole(StrEnum):
     OWNER = 'owner'
     ADMIN = 'admin'
@@ -85,10 +90,19 @@ class FileSource(StrEnum):
     S3 = "s3"
 
 
+class CanvasCategory(StrEnum):
+    Agent = "agent_canvas"
+    DataFlow = "dataflow_canvas"
+
+VALID_CANVAS_CATEGORIES = {CanvasCategory.Agent, CanvasCategory.DataFlow}
+
+
 class MCPServerType(StrEnum):
     SSE = "sse"
     STREAMABLE_HTTP = "streamable-http"
 
+
 VALID_MCP_SERVER_TYPES = {MCPServerType.SSE, MCPServerType.STREAMABLE_HTTP}
 
-KNOWLEDGEBASE_FOLDER_NAME = ".knowledgebase"
+
+KNOWLEDGEBASE_FOLDER_NAME=".knowledgebase"

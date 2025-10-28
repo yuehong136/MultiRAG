@@ -6,15 +6,18 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, 
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from pathlib import Path
 
 from api.db import FileType
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.utils import get_uuid
-from api.utils.api_utils import get_error_data_result, get_result, server_error_response, token_required
+from api.utils.api_utils import get_error_data_result, get_result, server_error_response, token_required, \
+    get_json_result
 from api.utils.file_utils import filename_type
 from core.utils.storage_factory import STORAGE_IMPL
 
@@ -62,7 +65,7 @@ def upload_files(
     pf_id = parent_id
 
     if not pf_id:
-        root_folder = FileService.get_root_folder(tenant_id)
+        root_folder = FileService.get_root_folder(db, tenant_id)
         pf_id = root_folder["id"]
 
     if not files:
@@ -75,7 +78,7 @@ def upload_files(
     file_res = []
 
     try:
-        e, pf_folder = FileService.get_by_id(pf_id)
+        e, pf_folder = FileService.get_by_id(db, pf_id)
         if not e:
             return get_error_data_result(retmsg="Can't find this folder!")
 
@@ -86,20 +89,20 @@ def upload_files(
             file_len = len(file_obj_names)
 
             # 获取文件夹路径ID
-            file_id_list = FileService.get_id_list_by_id(pf_id, file_obj_names, 1, [pf_id])
+            file_id_list = FileService.get_id_list_by_id(db, pf_id, file_obj_names, 1, [pf_id])
             len_id_list = len(file_id_list)
 
             # 创建文件夹结构
             if file_len != len_id_list:
-                e, file = FileService.get_by_id(file_id_list[len_id_list - 1])
-                if not e:
+                file = FileService.get_by_id(db, file_id_list[len_id_list - 1])
+                if not file:
                     return get_error_data_result(retmsg="Folder not found!")
-                last_folder = FileService.create_folder(file, file_id_list[len_id_list - 1], file_obj_names, len_id_list)
+                last_folder = FileService.create_folder(db, file, file_id_list[len_id_list - 1], file_obj_names, len_id_list)
             else:
-                e, file = FileService.get_by_id(file_id_list[len_id_list - 2])
-                if not e:
+                file = FileService.get_by_id(db, file_id_list[len_id_list - 2])
+                if not file:
                     return get_error_data_result(retmsg="Folder not found!")
-                last_folder = FileService.create_folder(file, file_id_list[len_id_list - 2], file_obj_names, len_id_list)
+                last_folder = FileService.create_folder(db, file, file_id_list[len_id_list - 2], file_obj_names, len_id_list)
 
             filetype = filename_type(file_obj_names[file_len - 1])
             location = file_obj_names[file_len - 1]
@@ -118,7 +121,7 @@ def upload_files(
                 "location": location,
                 "size": len(blob),
             }
-            file = FileService.insert(file_data)
+            file = FileService.insert(db, file_data)
             STORAGE_IMPL.put(last_folder.id, location, blob)
             file_res.append(file.to_json())
         return get_result(data=file_res)
@@ -484,7 +487,7 @@ def move_files(
     try:
         file_ids = req["src_file_ids"]
         parent_id = req["dest_file_id"]
-        files = FileService.get_by_ids(file_ids)
+        files = FileService.get_by_ids(db, file_ids)
         files_dict = {f.id: f for f in files}
 
         for file_id in file_ids:
@@ -494,11 +497,79 @@ def move_files(
             if not file.tenant_id:
                 return get_error_data_result(retmsg="Tenant not found!")
 
-        fe, _ = FileService.get_by_id(parent_id)
+        fe, _ = FileService.get_by_id(db, parent_id)
         if not fe:
             return get_error_data_result(retmsg="Parent Folder not found!")
 
-        FileService.move_file(file_ids, parent_id)
+        FileService.move_file(db, file_ids, parent_id)
         return get_result(data=True)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post('/file/convert', summary="文件转换")
+def convert(
+    kb_ids: list[str],
+    file_ids: list[str],
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required)
+):
+    file2documents = []
+
+    try:
+        files = FileService.get_by_ids(db, file_ids)
+        files_set = dict({file.id: file for file in files})
+        for file_id in file_ids:
+            file = files_set[file_id]
+            if not file:
+                return get_json_result(retmsg="File not found!", retcode=404)
+            file_ids_list = [file_id]
+            if file.type == FileType.FOLDER.value:
+                file_ids_list = FileService.get_all_innermost_file_ids(db, file_id, [])
+            for id in file_ids_list:
+                informs = File2DocumentService.get_by_file_id(db, id)
+                # delete
+                for inform in informs:
+                    doc_id = inform.document_id
+                    doc = DocumentService.get_by_id(db, doc_id)
+                    if not doc:
+                        return get_json_result(retmsg="Document not found!", retcode=404)
+                    tenant_id = DocumentService.get_tenant_id(db, doc_id)
+                    if not tenant_id:
+                        return get_json_result(retmsg="Tenant not found!", retcode=404)
+                    if not DocumentService.remove_document(db, doc, tenant_id):
+                        return get_json_result(retmsg="Database error (Document removal)!", retcode=404)
+                File2DocumentService.delete_by_file_id(db, id)
+
+                # insert
+                for kb_id in kb_ids:
+                    kb = KnowledgebaseService.get_by_id(db, kb_id)
+                    if not kb:
+                        return get_json_result(retmsg="Can't find this knowledgebase!", retcode=404)
+                    file = FileService.get_by_id(db, id)
+                    if not file:
+                        return get_json_result(retmsg="Can't find this file!", retcode=404)
+
+                    doc = DocumentService.insert(
+                        db,
+                        {
+                            "id": get_uuid(),
+                            "kb_id": kb.id,
+                            "parser_id": FileService.get_parser(file.type, file.name, kb.parser_id),
+                            "parser_config": kb.parser_config,
+                            "created_by": tenant_id,
+                            "type": file.type,
+                            "name": file.name,
+                            "suffix": Path(file.name).suffix.lstrip("."),
+                            "location": file.location,
+                            "size": file.size
+                        }
+                    )
+                    file2document = File2DocumentService.insert(
+                        db, {"id": get_uuid(),"file_id": id,"document_id": doc.id,}
+                    )
+
+                    file2documents.append(file2document.to_json())
+        return get_json_result(data=file2documents)
     except Exception as e:
         return server_error_response(e)

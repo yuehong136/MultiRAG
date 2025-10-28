@@ -379,6 +379,198 @@ class TenantLangfuse(BaseModel):
         }
 
 
+# ===== AI Guard domain models =====
+
+
+class GuardService(BaseModel):
+    __tablename__ = "t_guard_services"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    code = Column(String(128), index=True, nullable=False, unique=True)
+    name = Column(String(128), index=True, nullable=False)
+    description = Column(Text, index=False, nullable=True)
+    service_type = Column(String(32), index=True, nullable=False)
+    enabled_dimensions = Column(JSONB, index=False, nullable=False, default=list)
+    enabled_labels = Column(JSONB, index=False, nullable=False, default=list)
+    policy_config = Column(JSONB, index=False, nullable=False, default=dict)
+    cache_enabled = Column(Boolean, index=True, nullable=False, default=True)
+    timeout_ms = Column(Integer, index=True, nullable=False, default=1000)
+    total_requests = Column(Integer, index=True, nullable=False, default=0)
+    blocked_requests = Column(Integer, index=True, nullable=False, default=0)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardServiceLibrary(BaseModel):
+    __tablename__ = "t_guard_service_libraries"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    service_id = Column(String(32), index=True, nullable=False)
+    library_id = Column(String(32), index=True, nullable=False)
+    enabled = Column(Boolean, index=True, nullable=False, default=True)
+    priority = Column(Integer, index=True, nullable=False, default=0)
+    library_type = Column(String(32), index=True, nullable=True)
+    apply_to_dimensions = Column(JSONB, index=False, nullable=False, default=list)
+    apply_to_labels = Column(JSONB, index=False, nullable=False, default=list)
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardRule(BaseModel):
+    __tablename__ = "t_guard_rules"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    label_id = Column(String(32), index=True, nullable=False)
+    rule_type = Column(String(32), index=True, nullable=False)
+    content = Column(Text, index=True, nullable=False)
+    content_hash = Column(String(64), index=True, nullable=False)
+    match_mode = Column(String(16), index=True, nullable=False)
+    case_sensitive = Column(Boolean, index=True, nullable=False, default=False)
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    weight = Column(Float, index=True, nullable=False, default=0.0)
+    priority = Column(Integer, index=True, nullable=False, default=0)
+    source = Column(String(64), index=True, nullable=True)
+    description = Column(Text, index=False, nullable=True)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardLog(BaseModel):
+    __tablename__ = "t_guard_logs"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    service_id = Column(String(32), index=True, nullable=False)
+    service_code = Column(String(128), index=True, nullable=True)
+    request_id = Column(String(64), index=True, nullable=True)
+    chat_id = Column(String(64), index=True, nullable=True)
+    user_id = Column(String(32), index=True, nullable=True)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    content = Column(Text, index=False, nullable=True)
+    content_hash = Column(String(64), index=True, nullable=False)
+    content_length = Column(Integer, index=True, nullable=False, default=0)
+    content_preview = Column(String(500), index=False, nullable=True)
+    is_blocked = Column(Boolean, index=True, nullable=False, default=False)
+    risk_score = Column(Float, index=True, nullable=False, default=0.0)
+    content_risk_level = Column(String(16), index=True, nullable=True)
+    content_results = Column(JSONB, index=False, nullable=False, default=dict)
+    sensitive_level = Column(String(8), index=True, nullable=True)
+    sensitive_results = Column(JSONB, index=False, nullable=False, default=dict)
+    attack_level = Column(String(16), index=True, nullable=True)
+    attack_results = Column(JSONB, index=False, nullable=False, default=dict)
+    customized_hits = Column(JSONB, index=False, nullable=False, default=list)
+    risk_words = Column(JSONB, index=False, nullable=False, default=list)
+    sensitive_data = Column(JSONB, index=False, nullable=False, default=list)
+    action_taken = Column(String(32), index=True, nullable=True)
+    action_detail = Column(JSONB, index=False, nullable=False, default=dict)
+    source_type = Column(String(64), index=True, nullable=True)
+    source_id = Column(String(255), index=True, nullable=True)
+    client_ip = Column(String(64), index=True, nullable=True)
+    user_agent = Column(Text, index=False, nullable=True)
+    process_time_ms = Column(Integer, index=True, nullable=True)
+    cloud_service_used = Column(Boolean, index=True, nullable=False, default=False)
+
+
+class GuardLibraryItem(BaseModel):
+    __tablename__ = "t_guard_library_items"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    library_id = Column(String(32), index=True, nullable=False)
+    content = Column(Text, index=True, nullable=False)
+    content_hash = Column(String(64), index=True, nullable=False)
+    content_type = Column(String(32), index=True, nullable=False)
+    item_metadata = Column(JSONB, index=False, nullable=False, default=dict)
+    hit_count = Column(Integer, index=True, nullable=False, default=0)
+    last_hit_time = Column(DateTime, index=True, nullable=True)
+    sort_order = Column(Integer, index=True, nullable=False, default=0)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardLibrary(BaseModel):
+    __tablename__ = "t_guard_libraries"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    library_type = Column(String(32), index=True, nullable=False)
+    name = Column(String(128), index=True, nullable=False)
+    description = Column(Text, index=False, nullable=True)
+    category = Column(String(64), index=True, nullable=True)
+    tags = Column(JSONB, index=False, nullable=False, default=list)
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    item_count = Column(Integer, index=True, nullable=False, default=0)
+    hit_count = Column(Integer, index=True, nullable=False, default=0)
+    last_hit_time = Column(DateTime, index=True, nullable=True)
+    version = Column(Integer, index=True, nullable=False, default=1)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardLabel(BaseModel):
+    __tablename__ = "t_guard_labels"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    dimension_id = Column(String(32), index=True, nullable=False)
+    code = Column(String(64), index=True, nullable=False, unique=True)
+    name = Column(String(128), index=True, nullable=False)
+    description = Column(Text, index=False, nullable=True)
+    cloud_label = Column(String(64), index=True, nullable=True)
+    cloud_label_type = Column(String(16), index=True, nullable=False)
+    detection_ranges = Column(JSONB, index=False, nullable=False, default=list)
+    enabled = Column(Boolean, index=True, nullable=False, default=True)
+    risk_score = Column(Float, index=True, nullable=False, default=0.0)
+    risk_level = Column(Integer, index=True, nullable=False, default=0)
+    sensitive_level = Column(String(8), index=True, nullable=True)
+    action = Column(String(32), index=True, nullable=False)
+    action_config = Column(JSONB, index=False, nullable=False, default=dict)
+    sort_order = Column(Integer, index=True, nullable=False, default=0)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardLabelLibrary(BaseModel):
+    __tablename__ = "t_guard_label_libraries"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    label_id = Column(String(32), index=True, nullable=False)
+    library_id = Column(String(32), index=True, nullable=False)
+    enabled = Column(Boolean, index=True, nullable=False, default=True)
+    priority = Column(Integer, index=True, nullable=False, default=0)
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    conditions = Column(JSONB, index=False, nullable=False, default=dict)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
+class GuardDimension(BaseModel):
+    __tablename__ = "t_guard_dimensions"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    code = Column(String(64), index=True, nullable=False, unique=True)
+    name = Column(String(128), index=True, nullable=False)
+    description = Column(Text, index=False, nullable=True)
+    enabled = Column(Boolean, index=True, nullable=False, default=True)
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    sort_order = Column(Integer, index=True, nullable=False, default=0)
+    tenant_id = Column(String(32), index=True, nullable=False)
+    created_by = Column(String(32), index=True, nullable=False)
+    status = Column(String(1), index=True, nullable=True, default="1")
+
+
 class Knowledgebase(BaseModel):
     __tablename__ = "t_ai_knowledgebases"
     __table_args__ = {"schema": "usr_ai"}
@@ -499,9 +691,10 @@ class Dialog(BaseModel):
                                   "max_tokens": 512})
     prompt_type = Column(String(16), index=True, nullable=False, default="simple", doc="simple|advanced")
     prompt_config = Column(JSONB, index=False, nullable=False,
-                           default={"system": "", "prologue": "Hi! I'm your assistant, what can I do for you?",
+                           default={"system": "", "prologue": "Hi! I'm your assistant. What can I do for you?",
                                     "parameters": [],
                                     "empty_response": "Sorry! No relevant content was found in the knowledge base!"})
+    meta_data_filter = Column(JSONB,index=False, nullable=True, default={})
     similarity_threshold = Column(Float, index=False, nullable=False, default=0.2)
     vector_similarity_weight = Column(Float, index=False, nullable=False, default=0.3)
     top_n = Column(Integer, index=False, nullable=False, default=6)
@@ -569,6 +762,7 @@ class UserCanvas(BaseModel):
     permission = Column(String(16), index=True, nullable=False, default="me", doc="me|team")
     description = Column(Text, index=False, nullable=True, doc="Canvas description")
     canvas_type = Column(String(32), index=True, nullable=True, doc="Canvas type")
+    canvas_category = Column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")
     dsl = Column(JSONB, index=False, nullable=True, default={})
 
 
@@ -578,9 +772,10 @@ class CanvasTemplate(BaseModel):
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
-    title = Column(String(255), index=False, nullable=True, doc="Canvas title")
-    description = Column(Text, index=False, nullable=True, doc="Canvas description")
+    title = Column(JSONB, index=False, nullable=True, default=dict, doc="Canvas title")
+    description = Column(JSONB, index=False, nullable=True, default=dict, doc="Canvas description")
     canvas_type = Column(String(32), index=True, nullable=True, doc="Canvas type")
+    canvas_category = Column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")
     dsl = Column(JSONB, index=False, nullable=True, default={})
 
 
@@ -806,178 +1001,178 @@ class GlobalApiEnvironment(BaseModel):
         }
 
 
-class SensitiveWordCategory(BaseModel):
-    """敏感词分类表"""
-    __tablename__ = "t_ai_sensitive_categories"
-    __table_args__ = {"schema": "usr_ai"}
-
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    name = Column(String(128), index=True, nullable=False, doc="分类名称")
-    description = Column(Text, index=False, nullable=True, doc="分类描述")
-    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
-    created_by = Column(String(32), index=True, nullable=False, doc="创建用户ID")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "name": self.name,
-            "description": self.description,
-            "tenant_id": self.tenant_id,
-            "created_by": self.created_by,
-            "status": self.status,
-            "create_time": self.create_time,
-            "update_time": self.update_time
-        }
-
-
-class SensitiveWordLevel(BaseModel):
-    """敏感词等级表"""
-    __tablename__ = "t_ai_sensitive_levels"
-    __table_args__ = {"schema": "usr_ai"}
-
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    name = Column(String(64), index=True, nullable=False, doc="等级名称")
-    level = Column(Integer, index=True, nullable=False, doc="等级数值(1-5)")
-    description = Column(Text, index=False, nullable=True, doc="等级描述")
-    action = Column(String(32), index=True, nullable=False, default="block", doc="处理动作: block/replace/warn")
-    replacement = Column(String(128), index=False, nullable=True, doc="替换文本")
-    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "name": self.name,
-            "level": self.level,
-            "description": self.description,
-            "action": self.action,
-            "replacement": self.replacement,
-            "tenant_id": self.tenant_id,
-            "status": self.status,
-            "create_time": self.create_time,
-            "update_time": self.update_time
-        }
-
-
-class SensitiveWord(BaseModel):
-    """敏感词表"""
-    __tablename__ = "t_ai_sensitive_words"
-    __table_args__ = {"schema": "usr_ai"}
-
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    word = Column(String(255), index=True, nullable=False, doc="敏感词内容")
-    word_hash = Column(String(64), index=True, nullable=False, doc="敏感词MD5哈希")
-    category_id = Column(String(32), index=True, nullable=False, doc="分类ID")
-    level_id = Column(String(32), index=True, nullable=False, doc="等级ID")
-    match_type = Column(String(16), index=True, nullable=False, default="exact", doc="匹配类型: exact/partial/regex")
-    description = Column(Text, index=False, nullable=True, doc="词汇描述")
-    source = Column(String(64), index=True, nullable=True, doc="来源")
-    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
-    created_by = Column(String(32), index=True, nullable=False, doc="创建用户ID")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "word": self.word,
-            "category_id": self.category_id,
-            "level_id": self.level_id,
-            "match_type": self.match_type,
-            "description": self.description,
-            "source": self.source,
-            "tenant_id": self.tenant_id,
-            "created_by": self.created_by,
-            "status": self.status,
-            "create_time": self.create_time,
-            "update_time": self.update_time
-        }
-
-
-class SensitiveWordWhitelist(BaseModel):
-    """敏感词白名单表"""
-    __tablename__ = "t_ai_sensitive_whitelists"
-    __table_args__ = {"schema": "usr_ai"}
-
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    word = Column(String(255), index=True, nullable=False, doc="白名单词汇")
-    word_hash = Column(String(64), index=True, nullable=False, doc="白名单词汇MD5哈希")
-    reason = Column(Text, index=False, nullable=True, doc="白名单原因")
-    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
-    created_by = Column(String(32), index=True, nullable=False, doc="创建用户ID")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "word": self.word,
-            "reason": self.reason,
-            "tenant_id": self.tenant_id,
-            "created_by": self.created_by,
-            "status": self.status,
-            "create_time": self.create_time,
-            "update_time": self.update_time
-        }
-
-
-class SensitiveFilterLog(BaseModel):
-    """敏感词过滤日志表"""
-    __tablename__ = "t_ai_sensitive_filter_logs"
-    __table_args__ = {"schema": "usr_ai"}
-
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    user_id = Column(String(32), index=True, nullable=True, doc="用户ID")
-    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
-    content_hash = Column(String(64), index=True, nullable=False, doc="内容MD5哈希")
-    matched_words = Column(JSONB, index=False, nullable=False, default=[], doc="匹配的敏感词")
-    filter_action = Column(String(32), index=True, nullable=False, doc="过滤动作")
-    source_type = Column(String(64), index=True, nullable=True, doc="来源类型")
-    source_id = Column(String(255), index=True, nullable=True, doc="来源ID")
-    ip_address = Column(String(64), index=True, nullable=True, doc="IP地址")
-    user_agent = Column(Text, index=False, nullable=True, doc="用户代理")
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "tenant_id": self.tenant_id,
-            "content_hash": self.content_hash,
-            "matched_words": self.matched_words,
-            "filter_action": self.filter_action,
-            "source_type": self.source_type,
-            "source_id": self.source_id,
-            "ip_address": self.ip_address,
-            "user_agent": self.user_agent,
-            "create_time": self.create_time,
-            "update_time": self.update_time
-        }
-
-
-class SensitiveFilterStats(BaseModel):
-    """敏感词过滤统计表"""
-    __tablename__ = "t_ai_sensitive_filter_stats"
-    __table_args__ = {"schema": "usr_ai"}
-
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
-    stat_date = Column(DateTime, index=True, nullable=False, doc="统计日期")
-    total_requests = Column(Integer, index=False, nullable=False, default=0, doc="总请求数")
-    filtered_requests = Column(Integer, index=False, nullable=False, default=0, doc="被过滤请求数")
-    top_matched_words = Column(JSONB, index=False, nullable=False, default=[], doc="热门敏感词")
-    filter_rate = Column(Float, index=False, nullable=False, default=0.0, doc="过滤率")
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "tenant_id": self.tenant_id,
-            "stat_date": self.stat_date,
-            "total_requests": self.total_requests,
-            "filtered_requests": self.filtered_requests,
-            "top_matched_words": self.top_matched_words,
-            "filter_rate": self.filter_rate,
-            "create_time": self.create_time,
-            "update_time": self.update_time
-        }
+# class SensitiveWordCategory(BaseModel):
+#     """敏感词分类表"""
+#     __tablename__ = "t_ai_sensitive_categories"
+#     __table_args__ = {"schema": "usr_ai"}
+#
+#     id = Column(String(32), primary_key=True, index=False, nullable=False)
+#     name = Column(String(128), index=True, nullable=False, doc="分类名称")
+#     description = Column(Text, index=False, nullable=True, doc="分类描述")
+#     tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+#     created_by = Column(String(32), index=True, nullable=False, doc="创建用户ID")
+#     status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
+#
+#     def to_dict(self):
+#         return {
+#             "id": self.id,
+#             "name": self.name,
+#             "description": self.description,
+#             "tenant_id": self.tenant_id,
+#             "created_by": self.created_by,
+#             "status": self.status,
+#             "create_time": self.create_time,
+#             "update_time": self.update_time
+#         }
+#
+#
+# class SensitiveWordLevel(BaseModel):
+#     """敏感词等级表"""
+#     __tablename__ = "t_ai_sensitive_levels"
+#     __table_args__ = {"schema": "usr_ai"}
+#
+#     id = Column(String(32), primary_key=True, index=False, nullable=False)
+#     name = Column(String(64), index=True, nullable=False, doc="等级名称")
+#     level = Column(Integer, index=True, nullable=False, doc="等级数值(1-5)")
+#     description = Column(Text, index=False, nullable=True, doc="等级描述")
+#     action = Column(String(32), index=True, nullable=False, default="block", doc="处理动作: block/replace/warn")
+#     replacement = Column(String(128), index=False, nullable=True, doc="替换文本")
+#     tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+#     status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
+#
+#     def to_dict(self):
+#         return {
+#             "id": self.id,
+#             "name": self.name,
+#             "level": self.level,
+#             "description": self.description,
+#             "action": self.action,
+#             "replacement": self.replacement,
+#             "tenant_id": self.tenant_id,
+#             "status": self.status,
+#             "create_time": self.create_time,
+#             "update_time": self.update_time
+#         }
+#
+#
+# class SensitiveWord(BaseModel):
+#     """敏感词表"""
+#     __tablename__ = "t_ai_sensitive_words"
+#     __table_args__ = {"schema": "usr_ai"}
+#
+#     id = Column(String(32), primary_key=True, index=False, nullable=False)
+#     word = Column(String(255), index=True, nullable=False, doc="敏感词内容")
+#     word_hash = Column(String(64), index=True, nullable=False, doc="敏感词MD5哈希")
+#     category_id = Column(String(32), index=True, nullable=False, doc="分类ID")
+#     level_id = Column(String(32), index=True, nullable=False, doc="等级ID")
+#     match_type = Column(String(16), index=True, nullable=False, default="exact", doc="匹配类型: exact/partial/regex")
+#     description = Column(Text, index=False, nullable=True, doc="词汇描述")
+#     source = Column(String(64), index=True, nullable=True, doc="来源")
+#     tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+#     created_by = Column(String(32), index=True, nullable=False, doc="创建用户ID")
+#     status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
+#
+#     def to_dict(self):
+#         return {
+#             "id": self.id,
+#             "word": self.word,
+#             "category_id": self.category_id,
+#             "level_id": self.level_id,
+#             "match_type": self.match_type,
+#             "description": self.description,
+#             "source": self.source,
+#             "tenant_id": self.tenant_id,
+#             "created_by": self.created_by,
+#             "status": self.status,
+#             "create_time": self.create_time,
+#             "update_time": self.update_time
+#         }
+#
+#
+# class SensitiveWordWhitelist(BaseModel):
+#     """敏感词白名单表"""
+#     __tablename__ = "t_ai_sensitive_whitelists"
+#     __table_args__ = {"schema": "usr_ai"}
+#
+#     id = Column(String(32), primary_key=True, index=False, nullable=False)
+#     word = Column(String(255), index=True, nullable=False, doc="白名单词汇")
+#     word_hash = Column(String(64), index=True, nullable=False, doc="白名单词汇MD5哈希")
+#     reason = Column(Text, index=False, nullable=True, doc="白名单原因")
+#     tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+#     created_by = Column(String(32), index=True, nullable=False, doc="创建用户ID")
+#     status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:禁用,1:启用)")
+#
+#     def to_dict(self):
+#         return {
+#             "id": self.id,
+#             "word": self.word,
+#             "reason": self.reason,
+#             "tenant_id": self.tenant_id,
+#             "created_by": self.created_by,
+#             "status": self.status,
+#             "create_time": self.create_time,
+#             "update_time": self.update_time
+#         }
+#
+#
+# class SensitiveFilterLog(BaseModel):
+#     """敏感词过滤日志表"""
+#     __tablename__ = "t_ai_sensitive_filter_logs"
+#     __table_args__ = {"schema": "usr_ai"}
+#
+#     id = Column(String(32), primary_key=True, index=False, nullable=False)
+#     user_id = Column(String(32), index=True, nullable=True, doc="用户ID")
+#     tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+#     content_hash = Column(String(64), index=True, nullable=False, doc="内容MD5哈希")
+#     matched_words = Column(JSONB, index=False, nullable=False, default=[], doc="匹配的敏感词")
+#     filter_action = Column(String(32), index=True, nullable=False, doc="过滤动作")
+#     source_type = Column(String(64), index=True, nullable=True, doc="来源类型")
+#     source_id = Column(String(255), index=True, nullable=True, doc="来源ID")
+#     ip_address = Column(String(64), index=True, nullable=True, doc="IP地址")
+#     user_agent = Column(Text, index=False, nullable=True, doc="用户代理")
+#
+#     def to_dict(self):
+#         return {
+#             "id": self.id,
+#             "user_id": self.user_id,
+#             "tenant_id": self.tenant_id,
+#             "content_hash": self.content_hash,
+#             "matched_words": self.matched_words,
+#             "filter_action": self.filter_action,
+#             "source_type": self.source_type,
+#             "source_id": self.source_id,
+#             "ip_address": self.ip_address,
+#             "user_agent": self.user_agent,
+#             "create_time": self.create_time,
+#             "update_time": self.update_time
+#         }
+#
+#
+# class SensitiveFilterStats(BaseModel):
+#     """敏感词过滤统计表"""
+#     __tablename__ = "t_ai_sensitive_filter_stats"
+#     __table_args__ = {"schema": "usr_ai"}
+#
+#     id = Column(String(32), primary_key=True, index=False, nullable=False)
+#     tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
+#     stat_date = Column(DateTime, index=True, nullable=False, doc="统计日期")
+#     total_requests = Column(Integer, index=False, nullable=False, default=0, doc="总请求数")
+#     filtered_requests = Column(Integer, index=False, nullable=False, default=0, doc="被过滤请求数")
+#     top_matched_words = Column(JSONB, index=False, nullable=False, default=[], doc="热门敏感词")
+#     filter_rate = Column(Float, index=False, nullable=False, default=0.0, doc="过滤率")
+#
+#     def to_dict(self):
+#         return {
+#             "id": self.id,
+#             "tenant_id": self.tenant_id,
+#             "stat_date": self.stat_date,
+#             "total_requests": self.total_requests,
+#             "filtered_requests": self.filtered_requests,
+#             "top_matched_words": self.top_matched_words,
+#             "filter_rate": self.filter_rate,
+#             "create_time": self.create_time,
+#             "update_time": self.update_time
+#         }
 
 
 class UserCanvasVersion(BaseModel):
@@ -1032,7 +1227,7 @@ class Search(BaseModel):
     search_config = Column(JSONB, index=False, nullable=False, default=lambda: {
         "kb_ids": [],
         "doc_ids": [],
-        "similarity_threshold": 0.0,
+        "similarity_threshold": 0.2,
         "vector_similarity_weight": 0.3,
         "use_kg": False,
         # rerank settings
@@ -1041,11 +1236,12 @@ class Search(BaseModel):
         # chat settings
         "summary": False,
         "chat_id": "",
+        # Leave it here for reference, don't need to set default values
         "llm_setting": {
-            "temperature": 0.1,
-            "top_p": 0.3,
-            "frequency_penalty": 0.7,
-            "presence_penalty": 0.4,
+            # "temperature": 0.1,
+            # "top_p": 0.3,
+            # "frequency_penalty": 0.7,
+            # "presence_penalty": 0.4,
         },
         "chat_settingcross_languages": [],
         "highlight": False,

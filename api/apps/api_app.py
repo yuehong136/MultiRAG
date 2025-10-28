@@ -25,7 +25,7 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import queue_tasks, TaskService
 from api.db.services.user_service import UserTenantService
-from api.db.services.llm_service import TenantLLMService
+from api.db.services.tenant_llm_service import TenantLLMService
 
 from api import settings
 from api.utils import get_uuid, current_timestamp, datetime_format
@@ -35,7 +35,7 @@ from api.utils.api_utils import server_error_response, get_data_error_result, ge
 from api.utils.file_utils import filename_type, thumbnail
 from core.utils.storage_factory import STORAGE_IMPL
 from core.app.tag import label_question
-from core.prompts.prompts import keyword_extraction
+from core.prompts.generator import keyword_extraction
 from api.db.services.canvas_service import UserCanvasService
 from agent.canvas import Canvas
 from functools import partial

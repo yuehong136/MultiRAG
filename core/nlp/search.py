@@ -1105,8 +1105,6 @@ class Dealer:
             vector_column = "vector"
         zero_vector = [0.0] * dim
         sim_np = np.array(sim)
-        if doc_ids:
-            similarity_threshold = 0
         filtered_count = (sim_np >= similarity_threshold).sum()
         ranks["total"] = int(filtered_count) # Convert from np.int64 to Python int otherwise JSON serializable error
         for i in idx:

@@ -13,7 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-
+import gc
 import logging
 import copy
 import time
@@ -349,6 +349,13 @@ class TextRecognizer:
 
         return img
 
+    def close(self):
+        # close session and release manually
+        logging.info('Close TextRecognizer.')
+        if hasattr(self, "predictor"):
+            del self.predictor
+        gc.collect()
+
     def __call__(self, img_list):
         img_num = len(img_list)
         # Calculate the aspect ratio of all text bars
@@ -395,6 +402,9 @@ class TextRecognizer:
                 rec_res[indices[beg_img_no + rno]] = rec_result[rno]
 
         return rec_res, time.time() - st
+
+    def __del__(self):
+        self.close()
 
 
 class TextDetector:
@@ -480,6 +490,13 @@ class TextDetector:
         dt_boxes = np.array(dt_boxes_new)
         return dt_boxes
 
+
+    def close(self):
+        logging.info("Close TextDetector.")
+        if hasattr(self, "predictor"):
+            del self.predictor
+        gc.collect()
+
     def __call__(self, img):
         ori_im = img.copy()
         data = {'image': img}
@@ -508,6 +525,9 @@ class TextDetector:
         dt_boxes = self.filter_tag_det_res(dt_boxes, ori_im.shape)
 
         return dt_boxes, time.time() - st
+
+    def __del__(self):
+        self.close()
 
 
 class OCR:

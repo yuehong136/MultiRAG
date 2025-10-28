@@ -14,9 +14,8 @@ from functools import partial
 import re
 from copy import deepcopy
 from timeit import default_timer as timer
-
+import trio
 from langfuse import Langfuse
-
 from agentic_reasoning import DeepResearcher
 from datetime import datetime
 from sqlalchemy import asc, func
@@ -25,17 +24,20 @@ from sqlalchemy.orm import Session
 from api.db import LLMType, StatusEnum, ParserType
 from api.db.db_models import Dialog, Conversation, db_connection
 from api.db.services.common_service import CommonService
+from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
-from api.db.services.llm_service import LLMService, TenantLLMService, LLMBundle
+from api.db.services.llm_service import LLMBundle
+from api.db.services.tenant_llm_service import TenantLLMService
 from api import settings
 from api.utils import current_timestamp, datetime_format
+from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
 from core.nlp import extract_between
 from core.nlp.search import index_name
-from core.prompts.prompts import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
-    citation_prompt, cross_languages
+from core.prompts.generator import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
+    citation_prompt, cross_languages, gen_meta_filter, PROMPT_JINJA_ENV, ASK_SUMMARY
 from core.utils import rmSpace, num_tokens_from_string
 from core.utils.tavily_conn import Tavily
 
@@ -111,7 +113,7 @@ class DialogService(CommonService):
             raise e
 
     @classmethod
-    def get_list(cls, db: Session, tenant_id, page_number, items_per_page, orderby, desc, id, name):
+    def get_list(cls, db: Session, tenant_id, page_number, items_per_page, orderby, is_desc, id, name):
 
         query = db.query(cls.model)
 
@@ -125,9 +127,9 @@ class DialogService(CommonService):
             (cls.model.status == StatusEnum.VALID.value)
         )
 
-        # Order by specified field in ascending or descending order
-        order_clause = getattr(cls.model, orderby)
-        query = query.order_by(desc(order_clause) if desc else asc(order_clause))
+        # 根据 desc 参数确定排序方式
+        order_col = getattr(cls.model, orderby)
+        query = query.order_by(order_col.desc() if is_desc else order_col.asc())
 
         # Apply pagination
         query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
@@ -157,6 +159,7 @@ class DialogService(CommonService):
             cls.model.do_refer,
             cls.model.rerank_id,
             cls.model.kb_ids,
+            cls.model.icon,
             cls.model.status,
             User.nickname,
             User.avatar.label("tenant_avatar"),
@@ -315,6 +318,72 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
     return answer, idx
 
 
+def convert_conditions(metadata_condition):
+    if metadata_condition is None:
+        metadata_condition = {}
+    op_mapping = {
+        "is": "=",
+        "not is": "≠"
+    }
+    return [
+    {
+        "op": op_mapping.get(cond["comparison_operator"], cond["comparison_operator"]),
+        "key": cond["name"],
+        "value": cond["value"]
+    }
+    for cond in metadata_condition.get("conditions", [])
+]
+
+
+def meta_filter(metas: dict, filters: list[dict]):
+    doc_ids = set([])
+
+    def filter_out(v2docs, operator, value):
+        ids = []
+        for input, docids in v2docs.items():
+            try:
+                input = float(input)
+                value = float(value)
+            except Exception:
+                input = str(input)
+                value = str(value)
+
+            for conds in [
+                    (operator == "contains", str(value).lower() in str(input).lower()),
+                    (operator == "not contains", str(value).lower() not in str(input).lower()),
+                    (operator == "start with", str(input).lower().startswith(str(value).lower())),
+                    (operator == "end with", str(input).lower().endswith(str(value).lower())),
+                    (operator == "empty", not input),
+                    (operator == "not empty", input),
+                    (operator == "=", input == value),
+                    (operator == "≠", input != value),
+                    (operator == ">", input > value),
+                    (operator == "<", input < value),
+                    (operator == "≥", input >= value),
+                    (operator == "≤", input <= value),
+                ]:
+                try:
+                    if all(conds):
+                        ids.extend(docids)
+                        break
+                except Exception:
+                    pass
+        return ids
+
+    for k, v2docs in metas.items():
+        for f in filters:
+            if k != f["key"]:
+                continue
+            ids = filter_out(v2docs, f["op"], f["value"])
+            if not doc_ids:
+                doc_ids = set(ids)
+            else:
+                doc_ids = doc_ids & set(ids)
+            if not doc_ids:
+                return []
+    return list(doc_ids)
+
+
 def chat(dialog, messages, db, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
@@ -357,15 +426,16 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     retriever = settings.retrievaler
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
-    attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else None
+    attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
     if "doc_ids" in messages[-1]:
         attachments = messages[-1]["doc_ids"]
+
     prompt_config = dialog.prompt_config
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
         logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
-        ans = use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True))
+        ans = use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
         if ans:
             yield ans
             return
@@ -391,6 +461,18 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     if prompt_config.get("cross_languages"):
         questions = [cross_languages(db, dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
 
+    if dialog.meta_data_filter:
+        metas = DocumentService.get_meta_by_kbs(db, dialog.kb_ids)
+        if dialog.meta_data_filter.get("method") == "auto":
+            filters = gen_meta_filter(chat_mdl, metas, questions[-1])
+            attachments.extend(meta_filter(metas, filters))
+            if not attachments:
+                attachments = None
+        elif dialog.meta_data_filter.get("method") == "manual":
+            attachments.extend(meta_filter(metas, dialog.meta_data_filter["manual"]))
+            if not attachments:
+                attachments = None
+
     if prompt_config.get("keyword", False):
         questions[-1] += keyword_extraction(chat_mdl, questions[-1])
 
@@ -398,18 +480,28 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
     thought = ""
     kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
+    knowledges = []
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
-    if "knowledge" not in [p["key"] for p in prompt_config["parameters"]]:
-        # 如果不包含，则初始化知识信息为一个空的字典
-        knowledges = []
-    else:
+    if attachments is not None and "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
         knowledges = []
         if prompt_config.get("reasoning", False):
             reasoner = DeepResearcher(
                 chat_mdl,
                 prompt_config,
-                partial(retriever.retrieval, filter_exp="", embd_mdl=embd_mdl, tenant_id=dialog.tenant_id, kb_names=kb_names, page=1, page_size=dialog.top_n, similarity_threshold=0.2, vector_similarity_weight=0.3, search_mode=dialog.search_mode)
+                partial(
+                    retriever.retrieval,
+                    filter_exp="",
+                    embd_mdl=embd_mdl,
+                    tenant_id=dialog.tenant_id,
+                    kb_names=kb_names,
+                    page=1,
+                    page_size=dialog.top_n,
+                    similarity_threshold=0.2,
+                    vector_similarity_weight=0.3,
+                    doc_ids=attachments,
+                    search_mode=dialog.search_mode
+                )
             )
 
             for think in reasoner.thinking(kbinfos, " ".join(questions)):
@@ -587,7 +679,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         yield res
 
 
-def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True):
+def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_ids=None):
     sys_prompt = "You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question."
     user_prompt = """
     Table name: {};
@@ -628,7 +720,12 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True):
                     flds.append(k)
                 sql = "select doc_id,docnm_kwd," + ",".join(flds) + sql[8:]
 
-        print(f"“{question}” get SQL(refined): {sql}")
+        if kb_ids:
+            kb_filter = "(" + " OR ".join([f"kb_id = '{kb_id}'" for kb_id in kb_ids]) + ")"
+            if "where" not in sql.lower():
+                sql += f" WHERE {kb_filter}"
+            else:
+                sql += f" AND {kb_filter}"
 
         logging.debug(f"{question} get SQL(refined): {sql}")
         tried_times += 1
@@ -664,7 +761,6 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True):
         logging.debug("TRY it again: {}".format(sql))
 
     logging.debug("GET table: {}".format(tbl))
-    print(tbl)
     if tbl.get("error") or len(tbl["rows"]) == 0:
         return None
 
@@ -721,7 +817,32 @@ def tts(tts_mdl, text):
     return binascii.hexlify(bin).decode("utf-8")
 
 
-def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None):
+def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
+    if search_config is None:
+        search_config = {}
+    similarity_threshold = 0.1,
+    vector_similarity_weight = 0.3,
+    top = 1024,
+    doc_ids = []
+    rerank_id = ""
+    rerank_mdl = None
+
+    if search_config:
+        if search_config.get("kb_ids", []):
+            kb_ids = search_config.get("kb_ids", [])
+        if search_config.get("chat_id", ""):
+            chat_llm_name = search_config.get("chat_id", "")
+        if search_config.get("similarity_threshold", 0.1):
+            similarity_threshold = search_config.get("similarity_threshold", 0.1)
+        if search_config.get("vector_similarity_weight", 0.3):
+            vector_similarity_weight = search_config.get("vector_similarity_weight", 0.3)
+        if search_config.get("top_k", 1024):
+            top = search_config.get("top_k", 1024)
+        if search_config.get("doc_ids", []):
+            doc_ids = search_config.get("doc_ids", [])
+        if search_config.get("rerank_id", ""):
+            rerank_id = search_config.get("rerank_id", "")
+
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     embedding_list = list(set([kb.embd_id for kb in kbs]))
 
@@ -730,33 +851,37 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None):
 
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_llm_name)
+    if rerank_id:
+        rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
     max_tokens = chat_mdl.max_length
     tenant_ids = list([kb.tenant_id for kb in kbs])
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
-    kbinfos = retriever.retrieval(question, filter_exp, embd_mdl, tenant_ids, kb_names, 1, 12, 0.1, 0.3, aggs=False, rank_feature=label_question(db, question, kbs), search_mode=None) #todo 无法传递应用里的配置，所以只能使用一种默认检索模式
+    kbinfos = retriever.retrieval(
+        question=question,
+        filter_exp=filter_exp,
+        embd_mdl=embd_mdl,
+        tenant_id=tenant_ids,
+        kb_names=kb_names,
+        page=1,
+        page_size=12,
+        similarity_threshold=similarity_threshold,
+        vector_similarity_weight=vector_similarity_weight,
+        top=top,
+        doc_ids=doc_ids,
+        aggs=False,
+        rerank_mdl=rerank_mdl,
+        rank_feature=label_question(db, question, kbs),
+        search_mode=None #todo 无法传递应用里的配置，所以只能使用一种默认检索模式
+    )
     knowledges = kb_prompt(kbinfos, max_tokens)
-    prompt = """
-    Role: You're a smart assistant. Your name is Miss R.
-    Task: Summarize the information from knowledge bases and answer user's question.
-    Requirements and restriction:
-      - DO NOT make things up, especially for numbers.
-      - If the information from knowledge is irrelevant with user's question, JUST SAY: Sorry, no relevant information provided.
-      - Answer with markdown format text.
-      - Answer in language of user's question.
-      - DO NOT make things up, especially for numbers.
+    sys_prompt = PROMPT_JINJA_ENV.from_string(ASK_SUMMARY).render(knowledge="\n".join(knowledges))
 
-    ### Information from knowledge bases
-    %s
-
-    The above is information from knowledge bases.
-
-    """ % "\n".join(knowledges)
     msg = [{"role": "user", "content": question}]
 
     def decorate_answer(answer):
-        nonlocal knowledges, kbinfos, prompt
+        nonlocal knowledges, kbinfos, sys_prompt
         answer, idx = retriever.insert_citations(answer, [ck["content_ltks"] for ck in kbinfos["chunks"]], [ck["vector"] for ck in kbinfos["chunks"]], embd_mdl, tkweight=0.7, vtweight=0.3)
         idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
         recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
@@ -774,7 +899,59 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None):
         return {"answer": answer, "reference": refs}
 
     answer = ""
-    for ans in chat_mdl.chat_streamly(prompt, msg, {"temperature": 0.1}):
+    for ans in chat_mdl.chat_streamly(sys_prompt, msg, {"temperature": 0.1}):
         answer = ans
         yield {"answer": answer, "reference": {}}
     yield decorate_answer(answer)
+
+
+def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
+    if search_config is None:
+        search_config = {}
+    meta_data_filter = search_config.get("meta_data_filter", {})
+    doc_ids = search_config.get("doc_ids", [])
+    rerank_id = search_config.get("rerank_id", "")
+    rerank_mdl = None
+    kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
+    if not kbs:
+        return {"error": "No KB selected"}
+    embedding_list = list(set([kb.embd_id for kb in kbs]))
+    tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+    kb_names = list(set([kb.name for kb in kbs]))
+
+    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, llm_name=embedding_list[0])
+    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
+    if rerank_id:
+        rerank_mdl = LLMBundle(tenant_id, LLMType.RERANK, rerank_id)
+
+    if meta_data_filter:
+        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        if meta_data_filter.get("method") == "auto":
+            filters = gen_meta_filter(chat_mdl, metas, question)
+            doc_ids.extend(meta_filter(metas, filters))
+            if not doc_ids:
+                doc_ids = None
+        elif meta_data_filter.get("method") == "manual":
+            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"]))
+            if not doc_ids:
+                doc_ids = None
+
+    ranks = settings.retrievaler.retrieval(
+        question=question,
+        filter_exp="",
+        embd_mdl=embd_mdl,
+        tenant_id=tenant_ids,
+        kb_names=kb_names,
+        page=1,
+        page_size=12,
+        similarity_threshold=search_config.get("similarity_threshold", 0.2),
+        vector_similarity_weight=search_config.get("vector_similarity_weight", 0.3),
+        top=search_config.get("top_k", 1024),
+        doc_ids=doc_ids,
+        aggs=False,
+        rerank_mdl=rerank_mdl,
+        rank_feature=label_question(db, question, kbs),
+    )
+    mindmap = MindMapExtractor(chat_mdl)
+    mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
+    return mind_map.output

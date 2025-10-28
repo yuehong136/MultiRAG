@@ -8,8 +8,9 @@
 """
 import json
 import re
+import logging
 from copy import deepcopy
-import trio
+# import trio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -18,19 +19,22 @@ from typing import Generator, Literal, Annotated, Any
 
 from api.db.db_models import APIToken, get_db
 from api.db.services.conversation_service import ConversationService, structure_answer
-from api.db.services.dialog_service import DialogService, chat, ask
-from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMBundle, TenantService
+from api.db.services.dialog_service import DialogService, chat, ask, gen_mindmap
+# from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.llm_service import LLMBundle
+from api.db.services.search_service import SearchService
+from api.db.services.tenant_llm_service import TenantLLMService
+from api.db.services.user_service import TenantService, UserTenantService
 from api.db import LLMType
-from api.db.services.user_service import UserTenantService
 from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.api_utils import get_json_result
 from api.apps import manager
-from graphrag.general.mind_map_extractor import MindMapExtractor
-from core.app.tag import label_question
-from core.prompts.prompts import chunks_format
+# from graphrag.general.mind_map_extractor import MindMapExtractor
+# from core.app.tag import label_question
+from core.prompts.template import load_prompt
+from core.prompts.generator import chunks_format
 
 
 class SetConversationRequest(BaseModel):
@@ -87,6 +91,24 @@ class CompletionRequest(BaseModel):
 
     filter_condition: str | None = ""
     """过滤条件，可以根据实际需求自定义结构。"""
+
+    llm_id: str | None = None
+    """大语言模型的ID，如果不指定则使用默认模型。"""
+
+    temperature: float | None = None
+    """温度参数，控制生成文本的随机性。"""
+
+    top_p: float | None = None
+    """Top-p采样参数，控制生成文本的多样性。"""
+
+    frequency_penalty: float | None = None
+    """频率惩罚参数，降低重复内容的可能性。"""
+
+    presence_penalty: float | None = None
+    """存在惩罚参数，鼓励生成新内容。"""
+
+    max_tokens: int | None = None
+    """最大生成token数。"""
 
 
 class RemoveConversationRequest(BaseModel):
@@ -432,21 +454,160 @@ async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=
 @router.post('/completion', summary="生成对话", response_description="成功生成对话")
 def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-        完成会话
+    # 生成对话响应
 
-        该接口用于完成指定会话，生成对话内容。
+    该接口用于在指定会话中生成 AI 对话回复，支持流式和非流式输出，可自定义 LLM 模型及其参数。
 
-        参数:
-        - request: CompletionRequest对象，包含会话的详细信息
-            - conversation_id: str 会话的唯一标识符
-            - messages: List[dict] 消息列表，每个消息包含角色和内容
-            - stream: Optional[bool] 是否使用流式响应，默认值为 True
-            - filter_condition: Optional[dict] 过滤条件
+    ## 请求参数
 
-        返回:
-        - 成功时返回生成的对话内容
-        - 失败时返回错误信息
-        """
+    ### 基础参数
+    - **conversation_id** `string` *required*
+      - 会话的唯一标识符
+      - 用于关联历史对话记录
+
+    - **messages** `array` *required*
+      - 消息列表，每个消息包含以下字段：
+        - `role`: 消息角色，可选值：`user`, `assistant`, `system`
+        - `content`: 消息内容
+        - `id`: 消息唯一标识符（可选）
+      - 示例：
+        ```json
+        [
+          {"role": "user", "content": "你好"},
+          {"role": "assistant", "content": "您好，有什么可以帮您的？"}
+        ]
+        ```
+
+    ### 输出配置
+    - **stream** `boolean` *optional*
+      - 是否使用流式响应（Server-Sent Events）
+      - 默认值：`true`
+      - `true`: 实时流式返回，适合长文本生成
+      - `false`: 一次性返回完整结果
+
+    - **filter_condition** `string` *optional*
+      - 自定义过滤条件
+      - 默认值：`""`
+
+    ### 模型配置
+    - **llm_id** `string` *optional*
+      - 指定使用的大语言模型 ID
+      - 不指定则使用对话配置的默认模型
+      - 示例：`"gpt-4"`, `"claude-3-sonnet"`
+
+    - **temperature** `float` *optional*
+      - 温度参数，控制生成文本的随机性
+      - 取值范围：`0.0 ~ 2.0`
+      - 较低值（如 0.2）：更确定、保守的输出
+      - 较高值（如 0.8）：更有创造性、多样化的输出
+
+    - **top_p** `float` *optional*
+      - 核采样参数（nucleus sampling）
+      - 取值范围：`0.0 ~ 1.0`
+      - 控制生成文本的多样性
+      - 建议与 temperature 二选一使用
+
+    - **frequency_penalty** `float` *optional*
+      - 频率惩罚系数
+      - 取值范围：`-2.0 ~ 2.0`
+      - 正值：降低重复词汇出现的频率
+      - 负值：增加重复词汇出现的频率
+
+    - **presence_penalty** `float` *optional*
+      - 存在惩罚系数
+      - 取值范围：`-2.0 ~ 2.0`
+      - 正值：鼓励模型探讨新主题
+      - 负值：鼓励模型深入当前主题
+
+    - **max_tokens** `integer` *optional*
+      - 生成文本的最大 token 数量
+      - 限制回复的最大长度
+
+    ## 响应格式
+
+    ### 流式响应 (stream=true)
+    返回 `text/event-stream` 格式的 SSE 流：
+    ```
+    data: {"retcode": 0, "retmsg": "", "data": {"answer": "部分回答...", "reference": [...]}}
+
+    data: {"retcode": 0, "retmsg": "", "data": {"answer": "继续回答...", "reference": [...]}}
+
+    data: {"retcode": 0, "retmsg": "", "data": true}
+    ```
+
+    ### 非流式响应 (stream=false)
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "",
+      "data": {
+        "answer": "完整的回答内容",
+        "reference": [
+          {
+            "chunks": [...],
+            "doc_aggs": [...]
+          }
+        ],
+        "id": "message_id"
+      }
+    }
+    ```
+
+    ## 使用示例
+
+    ### 基础调用
+    ```json
+    {
+      "conversation_id": "conv_123456",
+      "messages": [
+        {"role": "user", "content": "介绍一下人工智能"}
+      ],
+      "stream": true
+    }
+    ```
+
+    ### 自定义模型参数
+    ```json
+    {
+      "conversation_id": "conv_123456",
+      "messages": [
+        {"role": "user", "content": "写一首关于春天的诗"}
+      ],
+      "llm_id": "gpt-4",
+      "temperature": 0.8,
+      "max_tokens": 500,
+      "presence_penalty": 0.6,
+      "stream": false
+    }
+    ```
+
+    ## 错误码
+
+    | 错误码 | 说明 |
+    |-------|------|
+    | 0 | 成功 |
+    | 400 | 参数错误（缺少必需参数或参数格式不正确） |
+    | 404 | 会话或对话不存在 |
+    | 500 | 服务器内部错误 |
+
+    ## 注意事项
+
+    1. **消息处理逻辑**
+       - 系统消息（`role: system`）会被自动过滤
+       - 连续的助手消息会被合并处理
+
+    2. **模型切换**
+       - 使用 `llm_id` 参数可以临时切换模型
+       - 需确保指定的模型已在租户配置中设置 API Key
+
+    3. **流式响应**
+       - 推荐用于长文本生成场景
+       - 客户端需要支持 SSE (Server-Sent Events)
+
+    4. **性能优化**
+       - 合理设置 `max_tokens` 避免过长响应
+       - 根据场景调整 `temperature` 平衡质量和多样性
+    """
     req = request.model_dump()
     if not req.get("conversation_id") or not req.get("messages"):
         return get_data_error_result(retmsg="Missing conversation_id or messages!")
@@ -466,6 +627,21 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
     if not msg:
         return get_data_error_result(retmsg="No valid messages found!")
 
+    chat_model_id = req.get("llm_id", "")
+    req.pop("llm_id", None)
+
+    chat_model_config = {}
+    for model_config in [
+        "temperature",
+        "top_p",
+        "frequency_penalty",
+        "presence_penalty",
+        "max_tokens",
+    ]:
+        config = req.get(model_config)
+        if config:
+            chat_model_config[model_config] = config
+
     try:
         conv = ConversationService.get_by_id(db, req["conversation_id"])
         if not conv:
@@ -482,15 +658,18 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
 
         if not conv.reference:
             conv.reference = []
-        else:
-            for ref in conv.reference:
-                if isinstance(ref, list):
-                    continue
-                ref["chunks"] = chunks_format(ref)
-
-        if not conv.reference:
-            conv.reference = []
+        conv.reference = [r for r in conv.reference if r]
         conv.reference.append({"chunks": [], "doc_aggs": []})
+
+        if chat_model_id:
+            if not TenantLLMService.get_api_key(db, tenant_id=dia.tenant_id, model_name=chat_model_id):
+                req.pop("chat_model_id", None)
+                req.pop("chat_model_config", None)
+                return get_data_error_result(retmsg=f"Cannot use specified model {chat_model_id}.")
+            dia.llm_id = chat_model_id
+            dia.llm_setting = chat_model_config
+
+        is_embedded = bool(chat_model_id)
 
         def stream_response():
             nonlocal dia, msg, db, req, conv
@@ -500,6 +679,7 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
                     yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
                 ConversationService.update_by_id(db, conv.id, conv.to_dict())
             except Exception as e:
+                logging.exception(e)
                 yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e),
                                             "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
                                            ensure_ascii=False) + "\n\n"
@@ -512,7 +692,8 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
             conv = deepcopy(conv)  # 深拷贝 conv，否则会导致后续更新数据时，无法更新引用
             for ans in chat(dia, msg, db, **req):
                 answer = structure_answer(conv, ans, message_id, conv.id)
-                ConversationService.update_by_id(db, conv.id, conv.to_dict())
+                if not is_embedded:
+                    ConversationService.update_by_id(db, conv.id, conv.to_dict())
                 break
             return get_json_result(data=answer)
     except Exception as e:
@@ -820,9 +1001,17 @@ async def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), use
     req = request.model_dump()
     uid = user.id
 
+    search_id = req.get("search_id", "")
+    search_app = None
+    search_config = {}
+    if search_id:
+        search_app = SearchService.get_detail(db, search_id)
+    if search_app:
+        search_config = search_app.get("search_config", {})
+
     def stream():
         try:
-            for ans in ask(db, req["question"], req["kb_ids"], uid):
+            for ans in ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
                 yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
@@ -853,22 +1042,86 @@ def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends
     - 思维导图数据
     """
     req = request.model_dump()
-    kb_ids = req["kb_ids"]
-    kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
-    if not kb:
-        return get_data_error_result(retmsg="Knowledgebase not found!")
 
-    embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
-    chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
-    filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
-    kb_names = list([kb.name])
+    search_id = req.get("search_id", "")
 
-    search_mode_dict = request.get_search_mode_dict()
+    search_app = SearchService.get_detail(db, search_id) if search_id else {}
+    search_config = search_app.get("search_config", {}) if search_app else {}
+    kb_ids = search_config.get("kb_ids", [])
+    kb_ids.extend(req["kb_ids"])
+    kb_ids = list(set(kb_ids))
 
-    ranks = settings.retrievaler.retrieval(req["question"], filter_exp, embd_mdl, kb.tenant_id, kb_names, 1, 12, 0.3, 0.3, aggs=False, rank_feature=label_question(db, req["question"], [kb]), search_mode=search_mode_dict)
-    mindmap = MindMapExtractor(chat_mdl)
-    mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
-    mind_map = mind_map.output
+    mind_map = gen_mindmap(db, req["question"], kb_ids, search_app.get("tenant_id", user.id), search_config)
+
+    # search_app = None
+    # search_config = {}
+    # if search_id:
+    #     search_app = SearchService.get_detail(db, search_id)
+    # if search_app:
+    #     search_config = search_app.get("search_config", {})
+    #
+    # kb_ids = req["kb_ids"]
+    # if search_config.get("kb_ids", []):
+    #     kb_ids = search_config.get("kb_ids", [])
+    # kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
+    # if not kb:
+    #     return get_data_error_result(retmsg="Knowledgebase not found!")
+    #
+    # chat_id = ""
+    # similarity_threshold = 0.3,
+    # vector_similarity_weight = 0.3,
+    # top = 1024,
+    # doc_ids = []
+    # rerank_id = ""
+    # rerank_mdl = None
+    #
+    # if search_config:
+    #     if search_config.get("chat_id", ""):
+    #         chat_id = search_config.get("chat_id", "")
+    #     if search_config.get("similarity_threshold", 0.2):
+    #         similarity_threshold = search_config.get("similarity_threshold", 0.2)
+    #     if search_config.get("vector_similarity_weight", 0.3):
+    #         vector_similarity_weight = search_config.get("vector_similarity_weight", 0.3)
+    #     if search_config.get("top_k", 1024):
+    #         top = search_config.get("top_k", 1024)
+    #     if search_config.get("doc_ids", []):
+    #         doc_ids = search_config.get("doc_ids", [])
+    #     if search_config.get("rerank_id", ""):
+    #         rerank_id = search_config.get("rerank_id", "")
+    #
+    # tenant_id = kb.tenant_id
+    # if search_app and search_app.get("tenant_id", ""):
+    #     tenant_id = search_app.get("tenant_id", "")
+    #
+    # embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+    # chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=chat_id)
+    # if rerank_id:
+    #     rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
+    # filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
+    # kb_names = list([kb.name])
+    #
+    # search_mode_dict = request.get_search_mode_dict()
+    #
+    # ranks = settings.retrievaler.retrieval(
+    #     question=req["question"],
+    #     filter_exp=filter_exp,
+    #     embd_mdl=embd_mdl,
+    #     tenant_id=tenant_id,
+    #     kb_names=kb_names,
+    #     page=1,
+    #     page_size=12,
+    #     similarity_threshold=similarity_threshold,
+    #     vector_similarity_weight=vector_similarity_weight,
+    #     top=top,
+    #     doc_ids=doc_ids,
+    #     aggs=False,
+    #     rerank_mdl=rerank_mdl,
+    #     rank_feature=label_question(db, req["question"], [kb]),
+    #     search_mode=search_mode_dict
+    # )
+    # mindmap = MindMapExtractor(chat_mdl)
+    # mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
+    # mind_map = mind_map.output
     if "error" in mind_map:
         return server_error_response(Exception(mind_map["error"]))
     return get_json_result(data=mind_map)
@@ -890,42 +1143,22 @@ async def related_questions(request: RelatedQuestionsRequest, db: Session = Depe
     - 相关搜索问题列表
     """
     req = request.model_dump()
+
+    search_id = req.get("search_id", "")
+    search_config = {}
+    if search_id:
+        if search_app := SearchService.get_detail(db, search_id):
+            search_config = search_app.get("search_config", {})
+
     question = req["question"]
-    chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
-    prompt = """
-Role: You are an AI language model assistant tasked with generating 5-10 related questions based on a user’s original query. These questions should help expand the search query scope and improve search relevance.
 
-Instructions:
-	Input: You are provided with a user’s question.
-	Output: Generate 5-10 alternative questions that are related to the original user question. These alternatives should help retrieve a broader range of relevant documents from a vector database.
-	Context: Focus on rephrasing the original question in different ways, making sure the alternative questions are diverse but still connected to the topic of the original query. Do not create overly obscure, irrelevant, or unrelated questions.
-	Fallback: If you cannot generate any relevant alternatives, do not return any questions.
-	Guidance:
-	1. Each alternative should be unique but still relevant to the original query.
-	2. Keep the phrasing clear, concise, and easy to understand.
-	3. Avoid overly technical jargon or specialized terms unless directly relevant.
-	4. Ensure that each question contributes towards improving search results by broadening the search angle, not narrowing it.
+    chat_id = search_config.get("chat_id", "")
+    chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, chat_id)
 
-Example:
-Original Question: What are the benefits of electric vehicles?
-
-Alternative Questions:
-	1. How do electric vehicles impact the environment?
-	2. What are the advantages of owning an electric car?
-	3. What is the cost-effectiveness of electric vehicles?
-	4. How do electric vehicles compare to traditional cars in terms of fuel efficiency?
-	5. What are the environmental benefits of switching to electric cars?
-	6. How do electric vehicles help reduce carbon emissions?
-	7. Why are electric vehicles becoming more popular?
-	8. What are the long-term savings of using electric vehicles?
-	9. How do electric vehicles contribute to sustainability?
-	10. What are the key benefits of electric vehicles for consumers?
-
-Reason:
-	Rephrasing the original query into multiple alternative questions helps the user explore different aspects of their search topic, improving the quality of search results.
-	These questions guide the search engine to provide a more comprehensive set of relevant documents.
-"""
-
+    gen_conf = search_config.get("llm_setting", {"temperature": 0.9})
+    if "parameter" in gen_conf:
+        del gen_conf["parameter"]
+    prompt = load_prompt("related_question")
     ans = chat_mdl.chat(
         prompt,
         [
@@ -937,7 +1170,7 @@ Reason:
         """,
             }
         ],
-        {"temperature": 0.9},
+        gen_conf,
     )
 
     related_terms = [re.sub(r"^[0-9]\. ", "", a) for a in ans.split("\n") if re.match(r"^[0-9]\. ", a)]

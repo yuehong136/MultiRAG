@@ -22,7 +22,7 @@ from typing import TypedDict, List, Any
 from agent.component.base import ComponentParamBase, ComponentBase
 from api.utils import hash_str2int
 from core.llm.chat_model.base import ToolCallSession
-from core.prompts.prompts import kb_prompt
+from core.prompts.generator import kb_prompt
 from core.utils.mcp_tool_call_conn import MCPToolCallSession
 from timeit import default_timer as timer
 
@@ -167,7 +167,7 @@ class ToolBase(ComponentBase):
                 "count": 1,
                 "url": url
             })
-        self._canvas.add_refernce(chunks, aggs)
+        self._canvas.add_reference(chunks, aggs)
         self.set_output("formalized_content", "\n".join(kb_prompt({"chunks": chunks, "doc_aggs": aggs}, 200000, True)))
 
     def thoughts(self) -> str:

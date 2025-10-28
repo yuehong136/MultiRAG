@@ -22,12 +22,18 @@ EMBEDDING_MDL = ""
 RERANK_MDL = ""
 ASR_MDL = ""
 IMAGE2TEXT_MDL = ""
+CHAT_CFG = ""
+EMBEDDING_CFG = ""
+RERANK_CFG = ""
+ASR_CFG = ""
+IMAGE2TEXT_CFG = ""
 API_KEY = None
 PARSERS = None
 HOST_IP = None
 HOST_PORT = None
 SECRET_KEY = None
 FACTORY_LLM_INFOS = None
+ADMIN_REQUIRE_SUPERUSER = None
 
 # DATABASE_TYPE = os.getenv("DB_TYPE", "postgresql")
 # DATABASE = decrypt_database_config(name=DATABASE_TYPE)
@@ -58,6 +64,16 @@ STRONG_TEST_COUNT = int(os.environ.get("STRONG_TEST_COUNT", "8"))
 
 BUILTIN_EMBEDDING_MODELS = ["BAAI/bge-large-zh-v1.5@BAAI", "maidalun1020/bce-embedding-base_v1@Youdao"]
 
+SMTP_CONF = None
+MAIL_SERVER = ""
+MAIL_PORT = 000
+MAIL_USE_SSL= True
+MAIL_USE_TLS = False
+MAIL_USERNAME = ""
+MAIL_PASSWORD = ""
+MAIL_DEFAULT_SENDER = ()
+MAIL_FRONTEND_URL = ""
+
 
 def get_or_create_secret_key():
     secret_key = os.environ.get("MULTI_RAG_SERVICE_NAME")
@@ -71,11 +87,9 @@ def get_or_create_secret_key():
 
     # Generate a new secure key and warn about it
     import logging
+
     new_key = secrets.token_hex(32)
-    logging.warning(
-        "SECURITY WARNING: Using auto-generated SECRET_KEY. "
-        f"Generated key: {new_key}"
-    )
+    logging.warning(f"SECURITY WARNING: Using auto-generated SECRET_KEY. Generated key: {new_key}")
     return new_key
 
 
@@ -89,11 +103,10 @@ def init_settings():
     # LLM_BASE_URL = LLM.get("base_url")
     global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, FACTORY_LLM_INFOS, REGISTER_ENABLED
     LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
-    LLM = get_base_config("user_default_llm", {})
-    LLM_DEFAULT_MODELS = LLM.get("default_models", {})
-    # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
-    LLM_FACTORY = LLM.get("factory")
-    LLM_BASE_URL = LLM.get("base_url")
+    LLM = get_base_config("user_default_llm", {}) or {}
+    LLM_DEFAULT_MODELS = LLM.get("default_models", {}) or {}
+    LLM_FACTORY = LLM.get("factory", "") or ""
+    LLM_BASE_URL = LLM.get("base_url", "") or ""
     try:
         REGISTER_ENABLED = int(os.environ.get("REGISTER_ENABLED", "1"))
     except Exception:
@@ -106,6 +119,7 @@ def init_settings():
         FACTORY_LLM_INFOS = []
 
     global CHAT_MDL, EMBEDDING_MDL, RERANK_MDL, ASR_MDL, IMAGE2TEXT_MDL
+    global CHAT_CFG, EMBEDDING_CFG, RERANK_CFG, ASR_CFG, IMAGE2TEXT_CFG
     if not LIGHTEN:
         EMBEDDING_MDL = BUILTIN_EMBEDDING_MODELS[0]
 
@@ -116,24 +130,39 @@ def init_settings():
         ASR_MDL = LLM_DEFAULT_MODELS.get("asr_model", ASR_MDL)
         IMAGE2TEXT_MDL = LLM_DEFAULT_MODELS.get("image2text_model", IMAGE2TEXT_MDL)
 
-        # factory can be specified in the config name with "@". LLM_FACTORY will be used if not specified
-        CHAT_MDL = CHAT_MDL + (f"@{LLM_FACTORY}" if "@" not in CHAT_MDL and CHAT_MDL != "" else "")
-        EMBEDDING_MDL = EMBEDDING_MDL + (f"@{LLM_FACTORY}" if "@" not in EMBEDDING_MDL and EMBEDDING_MDL != "" else "")
-        RERANK_MDL = RERANK_MDL + (f"@{LLM_FACTORY}" if "@" not in RERANK_MDL and RERANK_MDL != "" else "")
-        ASR_MDL = ASR_MDL + (f"@{LLM_FACTORY}" if "@" not in ASR_MDL and ASR_MDL != "" else "")
-        IMAGE2TEXT_MDL = IMAGE2TEXT_MDL + (f"@{LLM_FACTORY}" if "@" not in IMAGE2TEXT_MDL and IMAGE2TEXT_MDL != "" else "")
-
     global API_KEY, PARSERS, HOST_IP, HOST_PORT, SECRET_KEY
     API_KEY = LLM.get("api_key", "")
     PARSERS = LLM.get(
         "parsers", "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"
     )
 
+    chat_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("chat_model", CHAT_MDL))
+    embedding_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("embedding_model", EMBEDDING_MDL))
+    rerank_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("rerank_model", RERANK_MDL))
+    asr_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("asr_model", ASR_MDL))
+    image2text_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("image2text_model", IMAGE2TEXT_MDL))
+
+    CHAT_CFG = _resolve_per_model_config(chat_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    EMBEDDING_CFG = _resolve_per_model_config(embedding_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    RERANK_CFG = _resolve_per_model_config(rerank_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    ASR_CFG = _resolve_per_model_config(asr_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    IMAGE2TEXT_CFG = _resolve_per_model_config(image2text_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+
+    CHAT_MDL = CHAT_CFG.get("model", "") or ""
+    EMBEDDING_MDL = EMBEDDING_CFG.get("model", "") or ""
+    RERANK_MDL = RERANK_CFG.get("model", "") or ""
+    ASR_MDL = ASR_CFG.get("model", "") or ""
+    IMAGE2TEXT_MDL = IMAGE2TEXT_CFG.get("model", "") or ""
+
     HOST_IP = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("host", "127.0.0.1")
     HOST_PORT = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("http_port")
 
     # SECRET_KEY = get_or_create_secret_key()
     SECRET_KEY = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("secret_key", str(date.today()))
+    
+    # 管理后台权限配置
+    global ADMIN_REQUIRE_SUPERUSER
+    ADMIN_REQUIRE_SUPERUSER = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("admin_require_superuser", False)
 
     global AUTHENTICATION_CONF, CLIENT_AUTHENTICATION, HTTP_APP_KEY, GITHUB_OAUTH, FEISHU_OAUTH, OAUTH_CONFIG
     # authentication
@@ -162,11 +191,27 @@ def init_settings():
 
     retrievaler = search.Dealer(docStoreConn)
     from graphrag import search as kg_search
+
     kg_retrievaler = kg_search.KGSearch(docStoreConn)
 
     if int(os.environ.get("SANDBOX_ENABLED", "0")):
         global SANDBOX_HOST
         SANDBOX_HOST = os.environ.get("SANDBOX_HOST", "sandbox-executor-manager")
+
+    global SMTP_CONF, MAIL_SERVER, MAIL_PORT, MAIL_USE_SSL, MAIL_USE_TLS
+    global MAIL_USERNAME, MAIL_PASSWORD, MAIL_DEFAULT_SENDER, MAIL_FRONTEND_URL
+    SMTP_CONF = get_base_config("smtp", {})
+
+    MAIL_SERVER = SMTP_CONF.get("mail_server", "")
+    MAIL_PORT = SMTP_CONF.get("mail_port", 000)
+    MAIL_USE_SSL = SMTP_CONF.get("mail_use_ssl", True)
+    MAIL_USE_TLS = SMTP_CONF.get("mail_use_tls", False)
+    MAIL_USERNAME = SMTP_CONF.get("mail_username", "")
+    MAIL_PASSWORD = SMTP_CONF.get("mail_password", "")
+    mail_default_sender = SMTP_CONF.get("mail_default_sender", [])
+    if mail_default_sender and len(mail_default_sender) >= 2:
+        MAIL_DEFAULT_SENDER = (mail_default_sender[0], mail_default_sender[1])
+    MAIL_FRONTEND_URL = SMTP_CONF.get("mail_frontend_url", "")
 
 
 class CustomEnum(Enum):
@@ -204,6 +249,37 @@ class RetCode(IntEnum, CustomEnum):
     NOT_FOUND = 404
 
 
+def _parse_model_entry(entry):
+    if isinstance(entry, str):
+        return {"name": entry, "factory": None, "api_key": None, "base_url": None}
+    if isinstance(entry, dict):
+        name = entry.get("name") or entry.get("model") or ""
+        return {
+            "name": name,
+            "factory": entry.get("factory"),
+            "api_key": entry.get("api_key"),
+            "base_url": entry.get("base_url"),
+        }
+    return {"name": "", "factory": None, "api_key": None, "base_url": None}
+
+
+def _resolve_per_model_config(entry_dict, backup_factory, backup_api_key, backup_base_url):
+    name = (entry_dict.get("name") or "").strip()
+    m_factory = entry_dict.get("factory") or backup_factory or ""
+    m_api_key = entry_dict.get("api_key") or backup_api_key or ""
+    m_base_url = entry_dict.get("base_url") or backup_base_url or ""
+
+    if name and "@" not in name and m_factory:
+        name = f"{name}@{m_factory}"
+
+    return {
+        "model": name,
+        "factory": m_factory,
+        "api_key": m_api_key,
+        "base_url": m_base_url,
+    }
+
+
 # AIFORBI
 AIFORBI_BASE_CONFIG = get_base_config("aiforbi", {})
 AIFORBI_BASE_URL = AIFORBI_BASE_CONFIG.get("base_url")
@@ -223,181 +299,3 @@ DCS_SERVER_BASE_CONFIG = get_base_config("dcs_server", {})
 DCS_SERVER_PROTOCOL = DCS_SERVER_BASE_CONFIG.get("protocol")
 DCS_SERVER_HOST = DCS_SERVER_BASE_CONFIG.get("host")
 DCS_SERVER_PORT = DCS_SERVER_BASE_CONFIG.get("port")
-
-# LLM = get_base_config("user_default_llm", {})
-# LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
-# LLM_BASE_URL = LLM.get("base_url")
-#
-# if not LIGHTEN:
-#     default_llm = {
-#         "Tongyi-Qianwen": {
-#             "chat_model": "qwen-plus",
-#             "embedding_model": "text-embedding-v2",
-#             "image2text_model": "qwen-vl-max",
-#             "asr_model": "paraformer-realtime-8k-v1",
-#         },
-#         "OpenAI": {
-#             "chat_model": "gpt-3.5-turbo",
-#             "embedding_model": "text-embedding-ada-002",
-#             "image2text_model": "gpt-4-vision-preview",
-#             "asr_model": "whisper-1",
-#         },
-#         "Azure-OpenAI": {
-#             "chat_model": "gpt-35-turbo",
-#             "embedding_model": "text-embedding-ada-002",
-#             "image2text_model": "gpt-4-vision-preview",
-#             "asr_model": "whisper-1",
-#         },
-#         "ZHIPU-AI": {
-#             "chat_model": "glm-4-plus",
-#             "embedding_model": "embedding-2",
-#             "image2text_model": "glm-4v-plus",
-#             "asr_model": "",
-#         },
-#         "Ollama": {
-#             "chat_model": "qwen-14B-chat",
-#             "embedding_model": "flag-embedding",
-#             "image2text_model": "",
-#             "asr_model": "",
-#         },
-#         "Moonshot": {
-#             "chat_model": "moonshot-v1-8k",
-#             "embedding_model": "",
-#             "image2text_model": "",
-#             "asr_model": "",
-#         },
-#         "DeepSeek": {
-#             "chat_model": "deepseek-chat",
-#             "embedding_model": "",
-#             "image2text_model": "",
-#             "asr_model": "",
-#         },
-#         "VolcEngine": {
-#             "chat_model": "",
-#             "embedding_model": "",
-#             "image2text_model": "",
-#             "asr_model": "",
-#         },
-#         "BAAI": {
-#             "chat_model": "",
-#             "embedding_model": "BAAI/bge-large-zh-v1.5",
-#             "image2text_model": "",
-#             "asr_model": "",
-#             "rerank_model": "BAAI/bge-reranker-v2-m3",
-#         }
-#     }
-#
-#     CHAT_MDL = default_llm[LLM_FACTORY]["chat_model"]
-#     EMBEDDING_MDL = default_llm["BAAI"]["embedding_model"]
-#     RERANK_MDL = default_llm["BAAI"]["rerank_model"]
-#     ASR_MDL = default_llm[LLM_FACTORY]["asr_model"]
-#     IMAGE2TEXT_MDL = default_llm[LLM_FACTORY]["image2text_model"]
-# else:
-#     CHAT_MDL = EMBEDDING_MDL = RERANK_MDL = ASR_MDL = IMAGE2TEXT_MDL = ""
-#
-# API_KEY = LLM.get("api_key", "")
-# PARSERS = LLM.get(
-#     "parsers",
-#     "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,knowledge_graph:Knowledge Graph,email:Email")
-#
-# HOST = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("host", "127.0.0.1")
-# HTTP_PORT = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("http_port")
-#
-# SECRET_KEY = get_base_config(
-#     MULTI_RAG_SERVICE_NAME,
-#     {}).get("secret_key", str(date.today()))
-# # SECRET_KEY = get_base_config(
-# #     MULTI_RAG_SERVICE_NAME,
-# #     {}).get(
-# #         "secret_key",
-# #     "multirag_secret_key")
-#
-# DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
-# DATABASE = decrypt_database_config(name="postgresql")
-#
-# # authentication
-# AUTHENTICATION_CONF = get_base_config("authentication", {})
-#
-# # client
-# CLIENT_AUTHENTICATION = AUTHENTICATION_CONF.get(
-#     "client", {}).get(
-#     "switch", False)
-# HTTP_APP_KEY = AUTHENTICATION_CONF.get("client", {}).get("http_app_key")
-# GITHUB_OAUTH = get_base_config("oauth", {}).get("github")
-# FEISHU_OAUTH = get_base_config("oauth", {}).get("feishu")
-#
-# retrievaler = search.Dealer(MILVUS_CONNECTION)
-# kg_retrievaler = kg_search.KGSearch(MILVUS_CONNECTION)
-#
-# # AIFORBI
-# AIFORBI_BASE_CONFIG = get_base_config("aiforbi", {})
-# AIFORBI_BASE_URL = AIFORBI_BASE_CONFIG.get("base_url")
-# AIFORBI_API_KEY = AIFORBI_BASE_CONFIG.get("api_key")
-# AIFORBI_MODEL_ID = AIFORBI_BASE_CONFIG.get("model_id")
-#
-# AI_TRANSLATE_BASE_CONFIG = get_base_config("ai_translate", {})
-# AI_TRANSLATE_BASE_URL = AI_TRANSLATE_BASE_CONFIG.get("base_url")
-# AI_TRANSLATE_API_KEY = AI_TRANSLATE_BASE_CONFIG.get("api_key")
-# AI_TRANSLATE_MODEL_ID = AI_TRANSLATE_BASE_CONFIG.get("model_id")
-#
-#
-# class CustomEnum(Enum):
-#     @classmethod
-#     def valid(cls, value):
-#         try:
-#             cls(value)
-#             return True
-#         except BaseException:
-#             return False
-#
-#     @classmethod
-#     def values(cls):
-#         return [member.value for member in cls.__members__.values()]
-#
-#     @classmethod
-#     def names(cls):
-#         return [member.name for member in cls.__members__.values()]
-#
-#
-# class PythonDependenceName(CustomEnum):
-#     Rag_Source_Code = "python"
-#     Python_Env = "miniconda"
-#
-#
-# class ModelStorage(CustomEnum):
-#     REDIS = "redis"
-#     MYSQL = "mysql"
-#
-#
-# class RetCode(IntEnum, CustomEnum):
-#     SUCCESS = 0
-#     NOT_EFFECTIVE = 10
-#     EXCEPTION_ERROR = 100
-#     ARGUMENT_ERROR = 101
-#     DATA_ERROR = 102
-#     OPERATING_ERROR = 103
-#     CONNECTION_ERROR = 105
-#     RUNNING = 106
-#     PERMISSION_ERROR = 108
-#     AUTHENTICATION_ERROR = 109
-#     UNAUTHORIZED = 401
-#     SERVER_ERROR = 500
-#     FORBIDDEN = 403
-#     NOT_FOUND = 404
-
-
-# from api.utils.log_utils import LoggerFactory, getLogger
-
-# # Logger
-# LoggerFactory.set_directory(
-#     os.path.join(
-#         get_project_base_directory(),
-#         "logs",
-#         "api"))
-# # {CRITICAL: 50, FATAL:50, ERROR:40, WARNING:30, WARN:30, INFO:20, DEBUG:10, NOTSET:0}
-# LoggerFactory.LEVEL = 30
-#
-# stat_logger = getLogger("stat")
-# access_logger = getLogger("access")
-# database_logger = getLogger("database")
-# chat_logger = getLogger("chat")

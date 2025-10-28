@@ -15,11 +15,15 @@ from api.db.services import UserService
 from api.db.services.canvas_service import CanvasTemplateService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMFactoriesService, LLMService, TenantLLMService, LLMBundle
+# from api.db.services.llm_service import LLMFactoriesService, LLMService, TenantLLMService, LLMBundle
+from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
+from api.db.services.llm_service import LLMService, LLMBundle, get_init_tenant_llm
 from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
 # from api.db.database import SessionLocal
 from api.utils.file_utils import get_project_base_directory
+from api.db.db_models import GuardDimension
+from scripts.init_ai_guard_system import init_ai_guard_system
 
 
 
@@ -48,7 +52,46 @@ def init_superuser(db: Session):
         "invited_by": user_info["id"],
         "role": UserTenantRole.OWNER
     }
-    tenant_llm = []
+
+    tenant_llm = get_init_tenant_llm(db, user_info["id"])
+    # user_id = user_info
+    # tenant_llm = []
+    #
+    # seen = set()
+    # factory_configs = []
+    # for factory_config in [
+    #     settings.CHAT_CFG["factory"],
+    #     settings.EMBEDDING_CFG["factory"],
+    #     settings.ASR_CFG["factory"],
+    #     settings.IMAGE2TEXT_CFG["factory"],
+    #     settings.RERANK_CFG["factory"],
+    # ]:
+    #     factory_name = factory_config["factory"]
+    #     if factory_name not in seen:
+    #         seen.add(factory_name)
+    #         factory_configs.append(factory_config)
+    #
+    # for factory_config in factory_configs:
+    #     for llm in LLMService.query(db, fid=factory_config["factory"]):
+    #         tenant_llm.append(
+    #             {
+    #                 "tenant_id": user_id,
+    #                 "llm_factory": factory_config["factory"],
+    #                 "llm_name": llm.llm_name,
+    #                 "mdl_type": llm.mdl_type,
+    #                 "api_key": factory_config["api_key"],
+    #                 "api_base": factory_config["base_url"],
+    #                 "max_tokens": llm.max_tokens if llm.max_tokens else 8192,
+    #             }
+    #         )
+    #
+    # unique = {}
+    # for item in tenant_llm:
+    #     key = (item["tenant_id"], item["llm_factory"], item["llm_name"])
+    #     if key not in unique:
+    #         unique[key] = item
+    # tenant_llm = list(unique.values())
+
     for llm in LLMService.query(db, fid=settings.LLM_FACTORY):
         tenant_llm.append(
             {
@@ -60,18 +103,15 @@ def init_superuser(db: Session):
                 "api_base": settings.LLM_BASE_URL
             }
         )
-    # print(tenant_llm)
+
     if not UserService.save(db, **user_info):
-        # print("\033[93m【ERROR】\033[0mcan't init admin.")
         logging.error("can't init admin.")
         return
     TenantService.insert(db, **tenant)
     UserTenantService.insert(db, **usr_tenant)
     TenantLLMService.insert_many(db, tenant_llm)
-    # print(
-    #     "【INFO】Super user initialized. \033[93memail: admin@datav.com, password: admin\033[0m. Changing the password after logging in is strongly recommended.")
-    logging.info(
-        "Super user initialized. email: admin@datav.com, password: admin. Changing the password after login is strongly recommended.")
+
+    logging.info("Super user initialized. email: admin@datav.com, password: admin. Changing the password after login is strongly recommended.")
 
     try:
         chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])
@@ -159,9 +199,10 @@ def init_llm_factory(db: Session):
     #         except Exception as e:
     #             pass
     #         break
+    doc_count = DocumentService.get_all_kb_doc_count(db)
     for kb_id in KnowledgebaseService.get_all_ids(db):
         # KnowledgebaseService.update_by_id(db, kb_id, {"doc_num": DocumentService.get_kb_doc_count(db, kb_id)})
-        KnowledgebaseService.update_document_number_in_init(db, kb_id=kb_id, doc_num=DocumentService.get_kb_doc_count(db, kb_id))
+        KnowledgebaseService.update_document_number_in_init(db, kb_id=kb_id, doc_num=doc_count.get(kb_id, 0))
 
 
 def add_graph_templates(db: Session):
@@ -214,15 +255,66 @@ def add_graph_templates(db: Session):
             db.rollback()  # 回滚事务
 
 
+def init_guard_system_wrapper(db: Session, tenant_id: str, user_id: str):
+    """
+    初始化AI安全护栏系统（仅在未初始化时执行）
+
+    Args:
+        db: 数据库会话
+        tenant_id: 租户ID
+        user_id: 用户ID
+    """
+    try:
+        # 检查是否已有任何租户初始化过（由于code字段全局唯一，只能初始化一次）
+        existing_dimensions = db.query(GuardDimension).count()
+
+        if existing_dimensions > 0:
+            logging.info(f"AI安全护栏系统已初始化（发现 {existing_dimensions} 个维度），跳过初始化")
+            return
+
+        logging.info(f"开始初始化AI安全护栏系统，租户: {tenant_id}, 用户: {user_id}")
+
+        # 使用 init_ai_guard_system 进行初始化
+        init_ai_guard_system(tenant_id=tenant_id, created_by=user_id)
+
+        logging.info(f"✅ AI安全护栏系统初始化完成")
+
+    except Exception as e:
+        logging.error(f"初始化AI安全护栏系统失败: {e}")
+        raise
+
+
 def init_web_data(db: Session = SessionLocal()):
     start_time = time.time()
 
     init_llm_factory(db)
-    # print(len(UserService().get_all(db)))
-    if len(UserService.get_all(db)) == 0:
+
+    # 获取所有用户（只查询一次）
+    all_users = UserService.get_all(db)
+
+    # 如果没有用户，创建超级用户
+    if len(all_users) == 0:
         init_superuser(db)
+        # 重新获取用户列表
+        all_users = UserService.get_all(db)
 
     add_graph_templates(db)
+
+    # 初始化AI安全护栏系统
+    # 检查是否已有guard数据
+    existing_guard_data = db.query(GuardDimension).count()
+    if existing_guard_data == 0:
+        # 未初始化，查找超级用户
+        superuser = next((user for user in all_users if user.is_superuser), None)
+
+        if superuser:
+            logging.info(f"使用超级用户 {superuser.id} 初始化AI安全护栏系统")
+            init_guard_system_wrapper(db, tenant_id=superuser.id, user_id=superuser.id)
+        else:
+            logging.warning("未找到超级用户，跳过AI安全护栏系统初始化")
+    else:
+        logging.info(f"AI安全护栏系统已存在数据，跳过初始化")
+
     logging.info("init web data success:{}".format(time.time() - start_time))
 
 

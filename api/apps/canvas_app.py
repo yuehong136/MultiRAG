@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from api import settings
 from api.apps import manager  # 你现有的登录依赖，返回当前用户对象
 from api.db.db_models import get_db, APIToken
-from api.db import FileType
+from api.db import FileType, CanvasCategory
 from api.db.services.canvas_service import (
     CanvasTemplateService,
     UserCanvasService,
@@ -115,7 +115,7 @@ class SettingRequest(BaseModel):
 @router.get("/templates", summary="获取Canvas模板列表")
 def templates(db: Session = Depends(get_db), user=Depends(manager)):
     try:
-        data = [c.to_dict() for c in CanvasTemplateService.get_all(db)]
+        data = [c.to_dict() for c in CanvasTemplateService.query(db, canvas_category=CanvasCategory.Agent)]
         return get_json_result(data=data)
     except Exception as e:
         return server_error_response(e)
@@ -124,7 +124,7 @@ def templates(db: Session = Depends(get_db), user=Depends(manager)):
 @router.get("/list", summary="获取我的Canvas列表")
 def canvas_list(db: Session = Depends(get_db), user=Depends(manager)):
     try:
-        kbs = [c.to_dict() for c in UserCanvasService.query(db, user_id=user.id)]
+        kbs = [c.to_dict() for c in UserCanvasService.query(db, user_id=user.id, canvas_category=CanvasCategory.Agent)]
         kbs_sorted = sorted(kbs, key=lambda x: x["update_time"] * -1)
         return get_json_result(data=kbs_sorted)
     except Exception as e:
@@ -151,12 +151,12 @@ def rm(request: RemoveCanvasRequest, db: Session = Depends(get_db), user=Depends
 def save(request: SetCanvasRequest, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         req = request.model_dump()
-        req["user_id"] = user.id
         dsl_obj = req["dsl"]  # 已在 validator 中转为 dict
 
         if "id" not in req or not req["id"]:
+            req["user_id"] = user.id
             # 新建
-            if UserCanvasService.query(db, user_id=user.id, title=req["title"].strip()):
+            if UserCanvasService.query(db, user_id=user.id, title=req["title"].strip(), canvas_category=CanvasCategory.Agent):
                 return get_data_error_result(retmsg=f"{req['title'].strip()} already exists.")
             req["id"] = get_uuid()
             # 存储 dsl 需要序列化为原库约定格式
@@ -214,6 +214,12 @@ def getsse(
         if not objs:
             return get_data_error_result(retmsg='Authentication error: API key is invalid!"')
         tenant_id = objs[0].tenant_id
+        if not UserCanvasService.query(db, user_id=tenant_id, id=canvas_id):
+            return get_json_result(
+                data=False,
+                retmsg='Only owner of canvas authorized for this operation.',
+                retcode=RetCode.OPERATING_ERROR
+            )
         e, c = UserCanvasService.get_by_id(db, canvas_id)
         if not e or c.user_id != tenant_id:
             return get_data_error_result(retmsg="canvas not found.")
@@ -450,7 +456,7 @@ def test_db_connect(request: TestDBConnectRequest, user=Depends(manager)):
             )
             db.connect()
             db.close()
-        elif request.db_type == "postgresql":
+        elif request.db_type == "postgres":
             db = PostgresqlDatabase(
                 request.database,
                 user=request.username,
@@ -548,12 +554,10 @@ def setting(request: SettingRequest, db: Session = Depends(get_db), user=Depends
             return get_data_error_result(retmsg="canvas not found.")
         flow_dict = flow.to_dict()
         flow_dict["title"] = req["title"]
-        if req.get("description"):
-            flow_dict["description"] = req["description"]
-        if req.get("permission"):
-            flow_dict["permission"] = req["permission"]
-        if req.get("avatar"):
-            flow_dict["avatar"] = req["avatar"]
+
+        for key in ["description", "permission", "avatar"]:
+            if value := req.get(key):
+                flow[key] = value
 
         num = UserCanvasService.update_by_id(db, req["id"], flow_dict)
         return get_json_result(data=num)
@@ -618,3 +622,16 @@ def sessions(
         return get_json_result(data={"total": total, "sessions": sess})
     except Exception as e:
         return server_error_response(e)
+
+
+@router.get('/prompts', summary="获取项目模版提示词")  # noqa: F821
+def prompts(user=Depends(manager)):
+    from core.prompts.generator import ANALYZE_TASK_SYSTEM, ANALYZE_TASK_USER, NEXT_STEP, REFLECT, CITATION_PROMPT_TEMPLATE
+    return get_json_result(data={
+        "task_analysis": ANALYZE_TASK_SYSTEM +"\n\n"+ ANALYZE_TASK_USER,
+        "plan_generation": NEXT_STEP,
+        "reflection": REFLECT,
+        # "context_summary": SUMMARY4MEMORY,
+        # "context_ranking": RANK_MEMORY,
+        "citation_guidelines": CITATION_PROMPT_TEMPLATE
+    })

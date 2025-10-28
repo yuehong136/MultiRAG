@@ -83,7 +83,7 @@ def get_tools_data(
     #### 成功响应 (200)
     ```json
     {
-        "code": 0,
+        "retcode": 0,
         "data": {
             "flow_id": "rag-flow-001",
             "user_id": "user-123",
@@ -144,7 +144,7 @@ def create_tools_data(
     #### 成功响应 (200)
     ```json
     {
-        "code": 0,
+        "retcode": 0,
         "data": {
             "flow_id": "rag-flow-001",
             "user_id": "user-123",
@@ -207,7 +207,7 @@ def delete_tools_data(
     #### 成功响应 (200)
     ```json
     {
-        "code": 0,
+        "retcode": 0,
         "data": true
     }
     ```

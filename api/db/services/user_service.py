@@ -99,6 +99,12 @@ class UserService(CommonService):
             return None
 
     @classmethod
+    def query_user_by_email(cls, db: Session, email: str):
+        """根据邮箱查询用户列表"""
+        users = db.query(cls.model).filter(cls.model.email == email).all()
+        return users
+
+    @classmethod
     def save(cls, db: Session, **kwargs):
         if "id" not in kwargs:
             kwargs["id"] = get_uuid()
@@ -149,6 +155,35 @@ class UserService(CommonService):
         except Exception as e:
             db.rollback()
             raise e
+
+    @classmethod
+    def update_user_password(cls, db: Session, user_id: str, new_password: str):
+        """更新用户密码"""
+        try:
+            update_dict = {
+                "password": cls.hash_password(str(new_password)),
+                "update_time": current_timestamp(),
+                "update_date": datetime_format(datetime.now())
+            }
+            db.query(cls.model).filter(cls.model.id == user_id).update(
+                update_dict,
+                synchronize_session=False
+            )
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise e
+
+    @classmethod
+    def is_admin(cls, db: Session, user_id):
+        return db.query(cls.model).filter(
+            cls.model.id == user_id,
+            cls.model.is_superuser == 1).count() > 0
+
+    @classmethod
+    def get_all_users(cls, db: Session):
+        users = db.query(cls.model).all()
+        return users
 
 
 class TenantService(CommonService):

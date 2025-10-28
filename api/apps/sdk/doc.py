@@ -3,12 +3,12 @@ import logging
 import pathlib
 import re
 from io import BytesIO
-from typing import Any
+from typing import Any, Literal, Annotated
 
 import xxhash
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, Discriminator, model_validator
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from urllib.parse import quote
@@ -22,13 +22,15 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
+from api.db.services.tenant_llm_service import TenantLLMService
+from api.db.services.dialog_service import meta_filter, convert_conditions
 
 from api.db.services.task_service import TaskService, queue_tasks
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
 from core.app.qa import beAdoc, rmPrefix
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
-from core.prompts.prompts import cross_languages, keyword_extraction
+from core.prompts.generator import cross_languages, keyword_extraction
 from core.utils import rmSpace
 from core.utils.storage_factory import STORAGE_IMPL
 
@@ -36,6 +38,54 @@ MAXIMUM_OF_UPLOADING_FILES = 256
 
 router = APIRouter()
 
+
+class SparseSearchMode(BaseModel):
+    type: Literal["sparse"] = "sparse"
+
+
+class DenseSearchMode(BaseModel):
+    type: Literal["dense"] = "dense"
+
+
+class HybridSearchMode(BaseModel):
+    type: Literal["hybrid"] = "hybrid"
+    weight_dense: float = Field(default=0.7, ge=0.0, le=1.0)
+    weight_sparse: float = Field(default=0.3, ge=0.0, le=1.0)
+
+    @model_validator(mode='after')
+    def validate_weights(self) -> 'HybridSearchMode':
+        """确保权重和为1，如果不是则自动调整"""
+        total = self.weight_dense + self.weight_sparse
+        if abs(total - 1.0) > 0.001:
+            # 自动归一化权重
+            self.weight_dense = self.weight_dense / total
+            self.weight_sparse = self.weight_sparse / total
+        return self
+
+
+class FusionSearchMode(BaseModel):
+    type: Literal["fusion"] = "fusion"
+    weights: str = Field(default="0.05,0.95")
+
+    @model_validator(mode='after')
+    def validate_weights_format(self) -> 'FusionSearchMode':
+        """验证weights格式"""
+        try:
+            parts = self.weights.split(',')
+            if len(parts) != 2:
+                raise ValueError("weights must contain exactly two comma-separated values")
+            float(parts[0].strip())
+            float(parts[1].strip())
+        except (ValueError, AttributeError):
+            raise ValueError("weights must be in format 'float,float' (e.g., '0.05,0.95')")
+        return self
+
+
+# 使用 Discriminator 的高效版本
+SearchModeType = Annotated[
+    SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode,
+    Discriminator('type')
+]
 
 class ChunkModel(BaseModel):
     id: str = ""
@@ -95,20 +145,30 @@ class DeleteChunksRequest(BaseModel):
 
 class RetrievalTestRequest(BaseModel):
     question: str
-    datasets: list[str]
-    documents: list[str] = Field(default_factory=list)
+    dataset_ids: list[str]
+    document_ids: list[str] = Field(default_factory=list)
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=30, ge=1, le=100)
-    similarity_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    similarity_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
     vector_similarity_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     top_k: int = Field(default=1024, ge=1)
     rerank_id: str | None = None
     keyword: bool = Field(default=False)
     highlight: bool = Field(default=False)
+    use_kg: bool = Field(default=False)
+    cross_languages: list[str] = Field(default_factory=list)
+    metadata_condition: dict[str, Any] = Field(default_factory=dict)
+    search_mode: SearchModeType | None = None
 
+    def get_search_mode_dict(self) -> dict[str, Any] | None:
+        """将搜索模式转换为字典格式供底层函数使用"""
+        if self.search_mode is None:
+            return None
 
-# 由于文件很大，暂时只提供核心的API接口框架
-# 具体实现可以参考原文件并按照FastAPI模式进行改造
+        mode_data = self.search_mode.model_dump()
+        mode_type = mode_data.pop('type')
+        return {mode_type: mode_data}
+
 
 @router.post("/datasets/{dataset_id}/documents", summary="上传文档")
 async def upload_documents(
@@ -948,58 +1008,147 @@ def retrieval_test(
     """
     req = request.model_dump()
     
+    # 验证必填参数
+    if not req.get("dataset_ids"):
+        return get_error_data_result(retmsg="`dataset_ids` is required.")
+    
+    kb_ids = req["dataset_ids"]
+    if not isinstance(kb_ids, list):
+        return get_error_data_result(retmsg="`dataset_ids` should be a list")
+    
+    # 验证数据集权限
+    for kb_id in kb_ids:
+        if not KnowledgebaseService.query(db, id=kb_id, tenant_id=tenant_id):
+            return get_error_data_result(retmsg=f"You don't own the dataset {kb_id}.")
+    
+    # 获取所有知识库
+    kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
+    kb_names = list([kb.name for kb in kbs])
+    
+    # 验证所有数据集使用相同的embedding模型
+    embd_nms = list(set([TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]))
+    if len(embd_nms) != 1:
+        return get_result(
+            retmsg='Datasets use different embedding models.',
+            retcode=settings.RetCode.DATA_ERROR,
+        )
+    
+    if "question" not in req:
+        return get_error_data_result(retmsg="`question` is required.")
+    
+    page = int(req.get("page", 1))
+    size = int(req.get("page_size", 30))
     question = req["question"]
-    dataset_ids = req["datasets"]
-    document_ids = req.get("documents", [])
+    doc_ids = req.get("document_ids", [])
+    use_kg = req.get("use_kg", False)
+    langs = req.get("cross_languages", [])
+    search_mode_dict = req.get_search_mode_dict()
+
+    if not isinstance(doc_ids, list):
+        return get_error_data_result(retmsg="`document_ids` should be a list")
+    
+    # 验证文档ID
+    doc_ids_list = KnowledgebaseService.list_documents_by_ids(db, kb_ids)
+    for doc_id in doc_ids:
+        if doc_id not in doc_ids_list:
+            return get_error_data_result(retmsg=f"The datasets don't own the document {doc_id}")
+    
+    # 处理元数据过滤
+    if not doc_ids:
+        metadata_condition = req.get("metadata_condition", {})
+        if metadata_condition:
+            metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+            doc_ids = meta_filter(metas, convert_conditions(metadata_condition))
+    
+    similarity_threshold = float(req.get("similarity_threshold", 0.2))
+    vector_similarity_weight = float(req.get("vector_similarity_weight", 0.3))
+    top = int(req.get("top_k", 1024))
+    
+    # 处理highlight参数
+    if req.get("highlight") == "False" or req.get("highlight") == "false":
+        highlight = False
+    else:
+        highlight = bool(req.get("highlight", False))
     
     try:
-        # 验证数据集权限
-        for dataset_id in dataset_ids:
-            if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
-                return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
-        
-        # 构建查询条件
-        query_conditions = {"kb_id": dataset_ids}
-        if document_ids:
-            query_conditions["doc_id"] = document_ids
-        
-        # 获取embedding模型
-        e, kb = KnowledgebaseService.get_by_id(db, dataset_ids[0])
+        tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+        e, kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
         if not e:
-            return get_error_data_result(retmsg="Dataset not found.")
+            return get_error_data_result(retmsg="Dataset not found!")
         
-        embd_mdl = LLMBundle(kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
         
-        # 处理关键词提取
+        rerank_mdl = None
+        if req.get("rerank_id"):
+            rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK, llm_name=req["rerank_id"])
+        
+        # 跨语言翻译
+        if langs:
+            question = cross_languages(db, kb.tenant_id, None, question, langs)
+        
+        # 关键词提取增强
         if req.get("keyword", False):
-            chat_mdl = LLMBundle(kb.tenant_id, LLMType.CHAT)
+            chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
         
         # 执行检索
-        rerank_mdl = None
-        if req.get("rerank_id"):
-            rerank_mdl = LLMBundle(kb.tenant_id, LLMType.RERANK, llm_name=req["rerank_id"])
-        
         ranks = settings.retrievaler.retrieval(
             question,
             embd_mdl,
-            [tenant_id],
-            dataset_ids,
-            req["page"],
-            req["page_size"],
-            req["similarity_threshold"],
-            req["vector_similarity_weight"],
-            req["top_k"],
-            document_ids,
+            tenant_ids,
+            kb_names,
+            page,
+            size,
+            similarity_threshold,
+            vector_similarity_weight,
+            top,
+            doc_ids,
             rerank_mdl=rerank_mdl,
-            highlight=req.get("highlight", False)
+            highlight=highlight,
+            rank_feature=label_question(db, question, kbs),
+            search_mode=search_mode_dict
         )
         
-        # 处理结果
+        # 知识图谱增强
+        if use_kg:
+            ck = settings.kg_retrievaler.retrieval(
+                question, 
+                [k.tenant_id for k in kbs], 
+                kb_ids, 
+                embd_mdl, 
+                LLMBundle(db, kb.tenant_id, LLMType.CHAT)
+            )
+            if ck["content_with_weight"]:
+                ranks["chunks"].insert(0, ck)
+        
+        # 移除向量数据
+        for c in ranks["chunks"]:
+            c.pop("vector", None)
+        
+        # 重命名键名
+        renamed_chunks = []
         for chunk in ranks["chunks"]:
-            chunk.pop("vector", None)  # 移除向量数据
+            key_mapping = {
+                "chunk_id": "id",
+                "content_with_weight": "content",
+                "doc_id": "document_id",
+                "important_kwd": "important_keywords",
+                "question_kwd": "questions",
+                "docnm_kwd": "document_keyword",
+                "kb_id": "dataset_id",
+            }
+            rename_chunk = {}
+            for key, value in chunk.items():
+                new_key = key_mapping.get(key, key)
+                rename_chunk[new_key] = value
+            renamed_chunks.append(rename_chunk)
+        ranks["chunks"] = renamed_chunks
         
         return get_result(data=ranks)
     except Exception as e:
-        logging.exception(e)
-        return get_error_data_result(retmsg=f"Retrieval test failed: {str(e)}")
+        if str(e).find("not_found") > 0:
+            return get_result(
+                retmsg="No chunk found! Check the chunk status please!",
+                retcode=settings.RetCode.DATA_ERROR,
+            )
+        return server_error_response(e)

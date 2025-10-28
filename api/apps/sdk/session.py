@@ -14,11 +14,11 @@ from api import settings
 from api.db import LLMType, StatusEnum
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import API4ConversationService
-from api.db.services.canvas_service import UserCanvasService#, completionOpenAI
+from api.db.services.canvas_service import UserCanvasService, completionOpenAI  # , completionOpenAI
 from api.db.services.canvas_service import completion as agent_completion
 from api.db.services.conversation_service import ConversationService, iframe_completion
 from api.db.services.conversation_service import completion as rag_completion
-from api.db.services.dialog_service import DialogService, ask, chat#, gen_mindmap, meta_filter
+from api.db.services.dialog_service import DialogService, ask, chat, gen_mindmap, meta_filter
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -27,8 +27,8 @@ from api.db.services.user_service import UserTenantService
 from api.utils import get_uuid
 from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required, validate_request
 from core.app.tag import label_question
-from core.prompts.prompt_template import load_prompt
-from core.prompts.prompts import cross_languages, keyword_extraction, chunks_format#, gen_meta_filter
+from core.prompts.template import load_prompt
+from core.prompts.generator import cross_languages, keyword_extraction, chunks_format
 
 router = APIRouter()
 
@@ -520,10 +520,11 @@ def agents_completion_openai_compatibility(
     if stream:
         resp = StreamingResponse(
             completionOpenAI(
+                db,
                 tenant_id,
                 agent_id,
                 question,
-                session_id=req.get("session_id", req.get("id", "") or req.get("metadata", {}).get("id", "")),
+                session_id=req.pop("session_id", req.get("id", "") or req.get("metadata", {}).get("id", "")),
                 stream=True,
                 **req,
             ),
@@ -538,10 +539,11 @@ def agents_completion_openai_compatibility(
         # For non-streaming, just return the response directly
         response = next(
             completionOpenAI(
+                db,
                 tenant_id,
                 agent_id,
                 question,
-                session_id=req.get("session_id", req.get("id", "") or req.get("metadata", {}).get("id", "")),
+                session_id=req.pop("session_id", req.get("id", "") or req.get("metadata", {}).get("id", "")),
                 stream=False,
                 **req,
             )
@@ -551,15 +553,16 @@ def agents_completion_openai_compatibility(
 
 @router.post("/agents/{agent_id}/completions", summary="代理补全")
 def agent_completions(
-    agent_id: str, 
-    request: AgentCompletionRequest, 
-    db: Session = Depends(get_db), 
+    agent_id: str,
+    request: AgentCompletionRequest,
+    db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     req = request.model_dump()
 
     if req.get("stream", True):
         def generate():
+            ans = {}
             for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
                 if isinstance(answer, str):
                     try:
@@ -995,7 +998,11 @@ def get_agent_inputs(agent_id: str, db: Session = Depends(get_db)):
     # TODO: 需要获取正确的tenant_id
     tenant_id = "default"  # 临时解决方案
     canvas = Canvas(json.dumps(cvs.dsl), tenant_id)
-    return get_result(data={"title": cvs.title, "avatar": cvs.avatar, "inputs": canvas.get_component_input_form("begin"), "prologue": canvas.get_prologue(), "mode": canvas.get_mode()})
+    return get_result(data={
+        "title": cvs.title,
+        "avatar": cvs.avatar,
+        "inputs": canvas.get_component_input_form("begin")
+    })
 
 
 @router.post("/searchbots/ask", summary="搜索机器人询问")
@@ -1015,7 +1022,7 @@ def ask_searchbot(request: SearchBotAskRequest, db: Session = Depends(get_db)):
     def stream():
         nonlocal req, uid
         try:
-            for ans in ask(req["question"], req["kb_ids"], uid, search_config=search_config):
+            for ans in ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
                 yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
@@ -1043,6 +1050,8 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
     kb_ids = req["kb_id"]
     if isinstance(kb_ids, str):
         kb_ids = [kb_ids]
+    if not kb_ids:
+        return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=settings.RetCode.DATA_ERROR)
     doc_ids = req.get("doc_ids", [])
     similarity_threshold = float(req.get("similarity_threshold", 0.0))
     vector_similarity_weight = float(req.get("vector_similarity_weight", 0.3))
@@ -1136,7 +1145,7 @@ def get_searchbot_related_questions(request: SearchBotRelatedQuestionsRequest, d
     question = req["question"]
 
     chat_id = search_config.get("chat_id", "")
-    chat_mdl = LLMBundle(tenant_id, LLMType.CHAT, chat_id)
+    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_id)
 
     gen_conf = search_config.get("llm_setting", {"temperature": 0.9})
     prompt = load_prompt("related_question")
@@ -1184,15 +1193,20 @@ def get_searchbot_detail(search_id: str = Query(...), db: Session = Depends(get_
 @router.post("/searchbots/mindmap", summary="生成搜索机器人思维导图")
 def generate_searchbot_mindmap(request: SearchBotMindmapRequest, db: Session = Depends(get_db)):
     req = request.model_dump()
-    
-    # TODO: 需要重构token验证方式以符合FastAPI模式
-    # TODO: 需要获取正确的tenant_id
-    tenant_id = "default"  # 临时解决方案
+    token = request.headers.get("Authorization").split()
+    if len(token) != 2:
+        return get_error_data_result(retmsg='Authorization is not valid!"')
+    token = token[1]
+    objs = APIToken.query(beta=token)
+    if not objs:
+        return get_error_data_result(retmsg='Authentication error: API key is invalid!"')
+
+    tenant_id = objs[0].tenant_id
 
     search_id = req.get("search_id", "")
-    search_app = SearchService.get_detail(db, search_id) if search_id else {}
+    search_app = SearchService.get_detail(search_id) if search_id else {}
 
-    mind_map = gen_mindmap(req["question"], req["kb_ids"], tenant_id, search_app.get("search_config", {}))
+    mind_map = gen_mindmap(db, req["question"], req["kb_ids"], tenant_id, search_app.get("search_config", {}))
     if "error" in mind_map:
         return server_error_response(Exception(mind_map["error"]))
     return get_json_result(data=mind_map)

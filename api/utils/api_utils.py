@@ -8,6 +8,7 @@
 """
 import asyncio
 import logging
+import os
 import queue
 import json
 import random
@@ -34,7 +35,9 @@ import requests
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api import settings
-from api.db.services.llm_service import TenantLLMService, LLMService
+# from api.db.services.llm_service import TenantLLMService, LLMService
+from api.db.services.llm_service import LLMService
+from api.db.services.tenant_llm_service import TenantLLMService
 from api.utils import HTTP_STATUS_CODES, get_uuid
 from api.constants import REQUEST_WAIT_SEC, REQUEST_MAX_WAIT_SEC
 
@@ -42,6 +45,30 @@ import trio
 
 from core.utils.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 
+def serialize_for_json(obj):
+    """
+    Recursively serialize objects to make them JSON serializable.
+    Handles ModelMetaclass and other non-serializable objects.
+    """
+    if hasattr(obj, '__dict__'):
+        # For objects with __dict__, try to serialize their attributes
+        try:
+            return {key: serialize_for_json(value) for key, value in obj.__dict__.items()
+                   if not key.startswith('_')}
+        except (AttributeError, TypeError):
+            return str(obj)
+    elif hasattr(obj, '__name__'):
+        # For classes and metaclasses, return their name
+        return f"<{obj.__module__}.{obj.__name__}>" if hasattr(obj, '__module__') else f"<{obj.__name__}>"
+    elif isinstance(obj, (list, tuple)):
+        return [serialize_for_json(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: serialize_for_json(value) for key, value in obj.items()}
+    elif isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    else:
+        # Fallback: convert to string representation
+        return str(obj)
 
 def request(**kwargs):
     sess = requests.Session()
@@ -102,10 +129,14 @@ def server_error_response(e):
     except Exception:
         pass
     if len(e.args) > 1:
-        return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=e.args[1])
+        try:
+            serialized_data = serialize_for_json(e.args[1])
+            return get_json_result(retcode= settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=serialized_data)
+        except Exception:
+            return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=None)
     if repr(e).find("index_not_found_exception") >= 0:
-        return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR,
-                               retmsg="No chunk found, please upload file and parse it.")
+        return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg="No chunk found, please upload file and parse it.")
+
     return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e))
 
 
@@ -153,7 +184,7 @@ def validate_request(*args, **kwargs):
 
 
 def is_localhost(ip):
-    return ip in {'127.0.0.1', '::1', '[::1]', 'localhost'}
+    return ip in {"127.0.0.1", "::1", "[::1]", "localhost"}
 
 
 def send_file_in_mem(data, filename):
@@ -189,6 +220,10 @@ def get_json_result(retcode=settings.RetCode.SUCCESS, retmsg='success', data=Non
 
 
 def apikey_required(func: Callable) -> Callable:
+    """
+    装饰器形式的 API Key 验证（已废弃，建议使用 apikey_dependency）
+    保留此函数是为了向后兼容，但建议使用 FastAPI 依赖注入方式
+    """
     @wraps(func)
     async def decorated_function(*args, **kwargs):
         request: Request = kwargs.get('request')  # 从 kwargs 中获取 FastAPI Request 对象
@@ -208,6 +243,55 @@ def apikey_required(func: Callable) -> Callable:
         return await func(*args, **kwargs)
 
     return decorated_function
+
+
+async def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> str:
+    """
+    FastAPI 依赖注入形式的 API Key 验证
+    
+    从请求头中提取并验证 API Key，返回 tenant_id
+    
+    Args:
+        request: FastAPI Request 对象
+        db: 数据库会话
+    
+    Returns:
+        str: 租户ID
+        
+    Raises:
+        HTTPException: 当 API Key 无效或缺失时
+        
+    Example:
+        @router.post("/endpoint")
+        async def endpoint(tenant_id: str = Depends(apikey_dependency)):
+            # 使用 tenant_id
+            pass
+    """
+    authorization_header = request.headers.get('Authorization')
+    
+    if not authorization_header:
+        raise build_error_result(
+            error_msg='Authorization header is missing!', 
+            retcode=settings.RetCode.FORBIDDEN
+        )
+    
+    authorization_list = authorization_header.split()
+    if len(authorization_list) < 2:
+        raise build_error_result(
+            error_msg='Invalid Authorization format!', 
+            retcode=settings.RetCode.FORBIDDEN
+        )
+    
+    token = authorization_list[1]
+    objs = APITokenService.query(db, token=token)
+    
+    if not objs:
+        raise build_error_result(
+            error_msg='API-KEY is invalid!', 
+            retcode=settings.RetCode.FORBIDDEN
+        )
+    
+    return objs[0].tenant_id
 
 
 def build_error_result(retcode=settings.RetCode.FORBIDDEN, error_msg='success'):
@@ -266,6 +350,8 @@ def convert_datetime_to_str(data: dict):
     return data
 
 async def token_required(request: Request, db: Session = Depends(get_db)):
+    if os.environ.get("DISABLE_SDK"):
+        return get_json_result(data=False, retmsg="`Authorization` can't be empty")
     authorization_str = request.headers.get("Authorization")
     if not authorization_str:
         return get_json_result(data=False, retmsg="`Authorization` can't be empty")
@@ -685,7 +771,10 @@ def timeout(
 
             for a in range(attempts):
                 try:
-                    result = result_queue.get(timeout=seconds)
+                    if os.environ.get("ENABLE_TIMEOUT_ASSERTION"):
+                        result = result_queue.get(timeout=seconds)
+                    else:
+                        result = result_queue.get()
                     if isinstance(result, Exception):
                         raise result
                     return result
@@ -700,7 +789,10 @@ def timeout(
 
             for a in range(attempts):
                 try:
-                    with trio.fail_after(seconds):
+                    if os.environ.get("ENABLE_TIMEOUT_ASSERTION"):
+                        with trio.fail_after(seconds):
+                            return await func(*args, **kwargs)
+                    else:
                         return await func(*args, **kwargs)
                 except trio.TooSlowError:
                     if a < attempts - 1:

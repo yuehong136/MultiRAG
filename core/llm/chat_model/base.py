@@ -11,7 +11,7 @@ import openai
 from openai import OpenAI
 from strenum import StrEnum
 from core.nlp import is_chinese, is_english
-from core.utils import num_tokens_from_string
+from core.utils import num_tokens_from_string, total_token_count_from_response
 import logging
 import time
 
@@ -95,7 +95,7 @@ class Base(ABC):
             kwargs["extra_body"] = {"enable_thinking": False}
         response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf, **kwargs)
 
-        if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
+        if not response.choices or not response.choices[0].message or not response.choices[0].message.content:
             return "", 0
         ans = response.choices[0].message.content.strip()
         if response.choices[0].finish_reason == "length":
@@ -105,8 +105,10 @@ class Base(ABC):
     def _chat_streamly(self, history, gen_conf, **kwargs):
         logging.info("[HISTORY STREAMLY]" + json.dumps(history, ensure_ascii=False, indent=4))
         reasoning_start = False
-        response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, **gen_conf,
-                                                       stop=kwargs.get("stop"))
+        if kwargs.get("stop") or "stop" in gen_conf:
+            response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, **gen_conf, stop=kwargs.get("stop"))
+        else:
+            response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, **gen_conf)
         for resp in response:
             if not resp.choices:
                 continue
@@ -139,21 +141,30 @@ class Base(ABC):
             return ans + LENGTH_NOTIFICATION_CN
         return ans + LENGTH_NOTIFICATION_EN
 
-    def _exceptions(self, e, attempt):
+    @property
+    def _retryable_errors(self) -> set[str]:
+        return {
+            LLMErrorCode.ERROR_RATE_LIMIT,
+            LLMErrorCode.ERROR_SERVER,
+        }
+
+    def _should_retry(self, error_code: str) -> bool:
+        return error_code in self._retryable_errors
+
+    def _exceptions(self, e, attempt) -> str | None:
         logging.exception("OpenAI chat_with_tools")
         # Classify the error
         error_code = self._classify_error(e)
         if attempt == self.max_retries:
             error_code = LLMErrorCode.ERROR_MAX_RETRIES
 
-        # Check if it's a rate limit error or server error and not the last attempt
-        should_retry = (error_code == LLMErrorCode.ERROR_RATE_LIMIT or error_code == LLMErrorCode.ERROR_SERVER)
-        if not should_retry:
-            return f"{ERROR_PREFIX}: {error_code} - {str(e)}"
+        if self._should_retry(error_code):
+            delay = self._get_delay()
+            logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
+            time.sleep(delay)
+            return None
 
-        delay = self._get_delay()
-        logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
-        time.sleep(delay)
+        return f"{ERROR_PREFIX}: {error_code} - {str(e)}"
 
     def _verbose_tool_use(self, name, args, res):
         return "<tool_call>" + json.dumps({
@@ -408,15 +419,7 @@ class Base(ABC):
         yield total_tokens
 
     def total_token_count(self, resp):
-        try:
-            return resp.usage.total_tokens
-        except Exception:
-            pass
-        try:
-            return resp["usage"]["total_tokens"]
-        except Exception:
-            pass
-            return 0
+        return total_token_count_from_response(resp)
 
     def _calculate_dynamic_ctx(self, history):
         """Calculate dynamic context window size"""

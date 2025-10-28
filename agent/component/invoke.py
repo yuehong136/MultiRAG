@@ -57,7 +57,7 @@ class Invoke(ComponentBase, ABC):
     def _invoke(self, **kwargs):
         args = {}
         for para in self._param.variables:
-            if para.get("value") is not None:
+            if para.get("value"):
                 args[para["key"]] = para["value"]
             else:
                 args[para["key"]] = self._canvas.get_variable_value(para["ref"])
@@ -137,3 +137,6 @@ class Invoke(ComponentBase, ABC):
             return f"Http request error: {last_e}"
 
         assert False, self.output()
+
+    def thoughts(self) -> str:
+        return "Waiting for the server respond..."

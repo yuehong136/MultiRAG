@@ -17,7 +17,8 @@ from api.db.db_models import get_db
 from api.db.services.dialog_service import DialogService
 from api.db import StatusEnum
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import TenantLLMService
+# from api.db.services.llm_service import TenantLLMService
+from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
@@ -118,6 +119,10 @@ class DialogRequest(BaseModel):
     rerank_id: str | None = Field(
         default=None,
         description="重新排序模型的ID，用于对检索结果进行重新排序"
+    )
+    meta_data_filter: dict[str, Any] | None = Field(
+        default={},
+        description="元数据过滤器，用于过滤知识库中的条目"
     )
     similarity_threshold: float = Field(
         default=0.1,
@@ -356,13 +361,18 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
             ],
             "empty_response": "Sorry! 知识库中未找到相关内容！"
         }
-        is_create = not request.dialog_id
-        if not is_create:
-            # 使用提供的配置或默认配置
-            prompt_config = request.prompt_config or default_prompt_config
 
+        prompt_config = request.prompt_config or default_prompt_config
+
+        is_create = not request.dialog_id
+
+        if is_create and DialogService.get_or_none(db, tenant_id=user.id, name=request.name):
+            return get_data_error_result(retmsg=f"Duplicated Dialog name {request.name}.")
+
+        if not is_create:
+            # 针对更新逻辑的特殊校验
             if not request.kb_ids and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config['system']:
-                return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no knowledge base/Tavily used here.")
+                return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no knowledge base / Tavily used here.")
 
             # 验证系统提示中是否包含所有必需参数
             for p in prompt_config["parameters"]:
@@ -397,6 +407,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
                 "llm_id": llm_id,
                 "llm_setting": request.llm_setting,
                 "prompt_config": prompt_config,
+                "meta_data_filter": request.meta_data_filter,
                 "top_n": request.top_n,
                 "top_k": request.top_k,
                 "rerank_id": request.rerank_id,
@@ -431,6 +442,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
             return get_json_result(data=dia)
     except Exception as e:
         return server_error_response(e)
+
 
 @router.get('/get', summary="获取对话", response_description="成功获取对话")
 async def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):

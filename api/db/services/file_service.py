@@ -163,15 +163,32 @@ class FileService(CommonService):
         root_folder = cls.insert(db, file_data)
         return root_folder.to_dict()
 
+    # @classmethod
+    # def get_kb_folder(cls, db: Session, tenant_id: str) -> dict:
+    #     root = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=cls.model.id).first()
+    #     if root:
+    #         folder = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=root.id,
+    #                                                name=KNOWLEDGEBASE_FOLDER_NAME).first()
+    #         if folder:
+    #             return folder.to_dict()
+    #     raise RuntimeError("Can't find the KB folder. Database init error.")
+
     @classmethod
     def get_kb_folder(cls, db: Session, tenant_id: str) -> dict:
-        root = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=cls.model.id).first()
-        if root:
-            folder = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=root.id,
-                                                   name=KNOWLEDGEBASE_FOLDER_NAME).first()
-            if folder:
-                return folder.to_dict()
-        raise RuntimeError("Can't find the KB folder. Database init error.")
+        root_folder = cls.get_root_folder(db, tenant_id)
+        root_id = root_folder["id"]
+
+        kb_folder = db.query(cls.model).filter_by(
+            tenant_id=tenant_id,
+            parent_id=root_id,
+            name=KNOWLEDGEBASE_FOLDER_NAME
+        ).first()
+
+        if not kb_folder:
+            kb_folder = cls.new_a_file_from_kb(db, tenant_id, KNOWLEDGEBASE_FOLDER_NAME, root_id)
+            return kb_folder
+
+        return kb_folder.to_dict()
 
     @classmethod
     def new_a_file_from_kb(cls, db: Session, tenant_id: str, name: str, parent_id: str, ty=FileType.FOLDER.value,

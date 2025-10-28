@@ -136,6 +136,8 @@ def label_question(db, question, kbs):
         else:
             all_tags = json.loads(all_tags)
         tag_kbs = KnowledgebaseService.get_by_ids(db, tag_kb_ids)
+        if not tag_kbs:
+            return tags
         tags = settings.retrievaler.tag_query(question,
                                               list(set([kb.tenant_id for kb in tag_kbs])),
                                               tag_kb_ids,

@@ -252,7 +252,7 @@ class CalcScoreV2Request(BaseModel):
     """评分计算请求V2 - 强化版"""
     user_input: str | None = Field(None, description="用户补充要求")
     rule_description: str = Field(..., description="评分规则描述文本")
-    data: list[dict[str, Any]] = Field(..., description="SQL查询结果数据")
+    data: list[dict[str, Any]] | str = Field(..., description="SQL查询结果数据")
     context: dict[str, Any] | None = Field(None, description="评分上下文信息")
     llm_name: str | None = Field(None, description="指定用于评分的LLM模型")
     
@@ -969,7 +969,7 @@ def calculate_score_v2(
     **参数说明:**
     - user_input: 用户补充要求
     - rule_description: 评分规则的文本描述，由调用方提供
-    - data: SQL查询结果数据列表
+    - data: SQL查询结果数据列表或字符串
     - context: 评分上下文信息，可选
     - llm_name: 指定用于评分的LLM模型，可选
     - enable_multi_extraction: 启用多重提取策略，默认true
@@ -1075,8 +1075,8 @@ def calculate_score_v2(
         if not request.rule_description.strip():
             return get_data_error_result(retmsg="评分规则描述不能为空")
 
-        if not isinstance(request.data, list):
-            return get_data_error_result(retmsg="data必须是列表格式")
+        if not isinstance(request.data, (list, str)):
+            return get_data_error_result(retmsg="data必须是列表或字符串格式")
 
         # 验证期望分数范围
         if request.expected_score_range:
