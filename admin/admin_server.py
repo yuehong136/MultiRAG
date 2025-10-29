@@ -10,7 +10,7 @@ from api.utils.log_utils import init_root_logger
 from api.constants import SERVICE_CONF
 from api import settings
 from config import load_configurations, SERVICE_CONFIGS
-from exceptions import setup_exception_handlers
+from api.common.exceptions import setup_exception_handlers
 
 
 @asynccontextmanager

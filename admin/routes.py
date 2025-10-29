@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from auth import AdminAuth
 from responses import APIResponse, success_response, error_response
 from services import UserMgr, ServiceMgr, UserServiceMgr
-from exceptions import AdminException
+from api.common.exceptions import AdminException
 
 
 # ========== 请求/响应模型定义 ==========

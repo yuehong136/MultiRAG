@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy.orm import Session
 
-from exceptions import AdminException
+from api.common.exceptions import AdminException
 from api.db.services import UserService
 from api.db.db_models import get_db
 
