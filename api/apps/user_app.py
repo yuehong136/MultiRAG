@@ -149,8 +149,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             retcode=settings.RetCode.FORBIDDEN,
             retmsg="This account has been disabled, please contact the administrator!",
         )
-
-    if user:
+    elif user:
         response_data = user.to_dict()
         # 更新数据库会话标识（用于load_user验证）
         user.access_token = get_uuid()
@@ -235,6 +234,9 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
     # User exists, try to log in
     user = users[0]
     user.access_token = get_uuid()
+    if user and hasattr(user, 'is_active') and not user.is_active:
+        return RedirectResponse(url="/?error=user_inactive")
+
     login_user(user)
     db.add(user)
     db.commit()
@@ -309,6 +311,8 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
     # User exists, try to log in
     user = users[0]
     user.access_token = get_uuid()
+    if user and hasattr(user, 'is_active') and not user.is_active:
+        return RedirectResponse(url="/?error=user_inactive")
     login_user(user)
     db.add(user)
     db.commit()
@@ -460,6 +464,8 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
 
         # 用户已存在，尝试登录
         user = users[0]
+        if user and hasattr(user, 'is_active') and not user.is_active:
+            return RedirectResponse(url="/?error=user_inactive")
         user.access_token = get_uuid()
         login_user(user)
         db.add(user)
