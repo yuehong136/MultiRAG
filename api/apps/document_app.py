@@ -40,6 +40,7 @@ from api.db.services.task_service import TaskService, cancel_all_task_of, queue_
 from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
 from api import settings
+from api.common.check_team_permission import check_kb_team_permission
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result, get_data_error_result, server_error_response
 from api.utils import get_uuid
@@ -371,6 +372,9 @@ async def upload(
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
+    if not check_kb_team_permission(db, kb, user.id):
+        return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+
     file_contents = []
     for file in files:
         if file.filename == "":
@@ -569,6 +573,8 @@ def web_crawl(
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
+    if not check_kb_team_permission(db, kb, user.id):
+        return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
 
     blob = html2pdf(url)
     if not blob:

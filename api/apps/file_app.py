@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from starlette.responses import StreamingResponse
 
+from api.common.check_team_permission import check_file_team_permission
 from api.db import FileType, FileSource
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
@@ -24,7 +25,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api import settings
-from api.utils.api_utils import construct_json_result, construct_error_response, get_data_error_result, get_json_result
+from api.utils.api_utils import get_json_result, construct_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type
 from api.utils.web_utils import CONTENT_TYPE_MAP
@@ -84,11 +85,11 @@ async def upload(
         pf_id = root_folder["id"]
 
     if not files:
-        return construct_json_result(data=False, retmsg='No file part!', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='No file part!', retcode=settings.RetCode.ARGUMENT_ERROR)
 
     for file_obj in files:
         if file_obj.filename == '':
-            return construct_json_result(data=False, retmsg='No file selected!', retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg='No file selected!', retcode=settings.RetCode.ARGUMENT_ERROR)
 
     try:
         pf_folder = FileService.get_by_id(db, pf_id)
@@ -151,7 +152,7 @@ async def upload(
                 "size": file.size,
                 "type": file.type
             }
-        return construct_json_result(data=file_dict)
+        return get_json_result(data=file_dict)
     except Exception as e:
         return construct_error_response(e)
 
@@ -180,8 +181,7 @@ async def create(
 
     try:
         if not FileService.is_parent_folder_exist(db, pf_id):
-            return construct_json_result(data=False, retmsg="Parent Folder Doesn't Exist!",
-                                         retcode=settings.RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg="Parent Folder Doesn't Exist!", retcode=settings.RetCode.OPERATING_ERROR)
         if FileService.query(db, name=req["name"], parent_id=pf_id):
             return get_data_error_result(retmsg="Duplicated folder name in the same folder.")
 
@@ -212,7 +212,7 @@ async def create(
             "type": file.type
         }
 
-        return construct_json_result(data=file_dict)
+        return get_json_result(data=file_dict)
     except Exception as e:
         return construct_error_response(e)
 
@@ -251,13 +251,16 @@ async def list_files(
         if not file:
             return get_data_error_result(retmsg="Folder not found!")
 
+        if not check_file_team_permission(db, file, user.id):
+            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+
         files, total = FileService.get_by_pf_id(db, user.id, parent_id, page, page_size, orderby, desc, keywords)
 
         parent_folder = FileService.get_parent_folder(db, parent_id)
         if not parent_folder:
-            return construct_json_result(message="File not found!")
+            return get_json_result(retmsg="File not found!")
 
-        return construct_json_result(data={"total": total, "files": files, "parent_folder": parent_folder.to_dict()})
+        return get_json_result(data={"total": total, "files": files, "parent_folder": parent_folder.to_dict()})
     except Exception as e:
         return construct_error_response(e)
 
@@ -275,7 +278,7 @@ async def get_root_folder(
     """
     try:
         root_folder = FileService.get_root_folder(db, user.id)
-        return construct_json_result(data={"root_folder": root_folder})
+        return get_json_result(data={"root_folder": root_folder})
     except Exception as e:
         return construct_error_response(e)
 
@@ -300,8 +303,11 @@ async def get_parent_folder(
         if not file:
             return get_data_error_result(retmsg="Folder not found!")
 
+        if not check_file_team_permission(db, file, user.id):
+            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+
         parent_folder = FileService.get_parent_folder(db, file_id)
-        return construct_json_result(data={"parent_folder": parent_folder.to_dict()})
+        return get_json_result(data={"parent_folder": parent_folder.to_dict()})
     except Exception as e:
         return construct_error_response(e)
 
@@ -326,9 +332,12 @@ async def get_all_parent_folders(
         if not file:
             return get_data_error_result(retmsg="Folder not found!")
 
+        if not check_file_team_permission(db, file, user.id):
+            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+
         parent_folders = FileService.get_all_parent_folders(db, file_id)
         parent_folders_res = [parent_folder.to_dict() for parent_folder in parent_folders]
-        return construct_json_result(data={"parent_folders": parent_folders_res})
+        return get_json_result(data={"parent_folders": parent_folders_res})
     except Exception as e:
         return construct_error_response(e)
 
@@ -357,7 +366,7 @@ async def rm(
                 return get_data_error_result(retmsg="File or Folder not found!")
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
-            if file.tenant_id != user.id:
+            if not check_file_team_permission(db, file, user.id):
                 return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
             if file.source_type == FileSource.KNOWLEDGEBASE:
                 continue
@@ -389,7 +398,7 @@ async def rm(
                     return get_data_error_result(retmsg="Database error (Document removal)!")
             File2DocumentService.delete_by_file_id(db, file_id)
 
-        return construct_json_result(data=True)
+        return get_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)
 
@@ -414,12 +423,12 @@ async def rename(
         file = FileService.get_by_id(db, req["file_id"])
         if not file:
             return get_data_error_result(retmsg="File not found!")
-        if file.tenant_id != user.id:
+        if not check_file_team_permission(db, file, user.id):
             return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
         if file.type != FileType.FOLDER.value \
                 and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
-            return construct_json_result(data=False, message="The extension of file can't be changed",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg="The extension of file can't be changed",
+                                         retcode=settings.RetCode.ARGUMENT_ERROR)
         for f in FileService.query(db, name=req["name"], pf_id=file.parent_id):
             if f.name == req["name"]:
                 return get_data_error_result(retmsg="Duplicated file name in the same folder.")
@@ -432,7 +441,7 @@ async def rename(
             if not DocumentService.update_by_id(db, informs[0].document_id, {"name": req["name"]}):
                 return get_data_error_result(retmsg="Database error (Document rename)!")
 
-        return construct_json_result(data=True)
+        return get_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)
 
@@ -456,7 +465,7 @@ async def get_file(
         file = FileService.get_by_id(db, file_id)
         if not file:
             return get_data_error_result(retmsg="Document not found!")
-        if file.tenant_id != user.id:
+        if not check_file_team_permission(db, file, user.id):
             return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
 
         b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
@@ -514,12 +523,12 @@ async def move(
                 return get_data_error_result(retmsg="File or Folder not found!")
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
-            if file.tenant_id != user.id:
+            if not check_file_team_permission(db, file, user.id):
                 return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
         fe = FileService.get_by_id(db, parent_id)
         if not fe:
             return get_data_error_result(retmsg="Parent Folder not found!")
         FileService.move_file(db, file_ids, parent_id)
-        return construct_json_result(data=True)
+        return get_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)
