@@ -349,3 +349,7 @@ Respond immediately with your final comprehensive answer.
             logging.exception(e)
 
         return "Error occurred."
+
+    def reset(self):
+        for k, cpn in self.tools.items():
+            cpn.reset()
