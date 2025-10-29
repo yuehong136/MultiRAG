@@ -1199,8 +1199,23 @@ class Dealer:
     def chunk_list(self, doc_id: str, tenant_id: str,
                    kb_ids: list[str], max_count=1024,
                    offset=0,
-                   fields=["docnm_kwd", "content_with_weight", "img_id"]):
+                   fields=["docnm_kwd", "content_with_weight", "img_id"],
+                   sort_by_position: bool = False):
         condition = {"doc_id": doc_id}
+
+        fields_set = set(fields or [])
+        if sort_by_position:
+            for need in ("page_num_int", "position_int", "top_int"):
+                if need not in fields_set:
+                    fields_set.add(need)
+        fields = list(fields_set)
+
+        orderBy = OrderByExpr()
+        if sort_by_position:
+            orderBy.asc("page_num_int")
+            orderBy.asc("position_int")
+            orderBy.asc("top_int")
+
         res = []
         bs = 128
 
@@ -1208,7 +1223,7 @@ class Dealer:
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         for p in range(offset, max_count, bs):
-            milvus_res = self.dataStore.search(fields, [], condition, [], OrderByExpr(), p, bs, index_name(tenant_id, [kb.name]),
+            milvus_res = self.dataStore.search(fields, [], condition, [], orderBy, p, bs, index_name(tenant_id, [kb.name]),
                                            kb_ids)
             dict_chunks = self.dataStore.getFields(milvus_res, fields)
             # 直接删除系统字段

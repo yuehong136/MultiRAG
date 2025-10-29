@@ -393,12 +393,11 @@ class FileService(CommonService):
                     thumbnail_location = f"thumbnail_{file_id}.png"
                     STORAGE_IMPL.put(kb.id, thumbnail_location, img)
 
-
-
                 doc = {
                     "id": file_id,
                     "kb_id": kb.id,
                     "parser_id": cls.get_parser(filetype, filename, kb.parser_id),
+                    "pipeline_id": kb.pipeline_id,
                     "parser_config": kb.parser_config,
                     "created_by": current_user.id,
                     "type": filetype,
@@ -456,7 +455,7 @@ class FileService(CommonService):
             return ParserType.AUDIO.value
         if re.search(r"\.(ppt|pptx|pages)$", filename):
             return ParserType.PRESENTATION.value
-        if re.search(r"\.(eml)$", filename):
+        if re.search(r"\.(msg|eml)$", filename):
             return ParserType.EMAIL.value
         return default
 

@@ -756,13 +756,9 @@ TimeoutException = Type[BaseException] | BaseException
 OnTimeoutCallback = Callable[..., Any] | Coroutine[Any, Any, Any]
 
 
-def timeout(
-    seconds: float | int | None = None,
-    attempts: int = 2,
-    *,
-    exception: TimeoutException | None = None,
-    on_timeout: OnTimeoutCallback | None = None
-):
+def timeout(seconds: float | int | str = None, attempts: int = 2, *, exception: TimeoutException |  None = None, on_timeout: OnTimeoutCallback |  None = None):
+    if isinstance(seconds, str):
+        seconds = float(seconds)
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):

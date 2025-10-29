@@ -11,7 +11,7 @@ from datetime import datetime
 from sqlalchemy import func, update, or_, and_
 from sqlalchemy.orm import Session
 from api.db import StatusEnum, TenantPermission
-from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document
+from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document, UserCanvas
 from api.db.services.common_service import CommonService
 from api.utils import current_timestamp, datetime_format
 
@@ -255,11 +255,14 @@ class KnowledgebaseService(CommonService):
     @classmethod
     def get_detail(cls, db: Session, kb_id):
         """
-        根据知识库ID获取详细信息。
+        Get detailed information about a knowledge base
 
-        :param db: 数据库会话对象。
-        :param kb_id: 知识库ID。
-        :return: 知识库的详细信息字典，如果不存在则返回None。
+        Args:
+            db: Database session object
+            kb_id: Knowledge base ID
+
+        Returns:
+            Dictionary containing knowledge base details, or None if not found
         """
         # 定义查询的字段
         fields = [
@@ -274,22 +277,39 @@ class KnowledgebaseService(CommonService):
             cls.model.token_num,
             cls.model.chunk_num,
             cls.model.parser_id,
+            cls.model.pipeline_id,
+            UserCanvas.title.label("pipeline_name"),
+            UserCanvas.avatar.label("pipeline_avatar"),
             cls.model.parser_config,
             cls.model.pagerank,
+            cls.model.graphrag_task_id,
+            cls.model.graphrag_task_finish_at,
+            cls.model.raptor_task_id,
+            cls.model.raptor_task_finish_at,
+            cls.model.mindmap_task_id,
+            cls.model.mindmap_task_finish_at,
             cls.model.create_time,
             cls.model.update_time
         ]
-        # 根据ID和状态查询知识库信息，并关联租户信息
-        query = db.query(*fields).join(Tenant, (Tenant.id == cls.model.tenant_id)).filter(
-            (cls.model.id == kb_id),
-            (cls.model.status == StatusEnum.VALID.value),
-            (Tenant.status == StatusEnum.VALID.value)
-        ).first()
+
+        # LEFT JOIN UserCanvas to get pipeline information
+        query = (
+            db.query(*fields)
+            .outerjoin(UserCanvas, cls.model.pipeline_id == UserCanvas.id)
+            .filter(
+                cls.model.id == kb_id,
+                cls.model.status == StatusEnum.VALID.value
+            )
+            .first()
+        )
 
         # 返回查询结果的字典形式
         if not query:
             return None
-        return {field.key: getattr(query, field.key) for field in fields}
+
+        # 使用 Row._mapping 转换为字典
+        # 这会保留所有字段的键名，包括 .label() 定义的别名
+        return dict(query._mapping)  # todo 用dict(query._mapping)替换原先手动访问所有字段方案，目前只在此处做了
 
     @classmethod
     def update_parser_config(cls, db: Session, id, config):

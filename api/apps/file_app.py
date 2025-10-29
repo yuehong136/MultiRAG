@@ -251,9 +251,6 @@ async def list_files(
         if not file:
             return get_data_error_result(retmsg="Folder not found!")
 
-        if not check_file_team_permission(db, file, user.id):
-            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
-
         files, total = FileService.get_by_pf_id(db, user.id, parent_id, page, page_size, orderby, desc, keywords)
 
         parent_folder = FileService.get_parent_folder(db, parent_id)
@@ -303,9 +300,6 @@ async def get_parent_folder(
         if not file:
             return get_data_error_result(retmsg="Folder not found!")
 
-        if not check_file_team_permission(db, file, user.id):
-            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
-
         parent_folder = FileService.get_parent_folder(db, file_id)
         return get_json_result(data={"parent_folder": parent_folder.to_dict()})
     except Exception as e:
@@ -331,9 +325,6 @@ async def get_all_parent_folders(
         file = FileService.get_by_id(db, file_id)
         if not file:
             return get_data_error_result(retmsg="Folder not found!")
-
-        if not check_file_team_permission(db, file, user.id):
-            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
 
         parent_folders = FileService.get_all_parent_folders(db, file_id)
         parent_folders_res = [parent_folder.to_dict() for parent_folder in parent_folders]

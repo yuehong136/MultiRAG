@@ -20,8 +20,9 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc
 
 from api.constants import IMG_BASE64_PREFIX, FILE_NAME_LEN_LIMIT
-from api.db import FileType, TaskStatus, StatusEnum, UserTenantRole
-from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, db_connection, File2Document, File
+from api.db import FileType, TaskStatus, StatusEnum, UserTenantRole, CanvasCategory
+from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, File2Document, File, UserCanvas, \
+    User
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils import current_timestamp, get_format_time, get_uuid
@@ -48,6 +49,7 @@ class DocumentService(CommonService):
             cls.model.thumbnail,
             cls.model.kb_id,
             cls.model.parser_id,
+            cls.model.pipeline_id,
             cls.model.parser_config,
             cls.model.source_type,
             cls.model.type,
@@ -90,10 +92,14 @@ class DocumentService(CommonService):
 
         # 2) 基础查询（含 join）
         base = (
-            select(*fields)
+            select(*fields, UserCanvas.title)
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
+            .outerjoin(UserCanvas, and_(
+                cls.model.pipeline_id == UserCanvas.id,
+                UserCanvas.canvas_category == CanvasCategory.DataFlow.value
+            ))
             .where(cls.model.kb_id == kb_id)
         )
 
@@ -143,40 +149,49 @@ class DocumentService(CommonService):
         if suffix is None:
             suffix = []
         fields = cls.get_cls_model_fields()
-        query = (
-            db.query(*fields)
+        
+        # 使用 select() 构建查询（SQLAlchemy 2.0 风格）
+        base = (
+            select(*fields, UserCanvas.title.label("pipeline_name"), User.nickname)
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
-            .filter(cls.model.kb_id == kb_id)
+            .outerjoin(UserCanvas, cls.model.pipeline_id == UserCanvas.id)
+            .outerjoin(User, cls.model.created_by == User.id)
+            .where(cls.model.kb_id == kb_id)
         )
+        
         if keywords:
-            query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
+            base = base.where(func.lower(cls.model.name).contains(keywords.lower()))
 
         if run_status:
-            query = query.filter(cls.model.run.in_(run_status))
+            base = base.where(cls.model.run.in_(run_status))
 
         if types:
-            query = query.filter(cls.model.type.in_(types))
+            base = base.where(cls.model.type.in_(types))
 
         if suffix:
-            query = query.filter(cls.model.suffix.in_(suffix))
+            base = base.where(cls.model.suffix.in_(suffix))
 
-        count = query.count()
+        # 计算总数
+        count = db.execute(select(func.count()).select_from(base.subquery())).scalar_one()
 
+        # 排序
+        order_col = getattr(cls.model, orderby)
         if desc:
-            query = query.order_by(getattr(cls.model, orderby).desc())
+            base = base.order_by(sa_desc(order_col))
         else:
-            query = query.order_by(getattr(cls.model, orderby).asc())
+            base = base.order_by(asc(order_col))
 
+        # 分页
         if page_number and items_per_page:
-            docs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
+            stmt = base.offset((page_number - 1) * items_per_page).limit(items_per_page)
         else:
-            docs = query.all()
+            stmt = base
 
-        col_names = [getattr(c, "key", getattr(c, "name", None)) for c in fields]
-
-        return [dict(zip(col_names, row)) for row in docs], count
+        # 执行并返回字典行（自动获取列名，无需手动维护）
+        rows = db.execute(stmt).mappings().all()
+        return [dict(r) for r in rows], count
 
     @classmethod
     def get_filter_by_kb_id(cls, db: Session, kb_id, keywords, run_status, types, suffix):
@@ -1835,8 +1850,7 @@ class DocumentService(CommonService):
 
         # 如果文档更新影响行数为0，表示未找到文档，抛出异常
         if doc_update == 0:
-            raise LookupError("Document not found which is supposed to be there")
-
+            logging.warning("Document not found which is supposed to be there")
         # 更新知识库的令牌数量和片段数量
         kb_update = db.query(Knowledgebase).filter_by(id=kb_id).update({
             Knowledgebase.token_num: Knowledgebase.token_num + token_num,
@@ -2176,6 +2190,18 @@ class DocumentService(CommonService):
     @classmethod
     def update_progress(cls, db: Session):
         docs = cls.get_unfinished_docs(db)
+
+        cls._sync_progress(db, docs)
+
+    @classmethod
+    def update_progress_immediately(cls, db: Session, docs: list[dict]):
+        if not docs:
+            return
+
+        cls._sync_progress(db, docs)
+
+    @classmethod
+    def _sync_progress(cls, db: Session, docs: list[dict]):
         for d in docs:
             try:
                 # 从元组中提取文档ID
@@ -2187,14 +2213,9 @@ class DocumentService(CommonService):
                 prg = 0
                 finished = True
                 bad = 0
-                has_raptor = False
-                has_graphrag = False
                 doc = DocumentService.get_by_id(db, doc_id)
                 status = doc.run  # TaskStatus.RUNNING.value
                 priority = 0
-
-                # 安全获取parser_config
-                parser_config = getattr(doc, 'parser_config', {})
 
                 for t in tsks:
                     if 0 <= t.progress < 1:
@@ -2205,10 +2226,6 @@ class DocumentService(CommonService):
                     prg += t.progress if t.progress >= 0 else 0
                     if t.progress_msg.strip():
                         msg.append(t.progress_msg)
-                    if t.task_type == "raptor":
-                        has_raptor = True
-                    elif t.task_type == "graphrag":
-                        has_graphrag = True
                     priority = max(priority, t.priority)
 
                 prg /= len(tsks)
@@ -2216,14 +2233,8 @@ class DocumentService(CommonService):
                     prg = -1
                     status = TaskStatus.FAIL.value
                 elif finished:
-                    if (d["parser_config"].get("raptor") or {}).get("use_raptor") and not has_raptor:
-                        queue_raptor_o_graphrag_tasks(db, d, "raptor", priority)
-                        prg = 0.98 * len(tsks) / (len(tsks) + 1)
-                    elif (d["parser_config"].get("graphrag") or {}).get("use_graphrag") and not has_graphrag:
-                        queue_raptor_o_graphrag_tasks(db, d, "graphrag", priority)
-                        prg = 0.98 * len(tsks) / (len(tsks) + 1)
-                    else:
-                        status = TaskStatus.DONE.value
+                    prg = 1
+                    status = TaskStatus.DONE.value
 
                 msg = "\n".join(sorted(msg))
                 info = {
@@ -2234,7 +2245,7 @@ class DocumentService(CommonService):
                     info["progress"] = prg
                 if msg:
                     info["progress_msg"] = msg
-                    if msg.endswith("created task graphrag") or msg.endswith("created task raptor"):
+                    if msg.endswith("created task graphrag") or msg.endswith("created task raptor") or msg.endswith("created task mindmap"):
                         info["progress_msg"] += "\n%d tasks are ahead in the queue..."%get_queue_length(priority)
                 else:
                     info["progress_msg"] = "%d tasks are ahead in the queue..."%get_queue_length(priority)
@@ -2399,7 +2410,11 @@ class DocumentService(CommonService):
             "cancelled": int(cancelled),
         }
 
-def queue_raptor_o_graphrag_tasks(db, doc, ty, priority):
+def queue_raptor_o_graphrag_tasks(db, doc, ty, priority, fake_doc_id="", doc_ids=[]):
+    """
+    You can provide a fake_doc_id to bypass the restriction of tasks at the knowledgebase level.
+    Optionally, specify a list of doc_ids to determine which documents participate in the task.
+    """
     chunking_config = DocumentService.get_chunking_config(db, doc["id"])
     hasher = xxhash.xxh64()
     for field in sorted(chunking_config.keys()):
@@ -2409,11 +2424,12 @@ def queue_raptor_o_graphrag_tasks(db, doc, ty, priority):
         nonlocal doc
         return {
             "id": get_uuid(),
-            "doc_id": doc["id"],
+            "doc_id": fake_doc_id if fake_doc_id else doc["id"],
             "from_page": 100000000,
             "to_page": 100000000,
             "task_type": ty,
-            "progress_msg":  datetime.now().strftime("%H:%M:%S") + " created task " + ty
+            "progress_msg":  datetime.now().strftime("%H:%M:%S") + " created task " + ty,
+            "begin_at": datetime.now().isoformat(),
         }
 
     task = new_task()
@@ -2422,7 +2438,12 @@ def queue_raptor_o_graphrag_tasks(db, doc, ty, priority):
     hasher.update(ty.encode("utf-8"))
     task["digest"] = hasher.hexdigest()
     bulk_insert_into_db(db, Task, [task], True)
+
+    if ty in ["graphrag", "raptor", "mindmap"]:
+        task["doc_ids"] = doc_ids
+        DocumentService.begin2parse(db, doc["id"])
     assert REDIS_CONN.queue_product(get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
+    return task["id"]
 
 
 def get_queue_length(priority):

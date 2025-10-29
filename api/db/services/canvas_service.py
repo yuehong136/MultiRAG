@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-import traceback
-from typing import Any, Iterable
+from typing import Iterable
 from uuid import uuid4
 
 import tiktoken
@@ -15,7 +14,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import desc as sa_desc
 
 from agent.canvas import Canvas
-from agent.component.llm import LLM
 from api.db import TenantPermission, CanvasCategory
 from api.db.db_models import (
     CanvasTemplate,
@@ -190,10 +188,10 @@ class UserCanvasService(CommonService):
         orderby: str,
         desc: bool,
         keywords: str | None,
-        canvas_category=CanvasCategory.Agent,
+        canvas_category=None,
     ):
         """
-        TEAM 可见 + 自己的；支持 keywords（title 模糊）；排序+分页；返回(列表, 总数)
+        根据租户ID列表获取；支持 keywords（title 模糊）；排序+分页；返回(列表, 总数)
         """
         fields = [
             cls.model.id,
@@ -202,28 +200,25 @@ class UserCanvasService(CommonService):
             cls.model.dsl,
             cls.model.description,
             cls.model.permission,
+            cls.model.user_id.label("tenant_id"),
             User.nickname,
             User.avatar.label("tenant_avatar"),
             cls.model.update_time,
             cls.model.canvas_category,
         ]
 
-        cond_team = (cls.model.user_id.in_(joined_tenant_ids)) & (
-            cls.model.permission == TenantPermission.TEAM.value
-        )
-        cond_self = (cls.model.user_id == user_id)
-
         base = (
             select(*fields)
             .select_from(cls.model)
             .join(User, cls.model.user_id == User.id)
-            .where(cond_team | cond_self)
+            .where(cls.model.user_id.in_(joined_tenant_ids))
         )
 
         if keywords:
             base = base.where(func.lower(cls.model.title).contains(keywords.lower()))
 
-        base = base.where(cls.model.canvas_category == canvas_category)
+        if canvas_category:
+            base = base.where(cls.model.canvas_category == canvas_category)
 
         order_col = getattr(cls.model, orderby)
         base = base.order_by(sa_desc(order_col) if desc else asc(order_col))
@@ -232,7 +227,10 @@ class UserCanvasService(CommonService):
         total = db.execute(select(func.count()).select_from(base.subquery())).scalar_one()
 
         # page
-        stmt = base.offset((page_number - 1) * items_per_page).limit(items_per_page)
+        if page_number and items_per_page:
+            stmt = base.offset((page_number - 1) * items_per_page).limit(items_per_page)
+        else:
+            stmt = base
         rows = db.execute(stmt).mappings().all()
         return [dict(r) for r in rows], total
 
