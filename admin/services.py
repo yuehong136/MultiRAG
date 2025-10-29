@@ -8,8 +8,9 @@ from api.db.services import UserService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService
-from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
 from api.utils import health_utils
+
+from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
 from config import SERVICE_CONFIGS
 
 

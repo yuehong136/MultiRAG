@@ -9,6 +9,7 @@ class AdminException(Exception):
     """管理后台基础异常类"""
     def __init__(self, message: str, code: int = 400):
         super().__init__(message)
+        self.type = "admin"
         self.code = code
         self.message = message
 
