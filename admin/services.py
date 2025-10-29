@@ -9,6 +9,7 @@ from api.db.services.canvas_service import UserCanvasService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService
 from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
+from api.utils import health_utils
 from config import SERVICE_CONFIGS
 
 
@@ -246,11 +247,32 @@ class ServiceMgr:
     @staticmethod
     def get_service_details(service_id: int):
         """获取服务详情"""
+        service_id = int(service_id)
         configs = SERVICE_CONFIGS.configs
-        for config in configs:
-            if config.id == service_id:
-                return config.to_dict()
-        raise AdminException(f"Service with id {service_id} not found", 404)
+
+        # 查找对应的配置
+        service_config = None
+        for c in configs:
+            if c.id == service_id:
+                service_config = c
+                break
+
+        if not service_config:
+            raise AdminException(f"Invalid service_id: {service_id}")
+
+        # 调用健康检查函数
+        detail_func = getattr(health_utils, service_config.detail_func_name)
+        health_status = detail_func()
+
+        # 构建符合 ServiceResponse 格式的响应
+        result = service_config.to_dict()
+
+        # 将健康检查结果添加到 extra 字段
+        if 'extra' not in result:
+            result['extra'] = {}
+        result['extra']['health'] = health_status
+
+        return result
 
     @staticmethod
     def shutdown_service(service_id: int):

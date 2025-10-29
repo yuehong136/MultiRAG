@@ -381,7 +381,11 @@ class AdminCLI:
         if response.status_code == 200:
             res_json = response.json()
             if res_json.get('code') == 0:
-                self._print_table_simple(res_json['data'])
+                data = res_json.get('data')
+                if data is not None:
+                    self._print_table_simple(data)
+                else:
+                    print("No service data available")
             else:
                 print(f"Failed to get services: {res_json.get('message')}")
         else:
@@ -390,31 +394,64 @@ class AdminCLI:
     def _handle_show_service(self, command):
         service_id: int = command['number']
         print(f"Showing service details for ID: {service_id}")
-        
+
         url = f'http://{self.host}:{self.port}/api/v1/admin/services/{service_id}'
         response = requests.get(url, auth=HTTPBasicAuth(self.admin_account, self.admin_password))
-        
+        res_json = response.json()
         if response.status_code == 200:
-            res_json = response.json()
-            if res_json.get('code') == 0:
-                service_data = res_json.get('data', {})
-                # 格式化显示服务详情
-                print("\nService Details:")
-                print(f"  ID:           {service_data.get('id')}")
-                print(f"  Name:         {service_data.get('name')}")
-                print(f"  Host:         {service_data.get('host')}")
-                print(f"  Port:         {service_data.get('port')}")
-                print(f"  Type:         {service_data.get('service_type')}")
-                
-                extra = service_data.get('extra', {})
-                if extra:
-                    print(f"  Extra Info:")
-                    for key, value in extra.items():
-                        print(f"    {key}: {value}")
-            else:
-                print(f"Failed to get service details: {res_json.get('message')}")
+            res_data = res_json.get('data')
+            if res_data is None:
+                print(f"Failed to get service data: {res_json.get('message', 'Unknown error')}")
+                return
+
+            # 解析服务基本信息
+            service_name = res_data.get('name', 'Unknown')
+            service_id = res_data.get('id', 'N/A')
+            service_type = res_data.get('service_type', 'Unknown')
+            host = res_data.get('host', 'N/A')
+            port = res_data.get('port', 'N/A')
+
+            # 解析健康状态（在 extra.health 中）
+            extra = res_data.get('extra', {})
+            health = extra.get('health', {})
+            is_alive = health.get('alive', False)
+
+            # 显示服务基本信息
+            print(f"\nService Information:")
+            print(f"  ID: {service_id}")
+            print(f"  Name: {service_name}")
+            print(f"  Type: {service_type}")
+            print(f"  Host: {host}")
+            print(f"  Port: {port}")
+
+            # 显示健康状态
+            status_symbol = "✅" if is_alive else "❌"
+            status_text = "alive" if is_alive else "down"
+            print(f"\nHealth Status: {status_symbol} {status_text}")
+
+            if health:
+                # 显示健康检查详情
+                if 'elapsed' in health:
+                    print(f"  Response Time: {health['elapsed']}")
+                if 'message' in health:
+                    message = health['message']
+                    if isinstance(message, str):
+                        print(f"  Message: {message}")
+                    elif isinstance(message, dict):
+                        print(f"  Details:")
+                        self._print_table_simple(message)
+                if 'version' in health:
+                    print(f"  Version: {health['version']}")
+
+            # 显示 extra 中的其他信息
+            if extra:
+                other_info = {k: v for k, v in extra.items() if k != 'health'}
+                if other_info:
+                    print(f"\nAdditional Information:")
+                    for key, value in other_info.items():
+                        print(f"  {key}: {value}")
         else:
-            print(f"Request failed with status code: {response.status_code}")
+            print(f"Fail to show service, code: {res_json.get('code', 'N/A')}, message: {res_json.get('message', 'Unknown error')}")
 
     def _handle_restart_service(self, command):
         service_id: int = command['number']
@@ -462,7 +499,11 @@ class AdminCLI:
         if response.status_code == 200:
             res_json = response.json()
             if res_json.get('code') == 0:
-                self._print_table_simple(res_json['data'])
+                data = res_json.get('data')
+                if data is not None:
+                    self._print_table_simple(data)
+                else:
+                    print("No user data available")
             else:
                 print(f"Failed to get users: {res_json.get('message')}")
         else:
@@ -478,7 +519,11 @@ class AdminCLI:
         if response.status_code == 200:
             # 检查业务状态码
             if res_json.get('code') == 0:
-                self._print_table_simple(res_json['data'])
+                data = res_json.get('data')
+                if data is not None:
+                    self._print_table_simple(data)
+                else:
+                    print(f"No data available for user {username}")
             else:
                 print(f"Fail to get user {username}, code: {res_json.get('code', -1)}, message: {res_json.get('message', 'Unknown error')}")
         else:
@@ -539,7 +584,11 @@ class AdminCLI:
         if response.status_code == 200:
             # 检查响应体中的 code 字段，而不仅仅是 HTTP status code
             if res_json.get('code') == 0:
-                self._print_table_simple(res_json['data'])
+                data = res_json.get('data')
+                if data is not None:
+                    self._print_table_simple(data)
+                else:
+                    print(f"User {username} created successfully (no data returned)")
             else:
                 # 业务逻辑错误（如邮箱格式错误）
                 print(f"Fail to create user {username}, code: {res_json.get('code', -1)}, message: {res_json.get('message', 'Unknown error')}")
@@ -578,7 +627,11 @@ class AdminCLI:
         if response.status_code == 200:
             # 检查业务状态码
             if res_json.get('code') == 0:
-                self._print_table_simple(res_json['data'])
+                data = res_json.get('data')
+                if data is not None:
+                    self._print_table_simple(data)
+                else:
+                    print(f"No datasets available for user {username}")
             else:
                 print(f"Fail to get all datasets of {username}, code: {res_json.get('code', -1)}, message: {res_json.get('message', 'Unknown error')}")
         else:
@@ -594,7 +647,11 @@ class AdminCLI:
         if response.status_code == 200:
             # 检查业务状态码
             if res_json.get('code') == 0:
-                self._print_table_simple(res_json['data'])
+                data = res_json.get('data')
+                if data is not None:
+                    self._print_table_simple(data)
+                else:
+                    print(f"No agents available for user {username}")
             else:
                 print(f"Fail to get all agents of {username}, code: {res_json.get('code', -1)}, message: {res_json.get('message', 'Unknown error')}")
         else:

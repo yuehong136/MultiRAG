@@ -86,6 +86,20 @@ class RedisDB:
         if self.REDIS.get(a) == b:
             return True
 
+    def info(self):
+        info = self.REDIS.info()
+        return {
+            'redis_version': info.get("redis_version", "Unknown"),  # Redis版本
+            'server_mode': info.get("server_mode", "standalone"),  # 服务器模式: standalone(单机), sentinel(哨兵), cluster(集群)
+            'used_memory': info.get("used_memory_human", "N/A"),  # 已使用内存(人类可读格式)
+            'total_system_memory': info.get("total_system_memory_human", "N/A"),  # 系统总内存(人类可读格式)
+            'mem_fragmentation_ratio': info.get("mem_fragmentation_ratio", 0.0),  # 内存碎片比率
+            'connected_clients': info.get("connected_clients", 0),  # 已连接客户端数量
+            'blocked_clients': info.get("blocked_clients", 0),  # 被阻塞的客户端数量
+            'instantaneous_ops_per_sec': info.get("instantaneous_ops_per_sec", 0),  # 每秒执行的操作数
+            'total_commands_processed': info.get("total_commands_processed", 0)  # 处理过的命令总数
+        }
+
     def is_alive(self):
         return self.REDIS is not None
 

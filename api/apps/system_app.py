@@ -260,6 +260,11 @@ async def healthz(response: Response):
     return result
 
 
+@router.get("/ping", summary="连通测试") # noqa: F821
+def ping():
+    return "pong", 200
+
+
 @router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌", response_model=dict[str, Any])
 def new_token(request: TokenCreateRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """

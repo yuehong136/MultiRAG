@@ -1,11 +1,17 @@
+import os
+import requests
 from timeit import default_timer as timer
 
 from sqlalchemy import text
 
 from api import settings
 from api.db.db_models import engine, get_pool_status
+from core import settings as rag_settings
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.storage_factory import STORAGE_IMPL
+from core.utils.es_conn import ESConnection
+from core.utils.milvus_conn import MilvusConnection
+from core.utils.infinity_conn import InfinityConnection
 
 
 def _ok_nok(ok: bool) -> str:
@@ -84,6 +90,242 @@ def check_storage() -> tuple[bool, dict]:
         return True, {"elapsed": f"{(timer() - st) * 1000.0:.1f}"}
     except Exception as e:
         return False, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", "error": str(e)}
+
+def get_es_cluster_stats() -> dict:
+    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
+    if doc_engine != 'elasticsearch':
+        raise Exception("Elasticsearch is not in use.")
+    try:
+        return {
+            "alive": True,
+            "message": ESConnection().get_cluster_stats()
+        }
+    except Exception as e:
+        return {
+            "alive": False,
+            "message": f"error: {str(e)}",
+        }
+
+
+def get_infinity_status():
+    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
+    if doc_engine != 'infinity':
+        raise Exception("Infinity is not in use.")
+    try:
+        return {
+            "alive": True,
+            "message": InfinityConnection().health()
+        }
+    except Exception as e:
+        return {
+            "alive": False,
+            "message": f"error: {str(e)}",
+        }
+
+
+def get_milvus_cluster_stats() -> dict:
+    """
+    获取 Milvus 集群统计信息
+
+    Returns:
+        dict: 包含 alive 状态和详细统计信息的字典
+    """
+    start_time = timer()
+    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
+    if doc_engine != 'milvus':
+        return {
+            "alive": False,
+            "message": f"Milvus is not in use. Current DOC_ENGINE: {doc_engine}",
+            "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
+        }
+    try:
+        stats = MilvusConnection().get_cluster_stats()
+        elapsed = f"{(timer() - start_time) * 1000.0:.1f} ms"
+        return {
+            "alive": True,
+            "message": stats,
+            "elapsed": elapsed
+        }
+    except Exception as e:
+        return {
+            "alive": False,
+            "message": f"error: {str(e)}",
+            "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
+        }
+
+
+def check_milvus_alive() -> dict:
+    """
+    检查 Milvus 服务器是否存活（轻量级检查）
+
+    Returns:
+        dict: 包含 alive 状态和响应时间的字典
+    """
+    start_time = timer()
+    try:
+        # 轻量级健康检查
+        health = MilvusConnection().health()
+        elapsed = f"{(timer() - start_time) * 1000.0:.1f} ms"
+
+        if health.get('status') == 'green':
+            return {
+                'alive': True,
+                'message': f"Milvus {health.get('server_version')} is healthy. Elapsed: {elapsed}",
+                'elapsed': elapsed,
+                'version': health.get('server_version'),
+                'server_type': health.get('type')
+            }
+        else:
+            return {
+                'alive': False,
+                'message': f"Milvus status: {health.get('status')}. Elapsed: {elapsed}",
+                'elapsed': elapsed
+            }
+    except Exception as e:
+        return {
+            "alive": False,
+            "message": f"error: {str(e)}",
+            "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
+        }
+
+
+def get_database_status() -> dict:
+    """
+    获取数据库状态信息（进程列表）
+
+    支持 PostgreSQL 和 MySQL
+    - PostgreSQL: 查询 pg_stat_activity 视图
+    - MySQL: 执行 SHOW PROCESSLIST 命令
+
+    Returns:
+        dict: 包含 alive 状态和进程列表信息的字典
+    """
+    start_time = timer()
+    try:
+        with engine.connect() as connection:
+            # 检测数据库类型
+            db_dialect = engine.dialect.name.lower()
+
+            if db_dialect == 'postgresql':
+                # PostgreSQL: 使用 pg_stat_activity 视图
+                query = text("""
+                    SELECT
+                        pid as id,
+                        usename as user,
+                        client_addr as host,
+                        datname as database,
+                        state,
+                        query_start,
+                        state_change,
+                        wait_event_type,
+                        wait_event,
+                        query
+                    FROM pg_stat_activity
+                    WHERE pid <> pg_backend_pid()
+                    ORDER BY query_start DESC
+                    LIMIT 100
+                """)
+                result = connection.execute(query)
+                rows = result.fetchall()
+                columns = result.keys()
+
+                # 转换为字典列表
+                process_list = []
+                for row in rows:
+                    process_info = dict(zip(columns, row))
+                    # 格式化时间字段
+                    if process_info.get('query_start'):
+                        process_info['query_start'] = str(process_info['query_start'])
+                    if process_info.get('state_change'):
+                        process_info['state_change'] = str(process_info['state_change'])
+                    # 转换 IP 地址
+                    if process_info.get('host'):
+                        process_info['host'] = str(process_info['host'])
+                    process_list.append(process_info)
+
+                return {
+                    "alive": True,
+                    "database_type": "postgresql",
+                    "process_count": len(process_list),
+                    "message": process_list,
+                    "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
+                }
+
+            elif db_dialect == 'mysql':
+                # MySQL: 使用 SHOW PROCESSLIST
+                query = text("SHOW PROCESSLIST")
+                result = connection.execute(query)
+                rows = result.fetchall()
+                columns = result.keys()
+
+                # 转换为字典列表
+                process_list = [dict(zip(columns, row)) for row in rows]
+
+                return {
+                    "alive": True,
+                    "database_type": "mysql",
+                    "process_count": len(process_list),
+                    "message": process_list,
+                    "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
+                }
+            else:
+                # 不支持的数据库类型
+                return {
+                    "alive": False,
+                    "database_type": db_dialect,
+                    "message": f"Unsupported database type: {db_dialect}",
+                    "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
+                }
+
+    except Exception as e:
+        return {
+            "alive": False,
+            "message": f"error: {str(e)}",
+            "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
+        }
+
+
+def check_minio_alive():
+    start_time = timer()
+    try:
+        response = requests.get(f'http://{rag_settings.MINIO["host"]}/minio/health/live')
+        if response.status_code == 200:
+            return {'alive': True, "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+        else:
+            return {'alive': False, "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+    except Exception as e:
+        return {
+            "alive": False,
+            "message": f"error: {str(e)}",
+        }
+
+
+def get_redis_info():
+    try:
+        return {
+            "alive": True,
+            "message": REDIS_CONN.info()
+        }
+    except Exception as e:
+        return {
+            "alive": False,
+            "message": f"error: {str(e)}",
+        }
+
+
+def check_multirag_server_alive():
+    start_time = timer()
+    try:
+        response = requests.get(f'http://{settings.HOST_IP}:{settings.HOST_PORT}/v1/system/ping')
+        if response.status_code == 200:
+            return {'alive': True, "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+        else:
+            return {'alive': False, "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+    except Exception as e:
+        return {
+            "alive": False,
+            "message": f"error: {str(e)}",
+        }
 
 
 def check_chat() -> tuple[bool, dict]:

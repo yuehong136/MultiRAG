@@ -3430,3 +3430,182 @@ class MilvusConnection(DocStoreConnection):
             analyzer_names=analyzer_names,
             timeout=timeout,
         )
+
+
+    def get_cluster_stats(self):
+        """
+        获取 Milvus 集群统计信息
+
+        返回集群的整体状态，包括：
+        - 服务器信息（版本、类型）
+        - 集合统计（数量、文档数、分片、副本等）
+        - 索引信息
+        - 加载状态和内存使用
+        - 分区信息
+        - 资源组信息
+        """
+        try:
+            from api.utils.common import convert_bytes
+            from pymilvus import Collection
+
+            # 基础信息
+            server_version = utility.get_server_version(using=self._using)
+            server_type = utility.get_server_type(using=self._using)
+
+            res = {
+                'cluster_name': settings.MILVUS.get("hosts", "milvus"),
+                'status': 'green',  # Milvus 连接成功即为 green
+                'server_version': server_version,
+                'server_type': server_type,
+                'is_self_hosted': self.is_self_hosted
+            }
+
+            # 获取资源组信息（如果是自托管版本）
+            try:
+                resource_groups = utility.list_resource_groups(using=self._using)
+                res['resource_groups'] = resource_groups
+                res['resource_groups_count'] = len(resource_groups)
+            except Exception as e:
+                logger.debug(f"无法获取资源组信息（可能是云版本）: {e}")
+                res['resource_groups'] = []
+                res['resource_groups_count'] = 0
+
+            # 获取所有集合
+            collections = self.list_collections()
+            res['collections'] = len(collections)
+
+            # 统计所有集合的详细信息
+            total_rows = 0
+            total_fields = 0
+            total_shards = 0
+            total_partitions = 0
+            total_indexes = 0
+            total_replicas = 0
+            total_loaded_collections = 0
+            collection_details = []
+
+            for collection_name in collections:
+                try:
+                    # 创建集合对象
+                    coll = Collection(name=collection_name, using=self._using)
+
+                    # 基础统计信息
+                    stats = self.get_collection_stats(collection_name)
+                    row_count = int(stats.get('row_count', 0))
+                    total_rows += row_count
+
+                    # 集合描述信息
+                    desc = self.describe_collection(collection_name)
+                    field_count = len(desc.get('fields', []))
+                    total_fields += field_count
+
+                    # 分片数量
+                    num_shards = coll.num_shards
+                    total_shards += num_shards
+
+                    # 分区信息
+                    partitions = coll.partitions
+                    partition_count = len(partitions)
+                    total_partitions += partition_count
+
+                    # 索引信息
+                    indexes = coll.indexes
+                    index_count = len(indexes)
+                    total_indexes += index_count
+
+                    index_details = []
+                    for idx in indexes:
+                        try:
+                            index_details.append({
+                                'field_name': idx.field_name,
+                                'index_type': idx.params.get('index_type', 'Unknown'),
+                                'metric_type': idx.params.get('metric_type', 'Unknown')
+                            })
+                        except Exception:
+                            pass
+
+                    # 加载状态
+                    try:
+                        load_status = utility.load_state(collection_name, using=self._using)
+                        is_loaded = (load_status.name == 'Loaded')
+                        if is_loaded:
+                            total_loaded_collections += 1
+                    except Exception:
+                        load_status = None
+                        is_loaded = False
+
+                    # 副本信息
+                    replica_info = []
+                    replica_count = 0
+                    try:
+                        if is_loaded:
+                            replicas = coll.get_replicas()
+                            replica_count = len(replicas.groups)
+                            total_replicas += replica_count
+                            for replica in replicas.groups:
+                                replica_info.append({
+                                    'replica_id': replica.id,
+                                    'shard_count': len(replica.shards),
+                                    'node_ids': replica.node_ids
+                                })
+                    except Exception as e:
+                        logger.debug(f"获取集合 {collection_name} 副本信息失败: {e}")
+
+                    # 段信息（仅对已加载的集合）
+                    segment_info = None
+                    if is_loaded:
+                        try:
+                            segments = utility.get_query_segment_info(collection_name, using=self._using)
+                            segment_info = {
+                                'segment_count': len(segments),
+                                'total_rows': sum(seg.num_rows for seg in segments)
+                            }
+                        except Exception as e:
+                            logger.debug(f"获取集合 {collection_name} 段信息失败: {e}")
+
+                    # 压缩状态
+                    compaction_state = None
+                    try:
+                        comp_state = coll.get_compaction_state()
+                        compaction_state = comp_state.state.name if comp_state else None
+                    except Exception:
+                        pass
+
+                    collection_details.append({
+                        'name': collection_name,
+                        'row_count': row_count,
+                        'field_count': field_count,
+                        'shard_count': num_shards,
+                        'partition_count': partition_count,
+                        'index_count': index_count,
+                        'indexes': index_details,
+                        'is_loaded': is_loaded,
+                        'load_state': load_status.name if load_status else 'Unknown',
+                        'replica_count': replica_count,
+                        'replicas': replica_info,
+                        'segment_info': segment_info,
+                        'compaction_state': compaction_state
+                    })
+
+                except Exception as e:
+                    logger.warning(f"获取集合 {collection_name} 的统计信息失败: {e}")
+                    continue
+
+            # 更新汇总统计信息
+            res.update({
+                'total_rows': total_rows,
+                'total_fields': total_fields,
+                'total_shards': total_shards,
+                'total_partitions': total_partitions,
+                'total_indexes': total_indexes,
+                'total_replicas': total_replicas,
+                'loaded_collections': total_loaded_collections,
+                'collection_details': collection_details
+            })
+
+            logger.debug(f"MilvusConnection.get_cluster_stats: {res}")
+            return res
+
+        except Exception as e:
+            logger.exception(f"MilvusConnection.get_cluster_stats: {e}")
+            return None
