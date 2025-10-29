@@ -3559,6 +3559,13 @@
                     "is_tools": true
                 },
                 {
+                    "llm_name": "claude-sonnet-4-5-20250929",
+                    "tags": "LLM,CHAT,IMAGE2TEXT,200k",
+                    "max_tokens": 204800,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
                     "llm_name": "claude-sonnet-4-20250514",
                     "tags": "LLM,CHAT,IMAGE2TEXT,200k",
                     "max_tokens": 204800,
@@ -4904,6 +4911,13 @@
             "llm": [
                 {
                     "llm_name": "LongCat-Flash-Chat",
+                    "tags": "LLM,CHAT,8000",
+                    "max_tokens": 8000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "LongCat-Flash-Thinking",
                     "tags": "LLM,CHAT,8000",
                     "max_tokens": 8000,
                     "mdl_type": "chat",
