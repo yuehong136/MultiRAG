@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  multirag:
+    image: multirag:latest
+    container_name: multirag
+    restart: unless-stopped
+    
+    # 端口映射
+    ports:
+      # API 服务端口（默认：根据配置）
+      - "8123:8123"
+      # Admin 服务端口（需要启用 --enable-adminserver）
+      - "${ADMIN_SVR_HTTP_PORT:-8130}:8130"
+    
+    # 环境变量配置
+    environment:
+      # 基础配置
+      - PYTHONIOENCODING=utf-8
+      - LANG=zh_CN.UTF-8
+      - LC_ALL=zh_CN.UTF-8
+      
+      # Admin Server 端口配置（可选）
+      - ADMIN_SVR_HTTP_PORT=8130
+      
+      # 任务执行器数量
+      - WS=1
+      
+      # Redis 配置（如果使用外部 Redis）
+      # - REDIS_HOST=redis
+      # - REDIS_PORT=6379
+      # - REDIS_PASSWORD=
+      
+      # 其他服务配置...
+    
+    # 数据卷挂载
+    volumes:
+      # 配置文件
+      - ./configs:/multirag/configs
+      # 日志目录
+      - ./logs:/multirag/logs
+      # 数据目录（根据实际情况调整）
+      # - ./data:/root/.ragdatav
+    
+    # 默认命令：启动所有服务（Redis、API Server、TaskExecutor）
+    # 不启动 Admin Server
+    command: []
+    
+    # ========== Admin Server 启用示例 ==========
+    # 
+    # 方式 1：启用 Admin Server + 所有其他服务
+    # command:
+    #   - --enable-adminserver
+    #
+    # 方式 2：只启用 Admin Server 和 Redis，不启动主服务和任务执行器
+    # command:
+    #   - --enable-adminserver
+    #   - --disable-server
+    #   - --disable-taskexecutor
+    #
+    # 方式 3：自定义组合
+    # command:
+    #   - --enable-adminserver
+    #   - --workers=2
+    #
+    # ============================================
+    
+    # 网络配置
+    networks:
+      - multirag-network
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8123/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ========== 可选：外部 Redis 服务 ==========
+  # 如果不想使用容器内置的 Redis，可以使用独立的 Redis 服务
+  # redis:
+  #   image: redis:7.4.3-alpine
+  #   container_name: multirag-redis
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   command: redis-server --appendonly yes
+  #   networks:
+  #     - multirag-network
+  # ============================================
+
+networks:
+  multirag-network:
+    driver: bridge
+
+# volumes:
+#   redis-data:
+
