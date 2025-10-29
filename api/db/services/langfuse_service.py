@@ -53,6 +53,19 @@ class TenantLangfuseService(CommonService):
         return None
 
     @classmethod
+    def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
+        """根据tenant_id删除所有相关的Langfuse配置记录"""
+        try:
+            result = db.query(cls.model).filter(
+                cls.model.tenant_id == tenant_id
+            ).delete(synchronize_session=False)
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
+            raise e
+
+    @classmethod
     def update_by_tenant(cls, db: Session, tenant_id, langfuse_keys):
         """
         根据租户ID更新Langfuse配置信息。

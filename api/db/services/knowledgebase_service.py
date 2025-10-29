@@ -247,7 +247,7 @@ class KnowledgebaseService(CommonService):
 
     @classmethod
     def get_kb_names(cls, db: Session, tenant_id):
-        fields = [cls.model.id]
+        fields = [cls.model.name]
         kbs = db.query(*fields).filter(cls.model.tenant_id == tenant_id)
         kb_names = [kb.name for kb in kbs]
         return kb_names
@@ -527,4 +527,32 @@ class KnowledgebaseService(CommonService):
             db.rollback()
             # 如果确实需要处理特定的"no data to save"类似情况
             # 可以在这里添加相应的逻辑
+            raise e
+
+    @classmethod
+    def decrease_document_num_in_delete(cls, db: Session, kb_id: str, doc_num_info: dict) -> int:
+        """删除文档时减少知识库的统计数量（文档数、分块数、token数）"""
+        try:
+            # 获取知识库记录
+            kb_row = cls.get_by_id(db, kb_id)
+            if not kb_row:
+                raise RuntimeError(f"kb_id {kb_id} does not exist")
+
+            # 构造更新字典
+            update_dict = {
+                'doc_num': kb_row.doc_num - doc_num_info['doc_num'],
+                'chunk_num': kb_row.chunk_num - doc_num_info['chunk_num'],
+                'token_num': kb_row.token_num - doc_num_info['token_num'],
+                'update_time': current_timestamp(),
+                'update_date': datetime_format(datetime.now())
+            }
+
+            # 执行更新
+            result = db.query(cls.model).filter(
+                cls.model.id == kb_id
+            ).update(update_dict, synchronize_session=False)
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
             raise e

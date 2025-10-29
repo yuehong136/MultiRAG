@@ -33,6 +33,30 @@ class File2DocumentService(CommonService):
         return db.query(cls.model).filter_by(document_id=document_id).all()
 
     @classmethod
+    def get_by_document_ids(cls, db: Session, document_ids: list[str]) -> list[dict]:
+        """根据文档ID列表批量查询文件-文档关联记录"""
+        try:
+            objs = db.query(cls.model).filter(
+                cls.model.document_id.in_(document_ids)
+            ).all()
+
+            return [
+                {
+                    "id": obj.id,
+                    "file_id": obj.file_id,
+                    "document_id": obj.document_id,
+                    "create_time": obj.create_time,
+                    "create_date": obj.create_date,
+                    "update_time": obj.update_time,
+                    "update_date": obj.update_date
+                }
+                for obj in objs
+            ]
+        except Exception:
+            logging.exception("Failed to get file2document records by document_ids")
+            return []
+
+    @classmethod
     def insert(cls, db: Session, obj: dict):
         if not cls.save(db, **obj):
             raise RuntimeError("Database error (File)!")
@@ -48,6 +72,42 @@ class File2DocumentService(CommonService):
             db.rollback()  # 回滚事务
             logging.exception(f"[delete_by_file_id] Error occurred")
             return 0
+
+    @classmethod
+    def delete_by_document_ids_or_file_ids(cls, db: Session, document_ids: list[str] | None = None, file_ids: list[str] | None = None) -> int:
+        """根据文档ID列表或文件ID列表删除文件-文档关联记录"""
+        try:
+            from sqlalchemy import or_
+
+            # 构造过滤条件
+            if not document_ids and not file_ids:
+                return 0
+
+            if not document_ids:
+                # 只有 file_ids
+                result = db.query(cls.model).filter(
+                    cls.model.file_id.in_(file_ids)
+                ).delete(synchronize_session=False)
+            elif not file_ids:
+                # 只有 document_ids
+                result = db.query(cls.model).filter(
+                    cls.model.document_id.in_(document_ids)
+                ).delete(synchronize_session=False)
+            else:
+                # 两者都有，使用 OR 条件
+                result = db.query(cls.model).filter(
+                    or_(
+                        cls.model.document_id.in_(document_ids),
+                        cls.model.file_id.in_(file_ids)
+                    )
+                ).delete(synchronize_session=False)
+
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
+            logging.exception("Failed to delete file2document records")
+            raise e
 
     @classmethod
     def delete_by_document_id(cls, db: Session, doc_id: str):

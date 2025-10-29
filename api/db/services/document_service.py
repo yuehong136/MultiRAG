@@ -332,6 +332,84 @@ class DocumentService(CommonService):
         return int(query.scalar()) or 0
 
     @classmethod
+    def get_all_doc_ids_by_kb_ids(cls, db: Session, kb_ids: list[str]) -> list[dict]:
+        """根据知识库ID列表批量查询所有文档ID，使用分页避免内存溢出"""
+        stmt = (
+            select(cls.model.id)
+            .where(cls.model.kb_id.in_(kb_ids))
+            .order_by(cls.model.create_time.asc())
+        )
+
+        # maybe cause slow query by deep paginate, optimize later
+        offset, limit = 0, 100
+        res = []
+
+        while True:
+            try:
+                doc_batch = db.execute(
+                    stmt.offset(offset).limit(limit)
+                ).scalars().all()
+
+                if not doc_batch:
+                    break
+
+                res.extend([{"id": doc_id} for doc_id in doc_batch])
+                offset += limit
+            except Exception:
+                logging.exception("Failed to get document IDs for kb_ids at offset %d", offset)
+                break
+
+        return res
+
+    @classmethod
+    def get_all_docs_by_creator_id(cls, db: Session, creator_id: str) -> list[dict]:
+        """根据创建者ID批量查询所有文档信息，使用分页避免内存溢出"""
+        stmt = (
+            select(
+                cls.model.id,
+                cls.model.kb_id,
+                cls.model.token_num,
+                cls.model.chunk_num,
+                Knowledgebase.tenant_id,
+                Knowledgebase.name.label('kb_name')
+            )
+            .join(Knowledgebase, Knowledgebase.id == cls.model.kb_id)
+            .where(cls.model.created_by == creator_id)
+            .order_by(cls.model.create_time.asc())
+        )
+
+        # maybe cause slow query by deep paginate, optimize later
+        offset, limit = 0, 100
+        res = []
+
+        while True:
+            try:
+                doc_batch = db.execute(
+                    stmt.offset(offset).limit(limit)
+                ).all()
+
+                if not doc_batch:
+                    break
+
+                res.extend([
+                    {
+                        "id": doc.id,
+                        "kb_id": doc.kb_id,
+                        "token_num": doc.token_num,
+                        "chunk_num": doc.chunk_num,
+                        "tenant_id": doc.tenant_id,
+                        "kb_name": doc.kb_name
+                    }
+                    for doc in doc_batch
+                ])
+                offset += limit
+            except Exception:
+                logging.exception("Failed to get documents for creator_id=%s at offset %d", creator_id, offset)
+                break
+
+        return res
+
+    @classmethod
     def preview_document_chunks(
         cls,
         db: Session,

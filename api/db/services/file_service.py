@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from api.db import FileType, KNOWLEDGEBASE_FOLDER_NAME, FileSource, ParserType
 from api.db.db_models import File, Document, Knowledgebase, File2Document
@@ -117,6 +117,35 @@ class FileService(CommonService):
         else:
             result_ids.append(folder_id)
         return result_ids
+
+    @classmethod
+    def get_all_file_ids_by_tenant_id(cls, db: Session, tenant_id: str) -> list[dict]:
+        """根据tenant_id批量查询所有文件ID，使用分页避免内存溢出"""
+        stmt = (
+            select(cls.model.id)
+            .where(cls.model.tenant_id == tenant_id)
+            .order_by(cls.model.create_time.asc())
+        )
+
+        offset, limit = 0, 100
+        res = []
+
+        while True:
+            try:
+                file_batch = db.execute(
+                    stmt.offset(offset).limit(limit)
+                ).scalars().all()
+
+                if not file_batch:
+                    break
+
+                res.extend([{"id": file_id} for file_id in file_batch])
+                offset += limit
+            except Exception:
+                logging.exception("Failed to get file IDs for tenant_id=%s at offset %d", tenant_id, offset)
+                break
+
+        return res
 
     @classmethod
     def create_folder(cls, db: Session, file: File, parent_id: str, name: list[str], count: int) -> File:

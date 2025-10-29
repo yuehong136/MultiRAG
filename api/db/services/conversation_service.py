@@ -1,8 +1,9 @@
+import logging
 import time
 import json
 from uuid import uuid4
 
-from sqlalchemy import asc
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import StatusEnum
@@ -41,6 +42,50 @@ class ConversationService(CommonService):
         # 将结果转换为字典形式返回
         return [item.__dict__ for item in results]
 
+    @classmethod
+    def get_all_conversation_by_dialog_ids(cls, db: Session, dialog_ids: list[str]) -> list[dict]:
+        """根据对话ID列表批量查询所有会话记录，使用分页避免内存溢出"""
+
+        stmt = (
+            select(cls.model)
+            .where(cls.model.dialog_id.in_(dialog_ids))
+            .order_by(cls.model.create_time.asc())
+        )
+
+        offset, limit = 0, 100
+        res = []
+
+        while True:
+            try:
+                s_batch = db.execute(
+                    stmt.offset(offset).limit(limit)
+                ).scalars().all()
+
+                if not s_batch:
+                    break
+
+                # 将 ORM 对象转换为字典
+                res.extend([
+                    {
+                        "id": session.id,
+                        "dialog_id": session.dialog_id,
+                        "name": session.name,
+                        "message": session.message,
+                        "reference": session.reference,
+                        "user_id": session.user_id,
+                        "create_time": session.create_time,
+                        "create_date": session.create_date,
+                        "update_time": session.update_time,
+                        "update_date": session.update_date
+                    }
+                    for session in s_batch
+                ])
+                offset += limit
+            except Exception:
+                logging.exception("Failed to get conversations for dialog_ids at offset %d", offset)
+                break
+
+        return res
 
 def structure_answer(conv, ans, message_id, session_id):
     reference = ans["reference"]

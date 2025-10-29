@@ -156,8 +156,12 @@ async def delete_user(username: str, auth: AdminAuth) -> APIResponse[None]:
     """删除用户"""
     try:
         admin_username, db = auth
-        UserMgr.delete_user(db, username)
-        return success_response(None, "User and all data deleted successfully")
+        res = UserMgr.delete_user(db, username)
+        if res["success"]:
+            return success_response(None, res["message"])
+        else:
+            return error_response(res["message"])
+
     except AdminException as e:
         return error_response(e.message, e.code)
     except Exception as e:

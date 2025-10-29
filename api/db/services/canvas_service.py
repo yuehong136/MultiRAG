@@ -107,6 +107,7 @@ class UserCanvasService(CommonService):
         """
         # will get all permitted agents, be cautious
         fields = [
+            cls.model.id,
             cls.model.title,
             cls.model.permission,
             cls.model.canvas_type,
@@ -142,7 +143,7 @@ class UserCanvasService(CommonService):
         return res
 
     @classmethod
-    def get_by_tenant_id(cls, db: Session, pid: str):
+    def get_by_canvas_id(cls, db: Session, pid: str):
         """
         返回 (True, dict) / (False, None)
         等价 Peewee：join User 取 nickname / avatar
@@ -240,7 +241,7 @@ class UserCanvasService(CommonService):
         """Check whether the given tenant can access the canvas."""
         from api.db.services.user_service import UserTenantService
 
-        exists, canvas = UserCanvasService.get_by_tenant_id(db, canvas_id)
+        exists, canvas = UserCanvasService.get_by_canvas_id(db, canvas_id)
         if not exists or not canvas:
             return False
 

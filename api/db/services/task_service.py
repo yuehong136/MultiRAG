@@ -292,6 +292,20 @@ class TaskService(CommonService):
                     .values(progress=prog)
                 )
 
+    @classmethod
+    def delete_by_doc_ids(cls, db: Session, doc_ids: list[str]) -> int:
+        """根据文档ID列表删除相关的任务记录"""
+        try:
+            result = db.query(cls.model).filter(
+                cls.model.doc_id.in_(doc_ids)
+            ).delete(synchronize_session=False)
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
+            logging.exception(f"Failed to delete tasks for doc_ids={doc_ids}")
+            raise e
+
 
 def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
     """Create and queue document processing tasks.

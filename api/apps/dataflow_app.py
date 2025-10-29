@@ -214,7 +214,7 @@ def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)) ->
     try:
         if not UserCanvasService.accessible(db, canvas_id, user.id):
             return get_data_error_result(retmsg="canvas not found.")
-        c = UserCanvasService.get_by_tenant_id(db, canvas_id)
+        c = UserCanvasService.get_by_canvas_id(db, canvas_id)
         return get_json_result(data=c)
     except Exception as e:
         return server_error_response(e)
@@ -337,7 +337,7 @@ async def upload(
         dict[str, Any]: 上传结果，包含文件元数据
     """
     try:
-        cvs = UserCanvasService.get_by_tenant_id(db, canvas_id)
+        cvs = UserCanvasService.get_by_canvas_id(db, canvas_id)
         if not cvs:
             return get_data_error_result(retmsg="canvas not found.")
         

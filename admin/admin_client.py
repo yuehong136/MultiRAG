@@ -488,18 +488,18 @@ class AdminCLI:
         username_tree: Tree = command['username']
         username: str = username_tree.children[0].strip("'\"")
         print(f"Dropping user: {username}")
-        
+
         url = f'http://{self.host}:{self.port}/api/v1/admin/users/{username}'
         response = requests.delete(url, auth=HTTPBasicAuth(self.admin_account, self.admin_password))
-        
+        res_json = response.json()
         if response.status_code == 200:
-            res_json = response.json()
             if res_json.get('code') == 0:
-                print(f"User '{username}' deleted successfully")
+                print(res_json.get("message", "User dropped successfully"))
             else:
-                print(f"Failed to delete user: {res_json.get('message')}")
+                # 业务逻辑错误（如用户处于 active 状态无法删除）
+                print(f"Fail to drop user, code: {res_json.get('code', -1)}, message: {res_json.get('message', 'Unknown error')}")
         else:
-            print(f"Request failed with status code: {response.status_code}")
+            print(f"HTTP error, status: {response.status_code}")
 
     def _handle_alter_user(self, command):
         username_tree: Tree = command['username']
@@ -625,6 +625,7 @@ Commands:
   DROP USER <user>
   CREATE USER <user> <password>
   ALTER USER PASSWORD <user> <new_password>
+  ALTER USER ACTIVE <user> <on/off>
   LIST DATASETS OF <user>
   LIST AGENTS OF <user>
 

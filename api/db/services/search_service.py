@@ -154,6 +154,19 @@ class SearchService(CommonService):
         return search_list, count
 
     @classmethod
+    def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
+        """根据tenant_id删除所有相关的搜索配置记录"""
+        try:
+            result = db.query(cls.model).filter(
+                cls.model.tenant_id == tenant_id
+            ).delete(synchronize_session=False)
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
+            raise e
+
+    @classmethod
     def get_by_user_id(cls, db: Session, user_id: str):
         """根据用户ID获取搜索配置列表"""
         query = db.query(cls.model).filter(

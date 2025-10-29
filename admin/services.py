@@ -3,7 +3,7 @@ import re
 from sqlalchemy.orm import Session
 
 from api.db import ActiveEnum
-from api.db.joint_services.user_account_service import create_new_user
+from api.db.joint_services.user_account_service import create_new_user, delete_user_data
 from api.db.services import UserService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -99,99 +99,14 @@ class UserMgr:
 
     @staticmethod
     def delete_user(db: Session, username: str):
-        """
-        删除用户及其所有关联数据
-        
-        Args:
-            db: 数据库会话
-            username: 用户邮箱
-            
-        级联删除内容：
-        - User 记录
-        - Tenant 记录
-        - UserTenant 关系记录
-        - TenantLLM 配置记录
-        - File 记录（包括所有文件和文件夹）
-        - Knowledgebase 记录及相关文档
-        """
-        import logging
-        from api.db.db_models import TenantLLM
-        from api.db.services.knowledgebase_service import KnowledgebaseService
-        from api.db.services.file_service import FileService
-        
-        users = UserService.query(db, email=username)
-        if not users:
-            raise AdminException(f"User '{username}' not found", 404)
-        
-        user = users[0]
-        user_id = user.id
-        
-        # 防止删除超级管理员账户
-        if hasattr(user, 'is_superuser') and user.is_superuser:
-            raise AdminException("Cannot delete superuser account", 403)
-        
-        try:
-            logging.info(f"Starting cascade delete for user: {username} (id: {user_id})")
-            
-            # 1. 删除知识库（会级联删除相关文档、向量等）
-            try:
-                kbs = KnowledgebaseService.query(db, tenant_id=user_id)
-                if kbs:
-                    logging.info(f"Deleting {len(kbs)} knowledgebases for user {username}")
-                    for kb in kbs:
-                        KnowledgebaseService.delete_by_id(db, kb.id)
-            except Exception as e:
-                logging.warning(f"Error deleting knowledgebases: {e}")
-            
-            # 2. 删除文件和文件夹
-            try:
-                files = db.query(FileService.model).filter(
-                    FileService.model.tenant_id == user_id
-                ).all()
-                if files:
-                    logging.info(f"Deleting {len(files)} files for user {username}")
-                    for file in files:
-                        FileService.delete_by_id(db, file.id)
-            except Exception as e:
-                logging.warning(f"Error deleting files: {e}")
-            
-            # 3. 删除租户 LLM 配置
-            try:
-                deleted_count = db.query(TenantLLM).filter(
-                    TenantLLM.tenant_id == user_id
-                ).delete(synchronize_session=False)
-                if deleted_count > 0:
-                    logging.info(f"Deleted {deleted_count} tenant LLM configs for user {username}")
-                db.commit()
-            except Exception as e:
-                logging.warning(f"Error deleting tenant LLM configs: {e}")
-                db.rollback()
-            
-            # 4. 删除用户-租户关系
-            try:
-                user_tenants = UserTenantService.query(db, user_id=user_id)
-                if user_tenants:
-                    logging.info(f"Deleting {len(user_tenants)} user-tenant relationships for user {username}")
-                    for ut in user_tenants:
-                        UserTenantService.delete_by_id(db, ut.id)
-            except Exception as e:
-                logging.warning(f"Error deleting user-tenant relationships: {e}")
-            
-            # 5. 删除租户
-            try:
-                TenantService.delete_by_id(db, user_id)
-                logging.info(f"Deleted tenant for user {username}")
-            except Exception as e:
-                logging.warning(f"Error deleting tenant: {e}")
-            
-            # 6. 最后删除用户记录
-            UserService.delete_by_id(db, user_id)
-            logging.info(f"User {username} and all related data deleted successfully")
-            
-        except Exception as e:
-            db.rollback()
-            logging.exception(f"Error during cascade delete for user {username}: {e}")
-            raise AdminException(f"Failed to delete user: {str(e)}", 500)
+        # use email to delete
+        user_list = UserService.query_user_by_email(db, username)
+        if not user_list:
+            raise UserNotFoundError(username)
+        if len(user_list) > 1:
+            raise AdminException(f"Exist more than 1 user: {username}!")
+        usr = user_list[0]
+        return delete_user_data(db, usr.id)
 
     @staticmethod
     def update_user_password(db: Session, username: str, new_password: str) -> str:
@@ -300,7 +215,13 @@ class UserServiceMgr:
         tenants = TenantService.get_joined_tenants_by_user_id(db, usr.id)
         tenant_ids = [m["tenant_id"] for m in tenants]
         # filter permitted agents and owned agents
-        return UserCanvasService.get_all_agents_by_tenant_ids(db, tenant_ids, usr.id)
+        res = UserCanvasService.get_all_agents_by_tenant_ids(db, tenant_ids, usr.id)
+        return [{
+            'title': r['title'],
+            'permission': r['permission'],
+            'canvas_type': r['canvas_type'],
+            'canvas_category': r['canvas_category']
+        } for r in res]
 
 class ServiceMgr:
     @staticmethod

@@ -18,7 +18,7 @@ import trio
 from langfuse import Langfuse
 from agentic_reasoning import DeepResearcher
 from datetime import datetime
-from sqlalchemy import asc, func
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from api.db import LLMType, StatusEnum, ParserType
@@ -223,6 +223,35 @@ class DialogService(CommonService):
             result.append(dlg_dict)
 
         return result, total
+
+    @classmethod
+    def get_all_dialogs_by_tenant_id(cls, db: Session, tenant_id: str) -> list[dict]:
+        """根据tenant_id批量查询所有对话ID，使用分页避免内存溢出"""
+        stmt = (
+            select(cls.model.id)
+            .where(cls.model.tenant_id == tenant_id)
+            .order_by(cls.model.create_time.asc())
+        )
+
+        offset, limit = 0, 100
+        res = []
+
+        while True:
+            try:
+                d_batch = db.execute(
+                    stmt.offset(offset).limit(limit)
+                ).scalars().all()
+
+                if not d_batch:
+                    break
+
+                res.extend([{"id": dialog_id} for dialog_id in d_batch])
+                offset += limit
+            except Exception:
+                logging.exception("Failed to get dialog IDs for tenant_id=%s at offset %d", tenant_id, offset)
+                break
+
+        return res
 
 def chat_solo(db, dialog, messages, stream=True):
     if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":

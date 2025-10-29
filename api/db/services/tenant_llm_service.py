@@ -268,6 +268,20 @@ class TenantLLMService(CommonService):
         objs = db.query(cls.model).filter(cls.model.llm_factory == "OpenAI", cls.model.llm_name.notin_(["text-embedding-3-small", "text-embedding-3-large"])).all()
         return objs
 
+    @classmethod
+    def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
+        """根据tenant_id删除所有相关的LLM配置记录"""
+        try:
+            result = db.query(cls.model).filter(
+                cls.model.tenant_id == tenant_id
+            ).delete(synchronize_session=False)
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
+            logging.exception(f"Failed to delete tenant LLM records for tenant_id={tenant_id}")
+            raise e
+
     @staticmethod
     def llm_id2llm_type(llm_id: str) -> str | None:
         from api.db.services.llm_service import LLMService

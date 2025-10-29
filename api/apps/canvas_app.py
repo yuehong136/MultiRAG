@@ -193,7 +193,7 @@ def save(request: SetCanvasRequest, db: Session = Depends(get_db), user=Depends(
 def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     if not UserCanvasService.accessible(db, canvas_id, user.id):
         return get_data_error_result(retmsg="canvas not found.")
-    e, c = UserCanvasService.get_by_tenant_id(db, canvas_id)
+    e, c = UserCanvasService.get_by_canvas_id(db, canvas_id)
     return get_json_result(data=c)
 
 
@@ -311,7 +311,7 @@ async def upload(
     db: Session = Depends(get_db),
 ):
     try:
-        e, cvs = UserCanvasService.get_by_tenant_id(db, canvas_id)
+        e, cvs = UserCanvasService.get_by_canvas_id(db, canvas_id)
         if not e:
             return get_data_error_result(retmsg="canvas not found.")
         user_id = cvs["user_id"]
