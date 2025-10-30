@@ -139,7 +139,7 @@ def templates(
     - 快速复制常用配置
     - 学习Canvas的DSL结构
     """
-    templates_list = CanvasTemplateService.query(db, canvas_category=CanvasCategory.Agent)
+    templates_list = CanvasTemplateService.get_all(db)
     return get_json_result(data=[c.to_dict() for c in templates_list])
 
 
