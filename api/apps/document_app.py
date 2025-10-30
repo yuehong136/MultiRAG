@@ -2415,7 +2415,7 @@ def change_parser(
 
     try:
         # 处理 pipeline_id 更新
-        if "pipeline_id" in req and req["pipeline_id"] is not None:
+        if "pipeline_id" in req and req["pipeline_id"] != "":
             if doc.pipeline_id == req["pipeline_id"]:
                 return get_json_result(data=True)
             
