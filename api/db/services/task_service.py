@@ -59,38 +59,75 @@ class TaskService(CommonService):
 
     @classmethod
     def get_task(cls, db: Session, task_id, doc_ids=[]):
-        doc_id = cls.model.doc_id
-        if doc_id == CANVAS_DEBUG_DOC_ID and doc_ids:
-            doc_id = doc_ids[0]
-
-        query = db.query(
-            cls.model.id,
-            cls.model.doc_id,
-            cls.model.from_page,
-            cls.model.to_page,
-            cls.model.retry_count,
-            Document.kb_id,
-            Document.parser_id,
-            Document.parser_config,
-            Document.name,
-            Document.type,
-            Document.location,
-            Document.size,
-            Document.auth,
-            Knowledgebase.tenant_id,
-            Knowledgebase.language,
-            Knowledgebase.embd_id,
-            Knowledgebase.pagerank,
-            Knowledgebase.parser_config.label("kb_parser_config"),
-            Tenant.img2txt_id,
-            Tenant.asr_id,
-            Tenant.llm_id,
-            cls.model.update_time,
-            # cls.model.progress_msg
-        ).join(Document, doc_id == Document.id
-               ).join(Knowledgebase, Document.kb_id == Knowledgebase.id
-                      ).join(Tenant, Knowledgebase.tenant_id == Tenant.id
-                             ).filter(cls.model.id == task_id)
+        # 先获取任务的doc_id，判断是否需要使用doc_ids[0]
+        task_record = db.query(cls.model.doc_id).filter(cls.model.id == task_id).first()
+        if not task_record:
+            return None
+        
+        # 根据任务的doc_id决定用哪个ID去JOIN Document表
+        task_doc_id = task_record[0]
+        use_first_doc = task_doc_id in [CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID] and doc_ids
+        
+        if use_first_doc:
+            # 对于fake_doc_id任务，使用doc_ids[0]去获取Document配置
+            query = db.query(
+                cls.model.id,
+                cls.model.doc_id,
+                cls.model.from_page,
+                cls.model.to_page,
+                cls.model.retry_count,
+                Document.kb_id,
+                Document.parser_id,
+                Document.parser_config,
+                Document.name,
+                Document.type,
+                Document.location,
+                Document.size,
+                Document.auth,
+                Knowledgebase.tenant_id,
+                Knowledgebase.language,
+                Knowledgebase.embd_id,
+                Knowledgebase.pagerank,
+                Knowledgebase.parser_config.label("kb_parser_config"),
+                Tenant.img2txt_id,
+                Tenant.asr_id,
+                Tenant.llm_id,
+                cls.model.update_time,
+            ).select_from(cls.model
+                         ).join(Document, Document.id == doc_ids[0]
+                                ).join(Knowledgebase, Document.kb_id == Knowledgebase.id
+                                       ).join(Tenant, Knowledgebase.tenant_id == Tenant.id
+                                              ).filter(cls.model.id == task_id)
+        else:
+            # 普通任务，使用Task.doc_id去JOIN
+            query = db.query(
+                cls.model.id,
+                cls.model.doc_id,
+                cls.model.from_page,
+                cls.model.to_page,
+                cls.model.retry_count,
+                Document.kb_id,
+                Document.parser_id,
+                Document.parser_config,
+                Document.name,
+                Document.type,
+                Document.location,
+                Document.size,
+                Document.auth,
+                Knowledgebase.tenant_id,
+                Knowledgebase.language,
+                Knowledgebase.embd_id,
+                Knowledgebase.pagerank,
+                Knowledgebase.parser_config.label("kb_parser_config"),
+                Tenant.img2txt_id,
+                Tenant.asr_id,
+                Tenant.llm_id,
+                cls.model.update_time,
+            ).select_from(cls.model
+                         ).join(Document, cls.model.doc_id == Document.id
+                                ).join(Knowledgebase, Document.kb_id == Knowledgebase.id
+                                       ).join(Tenant, Knowledgebase.tenant_id == Tenant.id
+                                              ).filter(cls.model.id == task_id)
 
         docs = query.all()
         if not docs:
@@ -366,7 +403,7 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
             "progress": 0.0,
             "from_page": 0,
             "to_page": 100000000,
-            "begin_at": datetime.now().isoformat(),
+            "begin_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     parse_task_array = []
@@ -500,7 +537,7 @@ def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_
         to_page=100000000,
         task_type="dataflow" if not rerun else "dataflow_rerun",
         priority=priority,
-        begin_at=datetime.now().isoformat(),
+        begin_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 
     if doc_id not in [CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID]:

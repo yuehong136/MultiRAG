@@ -2373,6 +2373,7 @@ def change_parser(
         e = DocumentService.update_by_id(
             db, doc.id,
             {
+                "pipeline_id": req["pipeline_id"],
                 "parser_id": req.get("parser_id", doc.parser_id),
                 "progress": 0,
                 "progress_msg": "",

@@ -258,11 +258,28 @@ async def collect(db: Session):
 
     canceled = False
     if msg.get("doc_id", "") in [GRAPH_RAPTOR_FAKE_DOC_ID, CANVAS_DEBUG_DOC_ID]:
+        # Redis消息已包含fake_doc_id和doc_ids，先使用它
         task = msg
-        if task["task_type"] in ["graphrag", "raptor", "mindmap"] and msg.get("doc_ids", []):
-            task = TaskService.get_task(db, msg["id"], msg["doc_ids"])
-            task["doc_ids"] = msg["doc_ids"]
+        
+        if task.get("task_type") in ["graphrag", "raptor", "mindmap"]:
+            # 尝试从数据库获取完整配置（tenant_id, parser_config等）
+            db_task = TaskService.get_task(db, msg["id"], msg.get("doc_ids", []))
+            
+            if db_task:
+                # 成功获取数据库配置，合并数据
+                task = db_task
+                # Redis消息中的这两个字段需要覆盖数据库的
+                task["doc_id"] = msg["doc_id"]  # 保持使用fake_doc_id
+                task["doc_ids"] = msg.get("doc_ids", []) or []  # 文档列表
+                logging.info(f"Task {msg['id']}: merged DB config with Redis message (doc_id={task['doc_id']}, doc_ids count={len(task['doc_ids'])})")
+            else:
+                # 数据库获取失败，使用Redis消息（已包含必要字段）
+                logging.warning(f"Task {msg['id']}: failed to get from DB, using Redis message data")
+                # 确保doc_ids字段存在
+                if "doc_ids" not in task:
+                    task["doc_ids"] = []
     else:
+        # 普通任务，从数据库获取
         task = TaskService.get_task(db, msg["id"])
 
     if task:
@@ -848,9 +865,8 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
     else:
         vctr_nm = "vector"
     for doc_id in doc_ids:
-        for d in settings.retrievaler.chunk_list(row["doc_id"], row["tenant_id"], [str(row["kb_id"])],
-                                                 fields=["content_with_weight", vctr_nm],
-                                                 sort_by_position=True):
+        # 使用真实的doc_id查询chunks，而不是row["doc_id"]（fake_doc_id）
+        for d in settings.retrievaler.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
             chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
 
     raptor = Raptor(
@@ -862,7 +878,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
         raptor_config["threshold"]
     )
     original_length = len(chunks)
-    chunks = await raptor(chunks, row["kb_parser_config"]["raptor"]["random_seed"], callback)
+    chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback)
     doc = {
         "doc_id": fake_doc_id,
         "kb_id": [str(row["kb_id"])],
@@ -879,6 +895,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
         d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
         d["create_timestamp_flt"] = datetime.now().timestamp()
         d[vctr_nm] = vctr.tolist()
+        # d["vector"] = vctr.tolist() # todo 怎么合理发挥我们支持两种向量字段的特性呢？
         d["content_with_weight"] = content
         d["content_ltks"] = rag_tokenizer.tokenize(content)
         d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
@@ -981,7 +998,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             progress_callback(prog=progress, msg="")
         
         # 拼接本批次chunk_ids并更新到TaskService
-        chunk_ids = [chunk["id"] for chunk in chunk_batch]
+        chunk_ids = [chunk["pk"] for chunk in chunk_batch]
         chunk_ids_str = " ".join(chunk_ids)
         try:
             TaskService.update_chunk_ids(db, task_id, chunk_ids_str)
@@ -1082,8 +1099,7 @@ async def do_handle_task(db, task):
         raise
 
     # init_kb(task, vector_size)
-    kb_id = DocumentService.get_by_doc_id(db, task_doc_id)["kb_id"]
-    kb_name = KnowledgebaseService.get_by_id(db, kb_id).name
+    kb_name = KnowledgebaseService.get_by_id(db, task_dataset_id).name
     await init_kb(task, kb_name)
 
     if task_type[:len("dataflow")] == "dataflow":
@@ -1098,8 +1114,21 @@ async def do_handle_task(db, task):
 
         kb_parser_config = kb.parser_config
         if not kb_parser_config.get("raptor", {}).get("use_raptor", False):
-            progress_callback(prog=-1.0, msg="Internal error: Invalid RAPTOR configuration")
-            return
+            kb_parser_config.update(
+                {
+                    "raptor": {
+                        "use_raptor": True,
+                        "prompt": "Please summarize the following paragraphs. Be careful with the numbers, do not make things up. Paragraphs as following:\n      {cluster_content}\nThe above is the content you need to summarize.",
+                        "max_token": 256,
+                        "threshold": 0.1,
+                        "max_cluster": 64,
+                        "random_seed": 0,
+                    },
+                }
+            )
+            if not KnowledgebaseService.update_by_id(kb.id, {"parser_config": kb_parser_config}):
+                progress_callback(prog=-1.0, msg="Internal error: Invalid RAPTOR configuration")
+                return
         # bind LLM for raptor
         chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
         # run RAPTOR
@@ -1429,14 +1458,15 @@ async def task_manager():
 async def main():
     logging.info(r"""
 ======================================================================
-  ______           __      ______                     __
- /_  __/___ ______/ /__   / ____/  _____  _______  __/ /_____  _____
-  / / / __ `/ ___/ //_/  / __/ | |/_/ _ \/ ___/ / / / __/ __ \/ ___/
- / / / /_/ (__  ) ,<    / /____>  </  __/ /__/ /_/ / /_/ /_/ / /
-/_/  \__,_/____/_/|_|  /_____/_/|_|\___/\___/\__,_/\__/\____/_/
+    ____                      __  _
+   /  _/___  ____ ____  _____/ /_(_)___  ____     ________  ______   _____  _____
+   / // __ \/ __ `/ _ \/ ___/ __/ / __ \/ __ \   / ___/ _ \/ ___/ | / / _ \/ ___/
+ _/ // / / / /_/ /  __(__  ) /_/ / /_/ / / / /  (__  )  __/ /   | |/ /  __/ /
+/___/_/ /_/\__, /\___/____/\__/_/\____/_/ /_/  /____/\___/_/    |___/\___/_/
+          /____/
 ======================================================================
     """)
-    logging.info(f'TaskExecutor - MultiRAG version: {get_multirag_version()}')
+    logging.info(f'MultiRAG version: {get_multirag_version()}')
     settings.init_settings()
     print_rag_settings()
     if sys.platform != "win32":

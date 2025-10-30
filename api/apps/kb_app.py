@@ -30,8 +30,9 @@ from api.db import StatusEnum, FileSource, PipelineTaskType, VALID_TASK_STATUS, 
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import get_json_result
 from api.apps import manager
-from core.nlp import search
 from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
+from core.nlp import search
+from core.utils.redis_conn import REDIS_CONN
 from core.utils.storage_factory import STORAGE_IMPL
 
 router = APIRouter()
@@ -147,7 +148,7 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
             "html4excel": False,
             "topn_tags": 3,
             "raptor": {
-                "use_raptor": False,
+                "use_raptor": True,
                 "prompt": "Please summarize the following paragraphs. Be careful with the numbers, do not make things up. Paragraphs as following:\n      {cluster_content}\nThe above is the content you need to summarize.",
                 "max_token": 256,
                 "threshold": 0.1,
@@ -288,6 +289,9 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
         kb["size"] = DocumentService.get_total_size_by_kb_id(db, kb_id=kb["id"],keywords="", run_status=[], types=[])
+        for key in ["graphrag_task_finish_at", "raptor_task_finish_at", "mindmap_task_finish_at"]:
+            if finish_at := kb.get(key):
+                kb[key] = finish_at.strftime("%Y-%m-%d %H:%M:%S")
         return get_json_result(data=kb)
     except Exception as e:
         return server_error_response(e)
@@ -1038,7 +1042,7 @@ def run_graphrag(
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
 
-    task_id = queue_raptor_o_graphrag_tasks(db, doc=sample_document, ty="graphrag", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids))
+    task_id = queue_raptor_o_graphrag_tasks(db, sample_doc_id=sample_document, ty="graphrag", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids))
 
     if not KnowledgebaseService.update_by_id(db, kb.id, {"graphrag_task_id": task_id}):
         logging.warning(f"Cannot save graphrag_task_id for kb {kb_id}")
@@ -1239,7 +1243,7 @@ def run_raptor(
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
 
-    task_id = queue_raptor_o_graphrag_tasks(db, doc=sample_document, ty="raptor", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids))
+    task_id = queue_raptor_o_graphrag_tasks(db, sample_doc_id=sample_document, ty="raptor", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids))
 
     if not KnowledgebaseService.update_by_id(db, kb.id, {"raptor_task_id": task_id}):
         logging.warning(f"Cannot save raptor_task_id for kb {kb_id}")
@@ -1381,7 +1385,7 @@ def run_mindmap(
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
 
-    task_id = queue_raptor_o_graphrag_tasks(db, doc=sample_document, ty="mindmap", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids))
+    task_id = queue_raptor_o_graphrag_tasks(db, sample_doc_id=sample_document, ty="mindmap", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids))
 
     if not KnowledgebaseService.update_by_id(db, kb.id, {"mindmap_task_id": task_id}):
         logging.warning(f"Cannot save mindmap_task_id for kb {kb_id}")
@@ -1511,19 +1515,26 @@ def delete_kb_task(
 
     match pipeline_task_type:
         case PipelineTaskType.GRAPH_RAG:
-            settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id, [kb.name]), kb_id)
-            kb_task_id = "graphrag_task_id"
+            settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id), kb_id)
+            kb_task_id_field = "graphrag_task_id"
+            task_id = kb.graphrag_task_id
             kb_task_finish_at = "graphrag_task_finish_at"
         case PipelineTaskType.RAPTOR:
-            kb_task_id = "raptor_task_id"
+            kb_task_id_field = "raptor_task_id"
+            task_id = kb.raptor_task_id
             kb_task_finish_at = "raptor_task_finish_at"
         case PipelineTaskType.MINDMAP:
-            kb_task_id = "mindmap_task_id"
+            kb_task_id_field = "mindmap_task_id"
+            task_id = kb.mindmap_task_id
             kb_task_finish_at = "mindmap_task_finish_at"
         case _:
-            return get_error_data_result(retmsg="Internal Error: Invalid task type")
+            return get_error_data_result(message="Internal Error: Invalid task type")
 
-    ok = KnowledgebaseService.update_by_id(db, kb_id, {kb_task_id: "", kb_task_finish_at: None})
+    def cancel_task(task_id):
+        REDIS_CONN.set(f"{task_id}-cancel", "x")
+    cancel_task(task_id)
+
+    ok = KnowledgebaseService.update_by_id(db, kb_id, {kb_task_id_field: "", kb_task_finish_at: None})
     if not ok:
         return server_error_response(f"Internal error: cannot delete task {pipeline_task_type}")
 

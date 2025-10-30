@@ -2202,11 +2202,13 @@ class DocumentService(CommonService):
 
     @classmethod
     def _sync_progress(cls, db: Session, docs: list[dict]):
+        from api.db.services.task_service import TaskService
+
         for d in docs:
             try:
                 # 从元组中提取文档ID
                 doc_id = d[0] if isinstance(d, tuple) else d["id"]
-                tsks = db.query(Task).filter_by(doc_id=doc_id).order_by(Task.create_time).all()
+                tsks = TaskService.query(db, doc_id=doc_id, order_by="create_time")
                 if not tsks:
                     continue
                 msg = []
@@ -2410,26 +2412,28 @@ class DocumentService(CommonService):
             "cancelled": int(cancelled),
         }
 
-def queue_raptor_o_graphrag_tasks(db, doc, ty, priority, fake_doc_id="", doc_ids=[]):
+def queue_raptor_o_graphrag_tasks(db, sample_doc_id, ty, priority, fake_doc_id="", doc_ids=[]):
     """
     You can provide a fake_doc_id to bypass the restriction of tasks at the knowledgebase level.
     Optionally, specify a list of doc_ids to determine which documents participate in the task.
     """
-    chunking_config = DocumentService.get_chunking_config(db, doc["id"])
+    assert ty in ["graphrag", "raptor", "mindmap"], "type should be graphrag, raptor or mindmap"
+
+    chunking_config = DocumentService.get_chunking_config(db, sample_doc_id["id"])
     hasher = xxhash.xxh64()
     for field in sorted(chunking_config.keys()):
         hasher.update(str(chunking_config[field]).encode("utf-8"))
 
     def new_task():
-        nonlocal doc
+        nonlocal sample_doc_id
         return {
             "id": get_uuid(),
-            "doc_id": fake_doc_id if fake_doc_id else doc["id"],
+            "doc_id": sample_doc_id["id"],
             "from_page": 100000000,
             "to_page": 100000000,
             "task_type": ty,
             "progress_msg":  datetime.now().strftime("%H:%M:%S") + " created task " + ty,
-            "begin_at": datetime.now().isoformat(),
+            "begin_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     task = new_task()
@@ -2439,9 +2443,9 @@ def queue_raptor_o_graphrag_tasks(db, doc, ty, priority, fake_doc_id="", doc_ids
     task["digest"] = hasher.hexdigest()
     bulk_insert_into_db(db, Task, [task], True)
 
-    if ty in ["graphrag", "raptor", "mindmap"]:
-        task["doc_ids"] = doc_ids
-        DocumentService.begin2parse(db, doc["id"])
+    task["doc_id"] = fake_doc_id
+    task["doc_ids"] = doc_ids
+    DocumentService.begin2parse(db, sample_doc_id["id"])
     assert REDIS_CONN.queue_product(get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
     return task["id"]
 
