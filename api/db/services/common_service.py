@@ -12,6 +12,7 @@ from sqlalchemy.orm.attributes import InstrumentedAttribute
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from api.db import db_models
+from api.utils import get_uuid
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -159,7 +160,7 @@ class CommonService(Generic[ModelType]):
     @retry_db_operation(max_attempts=3)  # 插入操作重试3次
     def insert(cls, db: Session, **kwargs) -> ModelType:
         if "id" not in kwargs:
-            kwargs["id"] = str(uuid.uuid4())
+            kwargs["id"] = get_uuid()
         now = cls.current_timestamp()
         kwargs["create_time"] = now
         kwargs["create_date"] = cls.current_datetime()
