@@ -460,6 +460,7 @@ def list_documents(
     desc: bool = Query(True),
     keywords: str | None = Query(None),
     id: str | None = Query(None),
+    name: str | None = Query(None),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
@@ -492,7 +493,8 @@ def list_documents(
             orderby, 
             desc, 
             keywords=keywords, 
-            doc_id=id
+            id=id,
+            name=name
         )
         
         # 重命名键名
@@ -1092,7 +1094,7 @@ def retrieval_test(
             question += keyword_extraction(chat_mdl, question)
         
         # 执行检索
-        ranks = settings.retrievaler.retrieval(
+        ranks = settings.retriever.retrieval(
             question,
             embd_mdl,
             tenant_ids,
@@ -1111,7 +1113,7 @@ def retrieval_test(
         
         # 知识图谱增强
         if use_kg:
-            ck = settings.kg_retrievaler.retrieval(
+            ck = settings.kg_retriever.retrieval(
                 question, 
                 [k.tenant_id for k in kbs], 
                 kb_ids, 

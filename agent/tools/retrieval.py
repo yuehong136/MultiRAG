@@ -124,7 +124,7 @@ class Retrieval(ToolBase, ABC):
 
         if kbs:
             query = re.sub(r"^user[:：\s]*", "", query, flags=re.IGNORECASE)
-            kbinfos = settings.retrievaler.retrieval(
+            kbinfos = settings.retriever.retrieval(
                 query,
                 embd_mdl,
                 [kb.tenant_id for kb in kbs],
@@ -135,11 +135,11 @@ class Retrieval(ToolBase, ABC):
                 1 - self._param.keywords_similarity_weight,
                 aggs=False,
                 rerank_mdl=rerank_mdl,
-                rank_feature=label_question(query, kbs),
+                rank_feature=label_question(db, query, kbs),
             )
             if self._param.use_kg:
                 with db_connection() as db:
-                    ck = settings.kg_retrievaler.retrieval(query,
+                    ck = settings.kg_retriever.retrieval(query,
                                                            [kb.tenant_id for kb in kbs],
                                                            kb_ids,
                                                            embd_mdl,
