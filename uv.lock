@@ -785,6 +785,15 @@ wheels = [
 ]
 
 [[package]]
+name = "cobble"
+version = "0.1.4"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/54/7a/a507c709be2c96e1bb6102eb7b7f4026c5e5e223ef7d745a17d239e9d844/cobble-0.1.4.tar.gz", hash = "sha256:de38be1539992c8a06e569630717c485a5f91be2192c461ea2b220607dfa78aa" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/d5/e1/3714a2f371985215c219c2a70953d38e3eed81ef165aed061d21de0e998b/cobble-0.1.4-py3-none-any.whl", hash = "sha256:36c91b1655e599fd428e2b95fdd5f0da1ca2e9f1abb0bc871dec21a0e78a2b44" },
+]
+
+[[package]]
 name = "cohere"
 version = "5.6.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2852,6 +2861,18 @@ wheels = [
 ]
 
 [[package]]
+name = "mammoth"
+version = "1.11.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "cobble" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ed/3c/a58418d2af00f2da60d4a51e18cd0311307b72d48d2fffec36a97b4a5e44/mammoth-1.11.0.tar.gz", hash = "sha256:a0f59e442f34d5b6447f4b0999306cbf3e67aaabfa8cb516f878fb1456744637" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/ca/54/2e39566a131b13f6d8d193f974cb6a34e81bb7cc2fa6f7e03de067b36588/mammoth-1.11.0-py2.py3-none-any.whl", hash = "sha256:c077ab0d450bd7c0c6ecd529a23bf7e0fa8190c929e28998308ff4eada3f063b" },
+]
+
+[[package]]
 name = "markdown"
 version = "3.6"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2879,6 +2900,19 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/b5/1a/d235321eac5ba6de9f83dd172b9549eb03fd149ecda4c8c25cdc9a5224bc/markdown_to_json-2.1.1.tar.gz", hash = "sha256:27642c42acd9130d1449f791f57fd0c4bbf58c7a76cfb5af6d42010ca97b1107" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/47/2b/dac4143951a16c0c03e8fe217c9fa784838d02a29c52ef0e8b265befea8f/markdown_to_json-2.1.1-py3-none-any.whl", hash = "sha256:c73b8a3ac7fbde65463dbaeba8bb925d1d54377cbb01a064cd65e1f3e394bd62" },
+]
+
+[[package]]
+name = "markdownify"
+version = "1.2.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "beautifulsoup4" },
+    { name = "six" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/83/1b/6f2697b51eaca81f08852fd2734745af15718fea10222a1d40f8a239c4ea/markdownify-1.2.0.tar.gz", hash = "sha256:f6c367c54eb24ee953921804dfe6d6575c5e5b42c643955e7242034435de634c" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/6a/e2/7af643acb4cae0741dffffaa7f3f7c9e7ab4046724543ba1777c401d821c/markdownify-1.2.0-py3-none-any.whl", hash = "sha256:48e150a1c4993d4d50f282f725c0111bd9eb25645d41fa2f543708fd44161351" },
 ]
 
 [[package]]
@@ -3216,8 +3250,10 @@ dependencies = [
     { name = "langfuse" },
     { name = "lark" },
     { name = "litellm" },
+    { name = "mammoth" },
     { name = "markdown" },
     { name = "markdown-to-json" },
+    { name = "markdownify" },
     { name = "mcp" },
     { name = "mini-racer" },
     { name = "minio" },
@@ -3376,9 +3412,11 @@ requires-dist = [
     { name = "langfuse", specifier = ">=3.2.4" },
     { name = "lark", specifier = ">=1.2.2" },
     { name = "litellm", specifier = ">=1.74.15.post1" },
+    { name = "mammoth", specifier = ">=1.11.0" },
     { name = "markdown", specifier = "==3.6" },
     { name = "markdown-to-json", specifier = "==2.1.1" },
     { name = "markdown-to-json", specifier = ">=2.1.1" },
+    { name = "markdownify", specifier = ">=1.2.0" },
     { name = "mcp", specifier = ">=1.9.4" },
     { name = "mini-racer", specifier = ">=0.12.4,<0.13.0" },
     { name = "minio", specifier = "==7.2.4" },

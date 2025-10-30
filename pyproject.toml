@@ -178,6 +178,8 @@ dependencies = [
     "fastapi-mail>=1.4.1",
     "sqladmin>=0.21.0",
     "lark>=1.2.2",
+    "mammoth>=1.11.0",
+    "markdownify>=1.2.0",
 ]
 
 [tool.uv]
