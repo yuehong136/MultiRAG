@@ -398,14 +398,28 @@ async def token_required(request: Request, db: Session = Depends(get_db)):
 #     return decorated_function
 
 
-def get_result(retcode: settings.RetCode = settings.RetCode.SUCCESS, retmsg='error', data=None):
-    if retcode == 0:
+def get_result(retcode=settings.RetCode.SUCCESS, retmsg='error', data=None, total=None):
+    """
+    Standard API response format:
+    {
+        "code": 0,
+        "data": [...],        # List or object, backward compatible
+        "total": 47,          # Optional field for pagination
+        "message": "..."      # Error or status message
+    }
+    """
+    response = {"code": retcode}
+
+    if retcode == settings.RetCode.SUCCESS:
         if data is not None:
-            response = {"code": retcode, "data": data}
+            response["data"] = data
+        if total is not None:
+            response["total_datasets"] = total
         else:
             response = {"code": retcode}
     else:
-        response = {"code": retcode, "message": retmsg}
+        response["message"] = retmsg or "Error"
+
     return JSONResponse(content=jsonable_encoder(response))
 
 

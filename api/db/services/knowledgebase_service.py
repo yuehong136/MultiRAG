@@ -413,18 +413,18 @@ class KnowledgebaseService(CommonService):
     @classmethod
     def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name):
         """
-        根据租户ID列表、用户ID、知识库ID和名称获取知识库列表。
-
-        :param db: 数据库会话对象。
-        :param joined_tenant_ids: 用户加入的租户ID列表。
-        :param user_id: 用户ID。
-        :param page_number: 页码。
-        :param items_per_page: 每页项数。
-        :param orderby: 排序字段。
-        :param desc: 是否降序排序。
-        :param id: 知识库ID（可选）。
-        :param name: 知识库名称（可选）。
-        :return: 符合条件的知识库列表的字典形式。
+        # Get list of knowledge bases with filtering and pagination
+        # Args:
+        #     joined_tenant_ids: List of tenant IDs
+        #     user_id: Current user ID
+        #     page_number: Page number for pagination
+        #     items_per_page: Number of items per page
+        #     orderby: Field to order by
+        #     desc: Boolean indicating descending order
+        #     id: Optional ID filter
+        #     name: Optional name filter
+        # Returns:
+        #     Tuple of (List of knowledge bases, Total count of knowledge bases)
         """
         # 构建基础查询条件
         query = db.query(cls.model).filter(
@@ -445,9 +445,12 @@ class KnowledgebaseService(CommonService):
         else:
             query = query.order_by(getattr(cls.model, orderby).asc())
 
-        # 分页查询并返回结果的字典形式
+        # 获取总数
+        total = query.count()
+
+        # 分页查询并返回结果的字典形式和总数
         kbs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
-        return [kb.to_dict() for kb in kbs]
+        return [kb.to_dict() for kb in kbs], total
 
     @classmethod
     def accessible(cls, db: Session, kb_id, user_id):
