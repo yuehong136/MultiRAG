@@ -515,7 +515,7 @@ class AskdataService:
 
         logger.info(f"recommended_chart: {recommended_chart}, recommendation_reason: {recommendation_reason}")
 
-        return processed_semantic_layer, model_ids, recommended_chart, recommendation_reason
+        return processed_semantic_layer, [model_detail["modelId"] for model_detail in model_details], recommended_chart, recommendation_reason
 
     async def analyze_user_query_stream(
             self, event_id: str, user_query: str, rewritten_question: Optional[str], round_id: Optional[str],

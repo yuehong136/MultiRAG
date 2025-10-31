@@ -213,7 +213,6 @@ async def get_sql_and_table_config(
             pass
         else:
             sql_components = await service.sql_components_extractor.extract_sql_components(sql, body.llm_name)
-            pass
 
         if pagination_sql:
             result = await query_data_with_params(pagination_sql, int(dataset_id), [])
