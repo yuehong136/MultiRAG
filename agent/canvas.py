@@ -204,7 +204,6 @@ class Canvas(Graph):
             self.history = []
             self.retrieval = []
             self.memory = []
-
         for k in self.globals.keys():
             if isinstance(self.globals[k], str):
                 self.globals[k] = ""
@@ -293,7 +292,6 @@ class Canvas(Graph):
                     "thoughts": self.get_component_thoughts(self.path[i])
                 })
             _run_batch(idx, to)
-
             # post processing of components invocation
             for i in range(idx, to):
                 cpn = self.get_component(self.path[i])
@@ -394,7 +392,6 @@ class Canvas(Graph):
                 self.path = path
                 yield decorate("user_inputs", {"inputs": another_inputs, "tips": tips})
                 return
-
         self.path = self.path[:idx]
         if not self.error:
             yield decorate("workflow_finished",
