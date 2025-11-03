@@ -1528,7 +1528,7 @@ def delete_kb_task(
             task_id = kb.mindmap_task_id
             kb_task_finish_at = "mindmap_task_finish_at"
         case _:
-            return get_error_data_result(message="Internal Error: Invalid task type")
+            return get_error_data_result(retmsg="Internal Error: Invalid task type")
 
     def cancel_task(task_id):
         REDIS_CONN.set(f"{task_id}-cancel", "x")
