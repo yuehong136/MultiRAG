@@ -133,10 +133,12 @@ def get_data_error_result(retcode=settings.RetCode.DATA_ERROR, retmsg='Sorry! Da
 def server_error_response(e):
     logging.exception(e)
     try:
-        if e.code == 401:
-            return get_json_result(retcode=401, retmsg=repr(e))
-    except Exception:
-        pass
+        msg = repr(e).lower()
+        if getattr(e, "code", None) == 401 or ("unauthorized" in msg) or ("401" in msg):
+            return get_json_result(retcode=settings.RetCode.UNAUTHORIZED, retmsg=repr(e))
+    except Exception as ex:
+        logging.warning(f"error checking authorization: {ex}")
+
     if len(e.args) > 1:
         try:
             serialized_data = serialize_for_json(e.args[1])
