@@ -1,9 +1,11 @@
 import argparse
+# import base64
+from cmd import Cmd
+
 from typing import Dict, List, Any
 from lark import Lark, Transformer, Tree
 import requests
 from requests.auth import HTTPBasicAuth
-# from api.common.base64 import encode_to_base64
 
 GRAMMAR = r"""
 start: command
@@ -79,7 +81,6 @@ NUMBER: /[0-9]+/
 %import common.WS
 %ignore WS
 """
-
 
 class AdminTransformer(Transformer):
 
@@ -163,7 +164,6 @@ class AdminTransformer(Transformer):
     def meta_args(self, items):
         return items
 
-
 # def encrypt(input_string):
 #     pub = '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArq9XTUSeYr2+N1h3Afl/z8Dse/2yD0ZGrKwx+EEEcdsBLca9Ynmx3nIB5obmLlSfmskLpBo0UACBmB5rEjBp2Q2f3AG3Hjd4B+gNCG6BDaawuDlgANIhGnaTLrIqWrrcm4EMzJOnAOI1fgzJRsOOUEfaS318Eq9OVO3apEyCCt0lOQK6PuksduOjVxtltDav+guVAA068NrPYmRNabVKRNLJpL8w4D44sfth5RvZ3q9t+6RTArpEtc5sh5ChzvqPOzKGMXW83C95TxmXqpbK6olN4RevSfVjEAgCydH6HN6OhtOQEcnrU97r9H0iZOWwbw3pVrZiUkuRD1R56Wzs2wIDAQAB\n-----END PUBLIC KEY-----'
 #     pub_key = RSA.importKey(pub)
@@ -171,13 +171,50 @@ class AdminTransformer(Transformer):
 #     cipher_text = cipher.encrypt(base64.b64encode(input_string.encode('utf-8')))
 #     return base64.b64encode(cipher_text).decode("utf-8")
 
+# def encode_to_base64(input_string):
+#     base64_encoded = base64.b64encode(input_string.encode('utf-8'))
+#     return base64_encoded.decode('utf-8')
 
-class AdminCommandParser:
+class AdminCLI(Cmd):
     def __init__(self):
+        super().__init__()
         self.parser = Lark(GRAMMAR, start='start', parser='lalr', transformer=AdminTransformer())
         self.command_history = []
+        self.is_interactive = False
+        self.admin_account = "admin@datav.com"
+        self.admin_password: str = "admin"
+        self.host: str = ""
+        self.port: int = 0
 
-    def parse_command(self, command_str: str) -> Dict[str, Any]:
+    intro = r"""Type "\h" for help."""
+    prompt = "admin> "
+
+    def onecmd(self, command: str) -> bool:
+        try:
+            print(f"command: {command}")
+            result = self.parse_command(command)
+            self.execute_command(result)
+
+            if isinstance(result, Tree):
+                return False
+
+            if result.get('type') == 'meta' and result.get('command') in ['q', 'quit', 'exit']:
+                return True
+
+        except KeyboardInterrupt:
+            print("\nUse '\\q' to quit")
+        except EOFError:
+            print("\nGoodbye!")
+            return True
+        return False
+
+    def emptyline(self) -> bool:
+        return False
+
+    def default(self, line: str) -> bool:
+        return self.onecmd(line)
+
+    def parse_command(self, command_str: str) -> dict[str, Any] | Tree:
         if not command_str.strip():
             return {'type': 'empty'}
 
@@ -188,16 +225,6 @@ class AdminCommandParser:
             return result
         except Exception as e:
             return {'type': 'error', 'message': f'Parse error: {str(e)}'}
-
-
-class AdminCLI:
-    def __init__(self):
-        self.parser = AdminCommandParser()
-        self.is_interactive = False
-        self.admin_account = "admin@datav.com"
-        self.admin_password: str = "admin"
-        self.host: str = ""
-        self.port: int = 0
 
     def verify_admin(self, args):
 
@@ -304,7 +331,7 @@ class AdminCLI:
                     continue
 
                 print(f"command: {command}")
-                result = self.parser.parse_command(command)
+                result = self.parse_command(command)
                 self.execute_command(result)
 
                 if isinstance(result, Tree):
@@ -722,10 +749,17 @@ def main():
     /_/  /_/\__,_/\__/_/_/ |_/_/  |_\____/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/ 
         """)
         if cli.verify_admin(sys.argv):
-            cli.run_interactive()
+            cli.cmdloop()
     else:
+        print(r"""
+        __  ___      __  _ ____  ___   ______   ___       __          _     
+       /  |/  /_  __/ /_(_) __ \/   | / ____/  /   | ____/ /___ ___  (_)___ 
+      / /|_/ / / / / __/ / /_/ / /| |/ / __   / /| |/ __  / __ `__ \/ / __ \
+     / /  / / /_/ / /_/ / _, _/ ___ / /_/ /  / ___ / /_/ / / / / / / / / / /
+    /_/  /_/\__,_/\__/_/_/ |_/_/  |_\____/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/ 
+            """)
         if cli.verify_admin(sys.argv):
-            cli.run_interactive()
+            cli.cmdloop()
             # cli.run_single_command(sys.argv[1:])
 
 

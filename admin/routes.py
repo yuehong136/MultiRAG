@@ -71,6 +71,7 @@ class ServiceResponse(BaseModel):
     host: str
     port: int
     service_type: str
+    status: str | None = None
     extra: dict | None = None
 
     model_config = ConfigDict(from_attributes=True)
