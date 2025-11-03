@@ -248,6 +248,21 @@ class AdminCLI:
         columns = list(data[0].keys())
         col_widths = {}
 
+        def get_string_width(text):
+            half_width_chars = (
+                " !\"#$%&'()*+,-./0123456789:;<=>?@"
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`"
+                "abcdefghijklmnopqrstuvwxyz{|}~"
+                "\t\n\r"
+            )
+            width = 0
+            for char in text:
+                if char in half_width_chars:
+                    width += 1
+                else:
+                    width += 2
+            return width
+
         for col in columns:
             max_width = len(str(col))
             for item in data:
