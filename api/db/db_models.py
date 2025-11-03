@@ -574,7 +574,7 @@ class TenantLLM(BaseModel):
     llm_factory = Column(String(128), primary_key=True, index=True, nullable=False, doc="LLM factory name")
     mdl_type = Column(String(128), index=True, nullable=True, doc="LLM, Text Embedding, Image2Text, ASR")
     llm_name = Column(String(128), primary_key=True, index=True, nullable=True)
-    api_key = Column(String(2048), index=True, nullable=True)
+    api_key = Column(Text, nullable=True, doc="API KEY")
     api_base = Column(String(255), index=False, nullable=True)
     max_tokens = Column(Integer, index=True, nullable=False, default=8192)
     used_tokens = Column(Integer, index=True, nullable=False, default=0)

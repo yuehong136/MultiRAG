@@ -1181,6 +1181,7 @@ class GoogleChat(Base):
         else:
             if "max_tokens" in gen_conf:
                 gen_conf["max_output_tokens"] = gen_conf["max_tokens"]
+                del gen_conf["max_tokens"]
             for k in list(gen_conf.keys()):
                 if k not in ["temperature", "top_p", "max_output_tokens"]:
                     del gen_conf[k]
@@ -1188,6 +1189,7 @@ class GoogleChat(Base):
 
     def _chat(self, history, gen_conf={}, **kwargs):
         system = history[0]["content"] if history and history[0]["role"] == "system" else ""
+        gen_conf = self._clean_conf(gen_conf)
         if "claude" in self.model_name:
             response = self.client.messages.create(
                 model=self.model_name,
@@ -1249,9 +1251,12 @@ class GoogleChat(Base):
 
             yield total_tokens
         else:
+            response = None
+            total_tokens = 0
             self.client._system_instruction = system
             if "max_tokens" in gen_conf:
                 gen_conf["max_output_tokens"] = gen_conf["max_tokens"]
+                del gen_conf["max_tokens"]
             for k in list(gen_conf.keys()):
                 if k not in ["temperature", "top_p", "max_output_tokens"]:
                     del gen_conf[k]
@@ -1259,18 +1264,23 @@ class GoogleChat(Base):
                 if "role" in item and item["role"] == "assistant":
                     item["role"] = "model"
                 if "content" in item:
-                    item["parts"] = item.pop("content")
+                    item["parts"] = [
+                        {
+                            "text": item.pop("content"),
+                        }
+                    ]
             ans = ""
             try:
-                response = self.model.generate_content(history, generation_config=gen_conf, stream=True)
+                response = self.client.generate_content(history, generation_config=gen_conf, stream=True)
                 for resp in response:
                     ans = resp.text
+                    total_tokens += num_tokens_from_string(ans)
                     yield ans
 
             except Exception as e:
                 yield ans + "\n**ERROR**: " + str(e)
 
-            yield response._chunks[-1].usage_metadata.total_token_count
+            yield total_tokens
 
 
 class GPUStackChat(Base):
