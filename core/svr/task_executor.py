@@ -374,7 +374,7 @@ async def build_chunks(task, progress_callback, db: Session):
                 d["img_id"] = ""
                 docs.append(d)
                 return
-            await image2id(d, partial(STORAGE_IMPL.put), d["id"], task["kb_id"])
+            await image2id(d, partial(STORAGE_IMPL.put, tenant_id=task["tenant_id"]), d["id"], task["kb_id"])
             docs.append(d)
         except Exception:
             logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
@@ -428,38 +428,6 @@ async def build_chunks(task, progress_callback, db: Session):
                 nursery.start_soon(doc_question_proposal, chat_mdl, d, task["parser_config"]["auto_questions"])
         progress_callback(msg="Question generation {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
 
-    if task["parser_id"].lower() == "naive" and task["parser_config"].get("toc_extraction", False):
-        progress_callback(msg="Start to generate table of content ...")
-        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
-        docs = sorted(docs, key=lambda d:(
-            d.get("page_num_int", 0)[0] if isinstance(d.get("page_num_int", 0), list) else d.get("page_num_int", 0),
-            d.get("top_int", 0)[0] if isinstance(d.get("top_int", 0), list) else d.get("top_int", 0)
-        ))
-        toc: list[dict] = await run_toc_from_text([d["content_with_weight"] for d in docs], chat_mdl, progress_callback)
-        logging.info("------------ T O C -------------\n"+json.dumps(toc, ensure_ascii=False, indent='  '))
-        ii = 0
-        while ii < len(toc):
-            try:
-                idx = int(toc[ii]["chunk_id"])
-                del toc[ii]["chunk_id"]
-                toc[ii]["ids"] = [docs[idx]["id"]]
-                if ii == len(toc) -1:
-                    break
-                for jj in range(idx+1, int(toc[ii+1]["chunk_id"]) + 1):
-                    toc[ii]["ids"].append(docs[jj]["id"])
-            except Exception as e:
-                logging.exception(e)
-            ii += 1
-
-        if toc:
-            d = copy.deepcopy(docs[-1])
-            d["content_with_weight"] = json.dumps(toc, ensure_ascii=False)
-            d["toc_kwd"] = "toc"
-            d["available_int"] = 0
-            d["page_num_int"] = 100000000
-            d["pk"] = xxhash.xxh64((d["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
-            docs.append(d)
-
     if task["kb_parser_config"].get("tag_kb_ids", []):
         progress_callback(msg="Start to tag for every chunk ...")
         kb_ids = task["kb_parser_config"]["tag_kb_ids"]
@@ -507,6 +475,40 @@ async def build_chunks(task, progress_callback, db: Session):
         progress_callback(msg="Tagging {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
 
     return docs
+
+
+def build_TOC(task, docs, progress_callback):
+    progress_callback(msg="Start to generate table of content ...")
+    with db_connection() as db:
+        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
+    docs = sorted(docs, key=lambda d:(
+        d.get("page_num_int", 0)[0] if isinstance(d.get("page_num_int", 0), list) else d.get("page_num_int", 0),
+        d.get("top_int", 0)[0] if isinstance(d.get("top_int", 0), list) else d.get("top_int", 0)
+    ))
+    toc: list[dict] = trio.run(run_toc_from_text, [d["content_with_weight"] for d in docs], chat_mdl, progress_callback)
+    logging.info("------------ T O C -------------\n"+json.dumps(toc, ensure_ascii=False, indent='  '))
+    ii = 0
+    while ii < len(toc):
+        try:
+            idx = int(toc[ii]["chunk_id"])
+            del toc[ii]["chunk_id"]
+            toc[ii]["ids"] = [docs[idx]["id"]]
+            if ii == len(toc) -1:
+                break
+            for jj in range(idx+1, int(toc[ii+1]["chunk_id"])+1):
+                toc[ii]["ids"].append(docs[jj]["id"])
+        except Exception as e:
+            logging.exception(e)
+        ii += 1
+
+    if toc:
+        d = copy.deepcopy(docs[-1])
+        d["content_with_weight"] = json.dumps(toc, ensure_ascii=False)
+        d["toc_kwd"] = "toc"
+        d["available_int"] = 0
+        d["page_num_int"] = 100000000
+        d["pk"] = xxhash.xxh64((d["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
+        return d
 
 
 async def init_kb(row, kb_name):
@@ -1067,7 +1069,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     return True
 
 
-@timeout(60*60*2, 1)
+@timeout(60*60*3, 1)
 async def do_handle_task(db, task):
     # 将 Row 转换为字典，确保可以修改字段
     task = task._asdict() if hasattr(task, "_asdict") else dict(task)
@@ -1103,6 +1105,8 @@ async def do_handle_task(db, task):
     task_document_name = task["name"]
     task_parser_config = task["parser_config"]
     task_start_ts = timer()
+    toc_thread = None
+    executor = concurrent.futures.ThreadPoolExecutor()
 
     # prepare the progress callback function
     progress_callback = partial(set_progress, db, task_id, task_from_page, task_to_page)
@@ -1219,8 +1223,6 @@ async def do_handle_task(db, task):
         if not chunks:
             progress_callback(1., msg=f"No chunk built from {task_document_name}")
             return
-        # TODO: exception handler
-        ## set_progress(task["did"], -1, "ERROR: ")
         progress_callback(msg="Generate {} chunks".format(len(chunks)))
         start_ts = timer()
         try:
@@ -1234,6 +1236,8 @@ async def do_handle_task(db, task):
         progress_message = "Embedding chunks ({:.2f}s)".format(timer() - start_ts)
         logging.info(progress_message)
         progress_callback(msg=progress_message)
+        if task["parser_id"].lower() == "naive" and task["parser_config"].get("toc_extraction", False):
+            toc_thread = executor.submit(build_TOC,task, chunks, progress_callback)
 
     chunk_count = len(set([chunk["pk"] for chunk in chunks]))
     # 记录开始时间
@@ -1366,12 +1370,22 @@ async def do_handle_task(db, task):
 
     # 做一次进度回调
     time_cost = timer() - start_ts
+    progress_callback(msg="Indexing done ({:.2f}s).".format(time_cost))
+    if toc_thread:
+        d = toc_thread.result()
+        if d:
+            e = await insert_milvus(db, task_id, task_tenant_id, task_dataset_id, [d], progress_callback, collection_name, schema)
+            if not e:
+                return
+            DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, 0, 1, 0)
+
     task_time_cost = timer() - task_start_ts
     progress_callback(prog=1.0, msg="Indexing done ({:.2f}s). Task done ({:.2f}s)".format(time_cost, task_time_cost))
     logging.info(
         "Chunk doc({}), page({}-{}), chunks({}), token({}), elapsed:{:.2f}".format(task_document_name, task_from_page,
                                                                                    task_to_page, len(chunks),
                                                                                    token_count, task_time_cost))
+
 
 async def handle_task():
     global DONE_TASKS, FAILED_TASKS
