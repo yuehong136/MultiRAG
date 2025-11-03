@@ -58,6 +58,7 @@ class RetrievalParam(ToolParamBase):
         self.empty_response = ""
         self.use_kg = False
         self.cross_languages = []
+        self.toc_enhance = False
 
     def check(self):
         self.check_decimal_float(self.similarity_threshold, "[Retrieval] Similarity threshold")
@@ -122,12 +123,14 @@ class Retrieval(ToolBase, ABC):
         if self._param.cross_languages:
             query = cross_languages(kbs[0].tenant_id, None, query, self._param.cross_languages)
 
+        tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         if kbs:
+            kb_names = list([kb.name for kb in kbs])
             query = re.sub(r"^user[:：\s]*", "", query, flags=re.IGNORECASE)
             kbinfos = settings.retriever.retrieval(
                 query,
                 embd_mdl,
-                [kb.tenant_id for kb in kbs],
+                tenant_ids,
                 filtered_kb_ids,
                 1,
                 self._param.top_n,
@@ -137,21 +140,26 @@ class Retrieval(ToolBase, ABC):
                 rerank_mdl=rerank_mdl,
                 rank_feature=label_question(db, query, kbs),
             )
-            if self._param.use_kg:
-                with db_connection() as db:
+            with db_connection() as db:
+                if self._param.toc_enhance:
+                    chat_mdl = LLMBundle(db, self._canvas._tenant_id, LLMType.CHAT)
+                    cks = settings.retriever.retrieval_by_toc(query, kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, self._param.top_n)
+                    if cks:
+                        kbinfos["chunks"] = cks
+                if self._param.use_kg:
                     ck = settings.kg_retriever.retrieval(query,
-                                                           [kb.tenant_id for kb in kbs],
+                                                           tenant_ids,
                                                            kb_ids,
                                                            embd_mdl,
                                                            LLMBundle(db, self._canvas.get_tenant_id(), LLMType.CHAT))
-                if ck["content_with_weight"]:
-                    kbinfos["chunks"].insert(0, ck)
+                    if ck["content_with_weight"]:
+                        kbinfos["chunks"].insert(0, ck)
         else:
             kbinfos = {"chunks": [], "doc_aggs": []}
 
         if self._param.use_kg and kbs:
             with db_connection() as db:
-                ck = settings.kg_retrievaler.retrieval(query, [kb.tenant_id for kb in kbs], filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, LLMType.CHAT))
+                ck = settings.kg_retrievaler.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, LLMType.CHAT))
             if ck["content_with_weight"]:
                 ck["content"] = ck["content_with_weight"]
                 del ck["content_with_weight"]

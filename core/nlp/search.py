@@ -1,3 +1,4 @@
+import json
 import logging
 import math
 import re
@@ -7,13 +8,12 @@ from dataclasses import dataclass
 import numpy as np
 from pymilvus import AnnSearchRequest, WeightedRanker
 
-from api.db.db_models import db_connection, SessionLocal
+from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from core.utils import rmSpace, get_float
+from core.prompts.generator import relevant_chunks_with_toc
 from core.settings import TAG_FLD, PAGERANK_FLD
 from core.nlp import rag_tokenizer, query, is_english
-from core.utils.doc_store_conn import MatchDenseExpr
-
 from core.utils.doc_store_conn import (
     DocStoreConnection,
     MatchExpr,
@@ -1285,3 +1285,97 @@ class Dealer:
         tag_fea = sorted([(a, round(0.1*(c + 1) / (cnt + S) / max(1e-6, all_tags.get(a, 0.0001)))) for a, c in aggs],
                          key=lambda x: x[1] * -1)[:topn_tags]
         return {a.replace(".", "_"): max(1, c) for a, c in tag_fea}
+
+    def retrieval_by_toc(self, query: str, chunks: list[dict], tenant_ids: list[str], kb_names: list[str], chat_mdl, topn: int = 6):
+        """
+        基于 TOC (Table of Contents) 的检索增强方法
+        
+        Args:
+            query: 查询文本
+            chunks: 初始检索到的 chunk 列表
+            tenant_ids: 租户 ID 列表（支持跨租户共享）
+            kb_names: 知识库名称列表（与 tenant_ids 对应）
+            chat_mdl: LLM 模型用于 TOC 相关性评分
+            topn: 返回的 top N 结果
+            
+        Returns:
+            重新排序和补充后的 chunks 列表
+        """
+        if not chunks:
+            return []
+
+        # 从 chunks 中提取实际的 kb_id，查询对应的知识库名称
+        kb_id_set = set(ck.get("kb_id") for ck in chunks if ck.get("kb_id"))
+        with db_connection() as db:
+            kbs = KnowledgebaseService.get_by_ids(db, list(kb_id_set))
+
+        # 构建 tenant_id -> kb_names 的映射
+        tenant_kb_dict = {}
+        for kb in kbs:
+            tid = kb.tenant_id
+            if tid not in tenant_kb_dict:
+                tenant_kb_dict[tid] = []
+            tenant_kb_dict[tid].append(kb.name)
+
+        # 为每个 tenant_id 生成对应的索引名称
+        idx_nms = []
+        for tid in tenant_ids:
+            if tid in tenant_kb_dict:
+                idx_nms.extend(index_name(tid, tenant_kb_dict[tid]))
+        
+        ranks, doc_id2kb_id = {}, {}
+        for ck in chunks:
+            if ck["doc_id"] not in ranks:
+                ranks[ck["doc_id"]] = 0
+            ranks[ck["doc_id"]] += ck["similarity"]
+            doc_id2kb_id[ck["doc_id"]] = ck["kb_id"]
+        doc_id = sorted(ranks.items(), key=lambda x: x[1] * -1.)[0][0]
+        kb_ids = [doc_id2kb_id[doc_id]]
+        es_res = self.dataStore.search(["content_with_weight"], [], {"doc_id": doc_id, "toc_kwd": "toc"}, [],
+                                       OrderByExpr(), 0, 128, idx_nms,
+                                       kb_ids)
+        toc = []
+        dict_chunks = self.dataStore.getFields(es_res, ["content_with_weight"])
+        for _, doc in dict_chunks.items():
+            try:
+                toc.extend(json.loads(doc["content_with_weight"]))
+            except Exception as e:
+                logging.exception(e)
+        if not toc:
+            return chunks
+
+        ids = relevant_chunks_with_toc(query, toc, chat_mdl, topn * 2)
+        if not ids:
+            return chunks
+
+        vector_size = 1024
+        id2idx = {ck["chunk_id"]: i for i, ck in enumerate(chunks)}
+        for cid, sim in ids:
+            if cid in id2idx:
+                chunks[id2idx[cid]]["similarity"] += sim
+                continue
+            chunk = self.dataStore.get(cid, idx_nms, kb_ids)
+            d = {
+                "chunk_id": cid,
+                "content_ltks": chunk["content_ltks"],
+                "content_with_weight": chunk["content_with_weight"],
+                "doc_id": doc_id,
+                "docnm_kwd": chunk.get("docnm_kwd", ""),
+                "kb_id": chunk["kb_id"],
+                "important_kwd": chunk.get("important_kwd", []),
+                "image_id": chunk.get("img_id", ""),
+                "similarity": sim,
+                "vector_similarity": sim,
+                "term_similarity": sim,
+                "vector": [0.0] * vector_size,
+                "positions": chunk.get("position_int", []),
+                "doc_type_kwd": chunk.get("doc_type_kwd", "")
+            }
+            for k in chunk.keys():
+                if k[-4:] == "_vec":
+                    d["vector"] = chunk[k]
+                    vector_size = len(chunk[k])
+                    break
+            chunks.append(d)
+
+        return sorted(chunks, key=lambda x: x["similarity"] * -1)[:topn]

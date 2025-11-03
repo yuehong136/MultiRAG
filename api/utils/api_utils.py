@@ -35,9 +35,6 @@ import requests
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api import settings
-# from api.db.services.llm_service import TenantLLMService, LLMService
-from api.db.services.llm_service import LLMService
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.utils import HTTP_STATUS_CODES, get_uuid
 from api.constants import REQUEST_WAIT_SEC, REQUEST_MAX_WAIT_SEC
 
@@ -636,6 +633,8 @@ def verify_embedding_availability(db: Session, embd_id: str, tenant_id: str) -> 
         >>> verify_embedding_availability("invalid_model", "tenant_123")
         (False, {'code': 101, 'message': "Unsupported model: <invalid_model>"})
     """
+    from api.db.services.llm_service import LLMService
+    from api.db.services.tenant_llm_service import TenantLLMService
     try:
         llm_name, llm_factory = TenantLLMService.split_model_name_and_factory(embd_id)
         in_llm_service = bool(LLMService.query(db=db, llm_name=llm_name, fid=llm_factory, model_type="embedding"))

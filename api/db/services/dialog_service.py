@@ -513,6 +513,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
     if attachments is not None and "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
+        tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
         if prompt_config.get("reasoning", False):
             reasoner = DeepResearcher(
@@ -558,6 +559,10 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     rank_feature=label_question(db, " ".join(questions), kbs),
                     search_mode=dialog.search_mode
                 )
+                if prompt_config.get("toc_enhance"):
+                    cks = retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n)
+                    if cks:
+                        kbinfos["chunks"] = cks
             if prompt_config.get("tavily_api_key"):
                 tav = Tavily(prompt_config["tavily_api_key"])
                 tav_res = tav.retrieve_chunks(" ".join(questions))
