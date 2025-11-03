@@ -26,7 +26,7 @@ urls = [
     "https://bit.ly/chromedriver-linux64-121-0-6167-85",
 ]
 
-def get_urls(use_china_mirrors=False) -> str | list[str]:
+def get_urls(use_china_mirrors=False) -> list[str | list[str]]:
     if use_china_mirrors:
         return [
             "http://mirrors.tuna.tsinghua.edu.cn/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb",
