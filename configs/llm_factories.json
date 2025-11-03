@@ -767,6 +767,12 @@
                     "tags": "TEXT EMBEDDING",
                     "max_tokens": 512,
                     "mdl_type": "embedding"
+                },
+                {
+                    "llm_name": "glm-asr",
+                    "tags": "SPEECH2TEXT",
+                    "max_tokens": 4096,
+                    "mdl_type": "speech2text"
                 }
             ]
         },
