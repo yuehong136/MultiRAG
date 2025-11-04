@@ -101,7 +101,7 @@ start_server() {
 start_admin_server() {
   echo "[entrypoint] 启动 Admin Server (端口 8130)..."
   while true; do
-    "${PY}" admin/admin_server.py || true
+    "${PY}" admin/server/admin_server.py || true
     echo "[entrypoint] Admin Server 崩溃，1 秒后重启..."
     sleep 1
   done &

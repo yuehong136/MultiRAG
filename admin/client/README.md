@@ -26,7 +26,7 @@ It consists of a server-side Service and a command-line client (CLI), both imple
 2. Launch from source code:
 
    ```bash
-   python admin/admin_server.py
+   python admin/server/admin_server.py
    ```
    The service will start and listen for incoming connections from the CLI on the configured port. 
 
@@ -52,7 +52,7 @@ It consists of a server-side Service and a command-line client (CLI), both imple
     ```
 3.  Launch the CLI client:
     ```bash
-    multirag-cli -h 0.0.0.0 -p 9381
+    multirag-cli -h 0.0.0.0 -p 9130
     ```
 	Enter superuser's password to login. Default password is `admin`.
 

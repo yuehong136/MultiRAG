@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 from fastapi import APIRouter
 
-from auth import AdminAuth
+from admin.server.auth import AdminAuth
 from responses import APIResponse, success_response, error_response
 from services import UserMgr, ServiceMgr, UserServiceMgr
 from api.common.exceptions import AdminException
