@@ -11,7 +11,7 @@ from api.db.services.user_service import TenantService
 from api.utils import health_utils
 
 from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
-from admin.server.config import SERVICE_CONFIGS
+from config import SERVICE_CONFIGS
 
 
 class UserMgr:

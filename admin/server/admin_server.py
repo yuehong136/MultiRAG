@@ -9,7 +9,7 @@ from routes import admin_router
 from api.utils.log_utils import init_root_logger
 from api.constants import SERVICE_CONF
 from api import settings
-from admin.server.config import load_configurations, SERVICE_CONFIGS
+from config import load_configurations, SERVICE_CONFIGS
 from api.common.exceptions import setup_exception_handlers
 
 
