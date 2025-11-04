@@ -16,11 +16,11 @@ echo "🧹 Clean old build folder..."
 rm -rf release/
 
 echo "📁 Prepare source code..."
-mkdir release/$PROJECT_NAME/$SOURCE_DIR -p
+mkdir -p release/$PROJECT_NAME/$SOURCE_DIR
 cp pyproject.toml release/$PROJECT_NAME/pyproject.toml
 cp README.md release/$PROJECT_NAME/README.md
 
-mkdir release/$PROJECT_NAME/$SOURCE_DIR/$PACKAGE_DIR -p
+mkdir -p release/$PROJECT_NAME/$SOURCE_DIR/$PACKAGE_DIR
 cp admin_client.py release/$PROJECT_NAME/$SOURCE_DIR/$PACKAGE_DIR/admin_client.py
 
 if [ -d "release/$PROJECT_NAME/$SOURCE_DIR" ]; then
@@ -33,7 +33,7 @@ fi
 echo "🔨 Make build file..."
 cd release/$PROJECT_NAME
 export PYTHONPATH=$(pwd)
-python -m build
+uv build
 
 echo "✅ check build result..."
 if [ -d "$BUILD_DIR" ]; then
