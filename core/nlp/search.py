@@ -1088,7 +1088,7 @@ class Dealer:
 
         idxnms = index_name(tenant_id, kb_names)
 
-        sres = self.search(req, idxnms, kb_names, embd_mdl, rank_feature=rank_feature)
+        sres = self.search(req, idxnms, kb_names, embd_mdl, highlight=highlight, rank_feature=rank_feature)
         # ranks["total"] = sres.total
 
         # if not sres.ids:

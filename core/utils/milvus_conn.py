@@ -1105,58 +1105,101 @@ class MilvusConnection(DocStoreConnection):
 
     def getHighlight(self, res, keywords: list[str], fieldnm: str):
         """
-        生成高亮文本（应用层实现）
+        生成高亮文本（应用层实现，支持中英文）
         - res：可以是 list 或 (list, …) 形式
         - keywords：待高亮关键词列表
         - fieldnm：要高亮的字段名
         返回 {doc_id: snippet} 格式的字典
+        
+        参考 infinity_conn.py 实现，支持中文高亮
         """
         ans: dict[str, str] = {}
 
         # 兼容 tuple 包装
         results = res[0] if isinstance(res, tuple) else res
         if not isinstance(results, list):
+            logger.warning(f"getHighlight: results 不是列表，类型: {type(results)}")
             return ans
 
+        logger.info(f"getHighlight: 收到 {len(results)} 条结果，{len(keywords)} 个关键词: {keywords}")
+
         for item in results:
-            if not isinstance(item, dict):
+            # 采用与 getFields 完全相同的逻辑
+            # 兼容低版本使用'id'和高版本使用'pk'的情况
+            doc_id = None
+            if "pk" in item:
+                doc_id = item.get("pk")
+            elif "id" in item:
+                doc_id = item.get("id")
+
+            if doc_id is None:
+                logger.warning(f"getHighlight: 无法获取 doc_id，item keys: {list(item.keys()) if hasattr(item, 'keys') else 'no keys'}")
                 continue
 
-            # 兼容低/高版本 id 字段
-            doc_id = item.get("pk") or item.get("id")
-            if not doc_id:
-                continue
-
-            # 提取待高亮文本
+            # 提取待高亮文本（完全按照 getFields 的逻辑）
             text = None
-            if fieldnm in item and isinstance(item[fieldnm], str):
-                text = item[fieldnm]
-            elif isinstance(item.get("entity"), dict) and isinstance(item["entity"].get(fieldnm), str):
-                text = item["entity"][fieldnm]
+            # 首先检查顶层是否有该字段
+            if fieldnm in item:
+                text = item.get(fieldnm)
+                logger.debug(f"getHighlight: doc_id={doc_id}, 从顶层获取 {fieldnm}")
+            # 然后检查entity字典是否有该字段
+            elif "entity" in item and isinstance(item["entity"], dict) and fieldnm in item["entity"]:
+                text = item["entity"].get(fieldnm)
+                logger.debug(f"getHighlight: doc_id={doc_id}, 从 entity 获取 {fieldnm}")
+            
             if not isinstance(text, str):
+                logger.warning(f"getHighlight: doc_id={doc_id}, 无法获取文本字段 {fieldnm}")
+                continue
+            
+            logger.debug(f"getHighlight: doc_id={doc_id}, 获取到文本，长度: {len(text)}")
+
+            # 检查是否已经包含高亮标签（避免重复处理）
+            if re.search(r"<em>[^<>]+</em>", text, flags=re.IGNORECASE | re.MULTILINE):
+                ans[doc_id] = text
                 continue
 
             # 清理换行符
             text = re.sub(r"[\r\n]+", " ", text, flags=re.IGNORECASE | re.MULTILINE)
 
-            # 语言检测：如果不是英文，直接回退全文
-            if not is_english(text.split()):
-                ans[doc_id] = text
-                continue
-
-            # 英文内容按句子拆分并高亮关键词
+            # 按句子拆分并高亮关键词（中英文分别处理）
             snippets: list[str] = []
-            for sentence in re.split(r"[.?!;\n]", text):
+            for sentence in re.split(r"[.?!；。？！\n]", text):
+                if not sentence.strip():
+                    continue
+                
                 sent = sentence
-                for kw in keywords:
-                    pattern = rf"(^|[ .?/'\"()!,:;-])({re.escape(kw)})([ .?/'\"()!,:;-])"
-                    # 此处只使用 IGNORECASE
-                    sent = re.sub(pattern, r"\1<em>\2</em>\3", sent, flags=re.IGNORECASE)
-                if re.search(r"<em>[^<>]+</em>", sent, flags=re.IGNORECASE):
+                # 判断当前句子是否为英文
+                if is_english([sent]):
+                    # 英文处理：依赖单词边界，避免误匹配
+                    for kw in keywords:
+                        pattern = rf"(^|[ .?/'\"()!,:;-])({re.escape(kw)})([ .?/'\"()!,:;-])"
+                        sent = re.sub(
+                            pattern,
+                            r"\1<em>\2</em>\3",
+                            sent,
+                            flags=re.IGNORECASE | re.MULTILINE,
+                        )
+                else:
+                    # 中文处理：直接字符串匹配，按长度排序避免短词误匹配
+                    for kw in sorted(keywords, key=len, reverse=True):
+                        if not kw:
+                            continue
+                        sent = re.sub(
+                            re.escape(kw),
+                            f"<em>{kw}</em>",
+                            sent,
+                            flags=re.IGNORECASE | re.MULTILINE,
+                        )
+                
+                # 只保留包含高亮的句子
+                if re.search(r"<em>[^<>]+</em>", sent, flags=re.IGNORECASE | re.MULTILINE):
                     snippets.append(sent.strip())
 
             # 有高亮句子则拼接，否则回退全文
-            ans[doc_id] = "...".join(snippets) if snippets else text
+            if snippets:
+                ans[doc_id] = "...".join(snippets)
+            else:
+                ans[doc_id] = text
 
         return ans
 
@@ -1226,16 +1269,112 @@ class MilvusConnection(DocStoreConnection):
 
             # 提取表名
             from_match = re.search(r"FROM\s+(\w+)", sql, re.IGNORECASE)
+            
+            # 如果没有FROM子句，尝试从WHERE条件中的kb_id推断集合名
+            if not from_match:
+                logger.info("SQL缺少FROM子句，尝试从kb_id推断集合名")
+                # 提取kb_id
+                kb_id_match = re.search(r"kb_id\s*=\s*['\"]([^'\"]+)['\"]", sql, re.IGNORECASE)
+                if kb_id_match:
+                    kb_id = kb_id_match.group(1)
+                    logger.debug(f"从SQL中提取到kb_id: {kb_id}")
+                    
+                    # 查询数据库获取kb信息
+                    from api.db.db_models import db_connection
+                    from api.db.services.knowledgebase_service import KnowledgebaseService
+                    try:
+                        with db_connection() as db:
+                            kb = KnowledgebaseService.get_by_id(db, kb_id)
+                            if kb:
+                                # 生成集合名：multirag_{tenant_id}_{kb_name}
+                                collection_name = f"multirag_{kb.tenant_id}_{kb.name}"
+                                logger.info(f"自动推断集合名: {collection_name}")
+                                
+                                # 在SELECT和WHERE之间插入FROM子句
+                                where_pos = sql.upper().find("WHERE")
+                                if where_pos > 0:
+                                    sql = sql[:where_pos] + f"FROM {collection_name} " + sql[where_pos:]
+                                else:
+                                    # 如果没有WHERE，追加FROM到末尾（虽然不太可能）
+                                    sql = sql + f" FROM {collection_name}"
+                                logger.debug(f"补充FROM子句后的SQL: {sql}")
+                                from_match = re.search(r"FROM\s+(\w+)", sql, re.IGNORECASE)
+                            else:
+                                raise ValueError(f"找不到kb_id={kb_id}对应的知识库")
+                    except Exception as e:
+                        logger.error(f"通过kb_id查询集合名失败: {e}")
+                        raise ValueError(f"无法识别 FROM 子句，且无法从kb_id推断: {e}")
+                else:
+                    raise ValueError("无法识别 FROM 子句，且SQL中没有kb_id信息")
+            
             if not from_match:
                 raise ValueError("无法识别 FROM 子句")
-
+                
             collection_name = from_match.group(1)
+            
+            # 提取 SELECT 字段，并处理字面量
+            select_match = re.search(r"SELECT\s+(.*?)\s+FROM", sql, re.IGNORECASE)
+            select_fields = []  # 实际要查询的字段
+            literal_columns = {}  # 字面量列：{列名: 值}
+            
+            if select_match:
+                fields_str = select_match.group(1).strip()
+                if fields_str != "*":
+                    # 解析选择的字段（处理可能包含逗号的字面量）
+                    # 更智能的字段分割：考虑引号内的逗号
+                    parsed_fields = []
+                    current_field = ""
+                    in_quotes = False
+                    quote_char = None
+                    
+                    for char in fields_str:
+                        if char in ("'", '"') and not in_quotes:
+                            in_quotes = True
+                            quote_char = char
+                            current_field += char
+                        elif char == quote_char and in_quotes:
+                            in_quotes = False
+                            quote_char = None
+                            current_field += char
+                        elif char == ',' and not in_quotes:
+                            parsed_fields.append(current_field.strip())
+                            current_field = ""
+                        else:
+                            current_field += char
+                    
+                    if current_field.strip():
+                        parsed_fields.append(current_field.strip())
+                    
+                    for field in parsed_fields:
+                        # 检查是否是字面量（如 'value' as alias 或 "value" as alias）
+                        literal_match = re.match(r"^(['\"])(.+?)\1(\s+as\s+(['\"]?)(.+?)\4)?$", field, re.IGNORECASE)
+                        if literal_match:
+                            # 这是一个字面量
+                            literal_value = literal_match.group(2)
+                            alias = literal_match.group(5) if literal_match.group(5) else literal_value
+                            literal_columns[alias] = literal_value
+                            logger.debug(f"解析到字面量列: {alias} = {literal_value}")
+                        else:
+                            # 普通字段
+                            if " as " in field.lower():
+                                # 有别名，但不是字面量
+                                actual_field = field.split(" as ")[0].strip()
+                                select_fields.append(actual_field)
+                                logger.debug(f"解析到字段（带别名）: {actual_field}")
+                            else:
+                                select_fields.append(field)
+                                logger.debug(f"解析到字段: {field}")
 
             # 提取 WHERE 条件
             where_clause = ""
             where_match = re.search(r"WHERE\s+(.*?)(?:ORDER BY|GROUP BY|LIMIT|$)", sql, re.IGNORECASE)
             if where_match:
                 where_clause = where_match.group(1).strip()
+
+            # 检测恒假条件（如 WHERE 1 = 0），这是LLM表示"不相关"的方式
+            if where_clause and re.match(r"^\s*(1\s*=\s*0|0\s*=\s*1|false)\s*(and|or|&&|\|\|)?", where_clause, re.IGNORECASE):
+                logger.info(f"检测到恒假条件 '{where_clause}'，返回空结果")
+                return {"rows": [], "columns": []}
 
             # 提取 LIMIT
             limit = fetch_size
@@ -1255,22 +1394,60 @@ class MilvusConnection(DocStoreConnection):
 
             # 使用 Milvus query 方法执行查询
             conn = self._get_connection()
+            # 确定要查询的字段
+            output_fields = select_fields if select_fields else ["*"]
             results = conn.query(
                 collection_name,
                 expr=filter_expr,
-                output_fields=["*"],
+                output_fields=output_fields,
                 limit=limit
             )
 
             # 根据请求的格式返回结果
             if format.lower() == "json":
-                return {"data": results}
+                # 构建符合预期的返回格式 {"rows": [...], "columns": [...]}
+                if not results and not literal_columns:
+                    return {"rows": [], "columns": []}
+                
+                # 构建列信息（包括查询字段和字面量）
+                columns = []
+                column_names = []
+                
+                if len(results) > 0:
+                    # 确保列的顺序一致 - 先添加实际查询的字段
+                    column_names = list(results[0].keys())
+                    for key in column_names:
+                        columns.append({"name": key, "type": "text"})
+                
+                # 添加字面量列
+                for literal_name in literal_columns.keys():
+                    columns.append({"name": literal_name, "type": "text"})
+                    column_names.append(literal_name)
+                
+                # 将字典列表转换为数组列表（符合ES/OpenSearch SQL格式）
+                rows = []
+                if len(results) > 0:
+                    for result in results:
+                        row = []
+                        # 添加查询字段的值
+                        for col_name in list(results[0].keys()):
+                            row.append(result.get(col_name))
+                        # 添加字面量的值
+                        for literal_name, literal_value in literal_columns.items():
+                            row.append(literal_value)
+                        rows.append(row)
+                elif literal_columns:
+                    # 如果只有字面量列，没有查询结果，也要返回一行
+                    row = [literal_columns[name] for name in literal_columns.keys()]
+                    rows.append(row)
+                
+                return {"rows": rows, "columns": columns}
             else:
                 return results
 
         except Exception as e:
             logger.error(f"SQL 解析或执行失败: {str(e)}")
-            raise ValueError(f"SQL 查询失败: {str(e)}")
+            return {"error": f"SQL 查询失败: {str(e)}"}
 
     def update(self, condition: dict, newValue: dict, indexName: str | list[str], knowledgebaseId: str) -> bool:
         """
