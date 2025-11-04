@@ -323,9 +323,9 @@ class AdminCLI(Cmd):
             row = "|"
             for col in columns:
                 value = str(item.get(col, ''))
-                if len(value) > col_widths[col]:
+                if get_string_width(value) > col_widths[col]:
                     value = value[:col_widths[col] - 3] + "..."
-                row += f" {value:<{col_widths[col]}} |"
+                row += f" {value:<{col_widths[col] - (get_string_width(value) - len(value))}} |"
             print(row)
 
         print(separator)
@@ -430,9 +430,8 @@ class AdminCLI(Cmd):
 
         url = f'http://{self.host}:{self.port}/api/v1/admin/services'
         response = requests.get(url, auth=HTTPBasicAuth(self.admin_account, self.admin_password))
-        
+        res_json = response.json()
         if response.status_code == 200:
-            res_json = response.json()
             if res_json.get('code') == 0:
                 data = res_json.get('data')
                 if data is not None:
@@ -442,7 +441,8 @@ class AdminCLI(Cmd):
             else:
                 print(f"Failed to get services: {res_json.get('message')}")
         else:
-            print(f"Request failed with status code: {response.status_code}")
+            # print(f"Request failed with status code: {response.status_code}")
+            print(f"Fail to get all services, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
     def _handle_show_service(self, command):
         service_id: int = command['number']
