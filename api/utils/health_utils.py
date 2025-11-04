@@ -97,12 +97,12 @@ def get_es_cluster_stats() -> dict:
         raise Exception("Elasticsearch is not in use.")
     try:
         return {
-            "alive": True,
+            "status": "alive",
             "message": ESConnection().get_cluster_stats()
         }
     except Exception as e:
         return {
-            "alive": False,
+            "status": "timeout",
             "message": f"error: {str(e)}",
         }
 
@@ -113,12 +113,12 @@ def get_infinity_status():
         raise Exception("Infinity is not in use.")
     try:
         return {
-            "alive": True,
+            "status": "alive",
             "message": InfinityConnection().health()
         }
     except Exception as e:
         return {
-            "alive": False,
+            "status": "timeout",
             "message": f"error: {str(e)}",
         }
 
@@ -134,7 +134,7 @@ def get_milvus_cluster_stats() -> dict:
     doc_engine = os.getenv('DOC_ENGINE', 'milvus')
     if doc_engine != 'milvus':
         return {
-            "alive": False,
+            "status": "timeout",
             "message": f"Milvus is not in use. Current DOC_ENGINE: {doc_engine}",
             "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
         }
@@ -142,13 +142,13 @@ def get_milvus_cluster_stats() -> dict:
         stats = MilvusConnection().get_cluster_stats()
         elapsed = f"{(timer() - start_time) * 1000.0:.1f} ms"
         return {
-            "alive": True,
+            "status": "alive",
             "message": stats,
             "elapsed": elapsed
         }
     except Exception as e:
         return {
-            "alive": False,
+            "status": "timeout",
             "message": f"error: {str(e)}",
             "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
         }
@@ -169,7 +169,7 @@ def check_milvus_alive() -> dict:
 
         if health.get('status') == 'green':
             return {
-                'alive': True,
+                'status': "alive",
                 'message': f"Milvus {health.get('server_version')} is healthy. Elapsed: {elapsed}",
                 'elapsed': elapsed,
                 'version': health.get('server_version'),
@@ -177,13 +177,13 @@ def check_milvus_alive() -> dict:
             }
         else:
             return {
-                'alive': False,
+                'status': "timeout",
                 'message': f"Milvus status: {health.get('status')}. Elapsed: {elapsed}",
                 'elapsed': elapsed
             }
     except Exception as e:
         return {
-            "alive": False,
+            "status": "timeout",
             "message": f"error: {str(e)}",
             "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
         }
@@ -244,7 +244,7 @@ def get_database_status() -> dict:
                     process_list.append(process_info)
 
                 return {
-                    "alive": True,
+                    "status": "alive",
                     "database_type": "postgresql",
                     "process_count": len(process_list),
                     "message": process_list,
@@ -262,7 +262,7 @@ def get_database_status() -> dict:
                 process_list = [dict(zip(columns, row)) for row in rows]
 
                 return {
-                    "alive": True,
+                    "status": "alive",
                     "database_type": "mysql",
                     "process_count": len(process_list),
                     "message": process_list,
@@ -271,7 +271,7 @@ def get_database_status() -> dict:
             else:
                 # 不支持的数据库类型
                 return {
-                    "alive": False,
+                    "status": "timeout",
                     "database_type": db_dialect,
                     "message": f"Unsupported database type: {db_dialect}",
                     "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
@@ -290,12 +290,12 @@ def check_minio_alive():
     try:
         response = requests.get(f'http://{rag_settings.MINIO["host"]}/minio/health/live')
         if response.status_code == 200:
-            return {'alive': True, "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+            return {'status': "alive", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
         else:
-            return {'alive': False, "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+            return {'status': "timeout", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
     except Exception as e:
         return {
-            "alive": False,
+            "status": "timeout",
             "message": f"error: {str(e)}",
         }
 
@@ -303,12 +303,12 @@ def check_minio_alive():
 def get_redis_info():
     try:
         return {
-            "alive": True,
+            "status": "alive",
             "message": REDIS_CONN.info()
         }
     except Exception as e:
         return {
-            "alive": False,
+            "status": "timeout",
             "message": f"error: {str(e)}",
         }
 
@@ -318,12 +318,12 @@ def check_multirag_server_alive():
     try:
         response = requests.get(f'http://{settings.HOST_IP}:{settings.HOST_PORT}/v1/system/ping')
         if response.status_code == 200:
-            return {'alive': True, "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+            return {'status': "alive", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
         else:
-            return {'alive': False, "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+            return {'status': "timeout", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
     except Exception as e:
         return {
-            "alive": False,
+            "status": "timeout",
             "message": f"error: {str(e)}",
         }
 

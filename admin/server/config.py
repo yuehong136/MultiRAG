@@ -9,6 +9,8 @@ from api.utils.configs import read_config
 
 
 class ServiceConfigs:
+    configs = dict
+
     """服务配置管理器"""
     def __init__(self):
         self.configs: list[BaseModel] = []

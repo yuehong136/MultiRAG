@@ -74,7 +74,7 @@ class ServiceResponse(BaseModel):
     status: str | None = None
     extra: dict | None = None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra='allow')
 
 
 # ========== 路由定义 ==========

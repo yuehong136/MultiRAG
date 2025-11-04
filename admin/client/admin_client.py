@@ -194,11 +194,7 @@ class AdminCLI(Cmd):
 
     def onecmd(self, command: str) -> bool:
         try:
-            # print(f"command: {command}")
             result = self.parse_command(command)
-
-            # if 'type' in result and result.get('type') == 'empty':
-            #     return False
 
             if isinstance(result, dict):
                 if 'type' in result and result.get('type') == 'empty':
@@ -453,58 +449,29 @@ class AdminCLI(Cmd):
         res_json = response.json()
         if response.status_code == 200:
             res_data = res_json.get('data')
-            if res_data is None:
-                print(f"Failed to get service data: {res_json.get('message', 'Unknown error')}")
+            if not res_data:
+                print(f"Failed to get service details: no data returned")
                 return
-
-            # 解析服务基本信息
-            service_name = res_data.get('name', 'Unknown')
-            service_id = res_data.get('id', 'N/A')
-            service_type = res_data.get('service_type', 'Unknown')
-            host = res_data.get('host', 'N/A')
-            port = res_data.get('port', 'N/A')
-
-            # 解析健康状态（在 extra.health 中）
-            extra = res_data.get('extra', {})
-            health = extra.get('health', {})
-            is_alive = health.get('alive', False)
-
-            # 显示服务基本信息
-            print(f"\nService Information:")
-            print(f"  ID: {service_id}")
-            print(f"  Name: {service_name}")
-            print(f"  Type: {service_type}")
-            print(f"  Host: {host}")
-            print(f"  Port: {port}")
-
-            # 显示健康状态
-            status_symbol = "✅" if is_alive else "❌"
-            status_text = "alive" if is_alive else "down"
-            print(f"\nHealth Status: {status_symbol} {status_text}")
-
-            if health:
-                # 显示健康检查详情
-                if 'elapsed' in health:
-                    print(f"  Response Time: {health['elapsed']}")
-                if 'message' in health:
-                    message = health['message']
-                    if isinstance(message, str):
-                        print(f"  Message: {message}")
-                    elif isinstance(message, dict):
-                        print(f"  Details:")
-                        self._print_table_simple(message)
-                if 'version' in health:
-                    print(f"  Version: {health['version']}")
-
-            # 显示 extra 中的其他信息
-            if extra:
-                other_info = {k: v for k, v in extra.items() if k != 'health'}
-                if other_info:
-                    print(f"\nAdditional Information:")
-                    for key, value in other_info.items():
-                        print(f"  {key}: {value}")
+            
+            service_name = res_data.get('service_name') or res_data.get('name', 'Unknown')
+            status = res_data.get('status', 'unknown')
+            
+            if status == 'alive':
+                print(f"Service {service_name} is alive")
+                # 打印额外信息
+                if 'extra' in res_data:
+                    extra_info = res_data['extra']
+                    if 'message' in extra_info:
+                        if isinstance(extra_info['message'], str):
+                            print(extra_info['message'])
+                        else:
+                            self._print_table_simple(extra_info['message'])
+            else:
+                print(f"Service {service_name} is {status}")
+                if 'extra' in res_data and 'message' in res_data['extra']:
+                    print(f"Message: {res_data['extra']['message']}")
         else:
-            print(f"Fail to show service, code: {res_json.get('code', 'N/A')}, message: {res_json.get('message', 'Unknown error')}")
+            print(f"Fail to show service, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
     def _handle_restart_service(self, command):
         service_id: int = command['number']

@@ -236,12 +236,12 @@ class ServiceMgr:
             config_dict = config.to_dict()
             try:
                 service_detail = ServiceMgr.get_service_details(service_id)
-                if service_detail['extra']['health']['alive']:
-                    config_dict['status'] = 'Alive'
+                if "status" in service_detail:
+                    config_dict['status'] = service_detail['status']
                 else:
-                    config_dict['status'] = 'Timeout'
+                    config_dict['status'] = 'timeout'
             except Exception:
-                config_dict['status'] = 'Timeout'
+                config_dict['status'] = 'timeout'
             result.append(config_dict)
         return result
 
@@ -261,7 +261,7 @@ class ServiceMgr:
         service_id = int(service_id)
         configs = SERVICE_CONFIGS.configs
 
-        # 查找对应的配置
+        # 查找对应的配置对象
         service_config = None
         for c in configs:
             if c.id == service_id:
@@ -269,19 +269,38 @@ class ServiceMgr:
                 break
 
         if not service_config:
-            raise AdminException(f"Invalid service_id: {service_id}")
+            raise AdminException(f"invalid service_id: {service_id}")
 
-        # 调用健康检查函数
-        detail_func = getattr(health_utils, service_config.detail_func_name)
-        health_status = detail_func()
-
-        # 构建符合 ServiceResponse 格式的响应
+        # 获取基本配置信息
         result = service_config.to_dict()
+        
+        # 添加 service_name 字段以兼容客户端
+        result['service_name'] = service_config.name
 
-        # 将健康检查结果添加到 extra 字段
-        if 'extra' not in result:
-            result['extra'] = {}
-        result['extra']['health'] = health_status
+        # 调用健康检查函数获取状态和详细信息
+        try:
+            detail_func = getattr(health_utils, service_config.detail_func_name)
+            health_info = detail_func()
+            
+            # 设置状态
+            if 'status' in health_info:
+                result['status'] = health_info['status']
+            else:
+                result['status'] = 'alive'
+            
+            # 将健康检查的其他信息合并到 extra 字段
+            if 'extra' not in result:
+                result['extra'] = {}
+            
+            # 将健康检查信息（除了 status）放入 extra
+            for key, value in health_info.items():
+                if key != 'status':
+                    result['extra'][key] = value
+                    
+        except Exception:
+            result['status'] = 'timeout'
+            if 'extra' not in result:
+                result['extra'] = {}
 
         return result
 
