@@ -211,7 +211,15 @@ class UserCanvasService(CommonService):
             select(*fields)
             .select_from(cls.model)
             .join(User, cls.model.user_id == User.id)
-            .where(cls.model.user_id.in_(joined_tenant_ids))
+            .where(
+                or_(
+                    and_(
+                        cls.model.user_id.in_(joined_tenant_ids),
+                        cls.model.permission == TenantPermission.TEAM.value,
+                    ),
+                    cls.model.user_id == user_id,
+                )
+            )
         )
 
         if keywords:
