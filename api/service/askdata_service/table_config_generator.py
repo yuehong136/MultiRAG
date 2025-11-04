@@ -38,14 +38,116 @@ class TableConfigGenerator:
 
         # 1. 解析SQL
         parts = SQLComponentsParser(sql_components).parse_all()
+        main_table = parts["main_table"]
+
+        # 查询与主表有关的模型
+        # 首先要根据main_table的名字找到模型详情中的模型ID,然后调用查询模型关系的方法,把相关模型都查出来
+        # 因为后续返回给前端的可以调整的内容不仅仅是当前涉及到的表，完整的应该是与主表相关联的表都可以通过维度等进行调整。
+        main_table_model_id = None
+        if main_table and main_table in used_table_detail_dict:
+            main_table_model_id = used_table_detail_dict[main_table].get("modelId")
+        
+        # 如果找到了主表的模型ID,则查询相关的模型关系
+        related_model_relationships = []
+        if main_table_model_id:
+            try:
+                related_model_relationships = await self.semantic_api_client.get_model_relationships_async(
+                    model_ids=main_table_model_id
+                )
+                logging.info(f"获取到 {len(related_model_relationships)} 条与主表相关的模型关系")
+            except Exception as e:
+                logging.warning(f"获取主表模型关系失败: {str(e)}")
+        
+        # 从关系中提取所有涉及的模型ID
+        related_model_ids = set()
+        for relation in related_model_relationships:
+            source_model_id = relation.get('sourceModelId')
+            target_model_id = relation.get('targetModelId')
+            if source_model_id:
+                related_model_ids.add(source_model_id)
+            if target_model_id:
+                related_model_ids.add(target_model_id)
+        
+        # 获取model_list中已存在的模型ID
+        existing_model_ids = set(model.get('modelId') for model in model_list if model.get('modelId'))
+        
+        # 找出需要新增的模型ID
+        missing_model_ids = related_model_ids - existing_model_ids
+        
+        # 如果有缺失的模型,则获取它们的详情并添加到model_list
+        if missing_model_ids:
+            logging.info(f"发现 {len(missing_model_ids)} 个关联模型不在model_list中,准备获取详情")
+            try:
+                missing_models_details = await self.semantic_api_client.get_model_detail_async(
+                    model_ids=list(missing_model_ids)
+                )
+
+                # 为每个新模型获取 dimsAndMetrics，保持与 model_list 中已有模型的格式一致
+                for model_detail in missing_models_details:
+                    model_detail['dimsAndMetrics'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
+                        model_id=model_detail["modelId"]
+                    )
+                    model_list.append(model_detail)
+                    logging.info(f"成功添加关联模型: {model_detail.get('modelName')} (ID: {model_detail.get('modelId')})")
+
+                logging.info(f"成功获取并添加 {len(missing_models_details)} 个关联模型的完整详情到model_list")
+            except Exception as e:
+                logging.warning(f"获取关联模型详情失败: {str(e)}")
+
+        # 重新构建 used_table_detail_dict，确保包含所有模型（包括新增的关联模型）
+        for model in model_list:
+            table_name = model.get("tableName")
+            if table_name:
+                used_table_detail_dict[table_name] = model
+        logging.info(f"更新后的 used_table_detail_dict 包含 {len(used_table_detail_dict)} 个表/模型")
+
+        # 收集所有已存在的别名，避免冲突
+        existing_aliases = set()
+        max_alias_num = 0
+        has_number_pattern = False  # 是否识别到数字规律（如 t1, t2）
+
+        for alias_and_table in parts["from_tables"]:
+            alias = alias_and_table["alias"]
+            existing_aliases.add(alias)
+
+            # 尝试识别 t1, t2, t3 这类数字规律
+            match = re.match(r'^([a-zA-Z]+)(\d+)$', alias)
+            if match:
+                prefix = match.group(1)
+                num = int(match.group(2))
+                # 只记录 t1, t2 这种单字母+数字的模式
+                if prefix == 't':
+                    has_number_pattern = True
+                    max_alias_num = max(max_alias_num, num)
 
         model_table_alias_mapping_list = []
         for model in model_list:
             alias = ""
+            # 首先尝试从已有的from_tables中找到别名
             for alias_and_table in parts["from_tables"]:
                 if alias_and_table["table"] == model["tableName"]:
                     alias = alias_and_table["alias"]
                     break
+
+            # 如果没有找到别名（说明是新增的关联模型），生成一个新别名
+            if not alias:
+                if has_number_pattern:
+                    # 有数字规律，继续 t+数字
+                    max_alias_num += 1
+                    alias = f"t{max_alias_num}"
+                else:
+                    # 没有规律，使用表名_auto作为别名
+                    table_name = model["tableName"]
+                    alias = f"{table_name}_auto"
+                    # 如果冲突，添加序号
+                    counter = 1
+                    while alias in existing_aliases:
+                        alias = f"{table_name}_auto{counter}"
+                        counter += 1
+
+                existing_aliases.add(alias)
+                logging.info(f"为新增模型 {model['modelName']} (表: {model['tableName']}) 生成别名: {alias}")
+
             model_table_alias_mapping_list.append(
                 {"modelId": model["modelId"], "table": model["tableName"], "alias": alias,
                  "modelName": model["modelName"]})
