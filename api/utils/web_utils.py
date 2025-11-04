@@ -6,6 +6,7 @@ import socket
 from urllib.parse import urlparse
 import logging
 
+from api.utils.email_templates import EMAIL_TEMPLATES
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
@@ -17,6 +18,13 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from fastapi_mail import MessageSchema, MessageType
 from jinja2 import Template
+
+
+OTP_LENGTH = 8
+OTP_TTL_SECONDS = 5 * 60
+ATTEMPT_LIMIT = 5
+ATTEMPT_LOCK_SECONDS = 30 * 60
+RESEND_COOLDOWN_SECONDS = 60
 
 
 CONTENT_TYPE_MAP = {
@@ -186,52 +194,114 @@ def get_float(req: dict, key: str, default: float | int = 10.0) -> float:
 
 
 # Email functionality
-INVITE_EMAIL_TMPL = """
-<p>Hi {{email}},</p>
-<p>{{inviter}} has invited you to join their team (ID: {{tenant_id}}).</p>
-<p>Click the link below to complete your registration:<br>
-<a href="{{invite_url}}">{{invite_url}}</a></p>
-<p>If you did not request this, please ignore this email.</p>
-"""
+async def send_email_html(subject: str, to_email: str, template_key: str, **context):
+    """
+    Generic HTML email sender using shared templates.
+    template_key must exist in EMAIL_TEMPLATES.
+    
+    Args:
+        subject: Email subject
+        to_email: Recipient email address
+        template_key: Key in EMAIL_TEMPLATES dictionary
+        **context: Template variables to render
+    """
+    from api.apps import smtp_mail_server
+    
+    tmpl = EMAIL_TEMPLATES.get(template_key)
+    if not tmpl:
+        raise ValueError(f"Unknown email template: {template_key}")
+    
+    if smtp_mail_server is None:
+        logging.warning("SMTP mail server not initialized, skipping email send")
+        return
+    
+    try:
+        # Render email template
+        template = Template(tmpl)
+        html_body = template.render(**context)
+        
+        # Create and send message
+        message = MessageSchema(
+            subject=subject,
+            recipients=[to_email],
+            body=html_body,
+            subtype=MessageType.html
+        )
+        
+        await smtp_mail_server.send_message(message)
+        logging.info(f"Email '{subject}' sent to {to_email}")
+        
+    except Exception as e:
+        logging.error(f"Failed to send email to {to_email}: {e}")
+        raise
 
 
 async def send_invite_email(to_email: str, invite_url: str, tenant_id: str, inviter: str):
     """
-    Send invitation email to a user using FastAPI-Mail.
-
+    Send invitation email to a user.
+    Reuses the generic HTML sender with 'invite' template.
+    
     Args:
         to_email: Recipient email address
         invite_url: URL for accepting the invitation
         tenant_id: Tenant ID
         inviter: Name or email of the person sending the invitation
     """
-    from api.apps import smtp_mail_server
+    await send_email_html(
+        subject="MultiRAG Invitation",
+        to_email=to_email,
+        template_key="invite",
+        email=to_email,
+        invite_url=invite_url,
+        tenant_id=tenant_id,
+        inviter=inviter,
+    )
 
-    if smtp_mail_server is None:
-        logging.warning("SMTP mail server not initialized, skipping email send")
-        return
 
-    try:
-        # Render email template
-        template = Template(INVITE_EMAIL_TMPL)
-        html_body = template.render(
-            email=to_email,
-            invite_url=invite_url,
-            tenant_id=tenant_id,
-            inviter=inviter
-        )
+def otp_keys(email: str) -> tuple[str, str, str, str]:
+    """
+    Generate Redis keys for OTP management.
+    
+    Args:
+        email: User email address
+        
+    Returns:
+        Tuple of (otp_key, attempts_key, last_sent_key, lock_key)
+    """
+    email = (email or "").strip().lower()
+    return (
+        f"otp:{email}",
+        f"otp_attempts:{email}",
+        f"otp_last_sent:{email}",
+        f"otp_lock:{email}",
+    )
 
-        # Create and send message
-        # Note: recipients expects list of email strings, Pydantic will validate them
-        message = MessageSchema(
-            subject="MultiRAG Invitation",
-            recipients=[to_email],
-            body=html_body,
-            subtype=MessageType.html
-        )
 
-        await smtp_mail_server.send_message(message)
-        logging.info(f"Invitation email sent to {to_email}")
+def hash_code(code: str, salt: bytes) -> str:
+    """
+    Generate a secure hash of a code using HMAC-SHA256.
+    
+    Args:
+        code: The code to hash
+        salt: Salt bytes for hashing
+        
+    Returns:
+        Hexadecimal hash string
+    """
+    import hashlib
+    import hmac
+    
+    return hmac.new(salt, (code or "").encode("utf-8"), hashlib.sha256).hexdigest()
 
-    except Exception as e:
-        logging.error(f"Failed to send invitation email to {to_email}: {e}")
+
+def captcha_key(email: str) -> str:
+    """
+    Generate Redis key for captcha storage.
+    
+    Args:
+        email: User email address
+        
+    Returns:
+        Redis key string
+    """
+    return f"captcha:{email}"

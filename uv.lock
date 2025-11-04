@@ -676,6 +676,18 @@ wheels = [
 ]
 
 [[package]]
+name = "captcha"
+version = "0.7.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "pillow" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/b4/65/8e186bb798f33ba390eab897c995b0fcee92bc030e0f40cb8ea01f34dd07/captcha-0.7.1.tar.gz", hash = "sha256:a1b462bcc633a64d8db5efa7754548a877c698d98f87716c620a707364cabd6b" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/da/ff/3f0982ecd37c2d6a7266c22e7ea2e47d0773fe449984184c5316459d2776/captcha-0.7.1-py3-none-any.whl", hash = "sha256:8b73b5aba841ad1e5bdb856205bf5f09560b728ee890eb9dae42901219c8c599" },
+]
+
+[[package]]
 name = "cbor"
 version = "1.0.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -3221,6 +3233,7 @@ dependencies = [
     { name = "botocore" },
     { name = "bs4" },
     { name = "cachetools" },
+    { name = "captcha" },
     { name = "chardet" },
     { name = "click" },
     { name = "cn2an" },
@@ -3381,6 +3394,7 @@ requires-dist = [
     { name = "botocore", specifier = "==1.34.140" },
     { name = "bs4", specifier = ">=0.0.2" },
     { name = "cachetools", specifier = "==5.3.3" },
+    { name = "captcha", specifier = ">=0.7.1" },
     { name = "chardet", specifier = "==5.2.0" },
     { name = "click", specifier = ">=8.1.8" },
     { name = "cn2an", specifier = "==0.5.22" },
