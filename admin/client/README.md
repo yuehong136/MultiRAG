@@ -52,9 +52,16 @@ It consists of a server-side Service and a command-line client (CLI), both imple
     ```
 3.  Launch the CLI client:
     ```bash
-    multirag-cli -h 0.0.0.0 -p 9130
+    multirag-cli -h 127.0.0.1 -p 8130
     ```
-	Enter superuser's password to login. Default password is `admin`.
+    You will be prompted to enter the superuser's password to log in.
+    The default password is admin.
+
+    **Parameters:**
+    
+    - -h: RAGFlow admin server host address
+    
+    - -p: RAGFlow admin server port
 
 
 
