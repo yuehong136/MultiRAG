@@ -1,7 +1,8 @@
 import json
 import logging
-import math
 import re
+import math
+import os
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -210,7 +211,7 @@ class Dealer:
             ids = self.dataStore.getChunkIds(results)
             highlight_rst = self.dataStore.getHighlight(results, keywords, "content_with_weight")
             aggs = self.dataStore.getAggregation(results, "docnm_kwd")
-            fields = self.dataStore.getFields(results, src)
+            fields = self.dataStore.getFields(results, src + ["_score"])
             return self.SearchResult(
                 total=total,
                 ids=ids,
@@ -1065,8 +1066,8 @@ class Dealer:
         ranks = {"total": 0, "chunks": [], "doc_aggs": {}}
         if not question:
             return ranks
-        RERANK_LIMIT = 64
-        RERANK_LIMIT = int(RERANK_LIMIT//page_size + ((RERANK_LIMIT%page_size)/(page_size*1.) + 0.5)) * page_size if page_size>1 else 1
+        # Ensure RERANK_LIMIT is multiple of page_size
+        RERANK_LIMIT = math.ceil(64/page_size) * page_size if page_size > 1 else 1
         if RERANK_LIMIT < 1: ## when page_size is very large the RERANK_LIMIT will be 0.
             RERANK_LIMIT = 1
         req = {"kb_names": kb_names, "doc_ids": doc_ids, "page": math.ceil(page_size*page/RERANK_LIMIT), "size": RERANK_LIMIT,
@@ -1088,23 +1089,47 @@ class Dealer:
                                                    vector_similarity_weight,
                                                    rank_feature=rank_feature)
         else:
-            if len(sres.query_vector) == 0:
-                sim = np.array(sres.field["distance"])
-                tsim = np.zeros(len(sim))  # 与 sim 同样长度的零数组
-                vsim = np.zeros(len(sim))  # 与 sim 同样长度的零数组
+            lower_case_doc_engine = os.getenv('DOC_ENGINE', 'milvus')
+            if lower_case_doc_engine == "milvus":
+                # milvus doesn't normalize each way score before fusion.
+                if req.get("search_mode", {}).get("hybrid"):
+                    # Milvus 已经在引擎内部完成了 fusion（密集向量 + BM25 稀疏向量）
+                    # 直接使用融合后的距离分数，无法分解为独立的 term 和 vector 分数
+                    if "distance" in sres.field and isinstance(sres.field["distance"], list):
+                        sim = np.array(sres.field["distance"])
+                    else:
+                        # 如果没有 distance，尝试从 _score 获取
+                        sim = np.array([sres.field[id].get("_score", 0.0) for id in sres.ids])
+                    # 因为无法分解融合分数，所以 term 和 vector 相似度设为 0（表示不适用）
+                    tsim = np.zeros(len(sim))
+                    vsim = np.zeros(len(sim))
+                else:
+                    # 传统单路检索，Milvus 不会自动 fusion
+                    # 需要在应用层通过 rerank 手动融合
+                    if len(sres.query_vector) == 0:
+                        sim = np.array(sres.field["distance"])
+                        tsim = np.zeros(len(sim))  # 与 sim 同样长度的零数组
+                        vsim = np.zeros(len(sim))  # 与 sim 同样长度的零数组
+                    else:
+                        sim, tsim, vsim = self.rerank(
+                            sres, question, 1 - vector_similarity_weight, vector_similarity_weight,
+                            rank_feature=rank_feature)
             else:
-                sim, tsim, vsim = self.rerank(
-                    sres, question, 1 - vector_similarity_weight, vector_similarity_weight,
-                    rank_feature=rank_feature)
+                # Don't need rerank here since Infinity normalizes each way score before fusion.
+                sim = [sres.field[id].get("_score", 0.0) for id in sres.ids]
+                tsim = sim
+                vsim = sim
         # Already paginated in search function
-        idx = np.argsort(sim * -1)[(page - 1) * page_size:page * page_size]
+        begin = ((page % (RERANK_LIMIT//page_size)) - 1) * page_size
+        sim = sim[begin : begin + page_size]
+        sim_np = np.array(sim)
+        idx = np.argsort(sim_np * -1)
         dim = len(sres.query_vector)
         if dim != 768:
             vector_column = f"q_{dim}_vec"
         else:
             vector_column = "vector"
         zero_vector = [0.0] * dim
-        sim_np = np.array(sim)
         filtered_count = (sim_np >= similarity_threshold).sum()
         ranks["total"] = int(filtered_count) # Convert from np.int64 to Python int otherwise JSON serializable error
         for i in idx:
