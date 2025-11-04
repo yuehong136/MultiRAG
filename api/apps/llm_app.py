@@ -1018,6 +1018,9 @@ POST
     elif factory == "Azure-OpenAI":
         api_key = apikey_json(["api_key", "api_version"])
 
+    elif factory == "OpenRouter":
+        api_key = apikey_json(["api_key", "provider_order"])
+
     llm = {
         "tenant_id": user.id,
         "llm_factory": factory,
