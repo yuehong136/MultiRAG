@@ -9,6 +9,7 @@
 import logging
 import time
 from minio import Minio, S3Error
+from minio.commonconfig import CopySource
 from io import BytesIO
 from core import settings
 from core.utils import singleton
@@ -149,3 +150,37 @@ class MultiRAGMinio:
                 logging.warning(f"Bucket {bucket} does not exist.")
         except Exception:
             logging.exception(f"Failed to delete bucket {bucket}.")
+
+    def copy(self, src_bucket, src_path, dest_bucket, dest_path):
+        try:
+            if not self.conn.bucket_exists(dest_bucket):
+                self.conn.make_bucket(dest_bucket)
+
+            try:
+                self.conn.stat_object(src_bucket, src_path)
+            except Exception as e:
+                logging.exception(f"Source object not found: {src_bucket}/{src_path}, {e}")
+                return False
+
+            self.conn.copy_object(
+                dest_bucket,
+                dest_path,
+                CopySource(src_bucket, src_path),
+            )
+            return True
+
+        except Exception:
+            logging.exception(f"Fail to copy {src_bucket}/{src_path} -> {dest_bucket}/{dest_path}")
+            return False
+
+    def move(self, src_bucket, src_path, dest_bucket, dest_path):
+        try:
+            if self.copy(src_bucket, src_path, dest_bucket, dest_path):
+                self.rm(src_bucket, src_path)
+                return True
+            else:
+                logging.error(f"Copy failed, move aborted: {src_bucket}/{src_path}")
+                return False
+        except Exception:
+            logging.exception(f"Fail to move {src_bucket}/{src_path} -> {dest_bucket}/{dest_path}")
+            return False

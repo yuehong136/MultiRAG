@@ -417,6 +417,32 @@ class FileService(CommonService):
 
         return err, files_info
 
+    @classmethod
+    def list_all_files_by_parent_id(cls, db: Session, parent_id: str) -> list[File]:
+        """
+        根据父文件夹ID查询所有子文件和子文件夹
+        
+        Args:
+            db: 数据库会话
+            parent_id: 父文件夹ID
+            
+        Returns:
+            文件列表
+        """
+        try:
+            stmt = (
+                select(cls.model)
+                .where(
+                    cls.model.parent_id == parent_id,
+                    cls.model.id != parent_id
+                )
+            )
+            files = db.execute(stmt).scalars().all()
+            return list(files)
+        except Exception:
+            logging.exception("list_by_parent_id failed")
+            raise RuntimeError("Database error (list_by_parent_id)!")
+
     @staticmethod
     def parse_docs(file_data, user_id):
         exe = ThreadPoolExecutor(max_workers=12)
