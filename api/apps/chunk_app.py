@@ -368,7 +368,7 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
         # total = settings.retriever.count(query_count, search.index_name_one(tenant_id, kb.name)).total
         # sres = settings.retriever.search(query, search.index_name_one(tenant_id, kb.name))
         # total = settings.retriever.search(query_count, search.index_name_one(tenant_id, kb.name), kb_ids).total
-        sres = settings.retriever.search(query, search.index_name_one(tenant_id, kb.name), kb_ids)
+        sres = settings.retriever.search(query, search.index_name_one(tenant_id, kb.name), kb_ids, highlight=["content_ltks"])
         res = {"total": sres.total, "chunks": [], "doc": doc.to_dict()}
         for id in sres.ids:
             d = {

@@ -172,8 +172,15 @@ class Dealer:
         return " && ".join(filter_parts) if filter_parts else ""
 
 
-    def search(self, req, idx_names: str | list[str], kb_ids: list[str], emb_mdl=None, highlight=False,
-               rank_feature: dict | None = None):
+    def search(self, req, idx_names: str | list[str],
+               kb_ids: list[str],
+               emb_mdl=None,
+               highlight: bool | list | None = False,
+               rank_feature: dict | None = None
+               ):
+        if highlight is None:
+            highlight = False
+
         """Milvus‑backend search (single‑method refactor)."""
         # ---------- 通用预处理 ----------
         filters = self.get_filters(req)
@@ -190,7 +197,11 @@ class Dealer:
             "content_with_weight", PAGERANK_FLD, TAG_FLD,
         ]
         src: list[str] = list(req.get("fields", default_fields))
-        highlight_fields = ["content_ltks", "title_tks"] if highlight else []
+        highlight_fields = ["content_ltks", "title_tks"]
+        if not highlight:
+            highlight_fields = []
+        elif isinstance(highlight, list):
+            highlight_fields = highlight
 
         qst: str = req.get("question", "")
         q_vec: list[float] = []
