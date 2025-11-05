@@ -145,7 +145,8 @@ class ParserParam(ProcessParamBase):
             "video": {
                 "suffix":[
                     "mp4",
-                    "av"
+                    "avi",
+                    "mkv"
                 ],
                 "output_format": "json",
             },
