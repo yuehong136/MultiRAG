@@ -46,7 +46,7 @@ from api.utils.api_utils import construct_json_result, construct_error_response,
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type, thumbnail, get_project_base_directory
 from api.utils.web_utils import CONTENT_TYPE_MAP, html2pdf, is_valid_url
-from core.nlp import search
+from core.nlp import search, rag_tokenizer
 from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 
@@ -2228,6 +2228,22 @@ def rename(
         if informs:
             file = FileService.get_by_id(db, informs[0].file_id)
             FileService.update_by_id(db, file.id, {"name": req["name"]})
+
+        tenant_id = DocumentService.get_tenant_id(db, req["doc_id"])
+        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        title_tks = rag_tokenizer.tokenize(req["name"])
+        milvus_body = {
+            "docnm_kwd": req["name"],
+            "title_tks": title_tks,
+            "title_sm_tks": rag_tokenizer.fine_grained_tokenize(title_tks),
+        }
+        if settings.docStoreConn.indexExist(search.index_name_one(tenant_id, kb.name), doc.kb_id):
+            settings.docStoreConn.update(
+                {"doc_id": req["doc_id"]},
+                milvus_body,
+                search.index_name_one(tenant_id, kb.name),
+                doc.kb_id,
+            )
 
         return construct_json_result(data=True)
     except Exception as e:
