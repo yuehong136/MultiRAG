@@ -1,3 +1,6 @@
+#
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+#
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 #  You may obtain a copy of the License at
@@ -10,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+
 import copy
 import re
 from io import BytesIO
@@ -71,8 +75,7 @@ class Pdf(PdfParser):
         callback(msg="OCR started")
         self.__images__(filename if not binary else binary,
                         zoomin, from_page, to_page, callback)
-        callback(
-            msg="Page {}~{}: OCR finished ({:.2f}s)".format(from_page, min(to_page, self.total_page), timer() - start))
+        callback(msg="Page {}~{}: OCR finished ({:.2f}s)".format(from_page, min(to_page, self.total_page), timer() - start))
         assert len(self.boxes) == len(self.page_images), "{} vs. {}".format(
             len(self.boxes), len(self.page_images))
         res = []
@@ -149,8 +152,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
                 d["image"] = img
             d["page_num_int"] = [pn + 1]
             d["top_int"] = [0]
-            d["position_int"] = [
-                (pn + 1, 0, img.size[0] if img else 0, 0, img.size[1] if img else 0)]
+            d["position_int"] = [(pn + 1, 0, img.size[0] if img else 0, 0, img.size[1] if img else 0)]
             tokenize(d, txt, eng)
             res.append(d)
         return res

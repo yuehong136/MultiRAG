@@ -1,3 +1,6 @@
+#
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+#
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 #  You may obtain a copy of the License at
@@ -122,7 +125,6 @@ def label_question(db, question, kbs):
     from api.db.services.knowledgebase_service import KnowledgebaseService
     from graphrag.utils import get_tags_from_cache, set_tags_to_cache
     from api import settings
-    from api.db.db_models import SessionLocal
     tags = None
     tag_kb_ids = []
     for kb in kbs:
