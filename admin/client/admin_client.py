@@ -359,7 +359,7 @@ class AdminCLI(Cmd):
                             self.session.headers.update({
                                 'Content-Type': 'application/json',
                                 'Authorization': auth_header,
-                                'User-Agent': 'MultiRAG-CLI/0.8.0'
+                                'User-Agent': 'MultiRAG-CLI/0.9.0'
                             })
                             print("Authentication successful.")
                             return True
