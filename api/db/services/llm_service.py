@@ -497,18 +497,18 @@ class LLMBundle(LLM4Tenant):
     def _clean_param(chat_partial, **kwargs):
         func = chat_partial.func
         sig = inspect.signature(func)
-        keyword_args = []
         support_var_args = False
-        for param in sig.parameters.values():
-            if param.kind == inspect.Parameter.VAR_KEYWORD or param.kind == inspect.Parameter.VAR_POSITIONAL:
-                support_var_args = True
-            elif param.kind == inspect.Parameter.KEYWORD_ONLY:
-                keyword_args.append(param.name)
+        allowed_params = set()
 
-        use_kwargs = kwargs
-        if not support_var_args:
-            use_kwargs = {k: v for k, v in kwargs.items() if k in keyword_args}
-        return use_kwargs
+        for param in sig.parameters.values():
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                support_var_args = True
+            elif param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+                allowed_params.add(param.name)
+        if support_var_args:
+            return kwargs
+        else:
+            return {k: v for k, v in kwargs.items() if k in allowed_params}
 
     def chat(self, system: str, history: list, gen_conf: dict[str, Any] | None=None, **kwargs) -> str:
         if gen_conf is None:

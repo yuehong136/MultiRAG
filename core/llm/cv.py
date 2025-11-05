@@ -49,7 +49,7 @@ class Base(ABC):
     def describe_with_prompt(self, image, prompt=None):
         raise NotImplementedError("Please implement encode method!")
 
-    def _form_history(self, system, history, images=[]):
+    def _form_history(self, system, history, images=None):
         hist = []
         if system:
             hist.append({"role": "system", "content": system})
@@ -77,7 +77,7 @@ class Base(ABC):
             })
         return pmpt
 
-    def chat(self, system, history, gen_conf, images=[], **kwargs):
+    def chat(self, system, history, gen_conf, images=None, **kwargs):
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -88,7 +88,7 @@ class Base(ABC):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system, history, gen_conf, images=[], **kwargs):
+    def chat_streamly(self, system, history, gen_conf, images=None, **kwargs):
         ans = ""
         tk_count = 0
         try:
@@ -227,7 +227,7 @@ class QWenCV(GptV4):
             base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
         super().__init__(key, model_name, lang=lang, base_url=base_url, **kwargs)
 
-    def chat(self, system, history, gen_conf, images=[], video_bytes=None, filename=""):
+    def chat(self, system, history, gen_conf, images=None, video_bytes=None, filename=""):
         if video_bytes:
             try:
                 summary, summary_num_tokens = self._process_video(video_bytes, filename)
@@ -516,8 +516,6 @@ class OllamaCV(Base):
         return options
 
     def _form_history(self, system, history, images=None):
-        if images is None:
-            images = []
         hist = deepcopy(history)
         if system and hist[0]["role"] == "user":
             hist.insert(0, {"role": "system", "content": system})
@@ -558,7 +556,7 @@ class OllamaCV(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat(self, system, history, gen_conf, images=[]):
+    def chat(self, system, history, gen_conf, images=None):
         try:
             response = self.client.chat(
                 model=self.model_name,
@@ -572,7 +570,7 @@ class OllamaCV(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system, history, gen_conf, images=[]):
+    def chat_streamly(self, system, history, gen_conf, images=None):
         ans = ""
         try:
             response = self.client.chat(
@@ -607,7 +605,7 @@ class GeminiCV(Base):
         self.lang = lang
         Base.__init__(self, **kwargs)
 
-    def _form_history(self, system, history, images=[]):
+    def _form_history(self, system, history, images=None):
         hist = []
         if system:
             hist.append({"role": "user", "parts": [system, history[0]["content"]]})
@@ -644,7 +642,7 @@ class GeminiCV(Base):
                 return res.text, total_token_count_from_response(res)
 
 
-    def chat(self, system, history, gen_conf, images=[], video_bytes=None, filename=""):
+    def chat(self, system, history, gen_conf, images=None, video_bytes=None, filename=""):
         if video_bytes:
             try:
                 summary, summary_num_tokens = self._process_video(video_bytes, filename)
@@ -652,7 +650,7 @@ class GeminiCV(Base):
             except Exception as e:
                 return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system, history, gen_conf, images=[]):
+    def chat_streamly(self, system, history, gen_conf, images=None):
         ans = ""
         response = None
         try:
@@ -783,7 +781,7 @@ class NvidiaCV(Base):
             total_token_count_from_response(response)
         )
 
-    def chat(self, system, history, gen_conf, images=[], **kwargs):
+    def chat(self, system, history, gen_conf, images=None, **kwargs):
         try:
             response = self._request(self._form_history(system, history, images), gen_conf)
             return (
@@ -793,7 +791,7 @@ class NvidiaCV(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system, history, gen_conf, images=[], **kwargs):
+    def chat_streamly(self, system, history, gen_conf, images=None, **kwargs):
         total_tokens = 0
         try:
             response = self._request(self._form_history(system, history, images), gen_conf)
@@ -859,7 +857,7 @@ class AnthropicCV(Base):
             gen_conf["max_tokens"] = self.max_tokens
         return gen_conf
 
-    def chat(self, system, history, gen_conf, images=[]):
+    def chat(self, system, history, gen_conf, images=None):
         gen_conf = self._clean_conf(gen_conf)
         ans = ""
         try:
@@ -880,7 +878,7 @@ class AnthropicCV(Base):
         except Exception as e:
             return ans + "\n**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system, history, gen_conf, images=[]):
+    def chat_streamly(self, system, history, gen_conf, images=None):
         gen_conf = self._clean_conf(gen_conf)
         total_tokens = 0
         try:
@@ -964,13 +962,13 @@ class GoogleCV(AnthropicCV, GeminiCV):
         else:
             return GeminiCV.describe_with_prompt(self, image, prompt)
 
-    def chat(self, system, history, gen_conf, images=[]):
+    def chat(self, system, history, gen_conf, images=None):
         if "claude" in self.model_name:
             return AnthropicCV.chat(self, system, history, gen_conf, images)
         else:
             return GeminiCV.chat(self, system, history, gen_conf, images)
 
-    def chat_streamly(self, system, history, gen_conf, images=[]):
+    def chat_streamly(self, system, history, gen_conf, images=None):
         if "claude" in self.model_name:
             for ans in AnthropicCV.chat_streamly(self, system, history, gen_conf, images):
                 yield ans

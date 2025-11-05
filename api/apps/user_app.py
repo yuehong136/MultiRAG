@@ -944,7 +944,7 @@ async def forget_get_captcha(email: str, db: Session = Depends(get_db)):
     image = ImageCaptcha(width=300, height=120, font_sizes=[50, 60, 70])
     img_bytes = image.generate(captcha_text).read()
     
-    return Response(content=img_bytes, media_type="image/png")
+    return Response(content=img_bytes, media_type="image/jpeg")
 
 
 @router.post("/forget/otp", summary="发送邮箱OTP验证码")
