@@ -107,6 +107,17 @@ start_admin_server() {
   done &
 }
 
+ensure_docling() {
+  if [[ "${USE_DOCLING}" == "true" ]]; then
+    if ! "${PY}" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('docling') else 1)" 2>/dev/null; then
+      echo "[entrypoint] docling 未安装，正在安装..."
+      "${PY}" -m pip install --no-cache-dir "docling${DOCLING_VERSION:-}" || echo "[entrypoint] docling 安装失败，跳过"
+    else
+      echo "[entrypoint] docling 已安装，跳过"
+    fi
+  fi
+}
+
 _term() {
   echo "[entrypoint] 收到终止信号，清理子进程..."
   pkill -TERM -P $$ || true
@@ -123,6 +134,9 @@ fi
 if [[ "${ENABLE_ADMINSERVER}" -eq 1 ]]; then
   start_admin_server
 fi
+
+# 确保 docling 依赖已安装
+ensure_docling
 
 if [[ "${ENABLE_TASKEXECUTOR}" -eq 1 ]]; then
   if (( CONSUMER_NO_END > CONSUMER_NO_BEG )); then
