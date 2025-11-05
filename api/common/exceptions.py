@@ -32,6 +32,12 @@ class CannotDeleteAdminError(AdminException):
         super().__init__("Cannot delete admin account", 403)
 
 
+class NotAdminError(AdminException):
+    """非管理员异常"""
+    def __init__(self, username: str):
+        super().__init__(f"User '{username}' is not admin", 403)
+
+
 class AuthenticationError(AdminException):
     """认证失败异常"""
     def __init__(self, message: str = "Authentication failed"):

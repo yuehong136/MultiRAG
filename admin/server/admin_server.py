@@ -1,16 +1,40 @@
 import logging
+import os
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from routes import admin_router
+from auth import init_default_admin
 from api.utils.log_utils import init_root_logger
 from api.constants import SERVICE_CONF
 from api import settings
 from config import load_configurations, SERVICE_CONFIGS
 from api.common.exceptions import setup_exception_handlers
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    """限制请求体大小的中间件"""
+    def __init__(self, app, max_content_length: int):
+        super().__init__(app)
+        self.max_content_length = max_content_length
+
+    async def dispatch(self, request: Request, call_next):
+        # 检查 Content-Length header
+        content_length = request.headers.get("content-length")
+        if content_length:
+            content_length = int(content_length)
+            if content_length > self.max_content_length:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Request body too large. Maximum size: {self.max_content_length} bytes"
+                )
+        
+        response = await call_next(request)
+        return response
 
 
 @asynccontextmanager
@@ -26,9 +50,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     /_/  /_/\__,_/\__/_/_/ |_/_/  |_\____/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/ 
     """)
     
-    # 初始化设置
-    settings.init_settings()
+    # settings 已在 auth.py 模块导入时初始化，这里确保初始化完成
+    if settings.SECRET_KEY is None:
+        settings.init_settings()
+    
+    # 加载服务配置
     SERVICE_CONFIGS.configs = load_configurations(SERVICE_CONF)
+    
+    # 初始化默认管理员账号
+    from api.db.db_models import SessionLocal
+    db = SessionLocal()
+    try:
+        init_default_admin(db)
+    except Exception as e:
+        logging.error(f"Failed to init default admin: {e}")
+    finally:
+        db.close()
+    
     logging.info("MultiRAG Admin service started...")
     
     yield
@@ -45,6 +83,12 @@ def create_app() -> FastAPI:
         version="1.0.0",
         lifespan=lifespan
     )
+    
+    # 配置最大请求体大小（默认 1GB）
+    max_content_length = int(os.environ.get("MAX_CONTENT_LENGTH", 1024 * 1024 * 1024))
+    
+    # 添加请求体大小限制中间件
+    app.add_middleware(RequestSizeLimitMiddleware, max_content_length=max_content_length)
     
     # 配置 CORS
     app.add_middleware(
@@ -73,5 +117,8 @@ if __name__ == '__main__':
         host="0.0.0.0",
         port=8130,
         reload=True,
-        log_level="info"
+        log_level="info",
+        limit_max_requests=10000,  # 最大请求数（进程重启前的请求数）
+        timeout_keep_alive=5,       # Keep-Alive 超时
+        # 请求体大小限制已通过 RequestSizeLimitMiddleware 实现
     )

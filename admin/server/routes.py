@@ -1,15 +1,30 @@
 import logging
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
-from auth import AdminAuth
+from auth import AdminAuth, admin_manager, login_admin, logout_admin
 from responses import APIResponse, success_response, error_response
 from services import UserMgr, ServiceMgr, UserServiceMgr
 from api.common.exceptions import AdminException
+from api.db.db_models import get_db
 
 
 # ========== 请求/响应模型定义 ==========
+
+class LoginRequest(BaseModel):
+    """管理员登录请求"""
+    email: str = Field(..., description="管理员邮箱")
+    password: str = Field(..., description="加密后的密码")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "email": "admin@datav.com",
+            "password": "encrypted_password_string"
+        }
+    })
+
 
 class UserCreate(BaseModel):
     """创建用户请求"""
@@ -82,17 +97,67 @@ class ServiceResponse(BaseModel):
 admin_router = APIRouter(tags=["admin"])
 
 
+@admin_router.post(
+    "/login",
+    summary="管理员登录",
+    description="管理员登录接口，返回JWT token用于后续请求认证"
+)
+async def admin_login(request: LoginRequest, db: Session = Depends(get_db)):
+    """管理员登录"""
+    try:
+        return login_admin(db, request.email, request.password)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        logging.exception(f"Login error: {e}")
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/logout",
+    summary="管理员登出",
+    description="管理员登出，使当前 token 失效"
+)
+async def admin_logout(user=Depends(admin_manager), db: Session = Depends(get_db)):
+    """管理员登出"""
+    try:
+        logout_admin(db, user)
+        return success_response(True, "Logout successfully")
+    except Exception as e:
+        logging.exception(f"Logout error: {e}")
+        return error_response(str(e), 500)
+
+
 @admin_router.get(
     "/auth",
     response_model=APIResponse[None],
     summary="验证管理员身份",
-    description="验证当前用户是否具有管理员权限"
+    description="验证当前用户是否具有管理员权限（兼容旧版 HTTP Basic Auth）"
 )
 async def auth_admin(auth: AdminAuth) -> APIResponse[None]:
-    """验证管理员身份"""
+    """
+    验证管理员身份（旧接口，使用 HTTP Basic Auth）
+    
+    ⚠️ 已废弃：建议使用 JWT token 认证
+    新客户端应该使用 /login 获取 token，然后在请求头中携带 token
+    """
     try:
         username, db = auth
         return success_response(None, "Admin is authorized", 0)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/verify",
+    response_model=APIResponse[None],
+    summary="验证 JWT token 有效性",
+    description="验证当前 JWT token 是否有效且用户具有管理员权限"
+)
+async def verify_admin(user=Depends(admin_manager)) -> APIResponse[None]:
+    """验证 JWT token 有效性（推荐使用）"""
+    try:
+        return success_response(None, f"Admin {user.email} is authorized", 0)
     except Exception as e:
         return error_response(str(e), 500)
 
@@ -103,10 +168,9 @@ async def auth_admin(auth: AdminAuth) -> APIResponse[None]:
     summary="获取所有用户",
     description="获取系统中所有用户的列表"
 )
-async def list_users(auth: AdminAuth) -> APIResponse[list[UserResponse]]:
+async def list_users(user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[list[UserResponse]]:
     """获取所有用户列表"""
     try:
-        username, db = auth
         users = UserMgr.get_all_users(db)
         return success_response(users, "Get all users", 0)
     except Exception as e:
@@ -119,10 +183,9 @@ async def list_users(auth: AdminAuth) -> APIResponse[list[UserResponse]]:
     summary="创建用户",
     description="创建一个新用户"
 )
-async def create_user(user_data: UserCreate, auth: AdminAuth) -> APIResponse[dict]:
+async def create_user(user_data: UserCreate, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[dict]:
     """创建新用户"""
     try:
-        username, db = auth
         res = UserMgr.create_user(
             db,
             user_data.username,
@@ -153,10 +216,9 @@ async def create_user(user_data: UserCreate, auth: AdminAuth) -> APIResponse[dic
     summary="删除用户",
     description="删除指定用户及其所有数据"
 )
-async def delete_user(username: str, auth: AdminAuth) -> APIResponse[None]:
+async def delete_user(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[None]:
     """删除用户"""
     try:
-        admin_username, db = auth
         res = UserMgr.delete_user(db, username)
         if res["success"]:
             return success_response(None, res["message"])
@@ -178,11 +240,11 @@ async def delete_user(username: str, auth: AdminAuth) -> APIResponse[None]:
 async def change_password(
     username: str,
     password_data: PasswordUpdate,
-    auth: AdminAuth
+    user=Depends(admin_manager),
+    db: Session = Depends(get_db)
 ) -> APIResponse[None]:
     """修改用户密码"""
     try:
-        admin_username, db = auth
         msg = UserMgr.update_user_password(db, username, password_data.new_password)
         return success_response(None, msg)
 
@@ -201,11 +263,11 @@ async def change_password(
 async def alter_user_activate_status(
     username: str,
     status_data: ActivateStatusUpdate,
-    auth: AdminAuth
+    user=Depends(admin_manager),
+    db: Session = Depends(get_db)
 ) -> APIResponse[None]:
     """更新用户激活状态"""
     try:
-        admin_username, db = auth
         msg = UserMgr.update_user_activate_status(db, username, status_data.activate_status)
         return success_response(None, msg)
     except AdminException as e:
@@ -220,10 +282,9 @@ async def alter_user_activate_status(
     summary="获取用户详情",
     description="获取指定用户的详细信息"
 )
-async def get_user_details(username: str, auth: AdminAuth) -> APIResponse[UserDetail]:
+async def get_user_details(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[UserDetail]:
     """获取用户详细信息"""
     try:
-        admin_username, db = auth
         user_details = UserMgr.get_user_details(db, username)
         return success_response(user_details)
     except AdminException as e:
@@ -238,10 +299,9 @@ async def get_user_details(username: str, auth: AdminAuth) -> APIResponse[UserDe
     summary="获取用户的知识库列表",
     description="获取指定用户的所有知识库"
 )
-async def get_user_datasets(username: str, auth: AdminAuth) -> APIResponse[list[dict]]:
+async def get_user_datasets(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[list[dict]]:
     """获取用户的知识库列表"""
     try:
-        admin_username, db = auth
         datasets_list = UserServiceMgr.get_user_datasets(db, username)
         return success_response(datasets_list)
     except AdminException as e:
@@ -256,10 +316,9 @@ async def get_user_datasets(username: str, auth: AdminAuth) -> APIResponse[list[
     summary="获取用户的Agent列表",
     description="获取指定用户的所有Agent"
 )
-async def get_user_agents(username: str, auth: AdminAuth) -> APIResponse[list[dict]]:
+async def get_user_agents(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[list[dict]]:
     """获取用户的Agent列表"""
     try:
-        admin_username, db = auth
         agents_list = UserServiceMgr.get_user_agents(db, username)
         return success_response(agents_list)
     except AdminException as e:
@@ -274,10 +333,9 @@ async def get_user_agents(username: str, auth: AdminAuth) -> APIResponse[list[di
     summary="获取所有服务",
     description="获取系统中所有服务的列表"
 )
-async def get_services(auth: AdminAuth) -> APIResponse[list[ServiceResponse]]:
+async def get_services(user=Depends(admin_manager)) -> APIResponse[list[ServiceResponse]]:
     """获取所有服务列表"""
     try:
-        username, db = auth
         services = ServiceMgr.get_all_services()
         return success_response(services, "Get all services", 0)
     except Exception as e:
@@ -292,11 +350,10 @@ async def get_services(auth: AdminAuth) -> APIResponse[list[ServiceResponse]]:
 )
 async def get_services_by_type(
     service_type: str,
-    auth: AdminAuth
+    user=Depends(admin_manager)
 ) -> APIResponse[list[ServiceResponse]]:
     """按类型获取服务"""
     try:
-        username, db = auth
         services = ServiceMgr.get_services_by_type(service_type)
         return success_response(services)
     except Exception as e:
@@ -309,10 +366,9 @@ async def get_services_by_type(
     summary="获取服务详情",
     description="获取指定服务的详细信息"
 )
-async def get_service(service_id: int, auth: AdminAuth) -> APIResponse[ServiceResponse]:
+async def get_service(service_id: int, user=Depends(admin_manager)) -> APIResponse[ServiceResponse]:
     """获取服务详情"""
     try:
-        username, db = auth
         service = ServiceMgr.get_service_details(service_id)
         return success_response(service)
     except Exception as e:
@@ -325,10 +381,9 @@ async def get_service(service_id: int, auth: AdminAuth) -> APIResponse[ServiceRe
     summary="关闭服务",
     description="关闭指定的服务"
 )
-async def shutdown_service(service_id: int, auth: AdminAuth) -> APIResponse[dict]:
+async def shutdown_service(service_id: int, user=Depends(admin_manager)) -> APIResponse[dict]:
     """关闭服务"""
     try:
-        username, db = auth
         result = ServiceMgr.shutdown_service(service_id)
         return success_response(result)
     except Exception as e:
@@ -341,10 +396,9 @@ async def shutdown_service(service_id: int, auth: AdminAuth) -> APIResponse[dict
     summary="重启服务",
     description="重启指定的服务"
 )
-async def restart_service(service_id: int, auth: AdminAuth) -> APIResponse[dict]:
+async def restart_service(service_id: int, user=Depends(admin_manager)) -> APIResponse[dict]:
     """重启服务"""
     try:
-        username, db = auth
         result = ServiceMgr.restart_service(service_id)
         return success_response(result)
     except Exception as e:
