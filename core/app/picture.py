@@ -17,48 +17,67 @@ import numpy as np
 from PIL import Image
 
 from api.db import LLMType
-from api.db.db_models import SessionLocal
+from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from deepdoc.vision import OCR
-from core.nlp import tokenize
+from core.nlp import rag_tokenizer, tokenize
 from core.utils import clean_markdown_block
-from core.nlp import rag_tokenizer
 
 
 ocr = OCR()
 
+# Gemini supported MIME types
+VIDEO_EXTS = [".mp4", ".mov", ".avi", ".flv", ".mpeg", ".mpg", ".webm", ".wmv", ".3gp", ".3gpp"]
+
 
 def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
-    img = Image.open(io.BytesIO(binary)).convert('RGB')
     doc = {
         "docnm_kwd": filename,
         "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename)),
-        "image": img,
-        "doc_type_kwd": "image"
     }
-    bxs = ocr(np.array(img))
-    txt = "\n".join([t[0] for _, t in bxs if t[0]])
     eng = lang.lower() == "english"
-    callback(0.4, "Finish OCR: (%s ...)" % txt[:12])
-    if (eng and len(txt.split()) > 32) or len(txt) > 32:
-        tokenize(doc, txt, eng)
-        callback(0.8, "OCR results is too long to use CV LLM.")
-        return [doc]
 
-    try:
-        callback(0.4, "Use CV LLM to describe the picture.")
-        db = SessionLocal()
-        cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, lang=lang)
-        img_binary = io.BytesIO()
-        img.save(img_binary, format='JPEG')
-        img_binary.seek(0)
-        ans = cv_mdl.describe(binary)
-        callback(0.8, "CV LLM respond: %s ..." % ans[:32])
-        txt += "\n" + ans
-        tokenize(doc, txt, eng)
-        return [doc]
-    except Exception as e:
-        callback(prog=-1, msg=str(e))
+    with db_connection() as db:
+        if any(filename.lower().endswith(ext) for ext in VIDEO_EXTS):
+            try:
+                doc.update({"doc_type_kwd": "video"})
+                cv_mdl = LLMBundle(db, tenant_id, llm_type=LLMType.IMAGE2TEXT, lang=lang)
+                ans = cv_mdl.chat(system="", history=[], gen_conf={}, video_bytes=binary, filename=filename)
+                callback(0.8, "CV LLM respond: %s ..." % ans[:32])
+                ans += "\n" + ans
+                tokenize(doc, ans, eng)
+                return [doc]
+            except Exception as e:
+                callback(prog=-1, msg=str(e))
+        else:
+            img = Image.open(io.BytesIO(binary)).convert("RGB")
+            doc.update(
+                {
+                    "image": img,
+                    "doc_type_kwd": "image",
+                }
+            )
+            bxs = ocr(np.array(img))
+            txt = "\n".join([t[0] for _, t in bxs if t[0]])
+            callback(0.4, "Finish OCR: (%s ...)" % txt[:12])
+            if (eng and len(txt.split()) > 32) or len(txt) > 32:
+                tokenize(doc, txt, eng)
+                callback(0.8, "OCR results is too long to use CV LLM.")
+                return [doc]
+
+            try:
+                callback(0.4, "Use CV LLM to describe the picture.")
+                cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, lang=lang)
+                img_binary = io.BytesIO()
+                img.save(img_binary, format="JPEG")
+                img_binary.seek(0)
+                ans = cv_mdl.describe(img_binary.read())
+                callback(0.8, "CV LLM respond: %s ..." % ans[:32])
+                txt += "\n" + ans
+                tokenize(doc, txt, eng)
+                return [doc]
+            except Exception as e:
+                callback(prog=-1, msg=str(e))
 
     return []
 
@@ -77,7 +96,7 @@ def vision_llm_chunk(binary, vision_model, prompt=None, callback=None):
 
     try:
         with io.BytesIO() as img_binary:
-            img.save(img_binary, format='JPEG')
+            img.save(img_binary, format="JPEG")
             img_binary.seek(0)
             ans = clean_markdown_block(vision_model.describe_with_prompt(img_binary.read(), prompt))
             txt += "\n" + ans

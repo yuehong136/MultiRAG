@@ -516,9 +516,9 @@ class LLMBundle(LLM4Tenant):
         if self.langfuse:
             generation = self.langfuse.start_generation(trace_context=self.trace_context, name="chat", model=self.llm_name, input={"system": system, "history": history})
 
-        chat_partial = partial(self.mdl.chat, system, history, gen_conf)
+        chat_partial = partial(self.mdl.chat, system, history, gen_conf, **kwargs)
         if self.is_tools and self.mdl.is_tools:
-            chat_partial = partial(self.mdl.chat_with_tools, system, history, gen_conf)
+            chat_partial = partial(self.mdl.chat_with_tools, system, history, gen_conf, **kwargs)
 
         use_kwargs = self._clean_param(chat_partial, **kwargs)
         txt, used_tokens = chat_partial(**use_kwargs)
