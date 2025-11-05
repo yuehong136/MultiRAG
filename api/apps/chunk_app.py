@@ -1486,7 +1486,8 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
         # 当调用retrieval函数时，传递维度信息
         ranks = settings.retriever.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
                                request.size, request.similarity_threshold, request.vector_similarity_weight,
-                               request.top_k, doc_ids, rerank_mdl=rerank_mdl, highlight=request.highlight,
+                               request.top_k, doc_ids, rerank_mdl=rerank_mdl,
+                               highlight=request.highlight if request.highlight is not None else False,
                                rank_feature=labels, search_mode=search_mode_dict)
         if request.use_kg:
             ck = settings.kg_retriever.retrieval(question,
