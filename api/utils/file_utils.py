@@ -18,7 +18,6 @@ from typing import List, Union, Tuple
 
 # Third-party imports
 import olefile
-import fitz
 import pdfplumber
 from cachetools import LRUCache, cached
 from PIL import Image
@@ -297,17 +296,22 @@ def read_potential_broken_pdf(blob):
     return blob
 
 
+
 def _is_zip(h: bytes) -> bool:
     return h.startswith(b"PK\x03\x04") or h.startswith(b"PK\x05\x06") or h.startswith(b"PK\x07\x08")
+
 
 def _is_pdf(h: bytes) -> bool:
     return h.startswith(b"%PDF-")
 
+
 def _is_ole(h: bytes) -> bool:
     return h.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1")
 
+
 def _sha10(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()[:10]
+
 
 def _guess_ext(b: bytes) -> str:
     h = b[:8]
@@ -317,9 +321,9 @@ def _guess_ext(b: bytes) -> str:
                 names = [n.lower() for n in z.namelist()]
                 if any(n.startswith("word/") for n in names):
                     return ".docx"
-                if any(n.startswith("ppt/")  for n in names):
+                if any(n.startswith("ppt/") for n in names):
                     return ".pptx"
-                if any(n.startswith("xl/")   for n in names):
+                if any(n.startswith("xl/") for n in names):
                     return ".xlsx"
         except Exception:
             pass
@@ -338,9 +342,11 @@ def _extract_ole10native_payload(data: bytes) -> bytes:
             return data
         _ = int.from_bytes(data[pos:pos+4], "little")
         pos += 4
-        for _ in range(3):  # filename/src/tmp (NUL-terminated ANSI)
+        # filename/src/tmp (NUL-terminated ANSI)
+        for _ in range(3):
             z = data.index(b"\x00", pos)
             pos = z + 1
+        # skip unknown 4 bytes
         pos += 4
         if pos + 4 > len(data):
             return data
@@ -354,11 +360,9 @@ def _extract_ole10native_payload(data: bytes) -> bytes:
 
 def extract_embed_file(target: Union[bytes, bytearray]) -> List[Tuple[str, bytes]]:
     """
-    Only extract the "first layer" of embedding, returning raw (filename, bytes).
-    These bytes can be directly used for io.BytesIO and then passed to zipfile/fitz/olefile and other libraries for further parsing.
+    Only extract the 'first layer' of embedding, returning raw (filename, bytes).
     """
     top = bytes(target)
-
     head = top[:8]
     out: List[Tuple[str, bytes]] = []
     seen = set()
@@ -369,7 +373,7 @@ def extract_embed_file(target: Union[bytes, bytearray]) -> List[Tuple[str, bytes
             return
         seen.add(h10)
         ext = _guess_ext(b)
-        # If name_hint does not have a clear extension, use the extension guessed from the content
+        # If name_hint has an extension use its basename; else fallback to guessed ext
         if "." in name_hint:
             fname = name_hint.split("/")[-1]
         else:
@@ -380,8 +384,10 @@ def extract_embed_file(target: Union[bytes, bytearray]) -> List[Tuple[str, bytes
     if _is_zip(head):
         try:
             with zipfile.ZipFile(io.BytesIO(top), "r") as z:
-                embed_dirs = ("word/embeddings/", "word/objects/", "word/activex/",
-                              "xl/embeddings/", "ppt/embeddings/")
+                embed_dirs = (
+                    "word/embeddings/", "word/objects/", "word/activex/",
+                    "xl/embeddings/", "ppt/embeddings/"
+                )
                 for name in z.namelist():
                     low = name.lower()
                     if any(low.startswith(d) for d in embed_dirs):
@@ -394,24 +400,7 @@ def extract_embed_file(target: Union[bytes, bytearray]) -> List[Tuple[str, bytes
             pass
         return out
 
-    # PDF attachments
-    if _is_pdf(head):
-        try:
-            doc = fitz.open(stream=top, filetype="pdf")
-            count = getattr(doc, "embfile_count", 0)
-            for i in range(count):
-                try:
-                    data = doc.embfile_get(i)
-                    if data:
-                        push(bytes(data), f"EmbeddedFiles[{i}]")
-                except Exception:
-                    pass
-            doc.close()
-        except Exception:
-            pass
-        return out
-
-    # Legacy OLE (.doc/.xls/.ppt)
+    # OLE container (doc/ppt/xls)
     if _is_ole(head):
         try:
             with olefile.OleFileIO(io.BytesIO(top)) as ole:
