@@ -203,7 +203,7 @@ async def verify_admin(
     db: Annotated[Session, Depends(get_db)]
 ) -> tuple[str, Session]:
     """
-    验证管理员身份的依赖函数
+    验证管理员身份的依赖函数（兼容旧版 HTTP Basic Auth）
     
     Args:
         credentials: HTTP Basic 认证凭据
@@ -225,11 +225,21 @@ async def verify_admin(
             headers={"WWW-Authenticate": "Basic"},
         )
     
-    if not check_admin(db, username, password):
+    # 添加异常处理，捕获验证过程中的错误
+    try:
+        if not check_admin(db, username, password):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Access denied",
+            )
+    except HTTPException:
+        raise  # 重新抛出 HTTPException
+    except Exception as e:
+        # 捕获其他异常并统一返回
+        logging.error(f"Error during admin verification: {e}")
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
-            headers={"WWW-Authenticate": "Basic"},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
         )
     
     return username, db

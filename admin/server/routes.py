@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from auth import AdminAuth, admin_manager, login_admin, logout_admin
 from responses import APIResponse, success_response, error_response
 from services import UserMgr, ServiceMgr, UserServiceMgr
+from roles import RoleMgr
 from api.common.exceptions import AdminException
 from api.db.db_models import get_db
 
@@ -401,5 +402,174 @@ async def restart_service(service_id: int, user=Depends(admin_manager)) -> APIRe
     try:
         result = ServiceMgr.restart_service(service_id)
         return success_response(result)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+class RoleCreate(BaseModel):
+    """创建角色请求"""
+    role_name: str = Field(..., description="角色名称")
+    description: str = Field(default="", description="角色描述")
+
+
+@admin_router.post(
+    "/roles",
+    response_model=APIResponse[dict],
+    summary="创建角色",
+    description="创建一个新角色"
+)
+async def create_role(role_data: RoleCreate, user=Depends(admin_manager)) -> APIResponse[dict]:
+    """创建角色"""
+    try:
+        res = RoleMgr.create_role(role_data.role_name, role_data.description)
+        return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+class RoleUpdate(BaseModel):
+    """更新角色请求"""
+    description: str = Field(..., description="角色描述")
+
+
+@admin_router.put(
+    "/roles/{role_name}",
+    response_model=APIResponse[dict],
+    summary="更新角色",
+    description="更新角色描述"
+)
+async def update_role(role_name: str, role_data: RoleUpdate, user=Depends(admin_manager)) -> APIResponse[dict]:
+    """更新角色"""
+    try:
+        res = RoleMgr.update_role_description(role_name, role_data.description)
+        return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.delete(
+    "/roles/{role_name}",
+    response_model=APIResponse[dict],
+    summary="删除角色",
+    description="删除指定角色"
+)
+async def delete_role(role_name: str, user=Depends(admin_manager)) -> APIResponse[dict]:
+    """删除角色"""
+    try:
+        res = RoleMgr.delete_role(role_name)
+        return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/roles",
+    response_model=APIResponse[list[dict]],
+    summary="获取所有角色",
+    description="获取系统中所有角色的列表"
+)
+async def list_roles(user=Depends(admin_manager)) -> APIResponse[list[dict]]:
+    """获取所有角色"""
+    try:
+        res = RoleMgr.list_roles()
+        return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/roles/{role_name}/permission",
+    response_model=APIResponse[dict],
+    summary="获取角色权限",
+    description="获取指定角色的权限配置"
+)
+async def get_role_permission(role_name: str, user=Depends(admin_manager)) -> APIResponse[dict]:
+    """获取角色权限"""
+    try:
+        res = RoleMgr.get_role_permission(role_name)
+        return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+class PermissionGrant(BaseModel):
+    """授予权限请求"""
+    actions: list[str] = Field(..., description="操作列表")
+    resource: str = Field(..., description="资源名称")
+
+
+@admin_router.post(
+    "/roles/{role_name}/permission",
+    response_model=APIResponse[dict],
+    summary="授予角色权限",
+    description="为指定角色授予权限"
+)
+async def grant_role_permission(
+    role_name: str,
+    perm_data: PermissionGrant,
+    user=Depends(admin_manager)
+) -> APIResponse[dict]:
+    """授予角色权限"""
+    try:
+        res = RoleMgr.grant_role_permission(role_name, perm_data.actions, perm_data.resource)
+        return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.delete(
+    "/roles/{role_name}/permission",
+    response_model=APIResponse[dict],
+    summary="撤销角色权限",
+    description="撤销指定角色的权限"
+)
+async def revoke_role_permission(
+    role_name: str,
+    perm_data: PermissionGrant,
+    user=Depends(admin_manager)
+) -> APIResponse[dict]:
+    """撤销角色权限"""
+    try:
+        res = RoleMgr.revoke_role_permission(role_name, perm_data.actions, perm_data.resource)
+        return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+class UserRoleUpdate(BaseModel):
+    """更新用户角色请求"""
+    role_name: str = Field(..., description="角色名称")
+
+
+@admin_router.put(
+    "/users/{user_name}/role",
+    response_model=APIResponse[dict],
+    summary="更新用户角色",
+    description="更新指定用户的角色"
+)
+async def update_user_role(
+    user_name: str,
+    role_data: UserRoleUpdate,
+    user=Depends(admin_manager)
+) -> APIResponse[dict]:
+    """更新用户角色"""
+    try:
+        res = RoleMgr.update_user_role(user_name, role_data.role_name)
+        return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/users/{user_name}/permission",
+    response_model=APIResponse[dict],
+    summary="获取用户权限",
+    description="获取指定用户的权限配置"
+)
+async def get_user_permission(user_name: str, user=Depends(admin_manager)) -> APIResponse[dict]:
+    """获取用户权限"""
+    try:
+        res = RoleMgr.get_user_permission(user_name)
+        return success_response(res)
     except Exception as e:
         return error_response(str(e), 500)
