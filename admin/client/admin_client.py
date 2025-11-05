@@ -323,25 +323,26 @@ class AdminCLI(Cmd):
         except Exception as e:
             return {'type': 'error', 'message': f'Parse error: {str(e)}'}
 
-    def verify_admin(self, args):
-
-        conn_info = self._parse_connection_args(args)
-        if 'error' in conn_info:
-            print(f"Error: {conn_info['error']}")
-            return
-
-        self.host = conn_info['host']
-        self.port = conn_info['port']
+    def verify_admin(self, arguments: dict, single_command: bool):
+        self.host = arguments['host']
+        self.port = arguments['port']
         print(f"Attempt to access ip: {self.host}, port: {self.port}")
         url = f"http://{self.host}:{self.port}/api/v1/admin/login"
+
+        attempt_count = 3
+        if single_command:
+            attempt_count = 1
 
         try_count = 0
         while True:
             try_count += 1
-            if try_count > 3:
+            if try_count > attempt_count:
                 return False
 
-            admin_passwd = input(f"password for {self.admin_account}: ").strip()
+            if single_command:
+                admin_passwd = arguments['password']
+            else:
+                admin_passwd = input(f"password for {self.admin_account}: ").strip()
             try:
                 self.admin_password = encrypt(admin_passwd)
                 response = self.session.post(url, json={'email': self.admin_account, 'password': self.admin_password})
@@ -352,10 +353,13 @@ class AdminCLI(Cmd):
                         # 检查是否有 Authorization header
                         auth_header = response.headers.get('Authorization')
                         if auth_header:
+                            # fastapi-login 需要 "Bearer <token>" 格式
+                            if not auth_header.startswith('Bearer '):
+                                auth_header = f'Bearer {auth_header}'
                             self.session.headers.update({
                                 'Content-Type': 'application/json',
                                 'Authorization': auth_header,
-                                'User-Agent': 'MultiRAG-CLI/0.1.0'
+                                'User-Agent': 'MultiRAG-CLI/0.8.0'
                             })
                             print("Authentication successful.")
                             return True
@@ -367,7 +371,7 @@ class AdminCLI(Cmd):
                         print(f"Authentication failed: {error_message}, try again")
                         continue
                 else:
-                    print(f"Bad response，status: {response.status_code}, try again")
+                    print(f"Bad response，status: {response.status_code}, password is wrong")
             except Exception as e:
                 print(str(e))
                 print(f"Can't access {self.host}, port: {self.port}")
@@ -454,23 +458,32 @@ class AdminCLI(Cmd):
                 print("\nGoodbye!")
                 break
 
-    def run_single_command(self, args):
-        conn_info = self._parse_connection_args(args)
-        if 'error' in conn_info:
-            print(f"Error: {conn_info['error']}")
-            return
+    def run_single_command(self, command: str):
+        result = self.parse_command(command)
+        self.execute_command(result)
 
-    def _parse_connection_args(self, args: List[str]) -> Dict[str, Any]:
+    def parse_connection_args(self, args: List[str]) -> Dict[str, Any]:
         parser = argparse.ArgumentParser(description='Admin CLI Client', add_help=False)
         parser.add_argument('-h', '--host', default='localhost', help='Admin service host')
         parser.add_argument('-p', '--port', type=int, default=8130, help='Admin service port')
+        parser.add_argument('-w', '--password', default='admin', type=str, help='Superuser password')
+        parser.add_argument('command', nargs='?', help='Single command')
 
         try:
             parsed_args, remaining_args = parser.parse_known_args(args)
-            return {
-                'host': parsed_args.host,
-                'port': parsed_args.port,
-            }
+            if remaining_args:
+                command = remaining_args[0]
+                return {
+                    'host': parsed_args.host,
+                    'port': parsed_args.port,
+                    'password': parsed_args.password,
+                    'command': command
+                }
+            else:
+                return {
+                    'host': parsed_args.host,
+                    'port': parsed_args.port,
+                }
         except SystemExit:
             return {'error': 'Invalid connection arguments'}
 
@@ -982,27 +995,31 @@ def main():
 
     cli = AdminCLI()
 
-    if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1] == '-'):
-        print(r"""
-        __  ___      __  _ ____  ___   ______   ___       __          _     
-       /  |/  /_  __/ /_(_) __ \/   | / ____/  /   | ____/ /___ ___  (_)___ 
-      / /|_/ / / / / __/ / /_/ / /| |/ / __   / /| |/ __  / __ `__ \/ / __ \
-     / /  / / /_/ / /_/ / _, _/ ___ / /_/ /  / ___ / /_/ / / / / / / / / / /
-    /_/  /_/\__,_/\__/_/_/ |_/_/  |_\____/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/ 
-        """)
-        if cli.verify_admin(sys.argv):
-            cli.cmdloop()
+    args = cli.parse_connection_args(sys.argv)
+    if 'error' in args:
+        print(f"Error: {args['error']}")
+        return
+
+    if 'command' in args:
+        # 单命令模式
+        if 'password' not in args:
+            print("Error: password is missing")
+            return
+        if cli.verify_admin(args, single_command=True):
+            command: str = args['command']
+            print(f"Run single command: {command}")
+            cli.run_single_command(command)
     else:
-        print(r"""
+        # 交互模式
+        if cli.verify_admin(args, single_command=False):
+            print(r"""
         __  ___      __  _ ____  ___   ______   ___       __          _     
        /  |/  /_  __/ /_(_) __ \/   | / ____/  /   | ____/ /___ ___  (_)___ 
       / /|_/ / / / / __/ / /_/ / /| |/ / __   / /| |/ __  / __ `__ \/ / __ \
      / /  / / /_/ / /_/ / _, _/ ___ / /_/ /  / ___ / /_/ / / / / / / / / / /
     /_/  /_/\__,_/\__/_/_/ |_/_/  |_\____/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/ 
             """)
-        if cli.verify_admin(sys.argv):
             cli.cmdloop()
-            # cli.run_single_command(sys.argv[1:])
 
 
 if __name__ == '__main__':

@@ -67,10 +67,10 @@ def load_admin_user(email: str, db: Session = None):
         if user.is_active == ActiveEnum.INACTIVE.value:
             logging.warning(f"Admin {email} is inactive")
             return None
-        
+
         return user
     except Exception as e:
-        logging.warning(f"load_admin_user got exception {e}")
+        logging.error(f"load_admin_user got exception {e}", exc_info=True)
         return None
     finally:
         if close_db:
@@ -117,16 +117,10 @@ def login_admin(db: Session, email: str, password: str):
     
     # 解密客户端发送的密码
     try:
-        logging.info(f"Attempting to decrypt password for {email}")
-        logging.debug(f"Encrypted password length: {len(password)}")
-        
         # Step 1: RSA 解密
         decrypted_base64 = decrypt(password)
-        logging.debug(f"After RSA decrypt: {decrypted_base64} (length: {len(decrypted_base64)})")
-        
         # Step 2: Base64 解码（客户端加密前做了 base64 编码）
         plain_password = base64.b64decode(decrypted_base64).decode('utf-8')
-        logging.info(f"Password decrypted successfully: {plain_password} (length: {len(plain_password)})")
     except Exception as e:
         logging.error(f"Failed to decrypt password: {e}", exc_info=True)
         raise AdminException("Password decryption failed!")
