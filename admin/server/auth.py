@@ -14,7 +14,7 @@ from api.db.services import UserService
 from api.db.db_models import get_db, SessionLocal
 from api.db import ActiveEnum, StatusEnum
 from api.utils.crypt import decrypt
-from api.utils import get_uuid, current_timestamp, datetime_format
+from api.utils import get_uuid, current_timestamp, datetime_format, get_format_time
 
 
 security = HTTPBasic()
@@ -147,6 +147,7 @@ def login_admin(db: Session, email: str, password: str):
     user.access_token = get_uuid()
     user.update_time = current_timestamp()
     user.update_date = datetime_format(datetime.now())
+    user.last_login_time = get_format_time()
     db.add(user)
     db.commit()
     
