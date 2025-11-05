@@ -457,10 +457,14 @@ def list_documents(
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
     orderby: str = Query("create_time"),
-    desc: bool = Query(True),
+    desc: str | bool = Query("true"),
     keywords: str | None = Query(None),
     id: str | None = Query(None),
     name: str | None = Query(None),
+    suffix: list[str] = Query(None),
+    run: list[str] = Query(None),
+    create_time_from: int = Query(0),
+    create_time_to: int = Query(0),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
@@ -475,6 +479,11 @@ def list_documents(
         desc: 是否降序
         keywords: 关键词搜索
         id: 文档ID过滤
+        name: 文档名称过滤
+        suffix: 文件后缀过滤 (e.g., ["pdf", "txt", "docx"])
+        run: 文档运行状态过滤 (支持数字和文本格式: "0"/"UNSTART", "1"/"RUNNING", "2"/"CANCEL", "3"/"DONE", "4"/"FAIL")
+        create_time_from: Unix时间戳，过滤此时间之后创建的文档（0表示无过滤）
+        create_time_to: Unix时间戳，过滤此时间之前创建的文档（0表示无过滤）
         db: 数据库会话
         tenant_id: 租户ID
     
@@ -484,27 +493,58 @@ def list_documents(
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg="You don't own the dataset.")
     
+    # 检查文档ID
+    if id and not DocumentService.query(db, id=id, kb_id=dataset_id):
+        return get_error_data_result(retmsg=f"You don't own the document {id}.")
+    if name and not DocumentService.query(db, name=name, kb_id=dataset_id):
+        return get_error_data_result(retmsg=f"You don't own the document {name}.")
+    
+    # 处理 desc 参数
+    desc_bool = str(desc).strip().lower() != "false"
+    
+    # 映射 run 状态（接受文本或数字格式）
+    run_status_text_to_numeric = {
+        "UNSTART": "0",
+        "RUNNING": "1", 
+        "CANCEL": "2",
+        "DONE": "3",
+        "FAIL": "4"
+    }
+    run_status_converted = None
+    if run:
+        run_status_converted = [run_status_text_to_numeric.get(v, v) for v in run]
+    
     try:
-        docs = DocumentService.get_list(
+        docs, total = DocumentService.get_list(
             db, 
             dataset_id, 
             page, 
             page_size, 
             orderby, 
-            desc, 
+            desc_bool, 
             keywords=keywords, 
             id=id,
-            name=name
+            name=name,
+            suffix=suffix,
+            run=run_status_converted
         )
         
-        # 重命名键名
+        # 时间范围过滤（0表示无限制）
+        if create_time_from or create_time_to:
+            docs = [
+                d for d in docs
+                if (create_time_from == 0 or d.get("create_time", 0) >= create_time_from)
+                and (create_time_to == 0 or d.get("create_time", 0) <= create_time_to)
+            ]
+        
+        # 重命名键名 + 映射 run 状态回文本格式输出
         key_mapping = {
             "chunk_num": "chunk_count",
             "kb_id": "dataset_id", 
             "token_num": "token_count",
             "parser_id": "chunk_method",
         }
-        run_mapping = {
+        run_status_numeric_to_text = {
             "0": "UNSTART",
             "1": "RUNNING", 
             "2": "CANCEL",
@@ -512,18 +552,14 @@ def list_documents(
             "4": "FAIL",
         }
         
-        renamed_docs = []
-        for doc in docs:
-            renamed_doc = {}
-            for key, value in doc.items():
-                new_key = key_mapping.get(key, key)
-                if key == "run":
-                    renamed_doc[new_key] = run_mapping.get(str(value), str(value))
-                else:
-                    renamed_doc[new_key] = value
-            renamed_docs.append(renamed_doc)
+        output_docs = []
+        for d in docs:
+            renamed_doc = {key_mapping.get(k, k): v for k, v in d.items()}
+            if "run" in d:
+                renamed_doc["run"] = run_status_numeric_to_text.get(str(d["run"]), d["run"])
+            output_docs.append(renamed_doc)
         
-        return get_result(data=renamed_docs)
+        return get_result(data={"total": total, "docs": output_docs})
     except Exception as e:
         logging.exception(e)
         return get_error_data_result(retmsg="Failed to retrieve documents")

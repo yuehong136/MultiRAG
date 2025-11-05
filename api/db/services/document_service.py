@@ -84,7 +84,9 @@ class DocumentService(CommonService):
             desc: bool,
             keywords: str = None,
             id: int = None,
-            name: str = None
+            name: str = None,
+            suffix: list = None,
+            run: list = None
     ):
         # 1) 需要返回的列 —— 等价于 Peewee 的 select(*fields)
         #    确保 get_cls_model_fields() 返回的是 Column/ColumnElement 列对象，而不是字符串
@@ -114,6 +116,11 @@ class DocumentService(CommonService):
 
             # ilike（更直观，也能走索引策略更好）：
             # base = base.where(cls.model.name.ilike(f"%{keywords}%"))
+        
+        if suffix:
+            base = base.where(cls.model.suffix.in_(suffix))
+        if run:
+            base = base.where(cls.model.run.in_(run))
 
         # 4) 排序（避免与 sqlalchemy.desc 重名）
         order_col = getattr(cls.model, orderby)
@@ -128,7 +135,7 @@ class DocumentService(CommonService):
         # 6) 分页
         stmt = base.offset((page_number - 1) * items_per_page).limit(items_per_page)
 
-        # 7) 执行并返回“字典行”（等价 Peewee 的 .dicts()）
+        # 7) 执行并返回"字典行"（等价 Peewee 的 .dicts()）
         rows = db.execute(stmt).mappings().all()
         return [dict(r) for r in rows], total
 
