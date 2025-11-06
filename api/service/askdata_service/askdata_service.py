@@ -25,10 +25,13 @@ from api.service.askdata_service.sql_assembler import FlexibleSQLAssembler, Filt
 from api.service.askdata_service.sql_metric_exp_rewriter import SQLFieldAliasProcessor
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
 from api.service.askdata_service.util.add_table_alias_to_fields import add_table_alias_to_fields
+from api.service.askdata_service.util.append_join_clauses import append_join_clauses
 from api.service.askdata_service.util.convert_aggregation_value import convert_aggregation_value
 from api.service.askdata_service.util.convert_where_condition_value import process_where_condition
+from api.service.askdata_service.util.extract_manually_adjusted_field_ids import extract_manually_adjusted_field_ids
 from api.service.askdata_service.util.filter_model_relations_by_ids import filter_model_relations_by_ids
 from api.service.askdata_service.util.merge_dimensions_and_metrics import merge_dimensions_and_metrics
+from api.service.askdata_service.util.parse_from_clause import parse_from_clause
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
 from api.service.askdata_service.util.semantic_filter_processor import apply_semantic_filter
 from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
@@ -712,13 +715,82 @@ class AskdataService:
                                    pagination_info: Optional[Dict[str, Any]]):
         """生成重新查询的SQL语句。"""
         base_from = sql_components["from"]
+        all_semantic_fields = table_config["all_semantic_fields"]
         from_sentence = ""
         if base_from.lower().startswith("from"):
             from_sentence = base_from.split("FROM")[1]
         else:
             from_sentence = base_from
+
+        from_info = parse_from_clause(from_sentence)
+        main_table = from_info["main_table"]
+        existing_tables = from_info["existing_tables"]
+        logger.info(f"主表: {main_table}, 已存在的表: {existing_tables}")
+        # 获得用户手动调整/添加的字段ID列表
+        adjusted_field_ids = extract_manually_adjusted_field_ids(table_config)
+        logger.info(f"用户手动调整/添加的字段ID列表: {adjusted_field_ids}")
+        # 获取这些字段涉及的模型ID列表（去重）
+        adjusted_model_ids = list({
+            semantic_field["from_model_id"]
+            for field_id in adjusted_field_ids
+            if (semantic_field := self._find_semantic_field(field_id, all_semantic_fields)) is not None
+        })
+        logger.info(f"用户手动调整涉及的模型ID: {adjusted_model_ids}")
+        # 获取用户手动调整涉及的模型信息
+        adjusted_models = [
+            mapping for mapping in model_table_alias_mapping_list
+            if mapping["modelId"] in adjusted_model_ids
+        ]
+        logger.info(f"用户手动调整涉及的模型: {adjusted_models}")
+        # 判断哪些表需要新增 JOIN
+        tables_to_add = [
+            mapping for mapping in adjusted_models
+            if mapping["table"] not in existing_tables
+        ]
+        logger.info(f"需要新增JOIN的表: {tables_to_add}")
+
+        # 获取主表的 modelId
+        main_table_model_id = next(
+            (mapping["modelId"] for mapping in model_table_alias_mapping_list if mapping["table"] == main_table),
+            None
+        )
+
+        # 只在有表需要添加时才调用 API
+        if main_table_model_id and tables_to_add:
+            try:
+                # 获取关系信息
+                relationships = await self.semantic_api_client.get_model_relationships_async([main_table_model_id])
+
+                # 需要新增的表的 modelId 集合（用于快速查找）
+                tables_to_add_ids = {m["modelId"] for m in tables_to_add}
+
+                # 筛选相关关系
+                relevant_relationships = [
+                    rel for rel in relationships
+                    if rel["sourceModelId"] in tables_to_add_ids or rel["targetModelId"] in tables_to_add_ids
+                ]
+
+                logger.info(f"需要新增 JOIN 的关系: {relevant_relationships}")
+
+                # 只在找到关系时才更新 from_sentence
+                if relevant_relationships:
+                    from_sentence = append_join_clauses(
+                        from_sentence,
+                        relevant_relationships,
+                        model_table_alias_mapping_list,
+                        existing_tables
+                    )
+                    logger.info(f"更新后的 FROM 子句: {from_sentence}")
+                else:
+                    logger.warning(f"未找到以下表与主表的关系信息: {[t['table'] for t in tables_to_add]}")
+
+            except Exception as e:
+                logger.error(f"获取模型关系失败: {str(e)}", exc_info=True)
+                raise e
+        elif tables_to_add and not main_table_model_id:
+            logger.error(f"无法找到主表 {main_table} 的模型ID，无法添加新的 JOIN")
+
         assembler = FlexibleSQLAssembler(from_sentence)
-        all_semantic_fields = table_config["all_semantic_fields"]
 
         if chart_type == "table-row":
             for column in table_config["columns"]:

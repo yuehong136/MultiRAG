@@ -139,28 +139,28 @@ async def query_data_with_params(sql: str, dataset_wid: int, sql_params: List[An
 # 使用示例
 async def main():
     # 示例1：普通查询
-        print("=== 示例1：普通查询 ===")
-        query = """
-        SELECT COUNT(*) AS total_teachers
-FROM gx_test_teachers t1
-WHERE "t1"."hire_date" >= CAST('2009-01-01' AS DATE)
-  AND "t1"."hire_date" <= CAST('2010-12-31' AS DATE)
-        """
-
-        response1 = await query_data_from_zt_by_sql(query)
-        print(json.dumps(response1, indent=2, ensure_ascii=False))
+#         print("=== 示例1：普通查询 ===")
+#         query = """
+#         SELECT COUNT(*) AS total_teachers
+# FROM gx_test_teachers t1
+# WHERE "t1"."hire_date" >= CAST('2009-01-01' AS DATE)
+#   AND "t1"."hire_date" <= CAST('2010-12-31' AS DATE)
+#         """
+#
+#         response1 = await query_data_from_zt_by_sql(query)
+#         print(json.dumps(response1, indent=2, ensure_ascii=False))
 
     # 示例2：参数化查询
-    # print("\n=== 示例2：参数化查询 ===")
-    # param_sql = """SELECT "t1"."zgh", "t1"."xm", "t1"."nl", "t2"."mc" FROM t_jzg_jbxx AS t1 LEFT JOIN t_code_zzmm AS t2 ON t1.zzmm = t2.dm WHERE "t1"."nl" < ? AND "t2"."mc" = ?"""
-    # dataset_wid = 35979979193188352
-    # sql_params = [32, "中国共产党党员"]
-    #
-    # try:
-    #     response2 = await query_data_with_params(param_sql, dataset_wid, sql_params)
-    #     print(json.dumps(response2, indent=2, ensure_ascii=False))
-    # except Exception as e:
-    #     print(f"发生错误: {e}")
+    print("\n=== 示例2：参数化查询 ===")
+    param_sql = """EXPLAIN SELECT t1."‘cjgzny" AS "参加工作年月", t1."csrq" AS "出生日期", t1."jg" AS "籍贯", t1."jgh" AS "教工号", t1."lxrq" AS "来校日期", t1."ryflmc" AS "人员分类名称", t1."xm" AS "姓名", t1."xwdm" AS "学位代码", t1."xbm" AS "性别码", t1."zzmmdm" AS "政治面貌代码", t2."bm" AS "部门", t2."cjdprq" AS "参加党派日期", t2."zzmm" AS "政治面貌" FROM t_jzg t1 LEFT JOIN t_jzg_zzmml t2 ON t2."gh" = t1."jgh";"""
+    dataset_wid = 38608841318432768
+    sql_params = []
+
+    try:
+        response2 = await query_data_with_params(param_sql, dataset_wid, sql_params)
+        print(json.dumps(response2, indent=2, ensure_ascii=False))
+    except Exception as e:
+        print(f"发生错误: {e}")
 
 
 # 如果直接执行此文件则运行示例

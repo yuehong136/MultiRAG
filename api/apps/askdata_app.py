@@ -649,6 +649,7 @@ class ReQueryRequest(BaseModel):
     sql_components: Dict[str, Any] = Field(..., description="SQL组件")
     model_table_alias_mapping_list: List[Dict[str, Any]] = Field(..., description="模型表别名映射列表")
     dataset_id: str = Field(..., description="数据集ID")
+    userid: str = Field(..., description="用户ID")
     pagination_info: Optional[Dict[str, Any]] = Field(None, description="分页信息")
 
     class Config:
