@@ -675,7 +675,7 @@ async def re_query(
         requery_sql_result = await service.generate_requery_sql(body.chart_type, body.table_config,
                                                                 sql_components=body.sql_components,
                                                                 model_table_alias_mapping_list=body.model_table_alias_mapping_list,
-                                                                pagination_info=body.pagination_info)
+                                                                pagination_info=body.pagination_info, user_id=body.userid)
         logger.info("re-query sql result: {}".format(requery_sql_result))
 
         if body.pagination_info:

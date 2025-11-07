@@ -26,6 +26,8 @@ from api.service.askdata_service.sql_metric_exp_rewriter import SQLFieldAliasPro
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
 from api.service.askdata_service.util.add_table_alias_to_fields import add_table_alias_to_fields
 from api.service.askdata_service.util.append_join_clauses import append_join_clauses
+from api.service.askdata_service.util.apply_permissions import apply_permissions_to_assembler
+from api.service.askdata_service.util.build_model_permissions_map import build_model_permissions_map
 from api.service.askdata_service.util.convert_aggregation_value import convert_aggregation_value
 from api.service.askdata_service.util.convert_where_condition_value import process_where_condition
 from api.service.askdata_service.util.extract_manually_adjusted_field_ids import extract_manually_adjusted_field_ids
@@ -712,7 +714,7 @@ class AskdataService:
 
     async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], sql_components: Dict[str, Any],
                                    model_table_alias_mapping_list: List[Dict[str, Any]],
-                                   pagination_info: Optional[Dict[str, Any]]):
+                                   pagination_info: Optional[Dict[str, Any]], user_id: str):
         """生成重新查询的SQL语句。"""
         base_from = sql_components["from"]
         all_semantic_fields = table_config["all_semantic_fields"]
@@ -754,12 +756,50 @@ class AskdataService:
             (mapping["modelId"] for mapping in model_table_alias_mapping_list if mapping["table"] == main_table),
             None
         )
-
-        # 只在有表需要添加时才调用 API
-        if main_table_model_id and tables_to_add:
+        model_permissions_map = None
+        if main_table_model_id:
             try:
                 # 获取关系信息
                 relationships = await self.semantic_api_client.get_model_relationships_async([main_table_model_id])
+
+                # ========== 权限逻辑开始 ==========
+
+                # 1. 提取所有涉及的模型ID
+                involved_model_ids = {main_table_model_id}
+
+                for rel in relationships:
+                    involved_model_ids.add(rel["sourceModelId"])
+                    involved_model_ids.add(rel["targetModelId"])
+
+                # 将用户手动调整涉及的模型也加入
+                for adjusted_model_id in adjusted_model_ids:
+                    involved_model_ids.add(adjusted_model_id)
+
+                logger.info(f"涉及的所有模型ID: {involved_model_ids}")
+
+                # 2. 获取权限信息
+                permissions_response = await self.semantic_api_client.get_user_semantic_permissions_async(
+                    user_id=user_id,
+                    model_id_list=list(involved_model_ids)
+                )
+
+                # 3. 构建权限映射
+                model_permissions_map = build_model_permissions_map(
+                    permissions_response,
+                    model_table_alias_mapping_list
+                )
+
+                logger.info(f"权限映射: {model_permissions_map}")
+
+                # 记录有权限限制的模型
+                if model_permissions_map:
+                    models_with_permissions = [
+                        f"{perm['table']}({perm['alias']})"
+                        for perm in model_permissions_map.values()
+                    ]
+                    logger.info(f"以下模型有行级权限限制: {', '.join(models_with_permissions)}")
+
+                # ========== 权限逻辑结束 ==========
 
                 # 需要新增的表的 modelId 集合（用于快速查找）
                 tables_to_add_ids = {m["modelId"] for m in tables_to_add}
@@ -861,6 +901,15 @@ class AskdataService:
                         else:
                             # 普通操作符，使用参数化查询
                             assembler.add_parameterized_where(f"{sql_column} {operator} %s", [value])
+
+            # 注入权限条件
+            logger.info("开始注入权限条件（table-row）")
+            apply_permissions_to_assembler(
+                assembler,
+                model_permissions_map,
+                model_table_alias_mapping_list
+            )
+            logger.info("权限条件注入完成（table-row）")
 
             for order_by in table_config["order_by"]:
                 if order_by["is_semantic_field"]:
@@ -1009,6 +1058,15 @@ class AskdataService:
                     else:
                         # 既没有 raw_condition 也没有 sql_column，跳过
                         pass
+
+            # 注入权限条件
+            logger.info(f"开始注入权限条件（{chart_type}）")
+            apply_permissions_to_assembler(
+                assembler,
+                model_permissions_map,
+                model_table_alias_mapping_list
+            )
+            logger.info(f"权限条件注入完成（{chart_type}）")
 
             for having_condition in table_config.get("having_conditions", []):
                 if having_condition["is_semantic_field"]:
