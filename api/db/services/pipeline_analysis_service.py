@@ -202,6 +202,8 @@ class PipelineAnalysisService:
         file=None,
         filename: str | None = None,
         kb_id: str | None = None,
+        parse_method: str = "auto",
+        output_format: str = "json",
         processing_strategy: str = "auto",
         hierarchical_config: dict | None = None,
         splitter_config: dict | None = None,
@@ -211,16 +213,18 @@ class PipelineAnalysisService:
         use_cache: bool = True
     ) -> dict:
         """
-        文档分析主入口
+        文档分析主入口（使用 core/flow 逻辑）
         
         Args:
             doc_id: 文档ID（可选）
             file: 上传文件（可选）
             filename: 文件名
             kb_id: 知识库ID
+            parse_method: 解析方法 (auto | deepdoc | plain_text | ocr | vlm)
+            output_format: 输出格式 (json | text | markdown | html)
             processing_strategy: 处理策略 (auto | hierarchical | raptor | hybrid | simple)
             hierarchical_config: HierarchicalMerger 配置
-            splitter_config: Splitter 配置
+            splitter_config: Splitter 配置（默认 overlapped_percent=0.1）
             raptor_config: RAPTOR 配置
             metadata_fields: 元数据字段配置列表
             dedup_strategy: 去重策略 (smart | semantic | none)
@@ -228,13 +232,23 @@ class PipelineAnalysisService:
         """
         start_time = time.time()
         
-        # 1. 获取文档 chunks
-        chunks = await self._get_document_chunks(doc_id, file, filename, kb_id)
+        # 1. 获取文档 chunks（使用 core/flow 逻辑）
+        chunks = await self._get_document_chunks(
+            doc_id, 
+            file, 
+            filename, 
+            kb_id,
+            splitter_config=splitter_config,
+            parse_method=parse_method
+        )
         
         if not chunks:
             raise ValueError("No chunks found")
         
-        logger.info(f"Got {len(chunks)} chunks")
+        logger.info(f"Got {len(chunks)} chunks with flow parser")
+        
+        # 标记使用了 Splitter
+        components_used = ["Parser", "Splitter"]
         
         # 2. 策略选择
         if processing_strategy == "auto":
@@ -242,8 +256,6 @@ class PipelineAnalysisService:
             logger.info(f"Auto-selected strategy: {strategy}")
         else:
             strategy = processing_strategy
-        
-        components_used = ["Parser"]
         
         # 3. 根据策略处理 chunks
         processed_data = await self._process_with_strategy(
@@ -293,7 +305,9 @@ class PipelineAnalysisService:
         doc_id: str | None,
         file=None,
         filename: str | None = None,
-        kb_id: str | None = None
+        kb_id: str | None = None,
+        splitter_config: dict | None = None,
+        parse_method: str = "auto"
     ) -> list[dict]:
         """获取文档 chunks"""
         # 参数验证
@@ -306,9 +320,15 @@ class PipelineAnalysisService:
         if doc_id and not kb_id:
             raise ValueError("kb_id is required when using doc_id")
         
-        # 场景1: 直传文件
+        # 场景1: 直传文件（使用 core/flow 逻辑）
         if file:
-            return await self._parse_uploaded_file(file, filename)
+            return await self._parse_uploaded_file(
+                file, 
+                filename,
+                parse_method=parse_method,
+                output_format="json",
+                splitter_config=splitter_config
+            )
         
         # 场景2: 已上传文档
         if doc_id:
@@ -357,8 +377,119 @@ class PipelineAnalysisService:
         
         return []
     
-    async def _parse_uploaded_file(self, file, filename: str | None) -> list[dict]:
-        """解析上传文件"""
+    async def _parse_uploaded_file(
+        self, 
+        file, 
+        filename: str | None,
+        parse_method: str = "auto",
+        output_format: str = "json",
+        splitter_config: dict | None = None
+    ) -> list[dict]:
+        """
+        使用 core/flow 逻辑解析上传文件（保留位置信息）
+        
+        Args:
+            file: 上传文件对象
+            filename: 文件名
+            parse_method: 解析方法（auto/deepdoc/plain_text等）
+            output_format: 输出格式
+            splitter_config: 切分配置
+        
+        Returns:
+            chunks with positions and images
+        """
+        import tempfile
+        import os
+        
+        # 获取文件名
+        if hasattr(file, 'filename'):
+            fname = file.filename
+        elif filename:
+            fname = filename
+        else:
+            raise ValueError("filename required")
+        
+        # 读取文件内容
+        if hasattr(file, 'read'):
+            if asyncio.iscoroutinefunction(file.read):
+                file_content = await file.read()
+            else:
+                file_content = await asyncio.to_thread(file.read)
+        else:
+            raise ValueError("file must be readable")
+        
+        try:
+            # 使用 core/flow 逻辑解析
+            from core.flow.utils import parse_file, split_chunks
+            
+            # 1. 解析文件（保留结构）
+            # 构建配置（参考 core/flow/parser 的 setups 结构）
+            pdf_config = {
+                "parse_method": parse_method if parse_method in ["deepdoc", "plain_text", "mineru"] else (
+                    parse_method if parse_method not in ["auto", "ocr", "vlm"] else "deepdoc"
+                ),
+                "output_format": output_format,
+                "lang": "Chinese"
+            }
+            image_config = {
+                "parse_method": parse_method if parse_method in ["ocr", "vlm"] else "ocr",
+                "llm_name": None,
+                "lang": "Chinese"
+            }
+            
+            parsed_result = await parse_file(
+                filename=fname,
+                binary=file_content,
+                tenant_id=self.tenant_id,
+                pdf_config=pdf_config,
+                image_config=image_config
+            )
+            
+            logger.info(f"Parsed with flow: format={parsed_result.get('output_format')}")
+            
+            # 2. 切分（保留位置）
+            if splitter_config is None:
+                splitter_config = {}
+            
+            chunk_token_size = splitter_config.get("chunk_token_size", 512)
+            delimiters = splitter_config.get("delimiters")
+            overlapped_percent = splitter_config.get("overlapped_percent", 0.1)  # 默认 10% 重叠
+            
+            chunked_result = await split_chunks(
+                parsed_result=parsed_result,
+                chunk_token_size=chunk_token_size,
+                delimiters=delimiters,
+                overlapped_percent=overlapped_percent
+            )
+            
+            # 3. 转换格式
+            chunks = []
+            for c in chunked_result:
+                chunk_dict = {
+                    "content_with_weight": c.get("text", ""),
+                    "content_ltks": c.get("text", "")
+                }
+                
+                # 保留位置信息
+                if "positions" in c:
+                    chunk_dict["positions"] = c["positions"]
+                
+                # 保留图片
+                if "image" in c and c["image"]:
+                    chunk_dict["image"] = c["image"]
+                
+                chunks.append(chunk_dict)
+            
+            logger.info(f"Parsed {len(chunks)} chunks from uploaded file (overlap={overlapped_percent})")
+            
+            return chunks
+        
+        except Exception as e:
+            logger.exception(f"Failed to parse file with flow: {e}")
+            raise
+    
+    async def _parse_uploaded_file_old(self, file, filename: str | None) -> list[dict]:
+        """旧的解析方法（备用）"""
         import tempfile
         import os
         

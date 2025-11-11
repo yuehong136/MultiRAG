@@ -139,7 +139,6 @@ class MetadataFieldConfig(BaseModel):
     )
     prompt: str = Field(
         ...,
-        min_length=10,
         description="LLM 提取提示词"
     )
 
@@ -168,11 +167,11 @@ class MetadataFieldConfig(BaseModel):
     temperature: float = Field(
         default=0.1,
         ge=0.0,
-        le=2.0,
+        le=1.0,
         description="LLM 温度参数"
     )
     max_tokens: int = Field(
-        default=512,
+        default=1024,
         ge=50,
         le=4096,
         description="最大生成 tokens"
@@ -3575,7 +3574,7 @@ async def preview_chunks(
         raise
     except NotImplementedError as e:
         return _error_response(
-            HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            settings.RetCode.ARGUMENT_ERROR,
             str(e),
             HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             data=False,
@@ -3648,7 +3647,32 @@ async def run_analyze_v2(
     完整的 request JSON 配置（所有参数都是可选的）：
     ```json
     {
+      "parse_method": "auto",           // 可选：解析方法（auto/deepdoc/plain_text/ocr/vlm）
+      "output_format": "json",          // 可选：输出格式（json保留位置/text纯文本/markdown/html）
       "processing_strategy": "raptor",  // 可选：auto/hierarchical/raptor/hybrid/simple
+      
+      "splitter_config": {              // 可选：智能切分配置（使用 core/flow 逻辑，支持重叠）
+        "chunk_token_size": 512,        // chunk 大小（默认 512）
+        "delimiters": ["\n\n", "\n", "。", "！", "？"],  // 分隔符列表
+        "overlapped_percent": 0.1       // 重叠比例 0-0.5（默认 0.1，即 10%）
+      },
+      
+      "hierarchical_config": {          // 可选：层次化合并配置（strategy=hierarchical/hybrid时使用）
+        "levels": [                     // 标题层级正则表达式列表
+          ["^#\\s+", "^第[一二三四五六七八九十]+章"],  // 一级标题
+          ["^##\\s+", "^\\d+\\.\\s+"]                 // 二级标题
+        ],
+        "hierarchy": 1                  // 合并到第几层（0-5，默认1）
+      },
+      
+      "raptor_config": {                // 可选：RAPTOR 聚类配置（strategy=raptor/hybrid时使用）
+        "max_cluster": 64,              // 最大聚类数量（默认 64）
+        "max_token": 512,               // 每个摘要的最大 tokens（默认 512）
+        "threshold": 0.1,               // 聚类相似度阈值（默认 0.1）
+        "random_seed": 42,              // 随机种子（默认 42）
+        "prompt": "Please summarize..." // 可选：自定义摘要提示词
+      },
+      
       "metadata_fields": [              // 可选：不传则使用默认（summary + tags）
         {
           "field_name": "document_summary",
@@ -3666,9 +3690,82 @@ async def run_analyze_v2(
           "call_mode": "batch",
           "post_process": "counter_top10"
         }
-      ]
+      ],
+      
+      "dedup_strategy": "smart",        // 可选：标签去重策略（smart/semantic/none）
+      "use_cache": true                 // 可选：是否使用 LLM 缓存
     }
     ```
+    
+    **参数详解：**
+    
+    **1. 解析配置（Parser）**
+    - `parse_method`: 解析方法
+      - `auto`: 自动识别（PDF→deepdoc, 图片→ocr）✅ 推荐
+      - **PDF 专用：**
+        - `deepdoc`: 深度布局解析（保留位置、表格、图片）
+        - `plain_text`: 纯文本解析（快速）
+        - `mineru`: MinerU 解析（需要安装，适合复杂排版）
+        - VLM 模型名: 如 `"qwen-vl-plus"` 视觉理解（适合扫描件）
+      - **图片专用：**
+        - `ocr`: 文字识别（快速）
+        - `vlm`: 视觉理解（需指定 image_llm_name）
+    - `output_format`: 输出格式
+      - `json`: 结构化（保留位置信息）✅ 推荐
+      - `text`: 纯文本（不保留位置）
+      - `markdown`: Markdown 格式
+      - `html`: HTML 格式（Excel）
+    
+    **2. 切分配置（Splitter）**
+    - `splitter_config`: 使用 core/flow/splitter 逻辑
+      - `chunk_token_size`: chunk 大小（100-4096）
+      - `delimiters`: 分隔符优先级列表
+      - `overlapped_percent`: 重叠比例（0=无重叠，0.1=10%重叠）
+    
+    **3. 处理策略**
+    - `processing_strategy`: 文档处理策略
+      - `auto`: 自动选择（根据文档结构和长度）
+      - `simple`: 直接处理（适合短文档 < 10 chunks）
+      - `hierarchical`: 层次化合并（适合有章节的文档）
+      - `raptor`: RAPTOR 聚类（适合长文档 > 10 chunks）
+      - `hybrid`: 混合策略（先层次化，再 RAPTOR）
+    
+    **4. 层次化配置（HierarchicalMerger）**
+    - `hierarchical_config`: 按标题结构分层合并
+      - `levels`: 标题层级正则表达式（支持多级）
+      - `hierarchy`: 合并到第几层（0=不合并，1=一级，2=二级...）
+    
+    **5. RAPTOR 配置**
+    - `raptor_config`: 聚类递归摘要
+      - `max_cluster`: 最大聚类数（2-256）
+      - `max_token`: 摘要大小（100-2048）
+      - `threshold`: 相似度阈值（0.0-1.0，越小聚类越多）
+      - `random_seed`: 随机种子（可重现结果）
+      - `prompt`: 自定义摘要提示词
+    
+    **6. 元数据提取**
+    - `metadata_fields`: 灵活的字段提取配置
+      - `field_name`: 字段名称
+      - `prompt`: LLM 提示词
+      - `source`: 数据源
+        - `global_summary`: RAPTOR 全局摘要或合并摘要
+        - `cluster_summaries`: RAPTOR 聚类摘要列表
+        - `original_chunks`: 原始 chunks
+      - `call_mode`: 调用模式
+        - `single`: 一次调用（合并后）
+        - `batch`: 多次调用（每个 chunk/摘要单独调用）
+      - `post_process`: 后处理
+        - `none`: 原样返回
+        - `split_comma`: 按逗号分割
+        - `counter_top10`: 频次统计 top10
+        - `concat`: 拼接（batch 模式）
+    
+    **⭐ 核心特性（使用 core/flow 逻辑）：**
+    - ✅ 保留位置信息（PDF 页码、坐标）
+    - ✅ 保留图片关联
+    - ✅ 重叠切分（默认 10%，提高检索质量）
+    - ✅ 智能解析（auto 自动识别文件类型）
+    - ✅ 灵活配置（parse_method, output_format, splitter_config）
 
     **使用示例**:
 
@@ -3685,12 +3782,47 @@ async def run_analyze_v2(
       -F 'request={"processing_strategy":"raptor"}'
     ```
 
-    **示例 3: 自定义元数据（推荐）**
+    **示例 3: PDF MinerU 解析（复杂排版）**
+    ```bash
+    curl -X POST "http://api/v1/document/run_analyze_v2" \\
+      -F "file=@research_paper.pdf" \\
+      -F 'request={
+        "parse_method": "mineru",
+        "splitter_config": {
+          "overlapped_percent": 0.15
+        }
+      }'
+    ```
+    
+    **示例 4: PDF VLM 视觉理解（扫描件）**
+    ```bash
+    curl -X POST "http://api/v1/document/run_analyze_v2" \\
+      -F "file=@scanned.pdf" \\
+      -F 'request={
+        "parse_method": "qwen-vl-plus"
+      }'
+    ```
+    
+    **示例 5: 图片 VLM 理解**
+    ```bash
+    curl -X POST "http://api/v1/document/run_analyze_v2" \\
+      -F "file=@diagram.png" \\
+      -F 'request={
+        "parse_method": "vlm",
+        "image_llm_name": "qwen-vl-plus"
+      }'
+    ```
+
+    **示例 6: 自定义元数据（推荐）**
     ```bash
     curl -X POST "http://api/v1/document/run_analyze_v2" \\
       -F "file=@document.pdf" \\
       -F 'request={
         "processing_strategy": "raptor",
+        "splitter_config": {
+          "chunk_token_size": 512,
+          "overlapped_percent": 0.1
+        },
         "metadata_fields": [
           {
             "field_name": "document_summary",
@@ -4434,7 +4566,7 @@ async def analyze_document_v2(
                 detail="Cannot provide both doc_id and file"
             )
 
-        # 调用服务
+        # 调用服务（使用 core/flow 逻辑）
         service = PipelineAnalysisService(db, user.id)
 
         result = await service.analyze_document(
@@ -4442,6 +4574,8 @@ async def analyze_document_v2(
             file=file,
             filename=file.filename if file else None,
             kb_id=request.kb_id,
+            parse_method=request.parse_method or "auto",
+            output_format=request.output_format or "json",
             processing_strategy=request.processing_strategy,
             hierarchical_config=request.hierarchical_config.model_dump() if request.hierarchical_config else None,
             splitter_config=request.splitter_config.model_dump() if request.splitter_config else None,
