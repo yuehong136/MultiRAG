@@ -6,6 +6,7 @@
 @date：2024/8/14 11:00
 @desc:
 """
+import json
 import logging
 import random
 import time
@@ -1063,6 +1064,8 @@ class DocumentService(CommonService):
             return {ParserType.NAIVE.value}
         if re.search(r"\.eml$", f):
             return {ParserType.EMAIL.value}
+        if re.search(r"\.(mp3|wav|aac|flac|ogg|aiff|au|midi|wma|da|wave|realaudio|vqf|oggvorbis|ape)$", f):
+            return {ParserType.AUDIO.value}
         from api.db import ParserType as PT
         return {PT.NAIVE.value}
 
@@ -1124,6 +1127,8 @@ class DocumentService(CommonService):
             return cls._get_module_by_parser_id(ParserType.PICTURE.value), ParserType.PICTURE.value
         if re.search(r"\.eml$", f):
             return cls._get_module_by_parser_id(ParserType.EMAIL.value), ParserType.EMAIL.value
+        if re.search(r"\.(mp3|wav|aac|flac|ogg|aiff|au|midi|wma|da|wave|realaudio|vqf|oggvorbis|ape)$", f):
+            return cls._get_module_by_parser_id(ParserType.AUDIO.value), ParserType.AUDIO.value
         return cls._get_module_by_parser_id(ParserType.NAIVE.value), ParserType.NAIVE.value
 
     @classmethod
@@ -2455,6 +2460,101 @@ def queue_raptor_o_graphrag_tasks(db, sample_doc_id, ty, priority, fake_doc_id="
     DocumentService.begin2parse(db, sample_doc_id["id"])
     assert REDIS_CONN.queue_product(get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
     return task["id"]
+
+
+async def queue_analyze_v2_task(db, doc_id, kb_id, config, user_id, file=None, priority=0):
+    """
+    创建 analyze_v2 任务并加入队列
+    
+    参考: queue_raptor_o_graphrag_tasks
+    
+    Args:
+        db: 数据库会话
+        doc_id: 文档ID（可选）
+        kb_id: 知识库ID（可选）
+        config: 分析配置字典
+        user_id: 用户ID
+        file: 上传的文件对象（可选）
+        priority: 任务优先级
+        
+    Returns:
+        task_id: 任务ID
+    """
+    from api.db.db_models import Task
+    from api.utils import get_uuid
+    import tempfile
+    import os
+    
+    task_id = get_uuid()
+    
+    # 处理直传文件
+    temp_file_path = None
+    if file:
+        # 保存文件到临时位置，供 task_executor 读取
+        if hasattr(file, 'filename'):
+            fname = file.filename
+        else:
+            raise ValueError("File must have filename attribute")
+        
+        # 读取文件内容（FastAPI 的 UploadFile.read() 是异步的）
+        if hasattr(file, 'read'):
+            file_content = await file.read()
+        else:
+            raise ValueError("File must be readable")
+        
+        # 保存到 MinIO 临时位置
+        temp_location = f"temp/analyze_v2/{task_id}/{fname}"
+        STORAGE_IMPL.put("multirag-temp", temp_location, file_content)
+        
+        temp_file_path = temp_location
+        logging.info(f"Saved temp file to MinIO: {temp_location}")
+    
+    # 构建任务数据
+    # 注意：doc_id 字段最大长度为 32 个字符，如果没有提供 doc_id，使用 task_id（32字符）
+    # 而不是 f"temp-{task_id}" 会超过长度限制
+    task_data = {
+        "id": task_id,
+        "doc_id": doc_id or task_id,  # 直接使用 task_id，不加前缀
+        "task_type": "analyze_v2",
+        "begin_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "progress": 0,
+        "progress_msg": f"{datetime.now().strftime('%H:%M:%S')} 任务已创建",
+        "priority": priority,
+        "from_page": 0,
+        "to_page": 100000000,
+        # 使用 chunk_ids 存储配置
+        "chunk_ids": json.dumps({
+            "config": config,
+            "kb_id": kb_id,
+            "user_id": user_id,
+            "enable_sse": config.get("enable_sse", False),
+            "temp_file_path": temp_file_path,
+            "is_temp_file": file is not None,  # 标记是否是临时文件
+            "result": None
+        }, ensure_ascii=False)
+    }
+    
+    # 创建 Task 记录（传递字典而不是 ORM 对象）
+    bulk_insert_into_db(db, Task, [task_data], True)
+    
+    # 发送到 Redis 队列
+    queue_message = {
+        "id": task_id,
+        "task_type": "analyze_v2",
+        "doc_id": task_data["doc_id"],
+        "kb_id": kb_id,
+        "priority": priority
+    }
+    
+    success = REDIS_CONN.queue_product(get_svr_queue_name(priority), message=queue_message)
+    
+    if not success:
+        logging.error(f"Failed to send task {task_id} to Redis queue")
+        raise Exception("Can't access Redis. Please check the Redis' status.")
+    
+    logging.info(f"Created and queued analyze_v2 task: {task_id}, enable_sse: {config.get('enable_sse')}")
+    
+    return task_id
 
 
 def get_queue_length(priority):

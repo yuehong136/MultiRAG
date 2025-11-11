@@ -2,6 +2,7 @@ import random
 import sys
 import threading
 import time
+import concurrent.futures
 
 import json_repair
 
@@ -88,6 +89,7 @@ TASK_TYPE_TO_PIPELINE_TASK_TYPE = {
     "raptor": PipelineTaskType.RAPTOR,
     "graphrag": PipelineTaskType.GRAPH_RAG,
     "mindmap": PipelineTaskType.MINDMAP,
+    # analyze_v2 不需要记录 pipeline 操作日志（直传文件，无 Document 记录）
 }
 
 UNACKED_ITERATOR = None
@@ -197,7 +199,19 @@ class TaskCanceledException(Exception):
 #         logging.warning("set_progress(%s): 记录不存在，无法更新进度", task_id)
 #     except Exception:
 #         logging.exception(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, got exception")
-def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing..."):
+def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing...", enable_sse=False):
+    """
+    更新任务进度（支持双写模式）
+    
+    Args:
+        db: 数据库会话
+        task_id: 任务ID
+        from_page: 起始页
+        to_page: 结束页
+        prog: 进度值（0-1，-1表示失败）
+        msg: 进度消息
+        enable_sse: 是否同时发送 SSE 事件到 Redis Stream（默认 False，保持向后兼容）
+    """
     try:
         if prog is not None and prog < 0:
             msg = "[ERROR]" + msg
@@ -217,12 +231,58 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
         if prog is not None:
             d["progress"] = prog
 
+        # 1. 更新数据库（必须，供轮询查询）
         TaskService.update_progress(db, task_id, d)
         db.commit()
+        
+        # 2. 发送 SSE 事件到 Redis（可选，供实时推送）
+        if enable_sse and prog is not None:
+            try:
+                # 确定事件类型
+                if prog == 1.0:
+                    event_type = "complete"
+                elif prog < 0:
+                    event_type = "error"
+                else:
+                    event_type = "progress"
+                
+                # 提取纯消息（去掉时间戳前缀）
+                clean_msg = msg.split(" ", 1)[1] if " " in msg else msg
+                
+                # 构建事件数据
+                event_data = {
+                    "progress": prog,
+                    "message": clean_msg
+                }
+                
+                # 如果是完成事件，包含完整结果
+                if event_type == "complete":
+                    try:
+                        # 从数据库读取完整结果
+                        task = TaskService.get_by_id(db, task_id)
+                        if task and task.chunk_ids:
+                            task_data = json.loads(task.chunk_ids)
+                            result = task_data.get("result")
+                            if result:
+                                event_data["result"] = result
+                                logging.info(f"SSE complete event includes result for task {task_id}")
+                    except Exception as e:
+                        logging.warning(f"Failed to include result in SSE complete event: {e}")
+                
+                # 发送到 Redis Stream
+                REDIS_CONN.xadd_sse_event(
+                    task_id=task_id,
+                    event_type=event_type,
+                    data=event_data  # 使用包含 result 的完整数据
+                )
+            except Exception as e:
+                # SSE 发送失败不影响主流程
+                logging.warning(f"Failed to send SSE event: {e}")
+        
         db.close()
         if cancel:
             raise TaskCanceledException(msg)
-        logging.info(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}")
+        logging.info(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, enable_sse: {enable_sse}")
     except NoResultFound:
         logging.warning("set_progress(%s): 记录不存在，无法更新进度", task_id)
     except Exception:
@@ -257,6 +317,8 @@ async def collect(db: Session):
         return None, None
 
     canceled = False
+    task_type = msg.get("task_type", "")
+    
     if msg.get("doc_id", "") in [GRAPH_RAPTOR_FAKE_DOC_ID, CANVAS_DEBUG_DOC_ID]:
         # Redis消息已包含fake_doc_id和doc_ids，先使用它
         task = msg
@@ -278,6 +340,79 @@ async def collect(db: Session):
                 # 确保doc_ids字段存在
                 if "doc_ids" not in task:
                     task["doc_ids"] = []
+    elif task_type == "analyze_v2":
+        # analyze_v2 任务特殊处理：直接从 Task 表获取，不 JOIN Document
+        # 因为可能是直传文件，没有对应的 Document 记录
+        from api.db.db_models import Task as TaskModel
+        task_record = db.query(TaskModel).filter(TaskModel.id == msg["id"]).first()
+        
+        if task_record:
+            # 解析 chunk_ids 获取配置信息
+            task_data = json.loads(task_record.chunk_ids) if task_record.chunk_ids else {}
+            config = task_data.get("config", {})
+            kb_id = task_data.get("kb_id")
+            user_id = task_data.get("user_id")
+            
+            # 构建 task 字典
+            task = {
+                "id": task_record.id,
+                "doc_id": task_record.doc_id,
+                "from_page": task_record.from_page,
+                "to_page": task_record.to_page,
+                "retry_count": task_record.retry_count,
+                "task_type": task_type,
+                "chunk_ids": task_record.chunk_ids,
+            }
+            
+            # 如果有 kb_id，尝试获取相关配置
+            if kb_id:
+                try:
+                    from api.db.db_models import Knowledgebase, Tenant
+                    kb_record = db.query(Knowledgebase, Tenant).join(
+                        Tenant, Knowledgebase.tenant_id == Tenant.id
+                    ).filter(Knowledgebase.id == kb_id).first()
+                    
+                    if kb_record:
+                        kb, tenant = kb_record
+                        task["kb_id"] = kb.id
+                        task["tenant_id"] = tenant.id
+                        task["language"] = kb.language
+                        task["embd_id"] = kb.embd_id
+                        task["llm_id"] = tenant.llm_id
+                        task["parser_id"] = kb.parser_id
+                        task["parser_config"] = kb.parser_config
+                        logging.info(f"Task {msg['id']}: loaded kb config (kb_id={kb_id}, tenant_id={tenant.id})")
+                except Exception as e:
+                    logging.warning(f"Task {msg['id']}: failed to load kb config: {e}")
+            
+            # 如果没有 kb_id 或获取失败，使用用户的默认配置
+            if "tenant_id" not in task and user_id:
+                try:
+                    from api.db.db_models import UserTenant, Tenant
+                    # User 没有 tenant_id，需要通过 UserTenant 关联表查询
+                    user_tenant = db.query(UserTenant, Tenant).join(
+                        Tenant, UserTenant.tenant_id == Tenant.id
+                    ).filter(
+                        UserTenant.user_id == user_id,
+                        UserTenant.status == "1"  # 有效状态
+                    ).first()
+                    
+                    if user_tenant:
+                        ut, tenant = user_tenant
+                        task["tenant_id"] = tenant.id
+                        task["language"] = "Chinese"  # 默认中文
+                        task["llm_id"] = tenant.llm_id
+                        task["embd_id"] = tenant.embd_id
+                        logging.info(f"Task {msg['id']}: loaded user config (user_id={user_id}, tenant_id={tenant.id})")
+                except Exception as e:
+                    logging.warning(f"Task {msg['id']}: failed to load user config: {e}")
+            
+            # 如果还是没有 tenant_id，任务无法执行
+            if "tenant_id" not in task:
+                logging.error(f"Task {msg['id']}: Missing tenant_id. Please provide kb_id or valid user_id.")
+                task = None
+        else:
+            task = None
     else:
         # 普通任务，从数据库获取
         task = TaskService.get_task(db, msg["id"])
@@ -291,7 +426,7 @@ async def collect(db: Session):
         redis_msg.ack()
         return None, None
 
-    task_type = msg.get("task_type", "")
+    # task_type 已在前面定义
     task["task_type"] = task_type
     if task_type[:8] == "dataflow":
         task["tenant_id"] = msg["tenant_id"]
@@ -938,6 +1073,783 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
     return res, tk_count
 
 
+def _detect_hierarchical_structure(chunks, hierarchical_config):
+    """
+    检测文档是否有层次结构
+    
+    参考：PipelineAnalysisService._detect_hierarchical_structure (第 476-526 行)
+    """
+    
+    if not hierarchical_config or not hierarchical_config.get("levels"):
+        # 使用默认规则
+        default_patterns = [
+            r"^#\s+",
+            r"^第[一二三四五六七八九十百]+章",
+            r"^Chapter\s+\d+",
+            r"^\d+\.\s+[^\d]",
+        ]
+    else:
+        levels = hierarchical_config.get("levels", [])
+        default_patterns = []
+        for level_patterns in levels:
+            default_patterns.extend(level_patterns)
+    
+    # 检查前 100 个 chunks
+    match_count = 0
+    check_limit = min(100, len(chunks))
+    
+    for chunk in chunks[:check_limit]:
+        text = chunk.get("content_with_weight", "")
+        if not text:
+            continue
+        
+        for pattern in default_patterns:
+            if re.search(pattern, text, re.MULTILINE):
+                match_count += 1
+                break
+    
+    # 如果超过 10% 的 chunks 匹配标题 pattern，认为有结构
+    has_structure = match_count / check_limit > 0.1 if check_limit > 0 else False
+    
+    logging.info(f"Structure detection: {match_count}/{check_limit} matches, has_structure={has_structure}")
+    
+    return has_structure
+
+
+def _hierarchical_merge(chunks, config):
+    """
+    层次化合并
+    
+    参考：PipelineAnalysisService._hierarchical_merge (第 592-740 行)
+    """
+    from copy import deepcopy
+    
+    # 默认配置
+    if not config:
+        config = {
+            "levels": [
+                ["^#\\s+", "^第[一二三四五六七八九十百]+章"],
+                ["^##\\s+", "^\\d+\\.\\s+"]
+            ],
+            "hierarchy": 1
+        }
+    
+    levels = config.get("levels", [])
+    hierarchy_level = config.get("hierarchy", 1)
+    
+    # 提取文本行
+    lines = [c.get("content_with_weight", "") for c in chunks]
+    
+    # 识别每行的层级
+    matches = []
+    for txt in lines:
+        matched_level = None
+        for lvl, patterns in enumerate(levels):
+            for pattern in patterns:
+                if re.search(pattern, txt, re.MULTILINE):
+                    matched_level = lvl
+                    break
+            if matched_level is not None:
+                break
+        
+        # 如果没匹配到，设为最底层
+        if matched_level is None:
+            matches.append(len(levels))
+        else:
+            matches.append(matched_level)
+    
+    # 构建层次化树状结构
+    root = {"level": -1, "index": -1, "texts": [], "children": []}
+    
+    for i, level in enumerate(matches):
+        if level == 0:
+            # 一级标题
+            root["children"].append({
+                "level": level,
+                "index": i,
+                "texts": [],
+                "children": []
+            })
+        elif level == len(levels):
+            # 普通文本
+            def add_text(node):
+                if not node["children"]:
+                    node["texts"].append(i)
+                else:
+                    add_text(node["children"][-1])
+            add_text(root)
+        else:
+            # 中间层级
+            def add_child(node, target_level, idx):
+                if not node["children"] or target_level == node["level"] + 1:
+                    node["children"].append({
+                        "level": target_level,
+                        "index": idx,
+                        "texts": [],
+                        "children": []
+                    })
+                else:
+                    add_child(node["children"][-1], target_level, idx)
+            add_child(root, level, i)
+    
+    # 按 hierarchy 级别收集路径
+    all_paths = []
+    
+    def collect_paths(node, path, depth):
+        if not node["children"] and path:
+            all_paths.append(path)
+        
+        for child in node["children"]:
+            if depth < hierarchy_level:
+                new_path = deepcopy(path)
+            else:
+                new_path = path
+            
+            new_path.extend([child["index"], *child["texts"]])
+            collect_paths(child, new_path, depth + 1)
+            
+            if depth == hierarchy_level:
+                all_paths.append(new_path)
+    
+    if root["texts"]:
+        all_paths.insert(0, root["texts"])
+    
+    collect_paths(root, [], 0)
+    
+    # 合并文本
+    chapters = []
+    for path_indices in all_paths:
+        if not path_indices:
+            continue
+        
+        chapter_text = "\n".join([lines[i] for i in path_indices])
+        chapter_chunks = [chunks[i] for i in path_indices]
+        title_text = lines[path_indices[0]] if path_indices else ""
+        
+        chapters.append({
+            "title": title_text.strip(),
+            "text": chapter_text,
+            "chunks": chapter_chunks,
+            "chunk_indices": path_indices
+        })
+    
+    # 构建结构信息
+    structure = {
+        "chapters": [
+            {
+                "title": ch["title"],
+                "level": 0,
+                "chunk_range": [ch["chunk_indices"][0], ch["chunk_indices"][-1]]
+                if ch["chunk_indices"] else [0, 0]
+            }
+            for ch in chapters
+        ]
+    }
+    
+    logging.info(f"HierarchicalMerger: {len(chapters)} chapters identified")
+    
+    # 调试日志：打印每个章节的信息
+    for idx, ch in enumerate(chapters):
+        logging.info(f"  Chapter {idx+1}: title='{ch['title'][:30]}', chunks={len(ch['chunks'])}, indices={ch['chunk_indices'][:5]}...")
+    
+    return {
+        "chapters": chapters,
+        "summaries": [ch["text"] for ch in chapters],
+        "structure": structure
+    }
+
+
+def _get_default_metadata_fields():
+    """
+    获取默认元数据字段配置
+    
+    当用户未配置时，默认提取：摘要 + 语义标签
+    """
+    return [
+        {
+            "field_name": "document_summary",
+            "prompt": "Summarize the document concisely in 150-200 words with chinese.",
+            "source": "global_summary",
+            "call_mode": "single",
+            "post_process": "none",
+            "temperature": 0.3,
+            "max_tokens": 400
+        },
+        {
+            "field_name": "semantic_tags",
+            "prompt": " use chinese, Extract 3-5 semantic tags that represent the main themes. Output comma-separated.",
+            "source": "cluster_summaries",
+            "call_mode": "batch",
+            "post_process": "counter_top10",
+            "temperature": 0.2,
+            "max_tokens": 100
+        }
+    ]
+
+
+def _get_extraction_contents(source, summaries, chunks, cluster_results=None, original_length=0):
+    """
+    根据 source 参数选择数据源
+    
+    Args:
+        source: 数据源类型
+        summaries: 当前处理后的摘要列表（RAPTOR 聚类摘要或原始 chunks）
+        chunks: 原始 chunks
+        cluster_results: RAPTOR 完整结果（可选）
+        original_length: 原始 chunk 数量
+    
+    Returns:
+        list[str]: 用于提取的内容列表
+    """
+    if source == "global_summary":
+        # 全局摘要：优先用 RAPTOR 最终摘要
+        if cluster_results and len(cluster_results) > original_length:
+            # RAPTOR 最后一个 = 全局摘要
+            return [cluster_results[-1][0]]
+        else:
+            # 没用 RAPTOR，智能合并 chunks
+            # 根据 chunk 数量决定合并多少个
+            if len(summaries) <= 5:
+                # 少量 chunk，全部合并
+                combined = "\n\n".join(summaries)
+            elif len(summaries) <= 20:
+                # 中等数量，取前 10 个
+                combined = "\n\n".join(summaries[:10])
+            else:
+                # 大量 chunk，取前 20 个
+                combined = "\n\n".join(summaries[:20])
+            
+            return [combined]
+    
+    elif source == "cluster_summaries":
+        # 聚类摘要：使用当前的 summaries（可能是 RAPTOR 摘要或原始 chunks）
+        return summaries
+    
+    elif source == "original_chunks":
+        # 原始 chunks
+        return [c["content_with_weight"] for c in chunks]
+    
+    else:
+        # 默认：global_summary
+        return _get_extraction_contents("global_summary", summaries, chunks, cluster_results, original_length)
+
+
+def _post_process_result(raw_output, post_process):
+    """
+    后处理 LLM 输出
+    
+    参考：
+    - DocumentAnalysisService 第 759 行: semantic_tags = [t.strip() for t in result.split(",")]
+    - keyword_extraction: 直接返回 LLM 原始输出
+    
+    Args:
+        raw_output: LLM 输出（str 或 list[str]）
+        post_process: 后处理策略
+    
+    Returns:
+        处理后的结果
+    """
+    from collections import Counter
+    
+    if post_process == "none":
+        # 原样返回（参考 core/flow/extractor）
+        return raw_output
+    
+    elif post_process == "split_comma":
+        # 简单按逗号分割（参考 DocumentAnalysisService 第 759 行）
+        if isinstance(raw_output, list):
+            all_items = []
+            for r in raw_output:
+                items = [t.strip() for t in r.split(",") if t.strip()]
+                all_items.extend(items)
+            return all_items
+        else:
+            return [t.strip() for t in raw_output.split(",") if t.strip()]
+    
+    elif post_process == "counter_top10":
+        # 频次统计 top10（参考 DocumentAnalysisService._compute_frequency_tags）
+        if isinstance(raw_output, list):
+            all_items = []
+            for r in raw_output:
+                items = [t.strip() for t in r.split(",") if t.strip()]
+                all_items.extend(items)
+            counter = Counter(all_items)
+            return [item for item, count in counter.most_common(10)]
+        else:
+            items = [t.strip() for t in raw_output.split(",") if t.strip()]
+            return items
+    
+    elif post_process == "concat":
+        # 拼接（batch 模式）
+        if isinstance(raw_output, list):
+            return "\n\n".join(raw_output)
+        return raw_output
+    
+    else:
+        # 未知策略，原样返回
+        return raw_output
+
+
+@timeout(3600)
+async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callback=None):
+    """
+    执行 analyze_v2 文档分析任务
+    
+    ⭐ 完全复用 PipelineAnalysisService 的成熟实现
+    
+    环境: trio → 桥接到 asyncio (PipelineAnalysisService)
+    
+    Args:
+        task: 任务信息
+        chat_mdl: LLM 模型（未使用，PipelineAnalysisService 内部创建）
+        embd_mdl: Embedding 模型（未使用，PipelineAnalysisService 内部创建）
+        vector_size: 向量维度
+        db: 数据库 Session
+        callback: 进度回调函数
+    """
+    # 解析任务配置
+    task_data = json.loads(task.get("chunk_ids", "{}"))
+    config = task_data.get("config", {})
+    
+    task_id = task["id"]
+    doc_id = config.get("doc_id")
+    kb_id = config.get("kb_id") or task_data.get("kb_id")
+    tenant_id = task.get("tenant_id")
+    
+    # 必须有 tenant_id
+    if not tenant_id:
+        error_msg = "analyze_v2 task missing tenant_id configuration"
+        logging.error(f"Task {task_id}: {error_msg}")
+        if callback:
+            callback(prog=-1, msg=error_msg)
+        raise ValueError(error_msg)
+    
+    # 进度回调
+    if not callback:
+        callback = lambda prog, msg: None
+    
+    try:
+        # ⭐ 参考 PipelineAnalysisService 的算法，在 trio 环境中实现
+        
+        # 1. 获取文档 chunks
+        callback(prog=0.05, msg="读取文档内容...")
+        
+        chunks = []
+        temp_file_path = task_data.get("temp_file_path")
+        file_content_base64 = task_data.get("file_content_base64")
+        filename = task_data.get("filename")
+        
+        # ⚠️ 优化：立即清理 file_content_base64（避免污染日志/数据库/Redis）
+        # 提取后立即删除，不保存到任何地方
+        has_base64 = file_content_base64 is not None
+        file_size = task_data.get("file_size", 0)
+        
+        # 提前删除，避免后续 task_data 被打印/保存时包含大量 base64
+        if has_base64:
+            task_data["file_content_base64"] = f"<removed, {file_size} bytes>"  # 标记已删除
+        
+        # 情况1：直传文件，需要先解析
+        if temp_file_path or file_content_base64:
+            callback(prog=0.1, msg="解析文档...")
+            
+            # 读取文件内容
+            if has_base64:
+                import base64
+                file_content = base64.b64decode(file_content_base64)
+                logging.info(f"Task {task_id}: loaded file from base64 ({len(file_content)} bytes)")
+                # base64 数据已在前面删除
+            else:
+                file_content = await get_storage_binary("multirag-temp", temp_file_path)
+                if not file_content:
+                    callback(prog=-1, msg="无法读取临时文件")
+                    return
+                logging.info(f"Task {task_id}: loaded file from MinIO ({len(file_content)} bytes)")
+            
+            # 解析文件（参考 PipelineAnalysisService._parse_uploaded_file）
+            import os
+            import tempfile
+            if not filename:
+                filename = os.path.basename(temp_file_path) if temp_file_path else "document"
+            
+            callback(prog=0.15, msg="调用文档解析器...")
+            
+            from api.db.services.document_service import DocumentService
+            
+            # 获取解析器
+            module, _ = await trio.to_thread.run_sync(
+                lambda: DocumentService._resolve_parser_for_filename(filename, None)
+            )
+            
+            # 创建本地临时文件（不是 MinIO）
+            file_ext = os.path.splitext(filename)[1].lower().lstrip(".")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as temp_file:
+                temp_file.write(file_content)
+                temp_path = temp_file.name
+            
+            try:
+                def _noop(prog=None, msg=""):
+                    return None
+                
+                # 调用解析器
+                parsed_chunks = await trio.to_thread.run_sync(
+                    lambda: module.chunk(
+                        filename,
+                        binary=file_content,
+                        from_page=0,
+                        to_page=100000,
+                        lang="Chinese",
+                        callback=_noop,
+                        parser_config=config.get("parser_config") or {},
+                        tenant_id=tenant_id
+                    )
+                )
+                
+                # 转换格式
+                if isinstance(parsed_chunks, list):
+                    chunks = [
+                        {
+                            "content_with_weight": chunk.get("content_with_weight", chunk.get("content_ltks", "")) if isinstance(chunk, dict) else str(chunk),
+                            "embeddings": None
+                        }
+                        for chunk in parsed_chunks
+                    ]
+                else:
+                    chunks = [{"content_with_weight": str(parsed_chunks), "embeddings": None}]
+                
+                logging.info(f"Task {task_id}: parsed {len(chunks)} chunks")
+                
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+        
+        # 情况2：从 Milvus 获取已有文档
+        elif doc_id and kb_id:
+            callback(prog=0.1, msg="从向量库获取文档...")
+            if vector_size != 768:
+                vctr_nm = f"q_{vector_size}_vec"
+            else:
+                vctr_nm = "vector"
+            
+            for d in settings.retriever.chunk_list(
+                doc_id, tenant_id, [kb_id],
+                fields=["content_with_weight", vctr_nm],
+                sort_by_position=True
+            ):
+                chunks.append({
+                    "content_with_weight": d["content_with_weight"],
+                    "embeddings": np.array(d[vctr_nm]) if vctr_nm in d else None
+                })
+        
+        if not chunks:
+            callback(prog=-1, msg="未找到文档内容")
+            return
+        
+        callback(prog=0.2, msg=f"文档已解析，共 {len(chunks)} 个片段")
+        
+        # 2. 根据策略处理（参考 PipelineAnalysisService._process_with_strategy）
+        strategy = config.get("processing_strategy", "auto")
+        hierarchical_config = config.get("hierarchical_config")
+        raptor_config = config.get("raptor_config") or {}
+        
+        # 2.1 自动选择策略（参考 PipelineAnalysisService._auto_select_strategy）
+        if strategy == "auto":
+            # 检测是否有层次结构
+            has_structure = _detect_hierarchical_structure(chunks, hierarchical_config)
+            is_long = len(chunks) > 50
+            
+            if has_structure and is_long:
+                strategy = "hybrid"
+            elif has_structure:
+                strategy = "hierarchical"
+            elif len(chunks) > 10:
+                strategy = "raptor"
+            else:
+                strategy = "simple"
+            
+            logging.info(f"Auto-selected strategy: {strategy}")
+        
+        summaries = []
+        cluster_count = 0
+        cluster_results = None
+        components_used = ["Parser"]
+        structure_info = None
+        
+        # 2.2 根据策略处理
+        if strategy == "simple":
+            # 直接使用原始 chunks
+            summaries = [c["content_with_weight"] for c in chunks]
+            callback(prog=0.5, msg=f"使用简单策略，共 {len(summaries)} 个片段")
+        
+        elif strategy == "hierarchical":
+            # 使用 HierarchicalMerger（参考 PipelineAnalysisService._hierarchical_merge）
+            components_used.append("HierarchicalMerger")
+            callback(prog=0.3, msg="层次化合并处理...")
+            
+            hierarchical_result = _hierarchical_merge(chunks, hierarchical_config)
+            summaries = hierarchical_result.get("summaries", [])
+            structure_info = hierarchical_result.get("structure")
+            
+            callback(prog=0.7, msg=f"层次化合并完成，{len(summaries)} 个章节")
+        
+        elif strategy == "hybrid":
+            # 混合：先 HierarchicalMerger，再 RAPTOR
+            components_used.extend(["HierarchicalMerger", "RAPTOR"])
+            callback(prog=0.3, msg="混合处理：层次化 + RAPTOR...")
+            
+            # 先层次化
+            hierarchical_result = _hierarchical_merge(chunks, hierarchical_config)
+            chapters = hierarchical_result.get("chapters", [])
+            structure_info = hierarchical_result.get("structure")
+            
+            # 对每个章节独立运行 RAPTOR
+            all_summaries = []
+            for idx, chapter in enumerate(chapters):
+                chapter_chunks = chapter["chunks"]
+                chapter_title = chapter.get("title", "")[:30]  # 前30个字符
+                
+                logging.info(f"Hybrid: processing chapter {idx+1}/{len(chapters)}, title='{chapter_title}', chunks={len(chapter_chunks)}")
+                
+                if len(chapter_chunks) > 10:
+                    # 章节较长，使用 RAPTOR
+                    chapter_raptor_inputs = []
+                    for chunk in chapter_chunks:
+                        text = chunk.get("content_with_weight", "")
+                        embd_result, _ = await trio.to_thread.run_sync(
+                            lambda t=text: embd_mdl.encode([t])
+                        )
+                        embd = embd_result[0] if len(embd_result) > 0 else np.array([])
+                        if len(embd) > 0:
+                            chapter_raptor_inputs.append((text, embd))
+                    
+                    # 禁用 usage tracking
+                    original_db_chat = chat_mdl.db
+                    original_db_embd = embd_mdl.db
+                    chat_mdl.db = None
+                    embd_mdl.db = None
+                    
+                    try:
+                        raptor = Raptor(
+                            max_cluster=raptor_config.get("max_cluster", 64),
+                            llm_model=chat_mdl,
+                            embd_model=embd_mdl,
+                            prompt=raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}",
+                            max_token=raptor_config.get("max_token", 512),
+                            threshold=raptor_config.get("threshold", 0.1)
+                        )
+                        chapter_results = await raptor(
+                            chapter_raptor_inputs,
+                            random_state=raptor_config.get("random_seed", 42),
+                            callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR ({chapter['title'][:20]}): {msg}")
+                        )
+                        
+                        # 提取聚类摘要
+                        original_len = len(chapter_raptor_inputs)
+                        if len(chapter_results) > original_len:
+                            chapter_summaries = [chapter_results[i][0] for i in range(original_len, len(chapter_results))]
+                            all_summaries.extend(chapter_summaries)
+                    finally:
+                        chat_mdl.db = original_db_chat
+                        embd_mdl.db = original_db_embd
+                else:
+                    # 章节较短，直接使用
+                    all_summaries.extend([c.get("content_with_weight", "") for c in chapter_chunks])
+            
+            summaries = all_summaries
+            cluster_count = len(summaries)
+            callback(prog=0.7, msg=f"混合处理完成，{len(chapters)} 个章节，{cluster_count} 个摘要")
+        
+        elif strategy == "raptor":
+            # 使用 RAPTOR
+            components_used.append("RAPTOR")
+            callback(prog=0.3, msg="RAPTOR 聚类处理...")
+            
+            raptor_inputs = []
+            for chunk in chunks:
+                text = chunk.get("content_with_weight", "")
+                embd = chunk.get("embeddings")
+                
+                if embd is None or (isinstance(embd, np.ndarray) and embd.size == 0):
+                    embd_result, _ = await trio.to_thread.run_sync(
+                        lambda t=text: embd_mdl.encode([t])
+                    )
+                    embd = embd_result[0] if len(embd_result) > 0 else np.array([])
+                
+                if len(embd) > 0:
+                    raptor_inputs.append((text, embd))
+            
+            # ⚠️ 关键：禁用 usage tracking（避免 trio 并行任务冲突）
+            # 参考 DocumentAnalysisService._analyze_with_raptor 第 611-613 行
+            original_db_chat = chat_mdl.db
+            original_db_embd = embd_mdl.db
+            chat_mdl.db = None
+            embd_mdl.db = None
+            
+            try:
+                raptor = Raptor(
+                    max_cluster=raptor_config.get("max_cluster", 64),
+                    llm_model=chat_mdl,
+                    embd_model=embd_mdl,
+                    prompt=raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}",
+                    max_token=raptor_config.get("max_token", 512),
+                    threshold=raptor_config.get("threshold", 0.1)
+                )
+                
+                cluster_results = await raptor(
+                    raptor_inputs,
+                    random_state=raptor_config.get("random_seed", 42),
+                    callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR: {msg}")
+                )
+            finally:
+                # 恢复 db session
+                chat_mdl.db = original_db_chat
+                embd_mdl.db = original_db_embd
+            
+            original_length = len(raptor_inputs)
+            if len(cluster_results) > original_length:
+                summaries = [cluster_results[i][0] for i in range(original_length, len(cluster_results))]
+                cluster_count = len(summaries)
+            else:
+                summaries = [text for text, _ in cluster_results]
+                cluster_count = 0
+            
+            callback(prog=0.7, msg=f"RAPTOR 生成了 {len(summaries)} 个聚类摘要")
+        else:
+            summaries = [c["content_with_weight"] for c in chunks]
+            callback(prog=0.5, msg=f"使用简单策略，共 {len(summaries)} 个片段")
+        
+        # 3. 提取元数据（参考 keyword_extraction 和 DocumentAnalysisService 的标准模式）
+        callback(prog=0.75, msg="提取文档元数据...")
+        
+        metadata = {}
+        metadata_fields = config.get("metadata_fields")
+        
+        # 如果没有配置，使用默认（摘要 + 标签）
+        if not metadata_fields:
+            metadata_fields = _get_default_metadata_fields()
+        
+        # 保存 cluster_results 用于数据源选择
+        cluster_results_for_source = cluster_results if cluster_count > 0 else None
+        original_chunk_length = len(chunks)
+        
+        for field_config in metadata_fields:
+            field_name = field_config.get("field_name")
+            source = field_config.get("source", "global_summary")
+            call_mode = field_config.get("call_mode", "single")
+            post_process = field_config.get("post_process", "none")
+            
+            try:
+                # 1. 获取数据源
+                contents = _get_extraction_contents(
+                    source, 
+                    summaries, 
+                    chunks, 
+                    cluster_results_for_source,
+                    original_chunk_length
+                )
+                
+                # 2. 调用 LLM（参考 keyword_extraction 的标准模式）
+                from core.prompts.generator import message_fit_in
+                
+                if call_mode == "single":
+                    # 合并后一次调用
+                    combined_content = "\n\n".join(contents) if isinstance(contents, list) else contents[0]
+                    
+                    # 使用 message_fit_in（项目标准）
+                    msg = [
+                        {"role": "system", "content": field_config.get("prompt")},
+                        {"role": "user", "content": combined_content}
+                    ]
+                    _, msg = message_fit_in(msg, chat_mdl.max_length)
+                    
+                    raw_output = await trio.to_thread.run_sync(
+                        lambda: chat_mdl.chat(msg[0]["content"], msg[1:], {
+                            "temperature": field_config.get("temperature", 0.1),
+                            "max_tokens": field_config.get("max_tokens", 512)
+                        })
+                    )
+                    
+                    # 清理输出（参考 keyword_extraction）
+                    raw_output = re.sub(r"^.*</think>", "", raw_output, flags=re.DOTALL).strip()
+                    if raw_output.find("**ERROR**") >= 0:
+                        raw_output = ""
+                
+                elif call_mode == "batch":
+                    # 每个内容调用一次（需要频次统计的场景）
+                    raw_outputs = []
+                    for content in contents:
+                        msg = [
+                            {"role": "system", "content": field_config.get("prompt")},
+                            {"role": "user", "content": content}
+                        ]
+                        _, msg = message_fit_in(msg, chat_mdl.max_length)
+                        
+                        result = await trio.to_thread.run_sync(
+                            lambda m=msg: chat_mdl.chat(m[0]["content"], m[1:], {
+                                "temperature": field_config.get("temperature", 0.1),
+                                "max_tokens": field_config.get("max_tokens", 512)
+                            })
+                        )
+                        
+                        result = re.sub(r"^.*</think>", "", result, flags=re.DOTALL).strip()
+                        if result.find("**ERROR**") < 0:
+                            raw_outputs.append(result)
+                    
+                    raw_output = raw_outputs
+                
+                # 3. 后处理
+                metadata[field_name] = _post_process_result(raw_output, post_process)
+                
+                logging.info(f"Extracted {field_name}: {metadata[field_name]}")
+                
+            except Exception as e:
+                logging.exception(f"Failed to extract {field_name}: {e}")
+                metadata[field_name] = None
+        
+        # 4. 构建结果（与 PipelineAnalysisService 保持一致）
+        result = {
+            "metadata": metadata,
+            "processing_info": {
+                "strategy_used": strategy,
+                "chunk_count": len(chunks),
+                "dedup_strategy": config.get("dedup_strategy", "smart"),
+                "components_used": components_used
+            }
+        }
+        
+        # 添加结构信息（如果使用了 HierarchicalMerger）
+        if structure_info:
+            result["structure"] = structure_info
+        
+        # 添加聚类信息（如果使用了 RAPTOR）
+        if cluster_count > 0:
+            result["processing_info"]["cluster_count"] = cluster_count
+        
+        # 5. 保存结果
+        callback(prog=0.95, msg="保存分析结果...")
+        
+        task_data["result"] = result
+        
+        from api.db.db_models import db_connection, Task as TaskModel
+        with db_connection() as new_db:
+            task_record = new_db.query(TaskModel).filter(TaskModel.id == task_id).first()
+            if task_record:
+                task_record.chunk_ids = json.dumps(task_data, ensure_ascii=False)
+                new_db.commit()
+                logging.info(f"Task {task_id}: saved result to database")
+        
+        callback(prog=1.0, msg="分析完成")
+        
+        logging.info(f"analyze_v2 task {task_id} completed: {len(chunks)} chunks, {len(summaries)} summaries, {len(metadata)} metadata fields")
+        
+        return result
+        
+    except Exception as e:
+        logging.exception(f"analyze_v2 task {task_id} failed: {e}")
+        if callback:
+            callback(prog=-1, msg=f"任务失败: {str(e)}")
+        raise
+
+
 async def delete_image(kb_id, chunk_id):
     try:
         async with minio_limiter:
@@ -1089,6 +2001,52 @@ async def do_handle_task(db, task):
     if task_type == "dataflow" and task.get("doc_id", "") == CANVAS_DEBUG_DOC_ID:
         await run_dataflow(db, task)
         return
+    
+    # analyze_v2 特殊处理：提前处理，避免访问不存在的字段
+    if task_type == "analyze_v2":
+        task_id = task["id"]
+        task_tenant_id = task["tenant_id"]
+        task_embedding_id = task["embd_id"]
+        task_language = task["language"]
+        task_llm_id = task["llm_id"]
+        
+        # 解析配置
+        task_data = json.loads(task.get("chunk_ids", "{}"))
+        enable_sse = task_data.get("enable_sse", False)
+        
+        # 创建进度回调
+        progress_callback_sse = partial(
+            set_progress,
+            db,
+            task_id,
+            task.get("from_page", 0),
+            task.get("to_page", 100000000),
+            enable_sse=enable_sse
+        )
+        
+        try:
+            # 绑定 LLM 模型
+            chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
+            embedding_model = LLMBundle(db, task_tenant_id, LLMType.EMBEDDING, llm_name=task_embedding_id, lang=task_language)
+            
+            # 获取向量维度
+            vts, _ = embedding_model.encode(["test"])
+            vector_size = len(vts[0])
+            
+            # 执行分析任务
+            await run_analyze_v2_task(
+                task,
+                chat_model,
+                embedding_model,
+                vector_size,
+                db,
+                callback=progress_callback_sse
+            )
+        except Exception as e:
+            logging.exception(f"analyze_v2 task {task_id} failed: {e}")
+            progress_callback_sse(prog=-1, msg=f"任务失败: {str(e)}")
+        
+        return
 
     # 处理 auth 列
     task['auth'] = convert_auth(task.get('auth'))
@@ -1100,10 +2058,10 @@ async def do_handle_task(db, task):
     task_embedding_id = task["embd_id"]
     task_language = task["language"]
     task_llm_id = task["llm_id"]
-    task_dataset_id = task["kb_id"]
+    task_dataset_id = task.get("kb_id")  # analyze_v2 之外的任务必须有 kb_id
     task_doc_id = task["doc_id"]
-    task_document_name = task["name"]
-    task_parser_config = task["parser_config"]
+    task_document_name = task.get("name", "unknown")
+    task_parser_config = task.get("parser_config", {})
     task_start_ts = timer()
     toc_thread = None
     executor = concurrent.futures.ThreadPoolExecutor()
@@ -1408,12 +2366,41 @@ async def handle_task():
                     task_dict = task
                 else:
                     task_dict = {key: str(value) for key, value in vars(task).items()}  # 通用对象转换为字典
+                
+                # 清理 base64（避免日志膨胀）
+                if "chunk_ids" in task_dict:
+                    try:
+                        chunk_ids_data = json.loads(task_dict["chunk_ids"])
+                        if "file_content_base64" in chunk_ids_data and chunk_ids_data["file_content_base64"]:
+                            if not chunk_ids_data["file_content_base64"].startswith("<removed"):
+                                file_size = chunk_ids_data.get("file_size", len(chunk_ids_data["file_content_base64"]))
+                                chunk_ids_data["file_content_base64"] = f"<removed, {file_size} bytes>"
+                                task_dict["chunk_ids"] = json.dumps(chunk_ids_data, ensure_ascii=False)
+                    except:
+                        pass
+                
                 logging.info(f"handle_task begin for task {json.dumps(task_dict)}")
-                CURRENT_TASKS[task["id"]] = copy.deepcopy(task)
+                
+                # 保存到 CURRENT_TASKS 前清理 base64（避免心跳日志膨胀）
+                task_for_tracking = copy.deepcopy(task)
+                if "chunk_ids" in task_for_tracking:
+                    try:
+                        chunk_ids_data = json.loads(task_for_tracking["chunk_ids"])
+                        if "file_content_base64" in chunk_ids_data:
+                            file_size = chunk_ids_data.get("file_size", 0)
+                            chunk_ids_data["file_content_base64"] = f"<removed, {file_size} bytes>"
+                            task_for_tracking["chunk_ids"] = json.dumps(chunk_ids_data, ensure_ascii=False)
+                    except:
+                        pass
+                
+                CURRENT_TASKS[task["id"]] = task_for_tracking
                 await do_handle_task(db, task)
                 DONE_TASKS += 1
                 CURRENT_TASKS.pop(task["id"], None)
-                logging.info(f"handle_task done for task {json.dumps(task)}")
+                
+                # "handle_task done" 日志也清理 base64
+                task_done_dict = copy.deepcopy(task_dict)  # 复用之前清理过的 task_dict
+                logging.info(f"handle_task done for task {json.dumps(task_done_dict)}")
             except Exception as e:
                 FAILED_TASKS += 1
                 CURRENT_TASKS.pop(task["id"], None)
@@ -1426,14 +2413,19 @@ async def handle_task():
                     set_progress(db, task["id"], prog=-1, msg=f"[Exception]: {err_msg}")
                 except Exception:
                     pass
-                logging.exception(f"handle_task got exception for task {json.dumps(task)}")
+                
+                # 异常日志也清理 base64
+                task_error_dict = copy.deepcopy(task_dict) if 'task_dict' in locals() else {}
+                logging.exception(f"handle_task got exception for task {json.dumps(task_error_dict)}")
 
             finally:
-                task_document_ids = []
-                if task_type in ["graphrag", "raptor", "mindmap"]:
-                    task_document_ids = task["doc_ids"]
-                if not task.get("dataflow_id", ""):
-                    PipelineOperationLogService.record_pipeline_operation(db, document_id=task["doc_id"], pipeline_id="", task_type=pipeline_task_type, fake_document_ids=task_document_ids)
+                # analyze_v2 任务不记录 pipeline 操作日志（临时 doc_id，无对应 Document 记录）
+                if task_type != "analyze_v2":
+                    task_document_ids = []
+                    if task_type in ["graphrag", "raptor", "mindmap"]:
+                        task_document_ids = task["doc_ids"]
+                    if not task.get("dataflow_id", ""):
+                        PipelineOperationLogService.record_pipeline_operation(db, document_id=task["doc_id"], pipeline_id="", task_type=pipeline_task_type, fake_document_ids=task_document_ids)
 
             redis_msg.ack()
         except Exception:

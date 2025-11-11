@@ -100,15 +100,9 @@ class QWenSeq2txt(Base):
                     "enable_itn": False,  # 逆文本规范化
                 }
             )
-            # 流式响应已自动累加，获取最后一个响应即可
-            last_response = None
             for response in response_stream:
-                last_response = response
-            
-            # 从最后一个响应提取完整内容
-            if last_response:
                 try:
-                    full_content = last_response["output"]["choices"][0]["message"].content[0]["text"]
+                    full_content += response["output"]["choices"][0]["message"].content[0]["text"]
                 except Exception:
                     pass
             

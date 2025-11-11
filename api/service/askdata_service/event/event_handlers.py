@@ -30,9 +30,17 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
         raise HTTPException(status_code=400, detail="Event ID is required")
 
     # 定义无活动超时时间（秒）
-    INACTIVITY_TIMEOUT = 60.0
-    # 初始化最后活动时间
+    # 对于长时间任务（如 RAPTOR），需要更长的超时时间
+    # 可以通过环境变量配置，默认 30 分钟
+    import os
+    INACTIVITY_TIMEOUT = float(os.environ.get('SSE_INACTIVITY_TIMEOUT', 1800.0))
+    
+    # 心跳间隔（秒），定期发送以保持连接活跃
+    HEARTBEAT_INTERVAL = float(os.environ.get('SSE_HEARTBEAT_INTERVAL', 15.0))
+    
+    # 初始化最后活动时间和最后心跳时间
     last_activity_time = time.time()
+    last_heartbeat_time = time.time()
 
     # 订阅事件队列
     queue = await event_manager.subscribe(event_id)
@@ -73,12 +81,16 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
 
             except asyncio.TimeoutError:
                 # 检查是否长时间无活动
-                if time.time() - last_activity_time > INACTIVITY_TIMEOUT:
-                    logger.warning(f"Inactivity timeout for event_id {event_id}. Closing server-side connection.")
+                current_time = time.time()
+                if current_time - last_activity_time > INACTIVITY_TIMEOUT:
+                    logger.warning(f"Inactivity timeout ({INACTIVITY_TIMEOUT}s) for event_id {event_id}. Closing server-side connection.")
                     break  # 超时，退出循环
-                else:
-                    # 未超时，发送心跳包以保持连接
+                
+                # 定期发送心跳包以保持连接活跃
+                if current_time - last_heartbeat_time >= HEARTBEAT_INTERVAL:
                     yield b": heartbeat\n\n"
+                    last_heartbeat_time = current_time
+                    logger.debug(f"Sent heartbeat for event_id {event_id}")
 
             except Exception as e:
                 # 发生错误，发送错误消息并中断连接

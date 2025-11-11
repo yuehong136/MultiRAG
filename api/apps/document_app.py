@@ -31,8 +31,9 @@ from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, ParserType, FileSource, db_models
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
-from api.db.services.document_service import DocumentService
+from api.db.services.document_service import DocumentService, queue_analyze_v2_task
 from api.db.services.document_analysis_service import DocumentAnalysisService
+from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -55,6 +56,189 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 router = APIRouter()
 
 
+# ==================== Pydantic Schemas ====================
+
+class HierarchicalConfig(BaseModel):
+    """层次化合并配置"""
+
+    levels: list[list[str]] = Field(
+        default=[
+            ["^#\\s+", "^第[一二三四五六七八九十百]+章"],
+            ["^##\\s+", "^\\d+\\.\\s+"]
+        ],
+        description="标题层级正则表达式列表"
+    )
+    hierarchy: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="合并到第几层（0-5）"
+    )
+
+
+class SplitterConfig(BaseModel):
+    """智能切片配置"""
+
+    chunk_token_size: int = Field(
+        default=512,
+        ge=100,
+        le=4096,
+        description="切片大小（tokens）"
+    )
+    delimiters: list[str] = Field(
+        default=["\n\n", "\n", "。", "！", "？"],
+        description="分隔符列表"
+    )
+    overlapped_percent: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=0.5,
+        description="重叠比例（0.0-0.5）"
+    )
+
+
+class RaptorConfig(BaseModel):
+    """RAPTOR 聚类配置"""
+
+    max_cluster: int = Field(
+        default=64,
+        ge=2,
+        le=256,
+        description="最大聚类数量"
+    )
+    max_token: int = Field(
+        default=512,
+        ge=100,
+        le=2048,
+        description="每个摘要的最大 tokens"
+    )
+    threshold: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description="聚类相似度阈值"
+    )
+    random_seed: int = Field(
+        default=42,
+        description="随机种子"
+    )
+    prompt: str | None = Field(
+        default=None,
+        description="摘要生成提示词（可选）"
+    )
+
+
+class MetadataFieldConfig(BaseModel):
+    """元数据字段配置"""
+
+    field_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="字段名称（如 tags, summary, authors）"
+    )
+    prompt: str = Field(
+        ...,
+        min_length=10,
+        description="LLM 提取提示词"
+    )
+
+    # 数据源选择
+    source: Literal["global_summary", "cluster_summaries", "original_chunks"] = Field(
+        default="global_summary",
+        description="数据源：global_summary(RAPTOR全局摘要), cluster_summaries(RAPTOR聚类摘要), original_chunks(原始chunks)"
+    )
+
+    # 调用模式
+    call_mode: Literal["single", "batch"] = Field(
+        default="single",
+        description="调用模式：single(合并后一次调用), batch(每个内容调用一次后聚合)"
+    )
+
+    # 后处理策略
+    post_process: Literal["none", "split_comma", "counter_top10", "concat"] = Field(
+        default="none",
+        description="后处理：none(原样返回), split_comma(按逗号分割), counter_top10(频次统计top10), concat(拼接)"
+    )
+
+    llm_name: str | None = Field(
+        default=None,
+        description="LLM 模型名称（可选，默认使用租户配置）"
+    )
+    temperature: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=2.0,
+        description="LLM 温度参数"
+    )
+    max_tokens: int = Field(
+        default=512,
+        ge=50,
+        le=4096,
+        description="最大生成 tokens"
+    )
+
+
+class AnalyzeDocumentRequest(BaseModel):
+    """文档分析请求模型"""
+
+    # 数据源（二选一）
+    doc_id: str | None = Field(
+        default=None,
+        description="文档ID（与 file 二选一）"
+    )
+    kb_id: str | None = Field(
+        default=None,
+        description="知识库ID（使用 doc_id 时必填）"
+    )
+
+    # 处理策略
+    processing_strategy: Literal["auto", "hierarchical", "raptor", "hybrid", "simple"] = Field(
+        default="auto",
+        description="处理策略：auto(自动), hierarchical(层次化), raptor(聚类), hybrid(混合), simple(直接)"
+    )
+
+    # 组件配置
+    hierarchical_config: HierarchicalConfig | None = Field(
+        default=None,
+        description="HierarchicalMerger 配置（可选）"
+    )
+    splitter_config: SplitterConfig | None = Field(
+        default=None,
+        description="Splitter 配置（可选）"
+    )
+    raptor_config: RaptorConfig | None = Field(
+        default=None,
+        description="RAPTOR 配置（可选）"
+    )
+
+    # 元数据提取配置
+    metadata_fields: list[MetadataFieldConfig] | None = Field(
+        default=None,
+        description="元数据字段配置列表（为空时使用默认：document_summary, semantic_tags）"
+    )
+
+    # 去重策略
+    dedup_strategy: Literal["smart", "semantic", "none"] = Field(
+        default="smart",
+        description="去重策略：smart(Jaccard+词典), semantic(Embedding), none(不去重)"
+    )
+
+    # 其他选项
+    use_cache: bool = Field(
+        default=True,
+        description="是否使用 LLM 缓存"
+    )
+
+    @field_validator("kb_id")
+    @classmethod
+    def validate_kb_id(cls, v, info):
+        """当使用 doc_id 时，kb_id 必填"""
+        if info.data.get("doc_id") and not v:
+            raise ValueError("kb_id is required when using doc_id")
+        return v
+
+
 class WebCrawlRequest(BaseModel):
     kb_id: str = Field(..., description="知识库ID")
     name: str = Field(..., description="文件名")
@@ -75,9 +259,10 @@ class DocumentFilter(BaseModel):
 class ChangeStatusRequest(BaseModel):
     doc_ids: list[str] | str = Field(..., description="文档ID或文档ID列表")
     status: int = Field(..., description="状态")
-    
+
     # 兼容旧版本字段
     doc_id: str | None = Field(None, description="文档ID（兼容旧版本）")
+
 
 class ChangeAuthRequest(BaseModel):
     doc_id: str = Field(..., description="文档ID")
@@ -104,6 +289,7 @@ class ChangeParserRequest(BaseModel):
     parser_config: dict | None = Field(None, description="解析器配置")
     pipeline_id: str | None = Field(None, description="Pipeline ID")
 
+
 class SetMetaRequest(BaseModel):
     doc_id: str = Field(..., description="文档ID")
     meta: dict[str, Any] = Field(..., description="元数据对象")
@@ -124,7 +310,8 @@ class PreviewChunksRequest(BaseModel):
     batch_size: int | None = Field(default=None, description="批次大小（启用批次模式时必填）")
     batch_id: str | None = Field(default=None, description="批次会话ID（续取时携带）")
     parser_id: str | None = Field(default=None, description="手动指定解析器（可选，受文件类型支持列表校验）")
-    batch_index: int | None = Field(default=None, description="并发批次号（从0开始）；指定则按批次号取片段，不推进会话offset")
+    batch_index: int | None = Field(default=None,
+                                    description="并发批次号（从0开始）；指定则按批次号取片段，不推进会话offset")
 
 
 class WebParseOptions(BaseModel):
@@ -381,7 +568,8 @@ async def upload(
         if file.filename == "":
             return get_json_result(data=False, retmsg="No file selected!", retcode=settings.RetCode.ARGUMENT_ERROR)
         if len(file.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
-            return get_json_result(data=False, retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
+                                   retcode=settings.RetCode.ARGUMENT_ERROR)
 
         file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
     # 确保 labels 是 list 或 None
@@ -403,7 +591,9 @@ async def upload(
         return construct_json_result(data=False, message="\n".join(err), code=settings.RetCode.SERVER_ERROR)
 
     if not files:
-        return get_json_result(data=files, retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.", retcode=settings.RetCode.DATA_ERROR)
+        return get_json_result(data=files,
+                               retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.",
+                               retcode=settings.RetCode.DATA_ERROR)
 
     return construct_json_result(data=files, code=settings.RetCode.SUCCESS)
 
@@ -523,7 +713,7 @@ def web_crawl(
 
     #### 文件类型自动识别
     - **图片文件**: 自动设置为图片解析器
-    - **演示文稿**: PPT/PPTX自动设置为演示文稿解析器  
+    - **演示文稿**: PPT/PPTX自动设置为演示文稿解析器
     - **邮件文件**: EML自动设置为邮件解析器
     - **PDF文件**: 使用知识库默认解析器
 
@@ -548,7 +738,7 @@ def web_crawl(
     #### 爬取新闻页面
     ```json
     {
-        "kb_id": "news_kb", 
+        "kb_id": "news_kb",
         "name": "今日新闻",
         "url": "https://news.example.com/today"
     }
@@ -570,7 +760,8 @@ def web_crawl(
     name = request_body.name
     url = request_body.url
     if not is_valid_url(url):
-        return construct_json_result(data=False, message='The URL format is invalid', code=settings.RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='The URL format is invalid',
+                                     code=settings.RetCode.ARGUMENT_ERROR)
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
@@ -635,10 +826,12 @@ def create_document(
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
     if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
-        return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", code=settings.RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
+                                     code=settings.RetCode.ARGUMENT_ERROR)
 
     if req["name"].strip() == "":
-        return construct_json_result(data=False, message="File name can't be empty.", code=settings.RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message="File name can't be empty.",
+                                     code=settings.RetCode.ARGUMENT_ERROR)
     req["name"] = req["name"].strip()
 
     try:
@@ -1126,7 +1319,7 @@ def list_docs(
             docs = [
                 doc for doc in docs
                 if (create_time_from == 0 or doc.get("create_time", 0) >= create_time_from)
-                and (create_time_to == 0 or doc.get("create_time", 0) <= create_time_to)
+                   and (create_time_to == 0 or doc.get("create_time", 0) <= create_time_to)
             ]
         # 处理缩略图路径
         for doc_item in docs:
@@ -1137,6 +1330,7 @@ def list_docs(
     except Exception as e:
         return construct_error_response(e)
 
+
 @router.post("/filter", summary="获取文档过滤器", response_description="成功获取文档过滤器")
 def get_filter(
         request_body: FilterRequest,
@@ -1145,32 +1339,33 @@ def get_filter(
 ):
     """
     获取指定知识库的文档过滤器统计信息。
-    
+
     该接口根据提供的过滤条件，返回知识库中文档的统计信息，包括文件后缀分布和运行状态分布。
-    
+
     参数:
     - kb_id (str): 知识库ID
     - keywords (str): 关键词过滤，默认为空
     - suffix (list[str]): 文件后缀过滤，默认为空列表
-    - run_status (list[str]): 运行状态过滤，默认为空列表  
+    - run_status (list[str]): 运行状态过滤，默认为空列表
     - types (list[str]): 文件类型过滤，默认为空列表
-    
+
     返回:
     - 包含过滤器统计信息和总数的响应
     """
     req = request_body.model_dump()
     kb_id = req.get("kb_id")
-    
+
     if not kb_id:
         return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
-    
+
     # 验证用户是否有权访问该知识库
     tenants = UserTenantService.query(db, user_id=user.id)
     for tenant in tenants:
         if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
             break
     else:
-        return get_json_result(data=False, retmsg="Only owner of knowledgebase authorized for this operation.", retcode=settings.RetCode.OPERATING_ERROR)
+        return get_json_result(data=False, retmsg="Only owner of knowledgebase authorized for this operation.",
+                               retcode=settings.RetCode.OPERATING_ERROR)
 
     keywords = req.get("keywords", "")
     suffix = req.get("suffix", [])
@@ -1183,11 +1378,12 @@ def get_filter(
         if invalid_status:
             return get_data_error_result(retmsg=f"Invalid filter run status conditions: {', '.join(invalid_status)}")
 
-    # 验证 types 参数  
+    # 验证 types 参数
     if types:
         invalid_types = {t for t in types if t not in VALID_FILE_TYPES}
         if invalid_types:
-            return get_data_error_result(retmsg=f"Invalid filter conditions: {', '.join(invalid_types)} type{'s' if len(invalid_types) > 1 else ''}")
+            return get_data_error_result(
+                retmsg=f"Invalid filter conditions: {', '.join(invalid_types)} type{'s' if len(invalid_types) > 1 else ''}")
 
     try:
         filter_data, total = DocumentService.get_filter_by_kb_id(db, kb_id, keywords, run_status, types, suffix)
@@ -1407,7 +1603,7 @@ def change_status(
         ```json
         {
             "retcode": 0,
-            "retmsg": "success", 
+            "retmsg": "success",
             "data": {
                 "doc_123": {"status": "1"},
                 "doc_456": {"status": "1"},
@@ -1539,7 +1735,7 @@ def change_status(
     - **权限控制**: 只有文档的拥有者才能更改文档状态
     - **数据一致性**: 接口会同时更新关系数据库和向量数据库的状态
     - **批量操作**: 每个文档的处理结果独立返回，部分失败不影响其他文档
-    - **状态含义**: 
+    - **状态含义**:
       - `0`: 文档禁用，不参与检索
       - `1`: 文档启用，正常参与检索
     - **错误处理**: 单个文档处理失败不会影响其他文档的处理
@@ -1574,7 +1770,7 @@ def change_status(
         "retmsg": "success",
         "data": {
             "doc_001": {"status": "1"},
-            "doc_002": {"status": "1"}, 
+            "doc_002": {"status": "1"},
             "doc_003": {"error": "Document not found!"}
         }
     }
@@ -1600,11 +1796,11 @@ def change_status(
     doc_ids = req.get("doc_ids")
     if doc_ids is None:
         doc_ids = req.get("doc_id")
-    
+
     # 确保 doc_ids 是列表格式
     if isinstance(doc_ids, str):
         doc_ids = [doc_ids]
-    
+
     if not doc_ids:
         return construct_json_result(data=False, message="Document ID(s) required!",
                                      code=settings.RetCode.ARGUMENT_ERROR)
@@ -1631,7 +1827,7 @@ def change_status(
 
             status = int(req["status"])
             if not settings.docStoreConn.update({"doc_id": doc_id}, {"available_int": status},
-                                               search.index_name_one(kb.tenant_id, kb.name), doc.kb_id):
+                                                search.index_name_one(kb.tenant_id, kb.name), doc.kb_id):
                 result[doc_id] = {"error": "Database error (docStore update)!"}
             result[doc_id] = {"status": str(req["status"])}
         except Exception as e:
@@ -1657,7 +1853,8 @@ def change_auth(
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
-            return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!",
+                                         code=settings.RetCode.ARGUMENT_ERROR)
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         if not kb:
             return construct_json_result(data=False, message="Can't find this knowledgebase!",
@@ -1887,10 +2084,12 @@ def rm(
         try:
             doc = DocumentService.get_by_id(db, doc_id)
             if not doc:
-                return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message="Document not found!",
+                                             code=settings.RetCode.ARGUMENT_ERROR)
             tenant_id = DocumentService.get_tenant_id(db, doc_id)
             if not tenant_id:
-                return construct_json_result(data=False, message="Tenant not found!", code=settings.RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message="Tenant not found!",
+                                             code=settings.RetCode.ARGUMENT_ERROR)
 
             # 在删除文档前先保存需要的属性
             doc_parser = doc.parser_id
@@ -1907,7 +2106,9 @@ def rm(
             f2d = File2DocumentService.get_by_document_id(db, doc_id)
             deleted_file_count = 0
             if f2d:
-                deleted_file_count = FileService.filter_delete(db, [db_models.File.source_type == FileSource.KNOWLEDGEBASE, db_models.File.id == f2d[0].file_id])
+                deleted_file_count = FileService.filter_delete(db,
+                                                               [db_models.File.source_type == FileSource.KNOWLEDGEBASE,
+                                                                db_models.File.id == f2d[0].file_id])
             File2DocumentService.delete_by_document_id(db, doc_id)
             if deleted_file_count > 0:
                 STORAGE_IMPL.rm(b, n)
@@ -1915,7 +2116,8 @@ def rm(
             # 使用之前保存的属性值，而不是访问已删除的对象
             if doc_parser == ParserType.TABLE:
                 if kb_id not in kb_table_num_map:
-                    counts = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="", run_status=[TaskStatus.DONE], types=[])
+                    counts = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="", run_status=[TaskStatus.DONE],
+                                                            types=[])
                     kb_table_num_map[kb_id] = counts
                 kb_table_num_map[kb_id] -= 1
                 if kb_table_num_map[kb_id] <= 0:
@@ -2136,7 +2338,8 @@ def run(
             kb = KnowledgebaseService.get_by_id(db, kb_id)
             tenant_id = kb.tenant_id
             if not tenant_id:
-                return construct_json_result(data=False, message="Tenant not found!", code=settings.RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message="Tenant not found!",
+                                             code=settings.RetCode.ARGUMENT_ERROR)
 
             if str(req["run"]) == TaskStatus.CANCEL.value:
                 if str(d["run"]) == TaskStatus.RUNNING.value:
@@ -2144,7 +2347,8 @@ def run(
                 else:
                     return get_data_error_result(retmsg="Cannot cancel a task that is not in RUNNING status")
 
-            if all([("delete" not in req or req["delete"]), str(req["run"]) == TaskStatus.RUNNING.value, str(d["run"]) == TaskStatus.DONE.value]):
+            if all([("delete" not in req or req["delete"]), str(req["run"]) == TaskStatus.RUNNING.value,
+                    str(d["run"]) == TaskStatus.DONE.value]):
                 DocumentService.clear_chunk_num_when_rerun(db, d["id"])
 
             DocumentService.update_by_id(db, id, info)
@@ -2161,7 +2365,8 @@ def run(
                             filter=f"doc_id == '{{doc_id}}'".format(doc_id=d["id"])
                         )
                         if not delete_result:
-                            return construct_json_result(data=False, message="Milvus delete failed!", code=settings.RetCode.ARGUMENT_ERROR)
+                            return construct_json_result(data=False, message="Milvus delete failed!",
+                                                         code=settings.RetCode.ARGUMENT_ERROR)
                 except MilvusException as e:
                     return construct_json_result(data=False, message=str(e), code=settings.RetCode.ARGUMENT_ERROR)
 
@@ -2175,9 +2380,10 @@ def run(
                     if not kb_id:
                         continue
                     if kb_id not in kb_table_num_map:
-                        count = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="", run_status=[TaskStatus.DONE], types=[])
+                        count = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="",
+                                                               run_status=[TaskStatus.DONE], types=[])
                         kb_table_num_map[kb_id] = count
-                        if kb_table_num_map[kb_id] <=0:
+                        if kb_table_num_map[kb_id] <= 0:
                             KnowledgebaseService.delete_field_map(db, kb_id)
                 if doc.get("pipeline_id", ""):
                     queue_dataflow(db, tenant_id, flow_id=doc["pipeline_id"], task_id=get_uuid(), doc_id=id)
@@ -2207,13 +2413,14 @@ def rename(
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
-            return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!",
+                                         code=settings.RetCode.ARGUMENT_ERROR)
         if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(doc.name.lower()).suffix:
             return construct_json_result(data=False, message="The extension of file can't be changed",
                                          code=settings.RetCode.ARGUMENT_ERROR)
         if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
             return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
-                                   code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=settings.RetCode.ARGUMENT_ERROR)
 
         for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
             if d.name == req["name"]:
@@ -2259,7 +2466,8 @@ def get_document(
     try:
         doc = DocumentService.get_by_id(db, doc_id)
         if not doc:
-            return construct_json_result(data=False, message="Document not found!", code=settings.RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!",
+                                         code=settings.RetCode.ARGUMENT_ERROR)
 
         b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
 
@@ -2296,20 +2504,20 @@ def change_parser(
 ):
     """
     更改文档的解析器或Pipeline配置
-    
+
     概要：允许用户修改文档的解析器类型（parser_id）、解析器配置（parser_config）或Pipeline配置（pipeline_id），并重置文档处理状态。
-    
+
     参数：
     - **request_body**: 请求体，包含：
         - doc_id: 文档ID（必填）
         - parser_id: 解析器ID（可选），如 "naive", "paper", "book", "laws", "presentation", "manual", "qa", "table", "resume", "picture", "one", "knowledge_graph", "email"
         - parser_config: 解析器配置（可选），JSON对象，包含解析器的各种参数
         - pipeline_id: Pipeline ID（可选），指定使用哪个Pipeline进行处理
-    
+
     返回：
     - dict: 操作结果
         - data: True 表示更改成功
-    
+
     功能：
     1. 验证用户对文档的访问权限
     2. 获取文档信息
@@ -2320,26 +2528,26 @@ def change_parser(
        - 清空处理进度和状态
        - 递减知识库的统计数据（token_num、chunk_num等）
        - 删除向量数据库中的文档chunks
-    
+
     内部函数 reset_doc()：
     - 更新文档的parser_id、进度和状态
     - 如果文档已有tokens，则：
       - 递减知识库的token_num、chunk_num和process_duration
       - 从向量数据库中删除该文档的所有chunks
-    
+
     业务场景：
     1. **更换解析器**：
        - 发现当前解析器效果不佳，切换到更合适的解析器
        - 例如：从 "naive" 切换到 "paper" 以更好地解析学术论文
-    
+
     2. **调整解析参数**：
        - 修改chunk_token_num、delimiter等参数优化分块效果
        - 调整layout_recognize选择不同的版面识别引擎
-    
+
     3. **切换Pipeline**：
        - 更换处理流程（如从简单处理切换到包含GraphRAG的复杂流程）
        - 适配不同的业务需求
-    
+
     验证逻辑：
     - 如果更新Pipeline：检查pipeline_id是否与当前相同，相同则直接返回成功
     - 如果更新解析器：
@@ -2347,10 +2555,10 @@ def change_parser(
       - 检查文档类型是否支持指定的解析器
       - VISUAL类型文档只能使用 "picture" 解析器
       - PPT/PPTX/Pages文档只能使用 "presentation" 解析器
-    
+
     权限要求：
     - 用户必须对该文档有访问权限（accessible检查）
-    
+
     异常处理：
     - 如果用户无权限，返回 AUTHENTICATION_ERROR
     - 如果文档不存在，返回 "Document not found!"
@@ -2358,14 +2566,14 @@ def change_parser(
     - 如果租户不存在，返回 "Tenant not found!"
     - 如果向量数据库删除失败，返回 "Milvus delete failed!"
     - 其他异常返回服务器错误
-    
+
     注意：
     - 更改解析器会清空文档的处理结果，需要重新运行解析任务
     - 如果文档已经处理过（token_num > 0），会删除所有已生成的chunks
     - 操作不可逆，请确认后再执行
     - parser_id和pipeline_id至少需要提供一个
     - 更新parser_config不会触发文档重置（如果parser_id未变）
-    
+
     使用示例：
     1. 更换解析器：{"doc_id": "xxx", "parser_id": "paper"}
     2. 调整参数：{"doc_id": "xxx", "parser_id": "naive", "parser_config": {"chunk_token_num": 512}}
@@ -2398,7 +2606,7 @@ def change_parser(
         )
         if not e:
             return get_data_error_result(retmsg="Document not found!")
-        
+
         if doc.token_num > 0:
             e = DocumentService.increment_chunk_num(
                 db, doc.id, doc.kb_id,
@@ -2408,14 +2616,14 @@ def change_parser(
             )
             if not e:
                 return get_data_error_result(retmsg="Document not found!")
-            
+
             tenant_id = DocumentService.get_tenant_id(db, req["doc_id"])
             if not tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
-            
+
             document = DocumentService.get_by_doc_id(db, doc.id)
             kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
-            
+
             # 删除向量数据库中的数据
             try:
                 delete_result = settings.docStoreConn.delete(
@@ -2426,7 +2634,7 @@ def change_parser(
                     return get_data_error_result(retmsg="Milvus delete failed!")
             except MilvusException as e:
                 return get_data_error_result(retmsg=str(e))
-        
+
         return None
 
     try:
@@ -2434,7 +2642,7 @@ def change_parser(
         if "pipeline_id" in req and req["pipeline_id"] != "":
             if doc.pipeline_id == req["pipeline_id"]:
                 return get_json_result(data=True)
-            
+
             DocumentService.update_by_id(db, doc.id, {"pipeline_id": req["pipeline_id"]})
             error = reset_doc()
             if error:
@@ -2451,17 +2659,18 @@ def change_parser(
                     return get_json_result(data=True)
 
             # 检查文档类型是否支持指定的解析器
-            if (doc.type == FileType.VISUAL and req["parser_id"] != "picture") or (re.search(r"\.(ppt|pptx|pages)$", doc.name) and req["parser_id"] != "presentation"):
+            if (doc.type == FileType.VISUAL and req["parser_id"] != "picture") or (
+                    re.search(r"\.(ppt|pptx|pages)$", doc.name) and req["parser_id"] != "presentation"):
                 return get_data_error_result(retmsg="Not supported yet!")
-            
+
             # 更新parser_config（如果提供）
             if "parser_config" in req and req["parser_config"] is not None:
                 DocumentService.update_parser_config(db, doc.id, req["parser_config"])
-            
+
             error = reset_doc()
             if error:
                 return error
-        
+
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
@@ -2714,8 +2923,46 @@ async def preview_chunks(
     ### POST `/preview_chunks` 仅切片预览接口（支持批次）
 
     **功能描述**:
-    该接口对指定文档执行“解析+切片”，仅返回切片后的文本内容用于预览与调参验证。
+    该接口对指定文档执行"解析+切片"，仅返回切片后的文本内容用于预览与调参验证。
     不进行向量化、也不写入向量库/数据库，不改变任何统计字段。
+
+    ---
+
+    ### 支持的文件类型与解析器
+
+    #### 📄 文档类型
+
+    | 文件类型 | 扩展名 | 解析器 | 说明 |
+    |---------|--------|--------|------|
+    | **PDF** | `.pdf` | `naive`, `paper`, `book`, `laws`, `manual`, `presentation`, `one`, `qa` | 多种专业解析器，支持学术论文、法律文档等 |
+    | **Word** | `.doc`, `.docx` | `naive`, `book`, `laws`, `manual`, `one`, `qa` | 支持文本和表格提取 |
+    | **Excel** | `.xls`, `.xlsx`, `.csv` | `table`, `naive`, `one`, `qa` | 表格数据解析 |
+    | **PPT** | `.ppt`, `.pptx` | `presentation` | 演示文稿解析 |
+    | **文本** | `.txt`, `.md`, `.markdown` | `naive`, `book`, `laws`, `one`, `qa`, `table` | 纯文本和Markdown |
+    | **邮件** | `.eml` | `email` | 邮件内容解析 |
+
+    #### 🎨 多媒体类型
+
+    | 文件类型 | 扩展名 | 解析器 | 处理方式 |
+    |---------|--------|--------|---------|
+    | **图片** | `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tif`, `.tiff`, `.webp`, `.svg`, `.ico` | `picture` | OCR文字识别 + VLM图像描述 |
+    | **视频** | `.mp4`, `.mov`, `.avi`, `.flv`, `.mpeg`, `.mpg`, `.webm`, `.wmv`, `.3gp`, `.3gpp`, `.mkv` | `picture` | 使用 IMAGE2TEXT LLM 进行视频内容分析 |
+    | **音频** | `.mp3`, `.wav`, `.flac`, `.aac`, `.ogg`, `.wma`, `.ape`, `.da`, `.wave`, `.aiff`, `.au`, `.midi`, `.realaudio`, `.vqf`, `.oggvorbis` | `audio` | 使用 SPEECH2TEXT LLM 进行语音转录 |
+
+    #### ⚙️ 解析器说明
+
+    - **`naive`**: 通用解析器，适用于大多数文档
+    - **`paper`**: 学术论文专用，优化公式、图表识别
+    - **`book`**: 书籍格式，优化章节结构
+    - **`laws`**: 法律文档，优化条款识别
+    - **`manual`**: 手册说明书，优化步骤和列表
+    - **`presentation`**: 演示文稿专用
+    - **`table`**: 表格数据专用
+    - **`one`**: 整体解析，不分段
+    - **`qa`**: 问答对提取
+    - **`picture`**: 图片/视频解析（自动OCR或VLM）
+    - **`audio`**: 音频转录
+    - **`email`**: 邮件结构化解析
 
     ---
 
@@ -2729,7 +2976,7 @@ async def preview_chunks(
     | `batch_size`    | `int`     | 否   | 批次大小；若传入则启用批次模式                                      |
     | `batch_id`      | `string`  | 否   | 批次会话ID；续取下一批时传入                                         |
     | `file`          | `file`    | 否   | 直传单个文件；与 `doc_id` 二选一                                      |
-    | `parser_id`     | `string`  | 否   | 手动指定解析器，如 `naive`/`paper` 等；会校验与文件类型兼容性         |
+    | `parser_id`     | `string`  | 否   | 手动指定解析器，如 `naive`/`paper`/`picture`/`audio` 等；会校验与文件类型兼容性 |
     | `batch_index`   | `int`     | 否   | 并发批次号（0-based）；指定则按批次号取片段，不推进offset            |
 
     ---
@@ -2821,11 +3068,11 @@ async def preview_chunks(
     ### 响应字段说明（v2.0 渐进式解析）
 
     #### 核心变化
-    
+
     从 v2.0 开始，**PDF文件**支持渐进式解析，边解析边返回数据，无需等待全部解析完成。
-    
+
     #### 字段说明
-    
+
     | 字段 | 类型 | 说明 | 版本 |
     |------|------|------|------|
     | `batch_id` | string | 批次会话ID | v1.0 |
@@ -2839,55 +3086,55 @@ async def preview_chunks(
     | `progress` | float | 解析进度（0.0-1.0，基于页数计算） | **v2.0** |
     | `parsed_page_range` | string | 已解析的页面范围（如"0-24"，表示已解析第0到24页）| **v2.0** |
     | `total_pages` | int | 总页数（PDF专用） | **v2.0** |
-    
+
     #### 📄 chunks字段说明
-    
+
     **chunks结构**：返回纯文本数组
     ```json
     ["切片文本1", "切片文本2", "切片文本3", ...]
     ```
-    
+
     **顺序保证**：
     - ✅ chunks数组严格按照PDF原始文档顺序排列
     - ✅ 第1页的chunks → 第2页的chunks → ... 依次排序
     - ✅ 每批解析完成后按顺序追加到数组，不会乱序
     - ✅ 用户通过offset顺序获取，保证不重复、不跳过
-    
+
     **页面来源说明**：
     - 虽然chunks是纯文本，但通过 `parsed_page_range` 可以知道当前所有chunks的来源页面范围
     - 例如：`parsed_page_range="0-24"` 表示当前所有chunks来自PDF的第0-24页
     - 如果需要精确的每个chunk的页码，可以考虑后续扩展返回元数据
-    
+
     #### 📊 字段详解
-    
+
     **`count`（当前批次数量）**：
     - 表示当前返回的chunks数量
     - 通常等于 `batch_size`，最后一批可能更少
     - 示例：`batch_size=20`，最后一批只有4个，则 `count=4`
-    
+
     **`total`（当前总数）**：
     - ⚠️ **重要变化**：v2.0中此字段会动态增长
     - **解析中**：随着后台解析进度增长（60 → 120 → 62）
     - **解析完成**：最终确定值（62）
     - **用途**：配合 `status` 判断，了解当前已有多少chunks可取
-    
+
     **`total_batches`（总批次数）**：
     - 基于当前 `total` 动态计算：`(total + batch_size - 1) / batch_size`
     - **解析中**：会随着total增长而变化（3批 → 6批 → 4批）
     - **解析完成**：最终确定值（4批）
     - **用途**：显示"第X批/共Y批"（但解析中不准确）
-    
+
     #### 使用建议
-    
+
     **使用示例**：
     ```javascript
     // 轮询获取所有chunks
     let allChunks = [];
-    
+
     while (data.has_more) {
       // 追加当前批次
       allChunks.push(...data.chunks);
-      
+
       // 显示进度
       if (data.status === "parsing") {
         console.log(`解析中: ${(data.progress * 100).toFixed(0)}%`);
@@ -2904,7 +3151,7 @@ async def preview_chunks(
         // 解析完成: 共62个chunks
         // 页面范围: 0-30
       }
-      
+
       // 续取下一批
       if (data.has_more) {
         response = await fetch('/api/preview_chunks', {
@@ -2914,17 +3161,17 @@ async def preview_chunks(
         data = await response.json().data;
       }
     }
-    
+
     console.log(`最终获取${allChunks.length}个chunks，顺序有保证`);
     ```
-    
+
     #### PDF渐进式解析特性（v2.0最终版）
-    
+
     **首次请求行为**：
     - ⏱️ **等待策略**：首次请求会**等待直到有数据**才返回，保证 `chunks` 非空（避免破坏调用者逻辑）
     - 📊 **返回时机**：通常等待2-5秒，返回首批已解析的chunks（50-200个）
     - ✅ **数据保证**：首次返回必有数据，`chunks.length > 0`（除非解析失败或空文档）
-    
+
     **后台解析机制**：
     - 📄 **分批解析**：按配置的 `task_page_size` 分批解析
       - 默认解析器：12页/批
@@ -2932,18 +3179,18 @@ async def preview_chunks(
       - 用户可通过 `parser_config.task_page_size` 自定义
     - 🔄 **增量存储**：每解析完一批，立即追加到Redis，用户轮询时可获取
     - 📈 **实时进度**：`progress`、`current_page` 字段实时更新
-    
+
     **轮询获取特性**：
     - ✨ **渐进式获取**：每次轮询都能获取到**新解析的chunks**
     - 🎯 **offset自动推进**：无论解析是否完成，读取位置都会正确更新
     - 🚫 **不会跳过数据**：修复了v1.0的bug，保证获取到所有chunks
     - ⏳ **可随时续取**：用户可以晚点续取（1分钟后），不会丢失中间chunks
-    
+
     **特殊情况处理**：
     - 🔀 **特殊解析器**：`one`、`knowledge_graph` 或非DeepDOC布局自动回退到一次性解析
     - ❌ **解析失败**：立即返回 `status="error"`，不会一直等待
     - 📄 **空文档**：立即返回 `status="completed"` + 空数组
-    
+
     ---
 
     ### 支持的模式
@@ -3012,9 +3259,9 @@ async def preview_chunks(
        - 当 `chunks.length > 0` 时，立即返回
        - 返回首批 `batch_size` 个chunks
        - **关键**：更新 `session.offset = batch_size`
-    
+
     **后续请求（续取批次）**：
-    
+
     1. **从Redis读取会话**（通过 `batch_id`）
     2. **读取当前批次**：
        - `start = session.offset`（上次读到哪里）
@@ -3070,7 +3317,7 @@ async def preview_chunks(
             "batch_size": 50,
             "parser_config": {"task_page_size": 12}
           }'
-    
+
     # 响应（等待2-5秒后返回）：
     {
       "retcode": 0,
@@ -3104,7 +3351,7 @@ async def preview_chunks(
             "batch_id": "abc123-def456",
             "batch_size": 50
           }'
-    
+
     # 响应（立即返回）：
     {
       "data": {
@@ -3128,7 +3375,7 @@ async def preview_chunks(
     **第N次请求（解析完成后）**：
     ```bash
     # 继续用batch_id续取
-    
+
     # 响应：
     {
       "data": {
@@ -3152,7 +3399,7 @@ async def preview_chunks(
     curl -X POST "http://api.example.com/v1/document/preview_chunks" \
       -F 'file=@/path/to/document.pdf' \
       -F 'request={"batch_size": 50, "parser_id": "paper"}'
-    
+
     # 首次返回batch_id，后续用batch_id续取
     ```
 
@@ -3200,13 +3447,13 @@ async def preview_chunks(
       - 只有当用户读完最后一批（has_more=false）或TTL过期（30分钟）时才删除
       - 用户可以随时回来继续读取（30分钟内）
     - 🚀 **并发友好**：使用后台线程解析，不会阻塞API线程池。
-    
+
     **兼容性说明**：
     - ⚠️ **重要变化**：v2.0中 `total` 字段会动态增长（PDF解析中）
     - ✅ 老客户端可以继续使用，但需注意 `total` 不再是固定值
     - ✅ 通过 `status` 字段可以判断解析状态
     - ⚠️ 如果调用者依赖 `chunks` 非空判断，v2.0保证首次返回必有数据（除非解析失败）
-    
+
     **chunks顺序性保证（v2.0重要）**：
     - ✅ **严格有序**：chunks数组严格按照PDF原始文档顺序排列
     - 🔄 **渐进式追加**：后台解析时，每批解析完成后按顺序追加到Redis
@@ -3217,13 +3464,14 @@ async def preview_chunks(
       const [fromPage, toPage] = data.parsed_page_range.split('-').map(Number);
       console.log(`当前${data.total}个chunks来自第${fromPage}-${toPage}页`);
       // 输出：当前160个chunks来自第0-24页
-      
+
       // 直接使用文本（保证顺序）
       data.chunks.forEach((text, index) => {
         console.log(`Chunk ${index}: ${text.substring(0, 50)}...`);
       });
       ```
     """
+
     def _error_response(retcode: int, retmsg: str, status_code: int, data: Any = False):
         response = get_json_result(retcode=retcode, retmsg=retmsg, data=data)
         response.status_code = status_code
@@ -3342,24 +3590,926 @@ async def preview_chunks(
         return _error_response(settings.RetCode.SERVER_ERROR, str(e), HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@router.post("/run_analyze_v2", summary="启动文档分析任务 V2（异步，数据库持久化，推荐）",
+             response_description="成功创建分析任务")
+async def run_analyze_v2(
+        request_body: str | None = Form(default=None, alias="request"),
+        file: UploadFile | None = File(default=None),
+        enable_sse: bool = Form(default=False),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    ### POST `/run_analyze_v2` 启动文档分析任务（异步，数据库持久化）
+
+    **功能描述**:
+    创建文档分析任务并加入处理队列，立即返回任务ID。任务在后台异步执行，支持进度查询和历史记录。
+
+    **设计理念**:
+    参考现有的 `/v1/kb/run_raptor` 接口，采用成熟的数据库持久化方案。
+
+    **适用场景**:
+    - ✅ 自己的前端产品（推荐）
+    - ✅ 需要持久化任务历史
+    - ✅ 需要多客户端查询同一任务
+    - ✅ 需要任务统计和报表
+
+    **参数**:
+    - `request`: JSON 配置（支持新的 source、call_mode、post_process 参数）
+    - `file`: 上传文件（可选）
+    - `enable_sse`: 是否启用 SSE 实时推送（默认 false）
+
+    **元数据字段配置（新增参数）**:
+    - `source`: 数据源（global_summary=RAPTOR全局摘要, cluster_summaries=聚类摘要, original_chunks=原始chunks）
+    - `call_mode`: 调用模式（single=一次调用, batch=多次调用后聚合）
+    - `post_process`: 后处理（none=原样, split_comma=分割, counter_top10=频次统计, concat=拼接）
+    - 详细说明见下方 `/v1/document/analyze_v2` 接口文档
+
+    **响应**:
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "success",
+      "data": {
+        "task_id": "task-abc-123",
+        "status": "pending",
+        "trace_url": "/v1/document/trace_analyze/task-abc-123",
+        "sse_url": "/v1/document/analyze_events/task-abc-123"
+      }
+    }
+    ```
+
+    **后续操作**:
+    1. 轮询查询进度：`GET /v1/document/trace_analyze/{task_id}`
+    2. 或订阅事件流：`GET /v1/document/analyze_events/{task_id}` (如果 enable_sse=true)
+
+    **request 参数详细说明**:
+
+    完整的 request JSON 配置（所有参数都是可选的）：
+    ```json
+    {
+      "processing_strategy": "raptor",  // 可选：auto/hierarchical/raptor/hybrid/simple
+      "metadata_fields": [              // 可选：不传则使用默认（summary + tags）
+        {
+          "field_name": "document_summary",
+          "prompt": "Summarize in 200 words.",
+          "source": "global_summary",      // 可选：global_summary/cluster_summaries/original_chunks
+          "call_mode": "single",           // 可选：single/batch
+          "post_process": "none",          // 可选：none/split_comma/counter_top10/concat
+          "temperature": 0.3,              // 可选
+          "max_tokens": 400                // 可选
+        },
+        {
+          "field_name": "semantic_tags",
+          "prompt": "Extract 5-10 tags, comma separated.",
+          "source": "cluster_summaries",
+          "call_mode": "batch",
+          "post_process": "counter_top10"
+        }
+      ]
+    }
+    ```
+
+    **使用示例**:
+
+    **示例 1: 最简单（使用默认配置）**
+    ```bash
+    curl -X POST "http://api/v1/document/run_analyze_v2" \\
+      -F "file=@document.pdf"
+    ```
+
+    **示例 2: 指定策略**
+    ```bash
+    curl -X POST "http://api/v1/document/run_analyze_v2" \\
+      -F "file=@document.pdf" \\
+      -F 'request={"processing_strategy":"raptor"}'
+    ```
+
+    **示例 3: 自定义元数据（推荐）**
+    ```bash
+    curl -X POST "http://api/v1/document/run_analyze_v2" \\
+      -F "file=@document.pdf" \\
+      -F 'request={
+        "processing_strategy": "raptor",
+        "metadata_fields": [
+          {
+            "field_name": "document_summary",
+            "prompt": "Summarize in 200 words.",
+            "source": "global_summary",
+            "call_mode": "single",
+            "post_process": "none"
+          },
+          {
+            "field_name": "semantic_tags",
+            "prompt": "Extract tags, comma separated.",
+            "source": "cluster_summaries",
+            "call_mode": "batch",
+            "post_process": "counter_top10"
+          }
+        ]
+      }'
+    ```
+
+    **返回示例**:
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "Task created successfully",
+      "data": {
+        "task_id": "xxx",
+        "status": "pending",
+        "trace_url": "/v1/document/trace_analyze/xxx"
+      }
+    }
+    ```
+
+    **查询结果**:
+    ```bash
+    # 轮询查询进度和结果
+    curl "http://api/v1/document/trace_analyze/xxx"
+
+    # 返回（完成后）
+    {
+      "data": {
+        "status": "done",
+        "progress": 1.0,
+        "result": {
+          "metadata": {
+            "document_summary": "This document discusses...",
+            "semantic_tags": ["AI", "Machine Learning", ...]
+          },
+          "processing_info": {
+            "strategy_used": "raptor",
+            "chunk_count": 23,
+            "cluster_count": 15
+          }
+        }
+      }
+    }
+    ```
+
+    **设计理念**:
+    参考 `/v1/kb/run_raptor`，采用数据库持久化 + 任务队列架构。
+
+    **适用场景**:
+    - ✅ 自己的前端产品（推荐）
+    - ✅ 第三方集成（需要持久化或实时推送）
+    - ✅ 长时间任务（无超时风险）
+
+    **支持两种进度查询模式**:
+    1. 轮询模式（默认）：定期调用 `/trace_analyze/{task_id}`
+    2. SSE 模式（可选）：订阅 `/analyze_events/{task_id}`（需设置 enable_sse=true）
+
+    **参数**:
+    - `request`: JSON 配置（与 analyze_v2 相同）
+    - `file`: 上传文件（可选）
+    - `enable_sse`: 是否启用 SSE 实时推送（默认 false）
+
+    **返回**:
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "success",
+      "data": {
+        "task_id": "xxx",
+        "status": "pending",
+        "trace_url": "/v1/document/trace_analyze/xxx",
+        "sse_url": "/v1/document/analyze_events/xxx"
+      }
+    }
+    ```
+    """
+    try:
+        # 解析请求
+        if request_body:
+            req_data = json.loads(request_body)
+            request = AnalyzeDocumentRequest.model_validate(req_data)
+        else:
+            request = AnalyzeDocumentRequest()
+
+        # 参数验证
+        if not request.doc_id and not file:
+            raise HTTPException(
+                status_code=400,
+                detail="Must provide either doc_id or file"
+            )
+
+        # 构建配置
+        config = {
+            "doc_id": request.doc_id,
+            "kb_id": request.kb_id,
+            "processing_strategy": request.processing_strategy,
+            "hierarchical_config": request.hierarchical_config.model_dump() if request.hierarchical_config else None,
+            "splitter_config": request.splitter_config.model_dump() if request.splitter_config else None,
+            "raptor_config": request.raptor_config.model_dump() if request.raptor_config else None,
+            "metadata_fields": [f.model_dump() for f in request.metadata_fields] if request.metadata_fields else None,
+            "dedup_strategy": request.dedup_strategy,
+            "use_cache": request.use_cache,
+            "enable_sse": enable_sse
+        }
+
+        # 创建任务并加入队列
+        task_id = await queue_analyze_v2_task(
+            db=db,
+            doc_id=request.doc_id,
+            kb_id=request.kb_id,
+            config=config,
+            user_id=user.id,
+            file=file,
+            priority=0
+        )
+
+        # 构建响应
+        response_data = {
+            "task_id": task_id,
+            "status": "pending",
+            "trace_url": f"/v1/document/trace_analyze/{task_id}"
+        }
+
+        if enable_sse:
+            response_data["sse_url"] = f"/v1/document/analyze_events/{task_id}"
+
+        return construct_json_result(
+            data=response_data,
+            code=settings.RetCode.SUCCESS,
+            message="Task created successfully"
+        )
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logging.error(f"Validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.exception(f"Failed to create task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/trace_analyze/{task_id}", summary="查询分析任务进度", response_description="成功获取任务状态")
+async def trace_analyze(
+        task_id: str,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    ### GET `/trace_analyze/{task_id}` 查询文档分析任务进度
+
+    **功能描述**:
+    查询指定任务的执行状态、进度和结果。参考 `/v1/kb/trace_raptor` 的设计。
+
+    **适用场景**:
+    - 前端轮询显示进度条
+    - 查询历史任务状态
+    - 获取任务执行结果
+
+    **响应**:
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "success",
+      "data": {
+        "task_id": "task-abc-123",
+        "doc_id": "doc-xxx",
+        "kb_id": "kb-xxx",
+        "status": "running",          // pending/running/done/failed
+        "progress": 0.65,             // 0-1, -1表示失败
+        "progress_msg": "RAPTOR 聚类处理...",
+        "begin_at": "2025-11-07 14:00:00",
+        "process_duration": 125.6,
+        "config": {...},              // 任务配置
+        "result": {...},              // 完成时包含结果
+        "error_msg": null             // 失败时包含错误
+      }
+    }
+    ```
+
+    **进度说明**:
+    - `0.0-0.2`: 文档解析
+    - `0.2-0.7`: 策略处理（HierarchicalMerger/RAPTOR）
+    - `0.7-0.9`: 元数据提取
+    - `0.9-1.0`: 最终处理
+    - `1.0`: 任务完成
+    - `-1`: 任务失败
+
+    **使用示例**:
+    ```javascript
+    // 前端轮询
+    const timer = setInterval(async () => {
+      const response = await fetch(`/v1/document/trace_analyze/${taskId}`);
+      const data = await response.json();
+
+      // 更新进度条
+      updateProgress(data.progress * 100, data.progress_msg);
+
+      // 完成或失败时停止
+      if (data.status === 'done') {
+        clearInterval(timer);
+        showResult(data.result);
+      } else if (data.status === 'failed') {
+        clearInterval(timer);
+        showError(data.error_msg);
+      }
+    }, 3000);  // 每 3 秒轮询
+    ```
+
+
+    **功能描述**:
+    查询指定任务的执行状态、进度和结果。参考 `/v1/kb/trace_raptor` 的设计。
+
+    **适用场景**:
+    - 前端轮询显示进度条（每 3-5 秒调用一次）
+    - 查询历史任务状态
+    - 获取任务执行结果
+
+    **响应**:
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "success",
+      "data": {
+        "task_id": "task-abc-123",
+        "doc_id": "doc-xxx",
+        "kb_id": "kb-xxx",
+        "status": "running",
+        "progress": 0.65,
+        "progress_msg": "RAPTOR 聚类处理...",
+        "begin_at": "2025-11-07 14:00:00",
+        "process_duration": 125.6,
+        "config": {...},
+        "result": {...},
+        "error_msg": null
+      }
+    }
+    ```
+
+    **进度说明**:
+    - `0.0-0.2`: 文档解析
+    - `0.2-0.7`: 策略处理（RAPTOR/Hierarchical）
+    - `0.7-0.9`: 元数据提取
+    - `0.9-1.0`: 最终处理
+    - `1.0`: 任务完成
+    - `-1`: 任务失败
+    """
+    try:
+        task = TaskService.get_by_id(db, task_id)
+
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # 解析存储的数据
+        task_data = json.loads(task.chunk_ids) if task.chunk_ids else {}
+
+        # 确定状态
+        if task.progress == 1.0:
+            status = "done"
+        elif task.progress == -1:
+            status = "failed"
+        elif task.progress > 0:
+            status = "running"
+        else:
+            status = "pending"
+
+        # 构建响应
+        result_data = {
+            "task_id": task.id,
+            "doc_id": task.doc_id,
+            "kb_id": task_data.get("kb_id"),
+            "task_type": task.task_type,
+            "status": status,
+            "progress": task.progress,
+            "progress_msg": task.progress_msg,
+            "begin_at": task.begin_at.strftime("%Y-%m-%d %H:%M:%S") if task.begin_at else None,
+            "process_duration": task.process_duration,
+            "config": task_data.get("config"),
+            "result": task_data.get("result") if status == "done" else None,
+            "error_msg": task.progress_msg if status == "failed" else None
+        }
+
+        return construct_json_result(data=result_data, code=settings.RetCode.SUCCESS)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Failed to get task info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/analyze_events/{task_id}", summary="订阅分析任务事件流（SSE）", response_description="SSE事件流")
+async def subscribe_to_analyze_event(request: Request, task_id: str):
+    """
+    ### GET `/analyze_events/{task_id}` 订阅分析任务事件流
+
+    **功能描述**:
+    订阅指定任务的 SSE 事件流，实时接收进度更新。仅当创建任务时 `enable_sse=true` 时可用。
+
+    **适用场景**:
+    - 需要实时进度反馈
+    - 避免轮询开销
+    - 更好的用户体验
+
+    **SSE 事件类型**:
+    - `connection`: 连接建立
+    - `progress`: 进度更新
+    - `complete`: 任务完成
+    - `error`: 错误信息
+    - `heartbeat`: 心跳（注释行，客户端可忽略）
+
+    **使用示例**:
+    ```javascript
+    const eventSource = new EventSource(`/v1/document/analyze_events/${taskId}`);
+
+    eventSource.addEventListener('progress', (e) => {
+      const data = JSON.parse(e.data);
+      updateProgress(data.progress * 100, data.message);
+    });
+
+    eventSource.addEventListener('complete', (e) => {
+      const data = JSON.parse(e.data);
+      showResult(data.result);
+      eventSource.close();
+    });
+    ```
+
+    **注意**:
+    - SSE 连接超时：默认 30 分钟（可通过 SSE_INACTIVITY_TIMEOUT 环境变量配置）
+    - 心跳间隔：15 秒（可通过 SSE_HEARTBEAT_INTERVAL 环境变量配置）
+    - 如果任务创建时未启用 SSE，此接口仍可用，但不会收到事件推送
+
+
+    **功能描述**:
+    订阅任务的 SSE 事件流（从 Redis Stream 读取），实时接收进度更新。
+
+    **适用场景**:
+    - 第三方集成，需要实时进度反馈
+    - 避免轮询开销
+    - 更好的用户体验
+
+    **工作原理**:
+    1. TaskExecutor 执行任务时写入 Redis Stream
+    2. 此接口从 Redis Stream 读取并推送给客户端
+    3. 支持断线重连（从上次位置继续读取）
+
+    **SSE 事件类型**:
+    - `connection`: 连接建立
+    - `progress`: 进度更新
+    - `complete`: 任务完成
+    - `error`: 错误信息
+    - `heartbeat`: 心跳（注释行，客户端可忽略）
+
+    **使用示例**:
+    ```javascript
+    const eventSource = new EventSource(`/v1/document/analyze_events/${taskId}`);
+
+    eventSource.addEventListener('progress', (e) => {
+      const data = JSON.parse(e.data);
+      updateProgress(data.progress * 100, data.message);
+    });
+
+    eventSource.addEventListener('complete', (e) => {
+      const data = JSON.parse(e.data);
+      showResult(data.result);
+      eventSource.close();
+    });
+    ```
+    """
+
+    async def event_generator():
+        from core.utils.redis_conn import REDIS_CONN
+        import time
+
+        last_id = '0-0'  # 从头开始读取
+        heartbeat_time = time.time()
+        start_time = time.time()
+
+        HEARTBEAT_INTERVAL = 15  # 15 秒心跳
+        TIMEOUT = 1800  # 30 分钟总超时
+
+        # 发送连接消息
+        yield b"event: connection\n"
+        yield b"data: {\"status\": \"connected\"}\n\n"
+
+        try:
+            while True:
+                # 检查客户端是否断开
+                if await request.is_disconnected():
+                    logging.info(f"Client disconnected for task {task_id}")
+                    break
+
+                # 检查总超时
+                current_time = time.time()
+                if current_time - start_time > TIMEOUT:
+                    logging.warning(f"SSE timeout for task {task_id}")
+                    yield b"event: timeout\n"
+                    yield b"data: {\"error\": \"Connection timeout\"}\n\n"
+                    break
+
+                # 从 Redis Stream 读取 SSE 事件
+                messages = REDIS_CONN.xread_sse_events(
+                    task_id=task_id,
+                    last_id=last_id,
+                    count=10,
+                    block=1000  # 阻塞 1 秒
+                )
+
+                if messages:
+                    # 有新消息
+                    for msg_id, payload in messages:
+                        last_id = msg_id
+
+                        event_type = payload.get("event_type", "data")
+                        data = payload.get("data", "{}")
+
+                        # 推送给客户端
+                        yield f"event: {event_type}\n".encode('utf-8')
+                        yield f"data: {data}\n\n".encode('utf-8')
+
+                        # 如果是完成或错误，关闭连接
+                        if event_type in ['complete', 'error']:
+                            logging.info(f"Task {task_id} ended with {event_type}")
+                            return
+
+                    # 收到消息，更新心跳时间
+                    heartbeat_time = current_time
+
+                else:
+                    # 无新消息，检查是否需要发送心跳
+                    if current_time - heartbeat_time >= HEARTBEAT_INTERVAL:
+                        yield b": heartbeat\n\n"
+                        heartbeat_time = current_time
+                        logging.debug(f"Sent heartbeat for task {task_id}")
+
+        except Exception as e:
+            logging.error(f"SSE error for task {task_id}: {e}")
+            error_data = json.dumps({"error": str(e)})
+            yield b"event: error\n"
+            yield f"data: {error_data}\n\n".encode('utf-8')
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@router.post("/analyze_v2", summary="文档智能分析 V2 (Pipeline - 同步)", response_description="成功分析文档")
+async def analyze_document_v2(
+        request_body: str | None = Form(default=None, alias="request"),
+        file: UploadFile | None = File(default=None),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    ### POST `/analyze_v2` 文档智能分析接口 V2（同步执行）
+
+    **⚠️ 重要提示**:
+    - 此接口为**同步执行**，适合快速任务（< 30秒）
+    - 对于长时间任务，请使用 `/run_analyze_v2`（异步，推荐）
+    - 长时间任务可能导致客户端超时
+
+    **功能描述**:
+    充分利用 core/flow 下的成熟组件，提供高度可配置的文档分析能力。同步返回结果。
+
+    支持组件：
+    - Parser: 多格式文档解析（PDF、Word、图片、视频、音频等）
+    - HierarchicalMerger: 按标题结构分层合并
+    - Splitter: 智能切片（支持重叠）
+    - RAPTOR: 聚类递归摘要（处理超长文档）
+    - Extractor: 灵活的元数据提取
+
+    ---
+
+    ### 请求参数
+
+    #### 数据源（二选一）
+    | 参数 | 类型 | 必填 | 描述 |
+    |------|------|------|------|
+    | `doc_id` | string | 否 | 文档ID |
+    | `kb_id` | string | doc_id时必填 | 知识库ID |
+    | `file` | file | 否 | 直传文件 |
+
+    #### 处理策略
+    | 参数 | 类型 | 默认值 | 可选值 | 描述 |
+    |------|------|--------|--------|------|
+    | `processing_strategy` | string | auto | auto, hierarchical, raptor, hybrid, simple | 处理策略 |
+
+    - **auto**: 自动检测文档结构和长度，智能选择
+    - **hierarchical**: 按标题结构分层（适合有章节的文档）
+    - **raptor**: 聚类递归摘要（适合超长文档）
+    - **hybrid**: 混合策略（先分层，再聚类）
+    - **simple**: 直接处理（适合短文档）
+
+    #### 组件配置（可选）
+    | 参数 | 类型 | 描述 |
+    |------|------|------|
+    | `hierarchical_config` | object | HierarchicalMerger 配置 |
+    | `splitter_config` | object | Splitter 配置 |
+    | `raptor_config` | object | RAPTOR 配置 |
+
+    **hierarchical_config 示例**:
+    ```json
+    {
+        "levels": [
+            ["^#\\s+", "^第[一二三]+章"],
+            ["^##\\s+", "^\\d+\\."]
+        ],
+        "hierarchy": 1
+    }
+    ```
+
+    **splitter_config 示例**:
+    ```json
+    {
+        "chunk_token_size": 512,
+        "delimiters": ["\n\n", "\n", "。"],
+        "overlapped_percent": 0.15
+    }
+    ```
+
+    **raptor_config 示例**:
+    ```json
+    {
+        "max_cluster": 64,
+        "max_token": 512,
+        "threshold": 0.1,
+        "random_seed": 42
+    }
+    ```
+
+    #### 元数据提取配置（已优化）
+    | 参数 | 类型 | 描述 |
+    |------|------|------|
+    | `metadata_fields` | array | 元数据字段配置列表（为空时使用默认：document_summary + semantic_tags） |
+
+    **metadata_fields 配置项**:
+    | 参数 | 类型 | 默认值 | 描述 |
+    |------|------|--------|------|
+    | `field_name` | string | - | 字段名称（必填） |
+    | `prompt` | string | - | LLM 提示词（必填） |
+    | `source` | string | global_summary | 数据源：global_summary/cluster_summaries/original_chunks |
+    | `call_mode` | string | single | 调用模式：single(一次调用)/batch(多次调用) |
+    | `post_process` | string | none | 后处理：none/split_comma/counter_top10/concat |
+    | `temperature` | float | 0.1 | LLM 温度参数 |
+    | `max_tokens` | int | 512 | 最大生成 tokens |
+
+    **metadata_fields 示例**:
+    ```json
+    [
+        {
+            "field_name": "document_summary",
+            "prompt": "Summarize the document in 200 words.",
+            "source": "global_summary",
+            "call_mode": "single",
+            "post_process": "none"
+        },
+        {
+            "field_name": "semantic_tags",
+            "prompt": "Extract 5-10 semantic tags, comma separated.",
+            "source": "cluster_summaries",
+            "call_mode": "batch",
+            "post_process": "counter_top10"
+        },
+        {
+            "field_name": "key_points",
+            "prompt": "List 5 key points, comma separated.",
+            "source": "global_summary",
+            "call_mode": "single",
+            "post_process": "split_comma"
+        }
+    ]
+    ```
+
+    **数据源说明**:
+    - `global_summary`: RAPTOR 最终全局摘要（整个文档精华，1个） ⭐ 推荐用于文档摘要
+    - `cluster_summaries`: RAPTOR 聚类摘要（~15个） ⭐ 推荐用于标签提取
+    - `original_chunks`: 原始文档切片 ⭐ 用于详细分析
+
+    **后处理说明**:
+    - `none`: 原样返回 LLM 输出（适合摘要、描述）
+    - `split_comma`: 按逗号分割成列表（适合标签、关键词）
+    - `counter_top10`: 按逗号分割 + 频次统计 + top10（适合 batch 模式的标签）
+    - `concat`: 拼接多个结果（适合 batch 模式的摘要）
+
+    #### 去重策略
+    | 参数 | 类型 | 默认值 | 可选值 | 描述 |
+    |------|------|--------|--------|------|
+    | `dedup_strategy` | string | smart | smart, semantic, none | 标签去重策略 |
+
+    - **smart**: Jaccard 相似度 + 同义词词典（快速、可控）
+    - **semantic**: 基于 Embedding 的语义去重（高质量、成本高）
+    - **none**: 不去重
+
+    ---
+
+    ### 响应格式
+
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "metadata": {
+                "semantic_tags": ["标签1", "标签2", "标签3"],
+                "short_summary": "文档摘要内容...",
+                ...  // 其他自定义字段
+            },
+            "processing_info": {
+                "strategy_used": "hybrid",
+                "chunk_count": 500,
+                "processing_time_seconds": 45.2,
+                "components_used": ["Parser", "HierarchicalMerger", "RAPTOR", "Extractor"],
+                "dedup_strategy": "smart",
+                "cluster_count": 20,
+                "chapter_count": 10
+            },
+            "structure": {
+                "chapters": [
+                    {
+                        "title": "第一章",
+                        "level": 0,
+                        "chunk_range": [0, 50]
+                    }
+                ]
+            }
+        }
+    }
+    ```
+
+    ---
+
+    ### 使用示例
+
+    #### 示例1: 使用默认配置（最简单）
+    ```bash
+    curl -X POST "/v1/document/analyze_v2" \
+      -F "file=@document.pdf"
+    ```
+
+    #### 示例2: 自定义元数据字段（使用新参数）
+    ```bash
+    curl -X POST "/v1/document/analyze_v2" \
+      -F "file=@research_paper.pdf" \
+      -F 'request={
+        "processing_strategy": "raptor",
+        "metadata_fields": [
+          {
+            "field_name": "document_summary",
+            "prompt": "Summarize in 200 words.",
+            "source": "global_summary",
+            "call_mode": "single",
+            "post_process": "none"
+          },
+          {
+            "field_name": "semantic_tags",
+            "prompt": "Extract 5-10 tags, comma separated.",
+            "source": "cluster_summaries",
+            "call_mode": "batch",
+            "post_process": "counter_top10"
+          },
+          {
+            "field_name": "authors",
+            "prompt": "Extract author names, comma separated.",
+            "source": "global_summary",
+            "call_mode": "single",
+            "post_process": "split_comma"
+          }
+        ]
+      }'
+    ```
+
+    #### 示例3: 指定策略和配置
+    ```bash
+    curl -X POST "/v1/document/analyze_v2" \
+      -F "file=@long_book.pdf" \
+      -F 'request={
+        "processing_strategy": "hybrid",
+        "hierarchical_config": {
+          "levels": [["^第[一二三]+章"]],
+          "hierarchy": 1
+        },
+        "raptor_config": {
+          "max_cluster": 32,
+          "max_token": 400
+        },
+        "dedup_strategy": "semantic"
+      }'
+    ```
+
+    #### 示例4: 音频会议分析
+    ```bash
+    curl -X POST "/v1/document/analyze_v2" \
+      -F "file=@meeting.mp3" \
+      -F 'request={
+        "processing_strategy": "raptor",
+        "metadata_fields": [
+          {"field_name": "speakers", "prompt": "Identify all speakers"},
+          {"field_name": "action_items", "prompt": "Extract action items"},
+          {"field_name": "decisions", "prompt": "Extract key decisions made"}
+        ]
+      }'
+    ```
+    """
+    try:
+        # 解析请求
+        if request_body:
+            req_data = json.loads(request_body)
+            request = AnalyzeDocumentRequest.model_validate(req_data)
+        else:
+            # 空配置，使用默认值
+            request = AnalyzeDocumentRequest()
+
+        # 参数验证
+        if not request.doc_id and not file:
+            raise HTTPException(
+                status_code=400,
+                detail="Must provide either doc_id or file"
+            )
+
+        if request.doc_id and file:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot provide both doc_id and file"
+            )
+
+        # 调用服务
+        service = PipelineAnalysisService(db, user.id)
+
+        result = await service.analyze_document(
+            doc_id=request.doc_id,
+            file=file,
+            filename=file.filename if file else None,
+            kb_id=request.kb_id,
+            processing_strategy=request.processing_strategy,
+            hierarchical_config=request.hierarchical_config.model_dump() if request.hierarchical_config else None,
+            splitter_config=request.splitter_config.model_dump() if request.splitter_config else None,
+            raptor_config=request.raptor_config.model_dump() if request.raptor_config else None,
+            metadata_fields=[f.model_dump() for f in request.metadata_fields] if request.metadata_fields else None,
+            dedup_strategy=request.dedup_strategy,
+            use_cache=request.use_cache
+        )
+
+        return construct_json_result(data=result, code=settings.RetCode.SUCCESS, message="success")
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logging.error(f"Validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.exception(f"Document analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/analyze", summary="文档智能分析", response_description="成功分析文档")
 async def analyze_document(
-    doc_id: str | None = Form(default=None),
-    file: UploadFile | None = File(default=None),
-    kb_id: str | None = Form(default=None),
-    include_summary: bool = Form(default=True),
-    include_tags: bool = Form(default=True),
-    summary_type: str = Form(default="short"),
-    raptor_config: str | None = Form(default=None),  # JSON字符串
-    use_cache: bool = Form(default=True),
-    db: Session = Depends(get_db),
-    user=Depends(manager)
+        doc_id: str | None = Form(default=None),
+        file: UploadFile | None = File(default=None),
+        kb_id: str | None = Form(default=None),
+        include_summary: bool = Form(default=True),
+        include_tags: bool = Form(default=True),
+        summary_type: str = Form(default="short"),
+        raptor_config: str | None = Form(default=None),  # JSON字符串
+        use_cache: bool = Form(default=True),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
 ):
     """
     ### POST `/analyze` 文档智能分析接口
 
     **功能描述**:
     对已解析的文档或上传的文件进行智能分析，生成语义标签、词频标签和文档摘要。
+
+    ---
+
+    ### 支持的文件类型与解析器
+
+    #### 📄 文档类型
+
+    | 文件类型 | 扩展名 | 默认解析器 | 智能分析能力 |
+    |---------|--------|-----------|------------|
+    | **PDF** | `.pdf` | `naive` | ✅ 文本提取 → 标签生成 → 摘要生成 |
+    | **Word** | `.doc`, `.docx` | `naive` | ✅ 文本提取 → 标签生成 → 摘要生成 |
+    | **Excel** | `.xls`, `.xlsx`, `.csv` | `table` | ✅ 表格数据 → 数据标签 → 数据摘要 |
+    | **PPT** | `.ppt`, `.pptx` | `presentation` | ✅ 幻灯片文本 → 主题标签 → 演讲摘要 |
+    | **文本** | `.txt`, `.md`, `.markdown` | `naive` | ✅ 纯文本 → 主题标签 → 内容摘要 |
+    | **邮件** | `.eml` | `email` | ✅ 邮件内容 → 主题标签 → 邮件摘要 |
+
+    #### 🎨 多媒体类型（新增支持）
+
+    | 文件类型 | 扩展名 | 解析器 | 处理方式 | 智能分析能力 |
+    |---------|--------|--------|---------|------------|
+    | **图片** | `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tif`, `.tiff`, `.webp`, `.svg`, `.ico` | `picture` | OCR + VLM图像描述 | ✅ 图像内容 → 视觉标签 → 图像摘要 |
+    | **视频** | `.mp4`, `.mov`, `.avi`, `.flv`, `.mpeg`, `.mpg`, `.webm`, `.wmv`, `.3gp`, `.3gpp`, `.mkv` | `picture` | IMAGE2TEXT LLM视频分析 | ✅ 视频场景 → 内容标签 → 视频摘要 |
+    | **音频** | `.mp3`, `.wav`, `.flac`, `.aac`, `.ogg`, `.wma`, `.ape`, `.da`, `.wave`, `.aiff`, `.au`, `.midi`, `.realaudio`, `.vqf`, `.oggvorbis` | `audio` | SPEECH2TEXT语音转录 | ✅ 语音转文本 → 主题标签 → 对话摘要 |
+
+    #### 🔧 依赖要求
+
+    - **视频分析**: 需配置 `IMAGE2TEXT` 类型的 LLM（如 Gemini）
+    - **音频转录**: 需配置 `SPEECH2TEXT` 类型的 LLM（如通义千问语音）
+    - **音频转换**: 建议安装 `ffmpeg`（自动转换为 16kHz 单声道）
 
     ---
 
@@ -3375,6 +4525,10 @@ async def analyze_document(
        - 已向量化文档: 从Milvus获取(性能优10-15倍)
        - 未向量化文档: 重新解析文件
        - 直传文件: 临时解析(不入库)
+    6. **多媒体支持**（新增）:
+       - 视频: 自动提取视频内容描述并分析
+       - 音频: 自动转录为文本后分析
+       - 图片: OCR识别或VLM描述后分析
 
     ---
 
@@ -3471,6 +4625,97 @@ async def analyze_document(
         -F "kb_id=kb_456" \
         -F 'raptor_config={"max_cluster":32,"max_token":400}'
     ```
+
+    #### 模式3: 分析视频文件（新增）
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/analyze" \
+        -H "Authorization: Bearer YOUR_TOKEN" \
+        -F "file=@presentation_video.mp4" \
+        -F "include_summary=true" \
+        -F "include_tags=true"
+    ```
+
+    **响应示例**:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "doc_name": "presentation_video.mp4",
+            "semantic_tags": ["产品演示", "技术讲解", "功能介绍"],
+            "frequency_tags": ["功能", "使用", "演示", "操作", "界面"],
+            "combined_tags": ["产品演示", "技术讲解", "功能介绍", "使用", "演示"],
+            "short_summary": "视频演示了产品的核心功能和操作流程，包括用户界面的使用方法...",
+            "metadata": {
+                "chunk_count": 1,
+                "use_raptor": false,
+                "processing_time_seconds": 8.2,
+                "media_type": "video"
+            }
+        }
+    }
+    ```
+
+    #### 模式4: 分析音频文件（新增）
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/analyze" \
+        -H "Authorization: Bearer YOUR_TOKEN" \
+        -F "file=@meeting_recording.mp3" \
+        -F "include_summary=true" \
+        -F "include_tags=true"
+    ```
+
+    **响应示例**:
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "doc_name": "meeting_recording.mp3",
+            "semantic_tags": ["会议讨论", "项目规划", "团队协作"],
+            "frequency_tags": ["项目", "时间", "任务", "团队", "计划"],
+            "combined_tags": ["会议讨论", "项目规划", "团队协作", "任务", "计划"],
+            "short_summary": "会议讨论了项目的整体规划和各团队的任务分配，确定了下一阶段的时间节点...",
+            "metadata": {
+                "chunk_count": 1,
+                "use_raptor": false,
+                "processing_time_seconds": 15.6,
+                "media_type": "audio",
+                "transcription_method": "speech2text"
+            }
+        }
+    }
+    ```
+
+    ---
+
+    ### 💡 使用建议
+
+    #### 多媒体文件处理建议
+
+    1. **视频文件**:
+       - 推荐使用支持视频的 LLM（如 Gemini）
+       - 大视频文件可能需要较长处理时间
+       - 视频分析会提取关键帧和场景信息
+
+    2. **音频文件**:
+       - 确保系统已安装 ffmpeg（音频格式转换）
+       - 长音频会自动转录为文本后分析
+       - 支持多种音频格式，自动转换为标准格式
+
+    3. **图片文件**:
+       - 优先使用 OCR 提取文字
+       - 如文字较少，自动使用 VLM 生成图像描述
+       - 支持多种图片格式（jpg, png, gif等）
+
+    ---
+
+    ### ⚠️ 注意事项
+
+    - **大文件处理**: 视频和长音频处理时间较长，建议设置合理的超时时间
+    - **LLM 配置**: 确保已配置对应类型的 LLM 服务（IMAGE2TEXT, SPEECH2TEXT）
+    - **格式支持**: 不支持的格式会返回 415 错误
+    - **性能优化**: 已向量化的文档直接从 Milvus 获取，性能提升 10-15 倍
     """
     try:
         # 参数验证
@@ -3522,7 +4767,7 @@ async def analyze_document(
             use_cache=use_cache
         )
 
-        return construct_json_result(data=result, code=200)
+        return construct_json_result(data=result)
 
     except HTTPException:
         raise
@@ -3533,10 +4778,10 @@ async def analyze_document(
 
 @router.get("/{doc_id}/tags", summary="获取文档标签", response_description="成功获取文档标签")
 async def get_document_tags(
-    doc_id: str,
-    kb_id: str = Query(..., description="知识库ID"),
-    db: Session = Depends(get_db),
-    user=Depends(manager)
+        doc_id: str,
+        kb_id: str = Query(..., description="知识库ID"),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
 ):
     """
     ### GET `/{doc_id}/tags` 快速获取文档标签
@@ -3609,11 +4854,11 @@ async def get_document_tags(
 
 @router.get("/{doc_id}/summary", summary="获取文档摘要", response_description="成功获取文档摘要")
 async def get_document_summary(
-    doc_id: str,
-    kb_id: str = Query(..., description="知识库ID"),
-    summary_type: str = Query(default="short", pattern="^(short|long)$"),
-    db: Session = Depends(get_db),
-    user=Depends(manager)
+        doc_id: str,
+        kb_id: str = Query(..., description="知识库ID"),
+        summary_type: str = Query(default="short", pattern="^(short|long)$"),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
 ):
     """
     ### GET `/{doc_id}/summary` 快速获取文档摘要
