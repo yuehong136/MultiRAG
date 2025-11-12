@@ -1129,6 +1129,8 @@ class DocumentService(CommonService):
             return cls._get_module_by_parser_id(ParserType.EMAIL.value), ParserType.EMAIL.value
         if re.search(r"\.(mp3|wav|aac|flac|ogg|aiff|au|midi|wma|da|wave|realaudio|vqf|oggvorbis|ape)$", f):
             return cls._get_module_by_parser_id(ParserType.AUDIO.value), ParserType.AUDIO.value
+        if re.search(r"\.(mp4|mov|avi|flv|mpeg|mpg|webm|wmv|3gp|3gpp|mkv)$", f):
+            return cls._get_module_by_parser_id(ParserType.PICTURE.value), ParserType.PICTURE.value
         return cls._get_module_by_parser_id(ParserType.NAIVE.value), ParserType.NAIVE.value
 
     @classmethod
