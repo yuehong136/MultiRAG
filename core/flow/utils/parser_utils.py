@@ -81,6 +81,7 @@ class FlowParser:
     - Excel (html/json/markdown)
     - PPT (json)
     - 音频 (text)
+    - 视频 (text)
     - 图片 (ocr/vlm)
     - Markdown (json/text)
     """
@@ -357,7 +358,7 @@ class FlowParser:
         filename: str,
         binary: bytes,
         tenant_id: str,
-        parse_method: Literal["ocr", "vlm"] = "ocr",
+        parse_method: str = "ocr",
         llm_name: str | None = None,
         lang: str = "Chinese",
         system_prompt: str | None = None,
@@ -367,8 +368,11 @@ class FlowParser:
         图片解析（参考 core/flow/parser/parser.py._image 第 346-375 行）
         
         Args:
-            parse_method: ocr（文字识别）或 vlm（视觉理解）
-            llm_name: VLM 模型名称（parse_method=vlm 时需要）
+            parse_method: 
+                - "ocr": OCR 文字识别
+                - "vlm": VLM 视觉理解（需要 llm_name）
+                - VLM 模型名（如 "qwen-vl-plus"）: 直接使用该模型
+            llm_name: VLM 模型名称（parse_method="vlm" 时需要）
         
         Returns:
             {"output_format": "text", "text": "..."}
@@ -385,8 +389,12 @@ class FlowParser:
             txt = "\n".join([t[0] for _, t in bxs if t[0]])
         else:
             # 使用 VLM 描述图片
+            # 兼容两种方式：
+            # 1. parse_method="vlm" + llm_name="qwen-vl-plus"（我们的方式）
+            # 2. parse_method="qwen-vl-plus"（core/flow 的方式）
+            actual_llm_name = llm_name or parse_method  # 优先使用 llm_name，否则用 parse_method
             with db_connection() as db:
-                cv_model = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_name=llm_name, lang=lang)
+                cv_model = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_name=actual_llm_name, lang=lang)
             
             img_binary = BytesIO()
             img.save(img_binary, format="JPEG")
@@ -568,8 +576,8 @@ async def parse_file(
 ) -> dict:
     """
     使用 core/flow 逻辑解析文件，返回结构化结果（保留位置信息）
-    
-    参考：core/flow/parser/parser.py._invoke 的逻辑（第 524-565 行）
+
+    参考：core/flow/parser/parser.py._invoke 的逻辑（第 524-580 行）
     根据文件扩展名自动路由到对应的解析方法
     
     Args:

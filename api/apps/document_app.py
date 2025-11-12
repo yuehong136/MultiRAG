@@ -191,6 +191,47 @@ class AnalyzeDocumentRequest(BaseModel):
         description="知识库ID（使用 doc_id 时必填）"
     )
 
+    # Parser 配置（简化方式）
+    parse_method: str | None = Field(
+        default="deepdoc",
+        description="解析方法：deepdoc/plain_text/mineru/ocr 或 VLM 模型名（如 qwen-vl-plus）"
+    )
+    output_format: str | None = Field(
+        default="json",
+        description="输出格式：json（保留位置）/text/markdown"
+    )
+    lang: str | None = Field(
+        default="Chinese",
+        description="语言（VLM 模式使用）"
+    )
+    image_llm_name: str | None = Field(
+        default=None,
+        description="图片 VLM 模型名称（parse_method=vlm 时使用）"
+    )
+    image_system_prompt: str | None = Field(
+        default=None,
+        description="图片 VLM 提示词（自定义图片理解方式）"
+    )
+    email_fields: list[str] | None = Field(
+        default=None,
+        description="邮件需要提取的字段（from/to/subject/body等）"
+    )
+    
+    # Parser 配置（完整方式）- 参考 core/flow/parser/parser.py 的 setups 结构
+    parser_config: dict | None = Field(
+        default=None,
+        description="""
+        按文件类型配置解析器（可选，优先级高于简化方式）
+        示例：{
+            "pdf": {"parse_method": "deepdoc", "output_format": "json", "lang": "Chinese"},
+            "image": {"parse_method": "qwen-vl-plus", "lang": "Chinese", "system_prompt": "..."},
+            "excel": {"output_format": "html"},
+            "word": {"output_format": "json"},
+            "email": {"output_format": "json", "fields": ["from", "to", "subject", "body"]}
+        }
+        """
+    )
+
     # 处理策略
     processing_strategy: Literal["auto", "hierarchical", "raptor", "hybrid", "simple"] = Field(
         default="auto",
@@ -221,12 +262,6 @@ class AnalyzeDocumentRequest(BaseModel):
     dedup_strategy: Literal["smart", "semantic", "none"] = Field(
         default="smart",
         description="去重策略：smart(Jaccard+词典), semantic(Embedding), none(不去重)"
-    )
-
-    # 其他选项
-    use_cache: bool = Field(
-        default=True,
-        description="是否使用 LLM 缓存"
     )
 
     @field_validator("kb_id")
@@ -3644,44 +3679,76 @@ async def run_analyze_v2(
 
     **request 参数详细说明**:
 
-    完整的 request JSON 配置（所有参数都是可选的）：
+    完整的 request JSON 配置（所有参数都是可选的，标注了默认值）：
     ```json
     {
-      "parse_method": "auto",           // 可选：解析方法（auto/deepdoc/plain_text/ocr/vlm）
-      "output_format": "json",          // 可选：输出格式（json保留位置/text纯文本/markdown/html）
-      "processing_strategy": "raptor",  // 可选：auto/hierarchical/raptor/hybrid/simple
+      // ========== Parser 配置方式 1：简化方式（推荐简单场景） ==========
+      "parse_method": "deepdoc",        // 默认值："deepdoc"，可选：deepdoc/plain_text/mineru/ocr 或 VLM模型名
+      "output_format": "json",          // 默认值："json"，可选：json/text/markdown/html
+      "lang": "Chinese",                // 默认值："Chinese"，VLM 模式使用
+      "image_llm_name": null,           // 默认值：null，图片文件 VLM 模型名（parse_method="vlm"时）
+      "image_system_prompt": null,      // 默认值：null，图片 VLM 自定义提示词
+      "email_fields": null,             // 默认值：null，邮件字段列表
       
-      "splitter_config": {              // 可选：智能切分配置（使用 core/flow 逻辑，支持重叠）
-        "chunk_token_size": 512,        // chunk 大小（默认 512）
-        "delimiters": ["\n\n", "\n", "。", "！", "？"],  // 分隔符列表
-        "overlapped_percent": 0.1       // 重叠比例 0-0.5（默认 0.1，即 10%）
+      // ========== Parser 配置方式 2：完整方式（推荐代码调用） ==========
+      "parser_config": {                // 默认值：null，按文件类型单独配置（优先级高于简化方式）
+        "pdf": {
+          "parse_method": "deepdoc",    // deepdoc/plain_text/mineru/VLM模型名
+          "output_format": "json",      // json/markdown
+          "lang": "Chinese"             // VLM 模式使用
+        },
+        "image": {
+          "parse_method": "ocr",        // ocr/VLM模型名
+          "lang": "Chinese",
+          "system_prompt": "描述图片内容"  // VLM 自定义提示词
+        },
+        "excel": {
+          "output_format": "html"       // html/json/markdown
+        },
+        "word": {
+          "output_format": "json"       // json/markdown
+        },
+        "email": {
+          "output_format": "json",      // json/text
+          "fields": ["from", "to", "subject", "body"]
+        }
       },
       
-      "hierarchical_config": {          // 可选：层次化合并配置（strategy=hierarchical/hybrid时使用）
-        "levels": [                     // 标题层级正则表达式列表
-          ["^#\\s+", "^第[一二三四五六七八九十]+章"],  // 一级标题
-          ["^##\\s+", "^\\d+\\.\\s+"]                 // 二级标题
+      // ========== 处理策略 ==========
+      "processing_strategy": "auto",    // 默认值："auto"，可选：auto/hierarchical/raptor/hybrid/simple
+      
+      // ========== 组件配置 ==========
+      "splitter_config": {              // 默认值：null，智能切分配置
+        "chunk_token_size": 512,        // 默认值：512，范围：100-4096
+        "delimiters": null,             // 默认值：null（自动选择），可选：["\n\n", "。", "！", "？"]
+        "overlapped_percent": 0.1       // 默认值：0.1（10%重叠），范围：0-0.5
+      },
+      
+      "hierarchical_config": {          // 默认值：null，层次化合并配置
+        "levels": [                     // 默认值：[["^#\\s+", "^第...章"], ["^##\\s+", "^\\d+\\.\\s+"]]
+          ["^#\\s+", "^第[一二三四五六七八九十]+章"],
+          ["^##\\s+", "^\\d+\\.\\s+"]
         ],
-        "hierarchy": 1                  // 合并到第几层（0-5，默认1）
+        "hierarchy": 1                  // 默认值：1，范围：0-5
       },
       
-      "raptor_config": {                // 可选：RAPTOR 聚类配置（strategy=raptor/hybrid时使用）
-        "max_cluster": 64,              // 最大聚类数量（默认 64）
-        "max_token": 512,               // 每个摘要的最大 tokens（默认 512）
-        "threshold": 0.1,               // 聚类相似度阈值（默认 0.1）
-        "random_seed": 42,              // 随机种子（默认 42）
-        "prompt": "Please summarize..." // 可选：自定义摘要提示词
+      "raptor_config": {                // 默认值：null，RAPTOR 聚类配置
+        "max_cluster": 64,              // 默认值：64，范围：2-256
+        "max_token": 512,               // 默认值：512，范围：100-2048
+        "threshold": 0.1,               // 默认值：0.1，范围：0.0-1.0
+        "random_seed": 42,              // 默认值：42
+        "prompt": null                  // 默认值：null（使用内置提示词）
       },
       
-      "metadata_fields": [              // 可选：不传则使用默认（summary + tags）
+      "metadata_fields": [              // 默认值：null（使用默认字段：document_summary + semantic_tags）
         {
           "field_name": "document_summary",
           "prompt": "Summarize in 200 words.",
-          "source": "global_summary",      // 可选：global_summary/cluster_summaries/original_chunks
-          "call_mode": "single",           // 可选：single/batch
-          "post_process": "none",          // 可选：none/split_comma/counter_top10/concat
-          "temperature": 0.3,              // 可选
-          "max_tokens": 400                // 可选
+          "source": "global_summary",      // 默认值："global_summary"
+          "call_mode": "single",           // 默认值："single"
+          "post_process": "none",          // 默认值："none"
+          "temperature": 0.1,              // 默认值：0.1，范围：0.0-2.0
+          "max_tokens": 512                // 默认值：512，范围：10-4096
         },
         {
           "field_name": "semantic_tags",
@@ -3692,73 +3759,111 @@ async def run_analyze_v2(
         }
       ],
       
-      "dedup_strategy": "smart",        // 可选：标签去重策略（smart/semantic/none）
-      "use_cache": true                 // 可选：是否使用 LLM 缓存
+      "dedup_strategy": "smart"         // 默认值："smart"，可选：smart/semantic/none
     }
     ```
     
     **参数详解：**
     
+    **📌 Parser 配置的两种方式**
+    
+    **方式 1：简化方式**（适合快速测试、前端用户）
+    - 使用 `parse_method`、`image_system_prompt` 等顶层参数
+    - 系统自动应用到对应的文件类型
+    - 示例：`{"parse_method": "qwen-vl-plus", "image_system_prompt": "..."}`
+    
+    **方式 2：完整方式**（推荐代码调用、批量处理）⭐
+    - 使用 `parser_config` 字典，按文件类型单独配置
+    - 一次配置，适用所有文件类型
+    - 优先级**高于**简化方式
+    - 示例：`{"parser_config": {"pdf": {...}, "image": {...}}}`
+    
+    **优先级规则**：
+    ```
+    if parser_config:
+        使用 parser_config 中的配置（按文件类型）
+    else:
+        使用 parse_method 等简化参数（自动应用）
+    ```
+    
+    ---
+    
     **1. 解析配置（Parser）**
-    - `parse_method`: 解析方法
-      - `auto`: 自动识别（PDF→deepdoc, 图片→ocr）✅ 推荐
+    - `parse_method`: 解析方法（简化方式，默认："deepdoc"）
       - **PDF 专用：**
-        - `deepdoc`: 深度布局解析（保留位置、表格、图片）
-        - `plain_text`: 纯文本解析（快速）
-        - `mineru`: MinerU 解析（需要安装，适合复杂排版）
-        - VLM 模型名: 如 `"qwen-vl-plus"` 视觉理解（适合扫描件）
+        - `"deepdoc"`: 深度布局解析（保留位置、表格、图片）✅ 默认
+        - `"plain_text"`: 纯文本解析（快速）
+        - `"mineru"`: MinerU 解析（需要安装，适合复杂排版）
+        - VLM 模型名: 如 `"qwen-vl-plus"` 视觉理解（转录整页，适合扫描件）
       - **图片专用：**
-        - `ocr`: 文字识别（快速）
-        - `vlm`: 视觉理解（需指定 image_llm_name）
-    - `output_format`: 输出格式
-      - `json`: 结构化（保留位置信息）✅ 推荐
-      - `text`: 纯文本（不保留位置）
-      - `markdown`: Markdown 格式
-      - `html`: HTML 格式（Excel）
+        - `"ocr"`: 文字识别（快速）
+        - VLM 模型名: 如 `"qwen-vl-plus"` 视觉理解（支持 system_prompt）
+    - `output_format`: 输出格式（默认："json"）
+      - `"json"`: 结构化（保留位置信息）✅ 推荐
+      - `"text"`: 纯文本（不保留位置）
+      - `"markdown"`: Markdown 格式
+      - `"html"`: HTML 格式（Excel）
+    - `lang`: 语言（默认："Chinese"），VLM 模式使用
+    - `image_llm_name`: 图片 VLM 模型名（默认：null）
+    - `image_system_prompt`: 图片 VLM 提示词（默认：null）
+    - `email_fields`: 邮件字段列表（默认：null）
     
-    **2. 切分配置（Splitter）**
+    - `parser_config`: 完整配置方式（默认：null，优先级高于简化方式）
+      - 按文件类型单独配置：`pdf`、`image`、`excel`、`word`、`email`
+      - 每种类型支持的配置见上述简化方式说明
+      - **优势**：一次配置，后续上传任何文件都使用对应配置
+    
+    **2. 切分配置（Splitter）**（默认值：null）
     - `splitter_config`: 使用 core/flow/splitter 逻辑
-      - `chunk_token_size`: chunk 大小（100-4096）
-      - `delimiters`: 分隔符优先级列表
-      - `overlapped_percent`: 重叠比例（0=无重叠，0.1=10%重叠）
+      - `chunk_token_size`: chunk 大小（默认：512，范围：100-4096）
+      - `delimiters`: 分隔符优先级列表（默认：null，自动选择）
+      - `overlapped_percent`: 重叠比例（默认：0.1 即 10%，范围：0-0.5）
     
-    **3. 处理策略**
+    **3. 处理策略**（默认值："auto"）
     - `processing_strategy`: 文档处理策略
-      - `auto`: 自动选择（根据文档结构和长度）
-      - `simple`: 直接处理（适合短文档 < 10 chunks）
-      - `hierarchical`: 层次化合并（适合有章节的文档）
-      - `raptor`: RAPTOR 聚类（适合长文档 > 10 chunks）
-      - `hybrid`: 混合策略（先层次化，再 RAPTOR）
+      - `"auto"`: 自动选择（根据文档结构和长度）✅ 默认
+      - `"simple"`: 直接处理（适合短文档 < 10 chunks）
+      - `"hierarchical"`: 层次化合并（适合有章节的文档）
+      - `"raptor"`: RAPTOR 聚类（适合长文档 > 10 chunks）
+      - `"hybrid"`: 混合策略（先层次化，再 RAPTOR）
     
-    **4. 层次化配置（HierarchicalMerger）**
+    **4. 层次化配置（HierarchicalMerger）**（默认值：null）
     - `hierarchical_config`: 按标题结构分层合并
-      - `levels`: 标题层级正则表达式（支持多级）
-      - `hierarchy`: 合并到第几层（0=不合并，1=一级，2=二级...）
+      - `levels`: 标题层级正则表达式（默认：[["^#\\s+", "^第...章"], ["^##\\s+", "^\\d+\\.\\s+"]]）
+      - `hierarchy`: 合并到第几层（默认：1，范围：0-5）
     
-    **5. RAPTOR 配置**
+    **5. RAPTOR 配置**（默认值：null）
     - `raptor_config`: 聚类递归摘要
-      - `max_cluster`: 最大聚类数（2-256）
-      - `max_token`: 摘要大小（100-2048）
-      - `threshold`: 相似度阈值（0.0-1.0，越小聚类越多）
-      - `random_seed`: 随机种子（可重现结果）
-      - `prompt`: 自定义摘要提示词
+      - `max_cluster`: 最大聚类数（默认：64，范围：2-256）
+      - `max_token`: 摘要大小（默认：512，范围：100-2048）
+      - `threshold`: 相似度阈值（默认：0.1，范围：0.0-1.0，越小聚类越多）
+      - `random_seed`: 随机种子（默认：42，可重现结果）
+      - `prompt`: 自定义摘要提示词（默认：null，使用内置提示词）
     
-    **6. 元数据提取**
+    **6. 元数据提取**（默认值：null，使用默认字段）
     - `metadata_fields`: 灵活的字段提取配置
-      - `field_name`: 字段名称
-      - `prompt`: LLM 提示词
-      - `source`: 数据源
-        - `global_summary`: RAPTOR 全局摘要或合并摘要
-        - `cluster_summaries`: RAPTOR 聚类摘要列表
-        - `original_chunks`: 原始 chunks
-      - `call_mode`: 调用模式
-        - `single`: 一次调用（合并后）
-        - `batch`: 多次调用（每个 chunk/摘要单独调用）
-      - `post_process`: 后处理
-        - `none`: 原样返回
-        - `split_comma`: 按逗号分割
-        - `counter_top10`: 频次统计 top10
-        - `concat`: 拼接（batch 模式）
+      - `field_name`: 字段名称（必填）
+      - `prompt`: LLM 提示词（必填）
+      - `source`: 数据源（默认："global_summary"）
+        - `"global_summary"`: RAPTOR 全局摘要或合并摘要
+        - `"cluster_summaries"`: RAPTOR 聚类摘要列表
+        - `"original_chunks"`: 原始 chunks
+      - `call_mode`: 调用模式（默认："single"）
+        - `"single"`: 一次调用（合并后）
+        - `"batch"`: 多次调用（每个 chunk/摘要单独调用）
+      - `post_process`: 后处理（默认："none"）
+        - `"none"`: 原样返回
+        - `"split_comma"`: 按逗号分割
+        - `"counter_top10"`: 频次统计 top10
+        - `"concat"`: 拼接（batch 模式）
+      - `temperature`: LLM 温度（默认：0.1，范围：0.0-2.0）
+      - `max_tokens`: 最大生成 tokens（默认：512，范围：10-4096）
+    
+    **7. 去重策略**（默认值："smart"）
+    - `dedup_strategy`: 标签去重策略
+      - `"smart"`: Jaccard + 同义词词典（快速、可控）✅ 默认
+      - `"semantic"`: 基于 Embedding（高质量、成本高）
+      - `"none"`: 不去重
     
     **⭐ 核心特性（使用 core/flow 逻辑）：**
     - ✅ 保留位置信息（PDF 页码、坐标）
@@ -3842,6 +3947,79 @@ async def run_analyze_v2(
       }'
     ```
 
+    **示例 7: 完整配置方式（推荐代码调用）🆕**
+    ```bash
+    curl -X POST "http://api/v1/document/run_analyze_v2" \\
+      -F "file=@any_document.pdf" \\
+      -F 'request={
+        "parser_config": {
+          "pdf": {
+            "parse_method": "deepdoc",
+            "output_format": "json",
+            "lang": "Chinese"
+          },
+          "image": {
+            "parse_method": "qwen-vl-plus",
+            "lang": "Chinese",
+            "system_prompt": "描述这张图片展示的关键信息、概念或流程"
+          },
+          "excel": {"output_format": "json"},
+          "word": {"output_format": "json"},
+          "email": {
+            "output_format": "json",
+            "fields": ["from", "to", "subject", "body"]
+          }
+        },
+        "processing_strategy": "auto",
+        "metadata_fields": [
+          {
+            "field_name": "document_summary",
+            "prompt": "总结文档内容（中文，200字）",
+            "source": "global_summary"
+          }
+        ]
+      }'
+    ```
+    
+    **完整方式优势**：
+    - ✅ 一次配置，适用所有文件类型（PDF/图片/Excel/Word/邮件）
+    - ✅ 每种文件类型单独配置解析方式
+    - ✅ 适合代码集成、批量处理场景
+    - ✅ 完全对齐 core/flow 的 setups 结构
+    
+    **Python 代码示例**（批量处理）：
+    ```python
+    import requests
+    import json
+    
+    # 一次性配置所有文件类型
+    config = {
+        "parser_config": {
+            "pdf": {"parse_method": "deepdoc", "output_format": "json"},
+            "image": {"parse_method": "qwen-vl-plus", "system_prompt": "描述技术架构"},
+            "excel": {"output_format": "json"},
+            "word": {"output_format": "json"},
+            "email": {"output_format": "json", "fields": ["from", "to", "subject", "body"]}
+        },
+        "processing_strategy": "auto",
+        "metadata_fields": [
+            {"field_name": "summary", "prompt": "Summarize the document"}
+        ]
+    }
+    
+    # 使用同一套配置处理多个文件
+    files = ["report.pdf", "diagram.png", "data.xlsx", "meeting.docx"]
+    for filepath in files:
+        with open(filepath, "rb") as f:
+            response = requests.post(
+                "http://api/v1/document/run_analyze_v2",
+                files={"file": f},
+                data={"request": json.dumps(config)}  # 同一套配置！
+            )
+            task_id = response.json()["data"]["task_id"]
+            print(f"Processing {filepath}: task_id={task_id}")
+    ```
+
     **返回示例**:
     ```json
     {
@@ -3880,6 +4058,26 @@ async def run_analyze_v2(
     }
     ```
 
+    **📊 参数默认值速查表**:
+    
+    | 参数 | 默认值 | 说明 |
+    |------|--------|------|
+    | `parse_method` | `"deepdoc"` | 解析方法 |
+    | `output_format` | `"json"` | 输出格式 |
+    | `lang` | `"Chinese"` | 语言 |
+    | `processing_strategy` | `"auto"` | 处理策略 |
+    | `chunk_token_size` | `512` | Chunk 大小 |
+    | `overlapped_percent` | `0.1` | 重叠比例（10%） |
+    | `hierarchy` | `1` | 合并到第几层 |
+    | `max_cluster` | `64` | RAPTOR 最大聚类数 |
+    | `max_token` | `512` | RAPTOR 摘要长度 |
+    | `threshold` | `0.1` | RAPTOR 聚类阈值 |
+    | `dedup_strategy` | `"smart"` | 去重策略 |
+    | `temperature` | `0.1` | 元数据提取温度 |
+    | `parser_config` | `null` | 完整配置（优先级高） |
+    
+    ---
+    
     **设计理念**:
     参考 `/v1/kb/run_raptor`，采用数据库持久化 + 任务队列架构。
 
@@ -3893,9 +4091,9 @@ async def run_analyze_v2(
     2. SSE 模式（可选）：订阅 `/analyze_events/{task_id}`（需设置 enable_sse=true）
 
     **参数**:
-    - `request`: JSON 配置（与 analyze_v2 相同）
+    - `request`: JSON 配置
     - `file`: 上传文件（可选）
-    - `enable_sse`: 是否启用 SSE 实时推送（默认 false）
+    - `enable_sse`: 是否启用 SSE 实时推送（默认：false）
 
     **返回**:
     ```json
@@ -3930,13 +4128,21 @@ async def run_analyze_v2(
         config = {
             "doc_id": request.doc_id,
             "kb_id": request.kb_id,
+            # Parser 配置（支持两种方式）
+            "parser_config": request.parser_config,  # 完整方式（优先）
+            "parse_method": request.parse_method,    # 简化方式
+            "output_format": request.output_format,
+            "lang": request.lang,
+            "image_llm_name": request.image_llm_name,
+            "image_system_prompt": request.image_system_prompt,
+            "email_fields": request.email_fields,
+            # 处理策略
             "processing_strategy": request.processing_strategy,
             "hierarchical_config": request.hierarchical_config.model_dump() if request.hierarchical_config else None,
             "splitter_config": request.splitter_config.model_dump() if request.splitter_config else None,
             "raptor_config": request.raptor_config.model_dump() if request.raptor_config else None,
             "metadata_fields": [f.model_dump() for f in request.metadata_fields] if request.metadata_fields else None,
             "dedup_strategy": request.dedup_strategy,
-            "use_cache": request.use_cache,
             "enable_sse": enable_sse
         }
 
@@ -4543,6 +4749,32 @@ async def analyze_document_v2(
         ]
       }'
     ```
+
+    #### 示例5: VLM 图片理解（正确用法）🆕
+    ```bash
+    curl -X POST "/v1/document/analyze_v2" \
+      -F "file=@technical_report.pdf" \
+      -F 'request={
+        "parse_method": "qwen-vl-plus",
+        "image_system_prompt": "描述这张图片的关键技术概念（中文，60字以内）",
+        "image_lang": "Chinese",
+        "processing_strategy": "hierarchical",
+        "hierarchical_config": {
+          "levels": [["^第[一二三四五六七八九十]+章", "^Chapter\\s+\\d+"]],
+          "hierarchy": 0
+        },
+        "metadata_fields": [
+          {
+            "field_name": "technical_summary",
+            "prompt": "总结文档的技术要点（包含文字和图片信息）",
+            "source": "global_summary",
+            "call_mode": "single"
+          }
+        ]
+      }'
+    ```
+    
+    **VLM 功能**：在 Parser 阶段对每张原始图片进行 VLM 理解，图片描述会自动融入文本，适用于包含架构图、流程图的技术文档。
     """
     try:
         # 解析请求
@@ -4574,15 +4806,21 @@ async def analyze_document_v2(
             file=file,
             filename=file.filename if file else None,
             kb_id=request.kb_id,
-            parse_method=request.parse_method or "auto",
+            # Parser 配置
+            parser_config=request.parser_config,
+            parse_method=request.parse_method or "deepdoc",
             output_format=request.output_format or "json",
+            lang=request.lang,
+            image_llm_name=request.image_llm_name,
+            image_system_prompt=request.image_system_prompt,
+            email_fields=request.email_fields,
+            # 处理策略
             processing_strategy=request.processing_strategy,
             hierarchical_config=request.hierarchical_config.model_dump() if request.hierarchical_config else None,
             splitter_config=request.splitter_config.model_dump() if request.splitter_config else None,
             raptor_config=request.raptor_config.model_dump() if request.raptor_config else None,
             metadata_fields=[f.model_dump() for f in request.metadata_fields] if request.metadata_fields else None,
-            dedup_strategy=request.dedup_strategy,
-            use_cache=request.use_cache
+            dedup_strategy=request.dedup_strategy
         )
 
         return construct_json_result(data=result, code=settings.RetCode.SUCCESS, message="success")

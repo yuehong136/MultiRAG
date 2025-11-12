@@ -55,7 +55,7 @@ from api import settings
 from api.versions import get_multirag_version
 from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, \
     email, tag
-from core.nlp import search, rag_tokenizer, add_positions
+from core.nlp import search, rag_tokenizer, add_positions, concat_img
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 from core.settings import DOC_MAXIMUM_SIZE, DOC_BULK_SIZE, EMBEDDING_BATCH_SIZE, SVR_CONSUMER_GROUP_NAME, get_svr_queue_name, get_svr_queue_names, print_rag_settings, TAG_FLD, PAGERANK_FLD
 from core.utils import rmSpace, num_tokens_from_string, truncate
@@ -1076,56 +1076,62 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
     return res, tk_count
 
 
-def _detect_hierarchical_structure(chunks, hierarchical_config):
+async def _detect_hierarchical_structure(chunks, hierarchical_config):
     """
     检测文档是否有层次结构
-
-    参考：PipelineAnalysisService._detect_hierarchical_structure (第 476-526 行)
+    
+    参考 core/flow 的设计理念：
+    - 不单独实现检测逻辑，而是直接调用 hierarchical_merge
+    - 通过返回的 chapters 数量判断是否有结构
+    
+    Args:
+        chunks: chunk 列表
+        hierarchical_config: 层次化配置
+    
+    Returns:
+        bool: 是否有层次结构（chapters > 1 表示有结构）
     """
-
-    if not hierarchical_config or not hierarchical_config.get("levels"):
-        # 使用默认规则
-        default_patterns = [
-            r"^#\s+",
-            r"^第[一二三四五六七八九十百]+章",
-            r"^Chapter\s+\d+",
-            r"^\d+\.\s+[^\d]",
-        ]
-    else:
-        levels = hierarchical_config.get("levels", [])
-        default_patterns = []
-        for level_patterns in levels:
-            default_patterns.extend(level_patterns)
-
-    # 检查前 100 个 chunks
-    match_count = 0
-    check_limit = min(100, len(chunks))
-
-    for chunk in chunks[:check_limit]:
-        text = chunk.get("content_with_weight", "")
-        if not text:
-            continue
-
-        for pattern in default_patterns:
-            if re.search(pattern, text, re.MULTILINE):
-                match_count += 1
-                break
-
-    # 如果超过 10% 的 chunks 匹配标题 pattern，认为有结构
-    has_structure = match_count / check_limit > 0.1 if check_limit > 0 else False
-
-    logging.info(f"Structure detection: {match_count}/{check_limit} matches, has_structure={has_structure}")
-
+    from core.flow.utils import hierarchical_merge
+    
+    # 调用 hierarchical_merge 尝试识别结构
+    result = await hierarchical_merge(
+        chunks=chunks,
+        levels=hierarchical_config.get("levels") if hierarchical_config else None,
+        hierarchy=hierarchical_config.get("hierarchy", 1) if hierarchical_config else 1,
+        callback=None
+    )
+    
+    chapters = result.get("chapters", [])
+    
+    # 如果识别出多个章节，说明有层次结构
+    has_structure = len(chapters) > 1
+    
+    logging.info(f"Structure detection: {len(chapters)} chapters identified, has_structure={has_structure}")
+    
     return has_structure
 
 
-def _hierarchical_merge(chunks, config):
+async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
     """
     层次化合并
 
-    参考：PipelineAnalysisService._hierarchical_merge (第 592-740 行)
+    使用 core/flow/utils 的 hierarchical_merge 实现，并增强：
+    - 位置信息合并
+    - 图片合并（仅用于展示，不进行 OCR/VLM 处理）
+
+    Args:
+        chunks: chunk 列表
+        config: 层次化配置，支持以下字段：
+            - levels: 标题层级正则表达式
+            - hierarchy: 合并到第几层
+        tenant_id: 租户ID（保留参数，未使用）
+        db: 数据库session（保留参数，未使用）
+    
+    注意：
+        图片处理应该在 Parser 阶段配置（parse_method），而不是在这里。
+        章节级的图片是合并后的巨图，不适合进行 OCR/VLM 处理。
     """
-    from copy import deepcopy
+    from core.flow.utils import hierarchical_merge
 
     # 默认配置
     if not config:
@@ -1137,106 +1143,68 @@ def _hierarchical_merge(chunks, config):
             "hierarchy": 1
         }
 
-    levels = config.get("levels", [])
+    levels = config.get("levels")
     hierarchy_level = config.get("hierarchy", 1)
 
-    # 提取文本行
-    lines = [c.get("content_with_weight", "") for c in chunks]
+    # ⭐ 调用 core/flow/utils 的层次化合并
+    result = await hierarchical_merge(
+        chunks=chunks,
+        levels=levels,
+        hierarchy=hierarchy_level,
+        callback=None
+    )
+    
+    chapters = result.get("chapters", [])
+    
+    # ✨ 增强：为每个章节添加位置信息、图片合并
+    for chapter in chapters:
+        chapter_chunks = chapter.get("chunks", [])
+        
+        # 合并位置信息
+        chapter_positions = []
+        for chunk in chapter_chunks:
+            if "positions" in chunk and chunk["positions"]:
+                chapter_positions.extend(chunk["positions"])
+        
+        # 合并图片（内存中处理，不上传 MinIO）
+        chapter_image = None
+        for chunk in chapter_chunks:
+            if "image" in chunk and chunk["image"]:
+                chapter_image = concat_img(chapter_image, chunk["image"])
+        
+        # 计算页码范围
+        page_range = None
+        if chapter_positions:
+            pages = [p[0] for p in chapter_positions]
+            page_range = [min(pages), max(pages)]
+        
+        # 添加到章节信息
+        chapter["positions"] = chapter_positions
+        chapter["image"] = chapter_image
+        chapter["page_range"] = page_range
 
-    # 识别每行的层级
-    matches = []
-    for txt in lines:
-        matched_level = None
-        for lvl, patterns in enumerate(levels):
-            for pattern in patterns:
-                if re.search(pattern, txt, re.MULTILINE):
-                    matched_level = lvl
-                    break
-            if matched_level is not None:
-                break
-
-        # 如果没匹配到，设为最底层
-        if matched_level is None:
-            matches.append(len(levels))
-        else:
-            matches.append(matched_level)
-
-    # 构建层次化树状结构
-    root = {"level": -1, "index": -1, "texts": [], "children": []}
-
-    for i, level in enumerate(matches):
-        if level == 0:
-            # 一级标题
-            root["children"].append({
-                "level": level,
-                "index": i,
-                "texts": [],
-                "children": []
-            })
-        elif level == len(levels):
-            # 普通文本
-            def add_text(node):
-                if not node["children"]:
-                    node["texts"].append(i)
-                else:
-                    add_text(node["children"][-1])
-
-            add_text(root)
-        else:
-            # 中间层级
-            def add_child(node, target_level, idx):
-                if not node["children"] or target_level == node["level"] + 1:
-                    node["children"].append({
-                        "level": target_level,
-                        "index": idx,
-                        "texts": [],
-                        "children": []
-                    })
-                else:
-                    add_child(node["children"][-1], target_level, idx)
-
-            add_child(root, level, i)
-
-    # 按 hierarchy 级别收集路径
-    all_paths = []
-
-    def collect_paths(node, path, depth):
-        if not node["children"] and path:
-            all_paths.append(path)
-
-        for child in node["children"]:
-            if depth < hierarchy_level:
-                new_path = deepcopy(path)
-            else:
-                new_path = path
-
-            new_path.extend([child["index"], *child["texts"]])
-            collect_paths(child, new_path, depth + 1)
-
-            if depth == hierarchy_level:
-                all_paths.append(new_path)
-
-    if root["texts"]:
-        all_paths.insert(0, root["texts"])
-
-    collect_paths(root, [], 0)
-
-    # 合并文本
-    chapters = []
-    for path_indices in all_paths:
-        if not path_indices:
-            continue
-
-        chapter_text = "\n".join([lines[i] for i in path_indices])
-        chapter_chunks = [chunks[i] for i in path_indices]
-        title_text = lines[path_indices[0]] if path_indices else ""
-
-        chapters.append({
-            "title": title_text.strip(),
-            "text": chapter_text,
-            "chunks": chapter_chunks,
-            "chunk_indices": path_indices
-        })
+    # ⚠️ 注意：不在章节级别处理合并后的图片
+    # 
+    # 原因分析：
+    # 1. Parser 阶段已经对每张原始图片进行了 OCR/VLM 处理
+    # 2. 图片内容已经转化为文本，存储在 chunk 的 content_with_weight 中
+    # 3. 章节级的图片是合并后的巨图（可能超过 65500 像素），VLM/OCR 无法处理
+    # 4. 所有其他地方（parser/picture/parser_utils）都是处理单张原始图片
+    # 5. 合并后的巨图在视觉上没有连贯性（只是垂直拼接），VLM 识别效果差
+    #
+    # 正确的流程：
+    # - 用户配置 parse_method="qwen-vl-plus" → 在 Parser 阶段对每张图片进行 VLM
+    # - HierarchicalMerger 只负责合并文本（文本中已包含图片描述）
+    # - 合并后的图片仅用于展示，不再进行 OCR/VLM 处理
+    #
+    # 参考：core/flow/parser/parser.py 第 346-375 行 - 只处理单张原始图片
+    
+    if config.get("image_model"):
+        logging.info(
+            f"Note: image_model ('{config.get('image_model')}') should be configured in parse_method, "
+            f"not in hierarchical_config. Images are processed during parsing stage, "
+            f"not during hierarchical merge. Each original image has already been processed individually."
+        )
 
     # 构建结构信息
     structure = {
@@ -1245,7 +1213,8 @@ def _hierarchical_merge(chunks, config):
                 "title": ch["title"],
                 "level": 0,
                 "chunk_range": [ch["chunk_indices"][0], ch["chunk_indices"][-1]]
-                if ch["chunk_indices"] else [0, 0]
+                if ch.get("chunk_indices") else [0, 0],
+                "page_range": ch.get("page_range")  # ✨ 页码范围
             }
             for ch in chapters
         ]
@@ -1255,8 +1224,10 @@ def _hierarchical_merge(chunks, config):
 
     # 调试日志：打印每个章节的信息
     for idx, ch in enumerate(chapters):
+        page_info = f", pages={ch['page_range']}" if ch.get('page_range') else ""
         logging.info(
-            f"  Chapter {idx + 1}: title='{ch['title'][:30]}', chunks={len(ch['chunks'])}, indices={ch['chunk_indices'][:5]}...")
+            f"  Chapter {idx + 1}: title='{ch['title'][:30]}', chunks={len(ch.get('chunks', []))}, "
+            f"positions={len(ch.get('positions', []))}{page_info}")
 
     return {
         "chapters": chapters,
@@ -1297,9 +1268,12 @@ def _get_extraction_contents(source, summaries, chunks, cluster_results=None, or
     """
     根据 source 参数选择数据源
 
+    ✨ 新增：支持字典格式的 summaries（包含 text、positions）
+
     Args:
         source: 数据源类型
         summaries: 当前处理后的摘要列表（RAPTOR 聚类摘要或原始 chunks）
+                   可以是 str 列表或 dict 列表（dict 包含 text、positions、image）
         chunks: 原始 chunks
         cluster_results: RAPTOR 完整结果（可选）
         original_length: 原始 chunk 数量
@@ -1307,6 +1281,12 @@ def _get_extraction_contents(source, summaries, chunks, cluster_results=None, or
     Returns:
         list[str]: 用于提取的内容列表
     """
+    # ✨ 辅助函数：提取文本（兼容字符串和字典）
+    def extract_text(item):
+        if isinstance(item, dict):
+            return item.get("text", "")
+        return item if isinstance(item, str) else ""
+
     if source == "global_summary":
         # 全局摘要：优先用 RAPTOR 最终摘要
         if cluster_results and len(cluster_results) > original_length:
@@ -1322,16 +1302,19 @@ def _get_extraction_contents(source, summaries, chunks, cluster_results=None, or
                 # 仍然为空，返回空字符串（会被后续逻辑处理）
                 return [""]
 
+            # ✨ 提取文本（兼容新格式）
+            texts = [extract_text(s) for s in summaries]
+
             # 根据 chunk 数量决定合并多少个
-            if len(summaries) <= 5:
+            if len(texts) <= 5:
                 # 少量 chunk，全部合并
-                combined = "\n\n".join(summaries)
-            elif len(summaries) <= 20:
+                combined = "\n\n".join(texts)
+            elif len(texts) <= 20:
                 # 中等数量，取前 10 个
-                combined = "\n\n".join(summaries[:10])
+                combined = "\n\n".join(texts[:10])
             else:
                 # 大量 chunk，取前 20 个
-                combined = "\n\n".join(summaries[:20])
+                combined = "\n\n".join(texts[:20])
 
             return [combined]
 
@@ -1340,7 +1323,8 @@ def _get_extraction_contents(source, summaries, chunks, cluster_results=None, or
         # 如果为空，使用原始 chunks
         if not summaries:
             summaries = [c.get("content_with_weight", "") for c in chunks if c.get("content_with_weight")]
-        return summaries
+        # ✨ 提取文本（兼容新格式）
+        return [extract_text(s) for s in summaries]
 
     elif source == "original_chunks":
         # 原始 chunks
@@ -1412,17 +1396,56 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
     """
     执行 analyze_v2 文档分析任务
 
-    ⭐ 完全复用 PipelineAnalysisService 的成熟实现
+    ⭐ 完全基于 core/flow 组件实现，支持灵活配置
 
-    环境: trio → 桥接到 asyncio (PipelineAnalysisService)
+    功能特性：
+    - Parser: 文档解析（支持 PDF/Word/Excel/图片/音视频等，支持 VLM 图片理解）
+    - HierarchicalMerger: 层次化章节合并
+    - RAPTOR: 递归摘要聚类
+    - Extractor: 元数据字段提取
+    - 智能去重：smart/semantic/none
 
     Args:
-        task: 任务信息
-        chat_mdl: LLM 模型（未使用，PipelineAnalysisService 内部创建）
-        embd_mdl: Embedding 模型（未使用，PipelineAnalysisService 内部创建）
+        task: 任务信息，task["chunk_ids"] 中包含配置：
+            config.processing_strategy: 处理策略 (auto/simple/hierarchical/raptor/hybrid)
+            config.parse_method: 解析方法（用于 VLM）
+                - "deepdoc": 深度解析（默认）
+                - "qwen-vl-plus": VLM 视觉理解（对每张原始图片）
+                - "ocr": OCR 识别（对每张原始图片）
+            config.hierarchical_config: 层次化配置
+                - levels: 标题正则表达式列表
+                - hierarchy: 层级（0=章节，1=章+节）
+            config.raptor_config: RAPTOR 配置
+                - max_cluster: 最大聚类数
+                - max_token: 摘要长度
+                - threshold: 聚类阈值
+            config.metadata_fields: 元数据字段列表
+                - field_name: 字段名
+                - prompt: LLM 提示词
+                - aggregate: 聚合策略
+            config.dedup_strategy: 去重策略 (smart/semantic/none)
+        chat_mdl: LLM 模型（用于摘要、提取）
+        embd_mdl: Embedding 模型（用于 RAPTOR 聚类）
         vector_size: 向量维度
         db: 数据库 Session
         callback: 进度回调函数
+
+    Returns:
+        dict: {
+            "metadata": {字段名: 提取的值},
+            "processing_info": {处理统计信息},
+            "structure": {文档结构信息（如有）}
+        }
+
+    图片理解功能：
+        应该在 Parser 阶段配置，而不是在 hierarchical_config 中。
+        
+        正确配置：
+        {
+            "parse_method": "qwen-vl-plus",  // VLM 处理每张原始图片
+            "image_system_prompt": "描述这张图片的关键信息",  // Parser 配置
+            "image_lang": "Chinese"
+        }
     """
     # 解析任务配置
     task_data = json.loads(task.get("chunk_ids", "{}"))
@@ -1493,26 +1516,40 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             from core.flow.utils import parse_file, split_chunks
 
             # 1. 解析文件（保留结构）
-            # 构建配置（参考 core/flow/parser/parser.py 的 setups 结构）
-            parse_method = config.get("parse_method", "deepdoc")
-            output_format = config.get("output_format", "json")
+            # 支持两种配置方式（参考 core/flow/parser/parser.py 的 setups 结构）
+            
+            parser_config_dict = config.get("parser_config")  # 完整方式（优先）
+            
+            if parser_config_dict:
+                # 方式 1：使用 parser_config 字典（用户一次性配置所有文件类型）
+                pdf_config = parser_config_dict.get("pdf", {"parse_method": "deepdoc", "output_format": "json"})
+                image_config = parser_config_dict.get("image", {"parse_method": "ocr", "lang": "Chinese"})
+                excel_config = parser_config_dict.get("excel", {"output_format": "html"})
+                word_config = parser_config_dict.get("word", {"output_format": "json"})
+                email_config = parser_config_dict.get("email", {"output_format": "json", "fields": None})
+                logging.info(f"Using parser_config dictionary mode")
+            else:
+                # 方式 2：使用简化参数（自动应用到所有文件类型）
+                parse_method = config.get("parse_method", "deepdoc")
+                output_format = config.get("output_format", "json")
 
-            pdf_config = {
-                "parse_method": parse_method if parse_method in ["deepdoc", "plain_text", "mineru"] else (
-                    parse_method if parse_method not in ["auto", "ocr", "vlm"] else "deepdoc"
-                ),
-                "output_format": output_format,
-                "lang": config.get("lang", "Chinese")
-            }
-            image_config = {
-                "parse_method": parse_method if parse_method in ["ocr", "vlm"] else "ocr",
-                "llm_name": config.get("image_llm_name"),
-                "lang": config.get("lang", "Chinese"),
-                "system_prompt": config.get("image_system_prompt")
-            }
-            excel_config = {"output_format": output_format}
-            word_config = {"output_format": output_format}
-            email_config = {"output_format": output_format, "fields": config.get("email_fields")}
+                pdf_config = {
+                    "parse_method": parse_method if parse_method in ["deepdoc", "plain_text", "mineru"] else (
+                        parse_method if parse_method not in ["auto", "ocr", "vlm"] else "deepdoc"
+                    ),
+                    "output_format": output_format,
+                    "lang": config.get("lang", "Chinese")
+                }
+                image_config = {
+                    "parse_method": parse_method,  # ✅ 直接传递，支持任何 VLM 模型名
+                    "llm_name": config.get("image_llm_name"),
+                    "lang": config.get("lang", "Chinese"),
+                    "system_prompt": config.get("image_system_prompt")
+                }
+                excel_config = {"output_format": output_format}
+                word_config = {"output_format": output_format}
+                email_config = {"output_format": output_format, "fields": config.get("email_fields")}
+                logging.info(f"Using simplified parse_method mode: {parse_method}")
 
             def _parser_callback(prog, msg):
                 callback(prog=0.15 + prog * 0.05, msg=msg)
@@ -1601,10 +1638,12 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
         # 2.1 自动选择策略（参考 PipelineAnalysisService._auto_select_strategy）
         if strategy == "auto":
-            # 检测是否有层次结构
-            has_structure = _detect_hierarchical_structure(chunks, hierarchical_config)
+            # 检测是否有层次结构（复用 core/flow/utils 的 hierarchical_merge）
+            has_structure = await _detect_hierarchical_structure(chunks, hierarchical_config)
             is_long = len(chunks) > 50
 
+            # ⚠️ 保护机制：如果没有检测到结构，不要使用 hierarchical 策略
+            # 避免将所有 chunks 合并成一个超大章节
             if has_structure and is_long:
                 strategy = "hybrid"
             elif has_structure:
@@ -1614,7 +1653,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             else:
                 strategy = "simple"
 
-            logging.info(f"Auto-selected strategy: {strategy}")
+            logging.info(f"Auto-selected strategy: {strategy} (has_structure={has_structure}, chunks={len(chunks)})")
 
         summaries = []
         cluster_count = 0
@@ -1629,13 +1668,22 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             callback(prog=0.5, msg=f"使用简单策略，共 {len(summaries)} 个片段")
 
         elif strategy == "hierarchical":
-            # 使用 HierarchicalMerger（参考 PipelineAnalysisService._hierarchical_merge）
+            # 使用 HierarchicalMerger（参考 core/flow/hierarchical_merger）
             components_used.append("HierarchicalMerger")
             callback(prog=0.3, msg="层次化合并处理...")
 
-            hierarchical_result = _hierarchical_merge(chunks, hierarchical_config)
+            # ✨ 传递 tenant_id 和 db 以支持 VLM 图片理解
+            hierarchical_result = await _hierarchical_merge(chunks, hierarchical_config, tenant_id=tenant_id, db=db)
             summaries = hierarchical_result.get("summaries", [])
             structure_info = hierarchical_result.get("structure")
+
+            # ⚠️ 保护机制：检查是否真的识别出了结构
+            if len(summaries) == 1 and len(chunks) > 10:
+                logging.warning(
+                    f"HierarchicalMerger only identified 1 chapter from {len(chunks)} chunks. "
+                    f"This may indicate no matching title structure was found. "
+                    f"Consider using 'auto' strategy or adjusting hierarchical_config."
+                )
 
             callback(prog=0.7, msg=f"层次化合并完成，{len(summaries)} 个章节")
 
@@ -1645,9 +1693,27 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             callback(prog=0.3, msg="混合处理：层次化 + RAPTOR...")
 
             # 先层次化
-            hierarchical_result = _hierarchical_merge(chunks, hierarchical_config)
+            # ✨ 传递 tenant_id 和 db 以支持 VLM 图片理解
+            hierarchical_result = await _hierarchical_merge(chunks, hierarchical_config, tenant_id=tenant_id, db=db)
             chapters = hierarchical_result.get("chapters", [])
             structure_info = hierarchical_result.get("structure")
+
+            # ⚠️ 保护机制：检查是否真的识别出了结构
+            if len(chapters) == 1 and len(chunks) > 10:
+                logging.warning(
+                    f"HierarchicalMerger only identified 1 chapter from {len(chunks)} chunks in hybrid strategy. "
+                    f"Falling back to RAPTOR-only processing to avoid creating a single huge chapter."
+                )
+                # 降级为纯 RAPTOR 策略：构造一个完整的 chapter 对象
+                chapters = [{
+                    "chunks": chunks,
+                    "title": "Full Document",
+                    "text": "\n".join([c.get("content_with_weight", "") for c in chunks]),
+                    "chunk_indices": list(range(len(chunks))),
+                    "positions": [],
+                    "image": None,
+                    "page_range": None
+                }]
 
             # 对每个章节独立运行 RAPTOR
             all_summaries = []
@@ -1661,6 +1727,9 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 if len(chapter_chunks) > 10:
                     # 章节较长，使用 RAPTOR
                     chapter_raptor_inputs = []
+                    # ✨ 新增：保存元数据（位置和图片）以便 RAPTOR 后关联
+                    chunk_metadata = []
+
                     for chunk in chapter_chunks:
                         text = chunk.get("content_with_weight", "")
                         embd_result, _ = await trio.to_thread.run_sync(
@@ -1669,6 +1738,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                         embd = embd_result[0] if len(embd_result) > 0 else np.array([])
                         if len(embd) > 0:
                             chapter_raptor_inputs.append((text, embd))
+                            # ✨ 保存元数据
+                            positions = chunk.get("positions", [])
+                            chunk_metadata.append({
+                                "positions": positions,
+                                "image": chunk.get("image"),
+                                "page_nums": sorted(set(p[0] for p in positions)) if positions else []
+                            })
 
                     # 禁用 usage tracking
                     original_db_chat = chat_mdl.db
@@ -1677,12 +1753,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     embd_mdl.db = None
 
                     try:
+                        # 修复：避免括号格式导致的SyntaxWarning
+                        raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
                         raptor = Raptor(
                             max_cluster=raptor_config.get("max_cluster", 64),
                             llm_model=chat_mdl,
                             embd_model=embd_mdl,
-                            prompt=raptor_config.get(
-                                "prompt") or "Please summarize the following content:\n{cluster_content}",
+                            prompt=raptor_prompt,
                             max_token=raptor_config.get("max_token", 512),
                             threshold=raptor_config.get("threshold", 0.1)
                         )
@@ -1692,18 +1769,50 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                             callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR ({chapter['title'][:20]}): {msg}")
                         )
 
-                        # 提取聚类摘要
+                        # ✨ 提取聚类摘要（RAPTOR 生成的新节点）
                         original_len = len(chapter_raptor_inputs)
                         if len(chapter_results) > original_len:
-                            chapter_summaries = [chapter_results[i][0] for i in
-                                                 range(original_len, len(chapter_results))]
-                            all_summaries.extend(chapter_summaries)
+                            # RAPTOR 生成的摘要节点（索引 >= original_len）
+                            for i in range(original_len, len(chapter_results)):
+                                summary_text = chapter_results[i][0]
+
+                                # ✨ 聚类摘要继承成员的位置信息
+                                # RAPTOR 返回格式: [(text, embd, parent_ids), ...]
+                                # 找到这个摘要节点的所有子节点
+                                child_indices = []
+                                if len(chapter_results[i]) > 2:
+                                    # 有 parent_ids 信息
+                                    parent_ids = chapter_results[i][2] if isinstance(chapter_results[i], tuple) and len(chapter_results[i]) > 2 else []
+                                    child_indices = [j for j in parent_ids if j < len(chunk_metadata)]
+
+                                # 合并子节点的位置
+                                merged_positions = []
+                                merged_image = None
+                                for child_idx in child_indices:
+                                    if child_idx < len(chunk_metadata):
+                                        meta = chunk_metadata[child_idx]
+                                        if meta["positions"]:
+                                            merged_positions.extend(meta["positions"])
+                                        if meta["image"]:
+                                            merged_image = concat_img(merged_image, meta["image"])
+
+                                all_summaries.append({
+                                    "text": summary_text,
+                                    "positions": merged_positions,
+                                    "image": merged_image,
+                                    "is_cluster_summary": True  # 标记为聚类摘要
+                                })
                     finally:
                         chat_mdl.db = original_db_chat
                         embd_mdl.db = original_db_embd
                 else:
-                    # 章节较短，直接使用
-                    all_summaries.extend([c.get("content_with_weight", "") for c in chapter_chunks])
+                    # ✨ 章节较短，直接使用（保留位置信息）
+                    for c in chapter_chunks:
+                        all_summaries.append({
+                            "text": c.get("content_with_weight", ""),
+                            "positions": c.get("positions", []),
+                            "image": c.get("image")
+                        })
 
             summaries = all_summaries
             cluster_count = len(summaries)
@@ -1745,12 +1854,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 embd_mdl.db = None
 
                 try:
+                    # 修复：避免括号格式导致的SyntaxWarning
+                    raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
                     raptor = Raptor(
                         max_cluster=raptor_config.get("max_cluster", 64),
                         llm_model=chat_mdl,
                         embd_model=embd_mdl,
-                        prompt=raptor_config.get(
-                            "prompt") or "Please summarize the following content:\n{cluster_content}",
+                        prompt=raptor_prompt,
                         max_token=raptor_config.get("max_token", 512),
                         threshold=raptor_config.get("threshold", 0.1)
                     )
