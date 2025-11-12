@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
+from api.db.db_models import db_connection
 from api.utils.prompt_template_util import PromptTemplateUtil
 
 logger = logging.getLogger(__name__)
@@ -132,9 +133,6 @@ class QueryIntentAnalyzer:
             (推荐的图表类型, 推荐理由): 图表类型和理由的元组
         """
         try:
-            # 初始化LLM模型
-            llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
-
             # 从文件加载提示词模板
             template_path = os.path.join(self.prompt_dir, "query_intent.txt")
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
@@ -159,13 +157,20 @@ class QueryIntentAnalyzer:
                 "max_tokens": 1024
             }
 
+            # 定义在独立线程中执行的函数，使用独立的数据库会话
+            def _chat_in_thread():
+                # 在线程中创建独立的数据库会话和LLM实例
+                # 这样可以避免多线程共享数据库会话导致的事务状态冲突
+                with db_connection() as thread_db:
+                    thread_llm_instance = LLMBundle(thread_db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+                    return thread_llm_instance.chat(
+                        system="",
+                        history=history,
+                        gen_conf=gen_conf
+                    )
+
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(
-                llm_model_instance.chat,
-                system="",
-                history=history,
-                gen_conf=gen_conf
-            )
+            response = await asyncio.to_thread(_chat_in_thread)
 
             # 提取和处理响应
             parsed_data, success = self._extract_json_from_response(response)
@@ -196,9 +201,6 @@ class QueryIntentAnalyzer:
             (推荐的图表类型, 推荐理由): 图表类型和理由的元组
         """
         try:
-            # 初始化LLM模型
-            llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
-
             # 从文件加载提示词模板（使用新的不依赖语义层的模板）
             template_path = os.path.join(self.prompt_dir, "query_intent_without_semantic.txt")
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
@@ -222,13 +224,20 @@ class QueryIntentAnalyzer:
                 "max_tokens": 1024
             }
 
+            # 定义在独立线程中执行的函数，使用独立的数据库会话
+            def _chat_in_thread():
+                # 在线程中创建独立的数据库会话和LLM实例
+                # 这样可以避免多线程共享数据库会话导致的事务状态冲突
+                with db_connection() as thread_db:
+                    thread_llm_instance = LLMBundle(thread_db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+                    return thread_llm_instance.chat(
+                        system="",
+                        history=history,
+                        gen_conf=gen_conf
+                    )
+
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(
-                llm_model_instance.chat,
-                system="",
-                history=history,
-                gen_conf=gen_conf
-            )
+            response = await asyncio.to_thread(_chat_in_thread)
 
             # 提取和处理响应
             parsed_data, success = self._extract_json_from_response(response)
@@ -261,9 +270,6 @@ class QueryIntentAnalyzer:
             包含推荐图表类型、推荐理由、原始响应和解析状态的字典
         """
         try:
-            # 初始化LLM模型
-            llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
-
             # 从文件加载提示词模板
             template_path = os.path.join(self.prompt_dir, "query_intent.txt")
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
@@ -288,13 +294,20 @@ class QueryIntentAnalyzer:
                 "max_tokens": 1024
             }
 
+            # 定义在独立线程中执行的函数，使用独立的数据库会话
+            def _chat_in_thread():
+                # 在线程中创建独立的数据库会话和LLM实例
+                # 这样可以避免多线程共享数据库会话导致的事务状态冲突
+                with db_connection() as thread_db:
+                    thread_llm_instance = LLMBundle(thread_db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+                    return thread_llm_instance.chat(
+                        system="",
+                        history=history,
+                        gen_conf=gen_conf
+                    )
+
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(
-                llm_model_instance.chat,
-                system="",
-                history=history,
-                gen_conf=gen_conf
-            )
+            response = await asyncio.to_thread(_chat_in_thread)
 
             # 提取和处理响应
             parsed_data, success = self._extract_json_from_response(response)
