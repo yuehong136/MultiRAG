@@ -40,19 +40,34 @@ class GuardLogService(CommonService):
             创建成功返回日志ID，失败返回None
         """
         try:
+            def _normalize_field(value: Any, max_len: int) -> Optional[str]:
+                if value is None:
+                    return None
+                value_str = str(value)
+                if len(value_str) <= max_len:
+                    return value_str
+                digest = hashlib.md5(value_str.encode('utf-8')).hexdigest()
+                suffix_len = min(8, max_len)
+                prefix_len = max_len - suffix_len - 1
+                if prefix_len <= 0:
+                    return digest[:max_len]
+                return f"{value_str[:prefix_len]}_{digest[:suffix_len]}"
+
+            content = content or ""
             content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
             content_preview = content[:500] if len(content) > 500 else content
+            content_preview = _normalize_field(content_preview, 500)
             
             log_data = {
                 "id": get_uuid(),
                 "service_id": service_id,
-                "service_code": service_code,
+                "service_code": _normalize_field(service_code, 128),
                 "tenant_id": tenant_id,
                 "content_hash": content_hash,
                 "content_length": len(content),
                 "content_preview": content_preview,
-                "request_id": kwargs.get("request_id"),
-                "chat_id": kwargs.get("chat_id"),
+                "request_id": _normalize_field(kwargs.get("request_id"), 64),
+                "chat_id": _normalize_field(kwargs.get("chat_id"), 64),
                 "user_id": kwargs.get("user_id"),
                 "is_blocked": kwargs.get("is_blocked", False),
                 "risk_score": kwargs.get("risk_score", 0.0),
@@ -67,9 +82,9 @@ class GuardLogService(CommonService):
                 "sensitive_data": kwargs.get("sensitive_data", []),
                 "action_taken": kwargs.get("action_taken"),
                 "action_detail": kwargs.get("action_detail", {}),
-                "source_type": kwargs.get("source_type"),
-                "source_id": kwargs.get("source_id"),
-                "client_ip": kwargs.get("client_ip"),
+                "source_type": _normalize_field(kwargs.get("source_type"), 64),
+                "source_id": _normalize_field(kwargs.get("source_id"), 255),
+                "client_ip": _normalize_field(kwargs.get("client_ip"), 64),
                 "user_agent": kwargs.get("user_agent"),
                 "process_time_ms": kwargs.get("process_time_ms"),
                 "cloud_service_used": kwargs.get("cloud_service_used", False)
