@@ -9,6 +9,7 @@
 import logging
 import hashlib
 import time
+import re
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,7 @@ from api.db.services.guard_log_service import GuardLogService
 
 class AiGuardEngineService:
     """渐进式AI安全护栏检测引擎服务"""
+    _regex_cache: dict[str, tuple[str, Optional[re.Pattern]]] = {}
 
     @classmethod
     def detect_content(cls, db: Session, content: str, service_id: str,
@@ -221,14 +223,26 @@ class AiGuardEngineService:
         
         matched_words = []
         current_content = processed_content
+        original_lower = original_content.lower()
         
         for item in library_items:
-            if item.content.lower() in original_content.lower():
-                matched_words.append(item.content)
-                # 从待检测内容中移除白名单词汇
+            match_segments = cls._match_library_item(original_content, item, original_lower)
+            if not match_segments:
+                continue
+            
+            matched_words.extend(match_segments)
+            
+            # 从待检测内容中移除白名单词汇
+            content_type = (item.content_type or "text").lower()
+            if content_type == "regex":
+                pattern = cls._get_regex_pattern(item)
+                if pattern:
+                    current_content = pattern.sub("", current_content)
+            else:
                 current_content = current_content.replace(item.content, "")
-                # 更新命中统计
-                GuardLibraryItemService.increment_hit_count(db, item.id)
+            
+            # 更新命中统计
+            GuardLibraryItemService.increment_hit_count(db, item.id)
         
         return {
             "matched": len(matched_words) > 0,
@@ -263,15 +277,19 @@ class AiGuardEngineService:
         ).all()
         logging.info(f"黑名单词库 {library_info.get('name')} 包含 {len(library_items)} 个启用的词汇")
         
-        matched_words = []
+        matched_words: list[str] = []
+        content_lower = content.lower()
         
         for item in library_items:
             logging.info(f"检查词汇: '{item.content}' 是否在内容 '{content}' 中")
-            if item.content.lower() in content.lower():
-                logging.info(f"匹配到黑名单词汇: {item.content}")
-                matched_words.append(item.content)
-                # 更新命中统计
-                GuardLibraryItemService.increment_hit_count(db, item.id)
+            match_segments = cls._match_library_item(content, item, content_lower)
+            if not match_segments:
+                continue
+            
+            logging.info(f"匹配到黑名单词汇: {match_segments[0]}")
+            matched_words.extend(match_segments)
+            # 更新命中统计
+            GuardLibraryItemService.increment_hit_count(db, item.id)
         
         if matched_words:
             # 计算风险分数
@@ -294,6 +312,69 @@ class AiGuardEngineService:
             }
         
         return {"matched": False, "result": {}}
+
+    @classmethod
+    def _match_library_item(cls, content: str, item: Any, lowered_content: Optional[str] = None) -> list[str]:
+        """
+        根据词库项类型执行匹配，返回命中的片段列表
+        """
+        content_type = (getattr(item, "content_type", None) or "text").lower()
+        
+        if content_type == "regex":
+            pattern = cls._get_regex_pattern(item)
+            if not pattern:
+                return []
+            matches = pattern.findall(content)
+            if not matches:
+                return []
+            normalized = cls._normalize_regex_matches(matches, pattern.pattern)
+            return [m for m in normalized if m]
+        
+        target = (item.content or "").strip()
+        if not target:
+            return []
+        
+        if lowered_content is None:
+            lowered_content = content.lower()
+        if target.lower() in lowered_content:
+            return [target]
+        return []
+
+    @classmethod
+    def _get_regex_pattern(cls, item: Any) -> Optional[re.Pattern]:
+        """
+        获取（或编译）词库项对应的正则表达式
+        """
+        cache_entry = cls._regex_cache.get(item.id)
+        if cache_entry and cache_entry[0] == item.content:
+            return cache_entry[1]
+        
+        try:
+            pattern = re.compile(item.content, re.IGNORECASE | re.MULTILINE | re.UNICODE)
+        except re.error as exc:
+            logging.warning(
+                "正则词库项编译失败 item_id=%s library_id=%s error=%s",
+                item.id, item.library_id, exc
+            )
+            cls._regex_cache[item.id] = (item.content, None)
+            return None
+        
+        cls._regex_cache[item.id] = (item.content, pattern)
+        return pattern
+
+    @staticmethod
+    def _normalize_regex_matches(matches: Any, fallback: str) -> list[str]:
+        """
+        规整 regex.findall 的结果，确保返回字符串列表
+        """
+        normalized = []
+        for match in matches:
+            if isinstance(match, tuple):
+                first_non_empty = next((grp for grp in match if grp), "")
+                normalized.append(first_non_empty or fallback)
+            else:
+                normalized.append(match or fallback)
+        return normalized
 
     @classmethod
     def _detect_comprehensive(cls, db: Session, content: str, service: Any) -> Dict[str, Any]:
