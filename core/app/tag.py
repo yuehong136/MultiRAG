@@ -1,3 +1,6 @@
+#
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+#
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 #  You may obtain a copy of the License at
@@ -122,7 +125,6 @@ def label_question(db, question, kbs):
     from api.db.services.knowledgebase_service import KnowledgebaseService
     from graphrag.utils import get_tags_from_cache, set_tags_to_cache
     from api import settings
-    from api.db.db_models import SessionLocal
     tags = None
     tag_kb_ids = []
     for kb in kbs:
@@ -131,14 +133,14 @@ def label_question(db, question, kbs):
     if tag_kb_ids:
         all_tags = get_tags_from_cache(tag_kb_ids)
         if not all_tags:
-            all_tags = settings.retrievaler.all_tags_in_portion(db, kb.tenant_id, tag_kb_ids)
+            all_tags = settings.retriever.all_tags_in_portion(db, kb.tenant_id, tag_kb_ids)
             set_tags_to_cache(tags=all_tags, kb_ids=tag_kb_ids)
         else:
             all_tags = json.loads(all_tags)
         tag_kbs = KnowledgebaseService.get_by_ids(db, tag_kb_ids)
         if not tag_kbs:
             return tags
-        tags = settings.retrievaler.tag_query(question,
+        tags = settings.retriever.tag_query(question,
                                               list(set([kb.tenant_id for kb in tag_kbs])),
                                               tag_kb_ids,
                                               all_tags,

@@ -1105,12 +1105,12 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
             chat_mdl = LLMBundle(kb.tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
 
-        labels = label_question(question, [kb])
-        ranks = settings.retrievaler.retrieval(
+        labels = label_question(db, question, [kb])
+        ranks = settings.retriever.retrieval(
             question, embd_mdl, tenant_ids, kb_ids, page, size, similarity_threshold, vector_similarity_weight, top, doc_ids, rerank_mdl=rerank_mdl, highlight=req.get("highlight"), rank_feature=labels
         )
         if use_kg:
-            ck = settings.kg_retrievaler.retrieval(question, tenant_ids, kb_ids, embd_mdl, LLMBundle(kb.tenant_id, LLMType.CHAT))
+            ck = settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, LLMBundle(kb.tenant_id, LLMType.CHAT))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
 

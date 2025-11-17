@@ -1102,7 +1102,7 @@ def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends
     #
     # search_mode_dict = request.get_search_mode_dict()
     #
-    # ranks = settings.retrievaler.retrieval(
+    # ranks = settings.retriever.retrieval(
     #     question=req["question"],
     #     filter_exp=filter_exp,
     #     embd_mdl=embd_mdl,

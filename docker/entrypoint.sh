@@ -25,6 +25,7 @@ PY=${PYTHON_BIN:-python3}       # Python 可执行文件，可通过环境变量
 ENABLE_REDIS=1                 # 是否启动 Redis
 ENABLE_SERVER=1                # 是否启动 api.multirag_server
 ENABLE_TASKEXECUTOR=1          # 是否启动 TaskExecutor
+ENABLE_ADMINSERVER=1           # 是否启动 admin server（默认启动）
 WORKERS="${WS:-1}"            # TaskExecutor 数量，默认取 WS 环境变量，否则 1
 CONSUMER_NO_BEG=0              # 消费者 ID 起始（含）
 CONSUMER_NO_END=0              # 消费者 ID 结束（不含） - 为 0 表示未指定区间
@@ -48,6 +49,7 @@ Usage: $0 [options]
   --disable-redis                 不启动 Redis
   --disable-server                不启动 api.multirag_server
   --disable-taskexecutor          不启动 TaskExecutor
+  --enable-adminserver            启动 Admin Server（默认启动）
   --workers=<num>                 TaskExecutor 数量（默认读取 WS 或 1）
   --consumer-no-beg=<num>         消费者 ID 起始（含）
   --consumer-no-end=<num>         消费者 ID 结束（不含）
@@ -63,6 +65,7 @@ for arg in "$@"; do
     --disable-redis)        ENABLE_REDIS=0 ; shift ;;
     --disable-server)       ENABLE_SERVER=0 ; shift ;;
     --disable-taskexecutor) ENABLE_TASKEXECUTOR=0 ; shift ;;
+    --enable-adminserver)   ENABLE_ADMINSERVER=1 ; shift ;;
     --workers=*)            WORKERS="${arg#*=}" ; shift ;;
     --consumer-no-beg=*)    CONSUMER_NO_BEG="${arg#*=}" ; shift ;;
     --consumer-no-end=*)    CONSUMER_NO_END="${arg#*=}" ; shift ;;
@@ -95,6 +98,26 @@ start_server() {
   exec "${PY}" -m api.multirag_server
 }
 
+start_admin_server() {
+  echo "[entrypoint] 启动 Admin Server (端口 8130)..."
+  while true; do
+    "${PY}" admin/server/admin_server.py || true
+    echo "[entrypoint] Admin Server 崩溃，1 秒后重启..."
+    sleep 1
+  done &
+}
+
+ensure_docling() {
+  if [[ "${USE_DOCLING}" == "true" ]]; then
+    if ! "${PY}" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('docling') else 1)" 2>/dev/null; then
+      echo "[entrypoint] docling 未安装，正在安装..."
+      "${PY}" -m pip install --no-cache-dir "docling${DOCLING_VERSION:-}" || echo "[entrypoint] docling 安装失败，跳过"
+    else
+      echo "[entrypoint] docling 已安装，跳过"
+    fi
+  fi
+}
+
 _term() {
   echo "[entrypoint] 收到终止信号，清理子进程..."
   pkill -TERM -P $$ || true
@@ -107,6 +130,13 @@ trap _term SIGTERM SIGINT
 if [[ "${ENABLE_REDIS}" -eq 1 ]]; then
   start_redis
 fi
+
+if [[ "${ENABLE_ADMINSERVER}" -eq 1 ]]; then
+  start_admin_server
+fi
+
+# 确保 docling 依赖已安装
+ensure_docling
 
 if [[ "${ENABLE_TASKEXECUTOR}" -eq 1 ]]; then
   if (( CONSUMER_NO_END > CONSUMER_NO_BEG )); then

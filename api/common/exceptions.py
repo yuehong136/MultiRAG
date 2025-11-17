@@ -9,6 +9,7 @@ class AdminException(Exception):
     """管理后台基础异常类"""
     def __init__(self, message: str, code: int = 400):
         super().__init__(message)
+        self.type = "admin"
         self.code = code
         self.message = message
 
@@ -29,6 +30,12 @@ class CannotDeleteAdminError(AdminException):
     """不能删除管理员异常"""
     def __init__(self):
         super().__init__("Cannot delete admin account", 403)
+
+
+class NotAdminError(AdminException):
+    """非管理员异常"""
+    def __init__(self, username: str):
+        super().__init__(f"User '{username}' is not admin", 403)
 
 
 class AuthenticationError(AdminException):

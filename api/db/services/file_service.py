@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from api.db import FileType, KNOWLEDGEBASE_FOLDER_NAME, FileSource, ParserType
 from api.db.db_models import File, Document, Knowledgebase, File2Document
@@ -117,6 +117,35 @@ class FileService(CommonService):
         else:
             result_ids.append(folder_id)
         return result_ids
+
+    @classmethod
+    def get_all_file_ids_by_tenant_id(cls, db: Session, tenant_id: str) -> list[dict]:
+        """根据tenant_id批量查询所有文件ID，使用分页避免内存溢出"""
+        stmt = (
+            select(cls.model.id)
+            .where(cls.model.tenant_id == tenant_id)
+            .order_by(cls.model.create_time.asc())
+        )
+
+        offset, limit = 0, 100
+        res = []
+
+        while True:
+            try:
+                file_batch = db.execute(
+                    stmt.offset(offset).limit(limit)
+                ).scalars().all()
+
+                if not file_batch:
+                    break
+
+                res.extend([{"id": file_id} for file_id in file_batch])
+                offset += limit
+            except Exception:
+                logging.exception("Failed to get file IDs for tenant_id=%s at offset %d", tenant_id, offset)
+                break
+
+        return res
 
     @classmethod
     def create_folder(cls, db: Session, file: File, parent_id: str, name: list[str], count: int) -> File:
@@ -364,12 +393,11 @@ class FileService(CommonService):
                     thumbnail_location = f"thumbnail_{file_id}.png"
                     STORAGE_IMPL.put(kb.id, thumbnail_location, img)
 
-
-
                 doc = {
                     "id": file_id,
                     "kb_id": kb.id,
                     "parser_id": cls.get_parser(filetype, filename, kb.parser_id),
+                    "pipeline_id": kb.pipeline_id,
                     "parser_config": kb.parser_config,
                     "created_by": current_user.id,
                     "type": filetype,
@@ -388,6 +416,32 @@ class FileService(CommonService):
                 err.append(f"{filename}: {str(e)}")
 
         return err, files_info
+
+    @classmethod
+    def list_all_files_by_parent_id(cls, db: Session, parent_id: str) -> list[File]:
+        """
+        根据父文件夹ID查询所有子文件和子文件夹
+        
+        Args:
+            db: 数据库会话
+            parent_id: 父文件夹ID
+            
+        Returns:
+            文件列表
+        """
+        try:
+            stmt = (
+                select(cls.model)
+                .where(
+                    cls.model.parent_id == parent_id,
+                    cls.model.id != parent_id
+                )
+            )
+            files = db.execute(stmt).scalars().all()
+            return list(files)
+        except Exception:
+            logging.exception("list_by_parent_id failed")
+            raise RuntimeError("Database error (list_by_parent_id)!")
 
     @staticmethod
     def parse_docs(file_data, user_id):
@@ -427,7 +481,7 @@ class FileService(CommonService):
             return ParserType.AUDIO.value
         if re.search(r"\.(ppt|pptx|pages)$", filename):
             return ParserType.PRESENTATION.value
-        if re.search(r"\.(eml)$", filename):
+        if re.search(r"\.(msg|eml)$", filename):
             return ParserType.EMAIL.value
         return default
 

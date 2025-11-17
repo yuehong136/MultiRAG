@@ -18,13 +18,15 @@ import re
 from abc import ABC
 from agent.tools.base import ToolParamBase, ToolBase, ToolMeta
 from api.db import LLMType
+from api.db.services.document_service import DocumentService
+from api.db.services.dialog_service import meta_filter
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api import settings
 from api.utils.api_utils import timeout
 from core.app.tag import label_question
-from core.prompts.generator import cross_languages, kb_prompt
+from core.prompts.generator import cross_languages, kb_prompt, gen_meta_filter
 
 
 class RetrievalParam(ToolParamBase):
@@ -58,6 +60,8 @@ class RetrievalParam(ToolParamBase):
         self.empty_response = ""
         self.use_kg = False
         self.cross_languages = []
+        self.toc_enhance = False
+        self.meta_data_filter={}
 
     def check(self):
         self.check_decimal_float(self.similarity_threshold, "[Retrieval] Similarity threshold")
@@ -80,82 +84,102 @@ class Retrieval(ToolBase, ABC):
         if not kwargs.get("query"):
             self.set_output("formalized_content", self._param.empty_response)
 
-        kb_ids: list[str] = []
-        for id in self._param.kb_ids:
-            if id.find("@") < 0:
-                kb_ids.append(id)
-                continue
-            kb_nm = self._canvas.get_variable_value(id)
-            # if kb_nm is a list
-            kb_nm_list = kb_nm if isinstance(kb_nm, list) else [kb_nm]
-            for nm_or_id in kb_nm_list:
-                with db_connection() as db:
+        with db_connection() as db:
+            kb_ids: list[str] = []
+            for id in self._param.kb_ids:
+                if id.find("@") < 0:
+                    kb_ids.append(id)
+                    continue
+                kb_nm = self._canvas.get_variable_value(id)
+                # if kb_nm is a list
+                kb_nm_list = kb_nm if isinstance(kb_nm, list) else [kb_nm]
+                for nm_or_id in kb_nm_list:
                     e, kb = KnowledgebaseService.get_by_name(db, nm_or_id, self._canvas._tenant_id)
                     if not e:
                         kb = KnowledgebaseService.get_by_id(db, nm_or_id)
                         if not kb:
                             raise Exception(f"Dataset({nm_or_id}) does not exist.")
-                kb_ids.append(kb.id)
+                    kb_ids.append(kb.id)
 
-        filtered_kb_ids: list[str] = list(set([kb_id for kb_id in kb_ids if kb_id]))
-        with db_connection() as db:
+            filtered_kb_ids: list[str] = list(set([kb_id for kb_id in kb_ids if kb_id]))
             kbs = KnowledgebaseService.get_by_ids(db, filtered_kb_ids)
-        if not kbs:
-            raise Exception("No dataset is selected.")
+            if not kbs:
+                raise Exception("No dataset is selected.")
 
-        embd_nms = list(set([kb.embd_id for kb in kbs]))
-        assert len(embd_nms) == 1, "Knowledge bases use different embedding models."
+            embd_nms = list(set([kb.embd_id for kb in kbs]))
+            assert len(embd_nms) == 1, "Knowledge bases use different embedding models."
 
-        embd_mdl = None
-        if embd_nms:
-            with db_connection() as db:
+            embd_mdl = None
+            if embd_nms:
                 embd_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.EMBEDDING, embd_nms[0])
 
-        rerank_mdl = None
-        if self._param.rerank_id:
-            with db_connection() as db:
+            rerank_mdl = None
+            if self._param.rerank_id:
                 rerank_mdl = LLMBundle(db, kbs[0].tenant_id, LLMType.RERANK, self._param.rerank_id)
 
-        vars = self.get_input_elements_from_text(kwargs["query"])
-        vars = {k:o["value"] for k,o in vars.items()}
-        query = self.string_format(kwargs["query"], vars)
-        if self._param.cross_languages:
-            query = cross_languages(kbs[0].tenant_id, None, query, self._param.cross_languages)
+            vars = self.get_input_elements_from_text(kwargs["query"])
+            vars = {k:o["value"] for k,o in vars.items()}
+            query = self.string_format(kwargs["query"], vars)
 
-        if kbs:
-            query = re.sub(r"^user[:：\s]*", "", query, flags=re.IGNORECASE)
-            kbinfos = settings.retrievaler.retrieval(
-                query,
-                embd_mdl,
-                [kb.tenant_id for kb in kbs],
-                filtered_kb_ids,
-                1,
-                self._param.top_n,
-                self._param.similarity_threshold,
-                1 - self._param.keywords_similarity_weight,
-                aggs=False,
-                rerank_mdl=rerank_mdl,
-                rank_feature=label_question(query, kbs),
-            )
-            if self._param.use_kg:
-                with db_connection() as db:
-                    ck = settings.kg_retrievaler.retrieval(query,
-                                                           [kb.tenant_id for kb in kbs],
+            doc_ids=[]
+            if self._param.meta_data_filter!={}:
+                metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+                if self._param.meta_data_filter.get("method") == "auto":
+                    chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.CHAT)
+                    filters = gen_meta_filter(chat_mdl, metas, query)
+                    doc_ids.extend(meta_filter(metas, filters))
+                    if not doc_ids:
+                        doc_ids = None
+                elif self._param.meta_data_filter.get("method") == "manual":
+                    doc_ids.extend(meta_filter(metas, self._param.meta_data_filter["manual"]))
+                    if not doc_ids:
+                        doc_ids = None
+
+            if self._param.cross_languages:
+                query = cross_languages(kbs[0].tenant_id, None, query, self._param.cross_languages)
+
+            tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+            if kbs:
+                kb_names = list([kb.name for kb in kbs])
+                query = re.sub(r"^user[:：\s]*", "", query, flags=re.IGNORECASE)
+                kbinfos = settings.retriever.retrieval(
+                    query,
+                    embd_mdl,
+                    tenant_ids,
+                    filtered_kb_ids,
+                    1,
+                    self._param.top_n,
+                    self._param.similarity_threshold,
+                    1 - self._param.keywords_similarity_weight,
+                    doc_ids=doc_ids,
+                    aggs=False,
+                    rerank_mdl=rerank_mdl,
+                    rank_feature=label_question(db, query, kbs),
+                )
+                
+                # TOC增强和知识图谱检索
+                if self._param.toc_enhance:
+                    chat_mdl = LLMBundle(db, self._canvas._tenant_id, LLMType.CHAT)
+                    cks = settings.retriever.retrieval_by_toc(query, kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, self._param.top_n)
+                    if cks:
+                        kbinfos["chunks"] = cks
+                if self._param.use_kg:
+                    ck = settings.kg_retriever.retrieval(query,
+                                                           tenant_ids,
                                                            kb_ids,
                                                            embd_mdl,
                                                            LLMBundle(db, self._canvas.get_tenant_id(), LLMType.CHAT))
-                if ck["content_with_weight"]:
-                    kbinfos["chunks"].insert(0, ck)
-        else:
-            kbinfos = {"chunks": [], "doc_aggs": []}
+                    if ck["content_with_weight"]:
+                        kbinfos["chunks"].insert(0, ck)
+            else:
+                kbinfos = {"chunks": [], "doc_aggs": []}
 
-        if self._param.use_kg and kbs:
-            with db_connection() as db:
-                ck = settings.kg_retrievaler.retrieval(query, [kb.tenant_id for kb in kbs], filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, LLMType.CHAT))
-            if ck["content_with_weight"]:
-                ck["content"] = ck["content_with_weight"]
-                del ck["content_with_weight"]
-                kbinfos["chunks"].insert(0, ck)
+            if self._param.use_kg and kbs:
+                ck = settings.kg_retrievaler.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, LLMType.CHAT))
+                if ck["content_with_weight"]:
+                    ck["content"] = ck["content_with_weight"]
+                    del ck["content_with_weight"]
+                    kbinfos["chunks"].insert(0, ck)
 
         for ck in kbinfos["chunks"]:
             if "vector" in ck:

@@ -1,3 +1,6 @@
+#
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+#
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 #  You may obtain a copy of the License at
@@ -10,17 +13,16 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+
 import logging
 import base64
 import datetime
 import json
 import re
-
 import pandas as pd
 import requests
 
-from api.db.db_models import SessionLocal
-# from api.db.database import SessionLocal
+from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from core.nlp import rag_tokenizer
 from deepdoc.parser.resume import refactor
@@ -163,9 +165,8 @@ def chunk(filename, binary=None, callback=None, **kwargs):
         doc[n] = resume[n]
 
     logging.debug("chunked resume to " + str(doc))
-    db = SessionLocal()
-    KnowledgebaseService.update_parser_config(
-        db=db, id=kwargs["kb_id"], config={"field_map": field_map})
+    with db_connection() as db:
+        KnowledgebaseService.update_parser_config(db=db, id=kwargs["kb_id"], config={"field_map": field_map})
     return [doc]
 
 

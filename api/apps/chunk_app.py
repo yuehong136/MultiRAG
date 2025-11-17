@@ -35,7 +35,6 @@ from api.utils.api_utils import server_error_response, get_data_error_result
 from api.db.services.document_service import DocumentService
 from api import settings
 from core.settings import PAGERANK_FLD
-# from api.settings import RetCode, retrievaler#, kg_retrievaler
 from api.utils.api_utils import get_json_result
 # from api.db.database import get_db
 from api.apps import manager
@@ -366,10 +365,10 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
         if request.available_int:
             query["available_int"] = request.available_int
             # query_count["available_int"] = request["available_int"]
-        # total = settings.retrievaler.count(query_count, search.index_name_one(tenant_id, kb.name)).total
-        # sres = settings.retrievaler.search(query, search.index_name_one(tenant_id, kb.name))
-        # total = settings.retrievaler.search(query_count, search.index_name_one(tenant_id, kb.name), kb_ids).total
-        sres = settings.retrievaler.search(query, search.index_name_one(tenant_id, kb.name), kb_ids)
+        # total = settings.retriever.count(query_count, search.index_name_one(tenant_id, kb.name)).total
+        # sres = settings.retriever.search(query, search.index_name_one(tenant_id, kb.name))
+        # total = settings.retriever.search(query_count, search.index_name_one(tenant_id, kb.name), kb_ids).total
+        sres = settings.retriever.search(query, search.index_name_one(tenant_id, kb.name), kb_ids, highlight=["content_ltks"])
         res = {"total": sres.total, "chunks": [], "doc": doc.to_dict()}
         for id in sres.ids:
             d = {
@@ -1485,12 +1484,13 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
         search_mode_dict = request.get_search_mode_dict()
 
         # 当调用retrieval函数时，传递维度信息
-        ranks = settings.retrievaler.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
+        ranks = settings.retriever.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
                                request.size, request.similarity_threshold, request.vector_similarity_weight,
-                               request.top_k, doc_ids, rerank_mdl=rerank_mdl, highlight=request.highlight,
+                               request.top_k, doc_ids, rerank_mdl=rerank_mdl,
+                               highlight=request.highlight if request.highlight is not None else False,
                                rank_feature=labels, search_mode=search_mode_dict)
         if request.use_kg:
-            ck = settings.kg_retrievaler.retrieval(question,
+            ck = settings.kg_retriever.retrieval(question,
                                                    kb.tenant_id,
                                                    [kb.name],
                                                    embd_mdl,
@@ -1628,7 +1628,7 @@ def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depends(man
     tenant_id = DocumentService.get_tenant_id(db, doc_id)
     kb_names = KnowledgebaseService.get_kb_ids(db, tenant_id)
     # todo 因为search参数里缺少knowledge_graph_kwd ，所以暂时无法使用，后续需要调整milvus集合创建的schema
-    sres = settings.retrievaler.search(req, search.index_name_one(tenant_id, kb_names))
+    sres = settings.retriever.search(req, search.index_name_one(tenant_id, kb_names))
     obj = {"graph": {}, "mind_map": {}}
     for id in sres.ids[:2]:
         ty = sres.field[id]["knowledge_graph_kwd"]

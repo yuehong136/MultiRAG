@@ -35,15 +35,13 @@ import requests
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api import settings
-# from api.db.services.llm_service import TenantLLMService, LLMService
-from api.db.services.llm_service import LLMService
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.utils import HTTP_STATUS_CODES, get_uuid
 from api.constants import REQUEST_WAIT_SEC, REQUEST_MAX_WAIT_SEC
 
 import trio
 
 from core.utils.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
+
 
 def serialize_for_json(obj):
     """
@@ -53,8 +51,7 @@ def serialize_for_json(obj):
     if hasattr(obj, '__dict__'):
         # For objects with __dict__, try to serialize their attributes
         try:
-            return {key: serialize_for_json(value) for key, value in obj.__dict__.items()
-                   if not key.startswith('_')}
+            return {key: serialize_for_json(value) for key, value in obj.__dict__.items() if not key.startswith('_')}
         except (AttributeError, TypeError):
             return str(obj)
     elif hasattr(obj, '__name__'):
@@ -70,44 +67,56 @@ def serialize_for_json(obj):
         # Fallback: convert to string representation
         return str(obj)
 
+
 def request(**kwargs):
     sess = requests.Session()
-    stream = kwargs.pop('stream', sess.stream)
-    timeout = kwargs.pop('timeout', None)
-    kwargs['headers'] = {k.replace('_', '-').upper(): v for k, v in kwargs.get('headers', {}).items()}
+    stream = kwargs.pop("stream", sess.stream)
+    timeout = kwargs.pop("timeout", None)
+    kwargs["headers"] = {k.replace("_", "-").upper(): v for k, v in kwargs.get("headers", {}).items()}
     prepped = requests.Request(**kwargs).prepare()
 
     if settings.CLIENT_AUTHENTICATION and settings.HTTP_APP_KEY and settings.SECRET_KEY:
-        timestamp = str(round(time.time() * 1000))
+        timestamp = str(round(time() * 1000))
         nonce = str(uuid1())
-        signature = b64encode(HMAC(settings.SECRET_KEY.encode('ascii'), b'\n'.join([
-            timestamp.encode('ascii'),
-            nonce.encode('ascii'),
-            settings.HTTP_APP_KEY.encode('ascii'),
-            prepped.path_url.encode('ascii'),
-            prepped.body if kwargs.get('json') else b'',
-            urlencode(
-                sorted(
-                    kwargs['data'].items()),
-                quote_via=quote,
-                safe='-._~').encode('ascii')
-            if kwargs.get('data') and isinstance(kwargs['data'], dict) else b'',
-        ]), 'sha1').digest()).decode('ascii')
+        signature = b64encode(
+            HMAC(
+                settings.SECRET_KEY.encode("ascii"),
+                b"\n".join(
+                    [
+                        timestamp.encode("ascii"),
+                        nonce.encode("ascii"),
+                        settings.HTTP_APP_KEY.encode("ascii"),
+                        prepped.path_url.encode("ascii"),
+                        prepped.body if kwargs.get("json") else b"",
+                        urlencode(sorted(kwargs["data"].items()), quote_via=quote, safe="-._~").encode(
+                            "ascii") if kwargs.get("data") and isinstance(kwargs["data"], dict) else b"",
+                    ]
+                ),
+                "sha1",
+            ).digest()
+        ).decode("ascii")
 
-        prepped.headers.update({
-            'TIMESTAMP': timestamp,
-            'NONCE': nonce,
-            'APP-KEY': settings.HTTP_APP_KEY,
-            'SIGNATURE': signature,
-        })
+        prepped.headers.update(
+            {
+                "TIMESTAMP": timestamp,
+                "NONCE": nonce,
+                "APP-KEY": settings.HTTP_APP_KEY,
+                "SIGNATURE": signature,
+            }
+        )
 
     return sess.send(prepped, stream=stream, timeout=timeout)
 
 
 def get_exponential_backoff_interval(retries, full_jitter=False):
+    """Calculate the exponential backoff wait time."""
+    # Will be zero if factor equals 0
     countdown = min(REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC * (2 ** retries))
+    # Full jitter according to
+    # https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
     if full_jitter:
         countdown = random.randrange(countdown + 1)
+    # Adjust according to maximum wait time and account for negative values.
     return max(0, countdown)
 
 
@@ -124,14 +133,16 @@ def get_data_error_result(retcode=settings.RetCode.DATA_ERROR, retmsg='Sorry! Da
 def server_error_response(e):
     logging.exception(e)
     try:
-        if e.code == 401:
-            return get_json_result(retcode=401, retmsg=repr(e))
-    except Exception:
-        pass
+        msg = repr(e).lower()
+        if getattr(e, "code", None) == 401 or ("unauthorized" in msg) or ("401" in msg):
+            return get_json_result(retcode=settings.RetCode.UNAUTHORIZED, retmsg=repr(e))
+    except Exception as ex:
+        logging.warning(f"error checking authorization: {ex}")
+
     if len(e.args) > 1:
         try:
             serialized_data = serialize_for_json(e.args[1])
-            return get_json_result(retcode= settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=serialized_data)
+            return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=serialized_data)
         except Exception:
             return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=None)
     if repr(e).find("index_not_found_exception") >= 0:
@@ -214,7 +225,7 @@ def send_file_in_mem(data, filename):
 #     return JSONResponse(content=jsonable_encoder(response))
 
 
-def get_json_result(retcode=settings.RetCode.SUCCESS, retmsg='success', data=None):
+def get_json_result(retcode: settings.RetCode = settings.RetCode.SUCCESS, retmsg='success', data=None):
     response = {"retcode": retcode, "retmsg": retmsg, "data": data}
     return JSONResponse(content=jsonable_encoder(response))
 
@@ -318,7 +329,7 @@ def construct_result(code=settings.RetCode.DATA_ERROR, message='data is missing'
     return JSONResponse(content=jsonable_encoder(response))
 
 
-def construct_json_result(code=settings.RetCode.SUCCESS, message='success', data=None):
+def construct_json_result(code: settings.RetCode = settings.RetCode.SUCCESS, message='success', data=None):
     if data is None:
         return JSONResponse(content={"code": code, "message": message})
     else:
@@ -386,19 +397,35 @@ async def token_required(request: Request, db: Session = Depends(get_db)):
 #     return decorated_function
 
 
-def get_result(retcode=settings.RetCode.SUCCESS, retmsg='error', data=None):
-    if retcode == 0:
+def get_result(retcode=settings.RetCode.SUCCESS, retmsg='error', data=None, total=None):
+    """
+    Standard API response format:
+    {
+        "code": 0,
+        "data": [...],        # List or object, backward compatible
+        "total": 47,          # Optional field for pagination
+        "message": "..."      # Error or status message
+    }
+    """
+    response = {"code": retcode}
+
+    if retcode == settings.RetCode.SUCCESS:
         if data is not None:
-            response = {"code": retcode, "data": data}
+            response["data"] = data
+        if total is not None:
+            response["total_datasets"] = total
         else:
             response = {"code": retcode}
     else:
-        response = {"code": retcode, "message": retmsg}
+        response["message"] = retmsg or "Error"
+
     return JSONResponse(content=jsonable_encoder(response))
 
 
-def get_error_data_result(retcode=settings.RetCode.DATA_ERROR,
-                          retmsg='Sorry! Data missing!'):
+def get_error_data_result(
+        retcode=settings.RetCode.DATA_ERROR,
+        retmsg='Sorry! Data missing!'
+):
     import re
     result_dict = {
         "code": retcode,
@@ -473,6 +500,7 @@ def get_parser_config(chunk_method, parser_config):
         },
         "email": None,
         "picture": None,
+        "audio": None,
     }
 
     default_config = key_mapping[chunk_method]
@@ -492,16 +520,16 @@ def get_parser_config(chunk_method, parser_config):
 
 
 def get_data_openai(
-    id=None,
-    created=None,
-    model=None,
-    prompt_tokens=0,
-    completion_tokens=0,
-    content=None,
-    finish_reason=None,
-    object="chat.completion",
-    param=None,
-    stream=False
+        id=None,
+        created=None,
+        model=None,
+        prompt_tokens=0,
+        completion_tokens=0,
+        content=None,
+        finish_reason=None,
+        object="chat.completion",
+        param=None,
+        stream=False
 ):
     total_tokens = prompt_tokens + completion_tokens
 
@@ -608,6 +636,8 @@ def verify_embedding_availability(db: Session, embd_id: str, tenant_id: str) -> 
         >>> verify_embedding_availability("invalid_model", "tenant_123")
         (False, {'code': 101, 'message': "Unsupported model: <invalid_model>"})
     """
+    from api.db.services.llm_service import LLMService
+    from api.db.services.tenant_llm_service import TenantLLMService
     try:
         llm_name, llm_factory = TenantLLMService.split_model_name_and_factory(embd_id)
         in_llm_service = bool(LLMService.query(db=db, llm_name=llm_name, fid=llm_factory, model_type="embedding"))
@@ -710,6 +740,16 @@ def remap_dictionary_keys(source_data: dict, key_aliases: dict = None) -> dict:
     return transformed_data
 
 
+def group_by(list_of_dict, key):
+    res = {}
+    for item in list_of_dict:
+        if item[key] in res.keys():
+            res[item[key]].append(item)
+        else:
+            res[item[key]] = [item]
+    return res
+
+
 def get_mcp_tools(mcp_servers: list, timeout: float | int = 10) -> tuple[dict, str]:
     results = {}
     tool_call_sessions = []
@@ -746,13 +786,9 @@ TimeoutException = Type[BaseException] | BaseException
 OnTimeoutCallback = Callable[..., Any] | Coroutine[Any, Any, Any]
 
 
-def timeout(
-    seconds: float | int | None = None,
-    attempts: int = 2,
-    *,
-    exception: TimeoutException | None = None,
-    on_timeout: OnTimeoutCallback | None = None
-):
+def timeout(seconds: float | int | str = None, attempts: int = 2, *, exception: TimeoutException |  None = None, on_timeout: OnTimeoutCallback |  None = None):
+    if isinstance(seconds, str):
+        seconds = float(seconds)
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):

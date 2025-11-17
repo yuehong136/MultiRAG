@@ -9,6 +9,8 @@ from api.utils.configs import read_config
 
 
 class ServiceConfigs:
+    configs = dict
+
     """服务配置管理器"""
     def __init__(self):
         self.configs: list[BaseModel] = []
@@ -35,6 +37,7 @@ class BaseConfig(BaseModel):
     host: str
     port: int
     service_type: str
+    detail_func_name: str
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -303,7 +306,8 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                     port=http_port,
                     service_type="multirag_server",
                     secret_key=secret_key,
-                    admin_require_superuser=admin_require_superuser
+                    admin_require_superuser=admin_require_superuser,
+                    detail_func_name="check_multirag_server_alive"
                 )
                 configurations.append(config)
                 id_count += 1
@@ -331,7 +335,8 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                     max_connections=max_connections,
                     stale_timeout=stale_timeout,
                     service_type="metadata",
-                    meta_type="postgresql"
+                    meta_type="postgresql",
+                    detail_func_name="get_database_status"
                 )
                 configurations.append(config)
                 id_count += 1
@@ -351,7 +356,8 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                     username=username,
                     password=password,
                     service_type="metadata",
-                    meta_type="mysql"
+                    meta_type="mysql",
+                    detail_func_name="get_database_status"
                 )
                 configurations.append(config)
                 id_count += 1
@@ -389,7 +395,8 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                     password=password,
                     db_name=db_name,
                     token=token,
-                    timeout=timeout
+                    timeout=timeout,
+                    detail_func_name="get_milvus_cluster_stats"
                 )
                 configurations.append(config)
                 id_count += 1
@@ -416,7 +423,8 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                     service_type="retrieval",
                     retrieval_type="elasticsearch",
                     username=username,
-                    password=password
+                    password=password,
+                    detail_func_name="get_es_cluster_stats"
                 )
                 configurations.append(config)
                 id_count += 1
@@ -436,7 +444,8 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                     port=port,
                     service_type="retrieval",
                     retrieval_type="infinity",
-                    db_name=database
+                    db_name=database,
+                    detail_func_name="get_infinity_status"
                 )
                 configurations.append(config)
                 id_count += 1
@@ -463,7 +472,8 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                     region=region,
                     workflow_bucket=workflow_bucket,
                     service_type="file_store",
-                    store_type="minio"
+                    store_type="minio",
+                    detail_func_name="check_minio_alive"
                 )
                 configurations.append(config)
                 id_count += 1
@@ -485,7 +495,8 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                     password=password,
                     database=db,
                     service_type="message_queue",
-                    mq_type="redis"
+                    mq_type="redis",
+                    detail_func_name="get_redis_info"
                 )
                 configurations.append(config)
                 id_count += 1

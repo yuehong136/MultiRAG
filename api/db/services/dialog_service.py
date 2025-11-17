@@ -18,7 +18,7 @@ import trio
 from langfuse import Langfuse
 from agentic_reasoning import DeepResearcher
 from datetime import datetime
-from sqlalchemy import asc, func
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from api.db import LLMType, StatusEnum, ParserType
@@ -224,6 +224,35 @@ class DialogService(CommonService):
 
         return result, total
 
+    @classmethod
+    def get_all_dialogs_by_tenant_id(cls, db: Session, tenant_id: str) -> list[dict]:
+        """根据tenant_id批量查询所有对话ID，使用分页避免内存溢出"""
+        stmt = (
+            select(cls.model.id)
+            .where(cls.model.tenant_id == tenant_id)
+            .order_by(cls.model.create_time.asc())
+        )
+
+        offset, limit = 0, 100
+        res = []
+
+        while True:
+            try:
+                d_batch = db.execute(
+                    stmt.offset(offset).limit(limit)
+                ).scalars().all()
+
+                if not d_batch:
+                    break
+
+                res.extend([{"id": dialog_id} for dialog_id in d_batch])
+                offset += limit
+            except Exception:
+                logging.exception("Failed to get dialog IDs for tenant_id=%s at offset %d", tenant_id, offset)
+                break
+
+        return res
+
 def chat_solo(db, dialog, messages, stream=True):
     if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
         chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
@@ -423,7 +452,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     kb_names = list([kb.name for kb in kbs])
     print("正在检索的知识库 --> ", kb_names)
 
-    retriever = settings.retrievaler
+    retriever = settings.retriever
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
     attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
@@ -484,6 +513,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
     if attachments is not None and "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
+        tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
         if prompt_config.get("reasoning", False):
             reasoner = DeepResearcher(
@@ -529,13 +559,17 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     rank_feature=label_question(db, " ".join(questions), kbs),
                     search_mode=dialog.search_mode
                 )
+                if prompt_config.get("toc_enhance"):
+                    cks = retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n)
+                    if cks:
+                        kbinfos["chunks"] = cks
             if prompt_config.get("tavily_api_key"):
                 tav = Tavily(prompt_config["tavily_api_key"])
                 tav_res = tav.retrieve_chunks(" ".join(questions))
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = settings.kg_retrievaler.retrieval(" ".join(questions), dialog.tenant_id, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
+                ck = settings.kg_retriever.retrieval(" ".join(questions), dialog.tenant_id, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
@@ -680,15 +714,23 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
 
 def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_ids=None):
-    sys_prompt = "You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question."
+    sys_prompt = "You are a Database Administrator. You need to determine if the user's question is related to the table data, and if so, write the appropriate SQL query."
     user_prompt = """
     Table name: {};
     Table of database fields are as follows:
     {}
 
-    Question are as follows:
+    User's question:
     {}
-    Please write the SQL, only SQL, without any other explanations or text.
+    
+    Instructions:
+    1. First, check if the question is asking for data that exists in the table fields above
+    2. If the question is RELATED to the table data:
+       - Write a proper SQL SELECT statement to retrieve the relevant data
+    3. If the question is NOT RELATED to the table data (asking about general knowledge, explanations, or data not in the table):
+       - Write: SELECT doc_id, docnm_kwd, 'The question is unrelated to the table data' as result WHERE 1 = 0
+    
+    Please write ONLY the SQL statement, without any explanations or additional text.
     """.format(
         index_name(tenant_id, kb_names),
         "\n".join([f"{k}: {v}" for k, v in field_map.items()]),
@@ -709,7 +751,9 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
             return None, None
         if not re.search(r"((sum|avg|max|min)\(|group by )", sql.lower()):
             if sql[:len("select *")] != "select *":
-                sql = "select doc_id,docnm_kwd," + sql[6:]
+                # 检查是否已经包含doc_id和docnm_kwd，避免重复添加
+                if "doc_id" not in sql[7:sql.find("from") if "from" in sql else len(sql)]:
+                    sql = "select doc_id,docnm_kwd," + sql[6:]
             else:
                 flds = []
                 for k in field_map.keys():
@@ -729,7 +773,7 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
 
         logging.debug(f"{question} get SQL(refined): {sql}")
         tried_times += 1
-        return settings.retrievaler.sql_retrieval(sql, format="json"), sql
+        return settings.retriever.sql_retrieval(sql, format="json"), sql
 
     tbl, sql = get_table()
     if tbl is None:
@@ -761,12 +805,35 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
         logging.debug("TRY it again: {}".format(sql))
 
     logging.debug("GET table: {}".format(tbl))
-    if tbl.get("error") or len(tbl["rows"]) == 0:
+    # 检查结果是否有错误或格式不正确
+    if tbl.get("error"):
+        logging.error(f"SQL查询返回错误: {tbl.get('error')}")
+        return None
+    
+    # 检查是否有rows字段且不为空
+    if "rows" not in tbl:
+        logging.error(f"SQL查询返回格式错误，缺少rows字段: {tbl}")
+        return None
+    
+    if len(tbl["rows"]) == 0:
+        logging.info("SQL查询返回空结果")
         return None
 
     docid_idx = set([ii for ii, c in enumerate(tbl["columns"]) if c["name"] == "doc_id"])
     doc_name_idx = set([ii for ii, c in enumerate(tbl["columns"]) if c["name"] == "docnm_kwd"])
     column_idx = [ii for ii in range(len(tbl["columns"])) if ii not in (docid_idx | doc_name_idx)]
+    
+    # 检查是否只有字面量列（表示LLM判断问题不相关）
+    # 如果除了doc_id和docnm_kwd之外，只有1列且所有行的值都相同，很可能是字面量
+    if len(column_idx) == 1 and len(tbl["rows"]) > 0:
+        # 检查这一列的所有值是否都相同
+        first_value = str(tbl["rows"][0][column_idx[0]]) if len(tbl["rows"]) > 0 else ""
+        all_same = all(str(row[column_idx[0]]) == first_value for row in tbl["rows"])
+        
+        # 如果所有值都相同，且包含"unrelated"或"not"等关键词，判定为不相关
+        if all_same and any(keyword in first_value.lower() for keyword in ["unrelated", "not related", "not found", "no data", "cannot", "无关", "未找到", "无数据"]):
+            logging.info(f"SQL返回的是不相关的字面量结果: '{first_value}'，跳过SQL检索，使用向量检索")
+            return None
 
     # compose Markdown table
     columns = (
@@ -847,7 +914,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     embedding_list = list(set([kb.embd_id for kb in kbs]))
 
     is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
-    retriever = settings.retrievaler if not is_knowledge_graph else settings.kg_retrievaler
+    retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_llm_name)
@@ -936,7 +1003,7 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
             if not doc_ids:
                 doc_ids = None
 
-    ranks = settings.retrievaler.retrieval(
+    ranks = settings.retriever.retrieval(
         question=question,
         filter_exp="",
         embd_mdl=embd_mdl,

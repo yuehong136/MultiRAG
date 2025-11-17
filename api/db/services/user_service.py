@@ -133,7 +133,7 @@ class UserService(CommonService):
     def delete_user(cls, db: Session, user_ids: list, update_user_dict: dict):
         try:
             db.query(cls.model).filter(cls.model.id.in_(user_ids)).update(
-                {"status": 0},
+                {"status": "0"},
                 synchronize_session=False
             )
             db.commit()
@@ -374,6 +374,32 @@ class UserTenantService(CommonService):
         ]
 
         return tenant_list
+
+    @classmethod
+    def get_user_tenant_relation_by_user_id(cls, db: Session, user_id: str):
+        """根据user_id查询用户租户关系"""
+        fields = [
+            cls.model.id,
+            cls.model.user_id,
+            cls.model.tenant_id,
+            cls.model.role
+        ]
+
+        results = db.query(*fields).filter(
+            cls.model.user_id == user_id
+        ).all()
+
+        relations = [
+            {
+                "id": result.id,
+                "user_id": result.user_id,
+                "tenant_id": result.tenant_id,
+                "role": result.role
+            }
+            for result in results
+        ]
+
+        return relations
 
     @classmethod
     def get_num_members(cls, db: Session, user_id: str):

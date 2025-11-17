@@ -1,5 +1,5 @@
 #
-#  Copyright 2024 The InfiniFlow Authors. All Rights Reserved.
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -13,18 +13,21 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+
 import logging
 import copy
 import re
 
 from api.db import ParserType
 from io import BytesIO
-from core.nlp import rag_tokenizer, tokenize, tokenize_table, bullets_category, title_frequency, tokenize_chunks, docx_question_level
-from deepdoc.parser import PlainParser
+from core.nlp import rag_tokenizer, tokenize, tokenize_table, bullets_category, title_frequency, tokenize_chunks, \
+    docx_question_level
 from core.utils import num_tokens_from_string
-from deepdoc.parser import PdfParser, DocxParser
+from deepdoc.parser import PdfParser, PlainParser, DocxParser
+from deepdoc.parser.figure_parser import vision_figure_parser_pdf_wrapper, vision_figure_parser_docx_wrapper
 from docx import Document
 from PIL import Image
+
 
 class Pdf(PdfParser):
     def __init__(self):
@@ -69,19 +72,31 @@ class Pdf(PdfParser):
         return [(b["text"], b.get("layoutno", ""), self.get_position(b, zoomin))
                 for i, b in enumerate(self.boxes)], tbls
 
+
 class Docx(DocxParser):
     def __init__(self):
         pass
+
     def get_picture(self, document, paragraph):
         img = paragraph._element.xpath('.//pic:pic')
         if not img:
             return None
-        img = img[0]
-        embed = img.xpath('.//a:blip/@r:embed')[0]
-        related_part = document.part.related_parts[embed]
-        image = related_part.image
-        image = Image.open(BytesIO(image.blob))
-        return image
+        try:
+            img = img[0]
+            embed = img.xpath('.//a:blip/@r:embed')[0]
+            related_part = document.part.related_parts[embed]
+            image = related_part.image
+            if image is not None:
+                image = Image.open(BytesIO(image.blob))
+                return image
+            elif related_part.blob is not None:
+                image = Image.open(BytesIO(related_part.blob))
+                return image
+            else:
+                return None
+        except Exception:
+            return None
+
     def concat_img(self, img1, img2):
         if img1 and not img2:
             return img1
@@ -118,7 +133,7 @@ class Docx(DocxParser):
                 last_answer = f'{last_answer}\n{p_text}'
                 current_image = self.get_picture(self.doc, p)
                 last_image = self.concat_img(last_image, current_image)
-            else:   # is a question
+            else:  # is a question
                 if last_answer or last_image:
                     sum_question = '\n'.join(question_stack)
                     if sum_question:
@@ -141,17 +156,17 @@ class Docx(DocxParser):
             sum_question = '\n'.join(question_stack)
             if sum_question:
                 ti_list.append((f'{sum_question}\n{last_answer}', last_image))
-                
+
         tbls = []
         for tb in self.doc.tables:
-            html= "<table>"
+            html = "<table>"
             for r in tb.rows:
                 html += "<tr>"
                 i = 0
                 while i < len(r.cells):
                     span = 1
                     c = r.cells[i]
-                    for j in range(i+1, len(r.cells)):
+                    for j in range(i + 1, len(r.cells)):
                         if c.text == r.cells[j].text:
                             span += 1
                             i = j
@@ -163,6 +178,7 @@ class Docx(DocxParser):
             html += "</table>"
             tbls.append(((None, html), ""))
         return ti_list, tbls
+
 
 def chunk(filename, binary=None, from_page=0, to_page=100000,
           lang="Chinese", callback=None, **kwargs):
@@ -224,7 +240,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             if not rows:
                 continue
             sections.append((rows if isinstance(rows, str) else rows[0], -1,
-                            [(p[0] + 1 - from_page, p[1], p[2], p[3], p[4]) for p in poss]))
+                             [(p[0] + 1 - from_page, p[1], p[2], p[3], p[4]) for p in poss]))
 
         def tag(pn, left, right, top, bottom):
             if pn + left + right + top + bottom == 0:
@@ -247,7 +263,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             tk_cnt = num_tokens_from_string(txt)
             if sec_id > -1:
                 last_sid = sec_id
-
+        tbls = vision_figure_parser_pdf_wrapper(tbls=tbls, callback=callback, **kwargs)
         res = tokenize_table(tbls, doc, eng)
         res.extend(tokenize_chunks(chunks, doc, eng, pdf_parser))
         return res
@@ -256,6 +272,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         docx_parser = Docx()
         ti_list, tbls = docx_parser(filename, binary,
                                     from_page=0, to_page=10000, callback=callback)
+        tbls = vision_figure_parser_docx_wrapper(sections=ti_list, tbls=tbls, callback=callback, **kwargs)
         res = tokenize_table(tbls, doc, eng)
         for text, image in ti_list:
             d = copy.deepcopy(doc)
@@ -267,8 +284,6 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         return res
     else:
         raise NotImplementedError("file type not supported yet(pdf and docx supported)")
-    
-
 
 
 if __name__ == "__main__":

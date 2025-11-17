@@ -6,6 +6,7 @@
 @date：2025/7/17 13:50
 @desc:
 """
+import logging
 import os
 import pathlib
 import re
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from starlette.responses import StreamingResponse
 
+from api.common.check_team_permission import check_file_team_permission
 from api.db import FileType, FileSource
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
@@ -24,7 +26,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api import settings
-from api.utils.api_utils import construct_json_result, construct_error_response, get_data_error_result
+from api.utils.api_utils import get_json_result, construct_error_response, get_data_error_result
 from api.utils import get_uuid
 from api.utils.file_utils import filename_type
 from api.utils.web_utils import CONTENT_TYPE_MAP
@@ -84,11 +86,11 @@ async def upload(
         pf_id = root_folder["id"]
 
     if not files:
-        return construct_json_result(data=False, retmsg='No file part!', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='No file part!', retcode=settings.RetCode.ARGUMENT_ERROR)
 
     for file_obj in files:
         if file_obj.filename == '':
-            return construct_json_result(data=False, retmsg='No file selected!', retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg='No file selected!', retcode=settings.RetCode.ARGUMENT_ERROR)
 
     try:
         pf_folder = FileService.get_by_id(db, pf_id)
@@ -151,7 +153,7 @@ async def upload(
                 "size": file.size,
                 "type": file.type
             }
-        return construct_json_result(data=file_dict)
+        return get_json_result(data=file_dict)
     except Exception as e:
         return construct_error_response(e)
 
@@ -180,8 +182,7 @@ async def create(
 
     try:
         if not FileService.is_parent_folder_exist(db, pf_id):
-            return construct_json_result(data=False, retmsg="Parent Folder Doesn't Exist!",
-                                         retcode=settings.RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg="Parent Folder Doesn't Exist!", retcode=settings.RetCode.OPERATING_ERROR)
         if FileService.query(db, name=req["name"], parent_id=pf_id):
             return get_data_error_result(retmsg="Duplicated folder name in the same folder.")
 
@@ -212,7 +213,7 @@ async def create(
             "type": file.type
         }
 
-        return construct_json_result(data=file_dict)
+        return get_json_result(data=file_dict)
     except Exception as e:
         return construct_error_response(e)
 
@@ -255,9 +256,9 @@ async def list_files(
 
         parent_folder = FileService.get_parent_folder(db, parent_id)
         if not parent_folder:
-            return construct_json_result(message="File not found!")
+            return get_json_result(retmsg="File not found!")
 
-        return construct_json_result(data={"total": total, "files": files, "parent_folder": parent_folder.to_dict()})
+        return get_json_result(data={"total": total, "files": files, "parent_folder": parent_folder.to_dict()})
     except Exception as e:
         return construct_error_response(e)
 
@@ -275,7 +276,7 @@ async def get_root_folder(
     """
     try:
         root_folder = FileService.get_root_folder(db, user.id)
-        return construct_json_result(data={"root_folder": root_folder})
+        return get_json_result(data={"root_folder": root_folder})
     except Exception as e:
         return construct_error_response(e)
 
@@ -301,7 +302,7 @@ async def get_parent_folder(
             return get_data_error_result(retmsg="Folder not found!")
 
         parent_folder = FileService.get_parent_folder(db, file_id)
-        return construct_json_result(data={"parent_folder": parent_folder.to_dict()})
+        return get_json_result(data={"parent_folder": parent_folder.to_dict()})
     except Exception as e:
         return construct_error_response(e)
 
@@ -328,7 +329,7 @@ async def get_all_parent_folders(
 
         parent_folders = FileService.get_all_parent_folders(db, file_id)
         parent_folders_res = [parent_folder.to_dict() for parent_folder in parent_folders]
-        return construct_json_result(data={"parent_folders": parent_folders_res})
+        return get_json_result(data={"parent_folders": parent_folders_res})
     except Exception as e:
         return construct_error_response(e)
 
@@ -350,6 +351,37 @@ async def rm(
     """
     req = request_body.model_dump()
     file_ids = req["file_ids"]
+
+    def _delete_single_file(file):
+        """删除单个文件及其关联的文档"""
+        try:
+            if file.location:
+                STORAGE_IMPL.rm(file.parent_id, file.location)
+        except Exception:
+            logging.exception(f"Fail to remove object: {file.parent_id}/{file.location}")
+        
+        # 删除关联的文档
+        informs = File2DocumentService.get_by_file_id(db, file.id)
+        for inform in informs:
+            doc_id = inform.document_id
+            doc = DocumentService.get_by_id(db, doc_id)
+            if doc:
+                tenant_id = DocumentService.get_tenant_id(db, doc_id)
+                if tenant_id:
+                    DocumentService.remove_document(db, doc, tenant_id)
+        File2DocumentService.delete_by_file_id(db, file.id)
+        FileService.delete(db, file)
+
+    def _delete_folder_recursive(folder, tenant_id):
+        """递归删除文件夹及其所有子文件"""
+        sub_files = FileService.list_all_files_by_parent_id(db, folder.id)
+        for sub_file in sub_files:
+            if sub_file.type == FileType.FOLDER.value:
+                _delete_folder_recursive(sub_file, tenant_id)
+            else:
+                _delete_single_file(sub_file)
+        FileService.delete(db, folder)
+
     try:
         for file_id in file_ids:
             file = FileService.get_by_id(db, file_id)
@@ -357,37 +389,20 @@ async def rm(
                 return get_data_error_result(retmsg="File or Folder not found!")
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
+            if not check_file_team_permission(db, file, user.id):
+                return get_json_result(data=False, retmsg="No authorization.", retcode=settings.RetCode.AUTHENTICATION_ERROR)
+
             if file.source_type == FileSource.KNOWLEDGEBASE:
                 continue
 
             if file.type == FileType.FOLDER.value:
-                file_id_list = FileService.get_all_innermost_file_ids(db, file_id, [])
-                for inner_file_id in file_id_list:
-                    file = FileService.get_by_id(db, inner_file_id)
-                    if not file:
-                        return get_data_error_result(retmsg="File not found!")
-                    STORAGE_IMPL.rm(file.parent_id, file.location)
-                FileService.delete_folder_by_pf_id(db, user.id, file_id)
-            else:
-                STORAGE_IMPL.rm(file.parent_id, file.location)
-                if not FileService.delete(db, file):
-                    return get_data_error_result(retmsg="Database error (File removal)!")
+                _delete_folder_recursive(file, user.id)
+                continue
+            
+            _delete_single_file(file)
 
-            # delete file2document
-            informs = File2DocumentService.get_by_file_id(db, file_id)
-            for inform in informs:
-                doc_id = inform.document_id
-                doc = DocumentService.get_by_id(db, doc_id)
-                if not doc:
-                    return get_data_error_result(retmsg="Document not found!")
-                tenant_id = DocumentService.get_tenant_id(db, doc_id)
-                if not tenant_id:
-                    return get_data_error_result(retmsg="Tenant not found!")
-                if not DocumentService.remove_document(db, doc, tenant_id):
-                    return get_data_error_result(retmsg="Database error (Document removal)!")
-            File2DocumentService.delete_by_file_id(db, file_id)
+        return get_json_result(data=True)
 
-        return construct_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)
 
@@ -412,10 +427,12 @@ async def rename(
         file = FileService.get_by_id(db, req["file_id"])
         if not file:
             return get_data_error_result(retmsg="File not found!")
+        if not check_file_team_permission(db, file, user.id):
+            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
         if file.type != FileType.FOLDER.value \
                 and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
-            return construct_json_result(data=False, message="The extension of file can't be changed",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg="The extension of file can't be changed",
+                                         retcode=settings.RetCode.ARGUMENT_ERROR)
         for f in FileService.query(db, name=req["name"], pf_id=file.parent_id):
             if f.name == req["name"]:
                 return get_data_error_result(retmsg="Duplicated file name in the same folder.")
@@ -428,7 +445,7 @@ async def rename(
             if not DocumentService.update_by_id(db, informs[0].document_id, {"name": req["name"]}):
                 return get_data_error_result(retmsg="Database error (Document rename)!")
 
-        return construct_json_result(data=True)
+        return get_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)
 
@@ -452,6 +469,8 @@ async def get_file(
         file = FileService.get_by_id(db, file_id)
         if not file:
             return get_data_error_result(retmsg="Document not found!")
+        if not check_file_team_permission(db, file, user.id):
+            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
 
         b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
         file_content = STORAGE_IMPL.get(b, n)
@@ -492,26 +511,96 @@ async def move(
     返回:
     - JSON: 移动结果的JSON响应。
     """
-    req = request_body.dict()
+    req = request_body.model_dump()
+    
     try:
         file_ids = req["src_file_ids"]
-        parent_id = req["dest_file_id"]
-
+        dest_parent_id = req["dest_file_id"]
+        
+        # 先检查目标文件夹是否存在
+        dest_folder = FileService.get_by_id(db, dest_parent_id)
+        if not dest_folder:
+            return get_data_error_result(retmsg="Parent Folder not found!")
+        
+        # 检查源文件是否存在
         files = FileService.get_by_ids(db, file_ids)
-        files_dict = {}
-        for file in files:
-            files_dict[file.id] = file
-
+        if not files:
+            return get_data_error_result(retmsg="Source files not found!")
+        
+        # 使用字典推导式简化代码
+        files_dict = {f.id: f for f in files}
+        
+        # 权限检查
         for file_id in file_ids:
-            file = files_dict[file_id]
+            file = files_dict.get(file_id)
             if not file:
                 return get_data_error_result(retmsg="File or Folder not found!")
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
-        fe = FileService.get_by_id(db, parent_id)
-        if not fe:
-            return get_data_error_result(retmsg="Parent Folder not found!")
-        FileService.move_file(db, file_ids, parent_id)
-        return construct_json_result(data=True)
+            if not check_file_team_permission(db, file, user.id):
+                return get_json_result(
+                    data=False,
+                    retmsg="No authorization.",
+                    retcode=settings.RetCode.AUTHENTICATION_ERROR
+                )
+        
+        def _move_entry_recursive(source_file_entry, dest_folder):
+            """递归移动文件或文件夹"""
+            # 如果是文件夹，递归处理
+            if source_file_entry.type == FileType.FOLDER.value:
+                # 检查目标位置是否已存在同名文件夹
+                existing_folder = FileService.query(db, name=source_file_entry.name, parent_id=dest_folder.id)
+                if existing_folder:
+                    new_folder = existing_folder[0]
+                else:
+                    # 在目标位置创建新文件夹
+                    new_folder = FileService.insert(db, {
+                        "id": get_uuid(),
+                        "parent_id": dest_folder.id,
+                        "tenant_id": source_file_entry.tenant_id,
+                        "created_by": user.id,
+                        "name": source_file_entry.name,
+                        "location": "",
+                        "size": 0,
+                        "type": FileType.FOLDER.value,
+                    })
+
+                # 递归移动所有子文件
+                sub_files = FileService.list_all_files_by_parent_id(db, source_file_entry.id)
+                for sub_file in sub_files:
+                    _move_entry_recursive(sub_file, new_folder)
+
+                # 删除源文件夹
+                FileService.delete_by_id(db, source_file_entry.id)
+                return
+
+            # 处理普通文件
+            old_parent_id = source_file_entry.parent_id
+            old_location = source_file_entry.location
+            filename = source_file_entry.name
+
+            new_location = filename
+            # 处理文件名冲突
+            while STORAGE_IMPL.obj_exist(dest_folder.id, new_location):
+                new_location += "_"
+
+            try:
+                # 移动存储层的文件
+                STORAGE_IMPL.move(old_parent_id, old_location, dest_folder.id, new_location)
+            except Exception as storage_err:
+                raise RuntimeError(f"Move file failed at storage layer: {str(storage_err)}")
+
+            # 更新数据库记录
+            FileService.update_by_id(db, source_file_entry.id, {
+                "parent_id": dest_folder.id,
+                "location": new_location,
+            })
+
+        # 移动所有选中的文件/文件夹
+        for file in files:
+            _move_entry_recursive(file, dest_folder)
+
+        return get_json_result(data=True)
+
     except Exception as e:
         return construct_error_response(e)

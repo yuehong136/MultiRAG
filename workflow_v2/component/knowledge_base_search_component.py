@@ -50,7 +50,7 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         if self.rerank_id:
             rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
         kb_names = list([kb.name for kb in kbs])
-        kbinfos = settings.retrievaler.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
+        kbinfos = settings.retriever.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
                                                  self.top_n,
                                                  self.similarity_threshold,
                                                  1 - self.keywords_similarity_weight,
@@ -89,7 +89,7 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         if self.rerank_id:
             rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
         kb_names = list([kb.name for kb in kbs])
-        kbinfos = settings.retrievaler.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
+        kbinfos = settings.retriever.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
                                                  self.top_n,
                                                  self.similarity_threshold,
                                                  1 - self.keywords_similarity_weight,

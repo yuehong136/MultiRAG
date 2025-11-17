@@ -28,6 +28,7 @@ class UpdateAgentRequest(BaseModel):
 class DeleteAgentsRequest(BaseModel):
     ids: list[str] | None = None
 
+
 @router.get("/agents", summary="获取代理列表")
 def list_agents(
     id: str | None = Query(None),

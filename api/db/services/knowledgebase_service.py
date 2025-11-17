@@ -11,7 +11,7 @@ from datetime import datetime
 from sqlalchemy import func, update, or_, and_
 from sqlalchemy.orm import Session
 from api.db import StatusEnum, TenantPermission
-from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document
+from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document, UserCanvas
 from api.db.services.common_service import CommonService
 from api.utils import current_timestamp, datetime_format
 
@@ -247,7 +247,7 @@ class KnowledgebaseService(CommonService):
 
     @classmethod
     def get_kb_names(cls, db: Session, tenant_id):
-        fields = [cls.model.id]
+        fields = [cls.model.name]
         kbs = db.query(*fields).filter(cls.model.tenant_id == tenant_id)
         kb_names = [kb.name for kb in kbs]
         return kb_names
@@ -255,11 +255,14 @@ class KnowledgebaseService(CommonService):
     @classmethod
     def get_detail(cls, db: Session, kb_id):
         """
-        根据知识库ID获取详细信息。
+        Get detailed information about a knowledge base
 
-        :param db: 数据库会话对象。
-        :param kb_id: 知识库ID。
-        :return: 知识库的详细信息字典，如果不存在则返回None。
+        Args:
+            db: Database session object
+            kb_id: Knowledge base ID
+
+        Returns:
+            Dictionary containing knowledge base details, or None if not found
         """
         # 定义查询的字段
         fields = [
@@ -274,22 +277,39 @@ class KnowledgebaseService(CommonService):
             cls.model.token_num,
             cls.model.chunk_num,
             cls.model.parser_id,
+            cls.model.pipeline_id,
+            UserCanvas.title.label("pipeline_name"),
+            UserCanvas.avatar.label("pipeline_avatar"),
             cls.model.parser_config,
             cls.model.pagerank,
+            cls.model.graphrag_task_id,
+            cls.model.graphrag_task_finish_at,
+            cls.model.raptor_task_id,
+            cls.model.raptor_task_finish_at,
+            cls.model.mindmap_task_id,
+            cls.model.mindmap_task_finish_at,
             cls.model.create_time,
             cls.model.update_time
         ]
-        # 根据ID和状态查询知识库信息，并关联租户信息
-        query = db.query(*fields).join(Tenant, (Tenant.id == cls.model.tenant_id)).filter(
-            (cls.model.id == kb_id),
-            (cls.model.status == StatusEnum.VALID.value),
-            (Tenant.status == StatusEnum.VALID.value)
-        ).first()
+
+        # LEFT JOIN UserCanvas to get pipeline information
+        query = (
+            db.query(*fields)
+            .outerjoin(UserCanvas, cls.model.pipeline_id == UserCanvas.id)
+            .filter(
+                cls.model.id == kb_id,
+                cls.model.status == StatusEnum.VALID.value
+            )
+            .first()
+        )
 
         # 返回查询结果的字典形式
         if not query:
             return None
-        return {field.key: getattr(query, field.key) for field in fields}
+
+        # 使用 Row._mapping 转换为字典
+        # 这会保留所有字段的键名，包括 .label() 定义的别名
+        return dict(query._mapping)  # todo 用dict(query._mapping)替换原先手动访问所有字段方案，目前只在此处做了
 
     @classmethod
     def update_parser_config(cls, db: Session, id, config):
@@ -393,18 +413,18 @@ class KnowledgebaseService(CommonService):
     @classmethod
     def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name):
         """
-        根据租户ID列表、用户ID、知识库ID和名称获取知识库列表。
-
-        :param db: 数据库会话对象。
-        :param joined_tenant_ids: 用户加入的租户ID列表。
-        :param user_id: 用户ID。
-        :param page_number: 页码。
-        :param items_per_page: 每页项数。
-        :param orderby: 排序字段。
-        :param desc: 是否降序排序。
-        :param id: 知识库ID（可选）。
-        :param name: 知识库名称（可选）。
-        :return: 符合条件的知识库列表的字典形式。
+        # Get list of knowledge bases with filtering and pagination
+        # Args:
+        #     joined_tenant_ids: List of tenant IDs
+        #     user_id: Current user ID
+        #     page_number: Page number for pagination
+        #     items_per_page: Number of items per page
+        #     orderby: Field to order by
+        #     desc: Boolean indicating descending order
+        #     id: Optional ID filter
+        #     name: Optional name filter
+        # Returns:
+        #     Tuple of (List of knowledge bases, Total count of knowledge bases)
         """
         # 构建基础查询条件
         query = db.query(cls.model).filter(
@@ -425,9 +445,12 @@ class KnowledgebaseService(CommonService):
         else:
             query = query.order_by(getattr(cls.model, orderby).asc())
 
-        # 分页查询并返回结果的字典形式
+        # 获取总数
+        total = query.count()
+
+        # 分页查询并返回结果的字典形式和总数
         kbs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
-        return [kb.to_dict() for kb in kbs]
+        return [kb.to_dict() for kb in kbs], total
 
     @classmethod
     def accessible(cls, db: Session, kb_id, user_id):
@@ -527,4 +550,32 @@ class KnowledgebaseService(CommonService):
             db.rollback()
             # 如果确实需要处理特定的"no data to save"类似情况
             # 可以在这里添加相应的逻辑
+            raise e
+
+    @classmethod
+    def decrease_document_num_in_delete(cls, db: Session, kb_id: str, doc_num_info: dict) -> int:
+        """删除文档时减少知识库的统计数量（文档数、分块数、token数）"""
+        try:
+            # 获取知识库记录
+            kb_row = cls.get_by_id(db, kb_id)
+            if not kb_row:
+                raise RuntimeError(f"kb_id {kb_id} does not exist")
+
+            # 构造更新字典
+            update_dict = {
+                'doc_num': kb_row.doc_num - doc_num_info['doc_num'],
+                'chunk_num': kb_row.chunk_num - doc_num_info['chunk_num'],
+                'token_num': kb_row.token_num - doc_num_info['token_num'],
+                'update_time': current_timestamp(),
+                'update_date': datetime_format(datetime.now())
+            }
+
+            # 执行更新
+            result = db.query(cls.model).filter(
+                cls.model.id == kb_id
+            ).update(update_dict, synchronize_session=False)
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
             raise e

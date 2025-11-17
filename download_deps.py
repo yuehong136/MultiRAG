@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-#
-# Install this script's dependencies with pip3:
-# pip3 install huggingface-hub nltk
 
-
-from os import rename
+# PEP 723 metadata
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "huggingface-hub",
+#   "nltk",
+# ]
+# ///
 
 from huggingface_hub import snapshot_download
 import nltk
@@ -23,7 +26,7 @@ urls = [
     "https://bit.ly/chromedriver-linux64-121-0-6167-85",
 ]
 
-def get_urls(use_china_mirrors=False) -> str | list[str]:
+def get_urls(use_china_mirrors=False) -> list[str | list[str]]:
     if use_china_mirrors:
         return [
             "http://mirrors.tuna.tsinghua.edu.cn/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb",

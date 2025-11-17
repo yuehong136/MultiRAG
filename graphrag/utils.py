@@ -94,10 +94,7 @@ def dict_has_keys_with_types(data: dict, expected_fields: list[tuple[str, type]]
 
 def get_llm_cache(llmnm, txt, history, genconf):
     hasher = xxhash.xxh64()
-    hasher.update(str(llmnm).encode("utf-8"))
-    hasher.update(str(txt).encode("utf-8"))
-    hasher.update(str(history).encode("utf-8"))
-    hasher.update(str(genconf).encode("utf-8"))
+    hasher.update((str(llmnm)+str(txt)+str(history)+str(genconf)).encode("utf-8"))
 
     k = hasher.hexdigest()
     bin = REDIS_CONN.get(k)
@@ -108,11 +105,7 @@ def get_llm_cache(llmnm, txt, history, genconf):
 
 def set_llm_cache(llmnm, txt, v, history, genconf):
     hasher = xxhash.xxh64()
-    hasher.update(str(llmnm).encode("utf-8"))
-    hasher.update(str(txt).encode("utf-8"))
-    hasher.update(str(history).encode("utf-8"))
-    hasher.update(str(genconf).encode("utf-8"))
-
+    hasher.update((str(llmnm)+str(txt)+str(history)+str(genconf)).encode("utf-8"))
     k = hasher.hexdigest()
     REDIS_CONN.set(k, v.encode("utf-8"), 24 * 3600)
 
@@ -349,7 +342,7 @@ def get_relation(tenant_id, kb_id, from_ent_name, to_ent_name, size=1):
 
     # 缓存 index_name，避免重复查询
     index_name = search.index_name(tenant_id, [kb_name])
-    milvus_res = settings.retrievaler.search(conds, index_name, [kb_id] if isinstance(kb_id, str) else kb_id)
+    milvus_res = settings.retriever.search(conds, index_name, [kb_id] if isinstance(kb_id, str) else kb_id)
     for id in milvus_res.ids:
         try:
             if size == 1:
@@ -418,7 +411,7 @@ async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
 
     # 缓存 index_name，避免重复查询
     index_name = search.index_name(tenant_id, [kb_name])
-    res = await trio.to_thread.run_sync(lambda: settings.retrievaler.search(conds, index_name, [kb_id]))
+    res = await trio.to_thread.run_sync(lambda: settings.retriever.search(conds, index_name, [kb_id]))
     doc_ids = []
     if res.total == 0:
         return doc_ids
@@ -435,7 +428,7 @@ async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
 
     # 缓存 index_name，避免重复查询
     index_name = search.index_name(tenant_id, [kb_name])
-    res = await trio.to_thread.run_sync(lambda: settings.retrievaler.search(conds, index_name, [kb_id]))
+    res = await trio.to_thread.run_sync(lambda: settings.retriever.search(conds, index_name, [kb_id]))
     if not res.total == 0:
         for id in res.ids:
             try:
@@ -616,7 +609,7 @@ def merge_tuples(list1, list2):
 
 
 async def get_entity_type2samples(idxnms, kb_ids: list):
-    milvus_res = await trio.to_thread.run_sync(lambda: settings.retrievaler.search({"knowledge_graph_kwd": "ty2ents", "kb_id": kb_ids, "size": 10000, "fields": ["content_with_weight"]}, idxnms, kb_ids))
+    milvus_res = await trio.to_thread.run_sync(lambda: settings.retriever.search({"knowledge_graph_kwd": "ty2ents", "kb_id": kb_ids, "size": 10000, "fields": ["content_with_weight"]}, idxnms, kb_ids))
 
     res = defaultdict(list)
     for id in milvus_res.ids:

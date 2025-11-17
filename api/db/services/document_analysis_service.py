@@ -276,7 +276,7 @@ class DocumentAnalysisService:
 
         logging.info(f"Fetching chunks from Milvus for doc {doc_id}")
 
-        chunks = settings.retrievaler.chunk_list(
+        chunks = settings.retriever.chunk_list(
             doc_id=doc_id,
             tenant_id=self.tenant_id,
             kb_ids=[kb_id],

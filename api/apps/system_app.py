@@ -220,7 +220,7 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
         task_executors = REDIS_CONN.smembers("TASKEXE")
         now = datetime.now().timestamp()
         for task_executor_id in task_executors:
-            heartbeats = REDIS_CONN.zrangebyscore(task_executor_id, now - 60*30, now)
+            heartbeats = REDIS_CONN.zrangebyscore(task_executor_id, now - 60 * 30, now)
             heartbeats = [json.loads(heartbeat) for heartbeat in heartbeats]
             task_executor_heartbeats[task_executor_id] = heartbeats
     except Exception:
@@ -258,6 +258,11 @@ async def healthz(response: Response):
     result, all_ok = run_health_checks()
     response.status_code = 200 if all_ok else 500
     return result
+
+
+@router.get("/ping", summary="连通测试") # noqa: F821
+def ping():
+    return "pong", 200
 
 
 @router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌", response_model=dict[str, Any])

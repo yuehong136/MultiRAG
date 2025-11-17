@@ -89,3 +89,16 @@ class MCPServerService(CommonService):
             return bool(mcp_server), mcp_server
         except SQLAlchemyError:
             return False, None
+
+    @classmethod
+    def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
+        """根据tenant_id删除所有相关的MCP服务器配置记录"""
+        try:
+            result = db.query(cls.model).filter(
+                cls.model.tenant_id == tenant_id
+            ).delete(synchronize_session=False)
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
+            raise e

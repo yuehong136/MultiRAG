@@ -189,6 +189,8 @@ def update(chat_id: str, request: UpdateChatRequest, db: Session = Depends(get_d
         if len(embd_count) > 1:
             return get_result(retmsg='Datasets use different embedding models."', retcode=settings.RetCode.AUTHENTICATION_ERROR)
         req["kb_ids"] = ids
+    else:
+        req["kb_ids"] = []
     llm = req.get("llm")
     if llm:
         if "model_name" in llm:

@@ -174,6 +174,7 @@ COPY workflow_v2 workflow_v2
 COPY errors errors
 COPY docker docker
 COPY scripts scripts
+COPY admin admin
 COPY pyproject.toml uv.lock alembic.ini ./
 COPY agentic_reasoning agentic_reasoning
 COPY mcp mcp

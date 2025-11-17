@@ -6,17 +6,19 @@ from copy import deepcopy
 from typing import Tuple
 import jinja2
 import json_repair
+import trio
 from sqlalchemy.orm import Session
 
 from api.db.db_models import db_connection
 from api.utils import hash_str2int
+from core.nlp import rag_tokenizer
 from core.prompts.template import load_prompt
 from core.settings import TAG_FLD
 from core.utils import encoder, num_tokens_from_string
 
 STOP_TOKEN = "<|STOP|>"
 COMPLETE_TASK = "complete_task"
-
+INPUT_UTILIZATION = 0.5
 
 def get_value(d, k1, k2):
     return d.get(k1, d.get(k2))
@@ -117,7 +119,7 @@ def kb_prompt(kbinfos, max_tokens, hash_id=False):
 
     knowledges = []
     for i, ck in enumerate(kbinfos["chunks"][:chunks_num]):
-        cnt = "\nID: {}".format(i if not hash_id else hash_str2int(get_value(ck, "id", "chunk_id"), 100))
+        cnt = "\nID: {}".format(i if not hash_id else hash_str2int(get_value(ck, "id", "chunk_id"), 500))
         cnt += draw_node("Title", get_value(ck, "docnm_kwd", "document_name"))
         cnt += draw_node("URL", ck['url']) if "url" in ck else ""
         for k, v in docs.get(get_value(ck, "doc_id", "document_id"), {}).items():
@@ -498,4 +500,380 @@ def gen_meta_filter(chat_mdl, meta_data: dict, query: str) -> list:
         return ans
     except Exception:
         logging.exception(f"Loading json failure: {ans}")
+    return []
+
+
+def gen_json(system_prompt: str, user_prompt: str, chat_mdl, gen_conf = None):
+    from graphrag.utils import get_llm_cache, set_llm_cache
+    cached = get_llm_cache(chat_mdl.llm_name, system_prompt, user_prompt, gen_conf)
+    if cached:
+        return json_repair.loads(cached)
+    _, msg = message_fit_in(form_message(system_prompt, user_prompt), chat_mdl.max_length)
+    ans = chat_mdl.chat(msg[0]["content"], msg[1:], gen_conf=gen_conf)
+    ans = re.sub(r"(^.*</think>|```json\n|```\n*$)", "", ans, flags=re.DOTALL)
+    try:
+        res = json_repair.loads(ans)
+        set_llm_cache(chat_mdl.llm_name, system_prompt, ans, user_prompt, gen_conf)
+        return res
+    except Exception:
+        logging.exception(f"Loading json failure: {ans}")
+
+
+TOC_DETECTION = load_prompt("toc_detection")
+
+
+def detect_table_of_contents(page_1024: list[str], chat_mdl):
+    toc_secs = []
+    for i, sec in enumerate(page_1024[:22]):
+        ans = gen_json(PROMPT_JINJA_ENV.from_string(TOC_DETECTION).render(page_txt=sec), "Only JSON please.", chat_mdl)
+        if toc_secs and not ans["exists"]:
+            break
+        toc_secs.append(sec)
+    return toc_secs
+
+
+TOC_EXTRACTION = load_prompt("toc_extraction")
+TOC_EXTRACTION_CONTINUE = load_prompt("toc_extraction_continue")
+
+
+def extract_table_of_contents(toc_pages, chat_mdl):
+    if not toc_pages:
+        return []
+
+    return gen_json(PROMPT_JINJA_ENV.from_string(TOC_EXTRACTION).render(toc_page="\n".join(toc_pages)),
+                    "Only JSON please.", chat_mdl)
+
+
+def toc_index_extractor(toc: list[dict], content: str, chat_mdl):
+    tob_extractor_prompt = """
+    You are given a table of contents in a json format and several pages of a document, your job is to add the physical_index to the table of contents in the json format.
+
+    The provided pages contains tags like <physical_index_X> and <physical_index_X> to indicate the physical location of the page X.
+
+    The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
+
+    The response should be in the following JSON format: 
+    [
+        {
+            "structure": <structure index, "x.x.x" or None> (string),
+            "title": <title of the section>,
+            "physical_index": "<physical_index_X>" (keep the format)
+        },
+        ...
+    ]
+
+    Only add the physical_index to the sections that are in the provided pages.
+    If the title of the section are not in the provided pages, do not add the physical_index to it.
+    Directly return the final JSON structure. Do not output anything else."""
+
+    prompt = tob_extractor_prompt + '\nTable of contents:\n' + json.dumps(toc, ensure_ascii=False,
+                                                                          indent=2) + '\nDocument pages:\n' + content
+    return gen_json(prompt, "Only JSON please.", chat_mdl)
+
+
+TOC_INDEX = load_prompt("toc_index")
+
+
+def table_of_contents_index(toc_arr: list[dict], sections: list[str], chat_mdl):
+    if not toc_arr or not sections:
+        return []
+
+    toc_map = {}
+    for i, it in enumerate(toc_arr):
+        k1 = (it["structure"] + it["title"]).replace(" ", "")
+        k2 = it["title"].strip()
+        if k1 not in toc_map:
+            toc_map[k1] = []
+        if k2 not in toc_map:
+            toc_map[k2] = []
+        toc_map[k1].append(i)
+        toc_map[k2].append(i)
+
+    for it in toc_arr:
+        it["indices"] = []
+    for i, sec in enumerate(sections):
+        sec = sec.strip()
+        if sec.replace(" ", "") in toc_map:
+            for j in toc_map[sec.replace(" ", "")]:
+                toc_arr[j]["indices"].append(i)
+
+    all_pathes = []
+
+    def dfs(start, path):
+        nonlocal all_pathes
+        if start >= len(toc_arr):
+            if path:
+                all_pathes.append(path)
+            return
+        if not toc_arr[start]["indices"]:
+            dfs(start + 1, path)
+            return
+        added = False
+        for j in toc_arr[start]["indices"]:
+            if path and j < path[-1][0]:
+                continue
+            _path = deepcopy(path)
+            _path.append((j, start))
+            added = True
+            dfs(start + 1, _path)
+        if not added and path:
+            all_pathes.append(path)
+
+    dfs(0, [])
+    path = max(all_pathes, key=lambda x: len(x))
+    for it in toc_arr:
+        it["indices"] = []
+    for j, i in path:
+        toc_arr[i]["indices"] = [j]
+    print(json.dumps(toc_arr, ensure_ascii=False, indent=2))
+
+    i = 0
+    while i < len(toc_arr):
+        it = toc_arr[i]
+        if it["indices"]:
+            i += 1
+            continue
+
+        if i > 0 and toc_arr[i - 1]["indices"]:
+            st_i = toc_arr[i - 1]["indices"][-1]
+        else:
+            st_i = 0
+        e = i + 1
+        while e < len(toc_arr) and not toc_arr[e]["indices"]:
+            e += 1
+        if e >= len(toc_arr):
+            e = len(sections)
+        else:
+            e = toc_arr[e]["indices"][0]
+
+        for j in range(st_i, min(e + 1, len(sections))):
+            ans = gen_json(PROMPT_JINJA_ENV.from_string(TOC_INDEX).render(
+                structure=it["structure"],
+                title=it["title"],
+                text=sections[j]), "Only JSON please.", chat_mdl)
+            if ans["exist"] == "yes":
+                it["indices"].append(j)
+                break
+
+        i += 1
+
+    return toc_arr
+
+
+def check_if_toc_transformation_is_complete(content, toc, chat_mdl):
+    prompt = """
+    You are given a raw table of contents and a  table of contents.
+    Your job is to check if the  table of contents is complete.
+
+    Reply format:
+    {{
+        "thinking": <why do you think the cleaned table of contents is complete or not>
+        "completed": "yes" or "no"
+    }}
+    Directly return the final JSON structure. Do not output anything else."""
+
+    prompt = prompt + '\n Raw Table of contents:\n' + content + '\n Cleaned Table of contents:\n' + toc
+    response = gen_json(prompt, "Only JSON please.", chat_mdl)
+    return response['completed']
+
+
+def toc_transformer(toc_pages, chat_mdl):
+    init_prompt = """
+    You are given a table of contents, You job is to transform the whole table of content into a JSON format included table_of_contents.
+
+    The `structure` is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
+    The `title` is a short phrase or a several-words term.
+
+    The response should be in the following JSON format: 
+    [
+        {
+            "structure": <structure index, "x.x.x" or None> (string),
+            "title": <title of the section>
+        },
+        ...
+    ],
+    You should transform the full table of contents in one go.
+    Directly return the final JSON structure, do not output anything else. """
+
+    toc_content = "\n".join(toc_pages)
+    prompt = init_prompt + '\n Given table of contents\n:' + toc_content
+
+    def clean_toc(arr):
+        for a in arr:
+            a["title"] = re.sub(r"[.·….]{2,}", "", a["title"])
+
+    last_complete = gen_json(prompt, "Only JSON please.", chat_mdl)
+    if_complete = check_if_toc_transformation_is_complete(toc_content,
+                                                          json.dumps(last_complete, ensure_ascii=False, indent=2),
+                                                          chat_mdl)
+    clean_toc(last_complete)
+    if if_complete == "yes":
+        return last_complete
+
+    while not (if_complete == "yes"):
+        prompt = f"""
+        Your task is to continue the table of contents json structure, directly output the remaining part of the json structure.
+        The response should be in the following JSON format: 
+
+        The raw table of contents json structure is:
+        {toc_content}
+
+        The incomplete transformed table of contents json structure is:
+        {json.dumps(last_complete[-24:], ensure_ascii=False, indent=2)}
+
+        Please continue the json structure, directly output the remaining part of the json structure."""
+        new_complete = gen_json(prompt, "Only JSON please.", chat_mdl)
+        if not new_complete or str(last_complete).find(str(new_complete)) >= 0:
+            break
+        clean_toc(new_complete)
+        last_complete.extend(new_complete)
+        if_complete = check_if_toc_transformation_is_complete(toc_content,
+                                                              json.dumps(last_complete, ensure_ascii=False, indent=2),
+                                                              chat_mdl)
+
+    return last_complete
+
+
+TOC_LEVELS = load_prompt("assign_toc_levels")
+
+
+def assign_toc_levels(toc_secs, chat_mdl, gen_conf = {"temperature": 0.2}):
+    if not toc_secs:
+        return []
+    return gen_json(
+        PROMPT_JINJA_ENV.from_string(TOC_LEVELS).render(),
+        str(toc_secs),
+        chat_mdl,
+        gen_conf
+    )
+
+
+TOC_FROM_TEXT_SYSTEM = load_prompt("toc_from_text_system")
+TOC_FROM_TEXT_USER = load_prompt("toc_from_text_user")
+
+
+# Generate TOC from text chunks with text llms
+async def gen_toc_from_text(txt_info: dict, chat_mdl, callback=None):
+    try:
+        ans = gen_json(
+            PROMPT_JINJA_ENV.from_string(TOC_FROM_TEXT_SYSTEM).render(),
+            PROMPT_JINJA_ENV.from_string(TOC_FROM_TEXT_USER).render(text="\n".join([json.dumps(d, ensure_ascii=False) for d in txt_info["chunks"]])),
+            chat_mdl,
+            gen_conf={"temperature": 0.0, "top_p": 0.9}
+        )
+        txt_info["toc"] = ans if ans and not isinstance(ans, str) else []
+        if callback:
+            callback(msg="")
+    except Exception as e:
+        logging.exception(e)
+
+
+def split_chunks(chunks, max_length: int):
+    """
+    Pack chunks into batches according to max_length, returning [{"id": idx, "text": chunk_text}, ...].
+    Do not split a single chunk, even if it exceeds max_length.
+    """
+
+    result = []
+    batch, batch_tokens = [], 0
+
+    for idx, chunk in enumerate(chunks):
+        t = num_tokens_from_string(chunk)
+        if batch_tokens + t > max_length:
+            result.append(batch)
+            batch, batch_tokens = [], 0
+        batch.append({idx: chunk})
+        batch_tokens += t
+    if batch:
+        result.append(batch)
+    return result
+
+
+async def run_toc_from_text(chunks, chat_mdl, callback=None):
+    input_budget = int(chat_mdl.max_length * INPUT_UTILIZATION) - num_tokens_from_string(
+        TOC_FROM_TEXT_USER + TOC_FROM_TEXT_SYSTEM
+    )
+
+    input_budget = 1024 if input_budget > 1024 else input_budget
+    chunk_sections = split_chunks(chunks, input_budget)
+    titles = []
+
+    chunks_res = []
+    async with trio.open_nursery() as nursery:
+        for i, chunk in enumerate(chunk_sections):
+            if not chunk:
+                continue
+            chunks_res.append({"chunks": chunk})
+            nursery.start_soon(gen_toc_from_text, chunks_res[-1], chat_mdl, callback)
+
+    for chunk in chunks_res:
+        titles.extend(chunk.get("toc", []))
+
+    # Filter out entries with title == -1
+    prune = len(titles) > 512
+    max_len = 12 if prune else 22
+    filtered = []
+    for x in titles:
+        if not isinstance(x, dict) or not x.get("title") or x["title"] == "-1":
+            continue
+        if len(rag_tokenizer.tokenize(x["title"]).split(" ")) > max_len:
+            continue
+        if len(x["title"].split(" ")) > 12:
+            continue
+        if re.match(r"[0-9,.()/ -]+$", x["title"]):
+            continue
+        filtered.append(x)
+
+    logging.info(f"\n\nFiltered TOC sections:\n{filtered}")
+    if not filtered:
+        return []
+
+    # Generate initial level (level/title)
+    raw_structure = [x.get("title", "") for x in filtered]
+
+    # Assign hierarchy levels using LLM
+    toc_with_levels = assign_toc_levels(raw_structure, chat_mdl, {"temperature": 0.0, "top_p": 0.9})
+    if not toc_with_levels:
+        return []
+
+    # Merge structure and content (by index)
+    prune = len(toc_with_levels) > 512
+    max_lvl = sorted([t.get("level", "0") for t in toc_with_levels if isinstance(t, dict)])[-1]
+    merged = []
+    for _ , (toc_item, src_item) in enumerate(zip(toc_with_levels, filtered)):
+        if prune and toc_item.get("level", "0") >= max_lvl:
+            continue
+        merged.append({
+            "level": toc_item.get("level", "0"),
+            "title": toc_item.get("title", ""),
+            "chunk_id": src_item.get("chunk_id", ""),
+        })
+
+    return merged
+
+
+TOC_RELEVANCE_SYSTEM = load_prompt("toc_relevance_system")
+TOC_RELEVANCE_USER = load_prompt("toc_relevance_user")
+def relevant_chunks_with_toc(query: str, toc: list[dict], chat_mdl, topn: int=6):
+    import numpy as np
+    try:
+        ans = gen_json(
+            PROMPT_JINJA_ENV.from_string(TOC_RELEVANCE_SYSTEM).render(),
+            PROMPT_JINJA_ENV.from_string(TOC_RELEVANCE_USER).render(query=query, toc_json="[\n%s\n]\n"%"\n".join([json.dumps({"level": d["level"], "title":d["title"]}, ensure_ascii=False) for d in toc])),
+            chat_mdl,
+            gen_conf={"temperature": 0.0, "top_p": 0.9}
+        )
+        id2score = {}
+        for ti, sc in zip(toc, ans):
+            if not isinstance(sc, dict) or sc.get("score", -1) < 1:
+                continue
+            for id in ti.get("ids", []):
+                if id not in id2score:
+                    id2score[id] = []
+                id2score[id].append(sc["score"]/5.)
+        for id in id2score.keys():
+            id2score[id] = np.mean(id2score[id])
+        return [(id, sc) for id, sc in list(id2score.items()) if sc>=0.3][:topn]
+    except Exception as e:
+        logging.exception(e)
     return []

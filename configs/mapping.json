@@ -131,6 +131,15 @@
         }
       },
       {
+        "toc_kwd_template": {
+          "match": "toc_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
         "create_time_template": {
           "match": "create_time",
           "mapping": {

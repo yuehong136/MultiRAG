@@ -140,7 +140,7 @@ class Agent(LLM, ToolBase):
             res.update(cpn.get_input_form())
         return res
 
-    @timeout(os.environ.get("COMPONENT_EXEC_TIMEOUT", 20*60))
+    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 20*60)))
     def _invoke(self, **kwargs):
         if kwargs.get("user_prompt"):
             usr_pmt = ""
@@ -349,3 +349,11 @@ Respond immediately with your final comprehensive answer.
             logging.exception(e)
 
         return "Error occurred."
+
+    def reset(self, temp=False):
+        """
+        Reset all tools if they have a reset method. This avoids errors for tools like MCPToolCallSession.
+        """
+        for k, cpn in self.tools.items():
+            if hasattr(cpn, "reset") and callable(cpn.reset):
+                cpn.reset()

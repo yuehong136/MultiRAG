@@ -25,6 +25,35 @@ class UserCanvasVersionService(CommonService):
             return []
 
     @classmethod
+    def get_all_canvas_version_by_canvas_ids(cls, db: Session, canvas_ids: list[str]):
+        """根据canvas_ids批量查询所有版本ID，使用分页避免内存溢出"""
+        stmt = (
+            select(cls.model.id)
+            .where(cls.model.user_canvas_id.in_(canvas_ids))
+            .order_by(cls.model.create_time.asc())
+        )
+
+        offset, limit = 0, 100
+        res = []
+
+        while True:
+            try:
+                version_batch = db.execute(
+                    stmt.offset(offset).limit(limit)
+                ).scalars().all()
+
+                if not version_batch:
+                    break
+
+                res.extend([{"id": version_id} for version_id in version_batch])
+                offset += limit
+            except Exception:
+                logging.exception("Failed to get canvas versions for batch at offset %d", offset)
+                break
+
+        return res
+
+    @classmethod
     def delete_all_versions(cls, db: Session, user_canvas_id: str) -> bool:
         """Keep only the latest 20 versions for the canvas and remove the rest."""
         stmt = (

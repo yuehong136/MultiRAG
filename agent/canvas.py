@@ -154,6 +154,17 @@ class Graph:
     def get_tenant_id(self):
         return self._tenant_id
 
+    def get_variable_value(self, exp: str) -> Any:
+        exp = exp.strip("{").strip("}").strip(" ").strip("{").strip("}")
+        if exp.find("@") < 0:
+            return self.globals[exp]
+        cpn_id, var_nm = exp.split("@")
+        cpn = self.get_component(cpn_id)
+        if not cpn:
+            raise Exception(f"Can't find variable: '{cpn_id}@{var_nm}'")
+        return cpn["obj"].output(var_nm)
+
+
 class Canvas(Graph):
 
     def __init__(self, dsl: str, tenant_id=None, task_id=None):
@@ -193,7 +204,6 @@ class Canvas(Graph):
             self.history = []
             self.retrieval = []
             self.memory = []
-
         for k in self.globals.keys():
             if isinstance(self.globals[k], str):
                 self.globals[k] = ""
@@ -282,7 +292,6 @@ class Canvas(Graph):
                     "thoughts": self.get_component_thoughts(self.path[i])
                 })
             _run_batch(idx, to)
-
             # post processing of components invocation
             for i in range(idx, to):
                 cpn = self.get_component(self.path[i])
@@ -383,7 +392,6 @@ class Canvas(Graph):
                 self.path = path
                 yield decorate("user_inputs", {"inputs": another_inputs, "tips": tips})
                 return
-
         self.path = self.path[:idx]
         if not self.error:
             yield decorate("workflow_finished",
@@ -405,16 +413,6 @@ class Canvas(Graph):
         if self.get_component(arr[0]) is None:
             return False
         return True
-
-    def get_variable_value(self, exp: str) -> Any:
-        exp = exp.strip("{").strip("}").strip(" ").strip("{").strip("}")
-        if exp.find("@") < 0:
-            return self.globals[exp]
-        cpn_id, var_nm = exp.split("@")
-        cpn = self.get_component(cpn_id)
-        if not cpn:
-            raise Exception(f"Can't find variable: '{cpn_id}@{var_nm}'")
-        return cpn["obj"].output(var_nm)
 
     def get_history(self, window_size):
         convs = []

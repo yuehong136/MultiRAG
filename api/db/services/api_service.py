@@ -47,6 +47,18 @@ class APITokenService(CommonService):
         db.commit()
         return res.rowcount or 0
 
+    @classmethod
+    def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
+        """根据tenant_id删除所有相关的API Token记录"""
+        try:
+            result = db.query(cls.model).filter(
+                cls.model.tenant_id == tenant_id
+            ).delete(synchronize_session=False)
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
+            raise e
 
 class API4ConversationService(CommonService):
     model = API4Conversation
@@ -250,3 +262,16 @@ class API4ConversationService(CommonService):
                 d["dt"] = dtv.strftime("%Y-%m-%d")
             out.append(d)
         return out
+
+    @classmethod
+    def delete_by_dialog_ids(cls, db: Session, dialog_ids: list[str]) -> int:
+        """根据对话ID列表删除所有相关的API会话记录"""
+        try:
+            result = db.query(cls.model).filter(
+                cls.model.dialog_id.in_(dialog_ids)
+            ).delete(synchronize_session=False)
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
+            raise e

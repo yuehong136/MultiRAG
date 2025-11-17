@@ -12,13 +12,12 @@ import random
 from datetime import datetime
 
 import xxhash
-from sqlalchemy import asc, desc, select, update, text, or_
+from sqlalchemy import asc, desc, select, update, or_
 from sqlalchemy.orm import Session
-import trio
 
 from api.utils.db_utils import bulk_insert_into_db
 from deepdoc.parser import PdfParser
-from api.db.db_models import Task, Document, Knowledgebase, Tenant, File2Document, File, db_connection, engine, DatabaseLock
+from api.db.db_models import Task, Document, Knowledgebase, Tenant, File2Document, File, DatabaseLock
 from api.db import StatusEnum, FileType, TaskStatus
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
@@ -29,6 +28,9 @@ from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
 from api import settings
 from core.nlp import search
+
+CANVAS_DEBUG_DOC_ID = "dataflow_x"
+GRAPH_RAPTOR_FAKE_DOC_ID = "graph_raptor_x"
 
 def trim_header_by_lines(text: str, max_length) -> str:
     len_text = len(text)
@@ -56,35 +58,76 @@ class TaskService(CommonService):
     model = Task
 
     @classmethod
-    def get_task(cls, db: Session, task_id):
-        query = db.query(
-            cls.model.id,
-            cls.model.doc_id,
-            cls.model.from_page,
-            cls.model.to_page,
-            cls.model.retry_count,
-            Document.kb_id,
-            Document.parser_id,
-            Document.parser_config,
-            Document.name,
-            Document.type,
-            Document.location,
-            Document.size,
-            Document.auth,
-            Knowledgebase.tenant_id,
-            Knowledgebase.language,
-            Knowledgebase.embd_id,
-            Knowledgebase.pagerank,
-            Knowledgebase.parser_config.label("kb_parser_config"),
-            Tenant.img2txt_id,
-            Tenant.asr_id,
-            Tenant.llm_id,
-            cls.model.update_time,
-            # cls.model.progress_msg
-        ).join(Document, cls.model.doc_id == Document.id
-               ).join(Knowledgebase, Document.kb_id == Knowledgebase.id
-                      ).join(Tenant, Knowledgebase.tenant_id == Tenant.id
-                             ).filter(cls.model.id == task_id)
+    def get_task(cls, db: Session, task_id, doc_ids=[]):
+        # 先获取任务的doc_id，判断是否需要使用doc_ids[0]
+        task_record = db.query(cls.model.doc_id).filter(cls.model.id == task_id).first()
+        if not task_record:
+            return None
+        
+        # 根据任务的doc_id决定用哪个ID去JOIN Document表
+        task_doc_id = task_record[0]
+        use_first_doc = task_doc_id in [CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID] and doc_ids
+        
+        if use_first_doc:
+            # 对于fake_doc_id任务，使用doc_ids[0]去获取Document配置
+            query = db.query(
+                cls.model.id,
+                cls.model.doc_id,
+                cls.model.from_page,
+                cls.model.to_page,
+                cls.model.retry_count,
+                Document.kb_id,
+                Document.parser_id,
+                Document.parser_config,
+                Document.name,
+                Document.type,
+                Document.location,
+                Document.size,
+                Document.auth,
+                Knowledgebase.tenant_id,
+                Knowledgebase.language,
+                Knowledgebase.embd_id,
+                Knowledgebase.pagerank,
+                Knowledgebase.parser_config.label("kb_parser_config"),
+                Tenant.img2txt_id,
+                Tenant.asr_id,
+                Tenant.llm_id,
+                cls.model.update_time,
+            ).select_from(cls.model
+                         ).join(Document, Document.id == doc_ids[0]
+                                ).join(Knowledgebase, Document.kb_id == Knowledgebase.id
+                                       ).join(Tenant, Knowledgebase.tenant_id == Tenant.id
+                                              ).filter(cls.model.id == task_id)
+        else:
+            # 普通任务，使用Task.doc_id去JOIN
+            query = db.query(
+                cls.model.id,
+                cls.model.doc_id,
+                cls.model.from_page,
+                cls.model.to_page,
+                cls.model.retry_count,
+                Document.kb_id,
+                Document.parser_id,
+                Document.parser_config,
+                Document.name,
+                Document.type,
+                Document.location,
+                Document.size,
+                Document.auth,
+                Knowledgebase.tenant_id,
+                Knowledgebase.language,
+                Knowledgebase.embd_id,
+                Knowledgebase.pagerank,
+                Knowledgebase.parser_config.label("kb_parser_config"),
+                Tenant.img2txt_id,
+                Tenant.asr_id,
+                Tenant.llm_id,
+                cls.model.update_time,
+            ).select_from(cls.model
+                         ).join(Document, cls.model.doc_id == Document.id
+                                ).join(Knowledgebase, Document.kb_id == Knowledgebase.id
+                                       ).join(Tenant, Knowledgebase.tenant_id == Tenant.id
+                                              ).filter(cls.model.id == task_id)
 
         docs = query.all()
         if not docs:
@@ -240,8 +283,23 @@ class TaskService(CommonService):
 
     @classmethod
     def update_progress(cls, db: Session, id: str, info: dict):
-        """
-        更新任务的 progress 和 progress_msg，并使用数据库锁。
+        """Update the progress information for a task.
+
+        This method updates both the progress message and completion percentage of a task.
+        It handles platform-specific behavior (macOS vs others) and uses database locking
+        when necessary to ensure thread safety.
+
+        Update Rules:
+            - progress_msg: Always appends the new message to the existing one, and trims the result to max 3000 lines.
+            - progress: Only updates if the current progress is not -1 AND
+                        (the new progress is -1 OR greater than the existing progress),
+                        to avoid overwriting valid progress with invalid or regressive values.
+
+        Args:
+            id (str): The unique identifier of the task to update.
+            info (dict): Dictionary containing progress information with keys:
+                        - progress_msg (str, optional): Progress message to append
+                        - progress (float, optional): Progress percentage (0.0 to 1.0)
         """
         task = cls.get_by_id(db, id)
         if not task:
@@ -250,7 +308,7 @@ class TaskService(CommonService):
 
         if os.environ.get("MACOS"):
             # 直接更新逻辑
-            if info["progress_msg"]:
+            if info.get("progress_msg"):
                 progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], 3000)
                 db.execute(
                     update(cls.model)
@@ -269,28 +327,52 @@ class TaskService(CommonService):
                     )
                     .values(progress=prog)
                 )
-            return
-
-        with DatabaseLock.create(db, f"update_progress_{id}"):
-            if info["progress_msg"]:
-                progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], 3000)
-                db.execute(
-                    update(cls.model)
-                    .where(cls.model.id == id)
-                    .values(progress_msg=progress_msg)
-                )
-
-            if "progress" in info:
-                prog = info["progress"]
-                db.execute(
-                    update(cls.model)
-                    .where(
-                        (cls.model.id == id) &
-                        (cls.model.progress != -1) &
-                        or_(prog == -1, prog > cls.model.progress)
+        else:
+            with DatabaseLock.create(db, f"update_progress_{id}"):
+                if info.get("progress_msg"):
+                    progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], 3000)
+                    db.execute(
+                        update(cls.model)
+                        .where(cls.model.id == id)
+                        .values(progress_msg=progress_msg)
                     )
-                    .values(progress=prog)
-                )
+
+                if "progress" in info:
+                    prog = info["progress"]
+                    db.execute(
+                        update(cls.model)
+                        .where(
+                            (cls.model.id == id) &
+                            (cls.model.progress != -1) &
+                            or_(prog == -1, prog > cls.model.progress)
+                        )
+                        .values(progress=prog)
+                    )
+
+        # Update process_duration after progress updates
+        if task.begin_at:
+            process_duration = (datetime.now() - task.begin_at).total_seconds()
+            db.execute(
+                update(cls.model)
+                .where(cls.model.id == id)
+                .values(process_duration=process_duration)
+            )
+
+        # Note: 不在此处 commit，由调用者控制事务边界
+
+    @classmethod
+    def delete_by_doc_ids(cls, db: Session, doc_ids: list[str]) -> int:
+        """根据文档ID列表删除相关的任务记录"""
+        try:
+            result = db.query(cls.model).filter(
+                cls.model.doc_id.in_(doc_ids)
+            ).delete(synchronize_session=False)
+            db.commit()
+            return result
+        except Exception as e:
+            db.rollback()
+            logging.exception(f"Failed to delete tasks for doc_ids={doc_ids}")
+            raise e
 
 
 def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
@@ -315,7 +397,14 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
         - Previous task chunks may be reused if available
     """
     def new_task():
-        return {"id": get_uuid(), "doc_id": doc["id"], "progress": 0.0, "from_page": 0, "to_page": 100000000}
+        return {
+            "id": get_uuid(),
+            "doc_id": doc["id"],
+            "progress": 0.0,
+            "from_page": 0,
+            "to_page": 100000000,
+            "begin_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
     parse_task_array = []
 
@@ -328,7 +417,7 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
         page_size = doc["parser_config"].get("task_page_size") or 12
         if doc["parser_id"] == "paper":
             page_size = doc["parser_config"].get("task_page_size") or 22
-        if doc["parser_id"] in ["one", "knowledge_graph"] or do_layout != "DeepDOC":
+        if doc["parser_id"] in ["one", "knowledge_graph"] or do_layout != "DeepDOC" or doc["parser_config"].get("toc", True):
             page_size = 10**9
         page_ranges = doc["parser_config"].get("pages") or [(1, 10**5)]
         for s, e in page_ranges:
@@ -436,33 +525,30 @@ def has_canceled(task_id):
     return False
 
 
-def queue_dataflow(db: Session, dsl: str, tenant_id: str, doc_id: str, task_id: str, flow_id: str, priority: int, callback=None) -> tuple[bool, str]:
+def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_id: str = CANVAS_DEBUG_DOC_ID, file: dict = None, priority: int = 0, rerun: bool = False) -> tuple[bool, str]:
     """
     Returns a tuple (success: bool, error_message: str).
     """
-    _ = callback
 
     task = dict(
-    id=get_uuid() if not task_id else task_id,
-    doc_id=doc_id,
-    from_page=0,
-    to_page=100000000,
-    task_type="dataflow",
-    priority=priority,
+        id=task_id,
+        doc_id=doc_id,
+        from_page=0,
+        to_page=100000000,
+        task_type="dataflow" if not rerun else "dataflow_rerun",
+        priority=priority,
+        begin_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 
-    TaskService.filter_delete(db, [Task.id == task["id"]])
+    if doc_id not in [CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID]:
+        TaskService.filter_delete(db, [Task.doc_id == doc_id])
+        DocumentService.begin2parse(db, doc_id)
     bulk_insert_into_db(db, model=Task, data_source=[task], replace_on_conflict=True)
 
-    kb_id = DocumentService.get_knowledgebase_id(db, doc_id)
-    if not kb_id:
-        return False, f"Can't find KB of this document: {doc_id}"
-
-    task["kb_id"] = kb_id
+    task["kb_id"] = DocumentService.get_knowledgebase_id(db, doc_id)
     task["tenant_id"] = tenant_id
-    task["task_type"] = "dataflow"
-    task["dsl"] = dsl
-    task["dataflow_id"] = get_uuid() if not flow_id else flow_id
+    task["dataflow_id"] = flow_id
+    task["file"] = file
 
     if not REDIS_CONN.queue_product(
         get_svr_queue_name(priority), message=task
