@@ -1466,7 +1466,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             return get_data_error_result(retmsg="Knowledgebase not found!")
 
         if request.cross_languages:
-            from core.prompts import cross_languages
+            from core.prompts.generator import cross_languages
             question = cross_languages(db, kb.tenant_id, None, question, request.cross_languages)
 
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
