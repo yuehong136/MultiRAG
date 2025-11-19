@@ -474,10 +474,16 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
     if not url:
         return get_data_error_result(retmsg="Invalid url.")
 
-    headers = safe_json_parse(req_data.get("headers", mcp_server.headers))
+    headers = req_data.get("headers")
+    if headers is None:
+        headers = mcp_server.headers
+    headers = safe_json_parse(headers or {})
     req_data["headers"] = headers
 
-    variables = safe_json_parse(req_data.get("variables", mcp_server.variables))
+    variables = req_data.get("variables")
+    if variables is None:
+        variables = mcp_server.variables
+    variables = safe_json_parse(variables or {})
     variables.pop("tools", None)
 
     timeout = get_float(req_data, "timeout", 10)
@@ -1421,8 +1427,8 @@ def test_mcp(request: TestMCPRequest, db: Session = Depends(get_db), user=Depend
         return get_data_error_result(retmsg="Unsupported MCP server type.")
 
     timeout = get_float(req_data, "timeout", 10)
-    headers = safe_json_parse(req_data.get("headers", {}))
-    variables = safe_json_parse(req_data.get("variables", {}))
+    headers = safe_json_parse(req_data.get("headers") or {})
+    variables = safe_json_parse(req_data.get("variables") or {})
 
     tool_call_sessions = []
     try:
