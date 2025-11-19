@@ -42,6 +42,7 @@ from pymilvus import __version__
 
 from api.utils.file_utils import get_project_base_directory
 from core import settings
+import numpy as np
 from core.nlp import is_english
 from core.settings import TAG_FLD, PAGERANK_FLD
 from core.utils import singleton, get_float
@@ -118,11 +119,378 @@ class MilvusConnection(DocStoreConnection):
             logger.error(msg)
             raise Exception(msg)
 
+        # 预加载字段检索配置（来自 mapping.json）
+        try:
+            self.search_field_configs = self._load_search_field_configs()
+            logger.info(f"Loaded BM25 field configs: {list(self.search_field_configs.keys())}")
+        except Exception as e:
+            logger.warning(f"加载检索字段配置失败: {e}")
+            self.search_field_configs = {}
+
     def field_keyword(self, field_name: str):
         # The "docnm_kwd" field is always a string, not list.
         if field_name == "source_id" or (field_name.endswith("_kwd") and field_name != "docnm_kwd" and field_name != "knowledge_graph_kwd"):
             return True
         return False
+
+    def _load_search_field_configs(self) -> dict:
+        cfg = {}
+        mapping_path = os.path.join(get_project_base_directory(), "configs", "mapping.json")
+        if not os.path.exists(mapping_path):
+            logger.warning(f"mapping 文件不存在: {mapping_path}")
+            return cfg
+        try:
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                mapping = json.load(f)
+        except Exception as e:
+            logger.error(f"读取 mapping 失败: {e}")
+            return cfg
+
+        dynamic_templates = mapping.get("mappings", {}).get("dynamic_templates", [])
+        for template in dynamic_templates:
+            for entry in template.values():
+                match = entry.get("match")
+                mapping_cfg = entry.get("mapping", {})
+                bm25_cfg = mapping_cfg.get("bm25")
+                if not match or not bm25_cfg or not bm25_cfg.get("enable"):
+                    continue
+                sparse_field = bm25_cfg.get("output_field", f"{match}_sparse")
+                cfg[match] = {
+                    "sparse_field": sparse_field,
+                    "weight": bm25_cfg.get("weight", 1.0),
+                    "search_params": copy.deepcopy(bm25_cfg.get("search_params", {"drop_ratio_search": 0.1})),
+                    "index_params": copy.deepcopy(bm25_cfg.get("index_params", {})),
+                }
+        return cfg
+
+        """
+        从 mapping.json 读取需要启用 BM25/倒排索引的字段配置。
+        返回 {field_name: {"sparse_field": str, "weight": float, "search_params": dict, "index_params": dict}}
+        """
+        cfg = {}
+        mapping_path = os.path.join(get_project_base_directory(), "configs", "mapping.json")
+        if not os.path.exists(mapping_path):
+            return cfg
+        with open(mapping_path, "r", encoding="utf-8") as f:
+            mapping = json.load(f)
+        dynamic_templates = mapping.get("mappings", {}).get("dynamic_templates", [])
+        for template in dynamic_templates:
+            for value in template.values():
+                field_name = value.get("match")
+                mapping_cfg = value.get("mapping", {})
+                bm25_cfg = mapping_cfg.get("bm25")
+                if not field_name or not bm25_cfg or not bm25_cfg.get("enable"):
+                    continue
+                sparse_field = bm25_cfg.get("output_field", f"{field_name}_sparse")
+                cfg[field_name] = {
+                    "sparse_field": sparse_field,
+                    "weight": bm25_cfg.get("weight", 1.0),
+                    "search_params": copy.deepcopy(bm25_cfg.get("search_params", {"drop_ratio_search": 0.1})),
+                    "index_params": copy.deepcopy(bm25_cfg.get("index_params", {
+                        "inverted_index_algo": "DAAT_WAND",
+                        "bm25_k1": 1.5,
+                        "bm25_b": 0.75,
+                    })),
+                }
+        return cfg
+
+    @staticmethod
+    def _parse_field_weight(field_expr: str) -> tuple[str, float]:
+        if "^" in field_expr:
+            fname, boost = field_expr.split("^", 1)
+            try:
+                return fname, float(boost)
+            except ValueError:
+                return fname, 1.0
+        return field_expr, 1.0
+
+    @staticmethod
+    def _normalize_scores(score_map: dict, reverse: bool = False) -> dict:
+        """
+        使用 Min-Max 归一化。
+        :param score_map: 文档ID到分数的映射
+        :param reverse: 是否反转分数（例如 L2 距离越小越好，需要反转），默认为 False
+        """
+        if not score_map:
+            return {}
+
+        keys = list(score_map.keys())
+        values = np.array([get_float(score_map[k]) for k in keys], dtype=np.float64)
+
+        if len(values) == 1:
+            return {keys[0]: 1.0}
+
+        min_v = np.min(values)
+        max_v = np.max(values)
+
+        # 如果分值差异过小，或者只有一个分值，直接返回 1.0
+        if max_v - min_v < 1e-6:
+            return {k: 1.0 for k in keys}
+
+        # 使用 Min-Max 归一化
+        if reverse:
+            # 对于 L2 距离：(max - x) / (max - min)，使得越小的值越大
+            normalized = (max_v - values) / (max_v - min_v)
+        else:
+            # 对于 IP/Cosine/BM25：(x - min) / (max - min)，使得越大的值越大
+            normalized = (values - min_v) / (max_v - min_v)
+
+        return {k: float(normalized[i]) for i, k in enumerate(keys)}
+
+    def _execute_text_queries(
+        self,
+        collection_names: list[str],
+        text_exprs: list[MatchTextExpr],
+        filter_expr: str,
+        select_fields: list[str],
+        limit: int,
+        offset: int,
+    ):
+        if not text_exprs:
+            return [], {}, 0
+
+        conn = self._get_connection()
+        aggregated = {}
+        score_map = {}
+        total_hits = 0
+        search_limit = max(limit + offset, 1)
+
+        for expr in text_exprs:
+            expr_limit = expr.topn or search_limit
+            for field_expr in expr.fields:
+                field_name, boost = self._parse_field_weight(field_expr)
+                cfg = self.search_field_configs.get(field_name)
+                if not cfg:
+                    continue
+
+                sparse_field = cfg["sparse_field"]
+                # base_weight = cfg.get("weight", 1.0)
+                final_weight = boost
+                search_params = {
+                    "metric_type": "BM25",
+                    "params": copy.deepcopy(cfg.get("search_params", {"drop_ratio_search": 0.1}))
+                }
+
+                for collection in collection_names:
+                    try:
+                        query_payload = expr.raw_text if hasattr(expr, "raw_text") else expr.matching_text
+                        res = conn.search(
+                            collection,
+                            data=[query_payload],
+                            anns_field=sparse_field,
+                            param=search_params,
+                            limit=expr_limit,
+                            expression=filter_expr if filter_expr else None,
+                            output_fields=select_fields,
+                        )
+                    except Exception as e:
+                        logger.warning(f"BM25 检索失败 field={field_name}, collection={collection}: {e}")
+                        continue
+
+                    hits = res[0] if res else []
+                    total_hits += len(hits)
+                    for hit in hits:
+                        hit_dict = hit.to_dict()
+                        doc_id = str(hit_dict.get("id", hit_dict.get("pk", "")))
+                        if not doc_id:
+                            continue
+                        distance = get_float(hit_dict.get("distance", 0.0))
+                        entry = aggregated.setdefault(doc_id, {
+                            "hit": {"id": doc_id, "pk": doc_id},
+                            "entity": {},
+                            "distance": 0.0,
+                        })
+                        entry["distance"] += final_weight * distance
+                        score_map[doc_id] = entry["distance"]
+
+                        entity = hit_dict.get("entity") or {}
+                        if entity:
+                            entry["entity"].update(entity)
+                        entry["hit"].update(hit_dict)
+
+        results = []
+        for doc_id, data in aggregated.items():
+            base_hit = data["hit"]
+            if isinstance(base_hit, dict):
+                hit = copy.deepcopy(base_hit)
+            else:
+                try:
+                    hit = base_hit.to_dict()
+                except Exception:
+                    hit = {"raw": str(base_hit)}
+            hit["distance"] = data["distance"]
+            hit["_score"] = data["distance"]
+            if data["entity"]:
+                if "entity" not in hit or not isinstance(hit["entity"], dict):
+                    hit["entity"] = {}
+                hit["entity"].update(data["entity"])
+            if "id" not in hit:
+                hit["id"] = doc_id
+            if "pk" not in hit:
+                hit["pk"] = doc_id
+            results.append(hit)
+
+        results.sort(key=lambda x: x.get("distance", 0.0), reverse=True)
+        return results, score_map, total_hits
+
+    def _execute_dense_query(
+        self,
+        collection_names: list[str],
+        dense_expr: MatchDenseExpr | None,
+        filter_expr: str,
+        select_fields: list[str],
+        limit: int,
+        offset: int,
+    ):
+        if dense_expr is None:
+            return [], {}, 0
+
+        vector_data = dense_expr.embedding_data
+        vector_field = dense_expr.vector_column_name
+        if vector_data is None or vector_field is None:
+            return [], {}, 0
+
+        conn = self._get_connection()
+        search_params = {
+            "metric_type": dense_expr.distance_type.upper(),
+            "params": {"nprobe": 10},
+        }
+        if dense_expr.extra_options and "similarity" in dense_expr.extra_options:
+            search_params["similarity"] = dense_expr.extra_options["similarity"]
+
+        query_limit = dense_expr.topn or max(limit + offset, 1)
+        vector_results = []
+        score_map = {}
+        total_hits = 0
+
+        for collection in collection_names:
+            try:
+                res = conn.search(
+                    collection,
+                    [vector_data],
+                    vector_field,
+                    search_params,
+                    expression=filter_expr,
+                    output_fields=select_fields,
+                    limit=query_limit,
+                )
+            except Exception as e:
+                logger.warning(f"向量检索失败 collection={collection}: {e}")
+                continue
+
+            hits = res[0] if res else []
+            total_hits += len(hits)
+            for hit in hits:
+                hit_dict = hit.to_dict()
+                doc_id = str(hit_dict.get("id", hit_dict.get("pk", "")))
+                vector_results.append(hit_dict)
+                if doc_id:
+                    score_map[doc_id] = get_float(hit_dict.get("distance", 0.0))
+
+        vector_results.sort(key=lambda x: x.get("distance", 0.0), reverse=True)
+        return vector_results, score_map, total_hits
+
+    @staticmethod
+    def _fusion_weights(fusion_expr: FusionExpr | None) -> tuple[float, float]:
+        default = (0.5, 0.5)
+        if not fusion_expr or not fusion_expr.fusion_params:
+            return default
+        weights = fusion_expr.fusion_params.get("weights")
+        if not weights:
+            return default
+        parts = [p.strip() for p in str(weights).split(",") if p.strip()]
+        if len(parts) < 2:
+            return default
+        try:
+            return float(parts[0]), float(parts[1])
+        except ValueError:
+            return default
+
+    def _search_with_text_and_dense(
+        self,
+        select_fields: list[str],
+        filter_expr: str,
+        text_exprs: list[MatchTextExpr],
+        dense_expr: MatchDenseExpr | None,
+        fusion_expr: FusionExpr | None,
+        index_names: list[str],
+        limit: int,
+        offset: int,
+        rank_boost: dict,
+    ):
+        # 1. 执行文本检索
+        text_results, text_scores, _ = self._execute_text_queries(
+            index_names, text_exprs, filter_expr, select_fields, limit, offset
+        )
+
+        # 2. 执行向量检索
+        vector_results, vector_scores, _ = self._execute_dense_query(
+            index_names, dense_expr, filter_expr, select_fields, limit, offset
+        )
+
+        combined_results = []
+        if text_results and vector_results:
+            text_weight, vector_weight = self._fusion_weights(fusion_expr)
+            # 文本检索 BM25 分数总是越大越好，reverse=False
+            norm_text = self._normalize_scores(text_scores, reverse=False)
+            
+            # 向量检索根据 metric_type 决定是否反转
+            vector_metric_type = dense_expr.distance_type.upper() if dense_expr else "COSINE"
+            is_l2 = vector_metric_type == "L2"
+            norm_vector = self._normalize_scores(vector_scores, reverse=is_l2)
+            
+            final_scores = {}
+            for doc_id in set(norm_text.keys()) | set(norm_vector.keys()):
+                final_scores[doc_id] = (
+                    text_weight * norm_text.get(doc_id, 0.0) +
+                    vector_weight * norm_vector.get(doc_id, 0.0)
+                )
+
+            lookup = {}
+            for hit in vector_results + text_results:
+                if isinstance(hit, dict):
+                    hit_copy = copy.deepcopy(hit)
+                else:
+                    try:
+                        hit_copy = dict(hit.to_dict())
+                    except Exception:
+                        hit_copy = {"raw": str(hit)}
+                doc_id = str(hit_copy.get("id", hit_copy.get("pk", "")))
+                if doc_id and doc_id not in lookup:
+                    lookup[doc_id] = hit_copy
+
+            for doc_id, score in final_scores.items():
+                base_hit = lookup.get(doc_id, {"id": doc_id, "pk": doc_id, "entity": {}})
+                if isinstance(base_hit, dict):
+                    hit = copy.deepcopy(base_hit)
+                else:
+                    try:
+                        hit = base_hit.to_dict()
+                    except Exception:
+                        hit = {"raw": str(base_hit)}
+                if "id" not in hit:
+                    hit["id"] = doc_id
+                if "pk" not in hit:
+                    hit["pk"] = doc_id
+                hit["distance"] = score
+                hit["_score"] = score
+                combined_results.append(hit)
+        elif text_results:
+            combined_results = text_results
+        elif vector_results:
+            combined_results = vector_results
+
+        for item in combined_results:
+            if "_score" not in item:
+                item["_score"] = get_float(item.get("distance", item.get("score", 0.0)))
+        combined_results.sort(key=lambda x: x.get("distance", 0.0), reverse=True)
+        total_hits = len(combined_results)
+        if offset > 0:
+            combined_results = combined_results[offset:]
+        if limit > 0:
+            combined_results = combined_results[:limit]
+
+        return combined_results, total_hits
 
     """
     数据库操作
@@ -666,53 +1034,17 @@ class MilvusConnection(DocStoreConnection):
             if filter_parts:
                 filter_expr = " && ".join(filter_parts)
 
-        # 提取搜索参数
-        search_params = {"metric_type": "COSINE"}
-        vector_data = None
-        vector_field = None
-        vector_similarity_weight = 0.5
+        text_exprs: list[MatchTextExpr] = []
+        dense_expr: MatchDenseExpr | None = None
+        fusion_expr: FusionExpr | None = None
 
-        # 处理融合参数，类似 es_conn.py 中的处理
-        for m in matchExprs:
-            if isinstance(m, FusionExpr) and m.method == "weighted_sum" and "weights" in m.fusion_params:
-                # 确认是文本+向量的融合搜索
-                if len(matchExprs) == 3 and isinstance(matchExprs[0], MatchTextExpr) and isinstance(matchExprs[1],
-                                                                                                    MatchDenseExpr) and isinstance(
-                        matchExprs[2], FusionExpr):
-                    weights = m.fusion_params["weights"]
-                    vector_similarity_weight = get_float(weights.split(",")[1])
-
-        # 处理不同类型的匹配表达式
         for expr in matchExprs:
-            # todo if isinstance(expr, MatchTextExpr) 使用milvus的全文检索特性
-            # if isinstance(expr, MatchTextExpr):
-            #     # 处理文本搜索
-            #     text_query = expr.matching_text
-            #     text_fields = expr.fields
-            #     if "minimum_should_match" in expr.extra_options:
-            #         minimum_should_match = expr.extra_options["minimum_should_match"]
-            #         if isinstance(minimum_should_match, float):
-            #             minimum_should_match = str(int(minimum_should_match * 100)) + "%"
-            #     # 将文本查询条件添加到过滤表达式中
-            #     if text_query and text_fields:
-            #         text_conditions = []
-            #         for field in text_fields:
-            #             text_conditions.append(f"match_phrase({field}, '{text_query}')")
-            #         if text_conditions:
-            #             text_filter = " || ".join(text_conditions)
-            #             if filter_expr:
-            #                 filter_expr = f"({filter_expr}) && ({text_filter})"
-            #             else:
-            #                 filter_expr = text_filter
-            #
-            #     logger.debug(f"文本搜索条件: {text_query}, 字段: {text_fields}, 最小匹配率: {minimum_should_match}")
-
-            if isinstance(expr, MatchDenseExpr):
-                vector_data = expr.embedding_data
-                vector_field = expr.vector_column_name
-                # 从额外选项中获取设置
-                if "similarity" in expr.extra_options:
-                    search_params["similarity"] = expr.extra_options["similarity"]
+            if isinstance(expr, MatchTextExpr):
+                text_exprs.append(expr)
+            elif isinstance(expr, MatchDenseExpr):
+                dense_expr = expr
+            elif isinstance(expr, FusionExpr):
+                fusion_expr = expr
 
         # 如果存在 rank_feature，添加到查询参数中
         # Milvus 不支持直接的 rank_feature，但我们可以在后处理中模拟
@@ -723,7 +1055,9 @@ class MilvusConnection(DocStoreConnection):
                     field = f"{TAG_FLD}.{field}"
                 rank_boost[field] = score
 
-        if not vector_data:
+        has_retrieval = bool(text_exprs or dense_expr)
+
+        if not has_retrieval:
             # 只有条件过滤，没有向量搜索
             for indexName in indexNames:
                 collection_name = indexName
@@ -770,74 +1104,18 @@ class MilvusConnection(DocStoreConnection):
                 return [], 0
 
         else:
-            # 向量搜索
-            for indexName in indexNames:
-                # collection_name = f"{indexName}_{knowledgebaseId}"
-                collection_name = indexName
-                try:
-                    conn = self._get_connection()
-                    if not conn.has_collection(collection_name):
-                        continue
-
-                    # 准备搜索参数
-                    search_data = [vector_data]
-
-                    # 执行向量搜索
-                    results = conn.search(
-                        collection_name,
-                        search_data,
-                        vector_field,
-                        search_params,
-                        expression=filter_expr,
-                        output_fields=selectFields,
-                        limit=limit
-                    )
-
-                    # 处理搜索结果
-                    if results and results[0]:
-                        hit_results = []
-                        for hit in results[0]:
-                            hit_dict = hit.to_dict()
-                            # 将距离信息添加到结果中
-                            # base_score = 1.0 - hit_dict.get("distance", 0)
-                            base_score = hit_dict.get("distance", 0) # 我们目前用的是consin，[-1,1],值越大越准
-                            hit_dict["SCORE"] = base_score
-
-                            # 应用 rank_feature 调整分数
-                            if rank_boost and PAGERANK_FLD in hit_dict["entity"]:
-                                pagerank = get_float(hit_dict["entity"].get(PAGERANK_FLD, 0))
-                                # 应用向量相似度权重和PageRank权重
-                                # todo 原始 ES 实现可能同时包含了全文检索和向量搜索，而在那种情况下，(1.0 - vector_similarity_weight) 部分可能是分配给全文检索得分的权重。但在我们目前的 Milvus 实现中，由于没有实现全文检索部分，这个权重被分配给了 PageRank，后续再调整。
-                                hit_dict["SCORE"] = (base_score * vector_similarity_weight +
-                                                     pagerank * rank_boost.get(PAGERANK_FLD, 1.0) * (
-                                                                 1.0 - vector_similarity_weight))
-
-                            hit_results.append(hit_dict)
-
-                        all_results.extend(hit_results)
-                        total_hits_count += len(hit_results)
-                except Exception as e:
-                    logger.warning(f"搜索集合 {collection_name} 失败: {str(e)}")
-
-            # 应用排序
-            if all_results:
-                if matchExprs:
-                    # 按分数降序排序
-                    all_results.sort(key=lambda x: x.get("SCORE", 0), reverse=True)
-
-                # 如果有自定义排序，应用它
-                if orderBy and orderBy.fields:
-                    for field, order in reversed(orderBy.fields):
-                        reverse_sort = (order == 1)  # 1表示降序
-                        all_results.sort(key=lambda x: x.get(field), reverse=reverse_sort)
-
-                    # 应用偏移和限制
-                paginated_results = all_results[offset:offset + limit]
-
-                return paginated_results, total_hits_count
-            else:
-                # 返回空结果
-                return [], 0
+            combined_results, total_hits_count = self._search_with_text_and_dense(
+                select_fields=selectFields,
+                filter_expr=filter_expr,
+                text_exprs=text_exprs,
+                dense_expr=dense_expr,
+                fusion_expr=fusion_expr,
+                index_names=indexNames,
+                limit=limit,
+                offset=offset,
+                rank_boost=rank_boost or {},
+            )
+            return combined_results, total_hits_count
 
     # todo 暂时不需要支持更复杂的更新逻辑（如批量更新、复杂条件查询以及特殊字段格式转换）
     # def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: list[str]) -> bool:
@@ -1046,6 +1324,10 @@ class MilvusConnection(DocStoreConnection):
 
             # 处理常规字段和嵌套的entity字段
             for field in fields:
+                if field == "_score":
+                    value = get_float(item.get("distance", item.get("score", 0.0)))
+                    row_dict[field] = value
+                    continue
                 # 首先检查顶层是否有该字段
                 if field in item:
                     value = item.get(field)
@@ -2529,6 +2811,10 @@ class MilvusConnection(DocStoreConnection):
                 if value.get("match_pattern", "") == "regex":
                     regex_patterns.append((value.get("match", ""), value.get("mapping", {})))
 
+        bm25_configs = []
+        bm25_config_map = {}
+        existing_field_names = set()
+
         # 解析动态模板中的字段信息
         for template in dynamic_templates:
             for key, value in template.items():
@@ -2538,92 +2824,112 @@ class MilvusConnection(DocStoreConnection):
                     continue
 
                 match = value.get("match", "")
-                mapping_type = value.get("mapping", {}).get("type", "")
+                mapping_cfg = value.get("mapping", {})
+                mapping_type = mapping_cfg.get("type", "")
 
                 # 处理向量字段的维度
                 if mapping_type == "FLOAT_VECTOR":
-                    dims = value.get("mapping", {}).get("dims", 768)
-                    if dims == "auto":
-                        if match in auto_dimensions:
-                            dims = auto_dimensions[match]
-                        else:
-                            # 默认使用768维
-                            dims = 768
-
+                    dims = mapping_cfg.get("dims", 1024)
+                    if match in auto_dimensions:
+                        dims = auto_dimensions.get(match, 1024)
                     fields.append(FieldSchema(name=match, dtype=DataType.FLOAT_VECTOR, dim=dims))
+                    existing_field_names.add(match)
                 elif mapping_type == "VARCHAR":
-                    max_length = value.get("mapping", {}).get("max_length", 256)
-                    is_primary = value.get("mapping", {}).get("is_primary", False)
-
-                    nullable_value = not is_primary  # 默认行为：主键不可空
-                    # 默认关闭所有字段的分析器
-                    enable_analyzer = False
-                    # 如果启用混合检索且字段名为content_with_weight，则启用analyzer
-                    if match == "content_with_weight":
+                    max_length = mapping_cfg.get("max_length", 256)
+                    is_primary = mapping_cfg.get("is_primary", False)
+                    bm25_cfg = mapping_cfg.get("bm25")
+                    nullable_value = not is_primary
+                    if bm25_cfg and bm25_cfg.get("enable"):
                         nullable_value = False
-                        enable_analyzer = True  # 启用分析器
-                        analyzer_params = {
-                            "type": "chinese",
-                        }
+                    enable_analyzer = mapping_cfg.get("enable_analyzer", False)
+                    enable_match = mapping_cfg.get("enable_match", False)
+                    analyzer_params = mapping_cfg.get("analyzer_params")
 
-                        fields.append(FieldSchema(
-                            name=match,
-                            dtype=DataType.VARCHAR,
-                            max_length=max_length,
-                            is_primary=is_primary,
-                            nullable=nullable_value,
-                            analyzer_params=analyzer_params,
-                            enable_analyzer = enable_analyzer
-                        ))
-                    else:
-                        fields.append(FieldSchema(
-                            name=match,
-                            dtype=DataType.VARCHAR,
-                            max_length=max_length,
-                            is_primary=is_primary,
-                            nullable=nullable_value,
-                        ))
+                    field_kwargs = {
+                        "name": match,
+                        "dtype": DataType.VARCHAR,
+                        "max_length": max_length,
+                        "is_primary": is_primary,
+                        "nullable": nullable_value,
+                    }
+                    if enable_analyzer:
+                        field_kwargs["enable_analyzer"] = True
+                    if analyzer_params:
+                        field_kwargs["analyzer_params"] = analyzer_params
+                    if enable_match:
+                        field_kwargs["enable_match"] = True
+
+                    fields.append(FieldSchema(**field_kwargs))
+                    existing_field_names.add(match)
+
+                    if bm25_cfg and bm25_cfg.get("enable"):
+                        sparse_field = bm25_cfg.get("output_field", f"{match}_sparse")
+                        cfg_entry = {
+                            "input_field": match,
+                            "sparse_field": sparse_field,
+                            "search_params": copy.deepcopy(bm25_cfg.get("search_params", {"drop_ratio_search": 0.1})),
+                            "index_params": copy.deepcopy(bm25_cfg.get("index_params", {
+                                "inverted_index_algo": "DAAT_WAND",
+                                "bm25_k1": 1.5,
+                                "bm25_b": 0.75
+                            }))
+                        }
+                        bm25_configs.append(cfg_entry)
+                        bm25_config_map[sparse_field] = cfg_entry
                 elif mapping_type == "FLOAT":
                     fields.append(FieldSchema(name=match, dtype=DataType.FLOAT, nullable=True))
+                    existing_field_names.add(match)
                 elif mapping_type == "INT64":
                     fields.append(FieldSchema(name=match, dtype=DataType.INT64, nullable=True))
+                    existing_field_names.add(match)
                 elif mapping_type == "JSON":
                     fields.append(FieldSchema(name=match, dtype=DataType.JSON, nullable=True))
+                    existing_field_names.add(match)
                 elif mapping_type == "ARRAY":
-                    element_type = value.get("mapping", {}).get("element_type", DataType.VARCHAR)
-                    max_length = value.get("mapping", {}).get("max_length", 256)
-                    max_capacity = value.get("mapping", {}).get("max_capacity", 4096)
-                    fields.append(FieldSchema(name=match, dtype=DataType.ARRAY,
-                                              element_type=getattr(DataType, element_type) if isinstance(element_type,
-                                                                                                         str) else element_type,
-                                              max_length=max_length, max_capacity=max_capacity,
-                                              nullable=True))
+                    element_type = mapping_cfg.get("element_type", DataType.VARCHAR)
+                    max_length = mapping_cfg.get("max_length", 256)
+                    max_capacity = mapping_cfg.get("max_capacity", 4096)
+                    fields.append(FieldSchema(
+                        name=match,
+                        dtype=DataType.ARRAY,
+                        element_type=getattr(DataType, element_type) if isinstance(element_type, str) else element_type,
+                        max_length=max_length,
+                        max_capacity=max_capacity,
+                        nullable=True
+                    ))
+                    existing_field_names.add(match)
 
         # 添加维度特定的向量字段
         for vector_field, dim in auto_dimensions.items():
             # 跳过已添加的字段
-            if any(field.name == vector_field for field in fields):
+            if vector_field in existing_field_names:
                 continue
 
             # 如果是维度特定字段模式 (q_{dim}_vec)
             if re.match(r'q_\d+_vec', vector_field):
                 fields.append(FieldSchema(name=vector_field, dtype=DataType.FLOAT_VECTOR, dim=dim))
-                # logger.info(f"添加特定维度向量字段: {vector_field}, 维度: {dim}")
-        fields.append(FieldSchema(
-            name="sparse_vector",
-            dtype=DataType.SPARSE_FLOAT_VECTOR
-        ))
-        # 创建BM25函数
-        bm25_function = Function(
-            name=f"bm25_function_{str(uuid.uuid4())[:8]}",
-            function_type=FunctionType.BM25,
-            input_field_names=["content_with_weight"],  # 输入字段为text_field_name
-            output_field_names="sparse_vector"  # 输出稀疏向量字段
-        )
+                existing_field_names.add(vector_field)
+
+        # 补充 BM25 稀疏向量字段
+        for cfg in bm25_configs:
+            if cfg["sparse_field"] in existing_field_names:
+                continue
+            fields.append(FieldSchema(
+                name=cfg["sparse_field"],
+                dtype=DataType.SPARSE_FLOAT_VECTOR
+            ))
+            existing_field_names.add(cfg["sparse_field"])
 
         # 创建集合模式
         schema = CollectionSchema(fields=fields, description="根据mapping.json创建，当前版本支持混合检索", enable_dynamic_field=True)
-        schema.add_function(bm25_function)
+        for cfg in bm25_configs:
+            bm25_function = Function(
+                name=f"bm25_function_{cfg['sparse_field']}",
+                function_type=FunctionType.BM25,
+                input_field_names=[cfg["input_field"]],
+                output_field_names=cfg["sparse_field"],
+            )
+            schema.add_function(bm25_function)
         # 创建集合
         self.create_collection(collection_name, schema=schema)
         logger.info(f"成功创建集合: {collection_name} 包含字段: {[field.name for field in fields]}")
@@ -2657,18 +2963,17 @@ class MilvusConnection(DocStoreConnection):
             # 为稀疏向量创建索引 - 使用最新推荐的SPARSE_INVERTED_INDEX
             elif field.dtype == DataType.SPARSE_FLOAT_VECTOR:
                 sparse_index_params = IndexParams()
-                # 按照新文档的建议，使用SPARSE_INVERTED_INDEX索引类型
+                cfg = bm25_config_map.get(field.name, {})
+                idx_params = cfg.get("index_params", {})
                 sparse_index_params.add_index(
                     field.name,
-                    "SPARSE_INVERTED_INDEX",  # 使用新推荐的索引类型
+                    "SPARSE_INVERTED_INDEX",
                     field.name,
-                    metric_type="BM25", # IP 或 BM25
+                    metric_type=idx_params.get("metric_type", "BM25"),
                     params={
-                        # 使用DAAT_WAND算法代替已弃用的SPARSE_WAND
-                        "inverted_index_algo": "DAAT_WAND", # DAAT_MAXSCORE (默认)：适合多、长topk, DAAT_WAND:适合少、短topk, TAAT_NAIVE：不推荐
-                        # 配置BM25参数
-                        "bm25_k1": 1.5,  # 控制术语频率饱和度，范围[1.2, 2.0]
-                        "bm25_b": 0.75  # 控制文档长度归一化，范围[0, 1]
+                        "inverted_index_algo": idx_params.get("inverted_index_algo", "DAAT_WAND"),
+                        "bm25_k1": idx_params.get("bm25_k1", 1.5),
+                        "bm25_b": idx_params.get("bm25_b", 0.75),
                     }
                 )
                 try:

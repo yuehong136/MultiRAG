@@ -498,7 +498,6 @@ async def build_chunks(task, progress_callback, db: Session):
             d.update(chunk)
             d["pk"] = xxhash.xxh64(
                 (chunk["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
-            d["id"] = d["pk"]  # 设置id字段，用于后续图片处理
             d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
             d["create_timestamp_flt"] = datetime.now().timestamp()
             d["page_num_int"] = d.get("page_num_int", [])
@@ -509,7 +508,7 @@ async def build_chunks(task, progress_callback, db: Session):
                 d["img_id"] = ""
                 docs.append(d)
                 return
-            await image2id(d, partial(STORAGE_IMPL.put, tenant_id=task["tenant_id"]), d["id"], task["kb_id"])
+            await image2id(d, partial(STORAGE_IMPL.put, tenant_id=task["tenant_id"]), d["pk"], task["kb_id"])
             docs.append(d)
         except Exception:
             logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))

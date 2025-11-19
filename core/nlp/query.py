@@ -17,8 +17,10 @@ class MilvusQueryer:
             "title_sm_tks^5",
             "important_kwd^30",
             "important_tks^20",
+            "question_tks^20",
             "content_ltks^2",
             "content_sm_ltks",
+            "content_with_weight",
         ]
 
     @staticmethod
@@ -110,8 +112,9 @@ class MilvusQueryer:
             if not q:
                 q.append(txt)
             query = " ".join(q)
+            raw_text = " ".join([term.partition("^")[0].strip("()") for term in query.split()])
             return MatchTextExpr(
-                self.query_fields, query, 100
+                self.query_fields, query, 100, raw_text=raw_text
             ), keywords
 
         def need_fine_grained_tokenize(tk):
@@ -123,10 +126,12 @@ class MilvusQueryer:
 
         txt = MilvusQueryer.rmWWW(txt)
         qs, keywords = [], []
+        raw_terms = []
         for tt in self.tw.split(txt)[:256]:  # .split():
             if not tt:
                 continue
             keywords.append(tt)
+            raw_terms.append(tt)
             twts = self.tw.weights([tt])
             syns = self.syn.lookup(tt)
             if syns and len(keywords) < 32:
@@ -195,8 +200,9 @@ class MilvusQueryer:
             query = " OR ".join([f"({t})" for t in qs if t])
             if not query:
                 query = otxt
+            raw_text = " ".join(raw_terms) if raw_terms else otxt
             return MatchTextExpr(
-                self.query_fields, query, 100, {"minimum_should_match": min_match}
+                self.query_fields, query, 100, {"minimum_should_match": min_match}, raw_text=raw_text
             ), keywords
         return None, keywords
 

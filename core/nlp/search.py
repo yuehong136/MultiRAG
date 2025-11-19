@@ -1101,36 +1101,36 @@ class Dealer:
                                                    rank_feature=rank_feature)
         else:
             lower_case_doc_engine = os.getenv('DOC_ENGINE', 'milvus')
-            if lower_case_doc_engine == "milvus":
-                # milvus doesn't normalize each way score before fusion.
+            if lower_case_doc_engine in ["elasticsearch", "opensearch"]:
+                # ElasticSearch doesn't normalize each way score before fusion.
+                sim, tsim, vsim = self.rerank(
+                    sres, question, 1 - vector_similarity_weight, vector_similarity_weight,
+                    rank_feature=rank_feature)
+            elif lower_case_doc_engine == "milvus":
                 if req.get("search_mode", {}).get("hybrid"):
-                    # Milvus 已经在引擎内部完成了 fusion（密集向量 + BM25 稀疏向量）
-                    # 直接使用融合后的距离分数，无法分解为独立的 term 和 vector 分数
                     if "distance" in sres.field and isinstance(sres.field["distance"], list):
                         sim = np.array(sres.field["distance"])
                     else:
-                        # 如果没有 distance，尝试从 _score 获取
-                        sim = np.array([sres.field[id].get("_score", 0.0) for id in sres.ids])
-                    # 因为无法分解融合分数，所以 term 和 vector 相似度设为 0（表示不适用）
-                    tsim = np.zeros(len(sim))
-                    vsim = np.zeros(len(sim))
+                        sim = np.array([sres.field[id].get("_score", 0.0) for id in sres.ids], dtype=np.float64)
+                    tsim = np.zeros(len(sim), dtype=np.float64)
+                    vsim = np.zeros(len(sim), dtype=np.float64)
                 else:
-                    # 传统单路检索，Milvus 不会自动 fusion
-                    # 需要在应用层通过 rerank 手动融合
-                    if len(sres.query_vector) == 0:
-                        sim = np.array(sres.field["distance"])
-                        tsim = np.zeros(len(sim))  # 与 sim 同样长度的零数组
-                        vsim = np.zeros(len(sim))  # 与 sim 同样长度的零数组
-                    else:
-                        sim, tsim, vsim = self.rerank(
-                            sres, question, 1 - vector_similarity_weight, vector_similarity_weight,
-                            rank_feature=rank_feature)
+                    # 应用层已经对 BM25 + 向量做了融合，直接使用 _score
+                    sim_list = [sres.field[id].get("_score", 0.0) for id in sres.ids]
+                    sim = np.array([s if s is not None else 0.0 for s in sim_list], dtype=np.float64)
+                    tsim = np.zeros(len(sim), dtype=np.float64)
+                    vsim = np.zeros(len(sim), dtype=np.float64)
             else:
-                # Don't need rerank here since Infinity normalizes each way score before fusion.
-                sim = [sres.field[id].get("_score", 0.0) for id in sres.ids]
-                sim = [s if s is not None else 0. for s in sim]
-                tsim = sim
-                vsim = sim
+                # Infinity / 其它已归一化的引擎
+                sim_list = [sres.field[id].get("_score", 0.0) for id in sres.ids]
+                sim = np.array([s if s is not None else 0.0 for s in sim_list], dtype=np.float64)
+                tsim = sim.copy()
+                vsim = sim.copy()
+
+            if lower_case_doc_engine == "milvus" and rank_feature:
+                rank_scores = self._rank_feature_scores(rank_feature, sres)
+                sim = sim + rank_scores
+
         # Already paginated in search function
         begin = ((page % (RERANK_LIMIT//page_size)) - 1) * page_size
         sim = sim[begin : begin + page_size]

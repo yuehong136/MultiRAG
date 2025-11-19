@@ -46,12 +46,14 @@ class MatchTextExpr(ABC):
         fields: list[str],
         matching_text: str,
         topn: int,
-        extra_options: dict = dict(),
+        extra_options: dict | None = None,
+        raw_text: str | None = None,
     ):
         self.fields = fields
         self.matching_text = matching_text
         self.topn = topn
-        self.extra_options = extra_options
+        self.extra_options = {} if extra_options is None else extra_options
+        self.raw_text = raw_text or matching_text
 
 
 class MatchDenseExpr(ABC):
