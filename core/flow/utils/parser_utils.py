@@ -382,7 +382,7 @@ class FlowParser:
         
         img = Image.open(BytesIO(binary)).convert("RGB")
         
-        if parse_method == "ocr":
+        if parse_method in ["ocr", "deepdoc", "plain_text"]:
             # 使用 OCR 识别文字
             ocr = OCR()
             bxs = await _to_thread(ocr, np.array(img))
@@ -392,6 +392,8 @@ class FlowParser:
             # 兼容两种方式：
             # 1. parse_method="vlm" + llm_name="qwen-vl-plus"（我们的方式）
             # 2. parse_method="qwen-vl-plus"（core/flow 的方式）
+            # 3. parse_method="deepdoc"（task_executor 默认值）-> 已在上一个 if 分支处理
+            
             actual_llm_name = llm_name or parse_method  # 优先使用 llm_name，否则用 parse_method
             with db_connection() as db:
                 cv_model = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_name=actual_llm_name, lang=lang)

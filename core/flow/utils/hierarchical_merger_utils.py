@@ -30,7 +30,7 @@ class FlowHierarchicalMerger:
     @staticmethod
     async def merge(
         chunks: list[dict],
-        levels: list[list[str]] = None,
+        levels: list[list[str]] | None = None,
         hierarchy: int = 1,
         callback=None
     ) -> dict:
@@ -183,7 +183,7 @@ class FlowHierarchicalMerger:
 
 async def hierarchical_merge(
     chunks: list[dict],
-    levels: list[list[str]] = None,
+    levels: list[list[str]] | None = None,
     hierarchy: int = 1,
     callback=None
 ) -> dict:
