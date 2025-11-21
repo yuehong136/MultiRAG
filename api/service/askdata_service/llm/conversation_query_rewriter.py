@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
+from api.db.db_models import db_connection
 from api.utils.prompt_template_util import PromptTemplateUtil
 
 logger = logging.getLogger(__name__)
@@ -100,8 +101,6 @@ class ConversationQueryRewriter:
     ) -> Dict[str, Any]:
         """调用LLM判断新问题是否与上下文相关并进行改写"""
         try:
-            llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
-
             template_path = os.path.join(self.prompt_dir, "conversation_query_rewriter_prompt.txt")
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
 
@@ -127,12 +126,19 @@ class ConversationQueryRewriter:
                 "max_tokens": 1024
             }
 
-            response = await asyncio.to_thread(
-                llm_model_instance.chat,
-                system="",
-                history=history,
-                gen_conf=gen_conf
-            )
+            # 定义在独立线程中执行的函数，使用独立的数据库会话
+            def _chat_in_thread():
+                # 在线程中创建独立的数据库会话和LLM实例
+                # 这样可以避免多线程共享数据库会话导致的事务状态冲突
+                with db_connection() as thread_db:
+                    thread_llm_instance = LLMBundle(thread_db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+                    return thread_llm_instance.chat(
+                        system="",
+                        history=history,
+                        gen_conf=gen_conf
+                    )
+
+            response = await asyncio.to_thread(_chat_in_thread)
 
             extracted_result, success = self._extract_json_from_response(response)
 

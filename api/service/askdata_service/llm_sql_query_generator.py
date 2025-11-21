@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
+from api.db.db_models import db_connection
 from api.utils.prompt_template_util import PromptTemplateUtil
 
 logger = logging.getLogger(__name__)
@@ -135,7 +136,6 @@ class NLQToInitialSQLGenerator:
         """
         try:
 
-            llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
             prompt_template = None
             if recommended_chart == "明细表":
                 prompt_template = PromptTemplateUtil.load_template_from_file(
@@ -164,12 +164,19 @@ class NLQToInitialSQLGenerator:
                 "max_tokens": 4096
             }
 
-            response = await asyncio.to_thread(
-                llm_model_instance.chat,
-                system="你是一个专业的SQL专家。请根据用户需求和语义层信息生成准确的SQL查询JSON对象。",
-                history=history,
-                gen_conf=gen_conf
-            )
+            # 定义在独立线程中执行的函数，使用独立的数据库会话
+            def _chat_in_thread():
+                # 在线程中创建独立的数据库会话和LLM实例
+                # 这样可以避免多线程共享数据库会话导致的事务状态冲突
+                with db_connection() as thread_db:
+                    thread_llm_instance = LLMBundle(thread_db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+                    return thread_llm_instance.chat(
+                        system="你是一个专业的SQL专家。请根据用户需求和语义层信息生成准确的SQL查询JSON对象。",
+                        history=history,
+                        gen_conf=gen_conf
+                    )
+
+            response = await asyncio.to_thread(_chat_in_thread)
 
             logger.info(f"智能问数-LLM-生成SQL")
             logger.info(f"prompt:{prompt}")
@@ -252,8 +259,6 @@ class NLQToInitialSQLGenerator:
             包含修复后sql, usedModels, 和 sqlComponents 的字典, 如果修复失败则返回None
         """
         try:
-            llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
-
             prompt_template = PromptTemplateUtil.load_template_from_file(
                 os.path.join(self.prompt_dir, "sql_error_fix.txt")
             )
@@ -279,12 +284,19 @@ class NLQToInitialSQLGenerator:
                 "max_tokens": 4096
             }
 
-            response = await asyncio.to_thread(
-                llm_model_instance.chat,
-                system="你是一个专业的SQL修复专家。请根据错误信息和语义层信息修复SQL查询，输出JSON格式的结果。",
-                history=history,
-                gen_conf=gen_conf
-            )
+            # 定义在独立线程中执行的函数，使用独立的数据库会话
+            def _chat_in_thread():
+                # 在线程中创建独立的数据库会话和LLM实例
+                # 这样可以避免多线程共享数据库会话导致的事务状态冲突
+                with db_connection() as thread_db:
+                    thread_llm_instance = LLMBundle(thread_db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+                    return thread_llm_instance.chat(
+                        system="你是一个专业的SQL修复专家。请根据错误信息和语义层信息修复SQL查询，输出JSON格式的结果。",
+                        history=history,
+                        gen_conf=gen_conf
+                    )
+
+            response = await asyncio.to_thread(_chat_in_thread)
 
             logger.info(f"SQL修复-LLM响应")
             logger.info(f"原始SQL: {original_sql}")

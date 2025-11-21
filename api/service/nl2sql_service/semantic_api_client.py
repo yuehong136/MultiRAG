@@ -2466,12 +2466,16 @@ class SemanticApiClient:
     async def get_user_semantic_permissions_async(
             self,
             user_id: str,
-            dataset_id_list: List[str],
+            dataset_id_list: Optional[List[str]] = None,
+            model_id_list: Optional[List[str]] = None,
             event_id: Optional[str] = None
     ) -> Optional[Dict]:
         logger.info(f"\n=== 获取用户语义权限信息 ===")
         logger.info(f"用户ID: {user_id}")
-        logger.info(f"数据集ID列表: {dataset_id_list}")
+        if dataset_id_list:
+            logger.info(f"数据集ID列表: {dataset_id_list}")
+        if model_id_list:
+            logger.info(f"模型ID列表: {model_id_list}")
         if event_id:
             await send_event(event_id, {"task_name": "获取用户语义权限信息", "task_status": "working"}, "task")
 
@@ -2481,20 +2485,30 @@ class SemanticApiClient:
             logger.error(error_msg)
             raise ApiRequestError(error_msg)
 
-        if not dataset_id_list:
-            error_msg = "数据集ID列表不能为空"
+        # 检查必须提供且只能提供一个参数
+        if not dataset_id_list and not model_id_list:
+            error_msg = "必须提供 dataset_id_list 或 model_id_list 中的一个"
+            logger.error(error_msg)
+            raise ApiRequestError(error_msg)
+        
+        if dataset_id_list and model_id_list:
+            error_msg = "dataset_id_list 和 model_id_list 不能同时提供，只能选择其一"
             logger.error(error_msg)
             raise ApiRequestError(error_msg)
 
         try:
+            # 根据参数构建请求数据
+            request_data = {"userId": user_id}
+            if dataset_id_list:
+                request_data["dataset_id_list"] = dataset_id_list
+            else:  # model_id_list
+                request_data["model_id_list"] = model_id_list
+            
             # 发起请求
             result = await self._make_async_request(
                 "POST",
                 self.api_paths["get_user_semantic_permissions"],
-                data={
-                    "userId": user_id,  # 修复：参数名应该是 userId 而不是 userid
-                    "dataset_id_list": dataset_id_list
-                }
+                data=request_data
             )
 
             # 获取数据部分

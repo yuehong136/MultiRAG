@@ -302,10 +302,15 @@ class SQLComponentsParser:
     def parse_all(self) -> Dict:
         """解析所有组件"""
         limit, offset = self.parse_pagination()
+        from_tables = self.parse_from_tables()
+
+        # 提取主表（FROM子句中的第一张表）
+        main_table = from_tables[0]['table'] if from_tables else None
 
         return {
             'select_columns': self.parse_select_columns(),
-            'from_tables': self.parse_from_tables(),
+            'from_tables': from_tables,
+            'main_table': main_table,
             'table_alias_mapping': self.get_table_alias_mapping(),
             'where_conditions': self.parse_where_conditions(),
             'group_by': self.parse_group_by(),
@@ -432,6 +437,15 @@ def format_parsed_components(parsed: Dict) -> None:
     """格式化输出解析结果"""
     print("SQL组件解析结果：")
     print("=" * 60)
+
+    # 主表（新增）
+    if parsed.get('main_table'):
+        main = parsed['main_table']
+        print("\n【主表】")
+        if main['table'] == main['alias']:
+            print(f"   {main['table']} (无别名)")
+        else:
+            print(f"   {main['table']} AS {main['alias']}")
 
     # SELECT列
     if parsed['select_columns']:
@@ -615,3 +629,4 @@ if __name__ == "__main__":
     print("单独解析LIMIT:", parser6.parse_limit())
     print("单独解析OFFSET:", parser6.parse_offset())
     print("单独解析分页信息:", parser6.parse_pagination())
+    print("单独解析主表:", parser6.parse_from_tables()[0] if parser6.parse_from_tables() else None)
