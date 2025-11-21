@@ -61,16 +61,22 @@ class MultiRAGMinio:
                                  )
         return r
 
-    def put(self, bucket, fnm, binary, tenant_id=None):
+    def put(self, bucket, fnm, binary, tenant_id=None, content_type=None):
         for _ in range(3):
             try:
                 if not self.conn.bucket_exists(bucket):
                     self.conn.make_bucket(bucket)
 
-                r = self.conn.put_object(bucket, fnm,
-                                         BytesIO(binary),
-                                         len(binary)
-                                         )
+                put_args = {
+                    "bucket_name": bucket,
+                    "object_name": fnm,
+                    "data": BytesIO(binary),
+                    "length": len(binary)
+                }
+                if content_type:
+                    put_args["content_type"] = content_type
+
+                r = self.conn.put_object(**put_args)
                 return r
             except Exception:
                 logging.exception(f"Fail to put {bucket}/{fnm}:")
@@ -125,7 +131,10 @@ class MultiRAGMinio:
     def get_presigned_url(self, bucket, fnm, expires, tenant_id=None):
         for _ in range(10):
             try:
-                return self.conn.get_presigned_url("GET", bucket, fnm, expires)
+                # Convert expires (int seconds) to timedelta as expected by Minio
+                from datetime import timedelta
+                expiry_delta = timedelta(seconds=expires)
+                return self.conn.get_presigned_url("GET", bucket, fnm, expires=expiry_delta)
             except Exception:
                 logging.exception(f"Fail to get_presigned {bucket}/{fnm}:")
                 self.__open__()

@@ -69,6 +69,14 @@ CONTENT_TYPE_MAP = {
     "ico": "image/x-icon",
     "avif": "image/avif",
     "heic": "image/heic",
+    # Video formats
+    "mp4": "video/mp4",
+    "avi": "video/x-msvideo",
+    "mov": "video/quicktime",
+    "mkv": "video/x-matroska",
+    "webm": "video/webm",
+    "wmv": "video/x-ms-wmv",
+    "flv": "video/x-flv",
 }
 
 

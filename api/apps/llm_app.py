@@ -1513,15 +1513,25 @@ def embeddings_api(request: EmbeddingsMultiModalRequest, db: Session = Depends(g
         vectors: list[Any]
         used_tokens: int
 
-        if media_items:
+        # 检查是否是视觉模型（强制多模态）
+        is_vision_model = model_name and any(k in model_name.lower() for k in ["vision", "multimodal", "vl"])
+
+        if media_items or is_vision_model:
             normalized_media = [media.model_dump(by_alias=True) if isinstance(media, VolcEmbeddingMedia) else media for media in media_items]
             combined_inputs: list[Any] = [ {"type": "text", "text": text} for text in inputs ] + normalized_media
             payload = {
                 "model": req.get("model") or emb_bundle.llm_name or getattr(emb_bundle.mdl, "model_name", None),
                 "input": combined_inputs,
             }
+            # 如果是 vision 模型，必须通过 payload 形式传递，并在底层触发多模态路由
             embedding, used_tokens = emb_bundle.encode([payload])
-            vectors = [embedding[0] if isinstance(embedding, (list, tuple)) else embedding]
+            
+            # 修复：正确处理 numpy array 和 list，提取第一条向量
+            import numpy as np
+            if isinstance(embedding, (list, tuple, np.ndarray)) and len(embedding) > 0:
+                vectors = [embedding[0]]
+            else:
+                vectors = [embedding]
         elif input_type == "query":
             if len(inputs) == 1:
                 vec, used_tokens = emb_bundle.encode_queries(inputs[0])

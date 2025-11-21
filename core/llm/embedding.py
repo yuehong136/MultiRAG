@@ -1032,16 +1032,24 @@ class VolcEngineEmbed(Base):
         if not texts:
             return np.array([]), 0
 
-        if all(isinstance(item, str) for item in texts) and not self.force_multimodal:
+        # 再次确认是否强制多模态 (防止初始化后 model_name 变更或其他原因)
+        model_lower = self.model_name.lower()
+        is_vision_model = any(k in model_lower for k in ["vision", "multimodal", "vl"])
+        should_use_multimodal = self.force_multimodal or is_vision_model
+
+        if all(isinstance(item, str) for item in texts) and not should_use_multimodal:
             embeddings, total_tokens = self._request_text_embeddings(list(texts), self.model_name, self.default_encoding_format)
             return np.array(embeddings), total_tokens
 
         if all(isinstance(item, str) for item in texts):
+            # 纯文本输入，但模型要求多模态 -> 走多模态端点
             payload = self._build_multimodal_payload(self.model_name, texts, self.default_dimensions, self.default_encoding_format)
             embedding, total_tokens = self._request_multimodal_embedding(payload)
+            # 注意：多模态端点对纯文本列表输入（被封装为单个请求）通常只返回 1 个向量
+            # 如果 texts 有多条，这里其实是把它们合并成了一个 request
             return np.array([embedding]), total_tokens
 
-        if len(texts) == 1 and self._is_text_request(texts[0]) and not self.force_multimodal:
+        if len(texts) == 1 and self._is_text_request(texts[0]) and not should_use_multimodal:
             text_inputs, model_name, encoding_format = self._extract_text_request(texts[0])
             embeddings, total_tokens = self._request_text_embeddings(text_inputs, model_name, encoding_format)
             return np.array(embeddings), total_tokens

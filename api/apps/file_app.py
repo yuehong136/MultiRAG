@@ -61,6 +61,66 @@ class MoveRequest(BaseModel):
     dest_file_id: str = Field(..., description="目标文件夹ID")
 
 
+@router.post("/upload_media_redirect", summary="上传媒体并获取临时URL", response_description="成功获取临时公网URL")
+async def upload_media_redirect(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    上传媒体文件（如视频、图片）到对象存储，并返回临时公网可访问的 URL。
+    该 URL 可用于传递给火山引擎等 AI 服务进行多模态分析。
+
+    参数:
+    - file: 上传的媒体文件
+
+    返回:
+    - JSON: 包含临时 URL 和过期时间的响应
+    """
+    try:
+        content = await file.read()
+        if not content:
+            return get_json_result(data=False, retmsg='No file content!', retcode=settings.RetCode.ARGUMENT_ERROR)
+
+        # 1. 定义存储桶和文件名
+        # 建议使用一个专门的临时桶，如果未配置则使用默认桶
+        # 注意：MinIO/OSS 的 bucket 名称通常有格式要求
+        from core import settings as core_settings
+        bucket = core_settings.OSS.get("bucket") or core_settings.MINIO.get("bucket") or "multimodal-temp"
+        
+        ext = file.filename.split('.')[-1].lower() if '.' in file.filename else "bin"
+        unique_filename = f"volc_upload/{get_uuid()}.{ext}"
+        
+        # Get content type
+        content_type = CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
+
+        # 2. 上传文件
+        # STORAGE_IMPL 会自动处理 MinIO/OSS/S3 的差异
+        try:
+            STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
+        except TypeError:
+            # Fallback for storage backends that don't support content_type
+            STORAGE_IMPL.put(bucket, unique_filename, content)
+
+        # 3. 获取预签名 URL (有效期 1小时)
+        # 这是关键：这个 URL 是带签名的，AI 服务可以通过公网访问并下载
+        expires = 3600
+        url = STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=expires)
+
+        if not url:
+             raise Exception("Failed to generate presigned URL")
+
+        return get_json_result(data={
+            "url": url,
+            "expires_in": expires,
+            "filename": unique_filename
+        })
+
+    except Exception as e:
+        logging.exception("Upload media redirect failed")
+        return construct_error_response(e)
+
+
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
 async def upload(
         parent_id: str,
