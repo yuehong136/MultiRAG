@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from api.db.services.llm_service import LLMBundle
 from api.db import LLMType
 from api import settings
-from core.utils import get_float
+from common.float_utils import get_float
 
 logger = logging.getLogger(__name__)
 

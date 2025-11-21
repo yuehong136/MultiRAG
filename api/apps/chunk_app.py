@@ -26,7 +26,6 @@ from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
 from core.prompts.generator import keyword_extraction, cross_languages, gen_meta_filter
-from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -38,6 +37,7 @@ from core.settings import PAGERANK_FLD
 from api.utils.api_utils import get_json_result
 # from api.db.database import get_db
 from api.apps import manager
+from common.string_utils import remove_redundant_spaces
 
 router = APIRouter()
 
@@ -373,7 +373,7 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
         for id in sres.ids:
             d = {
                 "chunk_id": id,
-                "content_with_weight": rmSpace(sres.highlight[id]) if request.keywords and id in sres.highlight else
+                "content_with_weight": remove_redundant_spaces(sres.highlight[id]) if request.keywords and id in sres.highlight else
                 sres.field[id].get(
                     "content_with_weight", ""),
                 "doc_id": sres.field[id]["doc_id"],
@@ -1200,7 +1200,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         if not kb:
             return get_data_error_result(retmsg="Knowledgebase not found!")
         if kb.pagerank is not None:
-            d["pagerank_fea"] = kb.pagerank
+            d[PAGERANK_FLD] = kb.pagerank
 
         embd_id = DocumentService.get_embd_id(db, req["doc_id"])
         embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, embd_id)
@@ -1466,7 +1466,6 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             return get_data_error_result(retmsg="Knowledgebase not found!")
 
         if request.cross_languages:
-            from core.prompts.generator import cross_languages
             question = cross_languages(db, kb.tenant_id, None, question, request.cross_languages)
 
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)

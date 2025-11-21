@@ -38,8 +38,9 @@ from core.nlp import extract_between
 from core.nlp.search import index_name
 from core.prompts.generator import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
     citation_prompt, cross_languages, gen_meta_filter, PROMPT_JINJA_ENV, ASK_SUMMARY
-from core.utils import rmSpace, num_tokens_from_string
+from core.utils import num_tokens_from_string
 from core.utils.tavily_conn import Tavily
+from common.string_utils import remove_redundant_spaces
 
 
 class DialogService(CommonService):
@@ -842,7 +843,7 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
 
     line = "|" + "|".join(["------" for _ in range(len(column_idx))]) + ("|------|" if docid_idx and docid_idx else "")
 
-    rows = ["|" + "|".join([rmSpace(str(r[i])) for i in column_idx]).replace("None", " ") + "|" for r in tbl["rows"]]
+    rows = ["|" + "|".join([remove_redundant_spaces(str(r[i])) for i in column_idx]).replace("None", " ") + "|" for r in tbl["rows"]]
     rows = [r for r in rows if re.sub(r"[ |]+", "", r)]
     if quota:
         rows = "\n".join([r + f" ##{ii}$$ |" for ii, r in enumerate(rows)])

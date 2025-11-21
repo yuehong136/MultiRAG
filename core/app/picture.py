@@ -21,7 +21,7 @@ from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from deepdoc.vision import OCR
 from core.nlp import rag_tokenizer, tokenize
-from core.utils import clean_markdown_block
+from common.string_utils import clean_markdown_block
 
 
 ocr = OCR()

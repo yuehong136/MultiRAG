@@ -179,6 +179,7 @@ COPY pyproject.toml uv.lock alembic.ini ./
 COPY agentic_reasoning agentic_reasoning
 COPY mcp mcp
 COPY plugin plugin
+COPY common common
 
 # 添加并配置entrypoint
 COPY ./docker/entrypoint.sh ./entrypoint.sh

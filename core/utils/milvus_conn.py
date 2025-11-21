@@ -45,7 +45,7 @@ from core import settings
 import numpy as np
 from core.nlp import is_english
 from core.settings import TAG_FLD, PAGERANK_FLD
-from core.utils import singleton, get_float
+from core.utils import singleton
 from core.utils.doc_store_conn import (
     DocStoreConnection,
     MatchExpr,
@@ -56,6 +56,8 @@ from core.utils.doc_store_conn import (
     FusionExpr,
     OrderByExpr,
 )
+from common.float_utils import get_float
+
 
 logger = logging.getLogger('multirag.milvus_conn')
 

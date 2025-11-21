@@ -11,7 +11,6 @@ from pymilvus import AnnSearchRequest, WeightedRanker
 
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from core.utils import rmSpace, get_float
 from core.prompts.generator import relevant_chunks_with_toc
 from core.settings import TAG_FLD, PAGERANK_FLD
 from core.nlp import rag_tokenizer, query, is_english
@@ -23,6 +22,9 @@ from core.utils.doc_store_conn import (
     FusionExpr,
     OrderByExpr,
 )
+from common.string_utils import remove_redundant_spaces
+from common.float_utils import get_float
+
 
 def index_name(uid, kb_names):
     # return [f"multirag_{uid}_{kb_name}" for kb_name in kb_names]
@@ -1039,7 +1041,7 @@ class Dealer:
             ins_tw.append(tks)
 
         tksim = self.qryr.token_similarity(keywords, ins_tw)
-        vtsim, _ = rerank_mdl.similarity(query, [rmSpace(" ".join(tks)) for tks in ins_tw])
+        vtsim, _ = rerank_mdl.similarity(query, [remove_redundant_spaces(" ".join(tks)) for tks in ins_tw])
         ## For rank feature(tag_fea) scores.
         rank_fea = self._rank_feature_scores(rank_feature, sres)
 
@@ -1183,7 +1185,7 @@ class Dealer:
             }
             if highlight and sres.highlight:
                 if id in sres.highlight:
-                    d["highlight"] = rmSpace(sres.highlight[id])
+                    d["highlight"] = remove_redundant_spaces(sres.highlight[id])
                 else:
                     d["highlight"] = d["text"]
             # if len(d["positions"]) % 5 == 0:

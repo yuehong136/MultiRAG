@@ -31,8 +31,8 @@ from core.app.qa import beAdoc, rmPrefix
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
-from core.utils import rmSpace
 from core.utils.storage_factory import STORAGE_IMPL
+from common.string_utils import remove_redundant_spaces
 
 MAXIMUM_OF_UPLOADING_FILES = 256
 
