@@ -108,14 +108,49 @@ start_admin_server() {
 }
 
 ensure_docling() {
-  if [[ "${USE_DOCLING}" == "true" ]]; then
-    if ! "${PY}" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('docling') else 1)" 2>/dev/null; then
-      echo "[entrypoint] docling 未安装，正在安装..."
-      "${PY}" -m pip install --no-cache-dir "docling${DOCLING_VERSION:-}" || echo "[entrypoint] docling 安装失败，跳过"
-    else
-      echo "[entrypoint] docling 已安装，跳过"
-    fi
+  [[ "${USE_DOCLING}" == "true" ]] || { echo "[entrypoint] docling 功能未启用（USE_DOCLING!=true）"; return 0; }
+
+  "${PY}" -c 'import pip' >/dev/null 2>&1 || "${PY}" -m ensurepip --upgrade || true
+  DOCLING_PIN="${DOCLING_VERSION:-==2.58.0}"
+  "${PY}" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('docling') else 1)" \
+    || "${PY}" -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://pypi.org/simple --no-cache-dir "docling${DOCLING_PIN}"
+}
+
+ensure_mineru() {
+  [[ "${USE_MINERU}" == "true" ]] || { echo "[entrypoint] mineru 功能未启用（USE_MINERU!=true）"; return 0; }
+
+  export HUGGINGFACE_HUB_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+
+  local default_prefix="${MINERU_HOME:-/multirag/uv_tools}"
+  local venv_dir="${default_prefix}/.venv"
+  local exe="${MINERU_EXECUTABLE:-${venv_dir}/bin/mineru}"
+
+  if [[ -x "${exe}" ]]; then
+    echo "[entrypoint] mineru 已检测到: ${exe}"
+    export MINERU_EXECUTABLE="${exe}"
+    return 0
   fi
+
+  echo "[entrypoint] mineru 未安装，正使用 uv 初始化..."
+
+  (
+    set -e
+    mkdir -p "${default_prefix}"
+    cd "${default_prefix}"
+    [[ -d "${venv_dir}" ]] || uv venv "${venv_dir}"
+
+    # shellcheck source=/dev/null
+    source "${venv_dir}/bin/activate"
+    uv pip install -U "mineru[core]" -i https://mirrors.aliyun.com/pypi/simple --extra-index-url https://pypi.org/simple
+    deactivate
+  )
+
+  export MINERU_EXECUTABLE="${exe}"
+  if ! "${MINERU_EXECUTABLE}" --help >/dev/null 2>&1; then
+    echo "[entrypoint] mineru 安装失败：${MINERU_EXECUTABLE} 无法运行" >&2
+    return 1
+  fi
+  echo "[entrypoint] mineru 安装完成: ${MINERU_EXECUTABLE}"
 }
 
 _term() {
@@ -127,6 +162,9 @@ _term() {
 trap _term SIGTERM SIGINT
 
 # --------------------------- 启动流程 ---------------------------------------
+ensure_docling
+ensure_mineru
+
 if [[ "${ENABLE_REDIS}" -eq 1 ]]; then
   start_redis
 fi
@@ -134,9 +172,6 @@ fi
 if [[ "${ENABLE_ADMINSERVER}" -eq 1 ]]; then
   start_admin_server
 fi
-
-# 确保 docling 依赖已安装
-ensure_docling
 
 if [[ "${ENABLE_TASKEXECUTOR}" -eq 1 ]]; then
   if (( CONSUMER_NO_END > CONSUMER_NO_BEG )); then
