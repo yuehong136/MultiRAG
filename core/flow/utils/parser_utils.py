@@ -29,6 +29,7 @@ from deepdoc.parser import ExcelParser
 from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
 from deepdoc.parser.mineru_parser import MinerUParser
 from deepdoc.parser.ppt_parser import RAGFlowPptParser
+from tika import parser as tika_parser
 from core.app.naive import Docx, Markdown as MarkdownParser
 from core.nlp import concat_img
 from deepdoc.vision import OCR
@@ -283,6 +284,41 @@ class FlowParser:
         if callback:
             callback(0.1, "Start to work on a Word Processor Document")
         
+        # Check extension for .doc support via Tika
+        ext = filename.lower().split(".")[-1] if "." in filename else ""
+        
+        if ext == "doc":
+            try:
+                # Use Tika for .doc files
+                # Ensure binary is bytes
+                if hasattr(binary, 'read'):
+                     binary_data = binary.read()
+                else:
+                     binary_data = binary
+                     
+                doc_parsed = await _to_thread(tika_parser.from_buffer, binary_data)
+                content = doc_parsed.get('content', '') or ''
+                
+                # Simple processing for .doc content
+                sections = [s.strip() for s in content.split('\n') if s.strip()]
+                
+                if output_format == "json":
+                    json_sections = [{"text": s, "image": None} for s in sections]
+                    return {"output_format": "json", "json": json_sections}
+                else:
+                    return {"output_format": "markdown", "markdown": "\n\n".join(sections)}
+            except Exception as e:
+                error_msg = str(e)
+                if "ContentTooShortError" in error_msg or "retrieval incomplete" in error_msg:
+                    logger.error(f"Tika server JAR download failed: {e}")
+                    raise ValueError(
+                        f"Failed to download Tika JAR (Network Error). Please manually download 'tika-server-standard-2.6.0.jar' "
+                        f"and set TIKA_SERVER_JAR environment variable, or ensure you have stable internet access to maven.org. "
+                        f"Details: {e}"
+                    )
+                logger.error(f"Error parsing .doc file with Tika: {e}")
+                raise ValueError(f"Failed to parse .doc file: {e}")
+
         docx_parser = Docx()
         
         if output_format == "json":
@@ -309,12 +345,48 @@ class FlowParser:
         if callback:
             callback(0.1, "Start to work on a PowerPoint Document")
         
-        ppt_parser = RAGFlowPptParser()
-        txts = await _to_thread(ppt_parser, binary, 0, 100000, None)
+        ext = filename.lower().split(".")[-1] if "." in filename else ""
         
-        sections = [{"text": section} for section in txts if section.strip()]
-        
-        return {"output_format": "json", "json": sections}
+        # 1. 尝试使用 Tika 解析 .ppt (老格式)
+        if ext == "ppt":
+            try:
+                # Ensure binary is bytes
+                if hasattr(binary, 'read'):
+                     binary_data = binary.read()
+                else:
+                     binary_data = binary
+
+                doc_parsed = await _to_thread(tika_parser.from_buffer, binary_data)
+                content = doc_parsed.get('content', '') or ''
+                
+                # Simple processing for .ppt content
+                sections = [s.strip() for s in content.split('\n') if s.strip()]
+                
+                # Tika doesn't extract structure well from ppt, so we return simple text blocks
+                json_sections = [{"text": s} for s in sections]
+                return {"output_format": "json", "json": json_sections}
+
+            except Exception as e:
+                logger.warning(f"Tika parsing failed for .ppt file: {e}. Falling back to pptx parser (unlikely to work).")
+                # Continue to try RAGFlowPptParser as fallback (though it likely fails for .ppt)
+
+        # 2. 尝试使用 python-pptx 解析 .pptx (或作为回退)
+        try:
+            ppt_parser = RAGFlowPptParser()
+            txts = await _to_thread(ppt_parser, binary, 0, 100000, None)
+            
+            sections = [{"text": section} for section in txts if section.strip()]
+            
+            return {"output_format": "json", "json": sections}
+        except KeyError as e:
+            error_msg = str(e)
+            if "no relationship of type" in error_msg:
+                # 这是 python-pptx 解析 .ppt 文件时的典型错误
+                raise ValueError(f"The file format is not supported by the PPTX parser (python-pptx only supports .pptx). Please convert '{filename}' to .pptx format or ensure Tika is configured correctly for .ppt support. Error: {e}")
+            raise
+        except Exception as e:
+            logger.exception(f"PPT parsing failed: {e}")
+            raise ValueError(f"Failed to parse PowerPoint file: {e}")
     
     @staticmethod
     async def parse_markdown(
