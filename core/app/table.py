@@ -15,6 +15,7 @@
 #
 
 import copy
+import logging
 import re
 from io import BytesIO
 from xpinyin import Pinyin
@@ -45,6 +46,11 @@ class Excel(ExcelParser):
         rn = 0
         for sheetname in wb.sheetnames:
             ws = wb[sheetname]
+            try:
+                rows = list(ws.rows)
+            except Exception as e:
+                logging.warning(f"Skip sheet '{sheetname}' due to rows access error: {e}")
+                continue
             rows = list(ws.rows)
             if not rows:
                 continue
