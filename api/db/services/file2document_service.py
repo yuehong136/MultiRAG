@@ -15,7 +15,7 @@ from api.db import FileSource
 from api.db.db_models import File2Document, File
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
-from api.utils import current_timestamp, datetime_format
+from common.time_utils import current_timestamp, datetime_format
 
 
 class File2DocumentService(CommonService):

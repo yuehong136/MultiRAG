@@ -20,7 +20,7 @@ from sqlalchemy import Text as SAText
 
 from api.db.db_models import API4Conversation, APIToken, Dialog
 from api.db.services.common_service import CommonService
-from api.utils import current_timestamp, datetime_format
+from common.time_utils import current_timestamp, datetime_format
 
 
 class APITokenService(CommonService):

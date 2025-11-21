@@ -21,7 +21,8 @@ from api.db.db_models import Task, Document, Knowledgebase, Tenant, File2Documen
 from api.db import StatusEnum, FileType, TaskStatus
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
-from api.utils import current_timestamp, get_uuid
+from api.utils import get_uuid
+from common.time_utils import current_timestamp
 from deepdoc.parser.excel_parser import RAGFlowExcelParser
 from core.settings import get_svr_queue_name
 from core.utils.storage_factory import STORAGE_IMPL

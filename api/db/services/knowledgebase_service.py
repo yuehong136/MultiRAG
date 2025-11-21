@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from api.db import StatusEnum, TenantPermission
 from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document, UserCanvas
 from api.db.services.common_service import CommonService
-from api.utils import current_timestamp, datetime_format
+from common.time_utils import current_timestamp, datetime_format
 
 
 class KnowledgebaseService(CommonService):

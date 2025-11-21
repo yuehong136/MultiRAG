@@ -26,7 +26,8 @@ from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, 
     User
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils import current_timestamp, get_format_time, get_uuid
+from api.utils import get_uuid
+from common.time_utils import current_timestamp, get_format_time
 from api.utils.db_utils import bulk_insert_into_db
 # from api.settings import docStoreConn
 from api import settings

@@ -33,6 +33,9 @@ from alembic import command
 from alembic.script import ScriptDirectory
 from alembic.runtime.migration import MigrationContext
 
+# from common.time_utils import current_timestamp, timestamp_to_date, date_string_to_timestamp
+
+
 DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
 DATABASE = decrypt_database_config(name=DATABASE_TYPE)
 database_config = DATABASE
