@@ -185,6 +185,13 @@ smtp:
     - "xxx@163.com" # sender email address
   mail_frontend_url: "https://your-frontend.example.com"
 
+tcadp_config:
+  secret_id: 'tencent_secret_id'
+  secret_key: 'tencent_secret_key'
+  region: 'tencent_region'
+  table_result_type: '1'
+  markdown_image_response_type: '1'
+
 script_scheduler:
   # 如果源码部署，则使用localhost，如果docker部署，则使用宿主机的ip
   host: localhost
