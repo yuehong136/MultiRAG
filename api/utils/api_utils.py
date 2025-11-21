@@ -23,7 +23,6 @@ from typing import Any, Callable, Coroutine, Type
 from fastapi import Request, Response, Depends
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from itsdangerous import URLSafeTimedSerializer
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from hmac import HMAC
@@ -35,7 +34,7 @@ import requests
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api import settings
-from api.utils import HTTP_STATUS_CODES, get_uuid
+from api.utils import HTTP_STATUS_CODES
 from api.constants import REQUEST_WAIT_SEC, REQUEST_MAX_WAIT_SEC
 
 import trio
@@ -455,9 +454,9 @@ def get_error_operating_result(message="Operating error"):
     return get_result(retcode=settings.RetCode.OPERATING_ERROR, retmsg=message)
 
 
-def generate_confirmation_token(tenant_id: str) -> str:
-    serializer = URLSafeTimedSerializer(tenant_id)
-    return "multirag-" + serializer.dumps(get_uuid(), salt=tenant_id)[2:34]
+def generate_confirmation_token():
+    import secrets
+    return "multirag-" + secrets.token_urlsafe(32)
 
 
 def valid(permission, valid_permission, language, valid_language, chunk_method, valid_chunk_method):

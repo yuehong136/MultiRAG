@@ -283,8 +283,8 @@ def new_token(request: TokenCreateRequest, db: Session = Depends(get_db), user=D
         tenant_id = [tenant for tenant in tenants if tenant.role == 'owner'][0].tenant_id
         obj = {
             "tenant_id": tenant_id,
-            "token": generate_confirmation_token(tenant_id),
-            "beta": generate_confirmation_token(generate_confirmation_token(tenant_id)).replace("multirag-", "")[:32],
+            "token": generate_confirmation_token(),
+            "beta": generate_confirmation_token().replace("multirag-", "")[:32],
             "name": request.name,
             "description": request.description,
             "create_time": current_timestamp(),
@@ -339,7 +339,7 @@ def token_list(db: Session = Depends(get_db), user=Depends(manager)):
         objs = [o.to_dict() for o in objs]
         for o in objs:
             if not o["beta"]:
-                o["beta"] = generate_confirmation_token(generate_confirmation_token(tenants[0].tenant_id)).replace("multirag-", "")[:32]
+                o["beta"] = generate_confirmation_token().replace("multirag-", "")[:32]
                 APITokenService.filter_update(db, [APIToken.tenant_id == tenant_id, APIToken.token == o["token"]], o)
         return get_json_result(data=objs)
     except Exception as e:
