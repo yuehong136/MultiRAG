@@ -10,7 +10,7 @@ import logging
 import hashlib
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, text
 from datetime import datetime
 
 from api.db.db_models import GuardLibraryItem
@@ -505,24 +505,40 @@ class GuardLibraryItemService(CommonService):
             更新的行数，失败返回0
         """
         try:
-            item = cls.get_by_id(db, item_id)
-            if not item:
+            now_timestamp = cls.current_timestamp()
+            now_datetime = cls.current_datetime()
+            result = db.execute(
+                text("""
+                    UPDATE usr_ai.t_guard_library_items
+                    SET hit_count = hit_count + :count,
+                        last_hit_time = :last_hit_time,
+                        update_time = :update_time,
+                        update_date = :update_date
+                    WHERE id = :item_id
+                    RETURNING library_id
+                """),
+                {
+                    "count": count,
+                    "last_hit_time": datetime.utcnow(),
+                    "update_time": now_timestamp,
+                    "update_date": now_datetime,
+                    "item_id": item_id
+                }
+            )
+            row = result.fetchone()
+            if row is None:
+                db.rollback()
+                logging.warning(f"命中统计更新失败，未找到词库项: {item_id}")
                 return 0
-                
-            new_count = item.hit_count + count
-            update_data = {
-                "hit_count": new_count,
-                "last_hit_time": datetime.utcnow()
-            }
             
-            success = cls.update_by_id(db, item_id, update_data)
+            library_id = row[0]
+            db.commit()
             
-            if success:
-                # 同时更新词库的命中次数
-                GuardLibraryService.increment_hit_count(db, item.library_id, count)
-                
-            return success
+            # 同时更新词库的命中次数
+            GuardLibraryService.increment_hit_count(db, library_id, count)
+            return 1
         except Exception as e:
+            db.rollback()
             logging.error(f"更新项命中数失败: {e}")
             return 0
 
