@@ -20,10 +20,10 @@ from api.db.db_models import APIToken, get_db, DATABASE_TYPE, get_pool_status
 from api.db.services.api_service import APITokenService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
-from api.utils import current_timestamp, datetime_format
 from api import settings
 from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
 from api.versions import get_multirag_version
+from common.time_utils import current_timestamp, datetime_format
 from core.utils.storage_factory import STORAGE_IMPL, STORAGE_IMPL_TYPE
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN

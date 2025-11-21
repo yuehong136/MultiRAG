@@ -27,7 +27,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserService, TenantService, UserTenantService#, pwd_context
 from api.db.services.file_service import FileService
 from api.db import UserTenantRole, FileType
-from api.utils import get_uuid, get_format_time, download_img, current_timestamp, datetime_format
+from api.utils import get_uuid, download_img
 from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, construct_response, get_data_error_result
 from api.apps.auth import get_auth_client
@@ -45,6 +45,8 @@ from api.utils.web_utils import (
     captcha_key,
 )
 from core.utils.redis_conn import REDIS_CONN
+from common.time_utils import current_timestamp, datetime_format, get_format_time
+
 
 router = APIRouter()
 
