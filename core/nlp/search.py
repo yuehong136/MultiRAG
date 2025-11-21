@@ -1138,7 +1138,7 @@ class Dealer:
         page_index = (page % max_pages) - 1
         begin = max(page_index * page_size, 0)
         sim = sim[begin : begin + page_size]
-        sim_np = np.array(sim)
+        sim_np = np.array(sim, dtype=np.float64)
         idx = np.argsort(sim_np * -1)
         dim = len(sres.query_vector)
         if dim != 768:
@@ -1149,7 +1149,7 @@ class Dealer:
         filtered_count = (sim_np >= similarity_threshold).sum()
         ranks["total"] = int(filtered_count) # Convert from np.int64 to Python int otherwise JSON serializable error
         for i in idx:
-            if sim[i] < similarity_threshold:
+            if np.float64(sim[i]) < similarity_threshold:
                 break
 
             id = sres.ids[i]
