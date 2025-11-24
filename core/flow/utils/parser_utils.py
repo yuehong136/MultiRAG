@@ -602,6 +602,7 @@ class FlowParser:
         filename: str,
         binary: bytes,
         tenant_id: str,
+        llm_name: str | None = None,
         callback=None
     ) -> dict:
         """
@@ -614,7 +615,7 @@ class FlowParser:
             callback(0.1, "Start to work on a video.")
         
         with db_connection() as db:
-            cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT)
+            cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_name=llm_name)
         
         # 视频分析（传递 video_bytes 和 filename）
         txt = await _to_thread(cv_mdl.chat, "", [], {}, video_bytes=binary, filename=filename)
@@ -763,6 +764,7 @@ async def parse_file(
     email_config: dict | None = None,
     slides_config: dict | None = None,
     markdown_config: dict | None = None,
+    video_config: dict | None = None,
     callback=None
 ) -> dict:
     """
@@ -782,6 +784,7 @@ async def parse_file(
         email_config: 邮件配置 {"output_format": "json", "fields": [...]}
         slides_config: PPT 配置 {"parse_method": "deepdoc", "output_format": "json"}
         markdown_config: Markdown 配置 {"output_format": "json"}
+        video_config: 视频配置 {"llm_id": "..."}
         callback: 进度回调
     
     Returns:
@@ -813,6 +816,8 @@ async def parse_file(
         slides_config = {"output_format": "json", "parse_method": "deepdoc"}
     if markdown_config is None:
         markdown_config = {"output_format": "json"}
+    if video_config is None:
+        video_config = {}
     
     # 根据扩展名路由（参考 core/flow/parser/parser.py 第 551-556 行）
     # 音频文件
@@ -887,7 +892,13 @@ async def parse_file(
     
     # 视频文件
     elif ext in ["mp4", "avi", "mkv", "mov", "flv", "wmv"]:
-        return await FlowParser.parse_video(filename, binary, tenant_id, callback)
+        return await FlowParser.parse_video(
+            filename, 
+            binary, 
+            tenant_id, 
+            video_config.get("llm_id"), 
+            callback
+        )
     
     # 邮件文件
     elif ext in ["eml", "msg"]:

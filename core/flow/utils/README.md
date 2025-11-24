@@ -117,11 +117,11 @@ python -m pytest tests/test_flow_utils.py -k "splitter"
 
 | 文件 | 行数 | 类 | 函数 |
 |------|------|---|------|
-| parser_utils.py | 901 | 1 | 10 |
+| parser_utils.py | 916 | 1 | 10 |
 | splitter_utils.py | 251 | 1 | 3 |
 | hierarchical_merger_utils.py | 208 | 1 | 2 |
 | extractor_utils.py | 122 | 1 | 2 |
-| **总计** | **1482** | **4** | **17** |
+| **总计** | **1497** | **4** | **17** |
 
 ## 🎯 设计原则
 

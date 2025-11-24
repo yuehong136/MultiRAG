@@ -1526,6 +1526,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 excel_config = parser_config_dict.get("excel", {"output_format": "html"})
                 word_config = parser_config_dict.get("word", {"output_format": "json"})
                 email_config = parser_config_dict.get("email", {"output_format": "json", "fields": None})
+                video_config = parser_config_dict.get("video", {"llm_id": config.get("video_llm_name")})
                 logging.info(f"Using parser_config dictionary mode")
             else:
                 # 方式 2：使用简化参数（自动应用到所有文件类型）
@@ -1548,6 +1549,12 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 excel_config = {"output_format": output_format}
                 word_config = {"output_format": output_format}
                 email_config = {"output_format": output_format, "fields": config.get("email_fields")}
+                video_llm_name = config.get("video_llm_name")
+                if not video_llm_name:
+                    candidate = config.get("parse_method")
+                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm"]:
+                        video_llm_name = candidate
+                video_config = {"llm_id": video_llm_name}
                 logging.info(f"Using simplified parse_method mode: {parse_method}")
 
             def _parser_callback(prog, msg):
@@ -1562,6 +1569,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 word_config=word_config,
                 image_config=image_config,
                 email_config=email_config,
+                video_config=video_config,
                 callback=_parser_callback
             )
 

@@ -212,6 +212,10 @@ class AnalyzeDocumentRequest(BaseModel):
         default=None,
         description="图片 VLM 提示词（自定义图片理解方式）"
     )
+    video_llm_name: str | None = Field(
+        default=None,
+        description="视频文件使用的 VLM 模型名称（解析 MP4/AVI/MKV 时生效）"
+    )
     email_fields: list[str] | None = Field(
         default=None,
         description="邮件需要提取的字段（from/to/subject/body等）"
@@ -3688,6 +3692,7 @@ async def run_analyze_v2(
       "lang": "Chinese",                // 默认值："Chinese"，VLM 模式使用
       "image_llm_name": null,           // 默认值：null，图片文件 VLM 模型名（parse_method="vlm"时）
       "image_system_prompt": null,      // 默认值：null，图片 VLM 自定义提示词
+      "video_llm_name": null,           // 默认值：null，视频文件 VLM 模型名
       "email_fields": null,             // 默认值：null，邮件字段列表
       
       // ========== Parser 配置方式 2：完整方式（推荐代码调用） ==========
@@ -4135,6 +4140,7 @@ async def run_analyze_v2(
             "lang": request.lang,
             "image_llm_name": request.image_llm_name,
             "image_system_prompt": request.image_system_prompt,
+            "video_llm_name": request.video_llm_name,
             "email_fields": request.email_fields,
             # 处理策略
             "processing_strategy": request.processing_strategy,
