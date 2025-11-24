@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import LLM
 from api.db.services.common_service import CommonService
 from api.db.services.tenant_llm_service import LLM4Tenant, TenantLLMService
+from core.utils import num_tokens_from_string
 # from api.db.services.langfuse_service import TenantLangfuseService
 # from api.db.services.user_service import TenantService
 # from core.llm import ChatModel, CvModel, EmbeddingModel, Seq2txtModel, RerankModel, TTSModel
@@ -377,7 +378,16 @@ class LLMBundle(LLM4Tenant):
         if self.langfuse:
             generation = self.langfuse.start_generation(trace_context=self.trace_context, name="encode", model=self.llm_name, input={"texts": texts})
 
-        embeddings, used_tokens = self.mdl.encode(texts)
+        safe_texts = []
+        for text in texts:
+            token_size = num_tokens_from_string(text)
+            if token_size > self.max_length:
+                target_len = int(self.max_length * 0.95)
+                safe_texts.append(text[:target_len])
+            else:
+                safe_texts.append(text)
+
+        embeddings, used_tokens = self.mdl.encode(safe_texts)
         
         # ⚠️ 线程安全：只在有 db session 时记录 usage
         # 在 trio 等多线程环境中，db 可能为 None 以避免跨线程 session 冲突
