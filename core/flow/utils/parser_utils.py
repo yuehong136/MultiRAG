@@ -14,6 +14,7 @@ import asyncio
 import logging
 import tempfile
 import os
+import re
 from io import BytesIO
 from typing import Literal
 from functools import reduce
@@ -29,6 +30,7 @@ from deepdoc.parser import ExcelParser
 from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
 from deepdoc.parser.mineru_parser import MinerUParser
 from deepdoc.parser.ppt_parser import RAGFlowPptParser
+from deepdoc.parser.tcadp_parser import TCADPParser
 from tika import parser as tika_parser
 from core.app.naive import Docx, Markdown as MarkdownParser
 from core.nlp import concat_img
@@ -95,7 +97,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        音频解析（参考 core/flow/parser/parser.py._audio 第 377-394 行）
+        音频解析（参考 core/flow/parser/parser.py._audio 第 412-429 行）
         
         Returns:
             {"output_format": "text", "text": "转录文本"}
@@ -149,22 +151,25 @@ class FlowParser:
         filename: str,
         binary: bytes,
         tenant_id: str,
-        parse_method: Literal["deepdoc", "plain_text", "mineru"] | str = "deepdoc",
+        parse_method: Literal["deepdoc", "plain_text", "mineru", "tcadp parser"] | str = "deepdoc",
         output_format: Literal["json", "markdown"] = "json",
         lang: str = "Chinese",
-        callback=None
+        callback=None,
+        **method_kwargs
     ) -> dict:
         """
-        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 213-264 行）
+        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 214-300 行）
         
         Args:
             parse_method: 
                 - deepdoc: 深度布局解析（保留位置、表格、图片）
                 - plain_text: 纯文本解析（快速）
                 - mineru: MinerU 解析（需要安装 mineru）
+                - tcadp parser: 腾讯云 ADP 解析（支持定位信息）
                 - 其他: VLM 模型名称（如 "qwen-vl-plus"）
             output_format: json（保留位置） 或 markdown
             lang: 语言（VLM 模式使用）
+            method_kwargs: 解析器特定参数（如 table_result_type、mineru_api 等）
         
         Returns:
             {"output_format": "json", "json": [bboxes with positions]}
@@ -172,30 +177,48 @@ class FlowParser:
         if callback:
             callback(0.1, "Start to work on a PDF.")
         
-        if parse_method == "deepdoc":
+        method = (parse_method or "deepdoc").lower()
+        
+        if method == "deepdoc":
             parser = RAGFlowPdfParser()
             bboxes = await _to_thread(parser.parse_into_bboxes, binary, callback)
         
-        elif parse_method == "plain_text":
+        elif method == "plain_text":
             parser = PlainParser()
             lines, _ = await _to_thread(parser, binary)
             bboxes = [{"text": t} for t, _ in lines]
         
-        elif parse_method == "mineru":
+        elif method == "mineru":
             # MinerU 解析（参考第 223-243 行）
-            mineru_executable = os.environ.get("MINERU_EXECUTABLE", "mineru")
-            pdf_parser = MinerUParser(mineru_path=mineru_executable)
+            mineru_executable = (
+                method_kwargs.get("mineru_executable")
+                or os.environ.get("MINERU_EXECUTABLE", "mineru")
+            )
+            mineru_api = (
+                method_kwargs.get("mineru_api")
+                or os.environ.get("MINERU_APISERVER", "http://host.docker.internal:9987")
+            )
+            mineru_output_dir = method_kwargs.get("mineru_output_dir") or os.environ.get("MINERU_OUTPUT_DIR", "")
+            mineru_delete_output = method_kwargs.get("mineru_delete_output")
+            if mineru_delete_output is None:
+                mineru_delete_output = bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1)))
+            else:
+                if isinstance(mineru_delete_output, str):
+                    mineru_delete_output = mineru_delete_output.lower() not in {"0", "false", "no"}
+                else:
+                    mineru_delete_output = bool(mineru_delete_output)
+            pdf_parser = MinerUParser(mineru_path=mineru_executable, mineru_api=mineru_api)
             
             if not pdf_parser.check_installation():
-                raise RuntimeError("MinerU not found. Please install it via: pip install -U 'mineru[core]'.")
+                raise RuntimeError("MinerU not found or server not accessible. Please install it via: pip install -U 'mineru[core]'.")
             
             lines, _ = await _to_thread(
                 pdf_parser.parse_pdf,
                 filepath=filename,
                 binary=binary,
                 callback=callback,
-                output_dir=os.environ.get("MINERU_OUTPUT_DIR", ""),
-                delete_output=bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1)))
+                output_dir=mineru_output_dir,
+                delete_output=mineru_delete_output
             )
             
             bboxes = []
@@ -206,6 +229,45 @@ class FlowParser:
                     "text": t,
                 }
                 bboxes.append(box)
+        
+        elif method == "tcadp parser":
+            # ADP is a document parsing tool using Tencent Cloud API
+            table_result_type = method_kwargs.get("table_result_type", "1")
+            markdown_image_response_type = method_kwargs.get("markdown_image_response_type", "1")
+            tcadp_parser = TCADPParser(
+                table_result_type=table_result_type,
+                markdown_image_response_type=markdown_image_response_type
+            )
+            sections, _ = await _to_thread(
+                tcadp_parser.parse_pdf,
+                filepath=filename,
+                binary=binary,
+                callback=callback,
+                file_type="PDF",
+                file_start_page=1,
+                file_end_page=1000
+            )
+            bboxes = []
+            for section, position_tag in sections:
+                if position_tag:
+                    # Extract position information from TCADP's position tag
+                    # Format: @@{page_number}\t{x0}\t{x1}\t{top}\t{bottom}##
+                    match = re.match(r"@@([0-9-]+)\t([0-9.]+)\t([0-9.]+)\t([0-9.]+)\t([0-9.]+)##", position_tag)
+                    if match:
+                        pn, x0, x1, top, bott = match.groups()
+                        bboxes.append({
+                            "page_number": int(pn.split('-')[0]),  # Take the first page number
+                            "x0": float(x0),
+                            "x1": float(x1),
+                            "top": float(top),
+                            "bottom": float(bott),
+                            "text": section
+                        })
+                    else:
+                        # If no position info, add as text without position
+                        bboxes.append({"text": section})
+                else:
+                    bboxes.append({"text": section})
         
         else:
             # VLM 模式（参考第 244-251 行）
@@ -245,10 +307,13 @@ class FlowParser:
         filename: str,
         binary: bytes,
         output_format: Literal["html", "json", "markdown"] = "html",
-        callback=None
+        callback=None,
+        *,
+        parse_method: str = "deepdoc",
+        **method_kwargs
     ) -> dict:
         """
-        Excel 解析（参考 core/flow/parser/parser.py._spreadsheet 第 266-277 行）
+        Excel 解析（参考 core/flow/parser/parser.py._spreadsheet 第 301-313 行）
         
         Returns:
             {"output_format": "html", "html": "<table>..."}
@@ -276,7 +341,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        Word 文档解析（参考 core/flow/parser/parser.py._word 第 279-292 行）
+        Word 文档解析（参考 core/flow/parser/parser.py._word 第 314-327 行）
         
         Returns:
             {"output_format": "json", "json": [sections with images]}
@@ -334,16 +399,66 @@ class FlowParser:
     async def parse_ppt(
         filename: str,
         binary: bytes,
-        callback=None
+        callback=None,
+        *,
+        output_format: Literal["json"] = "json",
+        parse_method: str = "deepdoc",
+        **method_kwargs
     ) -> dict:
         """
-        PPT 解析（参考 core/flow/parser/parser.py._slides 第 294-310 行）
+        PPT 解析（参考 core/flow/parser/parser.py._slides 第 329-346 行）
         
         Returns:
             {"output_format": "json", "json": [sections]}
         """
         if callback:
             callback(0.1, "Start to work on a PowerPoint Document")
+        
+        if output_format != "json":
+            raise ValueError("PPT parser currently only supports JSON output_format")
+        
+        method = (parse_method or "deepdoc").lower()
+        
+        if method == "tcadp parser":
+            table_result_type = method_kwargs.get("table_result_type", "1")
+            markdown_image_response_type = method_kwargs.get("markdown_image_response_type", "1")
+            tcadp_parser = TCADPParser(
+                table_result_type=table_result_type,
+                markdown_image_response_type=markdown_image_response_type
+            )
+            install_result = tcadp_parser.check_installation()
+            if isinstance(install_result, tuple):
+                ok, reason = install_result
+            else:
+                ok = bool(install_result)
+                reason = "" if ok else "Unknown reason"
+            if not ok:
+                raise RuntimeError(f"TCADP parser not available. Please check Tencent Cloud API configuration. {reason}".strip())
+            
+            if re.search(r"\.pptx?$", filename, re.IGNORECASE):
+                file_type = "PPTX"
+            else:
+                file_type = "PPT"
+            
+            sections, tables = await _to_thread(
+                tcadp_parser.parse_pdf,
+                filepath=filename,
+                binary=binary,
+                callback=callback,
+                file_type=file_type,
+                file_start_page=1,
+                file_end_page=1000
+            )
+            
+            result = []
+            for section, _ in sections:
+                if section:
+                    result.append({"text": section})
+            for table in tables:
+                if table:
+                    result.append({"text": table})
+            
+            return {"output_format": "json", "json": result}
         
         ext = filename.lower().split(".")[-1] if "." in filename else ""
         
@@ -396,7 +511,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        Markdown 解析（参考 core/flow/parser/parser.py._markdown 第 312-343 行）
+        Markdown 解析（参考 core/flow/parser/parser.py._markdown 第 347-379 行）
         
         Returns:
             {"output_format": "json", "json": [sections with images]}
@@ -437,7 +552,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        图片解析（参考 core/flow/parser/parser.py._image 第 346-375 行）
+        图片解析（参考 core/flow/parser/parser.py._image 第 381-410 行）
         
         Args:
             parse_method: 
@@ -490,7 +605,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        视频解析（参考 core/flow/parser/parser.py._video 第 396-405 行）
+        视频解析（参考 core/flow/parser/parser.py._video 第 431-440 行）
         
         Returns:
             {"output_format": "text", "text": "视频描述"}
@@ -515,7 +630,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        邮件解析（参考 core/flow/parser/parser.py._email 第 407-522 行）
+        邮件解析（参考 core/flow/parser/parser.py._email 第 442-557 行）
         
         Args:
             output_format: json 或 text
@@ -646,12 +761,14 @@ async def parse_file(
     word_config: dict | None = None,
     image_config: dict | None = None,
     email_config: dict | None = None,
+    slides_config: dict | None = None,
+    markdown_config: dict | None = None,
     callback=None
 ) -> dict:
     """
     使用 core/flow 逻辑解析文件，返回结构化结果（保留位置信息）
 
-    参考：core/flow/parser/parser.py._invoke 的逻辑（第 524-580 行）
+    参考：core/flow/parser/parser.py._invoke 的逻辑（第 559-600 行）
     根据文件扩展名自动路由到对应的解析方法
     
     Args:
@@ -663,6 +780,8 @@ async def parse_file(
         word_config: Word 配置 {"output_format": "json"}
         image_config: 图片配置 {"parse_method": "ocr", "llm_name": None, "lang": "Chinese"}
         email_config: 邮件配置 {"output_format": "json", "fields": [...]}
+        slides_config: PPT 配置 {"parse_method": "deepdoc", "output_format": "json"}
+        markdown_config: Markdown 配置 {"output_format": "json"}
         callback: 进度回调
     
     Returns:
@@ -690,6 +809,10 @@ async def parse_file(
         image_config = {"parse_method": "ocr", "llm_name": None, "lang": "Chinese"}
     if email_config is None:
         email_config = {"output_format": "json", "fields": None}
+    if slides_config is None:
+        slides_config = {"output_format": "json", "parse_method": "deepdoc"}
+    if markdown_config is None:
+        markdown_config = {"output_format": "json"}
     
     # 根据扩展名路由（参考 core/flow/parser/parser.py 第 551-556 行）
     # 音频文件
@@ -698,20 +821,28 @@ async def parse_file(
     
     # PDF 文件
     elif ext == "pdf":
+        pdf_extra = {k: v for k, v in pdf_config.items() if k not in {"parse_method", "output_format", "lang"}}
         return await FlowParser.parse_pdf(
-            filename, binary, tenant_id,
+            filename,
+            binary,
+            tenant_id,
             pdf_config.get("parse_method", "deepdoc"),
             pdf_config.get("output_format", "json"),
             pdf_config.get("lang", "Chinese"),
-            callback
+            callback=callback,
+            **pdf_extra
         )
     
     # Excel 文件
     elif ext in ["xls", "xlsx", "csv"]:
+        excel_extra = {k: v for k, v in excel_config.items() if k not in {"output_format", "parse_method"}}
         return await FlowParser.parse_excel(
-            filename, binary,
+            filename,
+            binary,
             excel_config.get("output_format", "html"),
-            callback
+            callback=callback,
+            parse_method=excel_config.get("parse_method", "deepdoc"),
+            **excel_extra
         )
     
     # Word 文件
@@ -724,12 +855,24 @@ async def parse_file(
     
     # PPT 文件
     elif ext in ["ppt", "pptx"]:
-        return await FlowParser.parse_ppt(filename, binary, callback)
+        slides_extra = {k: v for k, v in slides_config.items() if k not in {"output_format", "parse_method"}}
+        return await FlowParser.parse_ppt(
+            filename,
+            binary,
+            callback=callback,
+            output_format=slides_config.get("output_format", "json"),
+            parse_method=slides_config.get("parse_method", "deepdoc"),
+            **slides_extra
+        )
     
     # Markdown/文本文件
     elif ext in ["md", "markdown", "mdx", "txt"]:
-        # 默认使用 json 格式
-        return await FlowParser.parse_markdown(filename, binary, "json", callback)
+        return await FlowParser.parse_markdown(
+            filename,
+            binary,
+            markdown_config.get("output_format", "json"),
+            callback
+        )
     
     # 图片文件
     elif ext in ["jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp"]:

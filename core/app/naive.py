@@ -32,13 +32,16 @@ from api.db import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from api.utils.file_utils import extract_embed_file
-from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownElementExtractor, MarkdownParser, PdfParser, TxtParser
-from deepdoc.parser.figure_parser import VisionFigureParser, vision_figure_parser_docx_wrapper, vision_figure_parser_pdf_wrapper
+from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownElementExtractor, MarkdownParser, \
+    PdfParser, TxtParser
+from deepdoc.parser.figure_parser import VisionFigureParser, vision_figure_parser_docx_wrapper, \
+    vision_figure_parser_pdf_wrapper
 from deepdoc.parser.pdf_parser import PlainParser, VisionParser
 from deepdoc.parser.mineru_parser import MinerUParser
 from deepdoc.parser.docling_parser import DoclingParser
 from deepdoc.parser.tcadp_parser import TCADPParser
-from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, tokenize_chunks, tokenize_chunks_with_images, tokenize_table
+from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, \
+    tokenize_chunks, tokenize_chunks_with_images, tokenize_table
 
 
 class Docx(DocxParser):
@@ -304,6 +307,7 @@ class Docx(DocxParser):
             if not binary:
                 docx_file.close()
 
+
 class Pdf(PdfParser):
     def __init__(self):
         super().__init__()
@@ -442,7 +446,6 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         Next, these successive pieces are merge into chunks whose token number is no more than 'Max token number'.
     """
 
-
     is_english = lang.lower() == "english"  # is_english(cks)
     parser_config = kwargs.get(
         "parser_config", {
@@ -480,12 +483,11 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     if re.search(r"\.docx$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
 
-
         # fix "There is no item named 'word/NULL' in the archive", referring to https://github.com/python-openxml/python-docx/issues/1105#issuecomment-1298075246
         _SerializedRelationships.load_from_xml = load_from_xml_v2
         sections, tables = Docx()(filename, binary)
 
-        tables=vision_figure_parser_docx_wrapper(sections=sections,tbls=tables,callback=callback,**kwargs)
+        tables = vision_figure_parser_docx_wrapper(sections=sections, tbls=tables, callback=callback, **kwargs)
 
         res = tokenize_table(tables, doc, is_english)
         callback(0.8, "Finish parsing.")
@@ -515,14 +517,15 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         if layout_recognizer == "DeepDOC":
             pdf_parser = Pdf()
             sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
-            tables=vision_figure_parser_pdf_wrapper(tbls=tables,callback=callback,**kwargs)
+            tables = vision_figure_parser_pdf_wrapper(tbls=tables, callback=callback, **kwargs)
 
             res = tokenize_table(tables, doc, is_english)
             callback(0.8, "Finish parsing.")
 
         elif layout_recognizer == "MinerU":
             mineru_executable = os.environ.get("MINERU_EXECUTABLE", "mineru")
-            pdf_parser = MinerUParser(mineru_path=mineru_executable)
+            mineru_api = os.environ.get("MINERU_APISERVER", "http://host.docker.internal:9987")
+            pdf_parser = MinerUParser(mineru_path=mineru_executable, mineru_api=mineru_api)
             if not pdf_parser.check_installation():
                 callback(-1, "MinerU not found.")
                 return res
