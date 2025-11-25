@@ -14,7 +14,7 @@ from api.db.services import UserService
 from api.db.db_models import get_db, SessionLocal
 from api.db import ActiveEnum, StatusEnum
 from api.utils.crypt import decrypt
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format, get_format_time
 
 

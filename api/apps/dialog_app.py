@@ -17,12 +17,11 @@ from api.db.db_models import get_db
 from api.db.services.dialog_service import DialogService
 from api.db import StatusEnum
 from api.db.services.knowledgebase_service import KnowledgebaseService
-# from api.db.services.llm_service import TenantLLMService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api.utils.api_utils import get_json_result
 
 

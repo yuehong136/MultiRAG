@@ -16,7 +16,7 @@
 import logging
 from typing import Any, Literal
 from tavily import TavilyClient
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from core.nlp import rag_tokenizer
 
 

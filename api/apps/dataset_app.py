@@ -32,7 +32,7 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService
 from api import settings
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str
 from api.utils.api_utils import construct_result
 from api.utils.file_utils import filename_type, thumbnail

@@ -7,7 +7,7 @@ from sqlalchemy import asc
 
 from api.db.db_models import AskDataHistory
 from api.db.services.common_service import CommonService
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 
 
 class AskDataHistoryService(CommonService):

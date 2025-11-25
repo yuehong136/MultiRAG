@@ -27,7 +27,7 @@ from api.db.db_models import db_connection
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import LLMBundle
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api.utils.base64_image import image2id
 from deepdoc.parser import ExcelParser
 from deepdoc.parser.mineru_parser import MinerUParser

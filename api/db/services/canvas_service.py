@@ -23,7 +23,7 @@ from api.db.db_models import (
 )
 from api.db.services.common_service import CommonService
 from api.db.services.api_service import API4ConversationService
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api.utils.api_utils import get_data_openai
 
 

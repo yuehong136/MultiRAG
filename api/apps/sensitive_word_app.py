@@ -23,7 +23,7 @@ from api.db.db_models import get_db
 #     SensitiveFilterStatsService
 # )
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api import settings
 
 router = APIRouter()

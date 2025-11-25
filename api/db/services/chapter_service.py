@@ -12,7 +12,7 @@ from sqlalchemy.exc import NoResultFound
 from api.db.services.common_service import CommonService
 from api.db.db_models import WritingChapter, WritingProject, WritingChapterContent
 from api.db import StatusEnum
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 
 
 class ChapterService(CommonService):

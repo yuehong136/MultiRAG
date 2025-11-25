@@ -22,7 +22,7 @@ from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api.utils.file_utils import filename_type, read_potential_broken_pdf, thumbnail_img
 from core.llm.cv_model.models.gptv4 import GptV4
 from core.utils.storage_factory import STORAGE_IMPL

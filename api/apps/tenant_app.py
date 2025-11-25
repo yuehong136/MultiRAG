@@ -15,7 +15,7 @@ from api.apps import smtp_mail_server
 from api.db import UserTenantRole, StatusEnum
 from api.db.db_models import UserTenant, TenantLLM, Tenant, File, User, get_db
 from api.db.services.file_service import FileService
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from common.time_utils import delta_seconds
 from api.apps import manager
 from api.utils.api_utils import server_error_response, get_data_error_result

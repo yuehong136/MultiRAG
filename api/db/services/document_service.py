@@ -26,7 +26,7 @@ from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, 
     User
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
 from api.utils.db_utils import bulk_insert_into_db
 # from api.settings import docStoreConn
@@ -2483,10 +2483,6 @@ async def queue_analyze_v2_task(db, doc_id, kb_id, config, user_id, file=None, p
     Returns:
         task_id: 任务ID
     """
-    from api.db.db_models import Task
-    from api.utils import get_uuid
-    import tempfile
-    import os
     
     task_id = get_uuid()
     

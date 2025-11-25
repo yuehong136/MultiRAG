@@ -24,7 +24,7 @@ from api import settings
 from api.db.db_models import db_connection
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api.utils.api_utils import timeout
 from graphrag.entity_resolution import EntityResolution
 from graphrag.general.community_reports_extractor import CommunityReportsExtractor

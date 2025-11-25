@@ -16,7 +16,7 @@ from datetime import datetime
 from api.db.db_models import GuardLibraryItem
 from api.db.services.common_service import CommonService
 from api.db.services.guard_library_service import GuardLibraryService
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 
 
 class GuardLibraryItemService(CommonService):

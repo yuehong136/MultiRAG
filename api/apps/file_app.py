@@ -27,7 +27,7 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api import settings
 from api.utils.api_utils import get_json_result, construct_error_response, get_data_error_result
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api.utils.file_utils import filename_type
 from api.utils.web_utils import CONTENT_TYPE_MAP
 from core.utils.storage_factory import STORAGE_IMPL

@@ -14,7 +14,7 @@ from datetime import datetime, UTC
 
 from api.db.db_models import GuardLibrary
 from api.db.services.common_service import CommonService
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 
 
 class GuardLibraryService(CommonService):

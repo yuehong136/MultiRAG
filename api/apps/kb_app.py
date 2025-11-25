@@ -27,7 +27,7 @@ from api.db.services.task_service import TaskService, GRAPH_RAPTOR_FAKE_DOC_ID
 from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result, get_error_data_result
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api.db import StatusEnum, FileSource, LLMType, PipelineTaskType, VALID_TASK_STATUS, VALID_FILE_TYPES
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle

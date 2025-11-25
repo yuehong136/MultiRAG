@@ -10,7 +10,7 @@ import trio
 from sqlalchemy.orm import Session
 
 from api.db.db_models import db_connection
-from api.utils import hash_str2int
+from common.misc_utils import hash_str2int
 from core.nlp import rag_tokenizer
 from core.prompts.template import load_prompt
 from core.settings import TAG_FLD

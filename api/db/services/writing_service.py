@@ -19,7 +19,7 @@ from api.db.services.chapter_service import ChapterService
 from api.db.services.common_service import CommonService
 from api.db.services.user_service import TenantService
 from api.db.services.llm_service import LLMBundle
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api.utils.api_utils import get_json_result
 
 

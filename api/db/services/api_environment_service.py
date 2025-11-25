@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
 from api.db.db_models import ApiEnvironment, ApiEnvironmentVariable, GlobalApiEnvironment
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from .api_environment_models import (
     EnvironmentCreate, EnvironmentUpdate, EnvironmentListResponse, EnvironmentDetailResponse,
     EnvironmentVariableCreate, EnvironmentVariableUpdate, EnvironmentVariableResponse,

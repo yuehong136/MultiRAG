@@ -28,7 +28,7 @@ from api.db.services.user_service import UserTenantService
 from api.db.services.tenant_llm_service import TenantLLMService
 
 from api import settings
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result, \
     generate_confirmation_token
 

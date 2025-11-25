@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 from api.db.db_models import GuardLog
 from api.db.services.common_service import CommonService
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 
 
 class GuardLogService(CommonService):

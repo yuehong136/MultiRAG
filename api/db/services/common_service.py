@@ -12,7 +12,7 @@ from sqlalchemy.orm.attributes import InstrumentedAttribute
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from api.db import db_models
-from api.utils import get_uuid
+from common.misc_utils import get_uuid
 # from common.time_utils import current_timestamp, datetime_format
 
 # 配置日志
