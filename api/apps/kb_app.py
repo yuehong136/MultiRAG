@@ -10,10 +10,12 @@ import json
 import logging
 import os
 import re
+import random
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+import numpy as np
 
 from api.db.db_models import File, get_db
 # from api.db.services import duplicate_name
@@ -26,14 +28,16 @@ from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result, get_error_data_result
 from api.utils import get_uuid
-from api.db import StatusEnum, FileSource, PipelineTaskType, VALID_TASK_STATUS, VALID_FILE_TYPES
+from api.db import StatusEnum, FileSource, LLMType, PipelineTaskType, VALID_TASK_STATUS, VALID_FILE_TYPES
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import get_json_result
 from api.apps import manager
 from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.storage_factory import STORAGE_IMPL
+from core.utils.doc_store_conn import OrderByExpr
 
 router = APIRouter()
 
@@ -95,6 +99,12 @@ class RunRaptorRequest(BaseModel):
 
 class RunMindmapRequest(BaseModel):
     kb_id: str
+
+
+class CheckEmbeddingRequest(BaseModel):
+    kb_id: str
+    embd_id: str
+    check_num: int | None = 5
 
 
 @router.post('/create', summary="创建知识库", response_description="成功创建知识库")
@@ -1539,3 +1549,156 @@ def delete_kb_task(
         return server_error_response(f"Internal error: cannot delete task {pipeline_task_type}")
 
     return get_json_result(data=True)
+
+
+@router.post("/check_embedding", summary="抽样校验知识库向量一致性")
+def check_embedding(
+        request: CheckEmbeddingRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+
+    def _guess_vec_field(src: dict) -> str | None:
+        for k in src or {}:
+            if k.endswith("_vec"):
+                return k
+        return None
+
+    def _as_float_vec(v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [float(x) for x in v.split("\t") if x != ""]
+        if isinstance(v, (list, tuple, np.ndarray)):
+            return [float(x) for x in v]
+        return []
+
+    def _to_1d(x):
+        a = np.asarray(x, dtype=np.float32)
+        return a.reshape(-1)
+
+    def _cos_sim(a, b, eps=1e-12):
+        a = _to_1d(a)
+        b = _to_1d(b)
+        na = np.linalg.norm(a)
+        nb = np.linalg.norm(b)
+        if na < eps or nb < eps:
+            return 0.0
+        return float(np.dot(a, b) / (na * nb))
+
+    def sample_random_chunks_with_vectors(
+        doc_store_conn,
+        tenant_id: str,
+        kb_id: str,
+        kb_name: str,
+        n: int = 5,
+        base_fields=("docnm_kwd", "doc_id", "content_with_weight", "page_num_int", "position_int", "top_int"),
+    ):
+        idx_names = search.index_name(tenant_id, [kb_name])
+
+        res0 = doc_store_conn.search(
+            selectFields=[], highlightFields=[],
+            condition={"kb_id": kb_id, "available_int": 1},
+            matchExprs=[], orderBy=OrderByExpr(),
+            offset=0, limit=1,
+            indexNames=idx_names, knowledgebaseIds=[kb_id]
+        )
+        total = doc_store_conn.getTotal(res0)
+        if total <= 0:
+            return []
+
+        n = min(n, total)
+        offsets = sorted(random.sample(range(total), n))
+        out = []
+
+        for off in offsets:
+            res1 = doc_store_conn.search(
+                selectFields=list(base_fields),
+                highlightFields=[],
+                condition={"kb_id": kb_id, "available_int": 1},
+                matchExprs=[], orderBy=OrderByExpr(),
+                offset=off, limit=1,
+                indexNames=idx_names, knowledgebaseIds=[kb_id]
+            )
+            ids = doc_store_conn.getChunkIds(res1)
+            if not ids:
+                continue
+
+            cid = ids[0]
+            full_doc = doc_store_conn.get(cid, search.index_name_one(tenant_id, kb_name), [kb_id]) or {}
+            vec_field = _guess_vec_field(full_doc)
+            vec = _as_float_vec(full_doc.get(vec_field))
+
+            out.append({
+                "chunk_id": cid,
+                "kb_id": kb_id,
+                "doc_id": full_doc.get("doc_id"),
+                "doc_name": full_doc.get("docnm_kwd"),
+                "vector_field": vec_field,
+                "vector_dim": len(vec),
+                "vector": vec,
+                "page_num_int": full_doc.get("page_num_int"),
+                "position_int": full_doc.get("position_int"),
+                "top_int": full_doc.get("top_int"),
+                "content_with_weight": full_doc.get("content_with_weight") or "",
+            })
+        return out
+
+    req = request.model_dump()
+    kb_id = req.get("kb_id", "")
+    embd_id = req.get("embd_id", "")
+    n = int(req.get("check_num", 5) or 5)
+
+    if not KnowledgebaseService.accessible(db, kb_id, user.id):
+        return get_json_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=settings.RetCode.AUTHENTICATION_ERROR
+        )
+
+    kb = KnowledgebaseService.get_by_id(db, kb_id)
+    if not kb:
+        return get_error_data_result(retmsg="Invalid Knowledgebase ID")
+
+    emb_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, embd_id)
+    samples = sample_random_chunks_with_vectors(settings.docStoreConn, tenant_id=kb.tenant_id, kb_id=kb_id, kb_name=kb.name, n=n)
+
+    results, eff_sims = [], []
+    for ck in samples:
+        txt = (ck.get("content_with_weight") or "").strip()
+        if not txt:
+            results.append({"chunk_id": ck["chunk_id"], "reason": "no_text"})
+            continue
+
+        if not ck.get("vector"):
+            results.append({"chunk_id": ck["chunk_id"], "reason": "no_stored_vector"})
+            continue
+
+        try:
+            qv, _ = emb_mdl.encode_queries(txt)
+            sim = _cos_sim(qv, ck["vector"])
+        except Exception:
+            return get_error_data_result(retmsg="embedding failure")
+
+        eff_sims.append(sim)
+        results.append({
+            "chunk_id": ck["chunk_id"],
+            "doc_id": ck["doc_id"],
+            "doc_name": ck["doc_name"],
+            "vector_field": ck["vector_field"],
+            "vector_dim": ck["vector_dim"],
+            "cos_sim": round(sim, 6),
+        })
+
+    summary = {
+        "kb_id": kb_id,
+        "model": embd_id,
+        "sampled": len(samples),
+        "valid": len(eff_sims),
+        "avg_cos_sim": round(float(np.mean(eff_sims)) if eff_sims else 0.0, 6),
+        "min_cos_sim": round(float(np.min(eff_sims)) if eff_sims else 0.0, 6),
+        "max_cos_sim": round(float(np.max(eff_sims)) if eff_sims else 0.0, 6),
+    }
+    if summary["avg_cos_sim"] > 0.99:
+        return get_json_result(data={"summary": summary, "results": results})
+    return get_json_result(retcode=settings.RetCode.NOT_EFFECTIVE, retmsg="failed", data={"summary": summary, "results": results})
