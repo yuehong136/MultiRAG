@@ -20,6 +20,7 @@ DOC_ENGINE = os.getenv('DOC_ENGINE', 'milvus')
 
 ES = {}
 MILVUS = {}
+VASTBASE = {}
 INFINITY = {}
 AZURE = {}
 S3 = {}
@@ -36,6 +37,8 @@ elif DOC_ENGINE == 'milvus':
     MILVUS = get_base_config("milvus", {})
 elif DOC_ENGINE == 'infinity':
     INFINITY = get_base_config("infinity", {"uri": "infinity:23817"})
+elif DOC_ENGINE == 'vastbase':
+    VASTBASE = get_base_config("vastbase", {})
 
 if STORAGE_IMPL_TYPE in ['AZURE_SPN', 'AZURE_SAS']:
     AZURE = get_base_config("azure", {})

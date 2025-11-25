@@ -87,6 +87,15 @@ milvus:
   timeout: null
   kwargs: {}
 
+vastbase:
+  host: 192.168.188.220
+  port: 5433
+  database: datav
+  user: datav
+  password:
+  max_connections: 20
+  schema: public
+
 es:
   # Elasticsearch服务的主机地址
   hosts: 'http://es01:9200'
