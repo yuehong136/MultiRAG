@@ -511,7 +511,7 @@ class QWenRerank(Base):
             raise ValueError(f"Error calling QWenRerank model {self.model_name}: {resp.status_code} - {resp.text}")
 
 
-class HuggingfaceRerank(DefaultRerank):
+class HuggingfaceRerank(Base):
     _FACTORY_NAME = "HuggingFace"
 
     @staticmethod

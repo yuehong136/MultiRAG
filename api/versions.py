@@ -25,8 +25,6 @@ def get_multirag_version() -> str:
             MULITIRAG_VERSION_INFO = f.read().strip()
     else:
         MULITIRAG_VERSION_INFO = get_closest_tag_and_count()
-        LIGHTEN = int(os.environ.get("LIGHTEN", "0"))
-        MULITIRAG_VERSION_INFO += " slim" if LIGHTEN == 1 else " full"
     return MULITIRAG_VERSION_INFO
 
 

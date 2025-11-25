@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import os
 import logging
 from langfuse import Langfuse
 from sqlalchemy import update
@@ -124,28 +125,42 @@ class TenantLLMService(CommonService):
             model_config = cls.get_api_key(db, tenant_id, mdlnm)
         if model_config:
             model_config = model_config.to_dict()
-            llm = LLMService.query(db, llm_name=mdlnm) if not fid else LLMService.query(db, llm_name=mdlnm, fid=fid)
-            if not llm and fid: # for some cases seems fid mismatch
-                llm = LLMService.query(db, llm_name=mdlnm)
-            if llm:
-                model_config["is_tools"] = llm[0].is_tools
+        elif llm_type == LLMType.EMBEDDING.value and fid == 'Builtin' and "tei-" in os.getenv("COMPOSE_PROFILES", "") and mdlnm == os.getenv('TEI_MODEL', ''):
+            embedding_cfg = settings.EMBEDDING_CFG
+            model_config = {"llm_factory": 'Builtin', "api_key": embedding_cfg["api_key"], "llm_name": mdlnm, "api_base": embedding_cfg["base_url"]}
         else:
-            logging.info(f"Debug: No API key found for model {mdlnm}")
+            raise LookupError(f"Model({mdlnm}@{fid}) not authorized")
 
-        if not model_config:
-            logging.info(f"Debug: Model({mdlnm}) not authorized")
-            if llm_type in [LLMType.EMBEDDING, LLMType.RERANK]:
-                llm = LLMService.query(db, llm_name=mdlnm) if not fid else LLMService.query(db, llm_name=mdlnm, fid=fid)
-                if llm and llm[0].fid in ["Youdao", "FastEmbed", "BAAI"]:
-                    model_config = {"llm_factory": llm[0].fid, "api_key": "", "llm_name": mdlnm, "api_base": ""}
-            if not model_config:
-                if mdlnm == "flag-embedding":
-                    model_config = {"llm_factory": "Tongyi-Qianwen", "api_key": "", "llm_name": llm_name, "api_base": ""}
-                else:
-                    if not mdlnm:
-                        raise LookupError(f"Type of {llm_type} model is not set.")
-                    raise LookupError(f"Model({mdlnm}) not authorized")
+        llm = LLMService.query(db, llm_name=mdlnm) if not fid else LLMService.query(db, llm_name=mdlnm, fid=fid)
+        if not llm and fid:  # for some cases seems fid mismatch
+            llm = LLMService.query(db, llm_name=mdlnm)
+        if llm:
+            model_config["is_tools"] = llm[0].is_tools
         return model_config
+        # if model_config:
+        #     model_config = model_config.to_dict()
+        #     llm = LLMService.query(db, llm_name=mdlnm) if not fid else LLMService.query(db, llm_name=mdlnm, fid=fid)
+        #     if not llm and fid: # for some cases seems fid mismatch
+        #         llm = LLMService.query(db, llm_name=mdlnm)
+        #     if llm:
+        #         model_config["is_tools"] = llm[0].is_tools
+        # else:
+        #     logging.info(f"Debug: No API key found for model {mdlnm}")
+        #
+        # if not model_config:
+        #     logging.info(f"Debug: Model({mdlnm}) not authorized")
+        #     if llm_type in [LLMType.EMBEDDING, LLMType.RERANK]:
+        #         llm = LLMService.query(db, llm_name=mdlnm) if not fid else LLMService.query(db, llm_name=mdlnm, fid=fid)
+        #         if llm and llm[0].fid in ["Youdao", "FastEmbed", "BAAI"]:
+        #             model_config = {"llm_factory": llm[0].fid, "api_key": "", "llm_name": mdlnm, "api_base": ""}
+        #     if not model_config:
+        #         if mdlnm == "flag-embedding":
+        #             model_config = {"llm_factory": "Tongyi-Qianwen", "api_key": "", "llm_name": llm_name, "api_base": ""}
+        #         else:
+        #             if not mdlnm:
+        #                 raise LookupError(f"Type of {llm_type} model is not set.")
+        #             raise LookupError(f"Model({mdlnm}) not authorized")
+        # return model_config
 
     @classmethod
     def model_instance(cls, db: Session, tenant_id, llm_type, llm_name=None, lang="Chinese", **kwargs):

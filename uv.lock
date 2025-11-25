@@ -315,24 +315,6 @@ wheels = [
 
 [[package]]
 name = "aspose-slides"
-version = "24.12.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-resolution-markers = [
-    "(python_full_version >= '3.12.4' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12.4' and platform_machine == 'x86_64' and sys_platform == 'darwin')",
-    "(python_full_version < '3.12.4' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.12.4' and platform_machine == 'x86_64' and sys_platform == 'darwin')",
-    "python_full_version >= '3.12.4' and platform_machine == 'x86_64' and sys_platform != 'darwin'",
-    "python_full_version < '3.12.4' and platform_machine == 'x86_64' and sys_platform != 'darwin'",
-]
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/6e/db/680408b92f47aa9ff2c70f80b2f5d02155a8ff81ac493c3061099bf56c37/Aspose.Slides-24.12.0-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:ccfaa61a863ed28cd37b221e31a0edf4a83802599d76fb50861c25149ac5e5e3" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/01/ac/29838004784acb72c9d93f0b327a8e5105f35eb925cdaeccd07907464018/Aspose.Slides-24.12.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:b050659129c5ca92e52fbcd7d5091caa244db731adb68fbea1fd0a8b9fd62a5a" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/2b/6e/0b9da3757ce46b63f3fbb10ee352009c20260813d369306438bd3552fc18/Aspose.Slides-24.12.0-py3-none-manylinux1_x86_64.whl", hash = "sha256:a5eb8407bd93fa7851584c3b143000c09d9f5285f3c1da99677bf1d9c0abefe9" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/11/d4/023ce536ee861b6b8757b8ebfed3326cd21a48b9e557390cd904fc48ef1e/Aspose.Slides-24.12.0-py3-none-win32.whl", hash = "sha256:6e8bf6e20ff05a81ed9ef8025b20f16c5ada1af908934c82e8290aab26ad4f83" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/58/0b/af65314b471766709627a65096f69e8b70b7840edd98cabaa9b74fda671d/Aspose.Slides-24.12.0-py3-none-win_amd64.whl", hash = "sha256:e816e37a621221e8a73fc631c879ada37cf6a80513a817b687d6f7e189d5a978" },
-]
-
-[[package]]
-name = "aspose-slides"
 version = "25.3.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 resolution-markers = [
@@ -349,6 +331,24 @@ wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/57/ca/fae7781ffeeca0e720f3e453d7efd0927d3eb68e8d33e031a9be92fe6b93/Aspose.Slides-25.3.0-py3-none-manylinux1_x86_64.whl", hash = "sha256:39b7f2820830ba4abe480cad206223f1581c8cc37e0a00459f06ccff27a23026" },
     { url = "https://mirrors.aliyun.com/pypi/packages/5f/68/3308c98e73fb5012334284b8c568e7bb4b1d2465ba4a94165478c864f703/Aspose.Slides-25.3.0-py3-none-win32.whl", hash = "sha256:ca9bd8bb102d684ef49b3c696dd536c44b0440feeb9ca4e0c9d1355f308803b1" },
     { url = "https://mirrors.aliyun.com/pypi/packages/b5/5b/ffee94d0db5565fc27c9f13e3a67491975b0d7a11da6dfa9a1f394a63403/Aspose.Slides-25.3.0-py3-none-win_amd64.whl", hash = "sha256:7a5255f7cc4891b5da0f416059a008205605b9ef7279006cfd12b81cd3dac671" },
+]
+
+[[package]]
+name = "aspose-slides"
+version = "25.11.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+resolution-markers = [
+    "(python_full_version >= '3.12.4' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12.4' and platform_machine == 'x86_64' and sys_platform == 'darwin')",
+    "(python_full_version < '3.12.4' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.12.4' and platform_machine == 'x86_64' and sys_platform == 'darwin')",
+    "python_full_version >= '3.12.4' and platform_machine == 'x86_64' and sys_platform != 'darwin'",
+    "python_full_version < '3.12.4' and platform_machine == 'x86_64' and sys_platform != 'darwin'",
+]
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/4c/74/6d16cb3f8363a1df377845b5fef50cbe01ec56254ee8272e127af68854ab/aspose_slides-25.11.0-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:c69f277553c9fca706d36ab39a11e929f178d96402833da133b7b9c334a681dc" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/24/00/1160cdc03e7349530822ba08d22004341204c894f3abc89b847e4bae7055/aspose_slides-25.11.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:377370dab97c3751dcd1793ae5ac60384148924c84dc5e225d808135f6b1c9d2" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/2b/26/e19824eb490561a91d28e997e3275e0ec823e4e3c5203cc10a83191281a3/aspose_slides-25.11.0-py3-none-manylinux1_x86_64.whl", hash = "sha256:a203c94055862bafe3b609c1cef556327c6d81eac26217fe7a9f5059eafe5f8e" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/4d/a3/a1db808fa705a758f3eb8ad1347977548b4b5e31432be3432676fddab972/aspose_slides-25.11.0-py3-none-win32.whl", hash = "sha256:c213f75e70fc23a35b0077affc591226224e6636714a8a77053ef6135b7246da" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/4e/9b/b7de3f2fd0a58107ddf8e0421b319f22681ab293410618ea2b424221902b/aspose_slides-25.11.0-py3-none-win_amd64.whl", hash = "sha256:525e3c3a3152c4a004e99bd341a01c55c671202ce6140a292927835ab986e3e2" },
 ]
 
 [[package]]
@@ -1056,12 +1056,9 @@ wheels = [
 
 [[package]]
 name = "datrie"
-version = "0.8.2"
+version = "0.8.3"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/9d/fe/db74bd405d515f06657f11ad529878fd389576dca4812bea6f98d9b31574/datrie-0.8.2.tar.gz", hash = "sha256:525b08f638d5cf6115df6ccd818e5a01298cd230b2dac91c8ff2e6499d18765d" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/44/02/53f0cf0bf0cd629ba6c2cc13f2f9db24323459e9c19463783d890a540a96/datrie-0.8.2-pp273-pypy_73-win32.whl", hash = "sha256:b07bd5fdfc3399a6dab86d6e35c72b1dbd598e80c97509c7c7518ab8774d3fda" },
-]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/51/0b/c0f53a14317b304e2e93b29a831b0c83306caae9af7f0e2e037d17c4f63f/datrie-0.8.3.tar.gz", hash = "sha256:ea021ad4c8a8bf14e08a71c7872a622aa399a510f981296825091c7ca0436e80" }
 
 [[package]]
 name = "debugpy"
@@ -3222,8 +3219,8 @@ dependencies = [
     { name = "alembic" },
     { name = "anthropic" },
     { name = "arxiv" },
-    { name = "aspose-slides", version = "24.12.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple" }, marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
     { name = "aspose-slides", version = "25.3.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple" }, marker = "(platform_machine != 'arm64' and platform_machine != 'x86_64') or (platform_machine != 'x86_64' and sys_platform != 'darwin')" },
+    { name = "aspose-slides", version = "25.11.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple" }, marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
     { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "azure-storage-file-datalake" },
@@ -3308,6 +3305,7 @@ dependencies = [
     { name = "passlib", extra = ["bcrypt"] },
     { name = "pdfplumber" },
     { name = "pillow" },
+    { name = "pip" },
     { name = "pluginlib" },
     { name = "polars" },
     { name = "protobuf" },
@@ -3384,7 +3382,7 @@ requires-dist = [
     { name = "anthropic", specifier = "==0.34.1" },
     { name = "arxiv", specifier = "==2.1.3" },
     { name = "aspose-slides", specifier = ">=24.9.0" },
-    { name = "aspose-slides", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')", specifier = ">=24.9.0,<25.0.0" },
+    { name = "aspose-slides", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')", specifier = ">=25.10.0,<26.0.0" },
     { name = "azure-identity", specifier = "==1.17.1" },
     { name = "azure-storage-blob", specifier = "==12.22.0" },
     { name = "azure-storage-file-datalake", specifier = "==12.16.0" },
@@ -3403,7 +3401,7 @@ requires-dist = [
     { name = "cohere", specifier = "==5.6.2" },
     { name = "crawl4ai", specifier = ">=0.3.8" },
     { name = "dashscope", specifier = "==1.23.3" },
-    { name = "datrie", specifier = "==0.8.2" },
+    { name = "datrie", specifier = ">=0.8.3,<0.9.0" },
     { name = "debugpy", specifier = ">=1.8.13" },
     { name = "deepl", specifier = "==1.18.0" },
     { name = "demjson3", specifier = "==3.0.6" },
@@ -3476,6 +3474,7 @@ requires-dist = [
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
     { name = "pdfplumber", specifier = "==0.10.4" },
     { name = "pillow", specifier = "==10.4.0" },
+    { name = "pip", specifier = ">=25.2" },
     { name = "pluginlib", specifier = "==0.9.4" },
     { name = "polars", specifier = ">=1.13.0" },
     { name = "protobuf", specifier = "==5.27.2" },
@@ -4246,6 +4245,15 @@ wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/55/04/5e6de6e6120451ec0c24516c41dbaf80cce1b6451f96561235ef2429da2e/pillow-10.4.0-cp312-cp312-win32.whl", hash = "sha256:7dfecdbad5c301d7b5bde160150b4db4c659cee2b69589705b6f8a0c509d9f42" },
     { url = "https://mirrors.aliyun.com/pypi/packages/74/0a/d4ce3c44bca8635bd29a2eab5aa181b654a734a29b263ca8efe013beea98/pillow-10.4.0-cp312-cp312-win_amd64.whl", hash = "sha256:1d846aea995ad352d4bdcc847535bd56e0fd88d36829d2c90be880ef1ee4668a" },
     { url = "https://mirrors.aliyun.com/pypi/packages/b5/ca/184349ee40f2e92439be9b3502ae6cfc43ac4b50bc4fc6b3de7957563894/pillow-10.4.0-cp312-cp312-win_arm64.whl", hash = "sha256:e553cad5179a66ba15bb18b353a19020e73a7921296a7979c4a2b7f6a5cd57f9" },
+]
+
+[[package]]
+name = "pip"
+version = "25.3"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/fe/6e/74a3f0179a4a73a53d66ce57fdb4de0080a8baa1de0063de206d6167acc2/pip-25.3.tar.gz", hash = "sha256:8d0538dbbd7babbd207f261ed969c65de439f6bc9e5dbd3b3b9a77f25d95f343" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/44/3c/d717024885424591d5376220b5e836c2d5293ce2011523c9de23ff7bf068/pip-25.3-py3-none-any.whl", hash = "sha256:9655943313a94722b7774661c21049070f6bbb0a1516bf02f7c8d5d9201514cd" },
 ]
 
 [[package]]

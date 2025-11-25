@@ -10,6 +10,7 @@ import logging
 import os
 from api.utils.configs import get_base_config, decrypt_database_config
 from api.utils.file_utils import get_project_base_directory
+from api.utils.common import pip_install_torch
 
 # Server
 RAG_CONF_PATH = os.path.join(get_project_base_directory(), "configs")
@@ -60,13 +61,10 @@ SVR_QUEUE_NAME = "multi_rag_svr_queue"
 SVR_CONSUMER_GROUP_NAME = "multi_rag_svr_task_broker"
 PAGERANK_FLD = "pagerank_fea"
 TAG_FLD = "tag_feas"
-# SVR_QUEUE_RETENTION = 60*60
-# SVR_QUEUE_MAX_LEN = 1024
-# SVR_CONSUMER_NAME = "multi_rag_svr_consumer"
-# SVR_CONSUMER_GROUP_NAME = "multi_rag_svr_consumer_group"
 
 PARALLEL_DEVICES = 0
 try:
+    pip_install_torch()
     import torch.cuda
     PARALLEL_DEVICES = torch.cuda.device_count()
     logging.info(f"found {PARALLEL_DEVICES} gpus")

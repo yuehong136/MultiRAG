@@ -10,6 +10,7 @@ import asyncio
 import threading
 import logging
 import json
+import os
 import re
 from datetime import datetime
 from typing import Any, Literal
@@ -24,7 +25,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from api.apps import manager, executor
 from agent.component.agent_with_tools import Agent, AgentParam
-# from api.db.services.llm_service import LLMFactoriesService, TenantLLMService, LLMService, LLMBundle
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.llm_service import LLMService, LLMBundle
 from api.db.services.user_service import TenantService
@@ -1630,6 +1630,8 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
 
         for m in llms:
             m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in self_deployed
+            if "tei-" in os.getenv("COMPOSE_PROFILES", "") and m["model_type"]==LLMType.EMBEDDING and m["fid"]=="Builtin" and m["llm_name"]==os.getenv('TEI_MODEL', ''):
+                m["available"] = True
 
         llm_set = set([m["llm_name"] + "@" + m["fid"] for m in llms])
         for o in objs:

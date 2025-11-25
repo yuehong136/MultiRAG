@@ -3,8 +3,7 @@ FROM ubuntu:22.04 AS base
 USER root
 SHELL ["/bin/bash", "-c"]
 
-ARG LIGHTEN=0
-ENV LIGHTEN=${LIGHTEN}
+ARG NEED_MIRROR=0
 
 # 创建必要的目录
 RUN mkdir -p /root/.ragdatav /root/nltk_data && \
@@ -50,9 +49,9 @@ RUN apt update && apt -y install ca-certificates && \
     libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus  python3-pip pipx tcl-dev pkg-config \
     fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg && \
     # 安装uv
-    pip3 config set global.index-url https://mirrors.aliyun.com/pypi/simple && \
-    pip3 config set global.trusted-host mirrors.aliyun.com; \
-    pipx install uv -i https://mirrors.aliyun.com/pypi/simple && \
+    pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip3 config set global.trusted-host pypi.tuna.tsinghua.edu.cn; \
+    pipx install uv -i https://pypi.tuna.tsinghua.edu.cn/simple && \
     # 安装Redis
     wget https://download.redis.io/releases/redis-7.4.3.tar.gz && \
     tar -zxvf redis-7.4.3.tar.gz && \
@@ -94,14 +93,12 @@ RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co
         /huggingface.co/InfiniFlow/deepdoc \
         | tar -xf - --strip-components=3 -C /multirag/core/res/deepdoc
 RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co,target=/huggingface.co \
-    if [ "$LIGHTEN" != "1" ]; then \
-        (tar -cf - \
-            /huggingface.co/BAAI/bge-large-zh-v1.5 \
-            /huggingface.co/BAAI/bge-reranker-v2-m3 \
-            /huggingface.co/maidalun1020/bce-embedding-base_v1 \
-            /huggingface.co/maidalun1020/bce-reranker-base_v1 \
-            | tar -xf - --strip-components=2 -C /root/.ragdatav) \
-    fi
+    tar -cf - \
+        /huggingface.co/BAAI/bge-large-zh-v1.5 \
+        /huggingface.co/BAAI/bge-reranker-v2-m3 \
+        /huggingface.co/maidalun1020/bce-embedding-base_v1 \
+        /huggingface.co/maidalun1020/bce-reranker-base_v1 \
+        | tar -xf - --strip-components=2 -C /root/.ragdatav
 
 # 创建并添加NLTK数据
 # 设置Tika服务器
@@ -133,15 +130,17 @@ COPY pyproject.toml uv.lock ./
 
 # https://github.com/astral-sh/uv/issues/10462
 # uv records index url into uv.lock but doesn't failover among multiple indexes
-RUN uv sync --python 3.12 --frozen --all-extras;
+RUN --mount=type=cache,id=multirag_uv,target=/root/.cache/uv,sharing=locked \
+    if [ "$NEED_MIRROR" == "1" ]; then \
+        sed -i 's|pypi.org|pypi.tuna.tsinghua.edu.cn|g' uv.lock; \
+    else \
+        sed -i 's|pypi.tuna.tsinghua.edu.cn|pypi.org|g' uv.lock; \
+    fi; \
+    uv sync --python 3.12 --frozen --all-extras
 
 COPY .git /multirag/.git
 RUN version_info=$(git describe --tags --match=v* --first-parent --always); \
-    if [ "$LIGHTEN" == "1" ]; then \
-        version_info="$version_info slim"; \
-    else \
-        version_info="$version_info full"; \
-    fi; \
+    version_info="$version_info"; \
     echo "MultiRAG version: $version_info"; \
     echo $version_info > /multirag/VERSION
 

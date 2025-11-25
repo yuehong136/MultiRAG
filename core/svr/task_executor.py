@@ -13,6 +13,7 @@ from api.db.services.pipeline_operation_log_service import PipelineOperationLogS
 from api.utils.api_utils import timeout
 from api.utils.base64_image import image2id
 from api.utils.log_utils import init_root_logger, get_project_base_directory
+from api.utils.configs import show_configs
 from graphrag.general.index import run_graphrag_for_kb
 from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
 from core.flow.pipeline import Pipeline
@@ -815,7 +816,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
     tk_count = 0
     if len(tts) == len(cnts):
         vts, c = await trio.to_thread.run_sync(lambda: mdl.encode(tts[0: 1]))
-        tts = np.concatenate([vts for _ in range(len(tts))], axis=0)
+        tts = np.concatenate([vts[0] for _ in range(len(tts))], axis=0)
         tk_count += c
 
     @timeout(60)
@@ -2696,7 +2697,10 @@ async def main():
 ======================================================================
     """)
     logging.info(f'MultiRAG version: {get_multirag_version()}')
+    show_configs()
     settings.init_settings()
+    from api.settings import EMBEDDING_CFG
+    logging.info(f'api.settings.EMBEDDING_CFG: {EMBEDDING_CFG}')
     print_rag_settings()
     if sys.platform != "win32":
         signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)

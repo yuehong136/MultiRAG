@@ -101,8 +101,7 @@ def init_settings():
     # LLM = get_base_config("user_default_llm", {})
     # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
     # LLM_BASE_URL = LLM.get("base_url")
-    global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, FACTORY_LLM_INFOS, REGISTER_ENABLED
-    LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
+    global LLM, LLM_FACTORY, LLM_BASE_URL, FACTORY_LLM_INFOS, REGISTER_ENABLED
     LLM = get_base_config("user_default_llm", {}) or {}
     LLM_DEFAULT_MODELS = LLM.get("default_models", {}) or {}
     LLM_FACTORY = LLM.get("factory", "") or ""
@@ -120,15 +119,13 @@ def init_settings():
 
     global CHAT_MDL, EMBEDDING_MDL, RERANK_MDL, ASR_MDL, IMAGE2TEXT_MDL
     global CHAT_CFG, EMBEDDING_CFG, RERANK_CFG, ASR_CFG, IMAGE2TEXT_CFG
-    if not LIGHTEN:
-        EMBEDDING_MDL = BUILTIN_EMBEDDING_MODELS[0]
 
-    if LLM_DEFAULT_MODELS:
-        CHAT_MDL = LLM_DEFAULT_MODELS.get("chat_model", CHAT_MDL)
-        EMBEDDING_MDL = LLM_DEFAULT_MODELS.get("embedding_model", EMBEDDING_MDL)
-        RERANK_MDL = LLM_DEFAULT_MODELS.get("rerank_model", RERANK_MDL)
-        ASR_MDL = LLM_DEFAULT_MODELS.get("asr_model", ASR_MDL)
-        IMAGE2TEXT_MDL = LLM_DEFAULT_MODELS.get("image2text_model", IMAGE2TEXT_MDL)
+    # if LLM_DEFAULT_MODELS:
+    #     CHAT_MDL = LLM_DEFAULT_MODELS.get("chat_model", CHAT_MDL)
+    #     EMBEDDING_MDL = LLM_DEFAULT_MODELS.get("embedding_model", EMBEDDING_MDL)
+    #     RERANK_MDL = LLM_DEFAULT_MODELS.get("rerank_model", RERANK_MDL)
+    #     ASR_MDL = LLM_DEFAULT_MODELS.get("asr_model", ASR_MDL)
+    #     IMAGE2TEXT_MDL = LLM_DEFAULT_MODELS.get("image2text_model", IMAGE2TEXT_MDL)
 
     global API_KEY, PARSERS, HOST_IP, HOST_PORT, SECRET_KEY
     API_KEY = LLM.get("api_key", "")
@@ -149,7 +146,7 @@ def init_settings():
     IMAGE2TEXT_CFG = _resolve_per_model_config(image2text_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
 
     CHAT_MDL = CHAT_CFG.get("model", "") or ""
-    EMBEDDING_MDL = EMBEDDING_CFG.get("model", "") or ""
+    EMBEDDING_MDL = os.getenv("TEI_MODEL", "Qwen/Qwen3-Embedding-0.6B") if "tei-" in os.getenv("COMPOSE_PROFILES", "") else ""
     RERANK_MDL = RERANK_CFG.get("model", "") or ""
     ASR_MDL = ASR_CFG.get("model", "") or ""
     IMAGE2TEXT_MDL = IMAGE2TEXT_CFG.get("model", "") or ""
