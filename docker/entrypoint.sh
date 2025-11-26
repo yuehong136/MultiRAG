@@ -26,6 +26,7 @@ ENABLE_REDIS=1                 # 是否启动 Redis
 ENABLE_SERVER=1                # 是否启动 api.multirag_server
 ENABLE_TASKEXECUTOR=1          # 是否启动 TaskExecutor
 ENABLE_ADMINSERVER=1           # 是否启动 admin server（默认启动）
+ENABLE_WEBSERVER="${ENABLE_WEBSERVER:-1}"  # 是否启动 Nginx（默认启动）
 WORKERS="${WS:-1}"            # TaskExecutor 数量，默认取 WS 环境变量，否则 1
 CONSUMER_NO_BEG=0              # 消费者 ID 起始（含）
 CONSUMER_NO_END=0              # 消费者 ID 结束（不含） - 为 0 表示未指定区间
@@ -49,6 +50,7 @@ Usage: $0 [options]
   --disable-redis                 不启动 Redis
   --disable-server                不启动 api.multirag_server
   --disable-taskexecutor          不启动 TaskExecutor
+  --disable-webserver             不启动 Nginx（Web Server）
   --enable-adminserver            启动 Admin Server（默认启动）
   --workers=<num>                 TaskExecutor 数量（默认读取 WS 或 1）
   --consumer-no-beg=<num>         消费者 ID 起始（含）
@@ -65,6 +67,7 @@ for arg in "$@"; do
     --disable-redis)        ENABLE_REDIS=0 ; shift ;;
     --disable-server)       ENABLE_SERVER=0 ; shift ;;
     --disable-taskexecutor) ENABLE_TASKEXECUTOR=0 ; shift ;;
+    --disable-webserver)    ENABLE_WEBSERVER=0 ; shift ;;
     --enable-adminserver)   ENABLE_ADMINSERVER=1 ; shift ;;
     --workers=*)            WORKERS="${arg#*=}" ; shift ;;
     --consumer-no-beg=*)    CONSUMER_NO_BEG="${arg#*=}" ; shift ;;
@@ -76,6 +79,11 @@ for arg in "$@"; do
 done
 
 # --------------------------- 函数定义 ---------------------------------------
+start_nginx() {
+  echo "[entrypoint] 启动 Nginx..."
+  /usr/sbin/nginx
+}
+
 start_redis() {
   echo "[entrypoint] 启动 Redis -> ${REDIS_CONF}"
   redis-server "${REDIS_CONF}" &
@@ -164,6 +172,11 @@ trap _term SIGTERM SIGINT
 # --------------------------- 启动流程 ---------------------------------------
 ensure_docling
 ensure_mineru
+
+# 启动 Nginx（优先启动，作为统一入口）
+if [[ "${ENABLE_WEBSERVER}" -eq 1 ]]; then
+  start_nginx
+fi
 
 if [[ "${ENABLE_REDIS}" -eq 1 ]]; then
   start_redis

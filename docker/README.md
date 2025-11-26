@@ -5,6 +5,7 @@
 
 - 🐳 [Docker Compose](#-docker-compose)
 - 🐬 [Docker 环境变量](#-docker-环境变量)
+- 🌐 [Nginx 配置](#-nginx-配置)
 - 🧠 [TEI 服务配置](#-tei-服务配置)
 - 🐋 [启动选项](#-启动选项)
 - 📋 [使用示例](#-使用示例)
@@ -23,6 +24,8 @@
   包含 Docker 服务的重要环境变量配置。
 - **entrypoint.sh**  
   容器启动脚本，支持灵活的组件启停控制。
+- **nginx/**  
+  Nginx 反向代理配置目录，包含 HTTP/HTTPS 站点配置和代理规则。
 
 > [!NOTE]
 > 本目录结构和配置方式参考了 [ragflow](https://github.com/infiniflow/ragflow) 项目的 73144e27 提交。
@@ -83,6 +86,188 @@
 
 - `TZ`  
   容器的时区设置。默认值为 `Asia/Shanghai`。
+
+### Nginx / Web Server 配置
+
+- `ENABLE_WEBSERVER`  
+  Web Server 开关。`1` 启用 Nginx，`0` 禁用。默认值为 `1`。
+
+- `SVR_WEB_HTTP_PORT`  
+  Nginx HTTP 端口（对外暴露）。默认值为 `80`。
+
+- `SVR_WEB_HTTPS_PORT`  
+  Nginx HTTPS 端口（对外暴露，需配置 SSL 证书）。默认值为 `443`。
+
+### 直连端口配置（兼容模式）
+
+以下端口用于直连后端服务，主要用于调试或兼容旧版客户端。如需关闭直连，在 `docker-compose.yml` 中注释对应端口映射即可。
+
+- `SVR_HTTP_PORT`  
+  主服务 API 直连端口。默认值为 `8123`。
+
+- `ADMIN_SVR_HTTP_PORT`  
+  管理后台 API 直连端口。默认值为 `8130`。
+
+## 🌐 Nginx 配置
+
+`nginx/` 目录包含 Nginx 反向代理配置文件，用于统一管理 API 路由和静态资源服务。
+
+### 访问方式
+
+服务启动后，支持两种访问方式（平滑过渡设计）：
+
+#### 方式一：通过 Nginx（推荐）
+
+```bash
+# HTTP（端口 80）
+curl http://your-server/api/v1/user/login
+curl http://your-server/api/v1/admin/users
+
+# HTTPS（端口 443，需配置证书）
+curl https://your-server/api/v1/user/login
+```
+
+#### 方式二：直连后端（兼容/调试）
+
+```bash
+# 主服务 API（端口 8123）
+curl http://your-server:8123/api/v1/user/login
+
+# 管理后台 API（端口 8130）
+curl http://your-server:8130/api/v1/admin/users
+```
+
+> [!TIP]
+> 如需关闭直连访问，在 `docker-compose.yml` 中注释以下端口映射即可：
+> ```yaml
+> # - "${SVR_HTTP_PORT:-8123}:8123"       # 主服务 API 直连
+> # - "${ADMIN_SVR_HTTP_PORT:-8130}:8130" # 管理后台 API 直连
+> ```
+
+### 目录结构
+
+```
+nginx/
+├── nginx.conf              # Nginx 主配置文件
+├── proxy.conf              # 代理通用配置（请求头、超时、缓冲区）
+├── multirag.conf           # HTTP 站点配置（端口 80）
+└── multirag.https.conf     # HTTPS 站点配置（端口 443，预留）
+```
+
+### 端口映射
+
+根据 `configs/service_conf.yaml` 配置：
+
+| 服务 | 内部端口 | 路由规则 |
+|------|---------|---------|
+| 主服务 API | 8123 | `/v1/*`, `/api/*` |
+| 管理后台 API | 8130 | `/api/v1/admin/*` |
+| 前端静态资源 | - | `/`（预留） |
+
+### 配置文件说明
+
+#### nginx.conf
+
+主配置文件，包含：
+- Worker 进程配置（自动检测 CPU 核心数）
+- 日志格式定义
+- 最大上传文件大小（1024M）
+- 引入 `multirag.conf` 站点配置
+
+#### proxy.conf
+
+代理通用配置，被其他配置文件引用：
+- 请求头转发（Host, X-Forwarded-For, X-Forwarded-Proto）
+- 超时配置（3600s，支持长时间运行的请求）
+- 缓冲区配置（适合大文件传输）
+
+#### multirag.conf
+
+HTTP 站点配置，监听端口 80：
+- API 路由到后端服务
+- Gzip 压缩
+- 前端静态资源服务（预留）
+
+#### multirag.https.conf
+
+HTTPS 站点配置模板（预留），包含：
+- HTTP 到 HTTPS 重定向
+- SSL 证书配置占位
+- 与 HTTP 版本相同的路由规则
+
+### 启用 HTTPS
+
+#### 方式一：使用 Let's Encrypt 免费证书
+
+1. **安装 Certbot**
+   ```bash
+   # Ubuntu/Debian
+   sudo apt update && sudo apt install certbot
+   
+   # macOS
+   brew install certbot
+   ```
+
+2. **获取证书**
+   ```bash
+   # 确保 80/443 端口未被占用
+   sudo certbot certonly --standalone -d your-multirag-domain.com
+   ```
+
+3. **证书位置**
+   - 证书: `/etc/letsencrypt/live/your-multirag-domain.com/fullchain.pem`
+   - 私钥: `/etc/letsencrypt/live/your-multirag-domain.com/privkey.pem`
+
+4. **修改 docker-compose.yml**
+   在 `multirag` 服务中添加卷挂载：
+   ```yaml
+   services:
+     multirag:
+       # ...existing configuration...
+       volumes:
+         # SSL 证书
+         - /etc/letsencrypt/live/your-multirag-domain.com/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+         - /etc/letsencrypt/live/your-multirag-domain.com/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
+         # 切换到 HTTPS 配置
+         - ./nginx/multirag.https.conf:/etc/nginx/conf.d/multirag.conf
+         # ...other existing volumes...
+   ```
+
+5. **更新 nginx 配置**
+   编辑 `nginx/multirag.https.conf`，将 `your-multirag-domain.com` 替换为实际域名。
+
+6. **重启服务**
+   ```bash
+   docker compose down
+   docker compose up -d
+   ```
+
+#### 方式二：使用已有证书
+
+如果您已有其他 CA 签发的证书：
+
+1. 将证书文件放置到 Docker 可访问的目录
+2. 修改 `docker-compose.yml` 中的卷挂载路径指向您的证书文件
+3. 确保证书文件包含完整的证书链
+4. 按照上述步骤 5-6 操作
+
+> [!IMPORTANT]
+> - 确保域名的 DNS A 记录指向服务器 IP 地址
+> - 使用 `--standalone` 方式获取证书时，需停止占用 80/443 端口的服务
+
+> [!TIP]
+> 开发或测试环境可使用自签名证书，但浏览器会显示安全警告。
+
+### 自定义配置
+
+如需修改上传文件大小限制，编辑 `nginx/nginx.conf`：
+
+```nginx
+# 修改此值（默认 1024M）
+client_max_body_size 2048M;
+```
+
+同时确保 `configs/service_conf.yaml` 中的相关配置保持一致。
 
 ## 🧠 TEI 服务配置
 
@@ -204,6 +389,7 @@ MultiRAG 支持通过命令行参数灵活控制启动哪些组件。
 | `--disable-redis` | 不启动内置 Redis |
 | `--disable-server` | 不启动 API Server |
 | `--disable-taskexecutor` | 不启动 TaskExecutor |
+| `--disable-webserver` | 不启动 Nginx（Web Server） |
 | `--enable-adminserver` | 启动 Admin Server（默认不启动） |
 | `--workers=<num>` | 指定 TaskExecutor 数量（覆盖 `WS` 环境变量） |
 | `--consumer-no-beg=<num>` | 消费者 ID 起始编号（包含） |

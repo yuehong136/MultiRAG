@@ -1,0 +1,113 @@
+# ============================================================
+# TEI (Text Embeddings Inference) 独立部署配置
+# 
+# 使用方式：
+#   CPU 模式: docker compose -f docker-compose-tei.yml --profile cpu up -d
+#   GPU 模式: docker compose -f docker-compose-tei.yml --profile gpu up -d
+#
+# 或者在 .env 中设置 COMPOSE_PROFILES=cpu 或 COMPOSE_PROFILES=gpu
+# 然后执行: docker compose -f docker-compose-tei.yml up -d
+# ============================================================
+
+services:
+  # ========== TEI 服务 (CPU 版本) ==========
+  tei-cpu:
+    profiles:
+      - cpu
+    # 国内可使用阿里云镜像: registry.cn-hangzhou.aliyuncs.com/infiniflow/text-embeddings-inference:cpu-1.8
+    # 或者 Docker Hub: infiniflow/text-embeddings-inference:cpu-1.8
+    image: ${TEI_IMAGE_CPU:-infiniflow/text-embeddings-inference:cpu-1.8}
+    hostname: tei
+    container_name: tei-cpu
+    restart: unless-stopped
+    
+    ports:
+      - "${TEI_PORT:-6380}:80"
+    
+    environment:
+      # HuggingFace 镜像站点（国内用户推荐使用）
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      # HuggingFace Token（可选，用于下载私有模型）
+      - HF_TOKEN=${HF_TOKEN:-}
+    
+    volumes:
+      # 模型缓存目录（持久化下载的模型）
+      - ${TEI_MODEL_CACHE:-tei-models}:/data
+    
+    # 启动命令：指定模型和自动截断
+    command: 
+      - "--model-id"
+      - "${TEI_MODEL:-Qwen/Qwen3-Embedding-0.6B}"
+      - "--auto-truncate"
+      # 可选参数（按需取消注释）：
+      # - "--max-client-batch-size"
+      # - "32"
+      # - "--max-batch-tokens"
+      # - "16384"
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s  # 首次启动需要下载模型，给足时间
+    
+    # 资源限制（可选）
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 4G
+    #     reservations:
+    #       memory: 2G
+
+  # ========== TEI 服务 (GPU 版本) ==========
+  tei-gpu:
+    profiles:
+      - gpu
+    # 国内可使用阿里云镜像: registry.cn-hangzhou.aliyuncs.com/infiniflow/text-embeddings-inference:1.8
+    # 或者 Docker Hub: infiniflow/text-embeddings-inference:1.8
+    image: ${TEI_IMAGE_GPU:-infiniflow/text-embeddings-inference:1.8}
+    hostname: tei
+    container_name: tei-gpu
+    restart: unless-stopped
+    
+    ports:
+      - "${TEI_PORT:-6380}:80"
+    
+    environment:
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_TOKEN=${HF_TOKEN:-}
+      # CUDA 相关配置
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+    
+    volumes:
+      - ${TEI_MODEL_CACHE:-tei-models}:/data
+    
+    command: 
+      - "--model-id"
+      - "${TEI_MODEL:-BAAI/bge-m3}"
+      - "--auto-truncate"
+      # GPU 特有参数（按需取消注释）：
+      # - "--dtype"
+      # - "float16"
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    
+    # GPU 资源配置
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]
+
+volumes:
+  tei-models:
+    driver: local
+
