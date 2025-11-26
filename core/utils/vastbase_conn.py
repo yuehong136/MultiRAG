@@ -215,26 +215,222 @@ class VastBaseConnection(DocStoreConnection):
             }
 
     """
-    Table operations - 待实现
+    Table operations
     """
 
     def createIdx(self, indexName: str, knowledgebaseId: str, vectorSize: int):
         """
         Create an index with given name
         """
-        raise NotImplementedError("Not implemented")
+        table_name = f"{indexName}_{knowledgebaseId}"
+        conn = None
+
+        try:
+            conn = self._get_connection()
+            self._register_vector_extension(conn)
+            cursor = conn.cursor()
+
+            # 验证向量维度
+            if not (1 <= vectorSize <= 16384):
+                raise ValueError(f"向量维度必须在1-16384之间，当前: {vectorSize}")
+
+            # 检查表是否已存在
+            if self._table_exists(cursor, table_name):
+                logger.info(f"VastBase表 {table_name} 已存在，跳过创建")
+                return
+
+            # 构建表结构SQL
+            create_table_sql = self._build_create_table_sql(table_name, vectorSize)
+
+            logger.info(f"创建VastBase表: {table_name}, 向量维度: {vectorSize}")
+            cursor.execute(create_table_sql)
+
+            # 创建向量索引
+            self._create_vector_index(cursor, table_name, vectorSize)
+
+            # 创建全文索引
+            self._create_fulltext_indexes(cursor, table_name)
+
+            conn.commit()
+            logger.info(f"VastBase表 {table_name} 创建成功")
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"创建VastBase表 {table_name} 失败: {e}")
+            raise
+        finally:
+            if conn:
+                self._release_connection(conn)
 
     def deleteIdx(self, indexName: str, knowledgebaseId: str):
         """
         Delete an index with given name
         """
-        raise NotImplementedError("Not implemented")
+        table_name = f"{indexName}_{knowledgebaseId}"
+        conn = None
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # 检查表是否存在
+            if not self._table_exists(cursor, table_name):
+                logger.warning(f"VastBase表 {table_name} 不存在，跳过删除")
+                return
+
+            # 删除表（CASCADE会自动删除所有关联的索引）
+            drop_sql = f"DROP TABLE IF EXISTS {self.schema}.{table_name} CASCADE"
+            logger.info(f"删除VastBase表: {table_name}")
+            cursor.execute(drop_sql)
+
+            conn.commit()
+            logger.info(f"VastBase表 {table_name} 删除成功")
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"删除VastBase表 {table_name} 失败: {e}")
+            raise
+        finally:
+            if conn:
+                self._release_connection(conn)
 
     def indexExist(self, indexName: str, knowledgebaseId: str) -> bool:
         """
         Check if an index with given name exists
         """
-        raise NotImplementedError("Not implemented")
+        table_name = f"{indexName}_{knowledgebaseId}"
+        conn = None
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            exists = self._table_exists(cursor, table_name)
+            logger.debug(f"VastBase表 {table_name} 存在检查: {exists}")
+            return exists
+
+        except Exception as e:
+            logger.error(f"检查VastBase表 {table_name} 是否存在失败: {e}")
+            return False
+        finally:
+            if conn:
+                self._release_connection(conn)
+
+    def _table_exists(self, cursor, table_name: str) -> bool:
+        """检查表是否存在"""
+        check_sql = """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_tables
+                WHERE schemaname = %s AND tablename = %s
+            )
+        """
+        cursor.execute(check_sql, (self.schema, table_name))
+        return cursor.fetchone()[0]
+
+    def _build_create_table_sql(self, table_name: str, vectorSize: int) -> str:
+        """构建创建表的SQL语句"""
+        # 从配置加载基础字段
+        schema = self.table_schema.copy()
+
+        # 添加动态向量字段
+        vector_column = f"q_{vectorSize}_vec"
+        schema[vector_column] = {"type": f"floatvector({vectorSize})"}
+
+        # 构建字段定义
+        columns = []
+        primary_keys = []
+
+        for field_name, field_config in schema.items():
+            field_type = field_config["type"]
+
+            # 处理主键
+            if field_config.get("primary_key", False):
+                columns.append(f"{field_name} {field_type}")
+                primary_keys.append(field_name)
+            else:
+                # 处理默认值
+                default_value = field_config.get("default")
+                if default_value is not None:
+                    if isinstance(default_value, str):
+                        columns.append(f"{field_name} {field_type} DEFAULT '{default_value}'")
+                    else:
+                        columns.append(f"{field_name} {field_type} DEFAULT {default_value}")
+                else:
+                    columns.append(f"{field_name} {field_type}")
+
+        # 添加主键约束
+        if primary_keys:
+            columns.append(f"PRIMARY KEY ({', '.join(primary_keys)})")
+
+        # 添加时间戳字段
+        columns.append("created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        columns.append("updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+        create_sql = f"""
+            CREATE TABLE {self.schema}.{table_name} (
+                {',\n                '.join(columns)}
+            )
+        """
+
+        logger.debug(f"表创建SQL: {create_sql}")
+        return create_sql
+
+    def _create_vector_index(self, cursor, table_name: str, vectorSize: int):
+        """创建向量索引"""
+        vector_column = f"q_{vectorSize}_vec"
+        index_name = f"idx_{table_name}_vector"
+
+        # 创建Graph_Index索引（HNSW算法）
+        index_sql = f"""
+            CREATE INDEX {index_name}
+            ON {self.schema}.{table_name}
+            USING graph_index({vector_column} floatvector_l2_ops)
+            WITH (m=16, ef_construction=64)
+        """
+
+        try:
+            logger.debug(f"创建向量索引: {index_name}")
+            cursor.execute(index_sql)
+            logger.info(f"向量索引 {index_name} 创建成功")
+        except Exception as e:
+            logger.warning(f"创建向量索引 {index_name} 失败: {e}")
+            # 向量索引创建失败不影响表创建
+
+    def _create_fulltext_indexes(self, cursor, table_name: str):
+        """创建全文搜索索引（VastBase fulltext索引，基于BM25）"""
+        # 获取需要全文索引的字段
+        fulltext_fields = []
+        for field_name, field_config in self.table_schema.items():
+            if field_config.get("fulltext", False):
+                fulltext_fields.append(field_name)
+
+        if not fulltext_fields:
+            logger.debug(f"表 {table_name} 没有需要创建全文索引的字段")
+            return
+
+        # VastBase fulltext索引支持多列索引
+        # 创建一个综合的全文索引，包含所有需要全文检索的字段
+        index_name = f"idx_{table_name}_fulltext"
+        columns_str = ", ".join(fulltext_fields)
+
+        # 创建VastBase fulltext索引（使用默认BM25算法）
+        # 使用默认词典和默认参数
+        index_sql = f"""
+            CREATE INDEX {index_name}
+            ON {self.schema}.{table_name}
+            USING fulltext({columns_str})
+        """
+
+        try:
+            logger.debug(f"创建VastBase fulltext索引: {index_name} on fields: {columns_str}")
+            cursor.execute(index_sql)
+            logger.info(f"VastBase fulltext索引 {index_name} 创建成功")
+        except Exception as e:
+            logger.warning(f"创建VastBase fulltext索引 {index_name} 失败: {e}")
+            # 全文索引创建失败不影响表创建
+            # 可能的原因：1) VastBase版本不支持 2) 字段类型不兼容
 
     """
     CRUD operations - 待实现
@@ -288,7 +484,7 @@ class VastBaseConnection(DocStoreConnection):
         raise NotImplementedError("Not implemented")
 
     """
-    Milvus compatibility methods - 不需要实现
+    Milvus methods - 不需要实现
     """
 
     def search_by_milvus(self, *args, **kwargs):
