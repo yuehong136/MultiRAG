@@ -37,13 +37,13 @@ def field_keyword(field_name: str):
 class VastBaseConnection(DocStoreConnection):
     def __init__(self):
         # 从配置加载连接参数
-        self.host = settings.VASTBASE.get("host", "127.0.0.1")
-        self.port = settings.VASTBASE.get("port", 5433)
-        self.database = settings.VASTBASE.get("database", "datav")
-        self.user = settings.VASTBASE.get("user", "datav")
-        self.password = settings.VASTBASE.get("password", "")
+        self.host = str(settings.VASTBASE.get("host", "127.0.0.1"))
+        self.port = str(settings.VASTBASE.get("port", 5433))  # 确保是字符串
+        self.database = str(settings.VASTBASE.get("database", "datav"))
+        self.user = str(settings.VASTBASE.get("user", "datav"))
+        self.password = str(settings.VASTBASE.get("password", ""))
         self.max_connections = settings.VASTBASE.get("max_connections", 20)
-        self.schema = settings.VASTBASE.get("schema", "public")
+        self.schema = str(settings.VASTBASE.get("schema", "public"))
 
         self.connection_pool = None
         logger.info(f"使用 VastBase {self.host}:{self.port}/{self.database} 作为文档存储引擎")
@@ -54,28 +54,27 @@ class VastBaseConnection(DocStoreConnection):
                 # 创建连接池
                 self._create_connection_pool()
 
-                # 测试连接
+                # 测试基本连接
                 conn = self._get_connection()
                 cursor = conn.cursor()
 
-                # 注册向量扩展
-                self._register_vector_extension(conn)
-
-                # 检查数据库健康状态
+                # 检查数据库基本连接
                 cursor.execute("SELECT version()")
                 version = cursor.fetchone()[0]
                 logger.info(f"VastBase连接成功，版本: {version}")
 
-                # 检查向量功能支持
+                # 尝试注册向量扩展（非阻塞）
+                self._register_vector_extension(conn)
+
+                # 检查向量功能支持（可选）
                 try:
                     cursor.execute("SELECT vb_version()")
                     vb_version = cursor.fetchone()[0]
-                    if "VECTOR" not in vb_version:
-                        raise Exception("VastBase不支持向量功能，请检查安装和许可证")
-                    logger.info(f"VastBase向量功能可用: {vb_version}")
+                    logger.info(f"VastBase版本信息: {vb_version}")
                 except Exception as e:
-                    logger.warning(f"无法检查向量功能支持: {e}")
+                    logger.debug(f"无法获取VastBase版本信息（可能是旧版本）: {e}")
 
+                cursor.close()
                 self._release_connection(conn)
                 break
 
@@ -112,6 +111,7 @@ class VastBaseConnection(DocStoreConnection):
     def _create_connection_pool(self):
         """创建数据库连接池"""
         try:
+            # 不使用cursor_factory，避免在连接池级别出问题
             self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
                 1,  # minconn
                 self.max_connections,  # maxconn
@@ -120,7 +120,6 @@ class VastBaseConnection(DocStoreConnection):
                 database=self.database,
                 user=self.user,
                 password=self.password,
-                cursor_factory=RealDictCursor,
                 options=f'-c search_path={self.schema}'
             )
             logger.debug(f"VastBase连接池创建成功: 最大连接数 {self.max_connections}")
@@ -164,8 +163,8 @@ class VastBaseConnection(DocStoreConnection):
             logger.error("无法导入vastbase.psycopg2模块，请安装pyvector-vastbase包")
             raise Exception("缺少VastBase向量扩展依赖: pyvector-vastbase") from e
         except Exception as e:
-            logger.error(f"注册VastBase向量扩展失败: {e}")
-            raise
+            # 向量扩展注册失败不应该阻止基本连接
+            logger.warning(f"注册VastBase向量扩展失败（可以稍后重试）: {e}")
 
     def _load_table_schema(self) -> dict:
         """加载表结构配置"""
