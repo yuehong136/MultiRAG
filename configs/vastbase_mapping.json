@@ -1,5 +1,5 @@
 {
-  "id": {"type": "TEXT", "primary_key": true},
+  "id": {"type": "VARCHAR(128)", "primary_key": true},
   "doc_id": {"type": "VARCHAR(128)", "default": ""},
   "kb_id": {"type": "VARCHAR(128)", "default": ""},
   "create_time": {"type": "VARCHAR(50)", "default": ""},
