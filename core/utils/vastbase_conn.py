@@ -472,16 +472,85 @@ class VastBaseConnection(DocStoreConnection):
         """Search with given parameters"""
         raise NotImplementedError("Not implemented")
 
-    def get(self, chunkId: str, indexName: str, knowledgebaseIds: list[str]) -> dict | None:
-        """Get single chunk with given id"""
-        raise NotImplementedError("Not implemented")
-
-    def insert(self, rows: list[dict], indexName: str | list[str], knowledgebaseId: str = None) -> list[str]:
+    def get(self, chunkId: str, indexName: str | list[str], knowledgebaseIds: list[str]) -> dict | None:
         """
-        Insert or update a bulk of rows
+        Get single chunk with given id
 
         Args:
-            rows: 要插入的数据列表
+            chunkId: 文档块ID
+            indexName: 索引名称（字符串或字符串列表）
+            knowledgebaseIds: 知识库ID列表
+
+        Returns:
+            dict | None: 文档数据字典，如果不存在返回None
+        """
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return None
+            base_index_name = indexName[0]  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {indexName[0]}")
+        elif isinstance(indexName, str):
+            base_index_name = indexName
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return None
+
+        if not isinstance(knowledgebaseIds, list):
+            logger.error("knowledgebaseIds必须是列表")
+            return None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # 遍历所有知识库ID，查找文档
+            for kb_id in knowledgebaseIds:
+                table_name = f"{base_index_name}_{kb_id}"
+
+                # 检查表是否存在
+                if not self._table_exists(cursor, table_name):
+                    logger.warning(f"表 {table_name} 不存在，跳过")
+                    continue
+
+                # 查询文档
+                query_sql = f"""
+                    SELECT * FROM {self.schema}.{table_name}
+                    WHERE id = %s
+                    LIMIT 1
+                """
+
+                cursor.execute(query_sql, (chunkId,))
+                result = cursor.fetchone()
+
+                if result:
+                    # 找到文档，构建字典并进行数据反序列化
+                    # 获取列名
+                    columns = [desc[0] for desc in cursor.description]
+                    doc = dict(zip(columns, result))
+                    doc = self._deserialize_document(doc)
+                    logger.debug(f"从 {table_name} 找到文档 {chunkId}")
+                    return doc
+
+            logger.debug(f"在所有知识库中未找到文档 {chunkId}")
+            return None
+
+        except Exception as e:
+            logger.error(f"获取文档 {chunkId} 失败: {e}")
+            return None
+
+        finally:
+            if conn:
+                self._release_connection(conn)
+
+    def insert(self, documents: list[dict], indexName: str | list[str], knowledgebaseId: str = None) -> list[str]:
+        """
+        Insert or update a bulk of documents
+
+        Args:
+            documents: 要插入的数据列表 # 原本是 rows，为了和task_executor中的兼容，将参数名改为 documents
             indexName: 索引名称（字符串或字符串列表）
             knowledgebaseId: 知识库ID
 
@@ -501,7 +570,7 @@ class VastBaseConnection(DocStoreConnection):
             logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
             return [f"索引名称类型错误: {type(indexName)}"]
 
-        if not rows:
+        if not documents:
             logger.warning("没有数据需要插入")
             return []
 
@@ -517,7 +586,7 @@ class VastBaseConnection(DocStoreConnection):
                 vector_size = 0
                 pattern = re.compile(r"q_(\d+)_vec")
 
-                for row in rows:
+                for row in documents:
                     for key in row.keys():
                         match = pattern.match(key)
                         if match:
@@ -545,12 +614,24 @@ class VastBaseConnection(DocStoreConnection):
                 WHERE table_schema = %s AND table_name = %s
             """, (self.schema, table_name))
 
-            columns_info = {row['column_name']: row for row in cursor.fetchall()}
+            columns_info = {}
+            for row in cursor.fetchall():
+                # 由于没有使用RealDictCursor，需要手动构建字典
+                columns_info[row[0]] = {
+                    'column_name': row[0],
+                    'data_type': row[1],
+                    'udt_name': row[2]
+                }
 
             # 预处理数据
             processed_rows = []
-            for row in rows:
+            for row in documents:
                 new_row = copy.deepcopy(row)
+
+                # 移除不需要存储的内部字段
+                new_row.pop("pk", None)
+                new_row.pop("_id", None)
+                new_row.pop("vector", None)  # 移除通用vector字段
 
                 # 验证必须有id字段
                 if "id" not in new_row:
@@ -579,7 +660,13 @@ class VastBaseConnection(DocStoreConnection):
                     # 处理位置信息字段（嵌套数组展平为十六进制字符串）
                     elif k == "position_int":
                         if isinstance(v, list) and v:
-                            flat_array = [num for sublist in v for num in sublist] if isinstance(v[0], list) else v
+                            # 展平嵌套结构（支持列表、元组等可迭代对象）
+                            flat_array = []
+                            for item in v:
+                                if isinstance(item, (list, tuple)):
+                                    flat_array.extend(item)
+                                else:
+                                    flat_array.append(item)
                             new_row[k] = "_".join(f"{num:08x}" for num in flat_array)
                         else:
                             new_row[k] = ""
