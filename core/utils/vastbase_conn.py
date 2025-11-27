@@ -218,11 +218,22 @@ class VastBaseConnection(DocStoreConnection):
     Table operations
     """
 
-    def createIdx(self, indexName: str, knowledgebaseId: str, vectorSize: int):
+    def createIdx(self, indexName: str | list[str], knowledgebaseId: str, vectorSize: int):
         """
         Create an index with given name
         """
-        table_name = f"{indexName}_{knowledgebaseId}"
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return
+            table_name = f"{indexName[0]}_{knowledgebaseId}"  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {indexName[0]}")
+        elif isinstance(indexName, str):
+            table_name = f"{indexName}_{knowledgebaseId}"
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return
         conn = None
 
         try:
@@ -263,11 +274,22 @@ class VastBaseConnection(DocStoreConnection):
             if conn:
                 self._release_connection(conn)
 
-    def deleteIdx(self, indexName: str, knowledgebaseId: str):
+    def deleteIdx(self, indexName: str | list[str], knowledgebaseId: str):
         """
         Delete an index with given name
         """
-        table_name = f"{indexName}_{knowledgebaseId}"
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return
+            table_name = f"{indexName[0]}_{knowledgebaseId}"  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {indexName[0]}")
+        elif isinstance(indexName, str):
+            table_name = f"{indexName}_{knowledgebaseId}"
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return
         conn = None
 
         try:
@@ -296,11 +318,22 @@ class VastBaseConnection(DocStoreConnection):
             if conn:
                 self._release_connection(conn)
 
-    def indexExist(self, indexName: str, knowledgebaseId: str) -> bool:
+    def indexExist(self, indexName: str | list[str], knowledgebaseId: str = None) -> bool:
         """
         Check if an index with given name exists
         """
-        table_name = f"{indexName}_{knowledgebaseId}"
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return False
+            table_name = f"{indexName[0]}_{knowledgebaseId}"  # 取第一个元素
+            logger.debug(f"索引名称是列表，使用第一个元素: {indexName[0]}")
+        elif isinstance(indexName, str):
+            table_name = f"{indexName}_{knowledgebaseId}"
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return False
         conn = None
 
         try:
