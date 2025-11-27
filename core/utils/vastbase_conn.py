@@ -477,9 +477,189 @@ class VastBaseConnection(DocStoreConnection):
         """Get single chunk with given id"""
         raise NotImplementedError("Not implemented")
 
-    def insert(self, rows: list[dict], indexName: str, knowledgebaseId: str) -> list[str]:
-        """Update or insert a bulk of rows"""
-        raise NotImplementedError("Not implemented")
+    def insert(self, rows: list[dict], indexName: str | list[str], knowledgebaseId: str = None) -> list[str]:
+        """
+        Insert or update a bulk of rows
+
+        Args:
+            rows: 要插入的数据列表
+            indexName: 索引名称（字符串或字符串列表）
+            knowledgebaseId: 知识库ID
+
+        Returns:
+            list[str]: 空列表表示成功，否则返回错误信息列表
+        """
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return ["索引名称列表为空"]
+            table_name = f"{indexName[0]}_{knowledgebaseId}"
+            logger.debug(f"索引名称是列表，使用第一个元素: {indexName[0]}")
+        elif isinstance(indexName, str):
+            table_name = f"{indexName}_{knowledgebaseId}"
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return [f"索引名称类型错误: {type(indexName)}"]
+
+        if not rows:
+            logger.warning("没有数据需要插入")
+            return []
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            self._register_vector_extension(conn)
+            cursor = conn.cursor()
+
+            # 检查表是否存在，不存在则创建
+            if not self._table_exists(cursor, table_name):
+                # 从数据中推断向量维度
+                vector_size = 0
+                pattern = re.compile(r"q_(\d+)_vec")
+
+                for row in rows:
+                    for key in row.keys():
+                        match = pattern.match(key)
+                        if match:
+                            vector_size = int(match.group(1))
+                            break
+                    if vector_size > 0:
+                        break
+
+                if vector_size == 0:
+                    raise ValueError(f"无法从数据中确定向量维度，无法创建表 {table_name}")
+
+                logger.info(f"表 {table_name} 不存在，自动创建（向量维度: {vector_size}）")
+                # 释放当前连接，因为createIdx会获取新连接
+                self._release_connection(conn)
+                self.createIdx(indexName, knowledgebaseId, vector_size)
+                # 重新获取连接
+                conn = self._get_connection()
+                self._register_vector_extension(conn)
+                cursor = conn.cursor()
+
+            # 获取表结构信息
+            cursor.execute(f"""
+                SELECT column_name, data_type, udt_name
+                FROM information_schema.columns
+                WHERE table_schema = %s AND table_name = %s
+            """, (self.schema, table_name))
+
+            columns_info = {row['column_name']: row for row in cursor.fetchall()}
+
+            # 预处理数据
+            processed_rows = []
+            for row in rows:
+                new_row = copy.deepcopy(row)
+
+                # 验证必须有id字段
+                if "id" not in new_row:
+                    raise ValueError("每条记录必须包含'id'字段")
+
+                # 处理特殊字段
+                for k, v in list(new_row.items()):
+                    # 处理关键词字段（以_kwd结尾的字段，列表转字符串）
+                    if field_keyword(k):
+                        if isinstance(v, list):
+                            new_row[k] = "###".join(str(item) for item in v)
+                        else:
+                            new_row[k] = str(v) if v is not None else ""
+
+                    # 处理特征字段（以_feas结尾，转JSON字符串）
+                    elif re.search(r"_feas$", k):
+                        new_row[k] = json.dumps(v) if v is not None else "{}"
+
+                    # 处理kb_id字段
+                    elif k == "kb_id":
+                        if isinstance(v, list):
+                            new_row[k] = v[0] if v else ""
+                        else:
+                            new_row[k] = str(v) if v is not None else ""
+
+                    # 处理位置信息字段（嵌套数组展平为十六进制字符串）
+                    elif k == "position_int":
+                        if isinstance(v, list) and v:
+                            flat_array = [num for sublist in v for num in sublist] if isinstance(v[0], list) else v
+                            new_row[k] = "_".join(f"{num:08x}" for num in flat_array)
+                        else:
+                            new_row[k] = ""
+
+                    # 处理页码和顶部位置字段
+                    elif k in ["page_num_int", "top_int"]:
+                        if isinstance(v, list) and v:
+                            new_row[k] = "_".join(f"{num:08x}" for num in v)
+                        else:
+                            new_row[k] = ""
+
+                    # 向量字段保持原样
+                    elif k.endswith("_vec"):
+                        # 确保向量是列表格式
+                        if isinstance(v, list):
+                            new_row[k] = v
+                        else:
+                            new_row[k] = list(v) if hasattr(v, '__iter__') else v
+
+                    # 其他字段保持原样
+                    else:
+                        new_row[k] = v
+
+                processed_rows.append(new_row)
+
+            # 先删除已存在的记录（使用UPSERT模式）
+            ids = [row["id"] for row in processed_rows]
+            if ids:
+                # 构建删除语句
+                placeholders = ",".join(["%s"] * len(ids))
+                delete_sql = f"DELETE FROM {self.schema}.{table_name} WHERE id IN ({placeholders})"
+
+                try:
+                    cursor.execute(delete_sql, ids)
+                    deleted_count = cursor.rowcount
+                    if deleted_count > 0:
+                        logger.debug(f"删除了 {deleted_count} 条现有记录")
+                except Exception as e:
+                    logger.debug(f"删除现有记录时出错（可能不存在）: {e}")
+
+            # 批量插入新记录
+            # 获取所有字段名（从第一条记录）
+            if processed_rows:
+                fields = list(processed_rows[0].keys())
+
+                # 构建INSERT语句
+                columns_str = ", ".join(fields)
+                placeholders = ", ".join(["%s"] * len(fields))
+                insert_sql = f"""
+                    INSERT INTO {self.schema}.{table_name} ({columns_str})
+                    VALUES ({placeholders})
+                """
+
+                # 准备批量插入数据
+                insert_data = []
+                for row in processed_rows:
+                    values = [row.get(field) for field in fields]
+                    insert_data.append(values)
+
+                # 执行批量插入
+                from psycopg2.extras import execute_batch
+                execute_batch(cursor, insert_sql, insert_data)
+
+                conn.commit()
+                logger.info(f"成功插入 {len(processed_rows)} 条记录到 {table_name}")
+                logger.debug(f"VastBase inserted into {table_name}, ids: {ids[:5]}{'...' if len(ids) > 5 else ''}")
+
+            return []  # 成功返回空列表
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            error_msg = f"插入到 {table_name} 失败: {str(e)}"
+            logger.error(error_msg)
+            return [error_msg]  # 返回错误信息
+
+        finally:
+            if conn:
+                self._release_connection(conn)
 
     def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: str) -> bool:
         """Update rows with given conjunctive equivalent filtering condition"""
