@@ -6,6 +6,7 @@ from enum import IntEnum, Enum
 
 import core.utils
 import core.utils.milvus_conn
+import core.utils.vastbase_conn
 # import core.utils.infinity_conn, opensearch_conn
 from api.constants import MULTI_RAG_SERVICE_NAME
 from api.utils.configs import get_base_config
@@ -186,6 +187,8 @@ def init_settings():
         docStoreConn = core.utils.opensearch_conn.OSConnection()
     elif lower_case_doc_engine == "infinity":
         docStoreConn = core.utils.infinity_conn.InfinityConnection()
+    elif lower_case_doc_engine == 'vastbase':
+        docStoreConn = core.utils.vastbase_conn.VastBaseConnection()
     else:
         raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
 
