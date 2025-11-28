@@ -747,13 +747,481 @@ class VastBaseConnection(DocStoreConnection):
             if conn:
                 self._release_connection(conn)
 
-    def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: str) -> bool:
-        """Update rows with given conjunctive equivalent filtering condition"""
-        raise NotImplementedError("Not implemented")
+    def update(self, condition: dict, newValue: dict, indexName: str | list[str], knowledgebaseId: str) -> bool:
+        """
+        Update rows with given conjunctive equivalent filtering condition
 
-    def delete(self, condition: dict, indexName: str, knowledgebaseId: str) -> int:
-        """Delete rows with given conjunctive equivalent filtering condition"""
-        raise NotImplementedError("Not implemented")
+        Args:
+            condition: 更新条件字典
+            newValue: 新值字典（支持remove和add特殊操作）
+            indexName: 索引名称（字符串或字符串列表）
+            knowledgebaseId: 知识库ID
+
+        Returns:
+            bool: 更新是否成功
+        """
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return False
+            table_name = f"{indexName[0]}_{knowledgebaseId}"
+            logger.debug(f"索引名称是列表，使用第一个元素: {indexName[0]}")
+        elif isinstance(indexName, str):
+            table_name = f"{indexName}_{knowledgebaseId}"
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return False
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            self._register_vector_extension(conn)
+            cursor = conn.cursor()
+
+            # 检查表是否存在
+            if not self._table_exists(cursor, table_name):
+                logger.warning(f"表 {table_name} 不存在，无法更新")
+                return False
+
+            # 获取表结构信息
+            cursor.execute(f"""
+                SELECT column_name, data_type, column_default
+                FROM information_schema.columns
+                WHERE table_schema = %s AND table_name = %s
+            """, (self.schema, table_name))
+
+            columns_info = {}
+            for row in cursor.fetchall():
+                # 由于没有使用RealDictCursor，需要手动构建字典
+                columns_info[row[0]] = {
+                    'column_name': row[0],
+                    'data_type': row[1],
+                    'column_default': row[2]
+                }
+
+            # 深拷贝newValue以避免修改原始数据
+            update_values = copy.deepcopy(newValue)
+
+            # 移除不需要存储的内部字段
+            update_values.pop("pk", None)
+            update_values.pop("_id", None)
+            update_values.pop("vector", None)  # 移除通用vector字段
+
+            # 处理特殊操作
+            remove_operations = {}
+            add_operations = {}
+
+            # 提取remove操作
+            if "remove" in update_values:
+                remove_val = update_values.pop("remove")
+                if isinstance(remove_val, str):
+                    # 移除整个字段（设置为默认值）
+                    if remove_val in columns_info:
+                        col_info = columns_info[remove_val]
+                        default_val = col_info.get('column_default')
+                        if default_val:
+                            update_values[remove_val] = default_val
+                        elif col_info['data_type'] in ['character varying', 'text']:
+                            update_values[remove_val] = ""
+                        elif col_info['data_type'] in ['integer', 'bigint']:
+                            update_values[remove_val] = 0
+                        elif col_info['data_type'] in ['double precision', 'real']:
+                            update_values[remove_val] = 0.0
+                elif isinstance(remove_val, dict):
+                    # 从列表字段中移除特定元素
+                    remove_operations = remove_val
+
+            # 提取add操作
+            if "add" in update_values:
+                add_val = update_values.pop("add")
+                if isinstance(add_val, dict):
+                    add_operations = add_val
+
+            # 处理remove和add操作（需要先查询再更新）
+            if remove_operations or add_operations:
+                # 构建WHERE条件来查询需要更新的记录
+                where_clauses, params = self._build_where_clause(condition)
+
+                if where_clauses:
+                    where_str = " AND ".join(where_clauses)
+                    select_sql = f"SELECT * FROM {self.schema}.{table_name} WHERE {where_str}"
+
+                    cursor.execute(select_sql, params)
+                    rows_to_update = cursor.fetchall()
+
+                    # 获取列名
+                    columns = [desc[0] for desc in cursor.description]
+
+                    for row in rows_to_update:
+                        row_dict = dict(zip(columns, row))
+                        row_id = row_dict['id']
+
+                        # 处理remove操作
+                        for field, value_to_remove in remove_operations.items():
+                            if field in row_dict and row_dict[field]:
+                                # 反序列化字段值
+                                if field_keyword(field):
+                                    current_values = row_dict[field].split("###") if row_dict[field] else []
+                                    if value_to_remove in current_values:
+                                        current_values.remove(value_to_remove)
+                                    update_values[field] = "###".join(current_values)
+
+                        # 处理add操作
+                        for field, value_to_add in add_operations.items():
+                            if field in row_dict:
+                                # 反序列化字段值
+                                if field_keyword(field):
+                                    current_values = row_dict[field].split("###") if row_dict[field] else []
+                                    if value_to_add not in current_values:
+                                        current_values.append(value_to_add)
+                                    update_values[field] = "###".join(current_values)
+                                elif isinstance(row_dict[field], str):
+                                    update_values[field] = row_dict[field] + str(value_to_add)
+                            else:
+                                update_values[field] = value_to_add
+
+                        # 更新这一行（如果有remove/add操作产生的更新）
+                        if remove_operations or add_operations:
+                            self._update_single_row(cursor, table_name, row_id, update_values)
+
+            # 预处理更新值
+            processed_values = {}
+            for k, v in update_values.items():
+                # 处理关键词字段
+                if field_keyword(k):
+                    if isinstance(v, list):
+                        processed_values[k] = "###".join(str(item) for item in v)
+                    else:
+                        processed_values[k] = str(v) if v is not None else ""
+
+                # 处理特征字段
+                elif re.search(r"_feas$", k):
+                    processed_values[k] = json.dumps(v) if v is not None else "{}"
+
+                # 处理kb_id字段
+                elif k == "kb_id":
+                    if isinstance(v, list):
+                        processed_values[k] = v[0] if v else ""
+                    else:
+                        processed_values[k] = str(v) if v is not None else ""
+
+                # 处理位置信息字段
+                elif k == "position_int":
+                    if isinstance(v, list) and v:
+                        # 展平嵌套结构（支持列表、元组等可迭代对象）
+                        flat_array = []
+                        for item in v:
+                            if isinstance(item, (list, tuple)):
+                                flat_array.extend(item)
+                            else:
+                                flat_array.append(item)
+                        processed_values[k] = "_".join(f"{num:08x}" for num in flat_array)
+                    else:
+                        processed_values[k] = ""
+
+                # 处理页码和顶部位置字段
+                elif k in ["page_num_int", "top_int"]:
+                    if isinstance(v, list) and v:
+                        processed_values[k] = "_".join(f"{num:08x}" for num in v)
+                    else:
+                        processed_values[k] = ""
+
+                # 向量字段保持原样
+                elif k.endswith("_vec"):
+                    if isinstance(v, list):
+                        processed_values[k] = v
+                    else:
+                        processed_values[k] = list(v) if hasattr(v, '__iter__') else v
+
+                # 其他字段保持原样
+                else:
+                    processed_values[k] = v
+
+            # 如果有常规更新值，执行批量更新
+            if processed_values:
+                # 构建WHERE条件
+                where_clauses, params = self._build_where_clause(condition)
+
+                if not where_clauses:
+                    logger.warning("没有有效的更新条件")
+                    return False
+
+                where_str = " AND ".join(where_clauses)
+
+                # 构建SET子句
+                set_clauses = []
+                update_params = []
+                for k, v in processed_values.items():
+                    set_clauses.append(f"{k} = %s")
+                    update_params.append(v)
+
+                # 合并参数
+                all_params = update_params + params
+
+                # 构建UPDATE语句
+                set_str = ", ".join(set_clauses)
+                update_sql = f"""
+                    UPDATE {self.schema}.{table_name}
+                    SET {set_str}
+                    WHERE {where_str}
+                """
+
+                logger.debug(f"执行更新: {update_sql}")
+                cursor.execute(update_sql, all_params)
+                updated_count = cursor.rowcount
+
+                logger.info(f"在 {table_name} 中更新了 {updated_count} 条记录")
+
+            conn.commit()
+            return True
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"更新 {table_name} 失败: {e}")
+            return False
+
+        finally:
+            if conn:
+                self._release_connection(conn)
+
+    def _build_where_clause(self, condition: dict) -> tuple[list[str], list]:
+        """
+        构建WHERE子句
+
+        Returns:
+            tuple: (where_clauses列表, 参数列表)
+        """
+        where_clauses = []
+        params = []
+
+        for k, v in condition.items():
+            # 跳过内部字段
+            if k in ("_id", "pk", "vector") or v is None:
+                continue
+
+            # 处理exists条件
+            if k == "exists":
+                where_clauses.append(f"{v} IS NOT NULL AND {v} != ''")
+                continue
+
+            # 处理must_not条件
+            if k == "must_not":
+                if isinstance(v, dict):
+                    for kk, vv in v.items():
+                        if kk == "exists":
+                            where_clauses.append(f"({vv} IS NULL OR {vv} = '')")
+                continue
+
+            # 处理列表值（IN条件）
+            if isinstance(v, list):
+                if not v:
+                    continue
+                placeholders = ",".join(["%s"] * len(v))
+                where_clauses.append(f"{k} IN ({placeholders})")
+                params.extend(v)
+
+            # 处理字符串值
+            elif isinstance(v, str):
+                where_clauses.append(f"{k} = %s")
+                params.append(v)
+
+            # 处理数字值
+            elif isinstance(v, (int, float)):
+                where_clauses.append(f"{k} = %s")
+                params.append(v)
+
+            else:
+                logger.warning(f"不支持的条件类型: {k}={v} (type={type(v)})")
+
+        return where_clauses, params
+
+    def _update_single_row(self, cursor, table_name: str, row_id: str, update_values: dict):
+        """更新单行记录"""
+        if not update_values:
+            return
+
+        set_clauses = []
+        params = []
+
+        for k, v in update_values.items():
+            set_clauses.append(f"{k} = %s")
+            params.append(v)
+
+        params.append(row_id)
+
+        set_str = ", ".join(set_clauses)
+        update_sql = f"""
+            UPDATE {self.schema}.{table_name}
+            SET {set_str}
+            WHERE id = %s
+        """
+
+        cursor.execute(update_sql, params)
+
+    def _deserialize_document(self, doc: dict) -> dict:
+        """
+        反序列化文档数据（将存储格式转换为应用格式）
+
+        Args:
+            doc: 原始文档字典
+
+        Returns:
+            dict: 反序列化后的文档字典
+        """
+        result = {}
+
+        for k, v in doc.items():
+            # 跳过内部字段
+            if k in ['created_at', 'updated_at']:
+                continue
+
+            # 处理关键词字段
+            if field_keyword(k):
+                if v:
+                    result[k] = [item for item in v.split("###") if item]
+                else:
+                    result[k] = []
+
+            # 处理特征字段
+            elif re.search(r"_feas$", k):
+                if v:
+                    result[k] = json.loads(v)
+                else:
+                    result[k] = {}
+
+            # 处理位置信息字段
+            elif k == "position_int":
+                if v:
+                    arr = [int(hex_val, 16) for hex_val in v.split("_")]
+                    # 转换回嵌套数组（每5个一组）
+                    result[k] = [arr[i:i + 5] for i in range(0, len(arr), 5)]
+                else:
+                    result[k] = []
+
+            # 处理页码和顶部位置字段
+            elif k in ["page_num_int", "top_int"]:
+                if v:
+                    result[k] = [int(hex_val, 16) for hex_val in v.split("_")]
+                else:
+                    result[k] = []
+
+            # 向量字段保持原样（已经是列表）
+            elif k.endswith("_vec"):
+                result[k] = list(v) if v is not None else []
+
+            # 其他字段保持原样
+            else:
+                result[k] = v
+
+        return result
+
+    def delete(self, condition: dict, indexName: str | list[str], knowledgebaseId: str) -> int:
+        """
+        Delete rows with given conjunctive equivalent filtering condition
+
+        Args:
+            condition: 删除条件字典
+            indexName: 索引名称（字符串或字符串列表）
+            knowledgebaseId: 知识库ID
+
+        Returns:
+            int: 删除的记录数
+        """
+        # 处理索引名称参数
+        if isinstance(indexName, list):
+            if not indexName:  # 如果是空列表
+                logger.error("索引名称列表为空")
+                return 0
+            table_name = f"{indexName[0]}_{knowledgebaseId}"
+            logger.debug(f"索引名称是列表，使用第一个元素: {indexName[0]}")
+        elif isinstance(indexName, str):
+            table_name = f"{indexName}_{knowledgebaseId}"
+        else:
+            logger.error(f"索引名称必须是字符串或字符串列表，收到: {type(indexName)}")
+            return 0
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # 检查表是否存在
+            if not self._table_exists(cursor, table_name):
+                logger.warning(f"表 {table_name} 不存在，跳过删除")
+                return 0
+
+            # 构建WHERE条件
+            where_clauses = []
+            params = []
+
+            for k, v in condition.items():
+                # 跳过内部字段
+                if k in ("_id", "pk", "vector") or v is None:
+                    continue
+
+                # 处理exists条件（特殊处理）
+                if k == "exists":
+                    # PostgreSQL: 字段不为NULL且不为空
+                    where_clauses.append(f"{v} IS NOT NULL AND {v} != ''")
+                    continue
+
+                # 处理must_not条件
+                if k == "must_not":
+                    if isinstance(v, dict):
+                        for kk, vv in v.items():
+                            if kk == "exists":
+                                # 字段为NULL或为空
+                                where_clauses.append(f"({vv} IS NULL OR {vv} = '')")
+                    continue
+
+                # 处理列表值（IN条件）
+                if isinstance(v, list):
+                    if not v:
+                        continue
+                    placeholders = ",".join(["%s"] * len(v))
+                    where_clauses.append(f"{k} IN ({placeholders})")
+                    params.extend(v)
+
+                # 处理字符串值
+                elif isinstance(v, str):
+                    where_clauses.append(f"{k} = %s")
+                    params.append(v)
+
+                # 处理数字值
+                elif isinstance(v, (int, float)):
+                    where_clauses.append(f"{k} = %s")
+                    params.append(v)
+
+                else:
+                    logger.warning(f"不支持的条件类型: {k}={v} (type={type(v)})")
+
+            # 构建DELETE语句
+            if where_clauses:
+                where_str = " AND ".join(where_clauses)
+                delete_sql = f"DELETE FROM {self.schema}.{table_name} WHERE {where_str}"
+            else:
+                logger.warning("没有有效的删除条件")
+                return 0
+
+            logger.debug(f"执行删除: {delete_sql}, params: {params}")
+            cursor.execute(delete_sql, params)
+            deleted_count = cursor.rowcount
+
+            conn.commit()
+            logger.info(f"从 {table_name} 删除了 {deleted_count} 条记录")
+            return deleted_count
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"从 {table_name} 删除记录失败: {e}")
+            return 0
+
+        finally:
+            if conn:
+                self._release_connection(conn)
 
     """
     Helper functions for search result - 待实现
@@ -781,23 +1249,3 @@ class VastBaseConnection(DocStoreConnection):
     def sql(self, sql: str, fetch_size: int, format: str):
         """Run the sql generated by text-to-sql"""
         raise NotImplementedError("Not implemented")
-
-    """
-    Milvus methods - 不需要实现
-    """
-
-    def search_by_milvus(self, *args, **kwargs):
-        """Not applicable for VastBase"""
-        raise NotImplementedError("VastBase不支持Milvus兼容接口")
-
-    def describe_collection(self, *args, **kwargs):
-        """Not applicable for VastBase"""
-        raise NotImplementedError("VastBase不支持Milvus兼容接口")
-
-    def has_collection(self, *args, **kwargs):
-        """Not applicable for VastBase"""
-        raise NotImplementedError("VastBase不支持Milvus兼容接口")
-
-    def query(self, *args, **kwargs):
-        """Not applicable for VastBase"""
-        raise NotImplementedError("VastBase不支持Milvus兼容接口")
