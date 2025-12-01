@@ -123,7 +123,8 @@ user_default_llm:
       api_key: '622531847aa342ad9da7e62b83930d56.mV8uJ8BoWMa8lfra'
       base_url: ''
     embedding_model:
-      name: 'BAAI/bge-large-zh-v1.5@BAAI'
+      api_key: 'xxx'
+      base_url: 'http://192.168.139.127:6380'
     rerank_model: 'BAAI/bge-reranker-v2-m3'
     asr_model:
       model: 'whisper-large-v3' # alias of name
