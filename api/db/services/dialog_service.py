@@ -22,7 +22,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from api.db import LLMType, StatusEnum, ParserType
-from api.db.db_models import Dialog, Conversation, db_connection
+from api.db.db_models import Dialog
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -531,7 +531,8 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     similarity_threshold=0.2,
                     vector_similarity_weight=0.3,
                     doc_ids=attachments,
-                    search_mode=dialog.search_mode
+                    search_mode=dialog.search_mode,
+                    kb_ids=dialog.kb_ids
                 )
             )
 
@@ -558,7 +559,8 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     aggs=False,
                     rerank_mdl=rerank_mdl,
                     rank_feature=label_question(db, " ".join(questions), kbs),
-                    search_mode=dialog.search_mode
+                    search_mode=dialog.search_mode,
+                    kb_ids = dialog.kb_ids
                 )
                 if prompt_config.get("toc_enhance"):
                     cks = retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n)

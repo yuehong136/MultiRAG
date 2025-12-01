@@ -6,7 +6,9 @@ from enum import IntEnum, Enum
 
 import core.utils
 import core.utils.milvus_conn
-# import core.utils.infinity_conn, opensearch_conn
+import core.utils.es_conn
+import core.utils.infinity_conn
+import core.utils.opensearch_conn
 from api.constants import MULTI_RAG_SERVICE_NAME
 from api.utils.configs import get_base_config
 from api.utils.file_utils import get_project_base_directory
@@ -47,7 +49,10 @@ HTTP_APP_KEY = None
 GITHUB_OAUTH = None
 FEISHU_OAUTH = None
 OAUTH_CONFIG = None
-DOC_ENGINE = None
+DOC_ENGINE = os.getenv('DOC_ENGINE', 'elasticsearch')
+DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
+
+
 docStoreConn = None
 
 retriever = None
@@ -173,19 +178,52 @@ def init_settings():
 
     OAUTH_CONFIG = get_base_config("oauth", {})
 
-    global DOC_ENGINE, docStoreConn, retriever, kg_retriever
+    global DOC_ENGINE, DOC_ENGINE_INFINITY, docStoreConn, ES, OB, OS, INFINITY
     DOC_ENGINE = os.environ.get("DOC_ENGINE", "milvus")
-    # DOC_ENGINE = os.environ.get('DOC_ENGINE', "opensearch")
+    DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
     lower_case_doc_engine = DOC_ENGINE.lower()
-    if lower_case_doc_engine == "milvus":
+    if lower_case_doc_engine == "elasticsearch":
+        ES = get_base_config("es", {})
+        docStoreConn = core.utils.es_conn.ESConnection()
+    elif lower_case_doc_engine == "milvus":
         docStoreConn = core.utils.milvus_conn.MilvusConnection()
-    elif lower_case_doc_engine == "opensearch":
-        docStoreConn = core.utils.opensearch_conn.OSConnection()
     elif lower_case_doc_engine == "infinity":
+        INFINITY = get_base_config("infinity", {"uri": "infinity:23817"})
         docStoreConn = core.utils.infinity_conn.InfinityConnection()
+    elif lower_case_doc_engine == "opensearch":
+        OS = get_base_config("os", {})
+        docStoreConn = core.utils.opensearch_conn.OSConnection()
     else:
         raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
 
+    # global DOC_ENGINE, docStoreConn, retriever, kg_retriever
+    # # 动态加载对应的向量数据库配置到 core.settings
+    # from core import settings as core_settings
+    # if lower_case_doc_engine == "elasticsearch":
+    #     core_settings.ES = get_base_config("es", {})
+    # elif lower_case_doc_engine == "opensearch":
+    #     core_settings.OS = get_base_config("os", {})
+    # elif lower_case_doc_engine == "milvus":
+    #     core_settings.MILVUS = get_base_config("milvus", {})
+    # elif lower_case_doc_engine == "infinity":
+    #     core_settings.INFINITY = get_base_config("infinity", {"uri": "infinity:23817"})
+
+    # # 创建向量数据库连接
+    # if lower_case_doc_engine == "milvus":
+    #     docStoreConn = core.utils.milvus_conn.MilvusConnection()
+    # elif lower_case_doc_engine == "elasticsearch":
+    #     from core.utils import es_conn
+    #     docStoreConn = es_conn.ESConnection()
+    # elif lower_case_doc_engine == "opensearch":
+    #     from core.utils import opensearch_conn
+    #     docStoreConn = opensearch_conn.OSConnection()
+    # elif lower_case_doc_engine == "infinity":
+    #     from core.utils import infinity_conn
+    #     docStoreConn = infinity_conn.InfinityConnection()
+    # else:
+    #     raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
+
+    global retriever, kg_retriever
     retriever = search.Dealer(docStoreConn)
     from graphrag import search as kg_search
 

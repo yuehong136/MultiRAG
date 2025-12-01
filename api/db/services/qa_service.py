@@ -464,31 +464,47 @@ class QATemplateStorageService:
             failed_qa_ids = []
             success_qa_ids = []
 
+            db_type = settings.docStoreConn.dbType()
             for qa_id in qa_ids:
                 try:
-                    # 构建删除条件：匹配指定租户和qa_id的所有记录
-                    delete_expr = f'tenant_id == "{tenant_id}" && qa_id == "{qa_id}"'
-                    
-                    # 先查询要删除的记录数量
-                    query_results = settings.docStoreConn.query(
-                        collection_name=collection_name,
-                        filter=delete_expr,
-                        output_fields=["id"]
-                    )
-                    
-                    if not query_results:
-                        logger.warning(f"未找到租户 {tenant_id} 中 qa_id 为 {qa_id} 的模板")
-                        failed_qa_ids.append(qa_id)
-                        continue
+                    if db_type == "milvus":
+                        # Milvus 使用 filter 表达式
+                        delete_expr = f'tenant_id == "{tenant_id}" && qa_id == "{qa_id}"'
+                        
+                        # 先查询要删除的记录数量
+                        query_results = settings.docStoreConn.query(
+                            collection_name=collection_name,
+                            filter=delete_expr,
+                            output_fields=["id"]
+                        )
+                        
+                        if not query_results:
+                            logger.warning(f"未找到租户 {tenant_id} 中 qa_id 为 {qa_id} 的模板")
+                            failed_qa_ids.append(qa_id)
+                            continue
 
-                    # 执行删除操作
-                    delete_result = settings.docStoreConn.delete(
-                        collection_name=collection_name,
-                        filter=delete_expr
-                    )
+                        # 执行删除操作
+                        delete_result = settings.docStoreConn.delete(
+                            collection_name=collection_name,
+                            filter=delete_expr
+                        )
+                        total_deleted += len(query_results)
+                    else:
+                        # ES/OpenSearch 使用 condition 参数
+                        delete_result = settings.docStoreConn.delete(
+                            condition={"tenant_id": tenant_id, "qa_id": qa_id},
+                            indexName=collection_name,
+                            knowledgebaseId=""
+                        )
+                        # ES delete 返回删除的数量
+                        deleted_count = delete_result if isinstance(delete_result, int) else 0
+                        if deleted_count == 0:
+                            logger.warning(f"未找到租户 {tenant_id} 中 qa_id 为 {qa_id} 的模板")
+                            failed_qa_ids.append(qa_id)
+                            continue
+                        total_deleted += deleted_count
 
                     logger.info(f"删除QA模板 {qa_id} 结果: {delete_result}")
-                    total_deleted += len(query_results)
                     success_qa_ids.append(qa_id)
 
                 except Exception as e:

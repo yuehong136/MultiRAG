@@ -2393,19 +2393,28 @@ def run(
 
             # 构建 Milvus 集合名称
             collection_name = search.index_name_one(tenant_id, kb.name)
-            # 检查集合是否存在并删除 Milvus 中的数据
+            # 检查集合是否存在并删除向量数据库中的数据
             if req.get("delete", False):
                 TaskService.filter_delete(db, [Task.doc_id == id])
                 try:
                     if settings.docStoreConn.has_collection(collection_name):
-                        delete_result = settings.docStoreConn.delete(
-                            collection_name=collection_name,
-                            filter=f"doc_id == '{{doc_id}}'".format(doc_id=d["id"])
-                        )
-                        if not delete_result:
-                            return construct_json_result(data=False, message="Milvus delete failed!",
+                        db_type = settings.docStoreConn.dbType()
+                        if db_type == "milvus":
+                            delete_result = settings.docStoreConn.delete(
+                                collection_name=collection_name,
+                                filter=f"doc_id == '{{doc_id}}'".format(doc_id=d["id"])
+                            )
+                        else:
+                            # ES/OpenSearch/Infinity
+                            delete_result = settings.docStoreConn.delete(
+                                condition={"doc_id": d["id"]},
+                                indexName=collection_name,
+                                knowledgebaseId=kb.id
+                            )
+                        if delete_result is None:
+                            return construct_json_result(data=False, message="Doc store delete failed!",
                                                          code=settings.RetCode.ARGUMENT_ERROR)
-                except MilvusException as e:
+                except Exception as e:
                     return construct_json_result(data=False, message=str(e), code=settings.RetCode.ARGUMENT_ERROR)
 
             if str(req["run"]) == TaskStatus.RUNNING.value:
@@ -2664,13 +2673,22 @@ def change_parser(
 
             # 删除向量数据库中的数据
             try:
-                delete_result = settings.docStoreConn.delete(
-                    collection_name=search.index_name_one(tenant_id, kb.name),
-                    filter=f"doc_id == '{doc.id}'"
-                )
-                if not delete_result:
-                    return get_data_error_result(retmsg="Milvus delete failed!")
-            except MilvusException as e:
+                collection_name = search.index_name_one(tenant_id, kb.name)
+                db_type = settings.docStoreConn.dbType()
+                if db_type == "milvus":
+                    delete_result = settings.docStoreConn.delete(
+                        collection_name=collection_name,
+                        filter=f"doc_id == '{doc.id}'"
+                    )
+                else:
+                    delete_result = settings.docStoreConn.delete(
+                        condition={"doc_id": doc.id},
+                        indexName=collection_name,
+                        knowledgebaseId=kb.id
+                    )
+                if delete_result is None:
+                    return get_data_error_result(retmsg="Doc store delete failed!")
+            except Exception as e:
                 return get_data_error_result(retmsg=str(e))
 
         return None

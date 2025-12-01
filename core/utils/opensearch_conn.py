@@ -67,7 +67,7 @@ class OSConnection(DocStoreConnection):
             msg = f"OpenSearch version must be greater than or equal to 2, current version: {v}"
             logger.error(msg)
             raise Exception(msg)
-        fp_mapping = os.path.join(get_project_base_directory(), "conf", "os_mapping.json")
+        fp_mapping = os.path.join(get_project_base_directory(), "configs", "os_mapping.json")
         if not os.path.exists(fp_mapping):
             msg = f"OpenSearch mapping file not found at {fp_mapping}"
             logger.error(msg)

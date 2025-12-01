@@ -161,7 +161,7 @@ class InfinityConnection(DocStoreConnection):
 
     def _migrate_db(self, inf_conn):
         inf_db = inf_conn.create_database(self.dbName, ConflictType.Ignore)
-        fp_mapping = os.path.join(get_project_base_directory(), "conf", "infinity_mapping.json")
+        fp_mapping = os.path.join(get_project_base_directory(), "configs", "infinity_mapping.json")
         if not os.path.exists(fp_mapping):
             raise Exception(f"Mapping file not found at {fp_mapping}")
         schema = json.load(open(fp_mapping))
@@ -218,7 +218,7 @@ class InfinityConnection(DocStoreConnection):
         inf_conn = self.connPool.get_conn()
         inf_db = inf_conn.create_database(self.dbName, ConflictType.Ignore)
 
-        fp_mapping = os.path.join(get_project_base_directory(), "conf", "infinity_mapping.json")
+        fp_mapping = os.path.join(get_project_base_directory(), "configs", "infinity_mapping.json")
         if not os.path.exists(fp_mapping):
             raise Exception(f"Mapping file not found at {fp_mapping}")
         schema = json.load(open(fp_mapping))

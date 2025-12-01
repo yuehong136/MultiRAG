@@ -66,6 +66,38 @@ from graphrag.utils import chat_limiter
 
 BATCH_SIZE = 64
 
+
+def delete_chunks_by_doc_id(collection_name: str, doc_id: str, kb_id: str = "") -> int:
+    """
+    兼容不同数据库的删除操作辅助函数
+
+    Args:
+        collection_name: 集合/索引名称
+        doc_id: 文档ID
+        kb_id: 知识库ID (ES/OpenSearch 需要)
+
+    Returns:
+        删除的记录数
+    """
+    db_type = settings.docStoreConn.dbType()
+    try:
+        if db_type == "milvus":
+            # Milvus 使用 filter 参数
+            return settings.docStoreConn.delete(
+                collection_name=collection_name,
+                filter=f"doc_id == '{doc_id}'"
+            )
+        else:
+            # ES/OpenSearch/Infinity 使用 condition 参数
+            return settings.docStoreConn.delete(
+                condition={"doc_id": doc_id},
+                indexName=collection_name,
+                knowledgebaseId=kb_id
+            )
+    except Exception as e:
+        logging.warning(f"delete_chunks_by_doc_id failed for {db_type}: {e}")
+        return 0
+
 FACTORY = {
     "general": naive,
     ParserType.NAIVE.value: naive,
@@ -649,13 +681,38 @@ def build_TOC(task, docs, progress_callback):
 
 async def init_kb(row, kb_name):
     """
-    初始化知识库，创建集合并设置索引
+    初始化知识库，创建集合/索引
 
     Args:
         row: 任务数据行
         kb_name: 知识库名称
     """
     idxnm = search.index_name_one(row["tenant_id"], kb_name)
+    kb_id = row.get("kb_id", "")
+    db_type = settings.docStoreConn.dbType()
+
+    # 对于 ES/OpenSearch/Infinity，使用通用的 indexExist/createIdx 接口
+    if db_type != "milvus":
+        if await trio.to_thread.run_sync(lambda: settings.docStoreConn.indexExist(idxnm, kb_id)):
+            return
+        # 获取向量维度（用于 createIdx）
+        vector_dim = 768  # 默认维度
+        try:
+            if "embd_id" in row and row["tenant_id"]:
+                with db_connection() as db:
+                    embedding_model = LLMBundle(db, row["tenant_id"], LLMType.EMBEDDING,
+                                                llm_name=row["embd_id"], lang=row.get("language", "en"))
+                    sample_vec, _ = embedding_model.encode(["测试文本"])
+                    if len(sample_vec) > 0:
+                        vector_dim = len(sample_vec[0])
+                        logging.info(f"当前embedding模型维度: {vector_dim}")
+        except Exception as e:
+            logging.warning(f"获取嵌入模型维度失败，使用默认维度 {vector_dim}: {str(e)}")
+        # 创建索引
+        await trio.to_thread.run_sync(lambda: settings.docStoreConn.createIdx(idxnm, kb_id, vector_dim))
+        return
+
+    # 对于 Milvus，使用特有的 has_collection/create_collection_with_mapping 接口
     if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(idxnm)):
         return
 
@@ -701,11 +758,14 @@ async def init_kb(row, kb_name):
 
 def convert_data_types(data, schema):
     """
-    转换数据类型以匹配Milvus模式，确保所有必要字段都有值
+    转换数据类型以匹配向量数据库模式，确保所有必要字段都有值
+    
+    对于 Milvus: 根据 schema 进行严格的类型转换
+    对于 ES/OpenSearch: schema 为空，直接返回原数据
 
     Args:
         data: 文档数据字典
-        schema: Milvus集合模式
+        schema: 集合模式 (ES 返回 {"fields": []})
 
     Returns:
         转换后的数据字典
@@ -772,12 +832,12 @@ def convert_data_types(data, schema):
                     else:
                         result[field_name] = [result[field_name]]
 
-    # 处理动态向量字段 (q_*_vec)
+    # 处理动态向量字段 (q_*_vec) - 仅用于 Milvus，ES 使用动态 mapping 自动处理
     vector_fields = [k for k in result.keys() if re.match(r'q_\d+_vec', k)]
     for vector_field in vector_fields:
         if vector_field not in schema_fields:
-            # 如果这是一个新的向量字段，记录一下但保留它
-            logging.info(f"发现新的向量字段 {vector_field}，保留在数据中")
+            # 如果这是一个新的向量字段，记录一下但保留它（使用 debug 级别避免重复日志）
+            logging.debug(f"发现新的向量字段 {vector_field}，保留在数据中")
 
     return result
 
@@ -2045,17 +2105,17 @@ async def delete_image(kb_id, chunk_id):
 async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, progress_callback, collection_name,
                         schema):
     """
-    将chunks批量插入Milvus，包含类型转换和错误处理
+    将chunks批量插入向量数据库（支持 Milvus/ES/OpenSearch/Infinity），包含类型转换和错误处理
 
     Args:
         db: 数据库Session
         task_id: 任务ID
         task_tenant_id: 租户ID
-        task_dataset_id: 数据集ID
+        task_dataset_id: 数据集ID (ES 中作为 knowledgebaseId)
         chunks: 要插入的chunk列表
         progress_callback: 进度回调函数
-        collection_name: Milvus集合名称
-        schema: Milvus集合schema，用于数据类型转换
+        collection_name: 集合/索引名称
+        schema: 集合 schema，用于数据类型转换 (ES 返回空 schema)
 
     Returns:
         成功返回True，失败返回None
@@ -2076,41 +2136,62 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             converted_batch.append(converted_chunk)
 
         try:
-            # 调用Milvus的insert方法
-            doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
-                collection_name=collection_name,
-                data=converted_batch
-            ))
+            # 根据数据库类型调用不同的insert方法
+            db_type = settings.docStoreConn.dbType()
+            if db_type == "milvus":
+                # Milvus 使用 collection_name 和 data 参数
+                doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
+                    collection_name=collection_name,
+                    data=converted_batch
+                ))
+                # 检查insert_count是否与本批次长度一致
+                if doc_store_result.get("insert_count", 0) != len(converted_batch):
+                    error_message = (
+                        f"Insert count mismatch: expected {len(converted_batch)}, "
+                        f"got {doc_store_result.get('insert_count', 0)}."
+                    )
+                    progress_callback(-1, msg=error_message)
+                    raise Exception(error_message)
+                # 记录成功插入
+                successful_inserts.append(doc_store_result)
+            else:
+                # ES/OpenSearch/Infinity 使用 documents, indexName, knowledgebaseId 参数
+                # ES 要求文档有 "id" 字段，Milvus 使用 "pk"，需要做映射
+                es_batch = []
+                for doc in converted_batch:
+                    es_doc = doc.copy()
+                    # 如果没有 "id" 字段，使用 "pk" 作为 id
+                    if "id" not in es_doc and "pk" in es_doc:
+                        es_doc["id"] = es_doc["pk"]
+                    es_batch.append(es_doc)
 
-            # 检查insert_count是否与本批次长度一致
-            if doc_store_result.get("insert_count", 0) != len(converted_batch):
-                error_message = (
-                    f"Insert count mismatch: expected {len(converted_batch)}, "
-                    f"got {doc_store_result.get('insert_count', 0)}."
-                )
-                progress_callback(-1, msg=error_message)
-                raise Exception(error_message)
-
-            # 记录成功插入
-            successful_inserts.append(doc_store_result)
+                errors = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
+                    documents=es_batch,
+                    indexName=collection_name,
+                    knowledgebaseId=task_dataset_id
+                ))
+                if errors:
+                    logging.warning(f"Insert errors: {errors}")
+                # 记录成功插入
+                successful_inserts.append({"insert_count": len(converted_batch)})
 
         except Exception as e:
             # 如果出现异常，记录失败并进行删除回滚
             failed_inserts.extend(chunk_batch)
             progress_callback(
                 -1,
-                "Insert chunk error, detail info please check log file. Please also check Milvus status!"
+                "Insert chunk error, detail info please check log file. Please check doc store status!"
             )
             try:
                 if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
                     # 删除本批次已经尝试插入的记录
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
-                            await trio.to_thread.run_sync(lambda: settings.docStoreConn.delete(
-                                collection_name=collection_name,
-                                filter=f"doc_id == '{chunk['doc_id']}'"
-                            ))
-            except MilvusException as e:
+                            doc_id = chunk['doc_id']
+                            await trio.to_thread.run_sync(
+                                lambda d=doc_id: delete_chunks_by_doc_id(collection_name, d, task_dataset_id)
+                            )
+            except Exception as e:
                 logging.exception(f"Failed to rollback inserted chunks: {e}")
             logging.exception("Insert error:")
             logging.error("Data being inserted: %s", converted_batch)
@@ -2139,11 +2220,11 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
-                            await trio.to_thread.run_sync(lambda: settings.docStoreConn.delete(
-                                collection_name=collection_name,
-                                filter=f"doc_id == '{chunk['doc_id']}'"
-                            ))
-            except MilvusException as e:
+                            doc_id = chunk['doc_id']
+                            await trio.to_thread.run_sync(
+                                lambda d=doc_id: delete_chunks_by_doc_id(collection_name, d, task_dataset_id)
+                            )
+            except Exception as e:
                 logging.exception(f"Failed to rollback after task not found: {e}")
             async with trio.open_nursery() as nursery:
                 for chunk_id in chunk_ids:
@@ -2154,8 +2235,9 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     # 统计并记录插入结果
     if successful_inserts:
         total_insert_count = sum(item.get("insert_count", 0) for item in successful_inserts)
+        db_type = settings.docStoreConn.dbType()
         logging.info(
-            f"Successfully inserted {total_insert_count} chunks into Milvus collection '{collection_name}'"
+            f"Successfully inserted {total_insert_count} chunks into {db_type} index '{collection_name}'"
         )
 
     if failed_inserts:
@@ -2502,11 +2584,10 @@ async def do_handle_task(db, task):
     if TaskService.do_cancel(db, task_id):
         try:
             if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
-                await trio.to_thread.run_sync(lambda: settings.docStoreConn.delete(
-                    collection_name=collection_name,
-                    filter=f"doc_id == '{task_doc_id}'"
-                ))
-        except MilvusException as e:
+                await trio.to_thread.run_sync(
+                    lambda: delete_chunks_by_doc_id(collection_name, task_doc_id, task_dataset_id)
+                )
+        except Exception as e:
             return e
         return
 

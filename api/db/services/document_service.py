@@ -1782,12 +1782,20 @@ class DocumentService(CommonService):
                 STORAGE_IMPL.rm(doc.kb_id, doc.thumbnail)
 
         try:
-            # 检查集合是否存在并删除 Milvus 中的数据
+            # 检查集合是否存在并删除向量数据库中的数据
             if settings.docStoreConn.has_collection(collection_name):
-                settings.docStoreConn.delete(
-                    collection_name=collection_name,
-                    filter=f"doc_id == '{doc_id}'"
-                )
+                db_type = settings.docStoreConn.dbType()
+                if db_type == "milvus":
+                    settings.docStoreConn.delete(
+                        collection_name=collection_name,
+                        filter=f"doc_id == '{doc_id}'"
+                    )
+                else:
+                    settings.docStoreConn.delete(
+                        condition={"doc_id": doc_id},
+                        indexName=collection_name,
+                        knowledgebaseId=doc.kb_id
+                    )
             # todo 待测试【settings.docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
             # kb_id = document["kb_id"]  # 使用从数据库重新获取的kb_id
             # graph_source = settings.docStoreConn.getFields(
@@ -1802,7 +1810,7 @@ class DocumentService(CommonService):
             #                                 search.index_name(tenant_id, [kb.name]), kb_id)
             #     settings.docStoreConn.delete({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
             #                                 search.index_name(tenant_id, [kb.name]), kb_id)
-        except MilvusException as e:
+        except Exception as e:
             return e
         return cls.delete_by_id(db, doc_id)
 

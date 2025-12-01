@@ -46,8 +46,11 @@ def index_name_one(uid, kb_name):
 
 class Dealer:
     def __init__(self, dataStore: DocStoreConnection):
-        self.qryr = query.MilvusQueryer(dataStore)
-        self.qryr.flds = [
+        self.qryr = query.FulltextQueryer()
+        self.dataStore = dataStore
+        
+        # 基础搜索字段（ES/OpenSearch/Infinity 兼容）
+        base_fields = [
             "title_tks^10",
             "title_sm_tks^5",
             "important_kwd^30",
@@ -55,8 +58,12 @@ class Dealer:
             "question_tks^20",
             "content_ltks^2",
             "content_sm_ltks"]
-        # self.milvus_conn = milvus_conn
-        self.dataStore = dataStore
+        
+        # Milvus 额外支持 content_with_weight 搜索（ES 中该字段不可索引）
+        if dataStore.dbType() == "milvus":
+            base_fields.append("content_with_weight")
+        
+        self.qryr.flds = base_fields
 
     @dataclass
     class SearchResult:
@@ -240,9 +247,9 @@ class Dealer:
             order_by = OrderByExpr()
             if req.get("sort"):
                 order_by.asc("page_num_int").asc("top_int").desc("create_timestamp_flt")
-            results = self.dataStore.search(src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
+            res = self.dataStore.search(src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
             keywords_raw: list[str] =  []
-            return _build_result(results, keywords_raw)
+            return _build_result(res, keywords_raw)
 
         # ---------- 有 query ----------
         search_mode = req.get("search_mode", "")
@@ -330,7 +337,7 @@ class Dealer:
                 fusion_expr = FusionExpr("weighted_sum", topk, {"weights": "0.05,0.95"})
                 match_exprs = [match_text, match_dense, fusion_expr]
 
-            results, total = self.dataStore.search(
+            res = self.dataStore.search(
                 src,
                 highlight_fields,
                 filters,
@@ -342,13 +349,14 @@ class Dealer:
                 kb_ids,
                 rank_feature=rank_feature,
             )
+            total = self.dataStore.getTotal(res)
 
             # 若召回为 0 且使用嵌入，放宽阈值重试一次
             if emb_mdl and total == 0:
                 match_text_low, _ = self.qryr.question(qst, min_match=0.1)
                 filters.pop("doc_ids", None)
                 match_dense.extra_options["similarity"] = 0.17
-                results, _ = self.dataStore.search(
+                res = self.dataStore.search(
                     src,
                     highlight_fields,
                     filters,
@@ -360,7 +368,7 @@ class Dealer:
                     kb_ids,
                     rank_feature=rank_feature,
                 )
-            return _build_result(results, keywords_raw)
+            return _build_result(res, keywords_raw)
 
         except Exception as exc:  # noqa: BLE001
             logging.error("Search failed: %s", exc, exc_info=True)
@@ -948,18 +956,29 @@ class Dealer:
             return [], [], []
 
         # 获取结果中的嵌入向量
-        vector_dim = len(sres.query_vector)
+        vector_dim = len(sres.query_vector) if sres.query_vector else 0
+        logging.info(f"rerank: vector_dim={vector_dim}, sres.ids count={len(sres.ids)}")
+        
+        if vector_dim == 0:
+            logging.warning("rerank: query_vector 为空，无法计算向量相似度")
+            # 返回基于文本的相似度
+            sim = np.array([sres.field[id].get("_score", 0.0) for id in sres.ids], dtype=np.float64)
+            return sim, sim, np.zeros(len(sim), dtype=np.float64)
+            
         if vector_dim != 768:
             dim_field = f"q_{vector_dim}_vec"
         else:
             dim_field = "vector"
+        
         ins_embd = []
+        zero_count = 0
         for i in sres.ids:
             # 优先使用维度特定字段，如果没有则使用标准vector字段
             if dim_field in sres.field[i] and sres.field[i][dim_field]:
                 vector = sres.field[i][dim_field]
             elif sres.field[i].get(f"q_{vector_dim}_vec") is None:
                 vector = [0.0] * vector_dim
+                zero_count += 1
             else:
                 vector = sres.field[i].get(f"q_{vector_dim}_vec", [0.0] * vector_dim)
 
@@ -970,8 +989,11 @@ class Dealer:
                     vector = [get_float(v) for v in vector.split("\t")]
                 except:
                     vector = [0.0] * vector_dim
+                    zero_count += 1
 
             ins_embd.append(vector)
+        
+        logging.info(f"rerank: 获取到 {len(ins_embd)} 个向量，其中 {zero_count} 个为零向量，dim_field={dim_field}")
 
         # 处理文本相似度比较所需的token列表
         ins_tw = []
@@ -1055,7 +1077,12 @@ class Dealer:
 
     def retrieval(self, question, filter_exp, embd_mdl, tenant_id, kb_names, page, page_size, similarity_threshold=0.2,
                   vector_similarity_weight=0.3, top=1024, doc_ids=None, aggs=True, rerank_mdl=None, highlight=False,
-                  rank_feature=None, search_mode=None): #hybrid
+                  rank_feature=None, search_mode=None, kb_ids=None): #hybrid
+        """
+        Args:
+            kb_names: 知识库名称列表，用于构建索引名称
+            kb_ids: 知识库ID列表，用于ES的kb_id过滤条件。如果不提供，则使用kb_names（仅适用于Milvus）
+        """
         if rank_feature is None:
             rank_feature = {PAGERANK_FLD: 10}
         if search_mode is None:
@@ -1089,8 +1116,11 @@ class Dealer:
                "available_int": 1, "filter_exp": filter_exp, "search_mode": search_mode}
 
         idxnms = index_name(tenant_id, kb_names)
+        
+        # 优先使用 kb_ids（知识库ID），如果没有则使用 kb_names（仅适用于Milvus场景）
+        search_kb_ids = kb_ids if kb_ids else kb_names
 
-        sres = self.search(req, idxnms, kb_names, embd_mdl, highlight=highlight, rank_feature=rank_feature)
+        sres = self.search(req, idxnms, search_kb_ids, embd_mdl, highlight=highlight, rank_feature=rank_feature)
         # ranks["total"] = sres.total
 
         # if not sres.ids:
@@ -1102,13 +1132,17 @@ class Dealer:
                                                    vector_similarity_weight,
                                                    rank_feature=rank_feature)
         else:
-            lower_case_doc_engine = os.getenv('DOC_ENGINE', 'milvus')
-            if lower_case_doc_engine in ["elasticsearch", "opensearch"]:
+            # 使用实际的数据库类型判断，而不是环境变量
+            db_type = self.dataStore.dbType()
+            logging.info(f"db_type: {db_type}, sres.total: {sres.total}, query_vector len: {len(sres.query_vector) if sres.query_vector else 0}")
+            if db_type in ["elasticsearch", "opensearch"]:
                 # ElasticSearch doesn't normalize each way score before fusion.
+                logging.info("进入 ES rerank 分支")
                 sim, tsim, vsim = self.rerank(
                     sres, question, 1 - vector_similarity_weight, vector_similarity_weight,
                     rank_feature=rank_feature)
-            elif lower_case_doc_engine == "milvus":
+                logging.info(f"rerank 返回: sim={sim[:3] if len(sim) > 0 else []}, tsim={tsim[:3] if len(tsim) > 0 else []}, vsim={vsim[:3] if len(vsim) > 0 else []}")
+            elif db_type == "milvus":
                 if req.get("search_mode", {}).get("hybrid"):
                     if "distance" in sres.field and isinstance(sres.field["distance"], list):
                         sim = np.array(sres.field["distance"])
@@ -1129,7 +1163,7 @@ class Dealer:
                 tsim = sim.copy()
                 vsim = sim.copy()
 
-            if lower_case_doc_engine == "milvus" and rank_feature:
+            if db_type == "milvus" and rank_feature:
                 rank_scores = self._rank_feature_scores(rank_feature, sres)
                 sim = sim + rank_scores
 

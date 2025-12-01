@@ -24,7 +24,7 @@ import copy
 from elasticsearch import Elasticsearch, NotFoundError
 from elasticsearch_dsl import UpdateByQuery, Q, Search, Index
 from elastic_transport import ConnectionTimeout
-from core import settings
+from api import settings
 from core.settings import TAG_FLD, PAGERANK_FLD
 from core.utils import singleton
 from api.utils.file_utils import get_project_base_directory
@@ -62,7 +62,7 @@ class ESConnection(DocStoreConnection):
             msg = f"Elasticsearch version must be greater than or equal to 8, current version: {v}"
             logger.error(msg)
             raise Exception(msg)
-        fp_mapping = os.path.join(get_project_base_directory(), "conf", "mapping.json")
+        fp_mapping = os.path.join(get_project_base_directory(), "configs", "es_mapping.json")
         if not os.path.exists(fp_mapping):
             msg = f"Elasticsearch mapping file not found at {fp_mapping}"
             logger.error(msg)
