@@ -7,11 +7,13 @@ from core.nlp import rag_tokenizer, term_weight, synonym
 from core.utils.doc_store_conn import MatchTextExpr
 
 
-class MilvusQueryer:
-    def __init__(self, milvus):
+class FulltextQueryer:
+    """通用全文查询器，与具体向量数据库无关"""
+    def __init__(self, dataStore=None):
         self.tw = term_weight.Dealer()
-        self.milvus = milvus
+        self.dataStore = dataStore  # 保留接口兼容，但实际未使用
         self.syn = synonym.Dealer()
+        # 基础搜索字段（ES/OpenSearch/Infinity 兼容）
         self.query_fields = [
             "title_tks^10",
             "title_sm_tks^5",
@@ -20,8 +22,9 @@ class MilvusQueryer:
             "question_tks^20",
             "content_ltks^2",
             "content_sm_ltks",
-            "content_with_weight",
         ]
+        # Milvus 额外支持的搜索字段（content_with_weight 在 ES 中不可搜索）
+        self.milvus_extra_fields = ["content_with_weight"]
 
     @staticmethod
     def subSpecialChar(line):
@@ -69,17 +72,17 @@ class MilvusQueryer:
         return txt
 
     def question(self, txt, tbl="qa", min_match: float = 0.6):
-        txt = MilvusQueryer.add_space_between_eng_zh(txt)
+        txt = FulltextQueryer.add_space_between_eng_zh(txt)
         txt = re.sub(
             r"[ :|\r\n\t,，。？?/`!！&^%%()\[\]{}<>]+",
             " ",
             rag_tokenizer.tradi2simp(rag_tokenizer.strQ2B(txt.lower())),
         ).strip()
         otxt = txt
-        txt = MilvusQueryer.rmWWW(txt)
+        txt = FulltextQueryer.rmWWW(txt)
 
         if not self.isChinese(txt):
-            txt = MilvusQueryer.rmWWW(txt)
+            txt = FulltextQueryer.rmWWW(txt)
             tks = rag_tokenizer.tokenize(txt).split()
             keywords = [t for t in tks if t]
             tks_w = self.tw.weights(tks, preprocess=False)
@@ -124,7 +127,7 @@ class MilvusQueryer:
                 return False
             return True
 
-        txt = MilvusQueryer.rmWWW(txt)
+        txt = FulltextQueryer.rmWWW(txt)
         qs, keywords = [], []
         raw_terms = []
         for tt in self.tw.split(txt)[:256]:  # .split():
@@ -152,7 +155,7 @@ class MilvusQueryer:
                     )
                     for m in sm
                 ]
-                sm = [MilvusQueryer.subSpecialChar(m) for m in sm if len(m) > 1]
+                sm = [FulltextQueryer.subSpecialChar(m) for m in sm if len(m) > 1]
                 sm = [m for m in sm if len(m) > 1]
 
                 if len(keywords) < 32:
@@ -160,7 +163,7 @@ class MilvusQueryer:
                     keywords.extend(sm)
 
                 tk_syns = self.syn.lookup(tk)
-                tk_syns = [MilvusQueryer.subSpecialChar(s) for s in tk_syns]
+                tk_syns = [FulltextQueryer.subSpecialChar(s) for s in tk_syns]
                 if len(keywords) < 32:
                     keywords.extend([s for s in tk_syns if s])
                 tk_syns = [rag_tokenizer.fine_grained_tokenize(s) for s in tk_syns if s]
@@ -169,7 +172,7 @@ class MilvusQueryer:
                 if len(keywords) >= 32:
                     break
 
-                tk = MilvusQueryer.subSpecialChar(tk)
+                tk = FulltextQueryer.subSpecialChar(tk)
                 if tk.find(" ") > 0:
                     tk = '"%s"' % tk
                 if tk_syns:
@@ -187,7 +190,7 @@ class MilvusQueryer:
             syns = " OR ".join(
                 [
                     '"%s"'
-                    % rag_tokenizer.tokenize(MilvusQueryer.subSpecialChar(s))
+                    % rag_tokenizer.tokenize(FulltextQueryer.subSpecialChar(s))
                     for s in syns
                 ]
             )
@@ -254,10 +257,10 @@ class MilvusQueryer:
         keywords = [f'"{k.strip()}"' for k in keywords]
         for tk, w in sorted(tks_w, key=lambda x: x[1] * -1)[:keywords_topn]:
             tk_syns = self.syn.lookup(tk)
-            tk_syns = [MilvusQueryer.subSpecialChar(s) for s in tk_syns]
+            tk_syns = [FulltextQueryer.subSpecialChar(s) for s in tk_syns]
             tk_syns = [rag_tokenizer.fine_grained_tokenize(s) for s in tk_syns if s]
             tk_syns = [f"\"{s}\"" if s.find(" ") > 0 else s for s in tk_syns]
-            tk = MilvusQueryer.subSpecialChar(tk)
+            tk = FulltextQueryer.subSpecialChar(tk)
             if tk.find(" ") > 0:
                 tk = '"%s"' % tk
             if tk_syns:
@@ -267,4 +270,8 @@ class MilvusQueryer:
 
         return MatchTextExpr(self.query_fields, " ".join(keywords), 100,
                              {"minimum_should_match": min(3, len(keywords) // 10)})
+
+
+# 别名，保持向后兼容
+MilvusQueryer = FulltextQueryer
 

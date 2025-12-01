@@ -11,7 +11,6 @@ from pymilvus import AnnSearchRequest, WeightedRanker
 
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from core.utils import rmSpace, get_float
 from core.prompts.generator import relevant_chunks_with_toc
 from core.settings import TAG_FLD, PAGERANK_FLD
 from core.nlp import rag_tokenizer, query, is_english
@@ -23,6 +22,9 @@ from core.utils.doc_store_conn import (
     FusionExpr,
     OrderByExpr,
 )
+from common.string_utils import remove_redundant_spaces
+from common.float_utils import get_float
+
 
 def index_name(uid, kb_names):
     # return [f"multirag_{uid}_{kb_name}" for kb_name in kb_names]
@@ -37,15 +39,17 @@ def index_name(uid, kb_names):
         return [f"multirag_{u}_{kb}" for u, kb in zip(uid, kb_names)]
 
 
-
 def index_name_one(uid, kb_name):
     return f"multirag_{uid}_{kb_name}"
 
 
 class Dealer:
     def __init__(self, dataStore: DocStoreConnection):
-        self.qryr = query.MilvusQueryer(dataStore)
-        self.qryr.flds = [
+        self.qryr = query.FulltextQueryer()
+        self.dataStore = dataStore
+
+        # 基础搜索字段（ES/OpenSearch/Infinity 兼容）
+        base_fields = [
             "title_tks^10",
             "title_sm_tks^5",
             "important_kwd^30",
@@ -53,8 +57,12 @@ class Dealer:
             "question_tks^20",
             "content_ltks^2",
             "content_sm_ltks"]
-        # self.milvus_conn = milvus_conn
-        self.dataStore = dataStore
+
+        # Milvus 额外支持 content_with_weight 搜索（ES 中该字段不可索引）
+        if dataStore.dbType() == "milvus":
+            base_fields.append("content_with_weight")
+
+        self.qryr.flds = base_fields
 
     @dataclass
     class SearchResult:
@@ -111,7 +119,8 @@ class Dealer:
             if key in req and req[key] is not None:
                 condition[field] = req[key]
         # TODO(yzc): `available_int` is nullable however infinity doesn't support nullable columns.
-        for key in ["knowledge_graph_kwd", "available_int", "entity_kwd", "from_entity_kwd", "to_entity_kwd", "removed_kwd"]:
+        for key in ["knowledge_graph_kwd", "available_int", "entity_kwd", "from_entity_kwd", "to_entity_kwd",
+                    "removed_kwd"]:
             if key in req and req[key] is not None:
                 condition[key] = req[key]
         if req.get("filter_exp"):
@@ -123,7 +132,6 @@ class Dealer:
             else:
                 condition["auth"] = exp
         return condition
-
 
     # 构建过滤表达式的辅助方法
     def _build_filter_expr(self, filters):
@@ -170,7 +178,6 @@ class Dealer:
                 filter_parts.append(f"{k} == {v}")
 
         return " && ".join(filter_parts) if filter_parts else ""
-
 
     def search(self, req, idx_names: str | list[str],
                kb_ids: list[str],
@@ -238,9 +245,9 @@ class Dealer:
             order_by = OrderByExpr()
             if req.get("sort"):
                 order_by.asc("page_num_int").asc("top_int").desc("create_timestamp_flt")
-            results = self.dataStore.search(src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
-            keywords_raw: list[str] =  []
-            return _build_result(results, keywords_raw)
+            res = self.dataStore.search(src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
+            keywords_raw: list[str] = []
+            return _build_result(res, keywords_raw)
 
         # ---------- 有 query ----------
         search_mode = req.get("search_mode", "")
@@ -328,7 +335,7 @@ class Dealer:
                 fusion_expr = FusionExpr("weighted_sum", topk, {"weights": "0.05,0.95"})
                 match_exprs = [match_text, match_dense, fusion_expr]
 
-            results, total = self.dataStore.search(
+            res = self.dataStore.search(
                 src,
                 highlight_fields,
                 filters,
@@ -340,13 +347,14 @@ class Dealer:
                 kb_ids,
                 rank_feature=rank_feature,
             )
+            total = self.dataStore.getTotal(res)
 
             # 若召回为 0 且使用嵌入，放宽阈值重试一次
             if emb_mdl and total == 0:
                 match_text_low, _ = self.qryr.question(qst, min_match=0.1)
                 filters.pop("doc_ids", None)
                 match_dense.extra_options["similarity"] = 0.17
-                results, _ = self.dataStore.search(
+                res = self.dataStore.search(
                     src,
                     highlight_fields,
                     filters,
@@ -358,7 +366,7 @@ class Dealer:
                     kb_ids,
                     rank_feature=rank_feature,
                 )
-            return _build_result(results, keywords_raw)
+            return _build_result(res, keywords_raw)
 
         except Exception as exc:  # noqa: BLE001
             logging.error("Search failed: %s", exc, exc_info=True)
@@ -851,8 +859,9 @@ class Dealer:
         ans_v, _ = embd_mdl.encode(pieces_)
         for i in range(len(chunk_v)):
             if len(ans_v[0]) != len(chunk_v[i]):
-                chunk_v[i] = [0.0]*len(ans_v[0])
-                logging.warning("The dimension of query and chunk do not match: {} vs. {}".format(len(ans_v[0]), len(chunk_v[i])))
+                chunk_v[i] = [0.0] * len(ans_v[0])
+                logging.warning(
+                    "The dimension of query and chunk do not match: {} vs. {}".format(len(ans_v[0]), len(chunk_v[i])))
 
         assert len(ans_v[0]) == len(chunk_v[0]), "The dimension of query and chunk do not match: {} vs. {}".format(
             len(ans_v[0]), len(chunk_v[0]))
@@ -906,7 +915,7 @@ class Dealer:
         if not query_rfea:
             return np.array([0 for _ in range(len(search_res.ids))]) + pageranks
 
-        q_denor = np.sqrt(np.sum([s*s for t,s in query_rfea.items() if t != PAGERANK_FLD]))
+        q_denor = np.sqrt(np.sum([s * s for t, s in query_rfea.items() if t != PAGERANK_FLD]))
         for i in search_res.ids:
             nor, denor = 0, 0
             if not search_res.field[i].get(TAG_FLD):
@@ -919,8 +928,8 @@ class Dealer:
             if denor == 0:
                 rank_fea.append(0)
             else:
-                rank_fea.append(nor/np.sqrt(denor)/q_denor)
-        return np.array(rank_fea)*10. + pageranks
+                rank_fea.append(nor / np.sqrt(denor) / q_denor)
+        return np.array(rank_fea) * 10. + pageranks
 
     def rerank(self, sres, query, tkweight=0.3,
                vtweight=0.7, cfield="content_ltks",
@@ -946,18 +955,29 @@ class Dealer:
             return [], [], []
 
         # 获取结果中的嵌入向量
-        vector_dim = len(sres.query_vector)
+        vector_dim = len(sres.query_vector) if sres.query_vector else 0
+        logging.info(f"rerank: vector_dim={vector_dim}, sres.ids count={len(sres.ids)}")
+
+        if vector_dim == 0:
+            logging.warning("rerank: query_vector 为空，无法计算向量相似度")
+            # 返回基于文本的相似度
+            sim = np.array([sres.field[id].get("_score", 0.0) for id in sres.ids], dtype=np.float64)
+            return sim, sim, np.zeros(len(sim), dtype=np.float64)
+
         if vector_dim != 768:
             dim_field = f"q_{vector_dim}_vec"
         else:
             dim_field = "vector"
+
         ins_embd = []
+        zero_count = 0
         for i in sres.ids:
             # 优先使用维度特定字段，如果没有则使用标准vector字段
             if dim_field in sres.field[i] and sres.field[i][dim_field]:
                 vector = sres.field[i][dim_field]
             elif sres.field[i].get(f"q_{vector_dim}_vec") is None:
                 vector = [0.0] * vector_dim
+                zero_count += 1
             else:
                 vector = sres.field[i].get(f"q_{vector_dim}_vec", [0.0] * vector_dim)
 
@@ -968,8 +988,11 @@ class Dealer:
                     vector = [get_float(v) for v in vector.split("\t")]
                 except:
                     vector = [0.0] * vector_dim
+                    zero_count += 1
 
             ins_embd.append(vector)
+
+        logging.info(f"rerank: 获取到 {len(ins_embd)} 个向量，其中 {zero_count} 个为零向量，dim_field={dim_field}")
 
         # 处理文本相似度比较所需的token列表
         ins_tw = []
@@ -1039,7 +1062,7 @@ class Dealer:
             ins_tw.append(tks)
 
         tksim = self.qryr.token_similarity(keywords, ins_tw)
-        vtsim, _ = rerank_mdl.similarity(query, [rmSpace(" ".join(tks)) for tks in ins_tw])
+        vtsim, _ = rerank_mdl.similarity(query, [remove_redundant_spaces(" ".join(tks)) for tks in ins_tw])
         ## For rank feature(tag_fea) scores.
         rank_fea = self._rank_feature_scores(rank_feature, sres)
 
@@ -1053,7 +1076,12 @@ class Dealer:
 
     def retrieval(self, question, filter_exp, embd_mdl, tenant_id, kb_names, page, page_size, similarity_threshold=0.2,
                   vector_similarity_weight=0.3, top=1024, doc_ids=None, aggs=True, rerank_mdl=None, highlight=False,
-                  rank_feature=None, search_mode=None): #hybrid
+                  rank_feature=None, search_mode=None, kb_ids=None):  # hybrid
+        """
+        Args:
+            kb_names: 知识库名称列表，用于构建索引名称
+            kb_ids: 知识库ID列表，用于ES的kb_id过滤条件。如果不提供，则使用kb_names（仅适用于Milvus）
+        """
         if rank_feature is None:
             rank_feature = {PAGERANK_FLD: 10}
         if search_mode is None:
@@ -1078,17 +1106,21 @@ class Dealer:
         if not question:
             return ranks
         # Ensure RERANK_LIMIT is multiple of page_size
-        RERANK_LIMIT = math.ceil(64/page_size) * page_size if page_size > 1 else 1
-        if RERANK_LIMIT < 1: ## when page_size is very large the RERANK_LIMIT will be 0.
+        RERANK_LIMIT = math.ceil(64 / page_size) * page_size if page_size > 1 else 1
+        if RERANK_LIMIT < 1:  ## when page_size is very large the RERANK_LIMIT will be 0.
             RERANK_LIMIT = 1
-        req = {"kb_names": kb_names, "doc_ids": doc_ids, "page": math.ceil(page_size*page/RERANK_LIMIT), "size": RERANK_LIMIT,
+        req = {"kb_names": kb_names, "doc_ids": doc_ids, "page": math.ceil(page_size * page / RERANK_LIMIT),
+               "size": RERANK_LIMIT,
                "question": question, "vector": True, "topk": top,
                "similarity": similarity_threshold,
                "available_int": 1, "filter_exp": filter_exp, "search_mode": search_mode}
 
         idxnms = index_name(tenant_id, kb_names)
 
-        sres = self.search(req, idxnms, kb_names, embd_mdl, highlight=highlight, rank_feature=rank_feature)
+        # 优先使用 kb_ids（知识库ID），如果没有则使用 kb_names（仅适用于Milvus场景）
+        search_kb_ids = kb_ids if kb_ids else kb_names
+
+        sres = self.search(req, idxnms, search_kb_ids, embd_mdl, highlight=highlight, rank_feature=rank_feature)
         # ranks["total"] = sres.total
 
         # if not sres.ids:
@@ -1100,13 +1132,19 @@ class Dealer:
                                                    vector_similarity_weight,
                                                    rank_feature=rank_feature)
         else:
-            lower_case_doc_engine = os.getenv('DOC_ENGINE', 'milvus')
-            if lower_case_doc_engine in ["elasticsearch", "opensearch"]:
+            # 使用实际的数据库类型判断，而不是环境变量
+            db_type = self.dataStore.dbType()
+            logging.info(
+                f"db_type: {db_type}, sres.total: {sres.total}, query_vector len: {len(sres.query_vector) if sres.query_vector else 0}")
+            if db_type in ["elasticsearch", "opensearch"]:
                 # ElasticSearch doesn't normalize each way score before fusion.
+                logging.info("进入 ES rerank 分支")
                 sim, tsim, vsim = self.rerank(
                     sres, question, 1 - vector_similarity_weight, vector_similarity_weight,
                     rank_feature=rank_feature)
-            elif lower_case_doc_engine == "milvus":
+                logging.info(
+                    f"rerank 返回: sim={sim[:3] if len(sim) > 0 else []}, tsim={tsim[:3] if len(tsim) > 0 else []}, vsim={vsim[:3] if len(vsim) > 0 else []}")
+            elif db_type == "milvus":
                 if req.get("search_mode", {}).get("hybrid"):
                     if "distance" in sres.field and isinstance(sres.field["distance"], list):
                         sim = np.array(sres.field["distance"])
@@ -1127,14 +1165,16 @@ class Dealer:
                 tsim = sim.copy()
                 vsim = sim.copy()
 
-            if lower_case_doc_engine == "milvus" and rank_feature:
+            if db_type == "milvus" and rank_feature:
                 rank_scores = self._rank_feature_scores(rank_feature, sres)
                 sim = sim + rank_scores
 
         # Already paginated in search function
-        begin = ((page % (RERANK_LIMIT//page_size)) - 1) * page_size
-        sim = sim[begin : begin + page_size]
-        sim_np = np.array(sim)
+        max_pages = RERANK_LIMIT // page_size
+        page_index = (page % max_pages) - 1
+        begin = max(page_index * page_size, 0)
+        sim = sim[begin: begin + page_size]
+        sim_np = np.array(sim, dtype=np.float64)
         idx = np.argsort(sim_np * -1)
         dim = len(sres.query_vector)
         if dim != 768:
@@ -1143,9 +1183,9 @@ class Dealer:
             vector_column = "vector"
         zero_vector = [0.0] * dim
         filtered_count = (sim_np >= similarity_threshold).sum()
-        ranks["total"] = int(filtered_count) # Convert from np.int64 to Python int otherwise JSON serializable error
+        ranks["total"] = int(filtered_count)  # Convert from np.int64 to Python int otherwise JSON serializable error
         for i in idx:
-            if sim[i] < similarity_threshold:
+            if np.float64(sim[i]) < similarity_threshold:
                 break
 
             id = sres.ids[i]
@@ -1170,7 +1210,8 @@ class Dealer:
                 "doc_id": did,
                 "docnm_kwd": dnm,
                 "kb_id": sres.field[id]["kb_id"],
-                "important_kwd": list(sres.field[id].get("important_kwd", [])), # todo 临时用list解决important_kwd非标准python类型问题
+                "important_kwd": list(sres.field[id].get("important_kwd", [])),
+                # todo 临时用list解决important_kwd非标准python类型问题
                 "img_id": sres.field[id].get("img_id", ""),
                 "similarity": sim[i],
                 "vector_similarity": vsim[i],
@@ -1181,7 +1222,7 @@ class Dealer:
             }
             if highlight and sres.highlight:
                 if id in sres.highlight:
-                    d["highlight"] = rmSpace(sres.highlight[id])
+                    d["highlight"] = remove_redundant_spaces(sres.highlight[id])
                 else:
                     d["highlight"] = d["text"]
             # if len(d["positions"]) % 5 == 0:
@@ -1232,7 +1273,6 @@ class Dealer:
             logging.error(f"SQL failure: {sql} =>" + str(e))
             return {"error": str(e)}
 
-
     def chunk_list(self, doc_id: str, tenant_id: str,
                    kb_ids: list[str], max_count=1024,
                    offset=0,
@@ -1260,8 +1300,9 @@ class Dealer:
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         for p in range(offset, max_count, bs):
-            milvus_res = self.dataStore.search(fields, [], condition, [], orderBy, p, bs, index_name(tenant_id, [kb.name]),
-                                           kb_ids)
+            milvus_res = self.dataStore.search(fields, [], condition, [], orderBy, p, bs,
+                                               index_name(tenant_id, [kb.name]),
+                                               kb_ids)
             dict_chunks = self.dataStore.getFields(milvus_res, fields)
             # 直接删除系统字段
             system_fields = ['distance']
@@ -1280,13 +1321,15 @@ class Dealer:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         if not self.dataStore.indexExist(index_name_one(tenant_id, kb.kb_name), kb_ids[0]):
             return []
-        res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids, ["tag_kwd"])
+        res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids,
+                                    ["tag_kwd"])
         return self.dataStore.getAggregation(res, "tag_kwd")
 
     def all_tags_in_portion(self, tenant_id: str, kb_ids: list[str], S=1000):
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
-        res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids, ["tag_kwd"])
+        res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids,
+                                    ["tag_kwd"])
         res = self.dataStore.getAggregation(res, "tag_kwd")
         total = np.sum([c for _, c in res])
         return {t: (c + 1) / (total + S) for t, c in res}
@@ -1295,13 +1338,14 @@ class Dealer:
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         idx_nm = index_name(tenant_id, [kb.kb_name])
-        match_txt = self.qryr.paragraph(doc["title_tks"] + " " + doc["content_ltks"], doc.get("important_kwd", []), keywords_topn)
+        match_txt = self.qryr.paragraph(doc["title_tks"] + " " + doc["content_ltks"], doc.get("important_kwd", []),
+                                        keywords_topn)
         res = self.dataStore.search([], [], {}, [match_txt], OrderByExpr(), 0, 0, idx_nm, kb_ids, ["tag_kwd"])
         aggs = self.dataStore.getAggregation(res, "tag_kwd")
         if not aggs:
             return False
         cnt = np.sum([c for _, c in aggs])
-        tag_fea = sorted([(a, round(0.1*(c + 1) / (cnt + S) / max(1e-6, all_tags.get(a, 0.0001)))) for a, c in aggs],
+        tag_fea = sorted([(a, round(0.1 * (c + 1) / (cnt + S) / max(1e-6, all_tags.get(a, 0.0001)))) for a, c in aggs],
                          key=lambda x: x[1] * -1)[:topn_tags]
         doc[TAG_FLD] = {a.replace(".", "_"): c for a, c in tag_fea if c > 0}
         return True
@@ -1319,14 +1363,15 @@ class Dealer:
         if not aggs:
             return {}
         cnt = np.sum([c for _, c in aggs])
-        tag_fea = sorted([(a, round(0.1*(c + 1) / (cnt + S) / max(1e-6, all_tags.get(a, 0.0001)))) for a, c in aggs],
+        tag_fea = sorted([(a, round(0.1 * (c + 1) / (cnt + S) / max(1e-6, all_tags.get(a, 0.0001)))) for a, c in aggs],
                          key=lambda x: x[1] * -1)[:topn_tags]
         return {a.replace(".", "_"): max(1, c) for a, c in tag_fea}
 
-    def retrieval_by_toc(self, query: str, chunks: list[dict], tenant_ids: list[str], kb_names: list[str], chat_mdl, topn: int = 6):
+    def retrieval_by_toc(self, query: str, chunks: list[dict], tenant_ids: list[str], kb_names: list[str], chat_mdl,
+                         topn: int = 6):
         """
         基于 TOC (Table of Contents) 的检索增强方法
-        
+
         Args:
             query: 查询文本
             chunks: 初始检索到的 chunk 列表
@@ -1334,7 +1379,7 @@ class Dealer:
             kb_names: 知识库名称列表（与 tenant_ids 对应）
             chat_mdl: LLM 模型用于 TOC 相关性评分
             topn: 返回的 top N 结果
-            
+
         Returns:
             重新排序和补充后的 chunks 列表
         """
@@ -1359,7 +1404,7 @@ class Dealer:
         for tid in tenant_ids:
             if tid in tenant_kb_dict:
                 idx_nms.extend(index_name(tid, tenant_kb_dict[tid]))
-        
+
         ranks, doc_id2kb_id = {}, {}
         for ck in chunks:
             if ck["doc_id"] not in ranks:

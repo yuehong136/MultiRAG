@@ -26,7 +26,6 @@ from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
 from core.prompts.generator import keyword_extraction, cross_languages, gen_meta_filter
-from core.utils import rmSpace
 from api.db import LLMType, ParserType
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -38,6 +37,7 @@ from core.settings import PAGERANK_FLD
 from api.utils.api_utils import get_json_result
 # from api.db.database import get_db
 from api.apps import manager
+from common.string_utils import remove_redundant_spaces
 
 router = APIRouter()
 
@@ -373,7 +373,7 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
         for id in sres.ids:
             d = {
                 "chunk_id": id,
-                "content_with_weight": rmSpace(sres.highlight[id]) if request.keywords and id in sres.highlight else
+                "content_with_weight": remove_redundant_spaces(sres.highlight[id]) if request.keywords and id in sres.highlight else
                 sres.field[id].get(
                     "content_with_weight", ""),
                 "doc_id": sres.field[id]["doc_id"],
@@ -1004,7 +1004,17 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
         if not kb:
             return get_data_error_result(retmsg="KnowledgeBase not found!")
 
-        if not settings.docStoreConn.delete(collection_name=search.index_name_one(kb.tenant_id, kb.name), ids=req["chunk_ids"]):
+        collection_name = search.index_name_one(kb.tenant_id, kb.name)
+        db_type = settings.docStoreConn.dbType()
+        if db_type == "milvus":
+            delete_result = settings.docStoreConn.delete(collection_name=collection_name, ids=req["chunk_ids"])
+        else:
+            delete_result = settings.docStoreConn.delete(
+                condition={"id": req["chunk_ids"]},
+                indexName=collection_name,
+                knowledgebaseId=kb.id
+            )
+        if delete_result is None:
             return get_data_error_result(retmsg="Chunk deleting failure")
         deleted_chunk_ids = req["chunk_ids"]
         chunk_number = len(deleted_chunk_ids)
@@ -1200,7 +1210,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         if not kb:
             return get_data_error_result(retmsg="Knowledgebase not found!")
         if kb.pagerank is not None:
-            d["pagerank_fea"] = kb.pagerank
+            d[PAGERANK_FLD] = kb.pagerank
 
         embd_id = DocumentService.get_embd_id(db, req["doc_id"])
         embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, embd_id)
@@ -1466,7 +1476,6 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             return get_data_error_result(retmsg="Knowledgebase not found!")
 
         if request.cross_languages:
-            from core.prompts.generator import cross_languages
             question = cross_languages(db, kb.tenant_id, None, question, request.cross_languages)
 
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
@@ -1484,11 +1493,12 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
         search_mode_dict = request.get_search_mode_dict()
 
         # 当调用retrieval函数时，传递维度信息
+        # 注意：kb_ids 参数应传递知识库 ID 列表，而不是名称列表，用于 ES 的 kb_id 过滤
         ranks = settings.retriever.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
                                request.size, request.similarity_threshold, request.vector_similarity_weight,
                                request.top_k, doc_ids, rerank_mdl=rerank_mdl,
                                highlight=request.highlight if request.highlight is not None else False,
-                               rank_feature=labels, search_mode=search_mode_dict)
+                               rank_feature=labels, search_mode=search_mode_dict, kb_ids=request.kb_ids)
         if request.use_kg:
             ck = settings.kg_retriever.retrieval(question,
                                                    kb.tenant_id,
