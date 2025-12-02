@@ -128,10 +128,42 @@ class VastBaseConnection(DocStoreConnection):
             raise
 
     def _get_connection(self):
-        """从连接池获取连接"""
+        """从连接池获取连接，并验证连接有效性"""
         if not self.connection_pool:
             raise Exception("连接池未初始化")
-        return self.connection_pool.getconn()
+
+        conn = self.connection_pool.getconn()
+
+        # 验证连接是否有效
+        try:
+            if conn.closed:
+                # 连接已关闭，标记为坏连接并重新获取
+                logger.debug("连接已关闭，尝试重新获取")
+                self.connection_pool.putconn(conn, close=True)
+                conn = self.connection_pool.getconn()
+            else:
+                # 测试连接是否可用
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+                cursor.close()
+        except Exception as e:
+            logger.warning(f"连接验证失败，尝试重新获取: {e}")
+            try:
+                self.connection_pool.putconn(conn, close=True)
+            except Exception:
+                pass
+            # 重新创建连接池中的连接
+            try:
+                conn = self.connection_pool.getconn()
+                # 再次验证新连接
+                if conn.closed:
+                    raise Exception("无法获取有效连接")
+            except Exception as e2:
+                logger.error(f"重新获取连接失败: {e2}")
+                raise
+
+        return conn
 
     def _release_connection(self, conn):
         """释放连接回连接池"""
@@ -749,8 +781,28 @@ class VastBaseConnection(DocStoreConnection):
             param_parts = []
             if expr.extra_options:
                 minimum_should_match = expr.extra_options.get("minimum_should_match")
-                if minimum_should_match:
-                    param_parts.append(f"PARAM:MINIMUM_SHOULD_MATCH={minimum_should_match}")
+                if minimum_should_match is not None:
+                    # VastBase MINIMUM_SHOULD_MATCH 支持的格式：
+                    # - 正整数: 3 (固定匹配3个词项)
+                    # - 负整数: -1 (允许缺失1个词项)
+                    # - 正百分比: "75%" (至少匹配75%)
+                    # - 负百分比: "-25%" (允许缺失25%)
+                    if isinstance(minimum_should_match, float):
+                        # 浮点数转换为百分比格式: 0.3 -> "30%"
+                        if 0 < minimum_should_match < 1:
+                            minimum_should_match = f"{int(minimum_should_match * 100)}%"
+                        elif minimum_should_match >= 1:
+                            # 大于1的浮点数转为整数
+                            minimum_should_match = int(minimum_should_match)
+                        else:
+                            # 小于等于0的浮点数无效，跳过
+                            minimum_should_match = None
+                    elif isinstance(minimum_should_match, int) and minimum_should_match == 0:
+                        # 0 无效，跳过
+                        minimum_should_match = None
+
+                    if minimum_should_match is not None:
+                        param_parts.append(f"PARAM:MINIMUM_SHOULD_MATCH={minimum_should_match}")
 
             # 构建带参数的查询字符串
             if param_parts:
@@ -813,6 +865,11 @@ class VastBaseConnection(DocStoreConnection):
 
                 except Exception as e:
                     logger.warning(f"VastBase 全文检索失败 field={field_name}, table={table_name}: {e}")
+                    # 回滚当前事务以允许后续查询继续
+                    try:
+                        cursor.connection.rollback()
+                    except Exception:
+                        pass
                     continue
 
         return results_map, scores_map
@@ -886,6 +943,11 @@ class VastBaseConnection(DocStoreConnection):
 
         except Exception as e:
             logger.warning(f"VastBase 向量检索失败 table={table_name}: {e}")
+            # 回滚当前事务以允许后续查询继续
+            try:
+                cursor.connection.rollback()
+            except Exception:
+                pass
 
         return results_map, scores_map
 
