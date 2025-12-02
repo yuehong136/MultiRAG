@@ -465,12 +465,560 @@ class VastBaseConnection(DocStoreConnection):
             # 可能的原因：1) VastBase版本不支持 2) 字段类型不兼容
 
     """
-    CRUD operations - 待实现
+    CRUD operations
     """
 
-    def search(self, *args, **kwargs):
-        """Search with given parameters"""
-        raise NotImplementedError("Not implemented")
+    def search(
+        self,
+        selectFields: list[str],
+        highlightFields: list[str],
+        condition: dict,
+        matchExprs: list[MatchExpr],
+        orderBy: OrderByExpr,
+        offset: int,
+        limit: int,
+        indexNames: str | list[str],
+        knowledgebaseIds: list[str],
+        aggFields: list[str] = [],
+        rank_feature: dict | None = None,
+    ) -> tuple[list[dict], int]:
+        """
+        Search with given conjunctive equivalent filtering condition and return all fields of matched documents
+
+        Args:
+            selectFields: 要返回的字段列表
+            highlightFields: 要高亮的字段列表
+            condition: 过滤条件字典
+            matchExprs: 匹配表达式列表（如向量查询、全文查询）
+            orderBy: 排序表达式
+            offset: 分页偏移量
+            limit: 结果数量限制
+            indexNames: 索引名称（表名前缀）
+            knowledgebaseIds: 知识库ID列表
+            aggFields: 聚合字段
+            rank_feature: PageRank等特征调整
+
+        Returns:
+            tuple: (结果列表, 总命中数)
+        """
+        if isinstance(indexNames, str):
+            indexNames = indexNames.split(",")
+        assert isinstance(indexNames, list) and len(indexNames) > 0
+
+        # 准备输出字段
+        output_fields = selectFields.copy()
+        for essential_field in ["id"] + aggFields:
+            if essential_field not in output_fields:
+                output_fields.append(essential_field)
+        # 移除特殊字段（不在数据库中）
+        output_fields = [f for f in output_fields if f != "_score"]
+
+        if limit <= 0:
+            limit = 10000
+
+        # 分类匹配表达式
+        text_exprs: list[MatchTextExpr] = []
+        dense_expr: MatchDenseExpr | None = None
+        fusion_expr: FusionExpr | None = None
+
+        for expr in matchExprs:
+            if isinstance(expr, MatchTextExpr):
+                text_exprs.append(expr)
+            elif isinstance(expr, MatchDenseExpr):
+                dense_expr = expr
+            elif isinstance(expr, FusionExpr):
+                fusion_expr = expr
+
+        has_retrieval = bool(text_exprs or dense_expr)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            self._register_vector_extension(conn)
+            cursor = conn.cursor()
+
+            all_results = []
+            total_hits_count = 0
+
+            # 遍历所有表
+            for indexName in indexNames:
+                for kb_id in knowledgebaseIds:
+                    table_name = f"{indexName}_{kb_id}"
+
+                    # 检查表是否存在
+                    if not self._table_exists(cursor, table_name):
+                        logger.debug(f"表 {table_name} 不存在，跳过")
+                        continue
+
+                    # 获取表的实际列名
+                    actual_columns = self._get_table_columns(cursor, table_name)
+                    # 过滤输出字段，只保留实际存在的列
+                    valid_output = [f for f in output_fields if f in actual_columns]
+
+                    if has_retrieval:
+                        # 混合检索
+                        results, hits = self._search_with_retrieval(
+                            cursor=cursor,
+                            table_name=table_name,
+                            select_fields=valid_output,
+                            condition=condition,
+                            text_exprs=text_exprs,
+                            dense_expr=dense_expr,
+                            fusion_expr=fusion_expr,
+                            limit=limit + offset,
+                            rank_feature=rank_feature,
+                        )
+                    else:
+                        # 纯条件过滤
+                        results, hits = self._search_with_filter_only(
+                            cursor=cursor,
+                            table_name=table_name,
+                            select_fields=valid_output,
+                            condition=condition,
+                            order_by=orderBy,
+                            limit=limit + offset,
+                        )
+
+                    all_results.extend(results)
+                    total_hits_count += hits
+
+            # 如果有检索，需要重新排序和融合
+            if has_retrieval and all_results:
+                # 按 _score 降序排序
+                all_results.sort(key=lambda x: x.get("_score", 0.0), reverse=True)
+
+            # 应用偏移和限制
+            if offset > 0:
+                all_results = all_results[offset:]
+            if limit > 0:
+                all_results = all_results[:limit]
+
+            logger.debug(f"VastBase search 返回 {len(all_results)} 条结果, 总命中 {total_hits_count}")
+            return all_results, total_hits_count
+
+        except Exception as e:
+            logger.error(f"VastBase search 失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return [], 0
+
+        finally:
+            if conn:
+                self._release_connection(conn)
+
+    def _get_table_columns(self, cursor, table_name: str) -> set[str]:
+        """获取表的所有列名"""
+        cursor.execute(f"""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = %s AND table_name = %s
+        """, (self.schema, table_name))
+        return {row[0] for row in cursor.fetchall()}
+
+    def _search_with_filter_only(
+        self,
+        cursor,
+        table_name: str,
+        select_fields: list[str],
+        condition: dict,
+        order_by: OrderByExpr,
+        limit: int,
+    ) -> tuple[list[dict], int]:
+        """纯条件过滤搜索（无向量/全文检索）"""
+        # 构建 WHERE 子句
+        where_clauses, params = self._build_where_clause(condition)
+        where_str = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+        # 构建 SELECT 字段
+        select_str = ", ".join(select_fields) if select_fields else "*"
+
+        # 构建 ORDER BY 子句
+        order_str = ""
+        if order_by and order_by.fields:
+            order_parts = []
+            for field, direction in order_by.fields:
+                order_parts.append(f"{field} {'ASC' if direction == 0 else 'DESC'}")
+            order_str = "ORDER BY " + ", ".join(order_parts)
+
+        # 先统计总数
+        count_sql = f"SELECT COUNT(*) FROM {self.schema}.{table_name} WHERE {where_str}"
+        cursor.execute(count_sql, params)
+        total_count = cursor.fetchone()[0]
+
+        # 查询数据
+        query_sql = f"""
+            SELECT {select_str}
+            FROM {self.schema}.{table_name}
+            WHERE {where_str}
+            {order_str}
+            LIMIT {limit}
+        """
+        cursor.execute(query_sql, params)
+
+        # 获取列名
+        columns = [desc[0] for desc in cursor.description]
+        rows = cursor.fetchall()
+
+        results = []
+        for row in rows:
+            doc = dict(zip(columns, row))
+            doc = self._deserialize_document(doc)
+            results.append(doc)
+
+        return results, total_count
+
+    def _search_with_retrieval(
+        self,
+        cursor,
+        table_name: str,
+        select_fields: list[str],
+        condition: dict,
+        text_exprs: list[MatchTextExpr],
+        dense_expr: MatchDenseExpr | None,
+        fusion_expr: FusionExpr | None,
+        limit: int,
+        rank_feature: dict | None = None,
+    ) -> tuple[list[dict], int]:
+        """混合检索搜索（向量 + 全文）"""
+        # 构建基础过滤条件
+        where_clauses, filter_params = self._build_where_clause(condition)
+        filter_str = " AND ".join(where_clauses) if where_clauses else ""
+
+        text_results = {}
+        text_scores = {}
+        dense_results = {}
+        dense_scores = {}
+
+        # 执行全文检索
+        if text_exprs:
+            text_results, text_scores = self._execute_text_search(
+                cursor=cursor,
+                table_name=table_name,
+                select_fields=select_fields,
+                text_exprs=text_exprs,
+                filter_str=filter_str,
+                filter_params=filter_params,
+                limit=limit,
+            )
+
+        # 执行向量检索
+        if dense_expr:
+            dense_results, dense_scores = self._execute_dense_search(
+                cursor=cursor,
+                table_name=table_name,
+                select_fields=select_fields,
+                dense_expr=dense_expr,
+                filter_str=filter_str,
+                filter_params=filter_params,
+                limit=limit,
+            )
+
+        # 融合结果
+        combined_results = self._fuse_results(
+            text_results=text_results,
+            text_scores=text_scores,
+            dense_results=dense_results,
+            dense_scores=dense_scores,
+            dense_expr=dense_expr,
+            fusion_expr=fusion_expr,
+            rank_feature=rank_feature,
+        )
+
+        total_hits = len(combined_results)
+        return combined_results, total_hits
+
+    def _execute_text_search(
+        self,
+        cursor,
+        table_name: str,
+        select_fields: list[str],
+        text_exprs: list[MatchTextExpr],
+        filter_str: str,
+        filter_params: list,
+        limit: int,
+    ) -> tuple[dict[str, dict], dict[str, float]]:
+        """执行全文检索（BM25）"""
+        results_map = {}
+        scores_map = {}
+
+        for expr in text_exprs:
+            # 构建查询字符串（用于 @~@ 操作符）
+            query_text = expr.matching_text
+
+            # 处理 extra_options 中的参数
+            param_parts = []
+            if expr.extra_options:
+                minimum_should_match = expr.extra_options.get("minimum_should_match")
+                if minimum_should_match:
+                    param_parts.append(f"PARAM:MINIMUM_SHOULD_MATCH={minimum_should_match}")
+
+            # 构建带参数的查询字符串
+            if param_parts:
+                query_text = f"{query_text} @<{' '.join(param_parts)}>@"
+
+            # 遍历字段进行查询
+            for field_expr in expr.fields:
+                field_name, boost = self._parse_field_weight(field_expr)
+
+                # 检查字段是否存在
+                table_columns = self._get_table_columns(cursor, table_name)
+                if field_name not in table_columns:
+                    logger.debug(f"字段 {field_name} 不在表 {table_name} 中，跳过")
+                    continue
+
+                select_str = ", ".join(select_fields) if select_fields else "*"
+
+                # 构建完整的查询 SQL
+                # 添加 BOOST 参数
+                actual_query = query_text
+                if boost != 1.0:
+                    if "@<PARAM:" in actual_query:
+                        # 已有参数，添加 BOOST
+                        actual_query = actual_query.replace(">@", f" PARAM:BOOST={boost}>@")
+                    else:
+                        actual_query = f"{actual_query} @<PARAM:BOOST={boost}>@"
+
+                sql = f"""
+                    SELECT {select_str}, bm25_score() as _bm25_score
+                    FROM {self.schema}.{table_name}
+                    WHERE {field_name} @~@ %s
+                """
+                params = [actual_query]
+
+                if filter_str:
+                    sql += f" AND {filter_str}"
+                    params.extend(filter_params)
+
+                sql += f" ORDER BY _bm25_score DESC NULLS LAST LIMIT {limit}"
+
+                try:
+                    cursor.execute(sql, params)
+                    columns = [desc[0] for desc in cursor.description]
+                    rows = cursor.fetchall()
+
+                    for row in rows:
+                        doc = dict(zip(columns, row))
+                        doc_id = doc.get("id")
+                        if not doc_id:
+                            continue
+
+                        score = float(doc.pop("_bm25_score", 0.0))
+
+                        # 累加分数（多字段查询时）
+                        if doc_id in scores_map:
+                            scores_map[doc_id] += score
+                        else:
+                            scores_map[doc_id] = score
+                            results_map[doc_id] = self._deserialize_document(doc)
+
+                except Exception as e:
+                    logger.warning(f"VastBase 全文检索失败 field={field_name}, table={table_name}: {e}")
+                    continue
+
+        return results_map, scores_map
+
+    def _execute_dense_search(
+        self,
+        cursor,
+        table_name: str,
+        select_fields: list[str],
+        dense_expr: MatchDenseExpr,
+        filter_str: str,
+        filter_params: list,
+        limit: int,
+    ) -> tuple[dict[str, dict], dict[str, float]]:
+        """执行向量检索"""
+        results_map = {}
+        scores_map = {}
+
+        vector_field = dense_expr.vector_column_name
+        vector_data = dense_expr.embedding_data
+        distance_type = dense_expr.distance_type.upper()
+
+        # 确保向量数据是列表格式
+        if hasattr(vector_data, 'tolist'):
+            vector_data = vector_data.tolist()
+
+        # 检查向量字段是否存在
+        table_columns = self._get_table_columns(cursor, table_name)
+        if vector_field not in table_columns:
+            logger.debug(f"向量字段 {vector_field} 不在表 {table_name} 中，跳过")
+            return results_map, scores_map
+
+        # 选择距离操作符
+        if distance_type in ("COSINE", "COS"):
+            distance_op = "<=>"
+        elif distance_type in ("L2", "EUCLIDEAN"):
+            distance_op = "<->"
+        elif distance_type in ("IP", "INNER_PRODUCT"):
+            distance_op = "<#>"
+        else:
+            distance_op = "<=>"  # 默认余弦距离
+
+        select_str = ", ".join(select_fields) if select_fields else "*"
+
+        sql = f"""
+            SELECT {select_str}, {vector_field} {distance_op} %s as _vector_distance
+            FROM {self.schema}.{table_name}
+        """
+        params = [vector_data]
+
+        if filter_str:
+            sql += f" WHERE {filter_str}"
+            params.extend(filter_params)
+
+        sql += f" ORDER BY _vector_distance LIMIT {limit}"
+
+        try:
+            cursor.execute(sql, params)
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+
+            for row in rows:
+                doc = dict(zip(columns, row))
+                doc_id = doc.get("id")
+                if not doc_id:
+                    continue
+
+                distance = float(doc.pop("_vector_distance", 0.0))
+                scores_map[doc_id] = distance
+                results_map[doc_id] = self._deserialize_document(doc)
+
+        except Exception as e:
+            logger.warning(f"VastBase 向量检索失败 table={table_name}: {e}")
+
+        return results_map, scores_map
+
+    def _fuse_results(
+        self,
+        text_results: dict[str, dict],
+        text_scores: dict[str, float],
+        dense_results: dict[str, dict],
+        dense_scores: dict[str, float],
+        dense_expr: MatchDenseExpr | None,
+        fusion_expr: FusionExpr | None,
+        rank_feature: dict | None = None,
+    ) -> list[dict]:
+        """融合全文检索和向量检索结果"""
+        combined = []
+
+        # 确定融合权重
+        text_weight, vector_weight = self._get_fusion_weights(fusion_expr)
+
+        # 归一化分数
+        norm_text = self._normalize_scores(text_scores, reverse=False)  # BM25 越大越好
+
+        # 向量距离：根据距离类型决定是否反转
+        if dense_expr:
+            distance_type = dense_expr.distance_type.upper()
+            # L2/Euclidean 距离越小越好，需要反转
+            # Cosine/IP 在 VastBase 中使用的是距离（越小越好），也需要反转
+            is_distance = True  # VastBase 返回的都是距离
+            norm_vector = self._normalize_scores(dense_scores, reverse=is_distance)
+        else:
+            norm_vector = {}
+
+        # 合并所有文档 ID
+        all_doc_ids = set(text_scores.keys()) | set(dense_scores.keys())
+
+        # 合并结果
+        all_results = {**text_results, **dense_results}
+
+        for doc_id in all_doc_ids:
+            if doc_id not in all_results:
+                continue
+
+            doc = all_results[doc_id].copy()
+
+            # 计算融合分数
+            text_score = norm_text.get(doc_id, 0.0)
+            vector_score = norm_vector.get(doc_id, 0.0)
+
+            # 如果只有一种检索，直接使用该分数
+            if text_scores and not dense_scores:
+                final_score = text_score
+            elif dense_scores and not text_scores:
+                final_score = vector_score
+            else:
+                final_score = text_weight * text_score + vector_weight * vector_score
+
+            # 应用 rank_feature 加权
+            if rank_feature and PAGERANK_FLD in doc:
+                pagerank = float(doc.get(PAGERANK_FLD, 0))
+                pagerank_weight = rank_feature.get(PAGERANK_FLD, 1.0)
+                final_score += pagerank * pagerank_weight
+
+            doc["_score"] = final_score
+            combined.append(doc)
+
+        # 按分数降序排序
+        combined.sort(key=lambda x: x.get("_score", 0.0), reverse=True)
+
+        return combined
+
+    def _get_fusion_weights(self, fusion_expr: FusionExpr | None) -> tuple[float, float]:
+        """获取融合权重"""
+        default = (0.5, 0.5)
+        if not fusion_expr or not fusion_expr.fusion_params:
+            return default
+
+        weights = fusion_expr.fusion_params.get("weights")
+        if not weights:
+            return default
+
+        parts = [p.strip() for p in str(weights).split(",") if p.strip()]
+        if len(parts) < 2:
+            return default
+
+        try:
+            return float(parts[0]), float(parts[1])
+        except ValueError:
+            return default
+
+    @staticmethod
+    def _normalize_scores(score_map: dict[str, float], reverse: bool = False) -> dict[str, float]:
+        """
+        使用 Min-Max 归一化分数
+        :param score_map: 文档ID到分数的映射
+        :param reverse: 是否反转分数（例如距离越小越好，需要反转）
+        """
+        import numpy as np
+
+        if not score_map:
+            return {}
+
+        keys = list(score_map.keys())
+        values = np.array([float(score_map[k]) for k in keys], dtype=np.float64)
+
+        if len(values) == 1:
+            return {keys[0]: 1.0}
+
+        min_v = np.min(values)
+        max_v = np.max(values)
+
+        # 如果分值差异过小，返回 1.0
+        if max_v - min_v < 1e-9:
+            return {k: 1.0 for k in keys}
+
+        if reverse:
+            # 距离越小分数越高
+            normalized = (max_v - values) / (max_v - min_v)
+        else:
+            # 分数越大越好
+            normalized = (values - min_v) / (max_v - min_v)
+
+        return {k: float(normalized[i]) for i, k in enumerate(keys)}
+
+    @staticmethod
+    def _parse_field_weight(field_expr: str) -> tuple[str, float]:
+        """解析字段权重表达式（如 'title^2.0'）"""
+        if "^" in field_expr:
+            fname, boost = field_expr.split("^", 1)
+            try:
+                return fname, float(boost)
+            except ValueError:
+                return fname, 1.0
+        return field_expr, 1.0
 
     def get(self, chunkId: str, indexName: str | list[str], knowledgebaseIds: list[str]) -> dict | None:
         """
@@ -1224,28 +1772,274 @@ class VastBaseConnection(DocStoreConnection):
                 self._release_connection(conn)
 
     """
-    Helper functions for search result - 待实现
+    Helper functions for search result
     """
 
-    def getTotal(self, res):
-        raise NotImplementedError("Not implemented")
+    def getTotal(self, res: tuple[list[dict], int] | list[dict]) -> int:
+        """
+        从搜索结果中获取总命中数
 
-    def getChunkIds(self, res):
-        raise NotImplementedError("Not implemented")
+        Args:
+            res: search 方法返回的结果，可能是 (results, total) 元组或直接是结果列表
 
-    def getFields(self, res, fields: list[str]) -> dict[str, dict]:
-        raise NotImplementedError("Not implemented")
+        Returns:
+            int: 总命中数
+        """
+        if isinstance(res, tuple):
+            return res[1]
+        return len(res)
 
-    def getHighlight(self, res, keywords: list[str], fieldnm: str):
-        raise NotImplementedError("Not implemented")
+    def getChunkIds(self, res: tuple[list[dict], int] | list[dict]) -> list[str]:
+        """
+        从搜索结果中提取所有文档块 ID
 
-    def getAggregation(self, res, fieldnm: str):
-        raise NotImplementedError("Not implemented")
+        Args:
+            res: search 方法返回的结果
+
+        Returns:
+            list[str]: 文档块 ID 列表
+        """
+        if isinstance(res, tuple):
+            results = res[0]
+        else:
+            results = res
+
+        return [doc.get("id", "") for doc in results if doc.get("id")]
+
+    def getFields(self, res: tuple[list[dict], int] | list[dict], fields: list[str]) -> dict[str, dict]:
+        """
+        从搜索结果中提取指定字段，按文档 ID 组织
+
+        Args:
+            res: search 方法返回的结果
+            fields: 要提取的字段列表
+
+        Returns:
+            dict[str, dict]: {doc_id: {field: value, ...}, ...}
+        """
+        if isinstance(res, tuple):
+            results = res[0]
+        else:
+            results = res
+
+        if not fields:
+            return {}
+
+        result_dict = {}
+        fields_set = set(fields)
+        fields_set.add("id")  # 确保 id 字段被包含
+
+        for doc in results:
+            doc_id = doc.get("id")
+            if not doc_id:
+                continue
+
+            # 提取指定字段
+            field_values = {}
+            for field in fields_set:
+                if field in doc:
+                    field_values[field] = doc[field]
+                else:
+                    field_values[field] = None
+
+            result_dict[doc_id] = field_values
+
+        return result_dict
+
+    def getHighlight(
+        self,
+        res: tuple[list[dict], int] | list[dict],
+        keywords: list[str],
+        fieldnm: str
+    ) -> dict[str, str]:
+        """
+        为搜索结果生成高亮文本
+
+        VastBase 不支持原生高亮，这里手动实现关键词高亮
+
+        Args:
+            res: search 方法返回的结果
+            keywords: 要高亮的关键词列表
+            fieldnm: 要高亮的字段名
+
+        Returns:
+            dict[str, str]: {doc_id: highlighted_text, ...}
+        """
+        if isinstance(res, tuple):
+            results = res[0]
+        else:
+            results = res
+
+        highlight_dict = {}
+
+        for doc in results:
+            doc_id = doc.get("id")
+            if not doc_id:
+                continue
+
+            text = doc.get(fieldnm, "")
+            if not text or not isinstance(text, str):
+                highlight_dict[doc_id] = str(text) if text else ""
+                continue
+
+            # 检查是否已经有高亮标记
+            if re.search(r"<em>[^<>]+</em>", text, flags=re.IGNORECASE | re.MULTILINE):
+                highlight_dict[doc_id] = text
+                continue
+
+            # 清理换行符
+            txt = re.sub(r"[\r\n]", " ", text, flags=re.IGNORECASE | re.MULTILINE)
+
+            # 按句子分割
+            sentences = []
+            for sentence in re.split(r"[.?!;。？！；\n]", txt):
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+
+                highlighted_sentence = sentence
+
+                # 判断是否为英文
+                if is_english([sentence]):
+                    # 英文：单词边界匹配
+                    for word in keywords:
+                        pattern = r"(^|[ .?/'\"\\(\\)!,:;-])(%s)([ .?/'\"\\(\\)!,:;-])" % re.escape(word)
+                        highlighted_sentence = re.sub(
+                            pattern,
+                            r"\1<em>\2</em>\3",
+                            highlighted_sentence,
+                            flags=re.IGNORECASE | re.MULTILINE,
+                        )
+                else:
+                    # 中文：按关键词长度降序匹配
+                    for word in sorted(keywords, key=len, reverse=True):
+                        if word:
+                            highlighted_sentence = re.sub(
+                                re.escape(word),
+                                f"<em>{word}</em>",
+                                highlighted_sentence,
+                                flags=re.IGNORECASE | re.MULTILINE,
+                            )
+
+                # 只保留有高亮的句子
+                if re.search(r"<em>[^<>]+</em>", highlighted_sentence, flags=re.IGNORECASE | re.MULTILINE):
+                    sentences.append(highlighted_sentence)
+
+            if sentences:
+                highlight_dict[doc_id] = "...".join(sentences)
+            else:
+                highlight_dict[doc_id] = text
+
+        return highlight_dict
+
+    def getAggregation(
+        self,
+        res: tuple[list[dict], int] | list[dict],
+        fieldnm: str
+    ) -> list[list]:
+        """
+        手动聚合指定字段的值（因为 VastBase 不提供原生聚合）
+
+        Args:
+            res: search 方法返回的结果
+            fieldnm: 要聚合的字段名
+
+        Returns:
+            list[list]: [[value, count], ...] 按计数降序排列
+        """
+        from collections import Counter
+
+        if isinstance(res, tuple):
+            results = res[0]
+        else:
+            results = res
+
+        if not results:
+            return []
+
+        tag_counter = Counter()
+
+        for doc in results:
+            value = doc.get(fieldnm)
+            if value is None:
+                continue
+
+            # 处理不同的值类型
+            if isinstance(value, str):
+                # 处理 ### 分隔的标签字段
+                if "###" in value:
+                    tags = [tag.strip() for tag in value.split("###") if tag.strip()]
+                else:
+                    # 尝试逗号分隔
+                    tags = [tag.strip() for tag in value.split(",") if tag.strip()]
+
+                for tag in tags:
+                    if tag:
+                        tag_counter[tag] += 1
+
+            elif isinstance(value, list):
+                for item in value:
+                    if item and isinstance(item, str):
+                        tag_counter[item.strip()] += 1
+                    elif item:
+                        tag_counter[str(item)] += 1
+
+            else:
+                # 其他类型直接转字符串
+                tag_counter[str(value)] += 1
+
+        # 返回按计数降序排列的列表
+        return [[tag, count] for tag, count in tag_counter.most_common()]
 
     """
-    SQL - 待实现
+    SQL
     """
 
-    def sql(self, sql: str, fetch_size: int, format: str):
-        """Run the sql generated by text-to-sql"""
-        raise NotImplementedError("Not implemented")
+    def sql(self, sql_str: str, fetch_size: int = 100, format: str = "json"):
+        """
+        执行自定义 SQL 查询（用于 text-to-sql 场景）
+
+        Args:
+            sql_str: SQL 查询语句
+            fetch_size: 每次获取的行数
+            format: 返回格式（"json" 或 "raw"）
+
+        Returns:
+            查询结果
+        """
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(sql_str)
+
+            if cursor.description is None:
+                # 非查询语句（如 INSERT、UPDATE、DELETE）
+                conn.commit()
+                return {"affected_rows": cursor.rowcount}
+
+            # 获取列名
+            columns = [desc[0] for desc in cursor.description]
+
+            # 获取结果
+            rows = cursor.fetchmany(fetch_size)
+            results = []
+
+            while rows:
+                for row in rows:
+                    if format == "json":
+                        results.append(dict(zip(columns, row)))
+                    else:
+                        results.append(row)
+                rows = cursor.fetchmany(fetch_size)
+
+            return results
+
+        except Exception as e:
+            logger.error(f"执行 SQL 失败: {e}")
+            raise
+
+        finally:
+            if conn:
+                self._release_connection(conn)
