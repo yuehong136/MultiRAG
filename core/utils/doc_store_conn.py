@@ -259,10 +259,11 @@ class DocStoreConnection(ABC):
 
 
     """
-    only used by milvus
+    Milvus-specific methods (non-abstract, with default implementations)
+    These methods are primarily used by MilvusConnection.
+    Other implementations provide compatible fallbacks using standard interfaces.
     """
 
-    @abstractmethod
     def search_by_milvus(
             self,
             collection_name: str | list,
@@ -277,29 +278,35 @@ class DocStoreConnection(ABC):
             **kwargs,
     ) -> list[list[dict]]:
         """
-        Search with given conjunctive equivalent filtering condition and return all fields of matched documents
+        Milvus-specific vector search. Only implemented in MilvusConnection.
         """
-        raise NotImplementedError("Not implemented")
+        raise NotImplementedError(f"{self.dbType()} does not support search_by_milvus")
 
-    @abstractmethod
     def describe_collection(
             self,
             collection_name: str,
             timeout: float | None = None,
             **kwargs
-    ):
-        raise NotImplementedError("Not implemented")
+    ) -> dict:
+        """
+        Get collection/index schema. For non-Milvus databases, returns a basic structure.
+        """
+        # Default implementation for ES/OpenSearch/Infinity - return empty schema
+        return {"fields": []}
 
-    @abstractmethod
     def has_collection(
             self,
             collection_name: str,
             timeout: float | None = None,
             **kwargs
-    ):
-        raise NotImplementedError("Not implemented")
+    ) -> bool:
+        """
+        Check if collection/index exists. Falls back to indexExist for non-Milvus databases.
+        """
+        # Default implementation: use indexExist as fallback
+        # Ensure we return a proper bool (ES indexExist may return HeadApiResponse)
+        return bool(self.indexExist(collection_name, ""))
 
-    @abstractmethod
     def query(
             self,
             collection_name: str,
@@ -310,4 +317,7 @@ class DocStoreConnection(ABC):
             partition_names: list[str] | None = None,
             **kwargs,
     ) -> list[dict]:
-        raise NotImplementedError("Not implemented")
+        """
+        Milvus-specific query. Only implemented in MilvusConnection.
+        """
+        raise NotImplementedError(f"{self.dbType()} does not support query")

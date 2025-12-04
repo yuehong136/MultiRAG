@@ -13,6 +13,7 @@ from api.db.services.pipeline_operation_log_service import PipelineOperationLogS
 from api.utils.api_utils import timeout
 from api.utils.base64_image import image2id
 from api.utils.log_utils import init_root_logger, get_project_base_directory
+from api.utils.configs import show_configs
 from graphrag.general.index import run_graphrag_for_kb
 from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
 from core.flow.pipeline import Pipeline
@@ -57,13 +58,47 @@ from core.app import laws, paper, presentation, manual, qa, table, book, resume,
     email, tag
 from core.nlp import search, rag_tokenizer, add_positions, concat_img
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from core.settings import DOC_MAXIMUM_SIZE, DOC_BULK_SIZE, EMBEDDING_BATCH_SIZE, SVR_CONSUMER_GROUP_NAME, get_svr_queue_name, get_svr_queue_names, print_rag_settings, TAG_FLD, PAGERANK_FLD
-from core.utils import rmSpace, num_tokens_from_string, truncate
+from core.settings import DOC_MAXIMUM_SIZE, DOC_BULK_SIZE, EMBEDDING_BATCH_SIZE, SVR_CONSUMER_GROUP_NAME, \
+    get_svr_queue_name, get_svr_queue_names, print_rag_settings, TAG_FLD, PAGERANK_FLD
+from core.utils import num_tokens_from_string, truncate
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 from core.utils.storage_factory import STORAGE_IMPL
 from graphrag.utils import chat_limiter
 
 BATCH_SIZE = 64
+
+
+def delete_chunks_by_doc_id(collection_name: str, doc_id: str, kb_id: str = "") -> int:
+    """
+    兼容不同数据库的删除操作辅助函数
+
+    Args:
+        collection_name: 集合/索引名称
+        doc_id: 文档ID
+        kb_id: 知识库ID (ES/OpenSearch 需要)
+
+    Returns:
+        删除的记录数
+    """
+    db_type = settings.docStoreConn.dbType()
+    try:
+        if db_type == "milvus":
+            # Milvus 使用 filter 参数
+            return settings.docStoreConn.delete(
+                collection_name=collection_name,
+                filter=f"doc_id == '{doc_id}'"
+            )
+        else:
+            # ES/OpenSearch/Infinity 使用 condition 参数
+            return settings.docStoreConn.delete(
+                condition={"doc_id": doc_id},
+                indexName=collection_name,
+                knowledgebaseId=kb_id
+            )
+    except Exception as e:
+        logging.warning(f"delete_chunks_by_doc_id failed for {db_type}: {e}")
+        return 0
+
 
 FACTORY = {
     "general": naive,
@@ -133,7 +168,8 @@ def start_tracemalloc_and_snapshot(signum, frame):
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     snapshot_file = f"snapshot_{timestamp}.trace"
-    snapshot_file = os.path.abspath(os.path.join(get_project_base_directory(), "logs", f"{os.getpid()}_snapshot_{timestamp}.trace"))
+    snapshot_file = os.path.abspath(
+        os.path.join(get_project_base_directory(), "logs", f"{os.getpid()}_snapshot_{timestamp}.trace"))
 
     snapshot = tracemalloc.take_snapshot()
     snapshot.dump(snapshot_file)
@@ -145,7 +181,8 @@ def start_tracemalloc_and_snapshot(signum, frame):
     else:
         import resource
         max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    logging.info(f"taken snapshot {snapshot_file}. max RSS={max_rss / 1000:.2f} MB, current memory usage: {current / 10**6:.2f} MB, Peak memory usage: {peak / 10**6:.2f} MB")
+    logging.info(
+        f"taken snapshot {snapshot_file}. max RSS={max_rss / 1000:.2f} MB, current memory usage: {current / 10 ** 6:.2f} MB, Peak memory usage: {peak / 10 ** 6:.2f} MB")
 
 
 # SIGUSR2 handler: stop tracemalloc
@@ -333,7 +370,8 @@ async def collect(db: Session):
                 # Redis消息中的这两个字段需要覆盖数据库的
                 task["doc_id"] = msg["doc_id"]  # 保持使用fake_doc_id
                 task["doc_ids"] = msg.get("doc_ids", []) or []  # 文档列表
-                logging.info(f"Task {msg['id']}: merged DB config with Redis message (doc_id={task['doc_id']}, doc_ids count={len(task['doc_ids'])})")
+                logging.info(
+                    f"Task {msg['id']}: merged DB config with Redis message (doc_id={task['doc_id']}, doc_ids count={len(task['doc_ids'])})")
             else:
                 # 数据库获取失败，使用Redis消息（已包含必要字段）
                 logging.warning(f"Task {msg['id']}: failed to get from DB, using Redis message data")
@@ -454,7 +492,8 @@ async def build_chunks(task, progress_callback, db: Session):
         logging.info("From minio({}) {}/{}".format(timer() - st, task["location"], task["name"]))
     except TimeoutError:
         progress_callback(-1, "Internal server error: Fetch file from minio timeout. Could you try it again.")
-        logging.exception("Minio {}/{} got timeout: Fetch file from minio timeout.".format(task["location"], task["name"]))
+        logging.exception(
+            "Minio {}/{} got timeout: Fetch file from minio timeout.".format(task["location"], task["name"]))
         raise
     except Exception as e:
         if re.search("(No such file|not found)", str(e)):
@@ -467,9 +506,11 @@ async def build_chunks(task, progress_callback, db: Session):
 
     try:
         async with chunk_limiter:
-            cks = await trio.to_thread.run_sync(lambda: chunker.chunk(task["name"], binary=binary, from_page=task["from_page"],
-                                to_page=task["to_page"], lang=task["language"], callback=progress_callback,
-                                kb_id=task["kb_id"], parser_config=task["parser_config"], tenant_id=task["tenant_id"]))
+            cks = await trio.to_thread.run_sync(
+                lambda: chunker.chunk(task["name"], binary=binary, from_page=task["from_page"],
+                                      to_page=task["to_page"], lang=task["language"], callback=progress_callback,
+                                      kb_id=task["kb_id"], parser_config=task["parser_config"],
+                                      tenant_id=task["tenant_id"]))
         logging.info(
             "Chunking({}) {}/{}".format(timer() - st, task["location"], task["name"]))
     except TaskCanceledException:
@@ -511,7 +552,8 @@ async def build_chunks(task, progress_callback, db: Session):
             await image2id(d, partial(STORAGE_IMPL.put, tenant_id=task["tenant_id"]), d["pk"], task["kb_id"])
             docs.append(d)
         except Exception:
-            logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
+            logging.exception(
+                "Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
             raise
 
     async with trio.open_nursery() as nursery:
@@ -530,7 +572,8 @@ async def build_chunks(task, progress_callback, db: Session):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "keywords", {"topn": topn})
             if not cached:
                 async with chat_limiter:
-                    cached = await trio.to_thread.run_sync(lambda: keyword_extraction(chat_mdl, d["content_with_weight"], topn))
+                    cached = await trio.to_thread.run_sync(
+                        lambda: keyword_extraction(chat_mdl, d["content_with_weight"], topn))
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "keywords", {"topn": topn})
             if cached:
                 d["important_kwd"] = cached.split(",")
@@ -551,7 +594,8 @@ async def build_chunks(task, progress_callback, db: Session):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "question", {"topn": topn})
             if not cached:
                 async with chat_limiter:
-                    cached = await trio.to_thread.run_sync(lambda: question_proposal(chat_mdl, d["content_with_weight"], topn))
+                    cached = await trio.to_thread.run_sync(
+                        lambda: question_proposal(chat_mdl, d["content_with_weight"], topn))
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "question", {"topn": topn})
             if cached:
                 d["question_kwd"] = cached.split("\n")
@@ -585,7 +629,8 @@ async def build_chunks(task, progress_callback, db: Session):
             if task_canceled:
                 progress_callback(-1, msg="Task has been canceled.")
                 return
-            if settings.retriever.tag_content(tenant_id, kb_ids, d, all_tags, topn_tags=topn_tags, S=S) and len(d[TAG_FLD]) > 0:
+            if settings.retriever.tag_content(tenant_id, kb_ids, d, all_tags, topn_tags=topn_tags, S=S) and len(
+                    d[TAG_FLD]) > 0:
                 examples.append({"content": d["content_with_weight"], TAG_FLD: d[TAG_FLD]})
             else:
                 docs_to_tag.append(d)
@@ -597,7 +642,9 @@ async def build_chunks(task, progress_callback, db: Session):
                 if not picked_examples:
                     picked_examples.append({"content": "This is an example", TAG_FLD: {'example': 1}})
                 async with chat_limiter:
-                    cached = await trio.to_thread.run_sync(lambda: content_tagging(chat_mdl, d["content_with_weight"], all_tags, picked_examples, topn=topn_tags))
+                    cached = await trio.to_thread.run_sync(
+                        lambda: content_tagging(chat_mdl, d["content_with_weight"], all_tags, picked_examples,
+                                                topn=topn_tags))
                 if cached:
                     cached = json.dumps(cached)
             if cached:
@@ -642,19 +689,45 @@ def build_TOC(task, docs, progress_callback):
         d["toc_kwd"] = "toc"
         d["available_int"] = 0
         d["page_num_int"] = 100000000
-        d["pk"] = xxhash.xxh64((d["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
+        d["pk"] = xxhash.xxh64(
+            (d["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
         return d
 
 
 async def init_kb(row, kb_name):
     """
-    初始化知识库，创建集合并设置索引
+    初始化知识库，创建集合/索引
 
     Args:
         row: 任务数据行
         kb_name: 知识库名称
     """
     idxnm = search.index_name_one(row["tenant_id"], kb_name)
+    kb_id = row.get("kb_id", "")
+    db_type = settings.docStoreConn.dbType()
+
+    # 对于 ES/OpenSearch/Infinity，使用通用的 indexExist/createIdx 接口
+    if db_type in ("elasticsearch", "opensearch", "infinity", "vastbase"):
+        if await trio.to_thread.run_sync(lambda: settings.docStoreConn.indexExist(idxnm, kb_id)):
+            return
+        # 获取向量维度（用于 createIdx）
+        vector_dim = 768  # 默认维度
+        try:
+            if "embd_id" in row and row["tenant_id"]:
+                with db_connection() as db:
+                    embedding_model = LLMBundle(db, row["tenant_id"], LLMType.EMBEDDING,
+                                                llm_name=row["embd_id"], lang=row.get("language", "en"))
+                    sample_vec, _ = embedding_model.encode(["测试文本"])
+                    if len(sample_vec) > 0:
+                        vector_dim = len(sample_vec[0])
+                        logging.info(f"当前embedding模型维度: {vector_dim}")
+        except Exception as e:
+            logging.warning(f"获取嵌入模型维度失败，使用默认维度 {vector_dim}: {str(e)}")
+        # 创建索引
+        await trio.to_thread.run_sync(lambda: settings.docStoreConn.createIdx(idxnm, kb_id, vector_dim))
+        return
+
+    # 对于 Milvus，使用特有的 has_collection/create_collection_with_mapping 接口
     if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(idxnm)):
         return
 
@@ -695,16 +768,20 @@ async def init_kb(row, kb_name):
         auto_dimensions[f"q_{vector_dim}_vec"] = vector_dim
 
     # 创建集合
-    await trio.to_thread.run_sync(lambda: settings.docStoreConn.create_collection_with_mapping(idxnm, mapping, auto_dimensions))
+    await trio.to_thread.run_sync(
+        lambda: settings.docStoreConn.create_collection_with_mapping(idxnm, mapping, auto_dimensions))
 
 
 def convert_data_types(data, schema):
     """
-    转换数据类型以匹配Milvus模式，确保所有必要字段都有值
+    转换数据类型以匹配向量数据库模式，确保所有必要字段都有值
+
+    对于 Milvus: 根据 schema 进行严格的类型转换
+    对于 ES/OpenSearch: schema 为空，直接返回原数据
 
     Args:
         data: 文档数据字典
-        schema: Milvus集合模式
+        schema: 集合模式 (ES 返回 {"fields": []})
 
     Returns:
         转换后的数据字典
@@ -771,12 +848,12 @@ def convert_data_types(data, schema):
                     else:
                         result[field_name] = [result[field_name]]
 
-    # 处理动态向量字段 (q_*_vec)
+    # 处理动态向量字段 (q_*_vec) - 仅用于 Milvus，ES 使用动态 mapping 自动处理
     vector_fields = [k for k in result.keys() if re.match(r'q_\d+_vec', k)]
     for vector_field in vector_fields:
         if vector_field not in schema_fields:
-            # 如果这是一个新的向量字段，记录一下但保留它
-            logging.info(f"发现新的向量字段 {vector_field}，保留在数据中")
+            # 如果这是一个新的向量字段，记录一下但保留它（使用 debug 级别避免重复日志）
+            logging.debug(f"发现新的向量字段 {vector_field}，保留在数据中")
 
     return result
 
@@ -803,7 +880,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
         parser_config = {}
     tts, cnts = [], []
     for d in docs:
-        tts.append(rmSpace(d.get("docnm_kwd", "Title")))
+        tts.append(d.get("docnm_kwd", "Title"))
         c = "\n".join(d.get("question_kwd", []))
         if not c:
             c = d["content_with_weight"]
@@ -815,7 +892,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
     tk_count = 0
     if len(tts) == len(cnts):
         vts, c = await trio.to_thread.run_sync(lambda: mdl.encode(tts[0: 1]))
-        tts = np.concatenate([vts for _ in range(len(tts))], axis=0)
+        tts = np.concatenate([vts[0] for _ in range(len(tts))], axis=0)
         tk_count += c
 
     @timeout(60)
@@ -835,7 +912,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
         callback(prog=0.7 + 0.2 * (i + 1) / len(cnts), msg="")
     cnts = cnts_
 
-    filename_embd_weight = parser_config.get("filename_embd_weight", 0.1) # due to the db support none value
+    filename_embd_weight = parser_config.get("filename_embd_weight", 0.1)  # due to the db support none value
     if not filename_embd_weight:
         filename_embd_weight = 0.1
     title_w = float(filename_embd_weight)
@@ -878,7 +955,8 @@ async def run_dataflow(db: Session, task: dict):
         return
 
     if not chunks:
-        PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+        PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id,
+                                           task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
         return
 
     embedding_token_consumption = chunks.get("embedding_token_consumption", 0)
@@ -928,11 +1006,12 @@ async def run_dataflow(db: Session, task: dict):
                 ck["q_%d_vec" % len(v)] = v
         except Exception as e:
             set_progress(db, task_id, prog=-1, msg=f"[ERROR]: {e}")
-            PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+            PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id,
+                                               task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
             return
 
-
     metadata = {}
+
     def dict_update(meta):
         nonlocal metadata
         if not meta:
@@ -1010,18 +1089,23 @@ async def run_dataflow(db: Session, task: dict):
     kb_name = kb.name if kb else "default"
     collection_name = search.index_name_one(task["tenant_id"], kb_name)
     schema = await get_schema(collection_name)
-    
-    e = await insert_milvus(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, task_id, 0, 100000000), collection_name, schema)
+
+    e = await insert_milvus(db, task_id, task["tenant_id"], task["kb_id"], chunks,
+                            partial(set_progress, task_id, 0, 100000000), collection_name, schema)
     if not e:
-        PipelineOperationLogService.create(document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+        PipelineOperationLogService.create(document_id=doc_id, pipeline_id=dataflow_id,
+                                           task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
         return
 
     time_cost = timer() - start_ts
     task_time_cost = timer() - task_start_ts
     set_progress(task_id, prog=1., msg="Indexing done ({:.2f}s). Task done ({:.2f}s)".format(time_cost, task_time_cost))
-    DocumentService.increment_chunk_num(doc_id, task_dataset_id, embedding_token_consumption, len(chunks), task_time_cost)
-    logging.info("[Done], chunks({}), token({}), elapsed:{:.2f}".format(len(chunks),  embedding_token_consumption, task_time_cost))
-    PipelineOperationLogService.create(document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+    DocumentService.increment_chunk_num(doc_id, task_dataset_id, embedding_token_consumption, len(chunks),
+                                        task_time_cost)
+    logging.info("[Done], chunks({}), token({}), elapsed:{:.2f}".format(len(chunks), embedding_token_consumption,
+                                                                        task_time_cost))
+    PipelineOperationLogService.create(document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE,
+                                       dsl=str(pipeline))
 
 
 @timeout(3600)
@@ -1037,7 +1121,8 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
         vctr_nm = "vector"
     for doc_id in doc_ids:
         # 使用真实的doc_id查询chunks，而不是row["doc_id"]（fake_doc_id）
-        for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
+        for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])],
+                                               fields=["content_with_weight", vctr_nm], sort_by_position=True):
             chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
 
     raptor = Raptor(
@@ -1078,20 +1163,20 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
 async def _detect_hierarchical_structure(chunks, hierarchical_config):
     """
     检测文档是否有层次结构
-    
+
     参考 core/flow 的设计理念：
     - 不单独实现检测逻辑，而是直接调用 hierarchical_merge
     - 通过返回的 chapters 数量判断是否有结构
-    
+
     Args:
         chunks: chunk 列表
         hierarchical_config: 层次化配置
-    
+
     Returns:
         bool: 是否有层次结构（chapters > 1 表示有结构）
     """
     from core.flow.utils import hierarchical_merge
-    
+
     # 调用 hierarchical_merge 尝试识别结构
     result = await hierarchical_merge(
         chunks=chunks,
@@ -1099,14 +1184,14 @@ async def _detect_hierarchical_structure(chunks, hierarchical_config):
         hierarchy=hierarchical_config.get("hierarchy", 1) if hierarchical_config else 1,
         callback=None
     )
-    
+
     chapters = result.get("chapters", [])
-    
+
     # 如果识别出多个章节，说明有层次结构
     has_structure = len(chapters) > 1
-    
+
     logging.info(f"Structure detection: {len(chapters)} chapters identified, has_structure={has_structure}")
-    
+
     return has_structure
 
 
@@ -1125,7 +1210,7 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
             - hierarchy: 合并到第几层
         tenant_id: 租户ID（保留参数，未使用）
         db: 数据库session（保留参数，未使用）
-    
+
     注意：
         图片处理应该在 Parser 阶段配置（parse_method），而不是在这里。
         章节级的图片是合并后的巨图，不适合进行 OCR/VLM 处理。
@@ -1152,38 +1237,38 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
         hierarchy=hierarchy_level,
         callback=None
     )
-    
+
     chapters = result.get("chapters", [])
-    
+
     # ✨ 增强：为每个章节添加位置信息、图片合并
     for chapter in chapters:
         chapter_chunks = chapter.get("chunks", [])
-        
+
         # 合并位置信息
         chapter_positions = []
         for chunk in chapter_chunks:
             if "positions" in chunk and chunk["positions"]:
                 chapter_positions.extend(chunk["positions"])
-        
+
         # 合并图片（内存中处理，不上传 MinIO）
         chapter_image = None
         for chunk in chapter_chunks:
             if "image" in chunk and chunk["image"]:
                 chapter_image = concat_img(chapter_image, chunk["image"])
-        
+
         # 计算页码范围
         page_range = None
         if chapter_positions:
             pages = [p[0] for p in chapter_positions]
             page_range = [min(pages), max(pages)]
-        
+
         # 添加到章节信息
         chapter["positions"] = chapter_positions
         chapter["image"] = chapter_image
         chapter["page_range"] = page_range
 
     # ⚠️ 注意：不在章节级别处理合并后的图片
-    # 
+    #
     # 原因分析：
     # 1. Parser 阶段已经对每张原始图片进行了 OCR/VLM 处理
     # 2. 图片内容已经转化为文本，存储在 chunk 的 content_with_weight 中
@@ -1197,7 +1282,7 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
     # - 合并后的图片仅用于展示，不再进行 OCR/VLM 处理
     #
     # 参考：core/flow/parser/parser.py 第 346-375 行 - 只处理单张原始图片
-    
+
     if config.get("image_model"):
         logging.info(
             f"Note: image_model ('{config.get('image_model')}') should be configured in parse_method, "
@@ -1280,6 +1365,7 @@ def _get_extraction_contents(source, summaries, chunks, cluster_results=None, or
     Returns:
         list[str]: 用于提取的内容列表
     """
+
     # ✨ 辅助函数：提取文本（兼容字符串和字典）
     def extract_text(item):
         if isinstance(item, dict):
@@ -1438,7 +1524,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
     图片理解功能：
         应该在 Parser 阶段配置，而不是在 hierarchical_config 中。
-        
+
         正确配置：
         {
             "parse_method": "qwen-vl-plus",  // VLM 处理每张原始图片
@@ -1516,9 +1602,9 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
             # 1. 解析文件（保留结构）
             # 支持两种配置方式（参考 core/flow/parser/parser.py 的 setups 结构）
-            
+
             parser_config_dict = config.get("parser_config")  # 完整方式（优先）
-            
+
             if parser_config_dict:
                 # 方式 1：使用 parser_config 字典（用户一次性配置所有文件类型）
                 pdf_config = parser_config_dict.get("pdf", {"parse_method": "deepdoc", "output_format": "json"})
@@ -1526,6 +1612,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 excel_config = parser_config_dict.get("excel", {"output_format": "html"})
                 word_config = parser_config_dict.get("word", {"output_format": "json"})
                 email_config = parser_config_dict.get("email", {"output_format": "json", "fields": None})
+                video_config = parser_config_dict.get("video", {"llm_id": config.get("video_llm_name")})
                 logging.info(f"Using parser_config dictionary mode")
             else:
                 # 方式 2：使用简化参数（自动应用到所有文件类型）
@@ -1548,6 +1635,12 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 excel_config = {"output_format": output_format}
                 word_config = {"output_format": output_format}
                 email_config = {"output_format": output_format, "fields": config.get("email_fields")}
+                video_llm_name = config.get("video_llm_name")
+                if not video_llm_name:
+                    candidate = config.get("parse_method")
+                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm"]:
+                        video_llm_name = candidate
+                video_config = {"llm_id": video_llm_name}
                 logging.info(f"Using simplified parse_method mode: {parse_method}")
 
             def _parser_callback(prog, msg):
@@ -1562,6 +1655,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 word_config=word_config,
                 image_config=image_config,
                 email_config=email_config,
+                video_config=video_config,
                 callback=_parser_callback
             )
 
@@ -1753,7 +1847,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
                     try:
                         # 修复：避免括号格式导致的SyntaxWarning
-                        raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
+                        raptor_prompt = raptor_config.get(
+                            "prompt") or "Please summarize the following content:\n{cluster_content}"
                         raptor = Raptor(
                             max_cluster=raptor_config.get("max_cluster", 64),
                             llm_model=chat_mdl,
@@ -1781,7 +1876,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                                 child_indices = []
                                 if len(chapter_results[i]) > 2:
                                     # 有 parent_ids 信息
-                                    parent_ids = chapter_results[i][2] if isinstance(chapter_results[i], tuple) and len(chapter_results[i]) > 2 else []
+                                    parent_ids = chapter_results[i][2] if isinstance(chapter_results[i], tuple) and len(
+                                        chapter_results[i]) > 2 else []
                                     child_indices = [j for j in parent_ids if j < len(chunk_metadata)]
 
                                 # 合并子节点的位置
@@ -1854,7 +1950,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
                 try:
                     # 修复：避免括号格式导致的SyntaxWarning
-                    raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
+                    raptor_prompt = raptor_config.get(
+                        "prompt") or "Please summarize the following content:\n{cluster_content}"
                     raptor = Raptor(
                         max_cluster=raptor_config.get("max_cluster", 64),
                         llm_model=chat_mdl,
@@ -2036,17 +2133,17 @@ async def delete_image(kb_id, chunk_id):
 async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, progress_callback, collection_name,
                         schema):
     """
-    将chunks批量插入Milvus，包含类型转换和错误处理
+    将chunks批量插入向量数据库（支持 Milvus/ES/OpenSearch/Infinity），包含类型转换和错误处理
 
     Args:
         db: 数据库Session
         task_id: 任务ID
         task_tenant_id: 租户ID
-        task_dataset_id: 数据集ID
+        task_dataset_id: 数据集ID (ES 中作为 knowledgebaseId)
         chunks: 要插入的chunk列表
         progress_callback: 进度回调函数
-        collection_name: Milvus集合名称
-        schema: Milvus集合schema，用于数据类型转换
+        collection_name: 集合/索引名称
+        schema: 集合 schema，用于数据类型转换 (ES 返回空 schema)
 
     Returns:
         成功返回True，失败返回None
@@ -2067,41 +2164,62 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             converted_batch.append(converted_chunk)
 
         try:
-            # 调用Milvus的insert方法
-            doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
-                collection_name=collection_name,
-                data=converted_batch
-            ))
+            # 根据数据库类型调用不同的insert方法
+            db_type = settings.docStoreConn.dbType()
+            if db_type == "milvus":
+                # Milvus 使用 collection_name 和 data 参数
+                doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
+                    collection_name=collection_name,
+                    data=converted_batch
+                ))
+                # 检查insert_count是否与本批次长度一致
+                if doc_store_result.get("insert_count", 0) != len(converted_batch):
+                    error_message = (
+                        f"Insert count mismatch: expected {len(converted_batch)}, "
+                        f"got {doc_store_result.get('insert_count', 0)}."
+                    )
+                    progress_callback(-1, msg=error_message)
+                    raise Exception(error_message)
+                # 记录成功插入
+                successful_inserts.append(doc_store_result)
+            else:
+                # ES/OpenSearch/Infinity 使用 documents, indexName, knowledgebaseId 参数
+                # ES 要求文档有 "id" 字段，Milvus 使用 "pk"，需要做映射
+                es_batch = []
+                for doc in converted_batch:
+                    es_doc = doc.copy()
+                    # 如果没有 "id" 字段，使用 "pk" 作为 id
+                    if "id" not in es_doc and "pk" in es_doc:
+                        es_doc["id"] = es_doc["pk"]
+                    es_batch.append(es_doc)
 
-            # 检查insert_count是否与本批次长度一致
-            if doc_store_result.get("insert_count", 0) != len(converted_batch):
-                error_message = (
-                    f"Insert count mismatch: expected {len(converted_batch)}, "
-                    f"got {doc_store_result.get('insert_count', 0)}."
-                )
-                progress_callback(-1, msg=error_message)
-                raise Exception(error_message)
-
-            # 记录成功插入
-            successful_inserts.append(doc_store_result)
+                errors = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
+                    documents=es_batch,
+                    indexName=collection_name,
+                    knowledgebaseId=task_dataset_id
+                ))
+                if errors:
+                    logging.warning(f"Insert errors: {errors}")
+                # 记录成功插入
+                successful_inserts.append({"insert_count": len(converted_batch)})
 
         except Exception as e:
             # 如果出现异常，记录失败并进行删除回滚
             failed_inserts.extend(chunk_batch)
             progress_callback(
                 -1,
-                "Insert chunk error, detail info please check log file. Please also check Milvus status!"
+                "Insert chunk error, detail info please check log file. Please check doc store status!"
             )
             try:
                 if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
                     # 删除本批次已经尝试插入的记录
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
-                            await trio.to_thread.run_sync(lambda: settings.docStoreConn.delete(
-                                collection_name=collection_name,
-                                filter=f"doc_id == '{chunk['doc_id']}'"
-                            ))
-            except MilvusException as e:
+                            doc_id = chunk['doc_id']
+                            await trio.to_thread.run_sync(
+                                lambda d=doc_id: delete_chunks_by_doc_id(collection_name, d, task_dataset_id)
+                            )
+            except Exception as e:
                 logging.exception(f"Failed to rollback inserted chunks: {e}")
             logging.exception("Insert error:")
             logging.error("Data being inserted: %s", converted_batch)
@@ -2130,11 +2248,11 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
-                            await trio.to_thread.run_sync(lambda: settings.docStoreConn.delete(
-                                collection_name=collection_name,
-                                filter=f"doc_id == '{chunk['doc_id']}'"
-                            ))
-            except MilvusException as e:
+                            doc_id = chunk['doc_id']
+                            await trio.to_thread.run_sync(
+                                lambda d=doc_id: delete_chunks_by_doc_id(collection_name, d, task_dataset_id)
+                            )
+            except Exception as e:
                 logging.exception(f"Failed to rollback after task not found: {e}")
             async with trio.open_nursery() as nursery:
                 for chunk_id in chunk_ids:
@@ -2145,8 +2263,9 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     # 统计并记录插入结果
     if successful_inserts:
         total_insert_count = sum(item.get("insert_count", 0) for item in successful_inserts)
+        db_type = settings.docStoreConn.dbType()
         logging.info(
-            f"Successfully inserted {total_insert_count} chunks into Milvus collection '{collection_name}'"
+            f"Successfully inserted {total_insert_count} chunks into {db_type} index '{collection_name}'"
         )
 
     if failed_inserts:
@@ -2493,11 +2612,10 @@ async def do_handle_task(db, task):
     if TaskService.do_cancel(db, task_id):
         try:
             if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
-                await trio.to_thread.run_sync(lambda: settings.docStoreConn.delete(
-                    collection_name=collection_name,
-                    filter=f"doc_id == '{task_doc_id}'"
-                ))
-        except MilvusException as e:
+                await trio.to_thread.run_sync(
+                    lambda: delete_chunks_by_doc_id(collection_name, task_doc_id, task_dataset_id)
+                )
+        except Exception as e:
             return e
         return
 
@@ -2688,7 +2806,10 @@ async def main():
 ======================================================================
     """)
     logging.info(f'MultiRAG version: {get_multirag_version()}')
+    show_configs()
     settings.init_settings()
+    from api.settings import EMBEDDING_CFG
+    logging.info(f'api.settings.EMBEDDING_CFG: {EMBEDDING_CFG}')
     print_rag_settings()
     if sys.platform != "win32":
         signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)

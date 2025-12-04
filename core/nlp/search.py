@@ -59,7 +59,7 @@ class Dealer:
             "content_sm_ltks"]
 
         # Milvus 额外支持 content_with_weight 搜索（ES 中该字段不可索引）
-        if dataStore.dbType() == "milvus":
+        if dataStore.dbType() in ["milvus", "vastbase"]:
             base_fields.append("content_with_weight")
 
         self.qryr.flds = base_fields
@@ -258,7 +258,7 @@ class Dealer:
 
         try:
             # === Hybrid 模式 ===
-            if "hybrid" in search_mode and emb_mdl:
+            if "hybrid" in search_mode and emb_mdl and self.dataStore.dbType() == "milvus":
                 logging.info("执行混合检索…")
                 hybrid_params = search_mode["hybrid"]
                 weight_dense = hybrid_params.get("weight_dense", 0.7)
@@ -295,7 +295,7 @@ class Dealer:
                 return _build_result(results, keywords_raw)
 
             # === Sparse 模式 ===
-            if "sparse" in search_mode:
+            if "sparse" in search_mode and self.dataStore.dbType() == "milvus":
                 logging.info("执行全文检索…")
                 results = self.dataStore.search_by_milvus(
                     collection_name=idx_names,
