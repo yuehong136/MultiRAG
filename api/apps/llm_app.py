@@ -544,6 +544,7 @@ class AddLLMRequest(BaseModel):
     mdl_type: str
     api_key: str = None
     api_base: str | None = None
+    max_tokens: int | None = 8192
     ark_api_key: str | None = None
     endpoint_id: str | None = None
     bedrock_ak: str | None = None
@@ -742,7 +743,8 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
 
     try:
         fac = LLMFactoriesService.get_all(db)
-        fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI"]]
+        # fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI"]]
+        fac = [f.to_dict() for f in fac if f.name not in []]
         llms = LLMService.get_all(db)
         mdl_types = {}
         for m in llms:
@@ -1027,7 +1029,8 @@ POST
         "mdl_type": req["mdl_type"],
         "llm_name": llm_name,
         "api_base": req.get("api_base", ""),
-        "api_key": api_key
+        "api_key": api_key,
+        "max_tokens": req.get("max_tokens")
     }
 
     msg = ""

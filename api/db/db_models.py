@@ -560,9 +560,9 @@ class LLM(BaseModel):
     __tablename__ = "t_ai_llms"
     __table_args__ = {"schema": "usr_ai"}
 
+    fid = Column(String(128), primary_key=True, index=True, nullable=False, doc="LLM factory id")
     llm_name = Column(String(128), primary_key=True, index=True, nullable=False)
     mdl_type = Column(String(128), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, ASR")
-    fid = Column(String(128), index=True, nullable=False, doc="LLM factory id")
     max_tokens = Column(BigInteger, index=False, nullable=False, default=0)
     tags = Column(String(255), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, Chat, 32k...")
     is_tools = Column(Boolean, index=True, nullable=False, default=False, doc="support tools")

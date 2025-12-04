@@ -25,18 +25,23 @@ from scripts.init_ai_guard_system import init_ai_guard_system
 
 
 def init_superuser(db: Session):
+    # 检查是否已存在 admin 用户
+    existing_admin = UserService.query_user_onlywith_email(db, "admin@datav.com")
+    if existing_admin:
+        logging.info("超级用户已存在（邮箱：admin@datav.com），跳过初始化")
+        return
+    
     user_info = {
         "id": uuid.uuid1().hex,
         "password": 'admin',
         "nickname": "admin",
         "is_superuser": True,
         "email": "admin@datav.com",
-        "creator": "system",
         "status": "1",
     }
     tenant = {
         "id": user_info["id"],
-        "name": user_info["nickname"] + "‘s Kingdom",
+        "name": user_info["nickname"] + "'s Kingdom",
         "llm_id": settings.CHAT_MDL,
         "embd_id": settings.EMBEDDING_MDL,
         "asr_id": settings.ASR_MDL,
@@ -50,25 +55,34 @@ def init_superuser(db: Session):
         "role": UserTenantRole.OWNER
     }
 
+    # get_init_tenant_llm 已经包含了所有配置的 LLM factory，无需重复添加
     tenant_llm = get_init_tenant_llm(db, user_info["id"])
-
-    for llm in LLMService.query(db, fid=settings.LLM_FACTORY):
-        tenant_llm.append(
-            {
-                "tenant_id": user_info["id"],
-                "llm_factory": settings.LLM_FACTORY,
-                "llm_name": llm.llm_name,
-                "mdl_type": llm.mdl_type,
-                "api_key": settings.API_KEY,
-                "api_base": settings.LLM_BASE_URL
-            }
-        )
 
     if not UserService.save(db, **user_info):
         logging.error("can't init admin.")
         return
-    TenantService.insert(db, **tenant)
-    UserTenantService.insert(db, **usr_tenant)
+    
+    # 检查 Tenant 是否已存在，避免重复插入
+    existing_tenant = TenantService.get_or_none(db, id=tenant["id"])
+    if not existing_tenant:
+        TenantService.insert(db, **tenant)
+    else:
+        logging.info(f"Tenant {tenant['id']} already exists, skipping creation.")
+    
+    # 检查 UserTenant 是否已存在
+    existing_user_tenant = UserTenantService.get_or_none(db, tenant_id=usr_tenant["tenant_id"], user_id=usr_tenant["user_id"])
+    if not existing_user_tenant:
+        UserTenantService.insert(db, **usr_tenant)
+    else:
+        logging.info(f"UserTenant for user {usr_tenant['user_id']} already exists, skipping creation.")
+    
+    # 清理该 tenant 已有的 TenantLLM 记录，然后重新插入（避免唯一约束冲突）
+    try:
+        TenantLLMService.filter_delete(db, [TenantLLM.tenant_id == user_info["id"]])
+        logging.info(f"Cleaned existing TenantLLM records for tenant {user_info['id']}")
+    except Exception as e:
+        logging.warning(f"Failed to clean TenantLLM records: {e}")
+    
     TenantLLMService.insert_many(db, tenant_llm)
 
     logging.info("Super user initialized. email: admin@datav.com, password: admin. Changing the password after login is strongly recommended.")
@@ -108,10 +122,11 @@ def init_superuser(db: Session):
 
 
 def init_llm_factory(db: Session):
+    LLMFactoriesService.filter_delete(db, [1 == 1])
+    
     try:
         LLMService.filter_delete(db, [(LLM.fid == "MiniMax" or LLM.fid == "Minimax")])
         LLMService.filter_delete(db, [(LLM.fid == "cohere")])
-        LLMFactoriesService.filter_delete(db, [LLMFactories.name == "cohere"])
     except Exception:
         pass
 
@@ -254,9 +269,15 @@ def init_web_data(db: Session = SessionLocal()):
 
     # 如果没有用户，创建超级用户
     if len(all_users) == 0:
-        init_superuser(db)
-        # 重新获取用户列表
-        all_users = UserService.get_all(db)
+        # 额外检查：通过邮箱查询是否已经存在超级用户
+        existing_admin = UserService.query_user_onlywith_email(db, "admin@datav.com")
+        if not existing_admin:
+            init_superuser(db)
+            # 重新获取用户列表
+            all_users = UserService.get_all(db)
+        else:
+            logging.info("超级用户已存在，跳过初始化")
+            all_users = [existing_admin]
 
     add_graph_templates(db)
 
