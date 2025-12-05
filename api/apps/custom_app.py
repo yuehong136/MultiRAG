@@ -63,6 +63,253 @@ def update_cell_text_preserving_format(cell, text: str):
 
 PLACEHOLDER_PATTERN = re.compile(r'\{\{([^{}]+)\}\}')
 
+# 冒号模式（中英文冒号）
+COLON_PATTERN = re.compile(r'[：:]')
+
+
+def extract_underline_placeholders_from_paragraph(paragraph):
+    """
+    从段落中提取带下划线的填充项
+
+    识别模式：标签文本 + 冒号 + 下划线区域（font.underline=True）
+    例如："单   位：________________" 其中下划线部分的run的font.underline=True
+
+    返回：列表，每个元素为 {
+        'label': 标签文本,
+        'underline_run_indices': 下划线run的索引列表,
+        'colon_run_index': 冒号所在run的索引,
+        'colon_position': 冒号在该run中的位置
+    }
+    """
+    placeholders = []
+    runs = list(paragraph.runs)
+
+    if not runs:
+        return placeholders
+
+    # 构建run信息列表，记录每个run的文本、是否下划线、在段落中的字符起始位置
+    run_info = []
+    char_offset = 0
+    for i, run in enumerate(runs):
+        text = run.text or ""
+        # 检查下划线属性
+        is_underline = bool(run.font.underline)
+        run_info.append({
+            'index': i,
+            'text': text,
+            'is_underline': is_underline,
+            'char_start': char_offset,
+            'char_end': char_offset + len(text),
+            'run': run
+        })
+        char_offset += len(text)
+
+    # 找到所有下划线区域（连续的下划线run合并为一个区域）
+    underline_regions = []
+    i = 0
+    while i < len(run_info):
+        if run_info[i]['is_underline']:
+            region_start = i
+            region_end = i
+            # 合并连续的下划线run
+            while region_end + 1 < len(run_info) and run_info[region_end + 1]['is_underline']:
+                region_end += 1
+            underline_regions.append({
+                'start_index': region_start,
+                'end_index': region_end,
+                'run_indices': list(range(region_start, region_end + 1))
+            })
+            i = region_end + 1
+        else:
+            i += 1
+
+    # 对于每个下划线区域，向前查找标签
+    for region in underline_regions:
+        label = _find_label_before_underline(run_info, region['start_index'])
+        if label:
+            placeholders.append({
+                'label': label['text'],
+                'underline_run_indices': region['run_indices'],
+                'colon_run_index': label['colon_run_index'],
+                'colon_position': label['colon_position']
+            })
+
+    return placeholders
+
+
+def _find_label_before_underline(run_info, underline_start_index):
+    """
+    从下划线区域向前查找标签
+
+    规则：
+    1. 向前查找最近的冒号（：或:）
+    2. 冒号前的文本即为标签（去除前导空格，保留内部空格）
+    3. 标签结束于上一个下划线区域或段落开头
+
+    返回：{'text': 标签文本, 'colon_run_index': 冒号所在run索引, 'colon_position': 冒号位置}
+    """
+    # 收集下划线之前的所有文本和run信息
+    text_before = ""
+    run_text_mapping = []  # [(run_index, text_start_in_combined, text_end_in_combined)]
+
+    for i in range(underline_start_index):
+        text = run_info[i]['text']
+        start_pos = len(text_before)
+        text_before += text
+        run_text_mapping.append((i, start_pos, start_pos + len(text)))
+
+    if not text_before:
+        return None
+
+    # 查找最后一个冒号
+    colon_match = None
+    for match in COLON_PATTERN.finditer(text_before):
+        colon_match = match
+
+    if colon_match is None:
+        return None
+
+    colon_pos = colon_match.start()
+
+    # 确定冒号所在的run
+    colon_run_index = None
+    colon_position_in_run = None
+    for run_idx, start, end in run_text_mapping:
+        if start <= colon_pos < end:
+            colon_run_index = run_idx
+            colon_position_in_run = colon_pos - start
+            break
+
+    if colon_run_index is None:
+        return None
+
+    # 提取冒号前的标签文本
+    # 标签从上一个下划线区域结束后开始，或从段落开头开始
+    label_start = 0
+    for i in range(underline_start_index - 1, -1, -1):
+        if run_info[i]['is_underline']:
+            # 找到前一个下划线区域，标签从其后开始
+            label_start = run_info[i]['char_end']
+            break
+
+    # 提取标签文本（冒号前的文本）
+    label_text = text_before[label_start:colon_pos]
+
+    # 清理标签文本
+    # 去除前后空格，但保留内部空格（如"单   位"）
+    label_text = label_text.strip()
+
+    if not label_text:
+        return None
+
+    return {
+        'text': label_text,
+        'colon_run_index': colon_run_index,
+        'colon_position': colon_position_in_run
+    }
+
+
+def process_paragraph_underline_placeholders(paragraph, placeholders_dict):
+    """
+    处理段落中的下划线填充项，生成占位符并更新段落
+
+    Args:
+        paragraph: docx段落对象
+        placeholders_dict: 占位符字典，用于收集所有占位符
+
+    Returns:
+        bool: 是否有处理过占位符
+    """
+    underline_items = extract_underline_placeholders_from_paragraph(paragraph)
+
+    if not underline_items:
+        return False
+
+    runs = list(paragraph.runs)
+    processed = False
+
+    for item in underline_items:
+        label = item['label']
+        underline_run_indices = item['underline_run_indices']
+
+        # 生成标准化的占位符key
+        # 移除多余空格，保留中文、数字、字母、下划线和常用符号（括号、顿号等）
+        normalized_label = re.sub(r'\s+', '', label)  # 移除所有空格
+        placeholder_key = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9_（）()、]', '', normalized_label)
+
+        if not placeholder_key:
+            continue
+
+        placeholder_value = f"{{{{{placeholder_key}}}}}"
+
+        # 计算原始下划线区域的总字符长度
+        original_length = sum(len(runs[idx].text) for idx in underline_run_indices)
+
+        # 如果占位符比原始长度短，居中填充空格以保持下划线长度
+        if len(placeholder_value) < original_length:
+            total_padding = original_length - len(placeholder_value)
+            left_padding = total_padding // 2
+            right_padding = total_padding - left_padding
+            placeholder_value = ' ' * left_padding + placeholder_value + ' ' * right_padding
+
+        # 将占位符文本填入第一个下划线run，清空其余下划线run
+        if underline_run_indices:
+            first_underline_run = runs[underline_run_indices[0]]
+            first_underline_run.text = placeholder_value
+
+            # 清空其余下划线run
+            for idx in underline_run_indices[1:]:
+                runs[idx].text = ""
+
+        # 添加到占位符字典
+        placeholders_dict[placeholder_key] = ""
+        processed = True
+
+    return processed
+
+
+def fill_paragraph_underline_placeholders(paragraph, fill_data):
+    """
+    填充段落中的下划线占位符
+
+    Args:
+        paragraph: docx段落对象
+        fill_data: 填充数据字典
+
+    Returns:
+        bool: 是否有填充过占位符
+    """
+    runs = list(paragraph.runs)
+    filled = False
+
+    for run in runs:
+        if not run.text:
+            continue
+
+        original_length = len(run.text)
+
+        # 检查run中是否有占位符
+        def replace_placeholder(match):
+            nonlocal filled
+            key = match.group(1).strip()
+            value = fill_data.get(key, "")
+            if value is None:
+                value = ""
+            filled = True
+            return str(value)
+
+        new_text, count = PLACEHOLDER_PATTERN.subn(replace_placeholder, run.text)
+        if count > 0:
+            # 如果替换后的文本比原始文本短，居中填充空格以保持下划线长度
+            if len(new_text) < original_length:
+                total_padding = original_length - len(new_text)
+                left_padding = total_padding // 2
+                right_padding = total_padding - left_padding
+                new_text = ' ' * left_padding + new_text + ' ' * right_padding
+            run.text = new_text
+
+    return filled
+
 
 @router.post("/process_docx", summary="Word 文档占位符处理接口",
              response_description="返回处理后的文档和占位符 JSON 数据")
@@ -602,6 +849,12 @@ async def process_docx(file: UploadFile = File(...)):
                                     other_cell_id = (table_idx, id(other_cell._element))
                                     processed_cells.add(other_cell_id)
 
+    # --- 处理段落中的下划线填充项 ---
+    # 识别模式：标签文本 + 冒号 + 下划线区域（font.underline=True）
+    # 例如："单   位：________________系（科、室）：________________"
+    for paragraph in input_doc.paragraphs:
+        process_paragraph_underline_placeholders(paragraph, placeholders)
+
     # Step 5: 返回处理后的文档和占位符
     output_stream = BytesIO()
     input_doc.save(output_stream)
@@ -749,15 +1002,19 @@ async def fill_docx(
                     if replaced_count > 0:
                         update_cell_text_preserving_format(cell, replaced_text)
 
-        # Step 4: 保存填充后的文档到内存流
+        # Step 4: 遍历段落，替换下划线占位符
+        for paragraph in doc.paragraphs:
+            fill_paragraph_underline_placeholders(paragraph, fill_data)
+
+        # Step 5: 保存填充后的文档到内存流
         output_stream = BytesIO()
         doc.save(output_stream)
         output_stream.seek(0)
 
-        # Step 5: 将文档转为 Base64 数据
+        # Step 6: 将文档转为 Base64 数据
         base64_encoded_file = base64.b64encode(output_stream.getvalue()).decode("utf-8")
 
-        # Step 6: 返回结果
+        # Step 7: 返回结果
         response_data = {
             "file": base64_encoded_file
         }
