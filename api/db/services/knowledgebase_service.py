@@ -109,8 +109,9 @@ class KnowledgebaseService(CommonService):
         # 获取总记录数
         total = query.count()
 
-        # 条件分页 - 只有当page_number和items_per_page都有值时才进行分页
-        if page_number and items_per_page:
+        # 条件分页：当设置了每页数量时执行分页，page_number<=0 时回退为第1页
+        if items_per_page:
+            page_number = max(1, int(page_number) if page_number is not None else 1)
             kbs = query.offset((page_number - 1) * items_per_page).limit(items_per_page).all()
         else:
             kbs = query.all()

@@ -333,6 +333,10 @@ def list_kbs(
 ):
     page_number = int(page)
     items_per_page = int(page_size)
+
+    # 当指定了分页大小但页码<=0时，回退到第一页，避免分页条件被判定为 False
+    if items_per_page > 0 and page_number <= 0:
+        page_number = 1
     owner_ids = request_body.owner_ids or []
 
     try:
@@ -356,7 +360,7 @@ def list_kbs(
             total = len(kbs)
 
             # 手动处理分页
-            if page_number and items_per_page:
+            if items_per_page > 0:
                 start_idx = (page_number - 1) * items_per_page
                 end_idx = page_number * items_per_page
                 kbs = kbs[start_idx:end_idx]
