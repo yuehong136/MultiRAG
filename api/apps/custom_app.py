@@ -657,8 +657,8 @@ async def process_docx(
             if not title or not mapfield:
                 continue
 
-            if position != 'RIGHT':
-                continue  # 目前只支持 RIGHT
+            if position not in ('RIGHT', 'SELF'):
+                continue  # 目前只支持 RIGHT 和 SELF
 
             # 在所有表格中查找包含 title 的单元格
             found = False
@@ -673,8 +673,14 @@ async def process_docx(
                         if found:
                             break
                         if title in cell.text:
-                            # 找到 title 所在单元格，获取右边的单元格
-                            target_cell = find_right_cell(cells, cell_idx, cell)
+                            # 根据 position 类型确定目标单元格
+                            if position == 'RIGHT':
+                                target_cell = find_right_cell(cells, cell_idx, cell)
+                            elif position == 'SELF':
+                                target_cell = cell
+                            else:
+                                target_cell = None
+
                             if target_cell:
                                 placeholder_value = f"{{{{{mapfield}}}}}"
                                 update_cell_text_preserving_format(target_cell, placeholder_value)
