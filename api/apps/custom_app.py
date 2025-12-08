@@ -313,7 +313,10 @@ def fill_paragraph_underline_placeholders(paragraph, fill_data):
 
 @router.post("/process_docx", summary="Word 文档占位符处理接口",
              response_description="返回处理后的文档和占位符 JSON 数据")
-async def process_docx(file: UploadFile = File(...)):
+async def process_docx(
+        file: UploadFile = File(...),
+        data: str = Form(default=None)
+):
     """
     ### POST `/v1/document/process_docx` Word 文档占位符处理接口
 
@@ -404,6 +407,14 @@ async def process_docx(file: UploadFile = File(...)):
     # 验证文件名和格式
     if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="Invalid file format. Only .docx files are supported.")
+
+    # 解析可选的 JSON 数据
+    mapping_data = None
+    if data:
+        try:
+            mapping_data = json.loads(data)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON data provided.")
 
     # 工具方法：判断是否为独立单元格
     def is_isolated_cell(matrix, row_idx, col_idx):
@@ -600,6 +611,76 @@ async def process_docx(file: UploadFile = File(...)):
         target_element = target_cell._element
         return all(cell._element is target_element for cell in row.cells)
 
+    # 工具方法：找到当前单元格右边的"视觉上的一个格子"（处理合并单元格）
+    def find_right_cell(cells, current_idx, current_cell):
+        """
+        找到当前单元格右边的"视觉上的一个格子"
+        处理合并单元格的情况：跳过与当前单元格相同的合并单元格
+
+        Args:
+            cells: 行中的所有单元格列表
+            current_idx: 当前单元格索引
+            current_cell: 当前单元格对象
+
+        Returns:
+            右边的单元格对象，如果不存在则返回 None
+        """
+        current_element = current_cell._element
+
+        # 从当前位置向右遍历，找到第一个不同的单元格
+        for idx in range(current_idx + 1, len(cells)):
+            if cells[idx]._element is not current_element:
+                return cells[idx]
+
+        return None
+
+    # 工具方法：根据 mapping_data 中的 fillmapping 配置，手动指定单元格填充占位符
+    def apply_manual_fill_mappings(doc, mapping_data, placeholders_dict):
+        """
+        根据 mapping_data 中的 fillmapping 配置，手动指定单元格填充占位符
+
+        Args:
+            doc: Document 对象
+            mapping_data: 解析后的映射配置
+            placeholders_dict: 占位符字典，用于收集所有占位符
+        """
+        if not mapping_data or 'fillmapping' not in mapping_data:
+            return
+
+        fillmapping = mapping_data.get('fillmapping', [])
+
+        for mapping in fillmapping:
+            title = mapping.get('title', '').strip()
+            position = mapping.get('position', '').upper()
+            mapfield = mapping.get('mapfield', '').strip()
+
+            if not title or not mapfield:
+                continue
+
+            if position != 'RIGHT':
+                continue  # 目前只支持 RIGHT
+
+            # 在所有表格中查找包含 title 的单元格
+            found = False
+            for table in doc.tables:
+                if found:
+                    break
+                for row in table.rows:
+                    if found:
+                        break
+                    cells = row.cells
+                    for cell_idx, cell in enumerate(cells):
+                        if found:
+                            break
+                        if title in cell.text:
+                            # 找到 title 所在单元格，获取右边的单元格
+                            target_cell = find_right_cell(cells, cell_idx, cell)
+                            if target_cell:
+                                placeholder_value = f"{{{{{mapfield}}}}}"
+                                update_cell_text_preserving_format(target_cell, placeholder_value)
+                                placeholders_dict[mapfield] = ""
+                                found = True
+
     # 工具方法：填充表格（右填充 + 下填充，检测合并单元格，独立单元格）
     def fill_table(matrix, table, above_paragraphs):
         rows = len(matrix)
@@ -788,6 +869,9 @@ async def process_docx(file: UploadFile = File(...)):
         for r_idx, row in enumerate(table.rows):
             for c_idx, cell in enumerate(row.cells):
                 update_cell_text_preserving_format(cell, result_matrix[r_idx][c_idx])
+
+    # Step 3.5: 应用手动映射填充（根据 mapping_data 中的 fillmapping 配置）
+    apply_manual_fill_mappings(input_doc, mapping_data, placeholders)
 
     # Step 4: 收集占位符 JSON 数据
     for result_matrix in all_tables_result:
