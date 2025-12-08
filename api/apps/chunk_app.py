@@ -35,6 +35,7 @@ from api.db.services.document_service import DocumentService
 from api import settings
 from core.settings import PAGERANK_FLD
 from api.utils.api_utils import get_json_result
+from core.utils.doc_store_conn import OrderByExpr
 # from api.db.database import get_db
 from api.apps import manager
 from common.string_utils import remove_redundant_spaces
@@ -77,6 +78,15 @@ class CreateChunkRequest(BaseModel):
     content_with_weight: str
     question_kwd: list[str] | None = None
     important_kwd: list[str] | None = None
+
+
+class VectorStoreQueryRequest(BaseModel):
+    doc_id: str | None = None
+    kb_id: str | None = None
+    filters: dict[str, Any] = Field(default_factory=dict)
+    fields: list[str] = Field(default_factory=list)
+    page: int = Field(default=1, ge=1)
+    size: int = Field(default=100, ge=1, le=1000)
 
 
 class SparseSearchMode(BaseModel):
@@ -554,6 +564,90 @@ def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         if str(e).find("NotFoundError") >= 0:
             return get_json_result(data=False, retmsg='Chunk not found!',
                                    retcode=settings.RetCode.DATA_ERROR)
+        return server_error_response(e)
+
+
+@router.post('/vector_store/query', summary="向量存储字段查询")
+def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    根据 `doc_id` 或自定义过滤条件从向量存储中查询指定字段。
+
+    - 通过 `doc_id` 会自动定位所属租户与知识库。
+    - `filters` 允许追加更多过滤条件（与 `doc_id` 取交集）。
+    - `fields` 为必填，决定返回哪些字段，如 `["img_id"]`。
+    - 支持分页：`page`、`size`。
+
+    返回示例：
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "total": 2,
+            "rows": [
+                {"chunk_id": "xxx", "img_id": "img_1"},
+                {"chunk_id": "yyy", "img_id": "img_2"}
+            ]
+        }
+    }
+    ```
+    """
+    if not request.doc_id and not request.kb_id:
+        return get_data_error_result(retmsg="`doc_id` or `kb_id` is required!")
+    if not request.fields:
+        return get_data_error_result(retmsg="`fields` cannot be empty!")
+
+    try:
+        kb = None
+        tenant_id = None
+        condition = dict(request.filters or {})
+
+        if request.doc_id:
+            doc = DocumentService.get_by_id(db, request.doc_id)
+            if not doc:
+                return get_data_error_result(retmsg="Document not found!")
+            tenant_id = DocumentService.get_tenant_id(db, request.doc_id)
+            if not tenant_id:
+                return get_data_error_result(retmsg="Tenant not found!")
+            kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+            if not kb:
+                return get_data_error_result(retmsg="Knowledgebase not found!")
+            condition["doc_id"] = request.doc_id
+        else:
+            kb = KnowledgebaseService.get_by_id(db, request.kb_id)
+            if not kb:
+                return get_data_error_result(retmsg="Knowledgebase not found!")
+            tenant_id = kb.tenant_id
+            if not tenant_id:
+                return get_data_error_result(retmsg="Tenant not found!")
+
+        index_name = search.index_name_one(tenant_id, kb.name)
+        offset = (request.page - 1) * request.size
+
+        search_res = settings.docStoreConn.search(
+            request.fields,
+            [],
+            condition,
+            [],
+            OrderByExpr(),
+            offset,
+            request.size,
+            index_name,
+            [kb.id]
+        )
+
+        total = settings.docStoreConn.getTotal(search_res)
+        field_data = settings.docStoreConn.getFields(search_res, request.fields)
+        field_data.pop("distance", None)
+
+        rows = []
+        for pk, values in field_data.items():
+            row = {"chunk_id": pk}
+            row.update(values)
+            rows.append(row)
+
+        return get_json_result(data={"total": total, "rows": rows})
+    except Exception as e:
         return server_error_response(e)
 
 
@@ -1667,4 +1761,3 @@ def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depends(man
         obj[ty] = content_json
 
     return get_json_result(data=obj)
-
