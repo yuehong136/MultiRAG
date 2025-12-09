@@ -1,4 +1,9 @@
 import json
+import uuid
+import os
+import shutil
+import logging
+from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from io import BytesIO
@@ -9,6 +14,89 @@ import base64
 from api.utils.api_utils import get_json_result
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+# 临时文件存放目录
+DOCX_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "temp", "docx_logs")
+# 最大保留的请求数量
+DOCX_LOG_MAX_REQUESTS = 3
+
+
+def ensure_log_dir():
+    """确保日志目录存在"""
+    if not os.path.exists(DOCX_LOG_DIR):
+        os.makedirs(DOCX_LOG_DIR)
+
+
+def cleanup_old_logs():
+    """
+    清理旧的日志目录，只保留最近 DOCX_LOG_MAX_REQUESTS 次请求的数据
+    按目录创建时间排序，删除最旧的
+    """
+    if not os.path.exists(DOCX_LOG_DIR):
+        return
+
+    # 获取所有子目录
+    subdirs = []
+    for name in os.listdir(DOCX_LOG_DIR):
+        path = os.path.join(DOCX_LOG_DIR, name)
+        if os.path.isdir(path):
+            # 获取目录创建时间
+            ctime = os.path.getctime(path)
+            subdirs.append((path, ctime))
+
+    # 如果目录数量未超过限制，不需要清理
+    if len(subdirs) <= DOCX_LOG_MAX_REQUESTS:
+        return
+
+    # 按创建时间排序（最旧的在前）
+    subdirs.sort(key=lambda x: x[1])
+
+    # 删除最旧的目录，保留最近 DOCX_LOG_MAX_REQUESTS 个
+    dirs_to_delete = subdirs[:-DOCX_LOG_MAX_REQUESTS]
+    for dir_path, _ in dirs_to_delete:
+        try:
+            shutil.rmtree(dir_path)
+            logger.info(f"[cleanup] 已删除旧日志目录: {os.path.basename(dir_path)}")
+        except Exception as e:
+            logger.warning(f"[cleanup] 删除目录失败 {dir_path}: {e}")
+
+
+def save_docx_log(request_id: str, stage: str, file_content: bytes, json_data: dict = None, filename: str = None):
+    """
+    保存 docx 处理日志
+
+    Args:
+        request_id: 请求唯一标识符
+        stage: 阶段标识，如 "input", "output"
+        file_content: 文件内容（bytes）
+        json_data: JSON 数据（可选）
+        filename: 原始文件名（可选）
+    """
+    ensure_log_dir()
+
+    # 在保存新日志前清理旧日志
+    if stage == "input":
+        cleanup_old_logs()
+
+    # 创建请求专属目录
+    request_dir = os.path.join(DOCX_LOG_DIR, request_id)
+    if not os.path.exists(request_dir):
+        os.makedirs(request_dir)
+
+    # 保存文件
+    file_suffix = f"_{filename}" if filename else ""
+    docx_path = os.path.join(request_dir, f"{stage}{file_suffix}.docx")
+    with open(docx_path, "wb") as f:
+        f.write(file_content)
+
+    # 保存 JSON 数据（如果有）
+    if json_data is not None:
+        json_path = os.path.join(request_dir, f"{stage}_data.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(json_data, f, ensure_ascii=False, indent=2)
+
+    return request_dir
 
 
 def _replace_paragraph_text(paragraph, value: str):
@@ -404,6 +492,10 @@ async def process_docx(
 
 ---
     """
+    # 生成请求唯一标识符
+    request_id = f"process_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    logger.info(f"[process_docx] 请求ID: {request_id}, 文件名: {file.filename}")
+
     # 验证文件名和格式
     if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="Invalid file format. Only .docx files are supported.")
@@ -413,8 +505,16 @@ async def process_docx(
     if data:
         try:
             mapping_data = json.loads(data)
+            logger.info(f"[process_docx] 输入 mapping_data: {json.dumps(mapping_data, ensure_ascii=False)}")
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON data provided.")
+
+    # 读取上传的文件内容
+    input_file_content = await file.read()
+
+    # 保存输入文件和 JSON 数据
+    save_docx_log(request_id, "input", input_file_content, mapping_data, file.filename)
+    logger.info(f"[process_docx] 输入文件已保存")
 
     # 工具方法：判断是否为独立单元格
     def is_isolated_cell(matrix, row_idx, col_idx):
@@ -821,9 +921,8 @@ async def process_docx(
 
         _replace_paragraph_text(target_paragraph, placeholder)
 
-    # Step 1: 读取文件
-    file_content = await file.read()
-    input_doc = Document(BytesIO(file_content))
+    # Step 1: 读取文件（使用已读取的内容）
+    input_doc = Document(BytesIO(input_file_content))
 
     # Step 2: 处理表格
     placeholders = {}
@@ -949,10 +1048,16 @@ async def process_docx(
     output_stream = BytesIO()
     input_doc.save(output_stream)
     output_stream.seek(0)
+    output_file_content = output_stream.getvalue()
+
+    # 保存输出文件和占位符数据
+    save_docx_log(request_id, "output", output_file_content, {"placeholders": placeholders})
+    logger.info(f"[process_docx] 输出 placeholders: {json.dumps(placeholders, ensure_ascii=False)}")
+    logger.info(f"[process_docx] 请求ID: {request_id} 处理完成")
 
     response_data = {
         "placeholders": placeholders,
-        "file": base64.b64encode(output_stream.getvalue()).decode("utf-8")
+        "file": base64.b64encode(output_file_content).decode("utf-8")
     }
 
     return get_json_result(retmsg="File processed successfully.", data=response_data)
@@ -1061,6 +1166,10 @@ async def fill_docx(
 
 ---
     """
+    # 生成请求唯一标识符
+    request_id = f"fill_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    logger.info(f"[fill_docx] 请求ID: {request_id}, 文件名: {file.filename}")
+
     # 验证文件类型
     if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="Invalid file format. Only .docx files are supported.")
@@ -1068,10 +1177,16 @@ async def fill_docx(
     try:
         # Step 1: 解析 JSON 数据
         fill_data = json.loads(data)
+        logger.info(f"[fill_docx] 输入 fill_data: {json.dumps(fill_data, ensure_ascii=False)}")
 
         # Step 2: 读取上传的文件
-        file_content = await file.read()
-        doc = Document(BytesIO(file_content))
+        input_file_content = await file.read()
+
+        # 保存输入文件和 JSON 数据
+        save_docx_log(request_id, "input", input_file_content, fill_data, file.filename)
+        logger.info(f"[fill_docx] 输入文件已保存")
+
+        doc = Document(BytesIO(input_file_content))
 
         # Step 3: 遍历表格，替换整格占位符
         for table in doc.tables:
@@ -1100,9 +1215,14 @@ async def fill_docx(
         output_stream = BytesIO()
         doc.save(output_stream)
         output_stream.seek(0)
+        output_file_content = output_stream.getvalue()
+
+        # 保存输出文件
+        save_docx_log(request_id, "output", output_file_content)
+        logger.info(f"[fill_docx] 请求ID: {request_id} 处理完成")
 
         # Step 6: 将文档转为 Base64 数据
-        base64_encoded_file = base64.b64encode(output_stream.getvalue()).decode("utf-8")
+        base64_encoded_file = base64.b64encode(output_file_content).decode("utf-8")
 
         # Step 7: 返回结果
         response_data = {
