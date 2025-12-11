@@ -36,7 +36,6 @@ from api import settings
 from core.settings import PAGERANK_FLD
 from api.utils.api_utils import get_json_result
 from core.utils.doc_store_conn import OrderByExpr
-# from api.db.database import get_db
 from api.apps import manager
 from common.string_utils import remove_redundant_spaces
 
@@ -85,6 +84,9 @@ class VectorStoreQueryRequest(BaseModel):
     kb_id: str | None = None
     filters: dict[str, Any] = Field(default_factory=dict)
     fields: list[str] = Field(default_factory=list)
+    question: str | None = None
+    similarity: float | None = Field(default=None, ge=0.0, le=1.0)
+    include_score: bool = False
     page: int = Field(default=1, ge=1)
     size: int = Field(default=100, ge=1, le=1000)
 
@@ -567,7 +569,7 @@ def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.post('/vector_store/query', summary="向量存储字段查询")
+@router.post('/vector_store/query', summary="向量存储字段查询（可选语义检索）")
 def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     根据 `doc_id` 或自定义过滤条件从向量存储中查询指定字段。
@@ -575,6 +577,8 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
     - 通过 `doc_id` 会自动定位所属租户与知识库。
     - `filters` 允许追加更多过滤条件（与 `doc_id` 取交集）。
     - `fields` 为必填，决定返回哪些字段，如 `["img_id"]`。
+    - `question` 可选，提供自然语言问题时将进行向量语义检索。
+    - `include_score` 控制是否返回语义相似度分值（若可用）。
     - 支持分页：`page`、`size`。
 
     返回示例：
@@ -624,11 +628,24 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
         index_name = search.index_name_one(tenant_id, kb.name)
         offset = (request.page - 1) * request.size
 
+        match_exprs = []
+        if request.question:
+            embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+            dealer = search.Dealer(settings.docStoreConn)
+            match_exprs.append(
+                dealer.get_vector(
+                    request.question,
+                    embd_mdl,
+                    topk=request.size,
+                    similarity=request.similarity if request.similarity is not None else 0.1
+                )
+            )
+
         search_res = settings.docStoreConn.search(
             request.fields,
             [],
             condition,
-            [],
+            match_exprs,
             OrderByExpr(),
             offset,
             request.size,
@@ -638,12 +655,14 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
 
         total = settings.docStoreConn.getTotal(search_res)
         field_data = settings.docStoreConn.getFields(search_res, request.fields)
-        field_data.pop("distance", None)
+        distances = field_data.pop("distance", [])
 
         rows = []
-        for pk, values in field_data.items():
+        for idx, (pk, values) in enumerate(field_data.items()):
             row = {"chunk_id": pk}
             row.update(values)
+            if request.include_score and idx < len(distances):
+                row["score"] = distances[idx]
             rows.append(row)
 
         return get_json_result(data={"total": total, "rows": rows})
@@ -794,7 +813,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
 ```
     """
     d = {
-        "pk": request.chunk_id,
+        "id": request.chunk_id,
         "content_with_weight": request.content_with_weight,
         "content_ltks": rag_tokenizer.tokenize(request.content_with_weight),
         "content_sm_ltks": rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(request.content_with_weight)),
@@ -852,7 +871,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         d[f"q_{vector_dim}_vec"] = v.tolist()  # 同时保存到维度特定字段
 
         # 更新数据库
-        update_condition = {"pk": request.chunk_id}  # 主键查询条件
+        update_condition = {"id": request.chunk_id}  # 主键查询条件
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         settings.docStoreConn.update(update_condition, d, search.index_name_one(tenant_id, kb.name), doc.kb_id)
         return get_json_result(data=True)
@@ -938,7 +957,7 @@ def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depe
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
         for cid in req["chunk_ids"]:
-            if not settings.docStoreConn.update({"pk": cid},
+            if not settings.docStoreConn.update({"id": cid},
                                                 {"available_int": int(req["available_int"])},
                                                 search.index_name_one(DocumentService.get_tenant_id(db, req["doc_id"]), kb.name),
                                                 doc.kb_id):
@@ -1264,7 +1283,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
     """
     req = request.model_dump()
     chunk_id = xxhash.xxh64((request.content_with_weight + request.doc_id).encode("utf-8")).hexdigest()
-    d = {"pk": chunk_id, "content_ltks": rag_tokenizer.tokenize(req["content_with_weight"]),
+    d = {"id": chunk_id, "content_ltks": rag_tokenizer.tokenize(req["content_with_weight"]),
          "content_with_weight": req["content_with_weight"]}
     d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
     d["important_kwd"] = req.get("important_kwd", [])
@@ -1318,7 +1337,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         d["vector"] = v.tolist()  # 始终保存到标准vector字段以保持兼容性
         d[f"q_{vector_dim}_vec"] = v.tolist()  # 同时保存到维度特定字段
 
-        settings.docStoreConn.insert(search.index_name_one(tenant_id, kb.name), [d])
+        settings.docStoreConn.insert([d], search.index_name_one(tenant_id, kb.name), kb.id)
 
         DocumentService.increment_chunk_num(
             db, doc.id, doc.kb_id, c, 1, 0)

@@ -857,8 +857,38 @@ class MilvusConnection(DocStoreConnection):
             logger.warning(f"检查集合 {collection_name} 是否存在失败: {str(e)}")
             return False
 
-    def insert(self, rows: list[dict], indexName: str | list[str], knowledgebaseId: str = None) -> list[str]:
-        """插入数据"""
+    def insert(self, rows: list[dict] | dict | str, indexName: str | list[str] | dict | list[dict], knowledgebaseId: str = None) -> list[str]:
+        """插入数据
+
+        兼容两种调用方式：
+        1) 标准签名：insert(rows, indexName, knowledgebaseId)
+        2) 旧版/误用：insert(collection_name, data, partition_name)  # 会自动纠正
+        """
+        # 兼容调用：insert(collection_name, data, partition_name)
+        if isinstance(rows, str) and (
+            isinstance(indexName, dict)
+            or (isinstance(indexName, list) and (len(indexName) == 0 or isinstance(indexName[0], dict)))
+        ):
+            collection_name = rows
+            data = indexName
+            partition_name = knowledgebaseId
+            if isinstance(data, dict):
+                data = [data]
+            if not isinstance(data, list):
+                msg = "wrong type of argument 'data',"
+                msg += f" expected 'Dict' or list of 'Dict', got '{type(data).__name__}'"
+                raise TypeError(msg)
+            rows = data
+            indexName = collection_name
+            knowledgebaseId = partition_name
+
+        if isinstance(rows, dict):
+            rows = [rows]
+
+        if not isinstance(rows, list):
+            msg = "wrong type of argument 'rows',"
+            msg += f" expected 'Dict' or list of 'Dict', got '{type(rows).__name__}'"
+            raise TypeError(msg)
         # 处理索引名称参数
         if isinstance(indexName, list):
             if not indexName:  # 如果是空列表
@@ -899,6 +929,13 @@ class MilvusConnection(DocStoreConnection):
         for row in rows:
             # 创建副本避免修改原始数据
             new_row = copy.deepcopy(row)
+
+            # 确保主键字段：优先使用 pk，若无则用 id 补齐 pk（Milvus schema 主键为 pk）
+            if "pk" not in new_row:
+                if "id" in new_row:
+                    new_row["pk"] = new_row["id"]
+                else:
+                    raise ValueError("Insert requires primary key 'pk' (or provide 'id' to map to pk)")
 
             # 处理特殊字段
             if "kb_id" in new_row and isinstance(new_row["kb_id"], list):
@@ -1228,17 +1265,18 @@ class MilvusConnection(DocStoreConnection):
 
         # 构建过滤条件
         filter_expr = ""
-        if "id" in condition:
-            ids = condition["id"]
-            if not isinstance(ids, list):
-                ids = [ids]
+        # 优先使用 "id" 字段（与ES保持一致），其次使用 "pk" 字段
+        chunk_ids = condition.get("id") or condition.get("pk")
+        if chunk_ids:
+            if not isinstance(chunk_ids, list):
+                chunk_ids = [chunk_ids]
 
-            id_strs = [f"'{id}'" for id in ids]
-            filter_expr = f"id in [{','.join(id_strs)}]"
+            id_strs = [f"'{id}'" for id in chunk_ids]
+            filter_expr = f"pk in [{','.join(id_strs)}]"  # Milvus 内部主键字段名是 pk
         else:
             filter_parts = []
             for k, v in condition.items():
-                if k == "pk" or not v:
+                if k in ("pk", "id") or not v:  # 排除 pk 和 id 字段
                     continue
                 if isinstance(v, list):
                     values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
@@ -1765,13 +1803,15 @@ class MilvusConnection(DocStoreConnection):
         # 复制新值以避免修改原始数据
         doc = copy.deepcopy(newValue)
         doc.pop("pk", None)  # 移除pk字段，避免主键冲突
+        doc.pop("id", None)  # 移除id字段，避免主键冲突
 
         # 构建查询表达式
         filter_parts = []
 
-        # 处理单个文档更新（通过PK）
-        if "pk" in condition and isinstance(condition["pk"], str):
-            filter_parts.append(f"pk == '{condition['pk']}'")
+        # 处理单个文档更新（通过id或pk）- 优先使用id，与ES保持一致
+        chunk_id = condition.get("id") or condition.get("pk")
+        if chunk_id and isinstance(chunk_id, str):
+            filter_parts.append(f"pk == '{chunk_id}'")
         else:
             # 处理其他条件
             for k, v in condition.items():
@@ -2114,7 +2154,7 @@ class MilvusConnection(DocStoreConnection):
             logger.error("Failed to create an index on collection: %s", collection_name)
             raise ex from ex
 
-    def insert(
+    def _insert_milvus(
         self,
         collection_name: str,
         data: dict | list[dict],
@@ -2133,6 +2173,20 @@ class MilvusConnection(DocStoreConnection):
 
         if len(data) == 0:
             return {"insert_count": 0, "ids": []}
+
+        # 确保主键字段：优先使用 pk，若无则用 id 补齐 pk
+        processed = []
+        for row in data:
+            if not isinstance(row, dict):
+                raise TypeError("each element in data must be dict")
+            r = copy.deepcopy(row)
+            if "pk" not in r:
+                if "id" in r:
+                    r["pk"] = r["id"]
+                else:
+                    raise ValueError("Insert requires primary key 'pk' (or provide 'id' to map to pk)")
+            processed.append(r)
+        data = processed
 
         conn = self._get_connection()
         # Insert into the collection.

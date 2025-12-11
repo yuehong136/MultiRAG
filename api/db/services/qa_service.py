@@ -192,8 +192,8 @@ class QATemplateStorageService:
                 #     }
                 #     insert_data.append(paraphrase_record)
 
-            # 使用docStoreConn的insert方法
-            doc_store_result = settings.docStoreConn.insert(self.collection_name, insert_data)
+            # 使用统一接口，兼容不同向量数据库
+            doc_store_result = settings.docStoreConn.insert(insert_data, self.collection_name)
 
             # 检查 insert_count 是否与本批次长度一致
             if doc_store_result.get("insert_count", 0) != len(insert_data):
@@ -277,8 +277,8 @@ class QATemplateStorageService:
                 }
                 insert_data.append(record)
 
-            # 使用docStoreConn的insert方法
-            doc_store_result = settings.docStoreConn.insert(self.collection_name, insert_data)
+            # 使用统一接口，兼容不同向量数据库
+            doc_store_result = settings.docStoreConn.insert(insert_data, self.collection_name)
 
             # 检查 insert_count 是否与本批次长度一致
             if doc_store_result.get("insert_count", 0) != len(insert_data):
