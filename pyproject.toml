@@ -182,6 +182,7 @@ dependencies = [
     "mammoth>=1.11.0",
     "markdownify>=1.2.0",
     "captcha>=0.7.1",
+    "pip==25.3",
     "pyvector-vastbase==1.0.2"
 ]
 
