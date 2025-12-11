@@ -1322,7 +1322,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         if not kb:
             return get_data_error_result(retmsg="Knowledgebase not found!")
-        if kb.pagerank is not None:
+        if kb.pagerank:
             d[PAGERANK_FLD] = kb.pagerank
 
         embd_id = DocumentService.get_embd_id(db, req["doc_id"])
