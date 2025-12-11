@@ -7,7 +7,7 @@ import copy
 import psycopg2
 from psycopg2 import pool, sql
 from psycopg2.extras import RealDictCursor
-from core import settings
+from api import settings
 from core.settings import PAGERANK_FLD, TAG_FLD
 from core.utils import singleton
 import pandas as pd
@@ -1242,6 +1242,7 @@ class VastBaseConnection(DocStoreConnection):
                 new_row.pop("pk", None)
                 new_row.pop("_id", None)
                 new_row.pop("vector", None)  # 移除通用vector字段
+                new_row.pop("auth", None)
 
                 # 验证必须有id字段
                 if "id" not in new_row:

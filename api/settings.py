@@ -9,6 +9,7 @@ import core.utils.milvus_conn
 import core.utils.es_conn
 import core.utils.infinity_conn
 import core.utils.opensearch_conn
+import core.utils.vastbase_conn
 from api.constants import MULTI_RAG_SERVICE_NAME
 from api.utils.configs import get_base_config
 from api.utils.file_utils import get_project_base_directory
@@ -178,7 +179,7 @@ def init_settings():
 
     OAUTH_CONFIG = get_base_config("oauth", {})
 
-    global DOC_ENGINE, DOC_ENGINE_INFINITY, docStoreConn, ES, OB, OS, INFINITY
+    global DOC_ENGINE, DOC_ENGINE_INFINITY, docStoreConn, ES, OB, OS, INFINITY, VASTBASE
     DOC_ENGINE = os.environ.get("DOC_ENGINE", "milvus")
     DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
     lower_case_doc_engine = DOC_ENGINE.lower()
@@ -193,6 +194,9 @@ def init_settings():
     elif lower_case_doc_engine == "opensearch":
         OS = get_base_config("os", {})
         docStoreConn = core.utils.opensearch_conn.OSConnection()
+    elif lower_case_doc_engine == "vastbase":
+        VASTBASE = get_base_config("vastbase", {})
+        docStoreConn = core.utils.vastbase_conn.VastBaseConnection()
     else:
         raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
 
