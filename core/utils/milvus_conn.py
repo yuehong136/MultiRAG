@@ -1045,8 +1045,8 @@ class MilvusConnection(DocStoreConnection):
 
         # 构建过滤条件
         filter_expr = ""
+        filter_parts = []
         if condition:
-            filter_parts = []
             for k, v in condition.items():
                 if k == "pk" or not v:
                     continue
@@ -1062,6 +1062,17 @@ class MilvusConnection(DocStoreConnection):
                     filter_parts.append(f"{v}")
                 elif k == "content_with_weight":
                     filter_parts.append(f"{v}")
+                elif k == "exists":
+                    # Filter where field exists and is not empty
+                    field_name = v
+                    filter_parts.append(f'{field_name} != ""')
+                elif k == "must_not":
+                    # Handle negative conditions
+                    if isinstance(v, dict):
+                        for kk, vv in v.items():
+                            if kk == "exists":
+                                # Filter where field doesn't exist or is empty
+                                filter_parts.append(f'{vv} == ""')
                 elif isinstance(v, list):
                     values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
                     filter_parts.append(f"{k} in [{','.join(values)}]")
@@ -1072,6 +1083,10 @@ class MilvusConnection(DocStoreConnection):
 
             if filter_parts:
                 filter_expr = " && ".join(filter_parts)
+            else:
+                # Milvus query requires a valid filter expression
+                # Use a default expression that matches all records
+                filter_expr = "pk != ''"
 
         text_exprs: list[MatchTextExpr] = []
         dense_expr: MatchDenseExpr | None = None
@@ -1106,11 +1121,13 @@ class MilvusConnection(DocStoreConnection):
                         continue
 
                     # 执行条件查询
+                    # 使用一个合理的最大值来获取足够的数据，然后在内存中分页
+                    # Milvus 最大限制是 16384，我们使用 10000 作为合理的默认值
                     results = conn.query(
                         collection_name,
                         filter_expr,
                         output_fields=selectFields,
-                        # limit=limit
+                        limit=10000
                     )
 
                     if results:

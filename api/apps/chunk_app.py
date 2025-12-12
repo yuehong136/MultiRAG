@@ -632,11 +632,12 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
         if request.question:
             embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
             dealer = search.Dealer(settings.docStoreConn)
+            # 使用固定的 topk 以确保 total 保持一致
             match_exprs.append(
                 dealer.get_vector(
                     request.question,
                     embd_mdl,
-                    topk=request.size,
+                    topk=1024,
                     similarity=request.similarity if request.similarity is not None else 0.1
                 )
             )

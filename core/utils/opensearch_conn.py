@@ -160,6 +160,17 @@ class OSConnection(DocStoreConnection):
                     bqry.filter.append(
                         Q("bool", must_not=Q("range", available_int={"lt": 1})))
                 continue
+            if k == "exists":
+                # OpenSearch native exists query
+                bqry.filter.append(Q("exists", field=v))
+                continue
+            if k == "must_not":
+                # Handle negative conditions
+                if isinstance(v, dict):
+                    for kk, vv in v.items():
+                        if kk == "exists":
+                            bqry.must_not.append(Q("exists", field=vv))
+                continue
             if not v:
                 continue
             if isinstance(v, list):
