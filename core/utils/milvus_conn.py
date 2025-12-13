@@ -930,12 +930,13 @@ class MilvusConnection(DocStoreConnection):
             # 创建副本避免修改原始数据
             new_row = copy.deepcopy(row)
 
-            # 确保主键字段：优先使用 pk，若无则用 id 补齐 pk（Milvus schema 主键为 pk）
+            # 确保主键字段：pk 和 id 双向补齐（Milvus schema 主键为 pk）
+            if "pk" not in new_row and "id" not in new_row:
+                raise ValueError("Insert requires primary key 'pk' or 'id'")
             if "pk" not in new_row:
-                if "id" in new_row:
-                    new_row["pk"] = new_row["id"]
-                else:
-                    raise ValueError("Insert requires primary key 'pk' (or provide 'id' to map to pk)")
+                new_row["pk"] = new_row["id"]
+            if "id" not in new_row:
+                new_row["id"] = new_row["pk"]
 
             # 处理特殊字段
             if "kb_id" in new_row and isinstance(new_row["kb_id"], list):

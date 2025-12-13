@@ -2140,20 +2140,18 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             db_type = settings.docStoreConn.dbType()
             if db_type == "milvus":
                 # Milvus 使用 collection_name 和 data 参数
-                doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
-                    collection_name=collection_name,
-                    data=converted_batch
+                # insert 返回 list[str]：空列表表示成功，非空列表包含错误信息
+                doc_store_errors = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
+                    rows=converted_batch,
+                    indexName=collection_name
                 ))
-                # 检查insert_count是否与本批次长度一致
-                if doc_store_result.get("insert_count", 0) != len(converted_batch):
-                    error_message = (
-                        f"Insert count mismatch: expected {len(converted_batch)}, "
-                        f"got {doc_store_result.get('insert_count', 0)}."
-                    )
+                # 检查是否有错误（非空列表表示有错误）
+                if doc_store_errors:
+                    error_message = f"Insert failed: {doc_store_errors}"
                     progress_callback(-1, msg=error_message)
                     raise Exception(error_message)
                 # 记录成功插入
-                successful_inserts.append(doc_store_result)
+                successful_inserts.append({"insert_count": len(converted_batch)})
             else:
                 # ES/OpenSearch/Infinity 使用 documents, indexName, knowledgebaseId 参数
                 # ES 要求文档有 "id" 字段，Milvus 使用 "pk"，需要做映射
