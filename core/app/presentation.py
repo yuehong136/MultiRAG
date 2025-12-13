@@ -17,6 +17,10 @@
 import copy
 import re
 from io import BytesIO
+import os
+import sys
+import uuid
+from pathlib import Path
 
 from PIL import Image
 
@@ -38,16 +42,109 @@ class Ppt(PptParser):
         import aspose.slides as slides
         import aspose.pydrawing as drawing
         imgs = []
-        with slides.Presentation(BytesIO(fnm)) as presentation:
-            for i, slide in enumerate(presentation.slides[from_page: to_page]):
+
+        # fnm 既可能是二进制（task 里传入的 binary），也可能是文件路径（某些调用路径）。
+        ppt_bytes: bytes
+        if isinstance(fnm, (bytes, bytearray, memoryview)):
+            ppt_bytes = bytes(fnm)
+        else:
+            ppt_bytes = Path(fnm).read_bytes()
+
+        def slide_to_pil(slide):
+            """
+            兼容不同 Aspose.Slides Python 包/版本：
+            - 某些版本提供 Slide.get_thumbnail(scaleX, scaleY) 并支持保存到 BytesIO。
+            - 新版常见为 Slide.get_image(...)，返回 IImage；优先写入 BytesIO（aspose.slides.ImageFormat），不行再落盘兜底。
+            """
+            def _is_gdiplus_missing(err: Exception) -> bool:
+                msg = str(err)
+                return ("libgdiplus" in msg) or ("Gdip" in msg) or ("DllNotFoundException" in msg)
+
+            def _gdiplus_hint() -> str:
+                # Aspose.Slides for Python via .NET 渲染图片通常依赖 GDI+（libgdiplus / System.Drawing.Common）。
+                # 不同系统的安装方式不同，这里给出通用指引，避免只针对本地开发机。
+                if os.name == "posix":
+                    if sys.platform == "darwin":
+                        return (
+                            "macOS：请安装 libgdiplus（例如通过 Homebrew 安装 mono-libgdiplus），"
+                            "必要时配置 DYLD_FALLBACK_LIBRARY_PATH 指向其 lib 目录。"
+                        )
+                    return "Linux：请安装 libgdiplus（Debian/Ubuntu 通常为 `apt-get install libgdiplus`）。"
+                if os.name == "nt":
+                    return (
+                        "Windows：请确保 System.Drawing 相关运行时/依赖可用（例如安装 .NET 运行时及相关组件）。"
+                    )
+                return "请安装/配置 libgdiplus（GDI+）相关依赖后重试。"
+
+            # 1) 旧 API：get_thumbnail
+            if hasattr(slide, "get_thumbnail"):
+                with BytesIO() as buffered:
+                    try:
+                        slide.get_thumbnail(0.1, 0.1).save(
+                            buffered, drawing.imaging.ImageFormat.jpeg
+                        )
+                    except Exception as e:
+                        if _is_gdiplus_missing(e):
+                            raise RuntimeError(
+                                "Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。"
+                                + _gdiplus_hint()
+                            ) from e
+                        raise
+                    buffered.seek(0)
+                    return Image.open(buffered).copy()
+
+            # 2) 新 API：get_image
+            #    注意：IImage.save 的 format 类型是 aspose.slides.ImageFormat（不是 aspose.pydrawing.imaging.ImageFormat）
+            if hasattr(slide, "get_image"):
+                try:
+                    img = slide.get_image(0.1, 0.1)
+                except Exception as e:
+                    if _is_gdiplus_missing(e):
+                        raise RuntimeError(
+                            "Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。"
+                            + _gdiplus_hint()
+                        ) from e
+                    raise
+                # 2.1) 优先写入内存流
                 try:
                     with BytesIO() as buffered:
-                        slide.get_thumbnail(
-                            0.1, 0.1).save(
-                            buffered, drawing.imaging.ImageFormat.jpeg)
+                        img.save(buffered, slides.ImageFormat.JPEG)
                         buffered.seek(0)
-                        imgs.append(Image.open(buffered).copy())
-                except RuntimeError as e:
+                        return Image.open(buffered).copy()
+                except Exception:
+                    # 2.2) 兜底：落盘再读回（兼容部分绑定对 BytesIO 不友好的情况）
+                    pass
+
+            # 3) 兜底：临时文件（格式由后缀决定）
+            tmp_root = Path(os.getenv("MULTIRAG_TMP_DIR", Path.cwd() / ".cache" / "aspose_slides"))
+            tmp_root.mkdir(parents=True, exist_ok=True)
+            tmp_path = tmp_root / f"slide_{uuid.uuid4().hex}.jpg"
+            try:
+                try:
+                    img = slide.get_image(0.1, 0.1) if hasattr(slide, "get_image") else None
+                except Exception as e:
+                    if _is_gdiplus_missing(e):
+                        raise RuntimeError(
+                            "Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。"
+                            + _gdiplus_hint()
+                        ) from e
+                    raise
+                if img is None:
+                    raise AttributeError("Slide has neither get_thumbnail nor get_image")
+                img.save(str(tmp_path))
+                return Image.open(tmp_path).copy()
+            finally:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    # 临时文件删除失败不应中断解析流程
+                    pass
+
+        with slides.Presentation(BytesIO(ppt_bytes)) as presentation:
+            for i, slide in enumerate(presentation.slides[from_page: to_page]):
+                try:
+                    imgs.append(slide_to_pil(slide))
+                except Exception as e:
                     raise RuntimeError(f'ppt parse error at page {i+1}, original error: {str(e)}') from e
         assert len(imgs) == len(
             txts), "Slides text and image do not match: {} vs. {}".format(len(imgs), len(txts))
