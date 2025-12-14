@@ -24,7 +24,7 @@ from api.constants import NAME_LENGTH_LIMIT
 from api.db import FileType, ParserType, FileSource, TaskStatus
 from api.db import StatusEnum
 # from api.db.database import get_db, SessionLocal
-from api.db.db_models import File, get_db, SessionLocal
+from api.db.db_models import File, get_db, SessionLocal, db_connection
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -719,10 +719,11 @@ async def download_document(
 
 # ----------------------------start parsing a document-----------------------------------------------------
 
-def doc_parse_callback(doc_id, prog=None, msg="", db: Session = SessionLocal()):
-    cancel = DocumentService.do_cancel(db, doc_id)
-    if cancel:
-        raise Exception("The parsing process has been cancelled!")
+def doc_parse_callback(doc_id, prog=None, msg="", db: Session | None = None):
+    with db_connection() as db:
+        cancel = DocumentService.do_cancel(db, doc_id)
+        if cancel:
+            raise Exception("The parsing process has been cancelled!")
 
 
 def doc_parse(binary, doc_name, parser_name, tenant_id, doc_id):

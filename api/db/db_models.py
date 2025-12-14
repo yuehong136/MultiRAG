@@ -10,7 +10,7 @@ import logging
 import os
 import sys
 import inspect
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, DisconnectionError
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, BigInteger, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -144,6 +144,13 @@ def receive_checkout(dbapi_conn, connection_record, connection_proxy):
         # 检测连接是否在不同进程中使用（多进程场景）
         logging.warning(
             f"[连接池] 连接跨进程使用 | 创建进程: {pid}, 当前进程: {os.getpid()}"
+        )
+        # ⚠️ 关键：跨进程复用连接会导致连接异常/莫名断开。
+        # 使用 SQLAlchemy 官方推荐的 invalidate() 方法使连接失效，
+        # 连接池会自动丢弃该连接并新建连接（自愈机制）
+        connection_record.invalidate()
+        raise DisconnectionError(
+            f"DB connection belongs to PID {pid}, cannot be used in PID {os.getpid()}"
         )
 
 

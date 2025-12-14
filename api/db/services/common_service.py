@@ -230,12 +230,18 @@ class CommonService(Generic[ModelType]):
         return num
 
     @classmethod
+    @retry_db_operation(max_attempts=3)
     def get_by_id(cls, db: Session, pid: Any) -> ModelType | None:
         """
-        通过主键或 ID 字段查询单个记录。
-        找不到时返回 None；其他异常（如数据库连接错误）会正常抛出。
+        通过主键或 ID 字段查询单个记录（带自动重试）。
+
+        重试机制：
+        - 自动重试 OperationalError、DisconnectionError 等连接类错误
+        - 最多重试 3 次，使用指数退避（1-5秒）
+
+        Returns:
+            找到时返回对象，找不到时返回 None
         """
-        # one_or_none() 在没有结果时返回 None，找到多条时会抛出 MultipleResultsFound
         return (
             db.query(cls.model)
             .filter(cls.model.id == pid)
