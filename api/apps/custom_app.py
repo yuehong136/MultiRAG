@@ -968,12 +968,17 @@ async def process_docx(
         # 更新规范化后的矩阵
         all_tables_result[idx] = new_matrix
 
-    # Step 3: 填充文档内容
+    # Step 3: 填充文档内容（只更新发生变化的单元格，避免丢失非文本内容）
     for t_idx, table in enumerate(input_doc.tables):
         result_matrix = all_tables_result[t_idx]
+        original_matrix = all_tables_original[t_idx]
         for r_idx, row in enumerate(table.rows):
             for c_idx, cell in enumerate(row.cells):
-                update_cell_text_preserving_format(cell, result_matrix[r_idx][c_idx])
+                # 只有当单元格内容发生变化时才更新，避免破坏原有的非文本内容（如图片、特殊格式等）
+                original_text = original_matrix[r_idx][c_idx]
+                new_text = result_matrix[r_idx][c_idx]
+                if original_text != new_text:
+                    update_cell_text_preserving_format(cell, new_text)
 
     # Step 3.5: 应用手动映射填充（根据 mapping_data 中的 fillmapping 配置）
     apply_manual_fill_mappings(input_doc, mapping_data, placeholders)
