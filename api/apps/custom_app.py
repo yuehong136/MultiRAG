@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # 临时文件存放目录
 DOCX_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "temp", "docx_logs")
 # 最大保留的请求数量
-DOCX_LOG_MAX_REQUESTS = 3
+DOCX_LOG_MAX_REQUESTS = 10
 
 
 def ensure_log_dir():
