@@ -379,6 +379,21 @@ class WebParseOptions(BaseModel):
     )
     include_favicon: bool | None = Field(default=None, description="是否包含 favicon（默认 False）")
 
+    # 图片去噪选项
+    clean_images: bool | None = Field(
+        default=None,
+        description="是否启用图片去噪功能，自动过滤 logo、统计像素图、占位图等无用图片（默认 False）"
+    )
+    image_filter_mode: Literal["strict", "balanced", "minimal"] | None = Field(
+        default=None,
+        description=(
+            "图片过滤模式（仅在 clean_images=True 时生效）：\n"
+            "- strict（默认）：最大程度过滤（logo + 模板 + 统计 + 占位图）\n"
+            "- balanced：中等过滤（统计 + 占位图，保留可能的内容图）\n"
+            "- minimal：最小过滤（仅删除明确的统计像素图）"
+        ),
+    )
+
     @field_validator("limit", "max_depth", "timeout", mode="before")
     @classmethod
     def _empty_str_to_none_and_cast_int(cls, v):
@@ -1468,6 +1483,8 @@ def web_parse(
     | `format`           | `"markdown" | "text"`        | `markdown`| Tavily：返回格式。markdown 更快；text 为纯文本，可能增加延迟                            |
     | `timeout`          | `int (1~60)`                   | `自动`     | Tavily：最大等待秒数。未指定时：basic=10s，advanced=30s                                 |
     | `include_favicon`  | `boolean`                      | `False`    | Tavily：是否包含 favicon                                                                |
+    | `clean_images`     | `boolean`                      | `False`    | **图片去噪**：是否启用图片去噪功能，自动过滤 logo、统计像素图、占位图等无用图片         |
+    | `image_filter_mode`| `"strict" | "balanced" | "minimal"` | `strict`   | **过滤模式**（仅在 clean_images=true 时生效）：strict=最大过滤；balanced=中等过滤；minimal=最小过滤 |
 
     #### WebParseCredentials
     | 字段       | 类型     | 必填 | 说明                          |
@@ -1478,7 +1495,7 @@ def web_parse(
 
     ### 响应 (Response)
 
-    #### 成功响应 (200)
+    #### 成功响应 (200) - 默认情况（未启用图片清洗）
     ```json
     {
       "retcode": 0,
@@ -1486,7 +1503,7 @@ def web_parse(
       "data": {
         "provider": "tavily",
         "url": "https://example.com",
-        "texts": ["解析出的纯文本1", "解析出的纯文本2"],
+        "texts": ["解析出的纯文本（Markdown格式）"],
         "raw": {
           "results": [
             {"url": "https://example.com", "raw_content": "...", "images": [], "favicon": "..."}
@@ -1498,6 +1515,60 @@ def web_parse(
       }
     }
     ```
+
+    #### 成功响应 (200) - 启用图片清洗 (clean_images=true)
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "success",
+      "data": {
+        "provider": "tavily",
+        "url": "https://example.com",
+        "texts": ["已清洗的纯文本（无用图片已删除）"],
+        "filtered_images": [
+          "https://example.com/article/image1.png",
+          "https://example.com/article/image2.png"
+        ],
+        "image_cleaning_stats": {
+          "enabled": true,
+          "mode": "strict",
+          "total_images": 5,
+          "dropped_count": 3,
+          "kept_count": 2,
+          "dropped_details": [
+            {"url": "https://example.com/logo.png", "reason": "strict_pattern"},
+            {"url": "https://example.com/_visitcount?id=1", "reason": "force_drop_tracking"},
+            {"url": "https://example.com/blank.gif", "reason": "force_drop_blank_gif"}
+          ]
+        },
+        "raw": {
+          "results": [
+            {
+              "url": "https://example.com",
+              "raw_content": "原始未清洗的内容（包含所有图片）",
+              "images": ["url1", "url2", "url3", "url4", "url5"],
+              "favicon": "..."
+            }
+          ],
+          "failed_results": [],
+          "response_time": 1.23,
+          "request_id": "uuid"
+        }
+      }
+    }
+    ```
+
+    **返回字段说明**:
+    - `texts`: 清洗后的 Markdown 文本数组（仅当 clean_images=true 时会删除无用图片）
+    - `filtered_images`: 过滤后保留的图片 URL 列表（仅在 clean_images=true 时返回）
+    - `image_cleaning_stats`: 图片清洗统计信息（仅在 clean_images=true 时返回）
+      - `enabled`: 是否启用图片清洗
+      - `mode`: 使用的过滤模式
+      - `total_images`: 原始图片总数
+      - `dropped_count`: 被删除的图片数量
+      - `kept_count`: 保留的图片数量
+      - `dropped_details`: 被删除图片的详细信息（URL + 删除原因）
+    - `raw`: 原始响应数据（完全不变，包含所有原始图片和内容）
 
     #### 错误响应
     - **400: 参数错误/未配置凭据**
@@ -1524,6 +1595,23 @@ def web_parse(
     ---
 
     ### 使用示例
+
+    #### 示例 1: 基础网页解析
+    ```json
+    {
+      "url": "https://example.com/article",
+      "provider": "tavily",
+      "options": {
+        "extract_depth": "advanced",
+        "format": "markdown",
+        "include_images": false,
+        "timeout": 20
+      },
+      "credentials": {"api_key": "tvly-***"}
+    }
+    ```
+
+    #### 示例 2: 启用图片去噪（严格模式）
     ```json
     {
       "url": "https://jw.dhu.edu.cn/2025/0623/c22070a363167/page.htm",
@@ -1531,9 +1619,24 @@ def web_parse(
       "options": {
         "extract_depth": "advanced",
         "format": "markdown",
-        "include_images": false,
-        "include_favicon": false,
+        "include_images": true,
+        "clean_images": true,
+        "image_filter_mode": "strict",
         "timeout": 20
+      },
+      "credentials": {"api_key": "tvly-***"}
+    }
+    ```
+
+    #### 示例 3: 图片去噪（平衡模式）
+    ```json
+    {
+      "url": "https://example.com/news",
+      "provider": "tavily",
+      "options": {
+        "include_images": true,
+        "clean_images": true,
+        "image_filter_mode": "balanced"
       },
       "credentials": {"api_key": "tvly-***"}
     }
@@ -1544,8 +1647,18 @@ def web_parse(
     ### 注意事项
     - `provider = tavily` 需有效 `api_key`；未来支持从凭据表自动注入后可不在请求体传递。
     - `extract_depth/format/timeout` 语义遵循 Tavily 官方文档；`timeout` 范围 1~60 秒。
-    - `texts` 返回的是清洗后的纯文本；原始字段请在 `raw.results[*].raw_content` 获取。
+    - `texts` 返回的是处理后的文本；原始未处理内容请在 `raw.results[*].raw_content` 获取。
     - `jinareader` 为预留 provider，集成后在同一接口下直接可用。
+
+    **图片去噪功能说明**:
+    - `clean_images=true` 时会自动过滤网页中的装饰性图片（logo、统计像素图、占位图等），保留正文配图
+    - 过滤模式说明：
+      - `strict`（默认）：最大程度过滤，删除所有站点 logo、模板图片、统计图、占位图
+      - `balanced`：中等过滤，删除统计图和模板图片，保留可能的内容图（如站点 logo）
+      - `minimal`：最小过滤，仅删除明确的统计像素图和占位图
+    - `filtered_images` 字段包含过滤后保留的图片 URL 列表
+    - `image_cleaning_stats` 提供详细的过滤统计信息，包括删除原因
+    - 所有原始数据（包括被删除的图片）完整保留在 `raw` 字段中
     """
     try:
         url = request.url

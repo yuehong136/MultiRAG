@@ -2344,7 +2344,80 @@ class DocumentService(CommonService):
                 txt = item.get("raw_content") or ""
                 if txt:
                     texts.append(txt)
-            return {"provider": provider_lc, "url": url, "texts": texts, "raw": raw}
+
+            # 图片去噪处理
+            filtered_images: list[str] | None = None
+            image_cleaning_stats: dict | None = None
+
+            clean_images = options.get("clean_images") if options else None
+            if clean_images:
+                from common.image_utils import ImageFilter
+
+                filter_mode = options.get("image_filter_mode", "strict")
+
+                # 处理每个 result 的文本和图片
+                all_dropped_details = []
+                total_images_count = 0
+                kept_images_set = set()
+
+                # 清洗文本中的图片引用
+                cleaned_texts = []
+                for idx, item in enumerate(raw.get("results", []) or []):
+                    raw_content = item.get("raw_content") or ""
+                    if raw_content:
+                        cleaned_text, dropped_from_text, total_in_text = ImageFilter.clean_markdown_images(
+                            raw_content, mode=filter_mode, base_url=url
+                        )
+                        cleaned_texts.append(cleaned_text)
+                        all_dropped_details.extend(dropped_from_text)
+
+                # 过滤图片 URL 列表
+                for item in raw.get("results", []) or []:
+                    original_images = item.get("images") or []
+                    total_images_count += len(original_images)
+
+                    kept_urls, dropped_from_array = ImageFilter.filter_image_urls(
+                        original_images, mode=filter_mode, base_url=url
+                    )
+                    kept_images_set.update(kept_urls)
+                    all_dropped_details.extend(dropped_from_array)
+
+                # 去重 dropped_details（基于 URL）
+                seen_urls = set()
+                unique_dropped = []
+                for detail in all_dropped_details:
+                    if detail["url"] not in seen_urls:
+                        seen_urls.add(detail["url"])
+                        unique_dropped.append(detail)
+
+                # 更新 texts 和构建返回数据
+                if cleaned_texts:
+                    texts = cleaned_texts
+
+                # 从保留列表中移除所有被删除的图片（修复文本清洗与URL过滤的矛盾）
+                dropped_urls = {detail["url"] for detail in unique_dropped}
+                filtered_images = sorted([url for url in kept_images_set if url not in dropped_urls])
+
+                dropped_count = len(unique_dropped)
+                kept_count = total_images_count - dropped_count
+
+                image_cleaning_stats = {
+                    "enabled": True,
+                    "mode": filter_mode,
+                    "total_images": total_images_count,
+                    "dropped_count": dropped_count,
+                    "kept_count": kept_count,
+                    "dropped_details": unique_dropped,
+                }
+
+            # 构建返回数据
+            result = {"provider": provider_lc, "url": url, "texts": texts, "raw": raw}
+            if filtered_images is not None:
+                result["filtered_images"] = filtered_images
+            if image_cleaning_stats is not None:
+                result["image_cleaning_stats"] = image_cleaning_stats
+
+            return result
 
         elif provider_lc == "jinareader":
             # 预留：未来在 core/utils/jina_conn.py 中实现后在此对接
