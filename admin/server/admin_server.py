@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from routes import admin_router
 from auth import init_default_admin
 from api.utils.log_utils import init_root_logger
-from api.constants import SERVICE_CONF
+from common.constants import SERVICE_CONF
 from api import settings
 from config import load_configurations, SERVICE_CONFIGS
 from api.common.exceptions import setup_exception_handlers
