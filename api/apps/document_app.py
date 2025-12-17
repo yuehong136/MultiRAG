@@ -45,7 +45,8 @@ from api.common.check_team_permission import check_kb_team_permission
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result, get_data_error_result, server_error_response
 from common.misc_utils import get_uuid
-from api.utils.file_utils import filename_type, thumbnail, get_project_base_directory
+from api.utils.file_utils import filename_type, thumbnail
+from common.file_utils import get_project_base_directory
 from api.utils.web_utils import CONTENT_TYPE_MAP, html2pdf, is_valid_url
 from core.nlp import search, rag_tokenizer
 from core.utils.storage_factory import STORAGE_IMPL

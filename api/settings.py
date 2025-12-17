@@ -12,7 +12,7 @@ import core.utils.opensearch_conn
 import core.utils.vastbase_conn
 from api.constants import MULTI_RAG_SERVICE_NAME
 from api.utils.configs import get_base_config
-from api.utils.file_utils import get_project_base_directory
+from common.file_utils import get_project_base_directory
 from core.nlp import search
 
 LIGHTEN = int(os.environ.get("LIGHTEN", "0"))

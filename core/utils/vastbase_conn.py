@@ -11,7 +11,7 @@ from api import settings
 from core.settings import PAGERANK_FLD, TAG_FLD
 from common.decorator import singleton
 import pandas as pd
-from api.utils.file_utils import get_project_base_directory
+from common.file_utils import get_project_base_directory
 from core.nlp import is_english
 
 from core.utils.doc_store_conn import (

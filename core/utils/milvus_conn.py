@@ -40,7 +40,7 @@ from pymilvus.orm.iterator import QueryIterator, SearchIterator
 from pymilvus.orm.types import DataType
 from pymilvus import __version__
 
-from api.utils.file_utils import get_project_base_directory
+from common.file_utils import get_project_base_directory
 from core import settings
 import numpy as np
 from core.nlp import is_english

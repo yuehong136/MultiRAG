@@ -31,7 +31,7 @@ from api.apps import app
 from api.db.runtime_config import RuntimeConfig
 from api.db.services.document_service import DocumentService
 from api import settings
-from api import utils
+from common.file_utils import get_project_base_directory
 
 from api.db.db_models import init_database_tables as init_web_db, upgrade_database_tables as upgrade_database, SessionLocal
 from api.db.init_data import init_web_data
@@ -112,7 +112,7 @@ if __name__ == '__main__':
 
     # ============ 版本和环境信息 ============
     logging.info(f'MultiRAG version: {get_multirag_version()}')
-    logging.info(f'project base: {utils.file_utils.get_project_base_directory()}')
+    logging.info(f'project base: {get_project_base_directory()}')
 
     # ============ 命令行参数解析 ============
     import argparse

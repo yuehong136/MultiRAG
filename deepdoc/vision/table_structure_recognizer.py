@@ -21,7 +21,7 @@ from collections import Counter
 import numpy as np
 from huggingface_hub import snapshot_download
 
-from api.utils.file_utils import get_project_base_directory
+from common.file_utils import get_project_base_directory
 from core.nlp import rag_tokenizer
 
 from .recognizer import Recognizer
@@ -579,7 +579,7 @@ class TableStructureRecognizer(Recognizer):
 
         from ais_bench.infer.interface import InferSession
 
-        model_dir = os.path.join(get_project_base_directory(), "rag/res/deepdoc")
+        model_dir = os.path.join(get_project_base_directory(), "core/res/deepdoc")
         model_file_path = os.path.join(model_dir, "tsr.om")
 
         if not os.path.exists(model_file_path):

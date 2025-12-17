@@ -4,7 +4,7 @@ import os
 import time
 import re
 from nltk.corpus import wordnet
-from api.utils.file_utils import get_project_base_directory
+from common.file_utils import get_project_base_directory
 
 class Dealer:
     def __init__(self, redis=None):
