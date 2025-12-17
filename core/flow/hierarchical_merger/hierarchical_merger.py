@@ -21,7 +21,7 @@ from functools import partial
 import trio
 
 from common.misc_utils import get_uuid
-from api.utils.base64_image import id2image, image2id
+from common.base64_image import id2image, image2id
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.hierarchical_merger.schema import HierarchicalMergerFromUpstream
