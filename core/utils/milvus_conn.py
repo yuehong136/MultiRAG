@@ -4001,7 +4001,7 @@ class MilvusConnection(DocStoreConnection):
         - 资源组信息
         """
         try:
-            from api.utils.common import convert_bytes
+            from common.misc_utils import convert_bytes
             from pymilvus import Collection
 
             # 基础信息

@@ -28,7 +28,7 @@ from api import settings
 from core.settings import TAG_FLD, PAGERANK_FLD
 from common.decorator import singleton
 from common.file_utils import get_project_base_directory
-from api.utils.common import convert_bytes
+from common.misc_utils import convert_bytes
 from core.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr, MatchTextExpr, MatchDenseExpr, \
     FusionExpr
 from core.nlp import is_english, rag_tokenizer

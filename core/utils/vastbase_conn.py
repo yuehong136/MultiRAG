@@ -5,12 +5,10 @@ import json
 import time
 import copy
 import psycopg2
-from psycopg2 import pool, sql
-from psycopg2.extras import RealDictCursor
+from psycopg2 import pool
 from api import settings
 from core.settings import PAGERANK_FLD, TAG_FLD
 from common.decorator import singleton
-import pandas as pd
 from common.file_utils import get_project_base_directory
 from core.nlp import is_english
 

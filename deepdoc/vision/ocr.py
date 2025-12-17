@@ -22,7 +22,7 @@ import os
 from huggingface_hub import snapshot_download
 
 from common.file_utils import get_project_base_directory
-from api.utils.common import pip_install_torch
+from common.misc_utils import pip_install_torch
 from core.settings import PARALLEL_DEVICES
 from .operators import *
 from . import operators
