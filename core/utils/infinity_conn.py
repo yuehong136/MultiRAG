@@ -27,7 +27,7 @@ from infinity.connection_pool import ConnectionPool
 from infinity.errors import ErrorCode
 from core import settings
 from core.settings import PAGERANK_FLD, TAG_FLD
-from core.utils import singleton
+from common.decorator import singleton
 import pandas as pd
 from api.utils.file_utils import get_project_base_directory
 from core.nlp import is_english

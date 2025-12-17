@@ -9,7 +9,7 @@ from psycopg2 import pool, sql
 from psycopg2.extras import RealDictCursor
 from api import settings
 from core.settings import PAGERANK_FLD, TAG_FLD
-from core.utils import singleton
+from common.decorator import singleton
 import pandas as pd
 from api.utils.file_utils import get_project_base_directory
 from core.nlp import is_english

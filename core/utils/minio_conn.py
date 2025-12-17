@@ -12,7 +12,7 @@ from minio import Minio, S3Error
 from minio.commonconfig import CopySource
 from io import BytesIO
 from core import settings
-from core.utils import singleton
+from common.decorator import singleton
 
 
 @singleton

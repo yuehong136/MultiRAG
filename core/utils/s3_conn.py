@@ -4,7 +4,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 import time
 from io import BytesIO
-from core.utils import singleton
+from common.decorator import singleton
 from core import settings
 
 @singleton

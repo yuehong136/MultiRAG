@@ -15,7 +15,7 @@ from datetime import datetime
 import redis
 import logging
 from core import settings
-from core.utils import singleton
+from common.decorator import singleton
 # from valkey.lock import Lock
 from redis.lock import Lock
 import trio

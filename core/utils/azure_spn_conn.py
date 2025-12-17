@@ -2,7 +2,7 @@ import logging
 import os
 import time
 from core import settings
-from core.utils import singleton
+from common.decorator import singleton
 from azure.identity import ClientSecretCredential, AzureAuthorityHosts
 from azure.storage.filedatalake import FileSystemClient
 

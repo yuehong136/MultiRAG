@@ -26,7 +26,7 @@ from elasticsearch_dsl import UpdateByQuery, Q, Search, Index
 from elastic_transport import ConnectionTimeout
 from api import settings
 from core.settings import TAG_FLD, PAGERANK_FLD
-from core.utils import singleton
+from common.decorator import singleton
 from api.utils.file_utils import get_project_base_directory
 from api.utils.common import convert_bytes
 from core.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr, MatchTextExpr, MatchDenseExpr, \

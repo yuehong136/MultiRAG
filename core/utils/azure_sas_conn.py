@@ -3,7 +3,7 @@ import os
 import time
 from io import BytesIO
 from core import settings
-from core.utils import singleton
+from common.decorator import singleton
 from azure.storage.blob import ContainerClient
 
 
