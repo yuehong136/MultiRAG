@@ -1009,11 +1009,23 @@ def update_document_chunk(
         # 更新重要关键词
         if "important_keywords" in req:
             chunk_data["important_keywords"] = req["important_keywords"]
-        
+
+        if "questions" in req:
+            if not isinstance(req["questions"], list):
+                return get_error_data_result("`questions` should be a list")
+            chunk_data["question_kwd"] = [str(q).strip() for q in req.get("questions", []) if str(q).strip()]
+            chunk_data["question_tks"] = rag_tokenizer.tokenize("\n".join(req["questions"]))
+
         # 更新可用状态
         if "available" in req:
             chunk_data["available_int"] = 1 if req["available"] else 0
-        
+
+        # 更新位置
+        if "positions" in req:
+            if not isinstance(req["positions"], list):
+                return get_error_data_result("`positions` should be a list")
+            chunk_data["position_int"] = req["positions"]
+
         # 更新修改时间
         chunk_data["update_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         chunk_data["update_timestamp_flt"] = datetime.datetime.now().timestamp()
