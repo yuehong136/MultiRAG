@@ -38,7 +38,7 @@ from core.nlp import extract_between
 from core.nlp.search import index_name
 from core.prompts.generator import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
     citation_prompt, cross_languages, gen_meta_filter, PROMPT_JINJA_ENV, ASK_SUMMARY
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 from core.utils.tavily_conn import Tavily
 from common.string_utils import remove_redundant_spaces
 

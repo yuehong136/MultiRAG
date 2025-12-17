@@ -16,7 +16,7 @@ from graphrag.general.graph_prompt import GRAPH_EXTRACTION_PROMPT, CONTINUE_PROM
 from graphrag.utils import ErrorHandlerFn, perform_variable_replacements, chat_limiter, split_string_by_multi_markers
 from core.llm.chat_model.base import Base as CompletionLLM
 import networkx as nx
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 
 DEFAULT_TUPLE_DELIMITER = "<|>"
 DEFAULT_RECORD_DELIMITER = "##"

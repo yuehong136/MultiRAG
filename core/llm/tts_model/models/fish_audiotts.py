@@ -4,7 +4,7 @@ import ormsgpack
 from pydantic import BaseModel, conint, Field
 
 from core.llm.tts_model.base import Base
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 import json
 
 

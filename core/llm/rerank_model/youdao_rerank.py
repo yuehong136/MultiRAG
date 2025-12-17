@@ -6,7 +6,7 @@ import numpy as np
 from api.utils.file_utils import get_home_cache_dir
 from core.llm.rerank_model.base import sigmoid
 from core.llm.rerank_model.default_rerank import DefaultRerank
-from core.utils import truncate, num_tokens_from_string
+from common.token_utils import truncate, num_tokens_from_string
 
 
 class YoudaoRerank(DefaultRerank):

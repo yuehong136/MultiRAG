@@ -130,9 +130,3 @@ python -m pytest tests/test_flow_utils.py -k "splitter"
 3. **便于追踪**：注释标注参考来源
 4. **易于维护**：清晰的目录结构
 
-## 🔗 相关文档
-
-- `analyze_v2_core_flow_utils组织结构说明.md` - 详细设计说明
-- `analyze_v2_core_flow集成完成说明.md` - 功能使用说明
-- `analyze_v2_提取core_flow核心逻辑方案.md` - 方案评估
-

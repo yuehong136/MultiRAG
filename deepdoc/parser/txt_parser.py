@@ -9,7 +9,7 @@
 import re
 
 from deepdoc.parser.utils import get_text
-from core.nlp import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 
 class RAGFlowTxtParser:
     def __call__(self, fnm, binary=None, chunk_token_num=128, delimiter="\n!?;。；！？"):

@@ -5,7 +5,7 @@ import requests
 
 from api.utils.log_utils import log_exception
 from core.llm.rerank_model.base import Base
-from core.utils import num_tokens_from_string, truncate
+from common.token_utils import num_tokens_from_string, truncate
 
 
 class LocalAIRerank(Base):

@@ -36,7 +36,7 @@ from zhipuai import ZhipuAI
 from api import settings
 from api.utils.file_utils import get_home_cache_dir
 from api.utils.log_utils import log_exception
-from core.utils import num_tokens_from_string, truncate
+from common.token_utils import num_tokens_from_string, truncate
 
 
 class Base(ABC):

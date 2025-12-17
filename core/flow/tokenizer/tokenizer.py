@@ -30,7 +30,7 @@ from core.flow.tokenizer.schema import TokenizerFromUpstream
 from core.nlp import rag_tokenizer
 from core.settings import EMBEDDING_BATCH_SIZE
 from core.svr.task_executor import embed_limiter
-from core.utils import truncate
+from common.token_utils import truncate
 
 
 class TokenizerParam(ProcessParamBase):

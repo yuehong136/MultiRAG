@@ -3,7 +3,7 @@ from openai import OpenAI
 
 from api.utils.log_utils import log_exception
 from core.llm.embedding_model.base import Base
-from core.utils import truncate
+from common.token_utils import truncate
 
 
 class OpenAIEmbed(Base):

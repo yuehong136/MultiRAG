@@ -30,7 +30,7 @@ from yarl import URL
 from api import settings
 from api.utils.file_utils import get_home_cache_dir
 from api.utils.log_utils import log_exception
-from core.utils import num_tokens_from_string, truncate, total_token_count_from_response
+from common.token_utils import num_tokens_from_string, truncate, total_token_count_from_response
 
 class Base(ABC):
     def __init__(self, key, model_name, **kwargs):

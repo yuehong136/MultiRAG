@@ -24,7 +24,7 @@ import trio
 from common.misc_utils import get_uuid
 from graphrag.query_analyze_prompt import PROMPTS
 from graphrag.utils import get_entity_type2samples, get_llm_cache, set_llm_cache, get_relation
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 from core.utils.doc_store_conn import OrderByExpr
 
 from core.nlp.search import Dealer, index_name

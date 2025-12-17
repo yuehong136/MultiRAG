@@ -2,7 +2,7 @@ import numpy as np
 import requests
 
 from core.llm.rerank_model.default_rerank import DefaultRerank
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 
 
 class HuggingfaceRerank(DefaultRerank):

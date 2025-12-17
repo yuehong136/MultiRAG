@@ -3,7 +3,7 @@ import os
 import numpy as np
 from core.llm.embedding_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 
 
 class YoudaoEmbed(Base):

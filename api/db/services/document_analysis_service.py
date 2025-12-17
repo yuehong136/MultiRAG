@@ -28,7 +28,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from core.nlp import rag_tokenizer
 from core.nlp.term_weight import Dealer as TermWeightDealer
-from core.utils import truncate
+from common.token_utils import truncate
 from api.utils.api_utils import timeout
 
 # ⭐ 遵循项目规范：从 core.prompts.prompts 导入

@@ -14,7 +14,6 @@ core/flow/extractor 的纯函数提取
 """
 import asyncio
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 

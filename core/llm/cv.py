@@ -29,7 +29,7 @@ from openai.lib.azure import AzureOpenAI
 from zhipuai import ZhipuAI
 from core.nlp import is_english
 from core.prompts.generator import vision_llm_describe_prompt
-from core.utils import num_tokens_from_string, total_token_count_from_response
+from common.token_utils import num_tokens_from_string, total_token_count_from_response
 
 
 class Base(ABC):

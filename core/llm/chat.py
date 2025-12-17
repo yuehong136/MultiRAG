@@ -36,7 +36,7 @@ from zhipuai import ZhipuAI
 
 from core.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, SupportedLiteLLMProvider
 from core.nlp import is_chinese, is_english
-from core.utils import num_tokens_from_string, total_token_count_from_response
+from common.token_utils import num_tokens_from_string, total_token_count_from_response
 
 
 # Error message constants

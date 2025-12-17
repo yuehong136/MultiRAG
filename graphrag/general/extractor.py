@@ -38,7 +38,7 @@ from graphrag.utils import (
 )
 from core.llm.chat import Base as CompletionLLM
 from core.prompts.generator import message_fit_in
-from core.utils import truncate
+from common.token_utils import truncate
 
 GRAPH_FIELD_SEP = "<SEP>"
 DEFAULT_ENTITY_TYPES = ["organization", "person", "geo", "event", "category"]

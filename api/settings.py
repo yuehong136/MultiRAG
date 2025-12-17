@@ -216,13 +216,13 @@ def init_settings():
     # if lower_case_doc_engine == "milvus":
     #     docStoreConn = core.utils.milvus_conn.MilvusConnection()
     # elif lower_case_doc_engine == "elasticsearch":
-    #     from core.utils import es_conn
+    #     from common.token_utils import es_conn
     #     docStoreConn = es_conn.ESConnection()
     # elif lower_case_doc_engine == "opensearch":
-    #     from core.utils import opensearch_conn
+    #     from common.token_utils import opensearch_conn
     #     docStoreConn = opensearch_conn.OSConnection()
     # elif lower_case_doc_engine == "infinity":
-    #     from core.utils import infinity_conn
+    #     from common.token_utils import infinity_conn
     #     docStoreConn = infinity_conn.InfinityConnection()
     # else:
     #     raise Exception(f"Not supported doc engine: {DOC_ENGINE}")

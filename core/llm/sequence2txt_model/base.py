@@ -9,7 +9,7 @@
 import base64
 import io
 from abc import ABC
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 
 
 class Base(ABC):
