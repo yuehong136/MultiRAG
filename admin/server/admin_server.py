@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from routes import admin_router
 from auth import init_default_admin
-from api.utils.log_utils import init_root_logger
+from common.log_utils import init_root_logger
 from common.constants import SERVICE_CONF
 from common.config_utils import show_configs
 from api import settings
@@ -44,11 +44,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 启动时执行
     init_root_logger("admin_service")
     logging.info(r"""
+============================================================================
         __  ___      __  _ ____  ___   ______   ___       __          _     
        /  |/  /_  __/ /_(_) __ \/   | / ____/  /   | ____/ /___ ___  (_)___ 
       / /|_/ / / / / __/ / /_/ / /| |/ / __   / /| |/ __  / __ `__ \/ / __ \
      / /  / / /_/ / /_/ / _, _/ ___ / /_/ /  / ___ / /_/ / / / / / / / / / /
     /_/  /_/\__,_/\__/_/_/ |_/_/  |_\____/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/ 
+============================================================================
     """)
 
     # settings 已在 auth.py 模块导入时初始化，这里确保初始化完成

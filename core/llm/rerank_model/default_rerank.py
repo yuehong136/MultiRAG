@@ -6,7 +6,7 @@ from collections.abc import Iterable
 import numpy as np
 from huggingface_hub import snapshot_download
 
-from api.utils.log_utils import log_exception
+from common.log_utils import log_exception
 from core.llm.rerank_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
 from common.token_utils import num_tokens_from_string, truncate

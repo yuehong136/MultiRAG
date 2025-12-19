@@ -12,7 +12,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.utils.api_utils import timeout
 from common.base64_image import image2id
-from api.utils.log_utils import init_root_logger
+from common.log_utils import init_root_logger
 from common.file_utils import get_project_base_directory
 from common.config_utils import show_configs
 from graphrag.general.index import run_graphrag_for_kb
@@ -20,13 +20,6 @@ from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, se
 from core.flow.pipeline import Pipeline
 from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text
 import logging
-# for module in ["pdfminer"]:
-#     module_logger = logging.getLogger(module)
-#     module_logger.setLevel(logging.WARNING)
-# for module in ["sqlalchemy"]:
-#     module_logger = logging.getLogger(module)
-#     module_logger.handlers.clear()
-#     module_logger.propagate = True
 from datetime import datetime
 import json
 import os
@@ -35,7 +28,7 @@ import copy
 import re
 from functools import partial
 
-from pymilvus import MilvusException, DataType
+from pymilvus import DataType
 
 import numpy as np
 from sqlalchemy.orm.exc import NoResultFound
@@ -196,43 +189,6 @@ class TaskCanceledException(Exception):
         self.msg = msg
 
 
-# def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing..."):
-#     """
-#     同步执行的进度更新工具函数。
-#     - 不再把 db 传进 TaskService.update_progress；
-#     - 直接调用 _update_progress_sync，避免协程里再 await；
-#     - 避免关闭外层传进来的 db（由上层负责）。
-#     """
-#     try:
-#         if prog is not None and prog < 0:
-#             msg = "[ERROR]" + msg
-#
-#         cancel = TaskService.do_cancel(db, task_id)
-#         if cancel:
-#             msg += " [Canceled]"
-#             prog = -1
-#
-#         if to_page > 0 and msg and from_page < to_page:
-#             msg = f"Page({from_page + 1}~{to_page + 1}): " + msg
-#         if msg:
-#             msg = datetime.now().strftime("%H:%M:%S") + " " + msg
-#
-#         info = {"progress_msg": msg}
-#         if prog is not None:
-#             info["progress"] = prog
-#
-#         # ★ 关键：同步直接调用核心，不传 db
-#         TaskService._update_progress_sync(task_id, info)
-#
-#         if cancel:
-#             raise TaskCanceledException(msg)
-#
-#         logging.info(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}")
-#
-#     except NoResultFound:
-#         logging.warning("set_progress(%s): 记录不存在，无法更新进度", task_id)
-#     except Exception:
-#         logging.exception(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, got exception")
 def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing...", enable_sse=False):
     """
     更新任务进度（支持双写模式）

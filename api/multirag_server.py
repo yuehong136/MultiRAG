@@ -6,7 +6,7 @@
 @date：2024/7/30 18:00
 @desc:
 """
-from api.utils.log_utils import init_root_logger
+from common.log_utils import init_root_logger
 from plugin import GlobalPluginManager
 init_root_logger("multirag_server")
 # init_root_logger("multirag_server")
