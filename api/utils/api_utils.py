@@ -10,14 +10,12 @@ import asyncio
 import logging
 import os
 import queue
-import json
-import random
 import threading
 import time
 from copy import deepcopy
 from datetime import datetime
 from functools import wraps
-from io import BytesIO
+
 from typing import Any, Callable, Coroutine, Type
 
 from fastapi import Request, Response, Depends
@@ -25,14 +23,10 @@ from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
-import requests
 
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api import settings
-from api.utils import HTTP_STATUS_CODES
-from api.constants import REQUEST_WAIT_SEC, REQUEST_MAX_WAIT_SEC
-
 import trio
 
 from core.utils.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
@@ -61,18 +55,6 @@ def serialize_for_json(obj):
     else:
         # Fallback: convert to string representation
         return str(obj)
-
-
-def get_exponential_backoff_interval(retries, full_jitter=False):
-    """Calculate the exponential backoff wait time."""
-    # Will be zero if factor equals 0
-    countdown = min(REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC * (2 ** retries))
-    # Full jitter according to
-    # https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
-    if full_jitter:
-        countdown = random.randrange(countdown + 1)
-    # Adjust according to maximum wait time and account for negative values.
-    return max(0, countdown)
 
 
 def get_data_error_result(retcode=settings.RetCode.DATA_ERROR, retmsg='Sorry! Data missing!'):
@@ -104,15 +86,6 @@ def server_error_response(e):
         return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg="No chunk found, please upload file and parse it.")
 
     return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e))
-
-
-def error_response(response_code, retmsg=None):
-    if retmsg is None:
-        retmsg = HTTP_STATUS_CODES.get(response_code, 'Unknown Error')
-    return JSONResponse(status_code=response_code, content={
-        'retmsg': retmsg,
-        'retcode': response_code,
-    })
 
 
 def validate_request(*args, **kwargs):
@@ -147,37 +120,6 @@ def validate_request(*args, **kwargs):
         return decorated_function
 
     return wrapper
-
-
-def is_localhost(ip):
-    return ip in {"127.0.0.1", "::1", "[::1]", "localhost"}
-
-
-def send_file_in_mem(data, filename):
-    if not isinstance(data, (str, bytes)):
-        data = json.dumps(data)
-    if isinstance(data, str):
-        data = data.encode('utf-8')
-
-    f = BytesIO()
-    f.write(data)
-    f.seek(0)
-
-    return Response(content=f.getvalue(), media_type='application/octet-stream', headers={
-        'Content-Disposition': f'attachment; filename={filename}'
-    })
-
-
-# def get_json_result(retcode=RetCode.SUCCESS, retmsg='success', data=None, job_id=None, meta=None):
-#     result_dict = {
-#         "retcode": retcode,
-#         "retmsg": retmsg,
-#         "data": data,
-#         "jobId": job_id,
-#         "meta": meta,
-#     }
-#     response = {key: value for key, value in result_dict.items() if value is not None or key == "retcode"}
-#     return JSONResponse(content=jsonable_encoder(response))
 
 
 def get_json_result(retcode: settings.RetCode = settings.RetCode.SUCCESS, retmsg='success', data=None):
@@ -276,12 +218,6 @@ def construct_response(retcode=settings.RetCode.SUCCESS, retmsg='success', data=
     response.headers["Access-Control-Allow-Headers"] = "*"
     response.headers["Access-Control-Expose-Headers"] = "Authorization"
     return response
-
-
-def construct_result(code=settings.RetCode.DATA_ERROR, message='data is missing'):
-    result_dict = {"code": code, "message": message}
-    response = {key: value for key, value in result_dict.items() if value is not None or key == "code"}
-    return JSONResponse(content=jsonable_encoder(response))
 
 
 def construct_json_result(code: settings.RetCode = settings.RetCode.SUCCESS, message='success', data=None):
