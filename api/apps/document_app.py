@@ -17,7 +17,6 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form, Body, Request
 from fastapi.responses import StreamingResponse
-from pymilvus import MilvusException
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 from starlette.status import (
@@ -28,7 +27,7 @@ from starlette.status import (
 )
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
-from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, ParserType, FileSource, db_models
+from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, ParserType
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task
@@ -37,7 +36,7 @@ from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks, queue_dataflow
+from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
 from api import settings
@@ -636,8 +635,7 @@ async def upload(
             raise ValueError('Invalid JSON format for "labels".')
     elif labels is not None:
         raise ValueError('Labels must be a JSON-encoded list of strings or None.')
-    # err, files = FileService.upload_document(db, kb, file_contents, user)
-    err, files = FileService.upload_document(db, kb, file_contents, user, labels)  # 传递labels参数
+    err, files = FileService.upload_document(db, kb, file_contents, user.id, labels)  # 传递labels参数
 
     # if err:
     #     return get_json_result(data=files, retmsg="\n".join(err), retcode=settings.RetCode.SERVER_ERROR)
@@ -2226,56 +2224,7 @@ def rm(
                 retmsg='No authorization.',
                 retcode=settings.RetCode.AUTHENTICATION_ERROR
             )
-
-    root_folder = FileService.get_root_folder(db, user.id)
-    pf_id = root_folder["id"]
-    FileService.init_knowledgebase_docs(db, pf_id, user.id)
-    errors = ""
-    kb_table_num_map = {}
-    for doc_id in doc_ids:
-        try:
-            doc = DocumentService.get_by_id(db, doc_id)
-            if not doc:
-                return construct_json_result(data=False, message="Document not found!",
-                                             code=settings.RetCode.ARGUMENT_ERROR)
-            tenant_id = DocumentService.get_tenant_id(db, doc_id)
-            if not tenant_id:
-                return construct_json_result(data=False, message="Tenant not found!",
-                                             code=settings.RetCode.ARGUMENT_ERROR)
-
-            # 在删除文档前先保存需要的属性
-            doc_parser = doc.parser_id
-            kb_id = doc.kb_id
-
-            b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
-
-            TaskService.filter_delete(db, [Task.doc_id == doc_id])
-
-            if not DocumentService.remove_document(db, doc, tenant_id):
-                return construct_json_result(data=False, message="Database error (Document removal)!",
-                                             code=settings.RetCode.ARGUMENT_ERROR)
-
-            f2d = File2DocumentService.get_by_document_id(db, doc_id)
-            deleted_file_count = 0
-            if f2d:
-                deleted_file_count = FileService.filter_delete(db,
-                                                               [db_models.File.source_type == FileSource.KNOWLEDGEBASE,
-                                                                db_models.File.id == f2d[0].file_id])
-            File2DocumentService.delete_by_document_id(db, doc_id)
-            if deleted_file_count > 0:
-                STORAGE_IMPL.rm(b, n)
-
-            # 使用之前保存的属性值，而不是访问已删除的对象
-            if doc_parser == ParserType.TABLE:
-                if kb_id not in kb_table_num_map:
-                    counts = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="", run_status=[TaskStatus.DONE],
-                                                            types=[])
-                    kb_table_num_map[kb_id] = counts
-                kb_table_num_map[kb_id] -= 1
-                if kb_table_num_map[kb_id] <= 0:
-                    KnowledgebaseService.delete_field_map(db, kb_id)
-        except Exception as e:
-            errors += str(e)
+    errors = FileService.delete_docs(db, doc_ids, user.id)
 
     if errors:
         return construct_json_result(data=False, message=errors, code=settings.RetCode.SERVER_ERROR)
@@ -2533,24 +2482,7 @@ def run(
 
             if str(req["run"]) == TaskStatus.RUNNING.value:
                 doc = d
-                doc["tenant_id"] = tenant_id
-
-                doc_parser = doc.get("parser_id", ParserType.NAIVE)
-                if doc_parser == ParserType.TABLE:
-                    kb_id = doc.get("kb_id")
-                    if not kb_id:
-                        continue
-                    if kb_id not in kb_table_num_map:
-                        count = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="",
-                                                               run_status=[TaskStatus.DONE], types=[])
-                        kb_table_num_map[kb_id] = count
-                        if kb_table_num_map[kb_id] <= 0:
-                            KnowledgebaseService.delete_field_map(db, kb_id)
-                if doc.get("pipeline_id", ""):
-                    queue_dataflow(db, tenant_id, flow_id=doc["pipeline_id"], task_id=get_uuid(), doc_id=id)
-                else:
-                    bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])
-                    queue_tasks(db, doc, bucket, name, 0)
+                DocumentService.run(db, tenant_id, doc, kb_table_num_map)
         return construct_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)

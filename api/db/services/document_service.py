@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc
 
 from api.constants import IMG_BASE64_PREFIX, FILE_NAME_LEN_LIMIT
-from api.db import FileType, TaskStatus, StatusEnum, UserTenantRole, CanvasCategory
+from api.db import FileType, LLMType, ParserType, TaskStatus, StatusEnum, UserTenantRole, CanvasCategory
 from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, File2Document, File, UserCanvas, \
     User
 from api.db.services.common_service import CommonService
@@ -2507,6 +2507,30 @@ class DocumentService(CommonService):
             "failed": int(result.failed) if result else 0,
             "cancelled": int(cancelled),
         }
+
+
+    @classmethod
+    def run(cls, db: Session, tenant_id: str, doc: dict, kb_table_num_map: dict):
+        from api.db.services.task_service import queue_dataflow, queue_tasks
+        from api.db.services.file2document_service import File2DocumentService
+
+        doc["tenant_id"] = tenant_id
+        doc_parser = doc.get("parser_id", ParserType.NAIVE)
+        if doc_parser == ParserType.TABLE:
+            kb_id = doc.get("kb_id")
+            if not kb_id:
+                return
+            if kb_id not in kb_table_num_map:
+                count = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="", run_status=[TaskStatus.DONE], types=[])
+                kb_table_num_map[kb_id] = count
+                if kb_table_num_map[kb_id] <= 0:
+                    KnowledgebaseService.delete_field_map(db, kb_id)
+        if doc.get("pipeline_id", ""):
+            queue_dataflow(db, tenant_id, flow_id=doc["pipeline_id"], task_id=get_uuid(), doc_id=doc["id"])
+        else:
+            bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])
+            queue_tasks(db, doc, bucket, name, 0)
+
 
 def queue_raptor_o_graphrag_tasks(db, sample_doc_id, ty, priority, fake_doc_id="", doc_ids=[]):
     """

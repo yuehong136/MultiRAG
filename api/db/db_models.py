@@ -15,6 +15,7 @@ from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, BigInteger, text
 from sqlalchemy.dialects.postgresql import JSONB
 import typing
+from datetime import datetime, timezone
 import uuid
 from datetime import datetime, timezone
 import time
@@ -588,6 +589,7 @@ class TenantLLM(BaseModel):
     api_base = Column(String(255), index=False, nullable=True)
     max_tokens = Column(Integer, index=True, nullable=False, default=8192)
     used_tokens = Column(Integer, index=True, nullable=False, default=0)
+    status = Column(String(1), index=True, nullable=False, default="1", doc="is it validate(0: wasted, 1: validate)")
 
 
 class TenantLangfuse(BaseModel):
@@ -1365,6 +1367,102 @@ class PipelineOperationLog(BaseModel):
     operation_status = Column(String(32), index=True, nullable=False, doc="Operation status")
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted, 1: validate)")
+
+
+class Connector(BaseModel):
+    """数据源连接器"""
+    __tablename__ = "t_ai_connectors"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id = Column(String(32), index=True, nullable=False, doc="Tenant ID")
+    name = Column(String(128), index=False, nullable=False, doc="Search name")
+    source = Column(String(128), index=True, nullable=False, doc="Data source")
+    input_type = Column(String(128), index=True, nullable=False, doc="poll/event/..")
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    refresh_freq = Column(Integer, index=False, nullable=False, default=0)
+    prune_freq = Column(Integer, index=False, nullable=False, default=0)
+    timeout_secs = Column(Integer, index=False, nullable=False, default=3600)
+    indexing_start = Column(DateTime, index=True, nullable=True)
+    status = Column(String(16), index=True, nullable=True, default="schedule", doc="schedule")
+
+    def __str__(self):
+        return self.name
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "tenant_id": self.tenant_id,
+            "name": self.name,
+            "source": self.source,
+            "input_type": self.input_type,
+            "config": self.config,
+            "refresh_freq": self.refresh_freq,
+            "prune_freq": self.prune_freq,
+            "timeout_secs": self.timeout_secs,
+            "indexing_start": self.indexing_start,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+
+class Connector2Kb(BaseModel):
+    """连接器与知识库关联表"""
+    __tablename__ = "t_ai_connector2kb"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    connector_id = Column(String(32), index=True, nullable=False, doc="Connector ID")
+    kb_id = Column(String(32), index=True, nullable=False, doc="Knowledgebase ID")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "connector_id": self.connector_id,
+            "kb_id": self.kb_id
+        }
+
+
+class SyncLogs(BaseModel):
+    """同步日志表"""
+    __tablename__ = "t_ai_sync_logs"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    connector_id = Column(String(32), index=True, nullable=False, doc="Connector ID")
+    status = Column(String(128), index=True, nullable=False, doc="Processing status")
+    from_beginning = Column(String(1), index=False, nullable=True, default="0")
+    new_docs_indexed = Column(Integer, index=False, nullable=False, default=0)
+    total_docs_indexed = Column(Integer, index=False, nullable=False, default=0)
+    docs_removed_from_index = Column(Integer, index=False, nullable=False, default=0)
+    error_msg = Column(Text, index=False, nullable=False, default="", doc="process message")
+    error_count = Column(Integer, index=False, nullable=False, default=0)
+    full_exception_trace = Column(Text, index=False, nullable=True, default="", doc="process message")
+    time_started = Column(DateTime, index=True, nullable=True)
+    poll_range_start = Column(String(255), index=True, nullable=True, doc="ISO datetime with timezone")
+    poll_range_end = Column(String(255), index=True, nullable=True, doc="ISO datetime with timezone")
+    kb_id = Column(String(32), index=True, nullable=False, doc="Knowledgebase ID")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "connector_id": self.connector_id,
+            "status": self.status,
+            "from_beginning": self.from_beginning,
+            "new_docs_indexed": self.new_docs_indexed,
+            "total_docs_indexed": self.total_docs_indexed,
+            "docs_removed_from_index": self.docs_removed_from_index,
+            "error_msg": self.error_msg,
+            "error_count": self.error_count,
+            "full_exception_trace": self.full_exception_trace,
+            "time_started": self.time_started,
+            "poll_range_start": self.poll_range_start,
+            "poll_range_end": self.poll_range_end,
+            "kb_id": self.kb_id,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
 
 '''
 拥有权限，采用这种方式

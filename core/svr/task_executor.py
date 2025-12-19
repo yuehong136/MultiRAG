@@ -364,6 +364,9 @@ async def collect(db: Session):
             if db_task:
                 # 成功获取数据库配置，合并数据
                 task = db_task
+                if task:
+                    task["doc_id"] = msg["doc_id"]
+                    task["doc_ids"] = msg.get("doc_ids", []) or []
                 # Redis消息中的这两个字段需要覆盖数据库的
                 task["doc_id"] = msg["doc_id"]  # 保持使用fake_doc_id
                 task["doc_ids"] = msg.get("doc_ids", []) or []  # 文档列表

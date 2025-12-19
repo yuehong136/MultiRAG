@@ -71,7 +71,8 @@ class TenantLLMService(CommonService):
             LLMFactories.tags,
             TenantLLM.mdl_type,
             TenantLLM.llm_name,
-            TenantLLM.used_tokens
+            TenantLLM.used_tokens,
+            TenantLLM.status
         ]
         objs = db.query(*fields).join(LLMFactories, TenantLLM.llm_factory == LLMFactories.name).filter(
             TenantLLM.tenant_id == tenant_id, TenantLLM.api_key.isnot(None)
