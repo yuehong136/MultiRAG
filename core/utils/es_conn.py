@@ -75,7 +75,7 @@ class ESConnection(DocStoreConnection):
             settings.ES["hosts"].split(","),
             basic_auth=(settings.ES["username"], settings.ES[
                 "password"]) if "username" in settings.ES and "password" in settings.ES else None,
-            verify_certs=False,
+            verify_certs= settings.ES.get("verify_certs", False),
             timeout=600
         )
         if self.es:
