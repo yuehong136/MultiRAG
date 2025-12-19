@@ -8,7 +8,7 @@
 """
 import logging
 import os
-from api.utils.configs import get_base_config, decrypt_database_config
+from common.config_utils import get_base_config, decrypt_database_config
 from common.file_utils import get_project_base_directory
 from common.misc_utils import pip_install_torch
 

@@ -11,7 +11,7 @@ import core.utils.infinity_conn
 import core.utils.opensearch_conn
 import core.utils.vastbase_conn
 from api.constants import MULTI_RAG_SERVICE_NAME
-from api.utils.configs import get_base_config
+from common.config_utils import get_base_config
 from common.file_utils import get_project_base_directory
 from core.nlp import search
 

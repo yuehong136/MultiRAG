@@ -11,6 +11,7 @@ from routes import admin_router
 from auth import init_default_admin
 from api.utils.log_utils import init_root_logger
 from common.constants import SERVICE_CONF
+from common.config_utils import show_configs
 from api import settings
 from config import load_configurations, SERVICE_CONFIGS
 from api.common.exceptions import setup_exception_handlers
@@ -49,14 +50,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
      / /  / / /_/ / /_/ / _, _/ ___ / /_/ /  / ___ / /_/ / / / / / / / / / /
     /_/  /_/\__,_/\__/_/_/ |_/_/  |_\____/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/ 
     """)
-    
+
     # settings 已在 auth.py 模块导入时初始化，这里确保初始化完成
     if settings.SECRET_KEY is None:
         settings.init_settings()
     
     # 加载服务配置
     SERVICE_CONFIGS.configs = load_configurations(SERVICE_CONF)
-    
+
+    show_configs()
+
     # 初始化默认管理员账号
     from api.db.db_models import SessionLocal
     db = SessionLocal()
@@ -86,7 +89,6 @@ def create_app() -> FastAPI:
     
     # 配置最大请求体大小（默认 1GB）
     max_content_length = int(os.environ.get("MAX_CONTENT_LENGTH", 1024 * 1024 * 1024))
-    
     # 添加请求体大小限制中间件
     app.add_middleware(RequestSizeLimitMiddleware, max_content_length=max_content_length)
     
@@ -116,7 +118,7 @@ if __name__ == '__main__':
         "admin_server:app",
         host="0.0.0.0",
         port=8130,
-        reload=True,
+        reload=False,
         log_level="info",
         limit_max_requests=10000,  # 最大请求数（进程重启前的请求数）
         timeout_keep_alive=5,       # Keep-Alive 超时
