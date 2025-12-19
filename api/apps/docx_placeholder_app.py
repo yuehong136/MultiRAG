@@ -152,7 +152,7 @@ def extract_placeholders_from_document(doc: Document) -> list:
 
 def fill_placeholders_in_paragraph(paragraph, fill_dict: dict) -> bool:
     """
-    填充段落中的占位符
+    填充段落中的占位符，保留原有格式（如下划线）
 
     Args:
         paragraph: python-docx Paragraph 对象
@@ -168,36 +168,35 @@ def fill_placeholders_in_paragraph(paragraph, fill_dict: dict) -> bool:
     if not PLACEHOLDER_PATTERN.search(paragraph.text):
         return False
 
-    # 获取段落完整文本
-    original_text = paragraph.text
     replaced = False
 
-    # 替换占位符
-    def replace_match(match):
-        nonlocal replaced
-        num = match.group(1)
-        key = f"${num}"
-        value = fill_dict.get(key, "")
-        if value is None:
-            value = ""
-        replaced = True
-        return str(value)
+    # 逐个 run 处理，保留每个 run 的格式
+    for run in paragraph.runs:
+        if not run.text:
+            continue
 
-    new_text = PLACEHOLDER_PATTERN.sub(replace_match, original_text)
+        # 检查当前 run 是否包含占位符
+        if not PLACEHOLDER_PATTERN.search(run.text):
+            continue
 
-    # 如果文本发生了变化，更新段落
-    if new_text != original_text:
-        # 清空所有 run，保留第一个 run 并更新其文本
-        runs = list(paragraph.runs)
-        if runs:
-            # 删除多余的 run
-            for run in runs[1:]:
-                run._element.getparent().remove(run._element)
-            # 更新第一个 run 的文本
-            runs[0].text = new_text
-        else:
-            # 如果没有 run，创建一个新的
-            paragraph.add_run(new_text)
+        original_run_text = run.text
+
+        # 替换当前 run 中的占位符
+        def replace_match(match):
+            nonlocal replaced
+            num = match.group(1)
+            key = f"${num}"
+            value = fill_dict.get(key, "")
+            if value is None:
+                value = ""
+            replaced = True
+            return str(value)
+
+        new_run_text = PLACEHOLDER_PATTERN.sub(replace_match, original_run_text)
+
+        # 更新 run 的文本，保留原有格式（包括下划线等）
+        if new_run_text != original_run_text:
+            run.text = new_run_text
 
     return replaced
 
