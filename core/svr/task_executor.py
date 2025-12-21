@@ -1265,7 +1265,20 @@ def _get_default_metadata_fields():
     return [
         {
             "field_name": "document_summary",
-            "prompt": "Summarize the document concisely in 150-200 words with chinese.",
+            "prompt": """## 角色
+你是一个文档摘要专家。
+
+## 任务
+为给定的文本内容生成简洁的摘要。
+
+## 要求
+- 摘要长度控制在 150-200 字。
+- 准确捕捉主题和关键要点。
+- 保持内容连贯、结构清晰。
+- 聚焦最重要的信息。
+- 摘要必须与给定文本内容使用相同的语言。
+- 只输出摘要文本，不要输出其他内容。
+""",
             "source": "global_summary",
             "call_mode": "single",
             "post_process": "none",
@@ -1274,7 +1287,20 @@ def _get_default_metadata_fields():
         },
         {
             "field_name": "semantic_tags",
-            "prompt": " use chinese, Extract 3-5 semantic tags that represent the main themes. Output comma-separated.",
+            "prompt": """## 角色
+你是一个文本分析专家。
+
+## 任务
+从给定的文本内容中提取最重要的关键词/短语。
+
+## 要求
+- 总结文本内容，提取最重要的 3-5 个关键词/短语。
+- 关键词必须彼此独立，语义上不能有重叠。
+- 缩写词与全称合并（优先使用全称）。
+- 关键词必须与给定文本内容使用相同的语言。
+- 关键词之间用英文逗号分隔。
+- 只输出关键词，不要输出其他内容。
+""",
             "source": "cluster_summaries",
             "call_mode": "batch",
             "post_process": "counter_top10",
@@ -1578,7 +1604,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 video_config = {"llm_id": video_llm_name}
                 logging.info(f"Using simplified parse_method mode: {parse_method}")
 
-            def _parser_callback(prog, msg):
+            def _parser_callback(prog, msg=""):
                 callback(prog=0.15 + prog * 0.05, msg=msg)
 
             parsed_result = await parse_file(
