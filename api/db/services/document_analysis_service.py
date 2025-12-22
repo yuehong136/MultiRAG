@@ -29,7 +29,7 @@ from api.db.services.llm_service import LLMBundle
 from core.nlp import rag_tokenizer
 from core.nlp.term_weight import Dealer as TermWeightDealer
 from common.token_utils import truncate
-from api.utils.api_utils import timeout
+from common.connection_utils import timeout
 
 # ⭐ 遵循项目规范：从 core.prompts.prompts 导入
 from core.prompts.generator import (

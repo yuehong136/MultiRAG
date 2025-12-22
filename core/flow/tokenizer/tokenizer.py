@@ -24,7 +24,7 @@ from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import TenantService
-from api.utils.api_utils import timeout
+from common.connection_utils import timeout
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.tokenizer.schema import TokenizerFromUpstream
 from core.nlp import rag_tokenizer

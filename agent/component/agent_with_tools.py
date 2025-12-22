@@ -30,7 +30,7 @@ from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.mcp_server_service import MCPServerService
-from api.utils.api_utils import timeout
+from common.connection_utils import timeout
 from core.prompts.generator import next_step, COMPLETE_TASK, analyze_task, \
     citation_prompt, reflect, rank_memories, kb_prompt, citation_plus, full_question, message_fit_in
 from core.utils.mcp_tool_call_conn import MCPToolCallSession, mcp_tool_metadata_to_openai_tool

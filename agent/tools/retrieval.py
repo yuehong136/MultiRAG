@@ -24,7 +24,7 @@ from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api import settings
-from api.utils.api_utils import timeout
+from common.connection_utils import timeout
 from core.app.tag import label_question
 from core.prompts.generator import cross_languages, kb_prompt, gen_meta_filter
 

@@ -21,7 +21,7 @@ from abc import ABC
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
 from agent.component.llm import LLMParam, LLM
-from api.utils.api_utils import timeout
+from common.connection_utils import timeout
 from core.llm.chat_model.base import ERROR_PREFIX
 
 

@@ -27,7 +27,7 @@ from api import settings
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.misc_utils import get_uuid
-from api.utils.api_utils import timeout
+from common.connection_utils import timeout
 from core.nlp import rag_tokenizer, search
 from core.utils.doc_store_conn import OrderByExpr
 from core.utils.redis_conn import REDIS_CONN
