@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 import numpy as np
 
 from api.db.db_models import File, get_db
-# from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
@@ -26,8 +25,7 @@ from api.db.services.pipeline_operation_log_service import PipelineOperationLogS
 from api.db.services.task_service import TaskService, GRAPH_RAPTOR_FAKE_DOC_ID
 from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
-from api.utils.api_utils import server_error_response, get_data_error_result, get_error_data_result
-from common.misc_utils import get_uuid
+from api.utils.api_utils import server_error_response, get_data_error_result, get_error_data_result, get_parser_config
 from api.db import StatusEnum, FileSource, LLMType, PipelineTaskType, VALID_TASK_STATUS, VALID_FILE_TYPES
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -111,6 +109,8 @@ class CheckEmbeddingRequest(BaseModel):
 def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
     dataset_name = req_data["name"]
+    
+    # 验证数据集名称
     if not isinstance(dataset_name, str):
         return get_data_error_result(retmsg="Dataset name must be string.")
     if dataset_name.strip() == "":
@@ -118,6 +118,7 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
     if len(dataset_name.encode("utf-8")) > DATASET_NAME_LIMIT:
         return get_data_error_result(
             retmsg=f"Dataset name length is {len(dataset_name)} which is larger than {DATASET_NAME_LIMIT}")
+    
     # 验证 Milvus 集合名逻辑
     if not re.match(MILVUS_NAME_PATTERN, dataset_name):
         return get_data_error_result(
@@ -125,61 +126,39 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
         )
 
     dataset_name = dataset_name.strip()
-    # 检查数据库中是否已存在同名知识库
+    
+    # 检查数据库中是否已存在同名知识库（直接报错，不自动去重）
     existing_kb = KnowledgebaseService.query(
         db=db,
         name=dataset_name,
         tenant_id=user.id,
         status=StatusEnum.VALID.value
     )
-
     if existing_kb:
-        # 如果已存在同名知识库，返回错误信息
         return get_data_error_result(retmsg=f"已存在该知识库名: {existing_kb[0].name}，请调整！")
 
-    req_data["name"] = dataset_name
-
     try:
-        req_data["id"] = get_uuid()
-        req_data["tenant_id"] = user.id
-        req_data["created_by"] = user.id
-        if not req_data.get("parser_id"):
-            req_data["parser_id"] = "naive"
-        t = TenantService.get_by_id(db, user.id)
-        if not t:
-            return get_data_error_result(retmsg="Tenant not found.")
-        req_data["embd_id"] = t.embd_id if req_data["embd_id"] is None else req_data["embd_id"]
-        req_data["parser_config"] = {
-            "layout_recognize": "DeepDOC",
-            "chunk_token_num": 512,
-            "delimiter": "\n",
-            "auto_keywords": 0,
-            "auto_questions": 0,
-            "html4excel": False,
-            "topn_tags": 3,
-            "raptor": {
-                "use_raptor": True,
-                "prompt": "Please summarize the following paragraphs. Be careful with the numbers, do not make things up. Paragraphs as following:\n      {cluster_content}\nThe above is the content you need to summarize.",
-                "max_token": 256,
-                "threshold": 0.1,
-                "max_cluster": 64,
-                "random_seed": 0
-            },
-            "graphrag": {
-                "use_graphrag": False,
-                "entity_types": [
-                    "organization",
-                    "person",
-                    "geo",
-                    "event",
-                    "category"
-                ],
-                "method": "light"
-            }
-        }
+        # 生成parser_config
+        parser_id = req_data.get("parser_id") or "naive"
+        parser_config = get_parser_config(parser_id, None)
+        
+        # 使用封装的方法创建payload
+        req_data = KnowledgebaseService.create_with_name(
+            db=db,
+            name=dataset_name,
+            tenant_id=user.id,
+            parser_id=parser_id,
+            embd_id=req_data.get("embd_id"),
+            parser_config=parser_config,
+            description=req_data.get("description"),
+            permission=req_data.get("permission")
+        )
+        
         if not KnowledgebaseService.save(db, **req_data):
             return get_data_error_result()
         return get_json_result(data={"kb_id": req_data["id"]})
+    except ValueError as e:
+        return get_data_error_result(retmsg=str(e))
     except Exception as e:
         return server_error_response(e)
 

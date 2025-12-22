@@ -16,7 +16,6 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService
-from common.misc_utils import get_uuid
 from api.utils.api_utils import (
     deep_merge,
     get_error_data_result,
@@ -77,27 +76,37 @@ def create_dataset(
     req = request.model_dump()
     
     # Field name transformations
+    embd_id = None
+    parser_id = None
     if req.get("embedding_model"):
-        req["embd_id"] = req.pop("embedding_model")
+        embd_id = req.pop("embedding_model")
     if req.get("chunk_method"):
-        req["parser_id"] = req.pop("chunk_method")
+        parser_id = req.pop("chunk_method")
+    
+    # 检查数据集名称是否已存在
+    if KnowledgebaseService.get_or_none(db, name=req["name"], tenant_id=tenant_id, status=StatusEnum.VALID.value):
+        return get_error_data_result(retmsg=f"Dataset name '{req['name']}' already exists")
     
     try:
-        if KnowledgebaseService.get_or_none(db, name=req["name"], tenant_id=tenant_id, status=StatusEnum.VALID.value):
-            return get_error_data_result(retmsg=f"Dataset name '{req['name']}' already exists")
+        # 生成parser_config
+        final_parser_id = parser_id or "naive"
+        parser_config = get_parser_config(final_parser_id, req.get("parser_config"))
+        
+        # 使用封装的方法创建payload（会自动处理embd_id默认值）
+        req = KnowledgebaseService.create_with_name(
+            db=db,
+            name=req.pop("name"),
+            tenant_id=tenant_id,
+            parser_id=final_parser_id,
+            embd_id=embd_id,
+            parser_config=parser_config,
+            avatar=req.get("avatar"),
+            description=req.get("description"),
+            permission=req.get("permission")
+        )
 
-        req["parser_config"] = get_parser_config(req.get("parser_id", "naive"), req.get("parser_config"))
-        req["id"] = get_uuid()
-        req["tenant_id"] = tenant_id
-        req["created_by"] = tenant_id
-
-        ok, t = TenantService.get_by_id(db, tenant_id)
-        if not ok:
-            return get_error_data_result(retmsg="Tenant not found")
-
-        if not req.get("embd_id"):
-            req["embd_id"] = t.embd_id
-        else:
+        # 验证embedding model的可用性
+        if embd_id:  # 如果用户指定了embd_id，需要验证
             ok, err = verify_embedding_availability(req["embd_id"], tenant_id)
             if not ok:
                 return err
@@ -111,7 +120,9 @@ def create_dataset(
 
         response_data = remap_dictionary_keys(k.to_dict())
         return get_result(data=response_data)
-    except OperationalError as e:
+    except ValueError as e:
+        return get_error_data_result(retmsg=str(e))
+    except Exception as e:
         logging.exception(e)
         return get_error_data_result(retmsg="Database operation failed")
 
