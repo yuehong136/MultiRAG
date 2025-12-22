@@ -429,7 +429,7 @@ class KnowledgebaseService(CommonService):
         """Create a dataset (knowledgebase) by name with kb_app defaults.
 
         This encapsulates the creation logic used in kb_app.create so other callers
-        (including RESTful endpoints) can reuse the same behavior.
+        (including RESTFul endpoints) can reuse the same behavior.
 
         Args:
             db: Database session
@@ -599,7 +599,7 @@ class KnowledgebaseService(CommonService):
         # 先检查知识库是否存在
         kb = cls.get_by_id(db, kb_id)
         if not kb:
-            return
+            return None
 
         try:
             # 使用SQLAlchemy的update语句直接更新doc_num字段

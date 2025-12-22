@@ -157,7 +157,7 @@ async def upload(
         if not pf_folder:
             return get_data_error_result(retmsg="Can't find this folder!")
         for file_obj in files:
-            MAX_FILE_NUM_PER_USER = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
+            MAX_FILE_NUM_PER_USER: int = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
             if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, user.id):
                 return get_data_error_result(retmsg="Exceed the maximum file number of a free user!")
 
@@ -446,7 +446,7 @@ async def rm(
         for file_id in file_ids:
             file = FileService.get_by_id(db, file_id)
             if not file:
-                return get_data_error_result(retmsg="File or Folder not found!")
+                return get_data_error_result(retmsg="File or folder not found!")
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
             if not check_file_team_permission(db, file, user.id):
@@ -580,7 +580,7 @@ async def move(
         # 先检查目标文件夹是否存在
         dest_folder = FileService.get_by_id(db, dest_parent_id)
         if not dest_folder:
-            return get_data_error_result(retmsg="Parent Folder not found!")
+            return get_data_error_result(retmsg="Parent folder not found!")
         
         # 检查源文件是否存在
         files = FileService.get_by_ids(db, file_ids)
@@ -594,7 +594,7 @@ async def move(
         for file_id in file_ids:
             file = files_dict.get(file_id)
             if not file:
-                return get_data_error_result(retmsg="File or Folder not found!")
+                return get_data_error_result(retmsg="File or folder not found!")
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
             if not check_file_team_permission(db, file, user.id):

@@ -335,7 +335,7 @@ def completion(
     API4ConversationService.append_message(db, conv.id, conv.to_dict())
 
 
-def completionOpenAI(
+def completion_openai(
     db: Session,
     tenant_id: str,
     agent_id: str,
@@ -351,8 +351,8 @@ def completionOpenAI(
     - 流模式：yield "data: {...}\\n\\n"，最后 "data: [DONE]\\n\\n"
     - 非流模式：yield 最终完整对象
     """
-    tiktokenenc = tiktoken.get_encoding("cl100k_base")
-    prompt_tokens = len(tiktokenenc.encode(str(question)))
+    tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+    prompt_tokens = len(tiktoken_encoder.encode(str(question)))
     user_id = kwargs.get("user_id", "")
 
     if stream:
@@ -383,7 +383,7 @@ def completionOpenAI(
                 if ans["event"] == "message":
                     content_piece = ans["data"]["content"]
 
-                completion_tokens += len(tiktokenenc.encode(content_piece))
+                completion_tokens += len(tiktoken_encoder.encode(content_piece))
 
                 openai_data = get_data_openai(
                         id=session_id or str(uuid4()),
@@ -411,7 +411,7 @@ def completionOpenAI(
                     content=err_text,
                     finish_reason="stop",
                     prompt_tokens=prompt_tokens,
-                    completion_tokens=len(tiktokenenc.encode(err_text)),
+                    completion_tokens=len(tiktoken_encoder.encode(err_text)),
                     stream=True,
                 ),
                 ensure_ascii=False,
@@ -443,7 +443,7 @@ def completionOpenAI(
                 if ans.get("data", {}).get("reference", None):
                     reference.update(ans["data"]["reference"])
 
-            completion_tokens = len(tiktokenenc.encode(all_content))
+            completion_tokens = len(tiktoken_encoder.encode(all_content))
 
             openai_data = get_data_openai(
                 id=session_id or str(uuid4()),
@@ -466,7 +466,7 @@ def completionOpenAI(
                 id=session_id or str(uuid4()),
                 model=agent_id,
                 prompt_tokens=prompt_tokens,
-                completion_tokens=len(tiktokenenc.encode(err_text)),
+                completion_tokens=len(tiktoken_encoder.encode(err_text)),
                 content=err_text,
                 finish_reason="stop",
                 param=None,

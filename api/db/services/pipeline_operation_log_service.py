@@ -104,14 +104,14 @@ class PipelineOperationLogService(CommonService):
         document = DocumentService.get_by_id(db, referred_document_id)
         if not document:
             logging.warning(f"Document for referred_document_id {referred_document_id} not found")
-            return
+            return None
         DocumentService.update_progress_immediately(db, [document.to_dict()])
         document = DocumentService.get_by_id(db, referred_document_id)
         if not document:
             logging.warning(f"Document for referred_document_id {referred_document_id} not found")
-            return
+            return None
         if document.progress not in [1, -1]:
-            return
+            return None
         operation_status = document.run
 
         if pipeline_id:

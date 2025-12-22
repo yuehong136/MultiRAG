@@ -14,7 +14,7 @@ from api import settings
 from api.db import LLMType, StatusEnum
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import API4ConversationService
-from api.db.services.canvas_service import UserCanvasService, completionOpenAI  # , completionOpenAI
+from api.db.services.canvas_service import UserCanvasService, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
 from api.db.services.conversation_service import ConversationService, iframe_completion
 from api.db.services.conversation_service import completion as rag_completion
@@ -519,7 +519,7 @@ def agents_completion_openai_compatibility(
     stream = req.pop("stream", False)
     if stream:
         resp = StreamingResponse(
-            completionOpenAI(
+            completion_openai(
                 db,
                 tenant_id,
                 agent_id,
@@ -538,7 +538,7 @@ def agents_completion_openai_compatibility(
     else:
         # For non-streaming, just return the response directly
         response = next(
-            completionOpenAI(
+            completion_openai(
                 db,
                 tenant_id,
                 agent_id,

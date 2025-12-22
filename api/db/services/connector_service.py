@@ -215,7 +215,7 @@ class SyncLogsService(CommonService):
             existing = cls.query(db, kb_id=kb_id, connector_id=connector_id, status=TaskStatus.SCHEDULE)
             if existing:
                 logger.warning(f"{kb_id}--{connector_id} 已有调度中的同步任务，这是异常情况。")
-                return
+                return None
 
             reindex_flag = "1" if reindex else "0"
             return cls.insert(db, **{
@@ -274,7 +274,7 @@ class SyncLogsService(CommonService):
         # 获取当前任务
         task = cls.get_by_id(db, task_id)
         if not task:
-            return
+            return None
 
         # 计算新的 poll_range_start
         if task.poll_range_start:

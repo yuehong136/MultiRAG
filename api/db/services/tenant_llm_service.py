@@ -170,35 +170,36 @@ class TenantLLMService(CommonService):
         if llm_type == LLMType.EMBEDDING.value:
             if model_config["llm_factory"] not in EmbeddingModel:
                 logging.info(f"Debug: Embedding model factory not supported: {model_config['llm_factory']}")
-                return
+                return None
             return EmbeddingModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
 
         if llm_type == LLMType.RERANK:
             if model_config["llm_factory"] not in RerankModel:
-                return
+                return None
             return RerankModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
 
         if llm_type == LLMType.IMAGE2TEXT.value:
             if model_config["llm_factory"] not in CvModel:
                 logging.info(f"Debug: Image2Text model factory not supported: {model_config['llm_factory']}")
-                return
+                return None
             return CvModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], lang, base_url=model_config["api_base"], **kwargs)
 
         if llm_type == LLMType.CHAT.value:
             if model_config["llm_factory"] not in ChatModel:
                 logging.info(f"Debug: Chat model factory not supported: {model_config['llm_factory']}")
-                return
+                return None
             return ChatModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"], **kwargs)
 
         if llm_type == LLMType.SPEECH2TEXT:
             if model_config["llm_factory"] not in Seq2txtModel:
-                return
+                return None
             return Seq2txtModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"])
 
         if llm_type == LLMType.TTS:
             if model_config["llm_factory"] not in TTSModel:
-                return
+                return None
             return TTSModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
+        return None
 
     @classmethod
     def increase_usage(cls, db: Session, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str | None = None):
