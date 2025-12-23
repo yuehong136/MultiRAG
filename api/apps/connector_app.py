@@ -118,9 +118,9 @@ def set_connector(
                 "source": req["source"],
                 "input_type": InputType.POLL,
                 "config": req.get("config", {}),
-                "refresh_freq": int(req.get("refresh_freq", 60)),
-                "prune_freq": int(req.get("prune_freq", 0)),
-                "timeout_secs": int(req.get("timeout_secs", 3600)),
+                "refresh_freq": int(req.get("refresh_freq", 30)),
+                "prune_freq": int(req.get("prune_freq", 720)),
+                "timeout_secs": int(req.get("timeout_secs", 60 * 29)),
                 "status": TaskStatus.SCHEDULE
             }
             ConnectorService.insert(db, **conn)

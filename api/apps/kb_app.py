@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 import numpy as np
 
 from api.db.db_models import File, get_db
+from api.db.services.connector_service import Connector2KbService
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
@@ -280,6 +281,8 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
         kb["size"] = DocumentService.get_total_size_by_kb_id(db, kb_id=kb["id"],keywords="", run_status=[], types=[])
+        kb["connectors"] = Connector2KbService.list_connectors(db, kb_id)
+        
         for key in ["graphrag_task_finish_at", "raptor_task_finish_at", "mindmap_task_finish_at"]:
             if finish_at := kb.get(key):
                 kb[key] = finish_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -1508,26 +1511,29 @@ def delete_kb_task(
     if not pipeline_task_type or pipeline_task_type not in [PipelineTaskType.GRAPH_RAG, PipelineTaskType.RAPTOR, PipelineTaskType.MINDMAP]:
         return get_error_data_result(retmsg="Invalid task type")
 
+    def cancel_task(task_id):
+        REDIS_CONN.set(f"{task_id}-cancel", "x")
+
     match pipeline_task_type:
         case PipelineTaskType.GRAPH_RAG:
-            settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id), kb_id)
             kb_task_id_field = "graphrag_task_id"
             task_id = kb.graphrag_task_id
             kb_task_finish_at = "graphrag_task_finish_at"
+            cancel_task(task_id)
+            settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id), kb_id)
         case PipelineTaskType.RAPTOR:
             kb_task_id_field = "raptor_task_id"
             task_id = kb.raptor_task_id
             kb_task_finish_at = "raptor_task_finish_at"
+            cancel_task(task_id)
+            settings.docStoreConn.delete({"raptor_kwd": ["raptor"]}, search.index_name(kb.tenant_id), kb_id)
         case PipelineTaskType.MINDMAP:
             kb_task_id_field = "mindmap_task_id"
             task_id = kb.mindmap_task_id
             kb_task_finish_at = "mindmap_task_finish_at"
+            cancel_task(task_id)
         case _:
             return get_error_data_result(retmsg="Internal Error: Invalid task type")
-
-    def cancel_task(task_id):
-        REDIS_CONN.set(f"{task_id}-cancel", "x")
-    cancel_task(task_id)
 
     ok = KnowledgebaseService.update_by_id(db, kb_id, {kb_task_id_field: "", kb_task_finish_at: None})
     if not ok:
@@ -1687,3 +1693,51 @@ def check_embedding(
     if summary["avg_cos_sim"] > 0.99:
         return get_json_result(data={"summary": summary, "results": results})
     return get_json_result(retcode=RetCode.NOT_EFFECTIVE, retmsg="failed", data={"summary": summary, "results": results})
+
+
+class LinkConnectorRequest(BaseModel):
+    connector_ids: list[str]
+
+
+@router.post("/{kb_id}/link", summary="关联连接器到知识库", response_description="成功关联连接器")
+def link_connector(
+        kb_id: str,
+        request: LinkConnectorRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    将连接器与知识库进行关联
+    
+    概要：为指定知识库添加或移除数据源连接器，实现自动同步外部数据。
+    
+    参数：
+    - **kb_id**: 知识库ID（必填）
+    - **request**: 请求体
+        - connector_ids: 要关联的连接器ID列表
+    
+    返回：
+    - dict: 操作结果
+        - data: True 表示关联成功，False 表示失败
+    
+    功能：
+    1. 验证知识库ID和连接器ID列表
+    2. 添加新的关联关系
+    3. 移除不再需要的关联
+    4. 对新关联的连接器自动启动同步任务
+    5. 对移除的关联清理相关数据
+    
+    权限要求：
+    - 用户必须对该知识库有操作权限
+    
+    异常处理：
+    - 如果操作失败，返回错误信息
+    """
+    try:
+        req = request.model_dump()
+        errors = Connector2KbService.link_connectors(db, kb_id, req["connector_ids"], user.id)
+        if errors:
+            return get_json_result(data=False, retmsg=errors, retcode=RetCode.SERVER_ERROR)
+        return get_json_result(data=True)
+    except Exception as e:
+        return server_error_response(e)
