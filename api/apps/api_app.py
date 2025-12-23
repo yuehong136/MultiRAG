@@ -29,6 +29,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 
 from api import settings
 from common.misc_utils import get_uuid
+from common.constants import RetCode
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result, \
     generate_confirmation_token
 
@@ -296,7 +297,7 @@ async def set_conversation(request: NewConversationRequest, db: Session = Depend
         if not objs:
             print("No APIToken found with the provided token")
             return get_json_result(
-                data=False, retmsg='Token is not valid!"', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+                data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
 
         print("APIToken found:", objs)
         if objs[0].source == "agent":
@@ -354,7 +355,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db)):
     objs = APITokenService.query(token=token)
     if not objs:
         return get_json_result(
-            data=False, retmsg='Token is not valid!"', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
     req = request.model_dump()
     conv = API4ConversationService.get_by_id(db, req["conversation_id"])
     if not conv:
@@ -528,7 +529,7 @@ async def get(conversation_id: str, db: Session = Depends(get_db)):
     objs = APITokenService.query(db, token=token)
     if not objs:
         return get_json_result(
-            data=False, retmsg='Token is not valid!"', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
 
     try:
         conv = API4ConversationService.get_by_id(db, conversation_id)
@@ -538,7 +539,7 @@ async def get(conversation_id: str, db: Session = Depends(get_db)):
         conv = conv.to_dict()
         if token != APITokenService.query(db, dialog_id=conv['dialog_id'])[0].token:
             return get_json_result(data=False, retmsg='Token is not valid for this conversation_id!"',
-                                   retcode=settings.RetCode.AUTHENTICATION_ERROR)
+                                   retcode=RetCode.AUTHENTICATION_ERROR)
 
         for referenct_i in conv['reference']:
             if referenct_i is None or len(referenct_i) == 0:
@@ -558,7 +559,7 @@ async def upload(request: Request, db: Session = Depends(get_db)):
     objs = APITokenService.query(token=token)
     if not objs:
         return get_json_result(
-            data=False, retmsg='Token is not valid!"', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
 
     form = await request.form()
     kb_name = form.get("kb_name").strip()
@@ -573,11 +574,11 @@ async def upload(request: Request, db: Session = Depends(get_db)):
         return server_error_response(e)
 
     if 'file' not in form:
-        return get_json_result(data=False, retmsg='No file part!', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
 
     file = form['file']
     if file.filename == '':
-        return get_json_result(data=False, retmsg='No file selected!', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='No file selected!', retcode=RetCode.ARGUMENT_ERROR)
 
     root_folder = FileService.get_root_folder(tenant_id)
     pf_id = root_folder["id"]
@@ -656,7 +657,7 @@ async def list_chunks(request: Request, db: Session = Depends(get_db)):
     objs = APITokenService.query(token=token)
     if not objs:
         return get_json_result(
-            data=False, retmsg='Token is not valid!"', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
 
     req = await request.json()
 
@@ -707,7 +708,7 @@ async def list_kb_docs(request: ListKbDocsRequest, db: Session = Depends(get_db)
     objs = APITokenService.query(db, token=token)
     if not objs:
         return get_json_result(
-            data=False, retmsg='Token is not valid!"', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
 
     tenant_id = objs[0].tenant_id
     kb_name = request.kb_name.strip()
@@ -747,7 +748,7 @@ async def document_rm(request: DocumentRemoveRequest, db: Session = Depends(get_
     objs = APITokenService.query(db, token=token)
     if not objs:
         return get_json_result(
-            data=False, retmsg='Token is not valid!"', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
 
     tenant_id = objs[0].tenant_id
     try:
@@ -789,7 +790,7 @@ async def document_rm(request: DocumentRemoveRequest, db: Session = Depends(get_
             errors += str(e)
 
     if errors:
-        return get_json_result(data=False, retmsg=errors, retcode=settings.RetCode.SERVER_ERROR)
+        return get_json_result(data=False, retmsg=errors, retcode=RetCode.SERVER_ERROR)
 
     return get_json_result(data=True)
 
@@ -817,7 +818,7 @@ async def completion_faq(request: CompletionFAQRequest, db: Session = Depends(ge
     objs = APITokenService.query(db, token=token)
     if not objs:
         return get_json_result(
-            data=False, retmsg='Token is not valid!"', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
 
     conv = API4ConversationService.get_by_id(db, req["conversation_id"])
     if not conv:
@@ -954,7 +955,7 @@ def retrieval(request, question, db: Session = Depends(get_db),):
     objs = APIToken.query(token=token)
     if not objs:
         return get_json_result(
-            data=False, retmsg='Token is not valid!"', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            data=False, retmsg='Token is not valid!"', retcode=RetCode.AUTHENTICATION_ERROR)
 
     req = request.json
     kb_ids = req.get("kb_id",[])
@@ -972,7 +973,7 @@ def retrieval(request, question, db: Session = Depends(get_db),):
         if len(embd_nms) != 1:
             return get_json_result(
                 data=False, retmsg='Knowledge bases use different embedding models or does not exist."',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR)
+                retcode=RetCode.AUTHENTICATION_ERROR)
 
         embd_mdl = TenantLLMService.model_instance(
             db, kbs[0].tenant_id, LLMType.EMBEDDING.value, llm_name=kbs[0].embd_id)
@@ -992,5 +993,5 @@ def retrieval(request, question, db: Session = Depends(get_db),):
     except Exception as e:
         if str(e).find("not_found") > 0:
             return get_json_result(data=False, retmsg=f'No chunk found! Check the chunk status please!',
-                                   retcode=settings.RetCode.DATA_ERROR)
+                                   retcode=RetCode.DATA_ERROR)
         return server_error_response(e)

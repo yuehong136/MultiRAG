@@ -25,6 +25,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import UserTenantService
 from common.misc_utils import get_uuid
+from common.constants import RetCode
 from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required, validate_request
 from core.app.tag import label_question
 from core.prompts.template import load_prompt
@@ -1051,7 +1052,7 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
     if isinstance(kb_ids, str):
         kb_ids = [kb_ids]
     if not kb_ids:
-        return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=settings.RetCode.DATA_ERROR)
+        return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=RetCode.DATA_ERROR)
     doc_ids = req.get("doc_ids", [])
     similarity_threshold = float(req.get("similarity_threshold", 0.0))
     vector_similarity_weight = float(req.get("vector_similarity_weight", 0.3))
@@ -1086,7 +1087,7 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
                     tenant_ids.append(tenant.tenant_id)
                     break
             else:
-                return get_json_result(data=False, retmsg="Only owner of knowledgebase authorized for this operation.", retcode=settings.RetCode.OPERATING_ERROR)
+                return get_json_result(data=False, retmsg="Only owner of knowledgebase authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
         e, kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
         if not e:
@@ -1121,7 +1122,7 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
         return get_json_result(data=ranks)
     except Exception as e:
         if str(e).find("not_found") > 0:
-            return get_json_result(data=False, retmsg="No chunk found! Check the chunk status please!", retcode=settings.RetCode.DATA_ERROR)
+            return get_json_result(data=False, retmsg="No chunk found! Check the chunk status please!", retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
 
 
@@ -1180,7 +1181,7 @@ def get_searchbot_detail(search_id: str = Query(...), db: Session = Depends(get_
             if SearchService.query(db, tenant_id=tenant.tenant_id, id=search_id):
                 break
         else:
-            return get_json_result(data=False, retmsg="Has no permission for this operation.", retcode=settings.RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg="Has no permission for this operation.", retcode=RetCode.OPERATING_ERROR)
 
         search = SearchService.get_detail(db, search_id)
         if not search:

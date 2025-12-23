@@ -16,6 +16,7 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService
+from common.constants import RetCode
 from api.utils.api_utils import (
     deep_merge,
     get_error_data_result,
@@ -364,7 +365,7 @@ def get_knowledge_graph(
         return get_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     
     kb = KnowledgebaseService.get_by_id(db, dataset_id)
@@ -421,7 +422,7 @@ def delete_knowledge_graph(
         return get_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     
     kb = KnowledgebaseService.get_by_id(db, dataset_id)

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import SessionLocal
 from api.utils.api_utils import get_json_result
 from api import settings
+from common.constants import RetCode
 
 
 class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
@@ -115,7 +116,7 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
                 async def error_generator():
                     error_msg = {
                         "error": "内容包含敏感信息，请修改后重试",
-                        "code": settings.RetCode.OPERATING_ERROR,
+                        "code": RetCode.OPERATING_ERROR,
                         "sensitive_words": [w.get('word', '') for w in filter_result.get('matched_words', [])]
                     }
                     yield f"data: {json.dumps(error_msg, ensure_ascii=False)}\n\n"
@@ -135,7 +136,7 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
                 return get_json_result(
                     data=False,
                     retmsg="内容包含敏感信息，请修改后重试",
-                    retcode=settings.RetCode.OPERATING_ERROR
+                    retcode=RetCode.OPERATING_ERROR
                 )
         
         # 如果内容被过滤且不是SSE接口，修改请求体

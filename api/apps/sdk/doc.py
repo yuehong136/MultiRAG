@@ -24,6 +24,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.dialog_service import meta_filter, convert_conditions
+from common.constants import RetCode
 
 from api.db.services.task_service import TaskService, queue_tasks
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
@@ -190,16 +191,16 @@ async def upload_documents(
         上传的文档信息列表
     """
     if not files:
-        return get_error_data_result(retmsg="No file part!", retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_error_data_result(retmsg="No file part!", retcode=RetCode.ARGUMENT_ERROR)
     
     if len(files) > MAXIMUM_OF_UPLOADING_FILES:
         return get_error_data_result(retmsg=f"You try to upload {len(files)} files, which exceeds the maximum number: {MAXIMUM_OF_UPLOADING_FILES}")
     
     for file_obj in files:
         if file_obj.filename == "":
-            return get_result(retmsg="No file selected!", retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_result(retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
         if len(file_obj.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
-            return get_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=RetCode.ARGUMENT_ERROR)
     
     kb = KnowledgebaseService.get_by_id(db, dataset_id)
     if not kb:
@@ -207,7 +208,7 @@ async def upload_documents(
     
     err, uploaded_files = FileService.upload_document(db, kb, files, tenant_id)
     if err:
-        return get_result(retmsg="\n".join(err), retcode=settings.RetCode.SERVER_ERROR)
+        return get_result(retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
     
     # 重命名键名
     renamed_doc_list = []
@@ -283,12 +284,12 @@ def update_document(
         if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
             return get_result(
                 retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
-                retcode=settings.RetCode.ARGUMENT_ERROR,
+                retcode=RetCode.ARGUMENT_ERROR,
             )
         if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(doc.name.lower()).suffix:
             return get_result(
                 retmsg="The extension of file can't be changed",
-                retcode=settings.RetCode.ARGUMENT_ERROR,
+                retcode=RetCode.ARGUMENT_ERROR,
             )
         
         for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
@@ -1080,7 +1081,7 @@ def retrieval_test(
     if len(embd_nms) != 1:
         return get_result(
             retmsg='Datasets use different embedding models.',
-            retcode=settings.RetCode.DATA_ERROR,
+            retcode=RetCode.DATA_ERROR,
         )
     
     if "question" not in req:
@@ -1199,6 +1200,6 @@ def retrieval_test(
         if str(e).find("not_found") > 0:
             return get_result(
                 retmsg="No chunk found! Check the chunk status please!",
-                retcode=settings.RetCode.DATA_ERROR,
+                retcode=RetCode.DATA_ERROR,
             )
         return server_error_response(e)

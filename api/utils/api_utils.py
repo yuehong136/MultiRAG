@@ -27,6 +27,7 @@ import trio
 
 from core.utils.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from common.connection_utils import timeout
+from common.constants import RetCode
 
 
 def serialize_for_json(obj):
@@ -54,7 +55,7 @@ def serialize_for_json(obj):
         return str(obj)
 
 
-def get_data_error_result(retcode=settings.RetCode.DATA_ERROR, retmsg='Sorry! Data missing!'):
+def get_data_error_result(retcode=RetCode.DATA_ERROR, retmsg='Sorry! Data missing!'):
     logging.error(retmsg)
     result_dict = {
         "retcode": retcode,
@@ -69,20 +70,20 @@ def server_error_response(e):
     try:
         msg = repr(e).lower()
         if getattr(e, "code", None) == 401 or ("unauthorized" in msg) or ("401" in msg):
-            return get_json_result(retcode=settings.RetCode.UNAUTHORIZED, retmsg=repr(e))
+            return get_json_result(retcode=RetCode.UNAUTHORIZED, retmsg=repr(e))
     except Exception as ex:
         logging.warning(f"error checking authorization: {ex}")
 
     if len(e.args) > 1:
         try:
             serialized_data = serialize_for_json(e.args[1])
-            return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=serialized_data)
+            return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=serialized_data)
         except Exception:
-            return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=None)
+            return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=None)
     if repr(e).find("index_not_found_exception") >= 0:
-        return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg="No chunk found, please upload file and parse it.")
+        return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg="No chunk found, please upload file and parse it.")
 
-    return get_json_result(retcode=settings.RetCode.EXCEPTION_ERROR, retmsg=repr(e))
+    return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=repr(e))
 
 
 def validate_request(*args, **kwargs):
@@ -111,7 +112,7 @@ def validate_request(*args, **kwargs):
                 if error_arguments:
                     error_string += "required argument values: " + ", ".join(
                         [f"{a[0]}={a[1]}" for a in error_arguments])
-                return get_json_result(retcode=settings.RetCode.ARGUMENT_ERROR, retmsg=error_string)
+                return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg=error_string)
             return await func(request, *args, **kwargs)
 
         return decorated_function
@@ -119,7 +120,7 @@ def validate_request(*args, **kwargs):
     return wrapper
 
 
-def get_json_result(retcode: settings.RetCode = settings.RetCode.SUCCESS, retmsg='success', data=None):
+def get_json_result(retcode: RetCode = RetCode.SUCCESS, retmsg='success', data=None):
     response = {"retcode": retcode, "retmsg": retmsg, "data": data}
     return JSONResponse(content=jsonable_encoder(response))
 
@@ -141,7 +142,7 @@ def apikey_required(func: Callable) -> Callable:
 
         if not objs:
             return build_error_result(
-                error_msg='API-KEY is invalid!', retcode=settings.RetCode.FORBIDDEN
+                error_msg='API-KEY is invalid!', retcode=RetCode.FORBIDDEN
             )
 
         kwargs['tenant_id'] = objs[0].tenant_id
@@ -177,14 +178,14 @@ async def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> 
     if not authorization_header:
         raise build_error_result(
             error_msg='Authorization header is missing!', 
-            retcode=settings.RetCode.FORBIDDEN
+            retcode=RetCode.FORBIDDEN
         )
     
     authorization_list = authorization_header.split()
     if len(authorization_list) < 2:
         raise build_error_result(
             error_msg='Invalid Authorization format!', 
-            retcode=settings.RetCode.FORBIDDEN
+            retcode=RetCode.FORBIDDEN
         )
     
     token = authorization_list[1]
@@ -193,31 +194,18 @@ async def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> 
     if not objs:
         raise build_error_result(
             error_msg='API-KEY is invalid!', 
-            retcode=settings.RetCode.FORBIDDEN
+            retcode=RetCode.FORBIDDEN
         )
     
     return objs[0].tenant_id
 
 
-def build_error_result(retcode=settings.RetCode.FORBIDDEN, error_msg='success'):
+def build_error_result(retcode=RetCode.FORBIDDEN, error_msg='success'):
     response_content = {"error_code": retcode, "error_msg": error_msg}
     return JSONResponse(content=response_content, status_code=retcode)
 
 
-def construct_response(retcode=settings.RetCode.SUCCESS, retmsg='success', data=None, auth=None):
-    result_dict = {"retcode": retcode, "retmsg": retmsg, "data": data}
-    response_dict = {key: value for key, value in result_dict.items() if value is not None or key == "retcode"}
-    response = JSONResponse(content=jsonable_encoder(response_dict))
-    if auth:
-        response.headers["Authorization"] = auth
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Method"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    response.headers["Access-Control-Expose-Headers"] = "Authorization"
-    return response
-
-
-def construct_json_result(code: settings.RetCode = settings.RetCode.SUCCESS, message='success', data=None):
+def construct_json_result(code: RetCode = RetCode.SUCCESS, message='success', data=None):
     if data is None:
         return JSONResponse(content={"code": code, "message": message})
     else:
@@ -228,15 +216,15 @@ def construct_error_response(e):
     logging.exception(e)
     try:
         if e.code == 401:
-            return construct_json_result(code=settings.RetCode.UNAUTHORIZED, message=repr(e))
+            return construct_json_result(code=RetCode.UNAUTHORIZED, message=repr(e))
     except Exception:
         pass
     if len(e.args) > 1:
-        return construct_json_result(code=settings.RetCode.EXCEPTION_ERROR, message=repr(e.args[0]), data=e.args[1])
+        return construct_json_result(code=RetCode.EXCEPTION_ERROR, message=repr(e.args[0]), data=e.args[1])
     if repr(e).find("index_not_found_exception") >= 0:
-        return construct_json_result(code=settings.RetCode.EXCEPTION_ERROR,
+        return construct_json_result(code=RetCode.EXCEPTION_ERROR,
                                      message="No chunk found, please upload file and parse it.")
-    return construct_json_result(code=settings.RetCode.EXCEPTION_ERROR, message=repr(e))
+    return construct_json_result(code=RetCode.EXCEPTION_ERROR, message=repr(e))
 
 
 def convert_datetime_to_str(data: dict):
@@ -262,7 +250,7 @@ async def token_required(request: Request, db: Session = Depends(get_db)):
     token = authorization_list[1]
     objs = APIToken.query(db, token=token)
     if not objs:
-        return get_json_result(data=False, retmsg="Authentication error: API key is invalid!", retcode=settings.RetCode.AUTHENTICATION_ERROR)
+        return get_json_result(data=False, retmsg="Authentication error: API key is invalid!", retcode=RetCode.AUTHENTICATION_ERROR)
     return objs[0].tenant_id
 # def token_required(func):
 #     @wraps(func)
@@ -277,7 +265,7 @@ async def token_required(request: Request, db: Session = Depends(get_db)):
 #
 #         if not objs:
 #             return get_json_result(
-#                 data=False, retmsg='Token is not valid!', retcode=settings.RetCode.AUTHENTICATION_ERROR
+#                 data=False, retmsg='Token is not valid!', retcode=RetCode.AUTHENTICATION_ERROR
 #             )
 #         kwargs['tenant_id'] = objs[0].tenant_id
 #         return func(*args, **kwargs)
@@ -285,7 +273,7 @@ async def token_required(request: Request, db: Session = Depends(get_db)):
 #     return decorated_function
 
 
-def get_result(retcode=settings.RetCode.SUCCESS, retmsg='error', data=None, total=None):
+def get_result(retcode=RetCode.SUCCESS, retmsg='error', data=None, total=None):
     """
     Standard API response format:
     {
@@ -297,7 +285,7 @@ def get_result(retcode=settings.RetCode.SUCCESS, retmsg='error', data=None, tota
     """
     response = {"code": retcode}
 
-    if retcode == settings.RetCode.SUCCESS:
+    if retcode == RetCode.SUCCESS:
         if data is not None:
             response["data"] = data
         if total is not None:
@@ -311,7 +299,7 @@ def get_result(retcode=settings.RetCode.SUCCESS, retmsg='error', data=None, tota
 
 
 def get_error_data_result(
-        retcode=settings.RetCode.DATA_ERROR,
+        retcode=RetCode.DATA_ERROR,
         retmsg='Sorry! Data missing!'
 ):
     import re
@@ -332,15 +320,15 @@ def get_error_data_result(
 
 
 def get_error_argument_result(message="Invalid arguments"):
-    return get_result(retcode=settings.RetCode.ARGUMENT_ERROR, retmsg=message)
+    return get_result(retcode=RetCode.ARGUMENT_ERROR, retmsg=message)
 
 
 def get_error_permission_result(message="Permission error"):
-    return get_result(retcode=settings.RetCode.PERMISSION_ERROR, retmsg=message)
+    return get_result(retcode=RetCode.PERMISSION_ERROR, retmsg=message)
 
 
 def get_error_operating_result(message="Operating error"):
-    return get_result(retcode=settings.RetCode.OPERATING_ERROR, retmsg=message)
+    return get_result(retcode=RetCode.OPERATING_ERROR, retmsg=message)
 
 
 def generate_confirmation_token():

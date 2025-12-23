@@ -11,6 +11,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api import settings
+from common.constants import RetCode
 from api.utils.api_utils import build_error_result, apikey_dependency
 from core.app.tag import label_question
 from api.db.services.dialog_service import meta_filter, convert_conditions
@@ -127,7 +128,7 @@ async def retrieval(
         if not kb:
             return build_error_result(
                 error_msg="Knowledgebase not found!", 
-                retcode=settings.RetCode.NOT_FOUND
+                retcode=RetCode.NOT_FOUND
             )
 
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
@@ -184,10 +185,10 @@ async def retrieval(
         if str(e).find("not_found") > 0:
             return build_error_result(
                 error_msg='No chunk found! Check the chunk status please!',
-                retcode=settings.RetCode.NOT_FOUND
+                retcode=RetCode.NOT_FOUND
             )
         logging.exception(e)
         return build_error_result(
             error_msg=str(e), 
-            retcode=settings.RetCode.SERVER_ERROR
+            retcode=RetCode.SERVER_ERROR
         )

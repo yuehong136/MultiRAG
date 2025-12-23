@@ -19,6 +19,7 @@ from api.db.db_models import get_db
 from api.db.services.connector_service import ConnectorService, Connector2KbService, SyncLogsService
 from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
 from common.misc_utils import get_uuid
+from common.constants import RetCode
 
 router = APIRouter()
 
@@ -382,7 +383,7 @@ def link_kb(
         req = request.model_dump()
         errors = Connector2KbService.link_kb(db, connector_id, req["kb_ids"], user.id)
         if errors:
-            return get_json_result(data=False, retmsg=errors, retcode=settings.RetCode.SERVER_ERROR)
+            return get_json_result(data=False, retmsg=errors, retcode=RetCode.SERVER_ERROR)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)

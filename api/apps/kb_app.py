@@ -32,6 +32,7 @@ from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import get_json_result
 from api.apps import manager
 from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
+from common.constants import RetCode
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.storage_factory import STORAGE_IMPL
@@ -179,13 +180,13 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     try:
         if not KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"]):
             return get_json_result(
                 data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-                retcode=settings.RetCode.OPERATING_ERROR)
+                retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
         if not kb:
@@ -195,7 +196,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
             return get_json_result(
                 data=False,
                 retmsg='The chunking method Tag has not been supported by milvus yet.',
-                retcode=settings.RetCode.OPERATING_ERROR
+                retcode=RetCode.OPERATING_ERROR
             )
 
         if req_data["name"].lower() != kb.name.lower() \
@@ -273,7 +274,7 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         else:
             return get_json_result(
                 data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-                retcode=settings.RetCode.OPERATING_ERROR)
+                retcode=RetCode.OPERATING_ERROR)
         kb = KnowledgebaseService.get_detail(db, kb_id)
         if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
@@ -367,7 +368,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     try:
         # 查询知识库，确保只有知识库的创建者有权限删除
@@ -376,7 +377,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
             # 如果知识库不存在或用户无权限删除，返回错误信息
             return get_json_result(
                 data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-                retcode=settings.RetCode.OPERATING_ERROR)
+                retcode=RetCode.OPERATING_ERROR)
 
         # 提前保存知识库名称，避免访问被删除对象
         kb_name = kbs[0].name
@@ -424,7 +425,7 @@ def list_tags(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     tenants = UserTenantService.get_tenants_by_user_id(db, user.id)
     tags = []
@@ -441,7 +442,7 @@ def list_tags_from_kbs(kb_ids: str, db: Session = Depends(get_db), user=Depends(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
+                retcode=RetCode.AUTHENTICATION_ERROR
             )
     tenants = UserTenantService.get_tenants_by_user_id(db, user.id)
     tags = []
@@ -456,7 +457,7 @@ def rm_tags(kb_id: str, request: RemoveTagsRequest, db: Session = Depends(get_db
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
@@ -476,7 +477,7 @@ def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
@@ -498,7 +499,7 @@ def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(mana
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     req = {
@@ -536,7 +537,7 @@ def delete_knowledge_graph(kb_id, db: Session = Depends(get_db), user=Depends(ma
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
@@ -566,7 +567,7 @@ def get_meta(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
+                retcode=RetCode.AUTHENTICATION_ERROR
             )
 
     try:
@@ -619,7 +620,7 @@ async def get_basic_info(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
+                retcode=RetCode.AUTHENTICATION_ERROR
             )
 
         # 获取统计信息
@@ -697,7 +698,7 @@ def list_pipeline_logs(
     - 可用于追踪文件处理进度和排查处理失败的原因
     """
     if not kb_id:
-        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
 
     page_number = int(page)
     items_per_page = int(page_size)
@@ -792,7 +793,7 @@ def list_pipeline_dataset_logs(
     - 可用于审计和问题排查
     """
     if not kb_id:
-        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
 
     page_number = int(page)
     items_per_page = int(page_size)
@@ -861,7 +862,7 @@ def delete_pipeline_logs(
     - 删除日志不影响实际的文件处理结果，只是清理记录
     """
     if not kb_id:
-        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
 
     log_ids = request_body.log_ids
 
@@ -925,7 +926,7 @@ def pipeline_log_detail(
     - 错误日志会包含详细的错误堆栈
     """
     if not log_id:
-        return get_json_result(data=False, retmsg='Lack of "Pipeline log ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Lack of "Pipeline log ID"', retcode=RetCode.ARGUMENT_ERROR)
 
     log = PipelineOperationLogService.get_by_id(db, log_id)
     if not log:
@@ -1636,7 +1637,7 @@ def check_embedding(
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
@@ -1684,4 +1685,4 @@ def check_embedding(
     }
     if summary["avg_cos_sim"] > 0.99:
         return get_json_result(data={"summary": summary, "results": results})
-    return get_json_result(retcode=settings.RetCode.NOT_EFFECTIVE, retmsg="failed", data={"summary": summary, "results": results})
+    return get_json_result(retcode=RetCode.NOT_EFFECTIVE, retmsg="failed", data={"summary": summary, "results": results})

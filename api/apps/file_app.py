@@ -28,6 +28,7 @@ from api.db.services.file_service import FileService
 from api import settings
 from api.utils.api_utils import get_json_result, construct_error_response, get_data_error_result
 from common.misc_utils import get_uuid
+from common.constants import RetCode
 from api.utils.file_utils import filename_type
 from api.utils.web_utils import CONTENT_TYPE_MAP
 from core.utils.storage_factory import STORAGE_IMPL
@@ -80,7 +81,7 @@ async def upload_media_redirect(
     try:
         content = await file.read()
         if not content:
-            return get_json_result(data=False, retmsg='No file content!', retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg='No file content!', retcode=RetCode.ARGUMENT_ERROR)
 
         # 1. 定义存储桶和文件名
         # 建议使用一个专门的临时桶，如果未配置则使用默认桶
@@ -146,11 +147,11 @@ async def upload(
         pf_id = root_folder["id"]
 
     if not files:
-        return get_json_result(data=False, retmsg='No file part!', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
 
     for file_obj in files:
         if file_obj.filename == '':
-            return get_json_result(data=False, retmsg='No file selected!', retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg='No file selected!', retcode=RetCode.ARGUMENT_ERROR)
 
     try:
         pf_folder = FileService.get_by_id(db, pf_id)
@@ -242,7 +243,7 @@ async def create(
 
     try:
         if not FileService.is_parent_folder_exist(db, pf_id):
-            return get_json_result(data=False, retmsg="Parent Folder Doesn't Exist!", retcode=settings.RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg="Parent Folder Doesn't Exist!", retcode=RetCode.OPERATING_ERROR)
         if FileService.query(db, name=req["name"], parent_id=pf_id):
             return get_data_error_result(retmsg="Duplicated folder name in the same folder.")
 
@@ -450,7 +451,7 @@ async def rm(
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
             if not check_file_team_permission(db, file, user.id):
-                return get_json_result(data=False, retmsg="No authorization.", retcode=settings.RetCode.AUTHENTICATION_ERROR)
+                return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
             if file.source_type == FileSource.KNOWLEDGEBASE:
                 continue
@@ -488,11 +489,11 @@ async def rename(
         if not file:
             return get_data_error_result(retmsg="File not found!")
         if not check_file_team_permission(db, file, user.id):
-            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
         if file.type != FileType.FOLDER.value \
                 and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
             return get_json_result(data=False, retmsg="The extension of file can't be changed",
-                                         retcode=settings.RetCode.ARGUMENT_ERROR)
+                                         retcode=RetCode.ARGUMENT_ERROR)
         for f in FileService.query(db, name=req["name"], pf_id=file.parent_id):
             if f.name == req["name"]:
                 return get_data_error_result(retmsg="Duplicated file name in the same folder.")
@@ -530,7 +531,7 @@ async def get_file(
         if not file:
             return get_data_error_result(retmsg="Document not found!")
         if not check_file_team_permission(db, file, user.id):
-            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
         b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
         file_content = STORAGE_IMPL.get(b, n)
@@ -601,7 +602,7 @@ async def move(
                 return get_json_result(
                     data=False,
                     retmsg="No authorization.",
-                    retcode=settings.RetCode.AUTHENTICATION_ERROR
+                    retcode=RetCode.AUTHENTICATION_ERROR
                 )
         
         def _move_entry_recursive(source_file_entry, dest_folder):

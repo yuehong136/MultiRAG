@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db
 from api.db.services.canvas_service import UserCanvasService
-from api.settings import RetCode
+from common.constants import RetCode
 from common.misc_utils import get_uuid
 from api.utils.api_utils import get_error_data_result, get_result, token_required
 

@@ -29,7 +29,9 @@ from api.db.services.file_service import FileService
 from api.db import UserTenantRole, FileType
 from common.misc_utils import download_img, get_uuid
 from api import settings
-from api.utils.api_utils import get_json_result, server_error_response, construct_response, get_data_error_result
+from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
+from common.connection_utils import construct_response
+from common.constants import RetCode
 from api.apps.auth import get_auth_client
 # from api.utils.crypt import decrypt
 from api.apps import smtp_mail_server
@@ -144,7 +146,7 @@ async def get_login_channels():
         return get_json_result(
             data=[],
             retmsg=f"Load channels failure, error: {str(e)}",
-            retcode=settings.RetCode.EXCEPTION_ERROR
+            retcode=RetCode.EXCEPTION_ERROR
         )
 
 
@@ -168,7 +170,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     users = UserService.query(db, email=email)
     if not users:
         return get_json_result(data=False,
-                               retcode=settings.RetCode.AUTHENTICATION_ERROR,
+                               retcode=RetCode.AUTHENTICATION_ERROR,
                                retmsg=f'Email: {email} is not registered!')
 
     password = request.password
@@ -177,7 +179,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     if user and hasattr(user, 'is_active') and not user.is_active:
         return get_json_result(
             data=False,
-            retcode=settings.RetCode.FORBIDDEN,
+            retcode=RetCode.FORBIDDEN,
             retmsg="This account has been disabled, please contact the administrator!",
         )
     elif user:
@@ -198,7 +200,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=500, detail=f"Login error: {str(e)}")
     else:
         return get_json_result(data=False,
-                               retcode=settings.RetCode.AUTHENTICATION_ERROR,
+                               retcode=RetCode.AUTHENTICATION_ERROR,
                                retmsg='Email and password do not match!')
 
 
@@ -557,7 +559,7 @@ async def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db)
         new_password = request_data["new_password"]
         # if not pwd_context.verify(request_data["password"], user.password):
         if not UserService.verify_password(request_data["password"], user.password):
-            return get_json_result(data=False, retcode=settings.RetCode.AUTHENTICATION_ERROR, retmsg='Password error!')
+            return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg='Password error!')
         if new_password:
             # update_dict["password"] = pwd_context.hash(new_password)
             update_dict["password"] = UserService.hash_password(new_password)
@@ -576,7 +578,7 @@ async def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db)
         return get_json_result(data=True)
     except Exception as e:
         logging.exception(e)
-        return get_json_result(data=False, retmsg='Update failure!', retcode=settings.RetCode.EXCEPTION_ERROR)
+        return get_json_result(data=False, retmsg='Update failure!', retcode=RetCode.EXCEPTION_ERROR)
 
 
 @router.get("/info", summary="获取用户信息")
@@ -761,7 +763,7 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
         return get_json_result(
             data=False,
             retmsg="User registration is disabled!",
-            retcode=settings.RetCode.OPERATING_ERROR,
+            retcode=RetCode.OPERATING_ERROR,
         )
 
     req = request.model_dump()
@@ -770,14 +772,14 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
     if not re.match(r"^[\w\._-]+@([\w_-]+\.)+[\w-]{2,}$", email_address):
         return get_json_result(data=False,
                                retmsg=f'Invalid email address: {email_address}!',
-                               retcode=settings.RetCode.OPERATING_ERROR)
+                               retcode=RetCode.OPERATING_ERROR)
 
     # Check if the email address is already used
     if UserService.query(db, email=email_address):
         return get_json_result(
             data=False,
             retmsg=f'Email: {email_address} has already registered!',
-            retcode=settings.RetCode.OPERATING_ERROR)
+            retcode=RetCode.OPERATING_ERROR)
 
     # Construct user info data
     nickname = req["nickname"]
@@ -805,7 +807,7 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
         logging.exception(e)
         return get_json_result(data=False,
                                retmsg=f'User registration failure, error: {str(e)}',
-                               retcode=settings.RetCode.EXCEPTION_ERROR)
+                               retcode=RetCode.EXCEPTION_ERROR)
 
 
 @router.get("/tenant_info", summary="获取租户信息")
@@ -924,7 +926,7 @@ async def forget_get_captcha(email: str, db: Session = Depends(get_db)):
     if not email:
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.ARGUMENT_ERROR, 
+            retcode=RetCode.ARGUMENT_ERROR, 
             retmsg="email is required"
         )
     
@@ -932,7 +934,7 @@ async def forget_get_captcha(email: str, db: Session = Depends(get_db)):
     if not users:
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.DATA_ERROR, 
+            retcode=RetCode.DATA_ERROR, 
             retmsg="invalid email"
         )
     
@@ -971,7 +973,7 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
     if not email or not captcha:
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.ARGUMENT_ERROR, 
+            retcode=RetCode.ARGUMENT_ERROR, 
             retmsg="email and captcha required"
         )
     
@@ -979,7 +981,7 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
     if not users:
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.DATA_ERROR, 
+            retcode=RetCode.DATA_ERROR, 
             retmsg="invalid email"
         )
     
@@ -987,14 +989,14 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
     if not stored_captcha:
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.NOT_EFFECTIVE, 
+            retcode=RetCode.NOT_EFFECTIVE, 
             retmsg="invalid or expired captcha"
         )
     
     if (stored_captcha or "").strip().lower() != captcha.lower():
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.AUTHENTICATION_ERROR,
+            retcode=RetCode.AUTHENTICATION_ERROR,
             retmsg="invalid or expired captcha"
         )
     
@@ -1015,7 +1017,7 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
         if remaining > 0:
             return get_json_result(
                 data=False, 
-                retcode=settings.RetCode.NOT_EFFECTIVE,
+                retcode=RetCode.NOT_EFFECTIVE,
                 retmsg=f"you still have to wait {remaining} seconds"
             )
     
@@ -1046,13 +1048,13 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
             logging.exception(e)
             return get_json_result(
                 data=False, 
-                retcode=settings.RetCode.SERVER_ERROR, 
+                retcode=RetCode.SERVER_ERROR, 
                 retmsg="failed to send email"
             )
     
     return get_json_result(
         data=True, 
-        retcode=settings.RetCode.SUCCESS, 
+        retcode=RetCode.SUCCESS, 
         retmsg="verification passed, email sent"
     )
 
@@ -1083,7 +1085,7 @@ async def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
     if not all([email, otp, new_pwd, new_pwd2]):
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.ARGUMENT_ERROR,
+            retcode=RetCode.ARGUMENT_ERROR,
             retmsg="email, otp and passwords are required"
         )
     
@@ -1091,7 +1093,7 @@ async def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
     if new_pwd != new_pwd2:
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.ARGUMENT_ERROR, 
+            retcode=RetCode.ARGUMENT_ERROR, 
             retmsg="passwords do not match"
         )
     
@@ -1099,7 +1101,7 @@ async def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
     if not users:
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.DATA_ERROR, 
+            retcode=RetCode.DATA_ERROR, 
             retmsg="invalid email"
         )
     
@@ -1111,7 +1113,7 @@ async def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
     if REDIS_CONN.get(k_lock):
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.NOT_EFFECTIVE, 
+            retcode=RetCode.NOT_EFFECTIVE, 
             retmsg="too many attempts, try later"
         )
     
@@ -1119,7 +1121,7 @@ async def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
     if not stored:
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.NOT_EFFECTIVE, 
+            retcode=RetCode.NOT_EFFECTIVE, 
             retmsg="expired otp"
         )
     
@@ -1129,7 +1131,7 @@ async def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
     except Exception:
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.EXCEPTION_ERROR, 
+            retcode=RetCode.EXCEPTION_ERROR, 
             retmsg="otp storage corrupted"
         )
     
@@ -1149,7 +1151,7 @@ async def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
         
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.AUTHENTICATION_ERROR, 
+            retcode=RetCode.AUTHENTICATION_ERROR, 
             retmsg="invalid otp"
         )
     
@@ -1165,7 +1167,7 @@ async def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
         logging.exception(e)
         return get_json_result(
             data=False, 
-            retcode=settings.RetCode.EXCEPTION_ERROR, 
+            retcode=RetCode.EXCEPTION_ERROR, 
             retmsg="failed to reset password"
         )
     
@@ -1193,6 +1195,6 @@ async def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
         logging.exception(e)
         return get_json_result(
             data=False,
-            retcode=settings.RetCode.EXCEPTION_ERROR,
+            retcode=RetCode.EXCEPTION_ERROR,
             retmsg="failed to save user session"
         )
