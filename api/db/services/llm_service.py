@@ -150,6 +150,7 @@ class LLMBundle(LLM4Tenant):
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
         txt, used_tokens = self.mdl.describe(image)
+        # increase_usage 会在 db 为 None 时自动创建独立连接（支持多线程场景）
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
             logging.error(f"Can't update token usage for {self.tenant_id}/IMAGE2TEXT used_tokens: {used_tokens}")
 
@@ -166,6 +167,7 @@ class LLMBundle(LLM4Tenant):
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
         txt, used_tokens = self.mdl.describe_with_prompt(image, prompt)
+        # increase_usage 会在 db 为 None 时自动创建独立连接（支持多线程场景）
         if not TenantLLMService.increase_usage(
                 self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
             logging.error("LLMBundle.describe can't update token usage for {}/IMAGE2TEXT used_tokens: {}".format(self.tenant_id, used_tokens))

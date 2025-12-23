@@ -82,6 +82,9 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
     return []
 
 
+MIN_IMAGE_DIMENSION = 10  # 视觉模型要求图像宽高至少为10像素
+
+
 def vision_llm_chunk(binary, vision_model, prompt=None, callback=None):
     """
     A simple wrapper to process image to markdown texts via VLM.
@@ -93,6 +96,13 @@ def vision_llm_chunk(binary, vision_model, prompt=None, callback=None):
 
     img = binary
     txt = ""
+
+    # 检查图像尺寸是否满足视觉模型的最低要求
+    if hasattr(img, 'size'):
+        width, height = img.size
+        if width < MIN_IMAGE_DIMENSION or height < MIN_IMAGE_DIMENSION:
+            # 图像太小，跳过视觉模型处理
+            return ""
 
     try:
         with io.BytesIO() as img_binary:
