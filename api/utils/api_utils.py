@@ -729,6 +729,6 @@ def get_allowed_llm_factories(db) -> list:
     
     factories = LLMFactoriesService.get_all(db)
     if settings.ALLOWED_LLM_FACTORIES is None:
-        return factories
+        return list(factories)
     
     return [factory for factory in factories if factory.name in settings.ALLOWED_LLM_FACTORIES]
