@@ -26,7 +26,6 @@ from docx.opc.pkgreader import _SerializedRelationships, _SerializedRelationship
 from docx.opc.oxml import parse_xml
 from markdown import markdown
 from PIL import Image
-from tika import parser
 
 from common.constants import LLMType
 from api.db.db_models import db_connection
@@ -42,6 +41,103 @@ from deepdoc.parser.docling_parser import DoclingParser
 from deepdoc.parser.tcadp_parser import TCADPParser
 from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, \
     tokenize_chunks, tokenize_chunks_with_images, tokenize_table
+
+
+def by_deepdoc(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+    callback = callback
+    binary = binary
+    pdf_parser = pdf_cls() if pdf_cls else Pdf()
+    sections, tables = pdf_parser(
+        filename if not binary else binary,
+        from_page=from_page,
+        to_page=to_page,
+        callback=callback
+    )
+
+    tables = vision_figure_parser_pdf_wrapper(tbls=tables,
+                                              callback=callback,
+                                              **kwargs)
+    return sections, tables, pdf_parser
+
+
+def by_mineru(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+    mineru_executable = os.environ.get("MINERU_EXECUTABLE", "mineru")
+    mineru_api = os.environ.get("MINERU_APISERVER", "http://host.docker.internal:9987")
+    pdf_parser = MinerUParser(mineru_path=mineru_executable, mineru_api=mineru_api)
+
+    if not pdf_parser.check_installation():
+        callback(-1, "MinerU not found.")
+        return None, None, pdf_parser
+
+    sections, tables = pdf_parser.parse_pdf(
+        filepath=filename,
+        binary=binary,
+        callback=callback,
+        output_dir=os.environ.get("MINERU_OUTPUT_DIR", ""),
+        backend=os.environ.get("MINERU_BACKEND", "pipeline"),
+        delete_output=bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1))),
+    )
+    return sections, tables, pdf_parser
+
+
+def by_docling(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+    pdf_parser = DoclingParser()
+
+    if not pdf_parser.check_installation():
+        callback(-1, "Docling not found.")
+        return None, None, pdf_parser
+
+    sections, tables = pdf_parser.parse_pdf(
+        filepath=filename,
+        binary=binary,
+        callback=callback,
+        output_dir=os.environ.get("MINERU_OUTPUT_DIR", ""),
+        delete_output=bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1))),
+    )
+    return sections, tables, pdf_parser
+
+
+def by_tcadp(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+    tcadp_parser = TCADPParser()
+
+    if not tcadp_parser.check_installation():
+        callback(-1, "TCADP parser not available. Please check Tencent Cloud API configuration.")
+        return None, None, tcadp_parser
+
+    sections, tables = tcadp_parser.parse_pdf(
+        filepath=filename,
+        binary=binary,
+        callback=callback,
+        output_dir=os.environ.get("TCADP_OUTPUT_DIR", ""),
+        file_type="PDF"
+    )
+    return sections, tables, tcadp_parser
+
+
+def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
+    if kwargs.get("layout_recognizer", "") == "Plain Text":
+        pdf_parser = PlainParser()
+    else:
+        with db_connection() as db:
+            vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=kwargs.get("layout_recognizer", ""), lang=kwargs.get("lang", "Chinese"))
+        pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
+    
+    sections, tables = pdf_parser(
+        filename if not binary else binary,
+        from_page=from_page,
+        to_page=to_page,
+        callback=callback
+    )
+    return sections, tables, pdf_parser
+
+
+PARSERS = {
+    "deepdoc": by_deepdoc,
+    "mineru": by_mineru,
+    "docling": by_docling,
+    "tcadp": by_tcadp,
+    "plaintext": by_plaintext,  # default
+}
 
 
 class Docx(DocxParser):
@@ -542,83 +638,30 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"
+
+        name = layout_recognizer.strip().lower()
+        parser = PARSERS.get(name, by_plaintext)
         callback(0.1, "Start to parse.")
 
-        if layout_recognizer == "DeepDOC":
-            pdf_parser = Pdf()
-            sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
-            tables = vision_figure_parser_pdf_wrapper(tbls=tables, callback=callback, **kwargs)
+        sections, tables, pdf_parser = parser(
+            filename=filename,
+            binary=binary,
+            from_page=from_page,
+            to_page=to_page,
+            lang=lang,
+            callback=callback,
+            layout_recognizer=layout_recognizer,  # 传递原始值给 plaintext_parser 以支持 VLM
+            **kwargs
+        )
 
-            res = tokenize_table(tables, doc, is_english)
-            callback(0.8, "Finish parsing.")
+        if not sections and not tables:
+            return []
 
-        elif layout_recognizer == "MinerU":
-            mineru_executable = os.environ.get("MINERU_EXECUTABLE", "mineru")
-            mineru_api = os.environ.get("MINERU_APISERVER", "http://host.docker.internal:9987")
-            mineru_server_url = os.environ.get("MINERU_SERVER_URL", "")
-            mineru_backend = os.environ.get("MINERU_BACKEND", "pipeline")
-            pdf_parser = MinerUParser(mineru_path=mineru_executable, mineru_api=mineru_api, mineru_server_url=mineru_server_url)
-            ok, reason = pdf_parser.check_installation(backend=mineru_backend)
-            if not ok:
-                callback(-1, f"MinerU not found or server not accessible: {reason}")
-                return res
-
-            sections, tables = pdf_parser.parse_pdf(
-                filepath=filename,
-                binary=binary,
-                callback=callback,
-                output_dir=os.environ.get("MINERU_OUTPUT_DIR", ""),
-                backend=mineru_backend,
-                server_url=mineru_server_url,
-                delete_output=bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1))),
-            )
+        if name in ["tcadp", "docling", "mineru"]:
             parser_config["chunk_token_num"] = 0
-            callback(0.8, "Finish parsing.")
-
-        elif layout_recognizer == "Docling":
-            pdf_parser = DoclingParser()
-            if not pdf_parser.check_installation():
-                callback(-1, "Docling not found.")
-                return res
-
-            sections, tables = pdf_parser.parse_pdf(
-                filepath=filename,
-                binary=binary,
-                callback=callback,
-                output_dir=os.environ.get("MINERU_OUTPUT_DIR", ""),
-                delete_output=bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1))),
-            )
-            parser_config["chunk_token_num"] = 0
-            res = tokenize_table(tables, doc, is_english)
-            callback(0.8, "Finish parsing.")
-
-        elif layout_recognizer == "TCADP Parser":
-            tcadp_parser = TCADPParser()
-            if not tcadp_parser.check_installation():
-                callback(-1, "TCADP parser not available. Please check Tencent Cloud API configuration.")
-                return res
-
-            sections, tables = tcadp_parser.parse_pdf(
-                filepath=filename,
-                binary=binary,
-                callback=callback,
-                output_dir=os.environ.get("TCADP_OUTPUT_DIR", ""),
-                file_type="PDF"
-            )
-            parser_config["chunk_token_num"] = 0
-            callback(0.8, "Finish parsing.")
-        else:
-            if layout_recognizer == "Plain Text":
-                pdf_parser = PlainParser()
-            else:
-                with db_connection() as db:
-                    vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=layout_recognizer, lang=lang)
-                pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
-
-            sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page,
-                                          callback=callback)
-            res = tokenize_table(tables, doc, is_english)
-            callback(0.8, "Finish parsing.")
+        
+        res = tokenize_table(tables, doc, is_english)
+        callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.(csv|xlsx?)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
@@ -693,8 +736,15 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     elif re.search(r"\.doc$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
 
+        try:
+            from tika import parser as tika_parser
+        except Exception as e:
+            callback(0.8, f"tika not available: {e}. Unsupported .doc parsing.")
+            logging.warning(f"tika not available: {e}. Unsupported .doc parsing for {filename}.")
+            return []
+
         binary = BytesIO(binary)
-        doc_parsed = parser.from_buffer(binary)
+        doc_parsed = tika_parser.from_buffer(binary)
         if doc_parsed.get('content', None) is not None:
             sections = doc_parsed['content'].split('\n')
             sections = [(_, "") for _ in sections if _]

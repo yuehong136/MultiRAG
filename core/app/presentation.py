@@ -24,14 +24,11 @@ from pathlib import Path
 
 from PIL import Image
 
-from common.constants import LLMType
-from api.db.db_models import db_connection
-from api.db.services.llm_service import LLMBundle
-from deepdoc.parser.pdf_parser import VisionParser
 from core.nlp import tokenize, is_english
 from core.nlp import rag_tokenizer
 from deepdoc.parser import PdfParser, PptParser, PlainParser
 from PyPDF2 import PdfReader as pdf2_read
+from core.app.naive import by_plaintext, PARSERS
 
 
 class Ppt(PptParser):
@@ -182,7 +179,7 @@ class Pdf(PdfParser):
             res.append((lines, self.page_images[i]))
         callback(0.9, "Page {}~{}: Parsing finished".format(
             from_page, min(to_page, self.total_page)))
-        return res
+        return res, []
 
 
 class PlainPdf(PlainParser):
@@ -193,7 +190,7 @@ class PlainPdf(PlainParser):
         for page in self.pdf.pages[from_page: to_page]:
             page_txt.append(page.extract_text())
         callback(0.9, "Parsing finished")
-        return [(txt, None) for txt in page_txt]
+        return [(txt, None) for txt in page_txt], []
 
 
 def chunk(filename, binary=None, from_page=0, to_page=100000,
@@ -228,20 +225,34 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         return res
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
         layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
-        if layout_recognizer == "DeepDOC":
-            pdf_parser = Pdf()
-            sections = pdf_parser(filename, binary, from_page=from_page, to_page=to_page, callback=callback)
-        elif layout_recognizer == "Plain Text":
-            pdf_parser = PlainParser()
-            sections, _ = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
-        else:
-            with db_connection() as db:
-                vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=layout_recognizer, lang=lang)
-            pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
-            sections, _ = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page,
-                                      callback=callback)
 
+        if isinstance(layout_recognizer, bool):
+            layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"
+
+        name = layout_recognizer.strip().lower()
+        parser = PARSERS.get(name, by_plaintext)
+        callback(0.1, "Start to parse.")
+
+        sections, _, _ = parser(
+            filename=filename,
+            binary=binary,
+            from_page=from_page,
+            to_page=to_page,
+            lang=lang,
+            callback=callback,
+            pdf_cls=Pdf,
+            layout_recognizer=layout_recognizer,
+            **kwargs
+        )
+
+        if not sections:
+            return []
+
+        if name in ["tcadp", "docling", "mineru"]:
+            parser_config["chunk_token_num"] = 0
+        
         callback(0.8, "Finish parsing.")
+
         for pn, (txt, img) in enumerate(sections):
             d = copy.deepcopy(doc)
             pn += from_page
