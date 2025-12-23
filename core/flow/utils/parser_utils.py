@@ -158,7 +158,7 @@ class FlowParser:
         **method_kwargs
     ) -> dict:
         """
-        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 214-300 行）
+        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 214-301 行）
         
         Args:
             parse_method: 
@@ -209,8 +209,9 @@ class FlowParser:
                     mineru_delete_output = bool(mineru_delete_output)
             pdf_parser = MinerUParser(mineru_path=mineru_executable, mineru_api=mineru_api)
             
-            if not pdf_parser.check_installation():
-                raise RuntimeError("MinerU not found or server not accessible. Please install it via: pip install -U 'mineru[core]'.")
+            ok, reason = pdf_parser.check_installation()
+            if not ok:
+                raise RuntimeError(f"MinerU not found or server not accessible: {reason}. Please install it via: pip install -U 'mineru[core]'.")
             
             lines, _ = await _to_thread(
                 pdf_parser.parse_pdf,
