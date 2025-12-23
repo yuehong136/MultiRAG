@@ -383,8 +383,8 @@ class WebParseOptions(BaseModel):
 
     # 图片去噪选项
     clean_images: bool | None = Field(
-        default=None,
-        description="是否启用图片去噪功能，自动过滤 logo、统计像素图、占位图等无用图片（默认 False）"
+        default=True,
+        description="是否启用图片去噪功能，自动过滤 logo、统计像素图、占位图等无用图片（默认 True）"
     )
     image_filter_mode: Literal["strict", "balanced", "minimal"] | None = Field(
         default=None,
