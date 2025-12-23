@@ -710,3 +710,25 @@ async def is_strong_enough(chat_model, embedding_model):
     async with trio.open_nursery() as nursery:
         for _ in range(count):
             nursery.start_soon(_is_strong_enough)
+
+
+def get_allowed_llm_factories(db) -> list:
+    """
+    获取允许的LLM工厂列表
+    
+    如果在配置中设置了 ALLOWED_LLM_FACTORIES，则只返回配置中指定的工厂；
+    否则返回所有工厂。
+    
+    Args:
+        db: 数据库会话
+        
+    Returns:
+        list: 允许的LLM工厂对象列表
+    """
+    from api.db.services.tenant_llm_service import LLMFactoriesService
+    
+    factories = LLMFactoriesService.get_all(db)
+    if settings.ALLOWED_LLM_FACTORIES is None:
+        return factories
+    
+    return [factory for factory in factories if factory.name in settings.ALLOWED_LLM_FACTORIES]

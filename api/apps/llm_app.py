@@ -30,7 +30,7 @@ from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMSer
 from api.db.services.llm_service import LLMService, LLMBundle
 from api.db.services.user_service import TenantService
 from api import settings
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
+from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result, get_allowed_llm_factories
 from common.constants import StatusEnum, LLMType
 from api.db.db_models import TenantLLM, get_db, db_connection
 from common.base64_image import test_image
@@ -747,7 +747,7 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
     """
 
     try:
-        fac = LLMFactoriesService.get_all(db)
+        fac = get_allowed_llm_factories(db)
         # fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI"]]
         fac = [f.to_dict() for f in fac if f.name not in []]
         llms = LLMService.get_all(db)
@@ -977,6 +977,12 @@ POST
     factory = req["llm_factory"]
     api_key = req.get("api_key", "x")
     llm_name = req["llm_name"]
+
+    # 验证工厂是否在允许列表中
+    allowed_factories = get_allowed_llm_factories(db)
+    allowed_factory_names = [f.name for f in allowed_factories]
+    if factory not in allowed_factory_names:
+        return get_data_error_result(retmsg=f"LLM factory {factory} is not allowed")
 
     def apikey_json(keys):
         nonlocal req

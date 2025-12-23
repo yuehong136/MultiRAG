@@ -35,6 +35,7 @@ HOST_IP = None
 HOST_PORT = None
 SECRET_KEY = None
 FACTORY_LLM_INFOS = None
+ALLOWED_LLM_FACTORIES = None
 ADMIN_REQUIRE_SUPERUSER = None
 
 # DATABASE_TYPE = os.getenv("DB_TYPE", "postgresql")
@@ -106,11 +107,12 @@ def init_settings():
     # LLM = get_base_config("user_default_llm", {})
     # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
     # LLM_BASE_URL = LLM.get("base_url")
-    global LLM, LLM_FACTORY, LLM_BASE_URL, FACTORY_LLM_INFOS, REGISTER_ENABLED
+    global LLM, LLM_FACTORY, LLM_BASE_URL, FACTORY_LLM_INFOS, REGISTER_ENABLED, ALLOWED_LLM_FACTORIES
     LLM = get_base_config("user_default_llm", {}) or {}
     LLM_DEFAULT_MODELS = LLM.get("default_models", {}) or {}
     LLM_FACTORY = LLM.get("factory", "") or ""
     LLM_BASE_URL = LLM.get("base_url", "") or ""
+    ALLOWED_LLM_FACTORIES = LLM.get("allowed_factories", None)
     try:
         REGISTER_ENABLED = int(os.environ.get("REGISTER_ENABLED", "1"))
     except Exception:
