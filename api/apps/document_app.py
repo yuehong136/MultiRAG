@@ -27,7 +27,8 @@ from starlette.status import (
 )
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
-from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, ParserType
+from api.db import VALID_FILE_TYPES, FileType
+from common.constants import VALID_TASK_STATUS, TaskStatus, ParserType
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task

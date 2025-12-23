@@ -16,7 +16,8 @@ from pathlib import Path
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, select
 
-from api.db import KNOWLEDGEBASE_FOLDER_NAME, FileSource, FileType, ParserType, TaskStatus
+from api.db import KNOWLEDGEBASE_FOLDER_NAME, FileType
+from common.constants import FileSource, ParserType, TaskStatus
 from api.db.db_models import Document, File, File2Document, Knowledgebase, Task
 from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService

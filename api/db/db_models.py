@@ -35,7 +35,7 @@ from alembic.script import ScriptDirectory
 from alembic.runtime.migration import MigrationContext
 
 # from common.time_utils import current_timestamp, timestamp_to_date, date_string_to_timestamp
-
+from common.constants import ParserType
 
 DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
 DATABASE = decrypt_database_config(name=DATABASE_TYPE)
@@ -825,7 +825,7 @@ class Knowledgebase(BaseModel):
     chunk_num = Column(Integer, index=True, nullable=False, default=0)
     similarity_threshold = Column(Float, index=True, nullable=False, default=0.2)
     vector_similarity_weight = Column(Float, index=True, nullable=False, default=0.3)
-    parser_id = Column(String(32), index=True, nullable=False, doc="default parser ID")
+    parser_id = Column(String(32), index=True, nullable=False, default=ParserType.NAIVE.value, doc="default parser ID")
     pipeline_id = Column(String(32), index=True, nullable=True, doc="Pipeline ID")
     parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]]})
     pagerank = Column(Integer, index=False, nullable=False, default=0)

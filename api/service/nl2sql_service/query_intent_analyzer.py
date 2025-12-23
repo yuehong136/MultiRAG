@@ -8,7 +8,7 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.utils.prompt_template_util import PromptTemplateUtil
 

@@ -13,7 +13,7 @@ from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
 
 from sqlalchemy.orm import Session
 from api.db.services.llm_service import LLMBundle
-from api.db import LLMType
+from common.constants import LLMType
 from api import settings
 from common.float_utils import get_float
 

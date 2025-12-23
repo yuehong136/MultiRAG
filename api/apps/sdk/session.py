@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
 from api import settings
-from api.db import LLMType, StatusEnum
+from common.constants import LLMType, StatusEnum
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService, completion_openai

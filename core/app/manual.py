@@ -18,7 +18,7 @@ import logging
 import copy
 import re
 
-from api.db import ParserType
+from common.constants import ParserType
 from io import BytesIO
 from core.nlp import rag_tokenizer, tokenize, tokenize_table, bullets_category, title_frequency, tokenize_chunks, \
     docx_question_level

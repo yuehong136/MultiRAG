@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 
 from api import settings
 from api.apps import manager
-from api.db import TaskStatus, InputType
+from api.db import InputType
+from common.constants import TaskStatus
 from api.db.db_models import get_db
 from api.db.services.connector_service import ConnectorService, Connector2KbService, SyncLogsService
 from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response

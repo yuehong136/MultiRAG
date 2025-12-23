@@ -21,8 +21,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from api.constants import NAME_LENGTH_LIMIT
-from api.db import FileType, ParserType, FileSource, TaskStatus
-from api.db import StatusEnum
+from api.db import FileType
+from common.constants import ParserType, FileSource, TaskStatus, StatusEnum
 from api.db.db_models import File, get_db, db_connection
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService

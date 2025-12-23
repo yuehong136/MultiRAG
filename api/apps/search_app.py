@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from api import settings
 from api.constants import DATASET_NAME_LIMIT
-from api.db import StatusEnum
+from common.constants import StatusEnum
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
 from api.db.services.search_service import SearchService

@@ -15,7 +15,8 @@ from urllib.parse import quote
 
 from api import settings
 from api.constants import FILE_NAME_LEN_LIMIT
-from api.db import FileSource, FileType, LLMType, ParserType, TaskStatus
+from api.db import FileType
+from common.constants import FileSource, LLMType, ParserType, TaskStatus
 from api.db.db_models import File as FileModel, Task, get_db
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService

@@ -7,7 +7,7 @@ from pymilvus import CollectionSchema, DataType
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.db_models import get_db
 from api.db.services.llm_service import LLMBundle
 from api.settings import docStoreConn

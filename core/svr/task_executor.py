@@ -41,7 +41,7 @@ import signal
 import trio
 # import exceptiongroup
 import faulthandler
-from api.db import LLMType, ParserType, PipelineTaskType
+from common.constants import LLMType, ParserType, PipelineTaskType
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, has_canceled, CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID

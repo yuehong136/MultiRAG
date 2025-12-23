@@ -16,7 +16,7 @@ import re
 import numpy as np
 from PIL import Image
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from deepdoc.vision import OCR

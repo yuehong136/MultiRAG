@@ -7,7 +7,7 @@ from sqlalchemy.exc import NoResultFound, OperationalError
 
 from api.db.services.common_service import CommonService
 from api.db.db_models import WritingProject, WritingChapter, WritingChapterContent
-from api.db import StatusEnum
+from common.constants import StatusEnum
 from common.misc_utils import get_uuid
 
 

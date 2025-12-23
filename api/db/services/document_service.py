@@ -21,7 +21,8 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc
 
 from api.constants import IMG_BASE64_PREFIX, FILE_NAME_LEN_LIMIT
-from api.db import FileType, LLMType, ParserType, TaskStatus, StatusEnum, UserTenantRole, CanvasCategory
+from api.db import FileType, UserTenantRole, CanvasCategory
+from common.constants import LLMType, ParserType, TaskStatus, StatusEnum
 from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, File2Document, File, UserCanvas, \
     User
 from api.db.services.common_service import CommonService
@@ -1035,7 +1036,7 @@ class DocumentService(CommonService):
 
     @classmethod
     def _get_allowed_parsers_for_filename(cls, filename: str) -> set[str]:
-        from api.db import ParserType
+        from common.constants import ParserType
         import re
         f = (filename or "").lower()
         if re.search(r"\.pdf$", f):
@@ -1067,12 +1068,12 @@ class DocumentService(CommonService):
             return {ParserType.EMAIL.value}
         if re.search(r"\.(mp3|wav|aac|flac|ogg|aiff|au|midi|wma|da|wave|realaudio|vqf|oggvorbis|ape)$", f):
             return {ParserType.AUDIO.value}
-        from api.db import ParserType as PT
+        from common.constants import ParserType as PT
         return {PT.NAIVE.value}
 
     @classmethod
     def _get_module_by_parser_id(cls, parser_id: str):
-        from api.db import ParserType
+        from common.constants import ParserType
         from core.app import (
             naive,
             paper,
@@ -1119,7 +1120,7 @@ class DocumentService(CommonService):
         # 默认按扩展名推断
         import re
         f = (filename or "").lower()
-        from api.db import ParserType
+        from common.constants import ParserType
         if re.search(r"\.(ppt|pptx)$", f):
             return cls._get_module_by_parser_id(ParserType.PRESENTATION.value), ParserType.PRESENTATION.value
         if re.search(r"\.(csv|xlsx?|xls)$", f):

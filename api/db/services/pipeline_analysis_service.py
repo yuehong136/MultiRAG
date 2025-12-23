@@ -20,7 +20,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy.orm import Session
 
 from api import settings
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.metadata_extractor import BatchMetadataExtractor

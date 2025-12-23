@@ -4,7 +4,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api import settings

@@ -13,7 +13,8 @@ from sqlalchemy import select, func, text
 from sqlalchemy.sql import desc as sa_desc
 from sqlalchemy.orm import Session
 
-from api.db import InputType, TaskStatus
+from api.db import InputType
+from common.constants import TaskStatus
 from api.db.db_models import Connector, SyncLogs, Connector2Kb, Knowledgebase
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService

@@ -21,7 +21,7 @@ from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from api.db import LLMType, StatusEnum, ParserType
+from common.constants import LLMType, StatusEnum, ParserType
 from api.db.db_models import Dialog
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService

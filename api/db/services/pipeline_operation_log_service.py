@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, asc, desc as sa_desc, select
 from sqlalchemy.orm import Session
 
-from api.db import VALID_PIPELINE_TASK_TYPES, PipelineTaskType
+from common.constants import VALID_PIPELINE_TASK_TYPES, PipelineTaskType
 from api.db.db_models import Document, PipelineOperationLog
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.common_service import CommonService

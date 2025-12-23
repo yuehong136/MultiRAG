@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, Discriminator, model_validator, field_val
 from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.dialog_service import DialogService
-from api.db import StatusEnum
+from common.constants import StatusEnum
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService

@@ -7,7 +7,8 @@ from copy import deepcopy
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from api.db import LLMType, UserTenantRole
+from api.db import UserTenantRole
+from common.constants import LLMType
 from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM, db_connection
 from api.db.services import UserService
 from api.db.services.canvas_service import CanvasTemplateService

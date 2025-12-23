@@ -25,7 +25,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.db import LLMType
+from common.constants import LLMType
 from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from common.misc_utils import get_uuid

@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from api.common.check_team_permission import check_file_team_permission
-from api.db import FileType, FileSource
+from api.db import FileType
+from common.constants import FileSource
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService

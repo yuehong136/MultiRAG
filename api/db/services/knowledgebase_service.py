@@ -10,7 +10,8 @@ from datetime import datetime
 
 from sqlalchemy import func, update, or_, and_
 from sqlalchemy.orm import Session
-from api.db import StatusEnum, TenantPermission
+from api.db import TenantPermission
+from common.constants import StatusEnum
 from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document, UserCanvas
 from api.db.services.common_service import CommonService
 from common.time_utils import current_timestamp, datetime_format
@@ -37,7 +38,7 @@ class KnowledgebaseService(CommonService):
             If all documents are parsed successfully, returns (True, None)
             If any document is not fully parsed, returns (False, error_message)
         """
-        from api.db import TaskStatus
+        from common.constants import TaskStatus
         from api.db.services.document_service import DocumentService
 
         # Get knowledge base information

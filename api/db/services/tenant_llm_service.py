@@ -21,7 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from api import settings
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.db_models import LLMFactories, TenantLLM, db_connection
 from api.db.services.common_service import CommonService
 from api.db.services.langfuse_service import TenantLangfuseService

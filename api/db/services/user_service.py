@@ -17,7 +17,8 @@ from sqlalchemy import func
 # from passlib.context import CryptContext
 import bcrypt
 
-from api.db import UserTenantRole, StatusEnum
+from api.db import UserTenantRole
+from common.constants import StatusEnum
 from api.db.db_models import User, Tenant, UserTenant
 from api.db.services.common_service import CommonService
 from common.misc_utils import get_uuid

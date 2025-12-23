@@ -14,7 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from api.db import FileType, LLMType, ParserType, FileSource
+from api.db import FileType
+from common.constants import LLMType, ParserType, FileSource
 from api.db.db_models import APIToken, Task, File, get_db
 from api.db.services import duplicate_name
 from api.db.services.api_service import APITokenService, API4ConversationService

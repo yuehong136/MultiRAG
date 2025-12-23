@@ -19,7 +19,7 @@ import re
 import numpy as np
 import trio
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle

@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 from api.utils.db_utils import bulk_insert_into_db
 from deepdoc.parser import PdfParser
 from api.db.db_models import Task, Document, Knowledgebase, Tenant, File2Document, File, DatabaseLock
-from api.db import StatusEnum, FileType, TaskStatus
+from api.db import FileType
+from common.constants import StatusEnum, TaskStatus
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from common.misc_utils import get_uuid

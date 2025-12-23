@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, Discriminator, model_validator
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.db_models import get_db
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService

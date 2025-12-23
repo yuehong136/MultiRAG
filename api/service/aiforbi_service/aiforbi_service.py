@@ -4,7 +4,7 @@ import re
 import pandas as pd
 from fastapi import HTTPException
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService

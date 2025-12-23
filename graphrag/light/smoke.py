@@ -21,7 +21,7 @@ import networkx as nx
 import logging
 import trio
 
-from api.db import LLMType
+from common.constants import LLMType
 # from api.db.database import db_connection
 from api.db.db_models import db_connection
 from api.db.services.document_service import DocumentService

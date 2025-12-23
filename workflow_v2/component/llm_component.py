@@ -2,7 +2,7 @@ import asyncio
 from typing import Any
 from dataclasses import dataclass
 import copy
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.utils import parse_template, match_parameters, dict_arrays_to_array_dicts, map_schema_with_values

@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api import settings
-from api.db import StatusEnum
+from common.constants import StatusEnum
 from api.db.db_models import get_db
 from api.db.services.dialog_service import DialogService
 from api.db.services.knowledgebase_service import KnowledgebaseService

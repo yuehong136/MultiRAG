@@ -229,7 +229,7 @@ def question_proposal(chat_mdl, content, topn=3):
 def full_question(db: Session, tenant_id=None, llm_id=None, messages=None, language=None, chat_mdl=None):
     if messages is None:
         messages = []
-    from api.db import LLMType
+    from common.constants import LLMType
     from api.db.services.llm_service import LLMBundle
     from api.db.services.tenant_llm_service import TenantLLMService
 
@@ -263,7 +263,7 @@ def full_question(db: Session, tenant_id=None, llm_id=None, messages=None, langu
 
 
 def cross_languages(db, tenant_id, llm_id, query, languages=None):
-    from api.db import LLMType
+    from common.constants import LLMType
     from api.db.services.llm_service import LLMBundle
     from api.db.services.tenant_llm_service import TenantLLMService
 

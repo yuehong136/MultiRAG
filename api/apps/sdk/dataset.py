@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api import settings
-from api.db import FileSource, StatusEnum
+from common.constants import FileSource, StatusEnum
 from api.db.db_models import File, get_db
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService

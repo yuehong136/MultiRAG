@@ -2,7 +2,7 @@ import re
 
 from sqlalchemy.orm import Session
 
-from api.db import ActiveEnum
+from common.constants import ActiveEnum
 from api.db.joint_services.user_account_service import create_new_user, delete_user_data
 from api.db.services import UserService
 from api.db.services.canvas_service import UserCanvasService

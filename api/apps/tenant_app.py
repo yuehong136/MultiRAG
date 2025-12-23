@@ -12,7 +12,8 @@ from sqlalchemy import inspect
 
 from api import settings
 from api.apps import smtp_mail_server
-from api.db import UserTenantRole, StatusEnum
+from api.db import UserTenantRole
+from common.constants import StatusEnum
 from api.db.db_models import UserTenant, TenantLLM, Tenant, File, User, get_db
 from api.db.services.file_service import FileService
 from common.misc_utils import get_uuid

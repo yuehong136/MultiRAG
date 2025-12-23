@@ -22,7 +22,7 @@ import trio
 import numpy as np
 from sqlalchemy.orm import Session
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle

@@ -6,7 +6,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.db import StatusEnum
+from common.constants import StatusEnum
 from api.db.db_models import Conversation
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
