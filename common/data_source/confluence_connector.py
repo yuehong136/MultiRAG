@@ -46,7 +46,7 @@ from common.data_source.utils import load_all_docs_from_checkpoint_connector, sc
     process_confluence_user_profiles_override, confluence_refresh_tokens, run_with_timeout, _handle_http_error, \
     update_param_in_path, get_start_param_from_url, build_confluence_document_id, datetime_from_string, \
     is_atlassian_date_error, validate_attachment_filetype
-from rag.utils.redis_conn import RedisDB, REDIS_CONN
+from core.utils.redis_conn import RedisDB, REDIS_CONN
 
 _USER_ID_TO_DISPLAY_NAME_CACHE: dict[str, str | None] = {}
 _USER_EMAIL_CACHE: dict[str, str | None] = {}
