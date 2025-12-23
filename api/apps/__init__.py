@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
     # 1. 显示配置信息
     # 注意：settings.init_settings() 已在模块级别执行（见上方）
     # 无需重复初始化，避免资源浪费
-    from api.utils.configs import show_configs
+    from common.config_utils import show_configs
     from core.settings import print_rag_settings
     show_configs()
     print_rag_settings()
