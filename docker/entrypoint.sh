@@ -25,6 +25,7 @@ PY=${PYTHON_BIN:-python3}       # Python 可执行文件，可通过环境变量
 ENABLE_REDIS=1                 # 是否启动 Redis
 ENABLE_SERVER=1                # 是否启动 api.multirag_server
 ENABLE_TASKEXECUTOR=1          # 是否启动 TaskExecutor
+ENABLE_DATASYNC=1              # 是否启动数据源同步服务
 ENABLE_ADMINSERVER=1           # 是否启动 admin server（默认启动）
 ENABLE_WEBSERVER="${ENABLE_WEBSERVER:-1}"  # 是否启动 Nginx（默认启动）
 WORKERS="${WS:-1}"            # TaskExecutor 数量，默认取 WS 环境变量，否则 1
@@ -50,6 +51,7 @@ Usage: $0 [options]
   --disable-redis                 不启动 Redis
   --disable-server                不启动 api.multirag_server
   --disable-taskexecutor          不启动 TaskExecutor
+  --disable-datasync              不启动数据源同步服务
   --disable-webserver             不启动 Nginx（Web Server）
   --enable-adminserver            启动 Admin Server（默认启动）
   --workers=<num>                 TaskExecutor 数量（默认读取 WS 或 1）
@@ -67,6 +69,7 @@ for arg in "$@"; do
     --disable-redis)        ENABLE_REDIS=0 ; shift ;;
     --disable-server)       ENABLE_SERVER=0 ; shift ;;
     --disable-taskexecutor) ENABLE_TASKEXECUTOR=0 ; shift ;;
+    --disable-datasync)     ENABLE_DATASYNC=0 ; shift ;;
     --disable-webserver)    ENABLE_WEBSERVER=0 ; shift ;;
     --enable-adminserver)   ENABLE_ADMINSERVER=1 ; shift ;;
     --workers=*)            WORKERS="${arg#*=}" ; shift ;;
@@ -184,6 +187,15 @@ fi
 
 if [[ "${ENABLE_ADMINSERVER}" -eq 1 ]]; then
   start_admin_server
+fi
+
+if [[ "${ENABLE_DATASYNC}" -eq 1 ]]; then
+  echo "[entrypoint] 启动数据源同步服务..."
+  while true; do
+    "${PY}" -m core.svr.sync_data_source || true
+    echo "[entrypoint] 数据源同步服务崩溃，1 秒后重启..."
+    sleep 1
+  done &
 fi
 
 if [[ "${ENABLE_TASKEXECUTOR}" -eq 1 ]]; then
