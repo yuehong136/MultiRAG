@@ -166,29 +166,33 @@ class SyncLogsService(CommonService):
         return [dict(row) for row in rows]
 
     @classmethod
-    def start(cls, db: Session, task_id: str):
+    def start(cls, db: Session, task_id: str, connector_id: str):
         """
         开始同步任务
 
         Args:
             db: 数据库会话
             task_id: 任务ID
+            connector_id: 连接器ID
         """
         cls.update_by_id(db, task_id, {
             "status": TaskStatus.RUNNING,
             "time_started": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         })
+        ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.RUNNING})
 
     @classmethod
-    def done(cls, db: Session, task_id: str):
+    def done(cls, db: Session, task_id: str, connector_id: str):
         """
         完成同步任务
 
         Args:
             db: 数据库会话
             task_id: 任务ID
+            connector_id: 连接器ID
         """
         cls.update_by_id(db, task_id, {"status": TaskStatus.DONE})
+        ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.DONE})
 
     @classmethod
     def schedule(
@@ -219,6 +223,7 @@ class SyncLogsService(CommonService):
                 return None
 
             reindex_flag = "1" if reindex else "0"
+            ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.SCHEDULE})
             return cls.insert(db, **{
                 "id": get_uuid(),
                 "kb_id": kb_id,
@@ -248,6 +253,7 @@ class SyncLogsService(CommonService):
                     update_data["full_exception_trace"] = str(e)
 
                 cls.filter_update(db, [cls.model.id == task.id], update_data)
+                ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.SCHEDULE})
 
     @classmethod
     def increase_docs(

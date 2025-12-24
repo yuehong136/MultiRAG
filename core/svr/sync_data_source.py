@@ -1,24 +1,3 @@
-#
-#  Copyright 2024 The InfiniFlow Authors. All Rights Reserved.
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-#
-
-# from beartype import BeartypeConf
-# from beartype.claw import beartype_all  # <-- you didn't sign up for this
-# beartype_all(conf=BeartypeConf(violation_type=UserWarning))    # <-- emit warnings from all code
-
-
 import sys
 import threading
 import time
@@ -26,6 +5,7 @@ import traceback
 
 from api.db.services.connector_service import SyncLogsService
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.db_models import db_connection
 from common.log_utils import init_root_logger
 from common.config_utils import show_configs
 from common.data_source import BlobStorageConnector
@@ -51,7 +31,8 @@ class SyncBase:
         self.conf = conf
 
     async def __call__(self, task: dict):
-        SyncLogsService.start(task["id"])
+        with db_connection() as db:
+            SyncLogsService.start(db, task["id"], task["connector_id"])
         try:
             async with task_limiter:
                 with trio.fail_after(task["timeout_secs"]):
@@ -61,9 +42,11 @@ class SyncBase:
                 ''.join(traceback.format_exception_only(None, ex)).strip(),
                 ''.join(traceback.format_exception(None, ex, ex.__traceback__)).strip()
             ])
-            SyncLogsService.update_by_id(task["id"], {"status": TaskStatus.FAIL, "full_exception_trace": msg})
+            with db_connection() as db:
+                SyncLogsService.update_by_id(db, task["id"], {"status": TaskStatus.FAIL, "full_exception_trace": msg})
 
-        SyncLogsService.schedule(task["connector_id"], task["kb_id"], task["poll_range_start"])
+        with db_connection() as db:
+            SyncLogsService.schedule(db, task["connector_id"], task["kb_id"], task["poll_range_start"])
 
     async def _run(self, task: dict):
         raise NotImplementedError
@@ -105,15 +88,17 @@ class S3(SyncBase):
                 } for doc in document_batch]
 
             e, kb = KnowledgebaseService.get_by_id(task["kb_id"])
-            err, dids = SyncLogsService.duplicate_and_parse(kb, docs, task["tenant_id"], f"{FileSource.S3}/{task['connector_id']}")
-            SyncLogsService.increase_docs(task["id"], min_update, max_update, len(docs), "\n".join(err), len(err))
+            with db_connection() as db:
+                err, dids = SyncLogsService.duplicate_and_parse(db, kb, docs, task["tenant_id"], f"{FileSource.S3}/{task['connector_id']}")
+                SyncLogsService.increase_docs(db, task["id"], min_update, max_update, len(docs), "\n".join(err), len(err))
             doc_num += len(docs)
 
         logging.info("{} docs synchronized from {}: {} {}".format(doc_num, self.conf.get("bucket_type", "s3"),
                                                                   self.conf["bucket_name"],
                                                                   begin_info
                                                                   ))
-        SyncLogsService.done(task["id"])
+        with db_connection() as db:
+            SyncLogsService.done(db, task["id"], task["connector_id"])
         return next_update
 
 
@@ -178,13 +163,15 @@ class Confluence(SyncBase):
                 "blob": doc.blob
             }]
 
-            e, kb = KnowledgebaseService.get_by_id(task["kb_id"])
-            err, dids = SyncLogsService.duplicate_and_parse(kb, docs, task["tenant_id"], f"{FileSource.CONFLUENCE}/{task['connector_id']}")
-            SyncLogsService.increase_docs(task["id"], min_update, max_update, len(docs), "\n".join(err), len(err))
+            kb = KnowledgebaseService.get_by_id(task["kb_id"])
+            with db_connection() as db:
+                err, dids = SyncLogsService.duplicate_and_parse(db, kb, docs, task["tenant_id"], f"{FileSource.CONFLUENCE}/{task['connector_id']}")
+                SyncLogsService.increase_docs(db, task["id"], min_update, max_update, len(docs), "\n".join(err), len(err))
             doc_num += len(docs)
 
         logging.info("{} docs synchronized from Confluence: {} {}".format(doc_num, self.conf["wiki_base"], begin_info))
-        SyncLogsService.done(task["id"])
+        with db_connection() as db:
+            SyncLogsService.done(db, task["id"], task["connector_id"])
         return next_update
 
 
@@ -250,7 +237,9 @@ func_factory = {
 
 async def dispatch_tasks():
     async with trio.open_nursery() as nursery:
-        for task in SyncLogsService.list_sync_tasks():
+        with db_connection() as db:
+            tasks = SyncLogsService.list_sync_tasks(db)
+        for task in tasks:
             if task["poll_range_start"]:
                 task["poll_range_start"] = task["poll_range_start"].astimezone(timezone.utc)
             if task["poll_range_end"]:
