@@ -61,6 +61,7 @@ class UpdateKnowledgebaseRequest(BaseModel):
     parser_config: dict | None = None
     embd_id: str | None = None
     pagerank: int | None = 0
+    connectors: list[dict] | None = None
 
 
 class RemoveKnowledgebaseRequest(BaseModel):
@@ -206,6 +207,12 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
                                                    status=StatusEnum.VALID.value)) > 1:
             return get_data_error_result(retmsg="Duplicated knowledgebase name.")
 
+        # 提取 connectors 字段，不写入知识库表
+        connectors = []
+        if "connectors" in req_data:
+            connectors = req_data["connectors"]
+            del req_data["connectors"]
+
         # 过滤掉None值，避免将None写入数据库
         filtered_data = {k: v for k, v in req_data.items() if v is not None and k != "kb_id"}
         old_name = kb.name
@@ -252,6 +259,12 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
                     logging.info(f"已移除知识库 {kb.id} 的 PageRank 值")
                 except Exception as e:
                     logging.error(f"移除知识库 {kb.id} 的 PageRank 失败: {str(e)}")
+
+        # 处理 connectors 关联
+        if connectors:
+            errors = Connector2KbService.link_connectors(db, kb.id, [conn["id"] for conn in connectors], user.id)
+            if errors:
+                logging.error(f"Link KB errors: {errors}")
 
         kb = KnowledgebaseService.get_by_id(db, kb.id)
         if not kb:
@@ -1693,51 +1706,3 @@ def check_embedding(
     if summary["avg_cos_sim"] > 0.99:
         return get_json_result(data={"summary": summary, "results": results})
     return get_json_result(retcode=RetCode.NOT_EFFECTIVE, retmsg="failed", data={"summary": summary, "results": results})
-
-
-class LinkConnectorRequest(BaseModel):
-    connector_ids: list[str]
-
-
-@router.post("/{kb_id}/link", summary="关联连接器到知识库", response_description="成功关联连接器")
-def link_connector(
-        kb_id: str,
-        request: LinkConnectorRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
-    """
-    将连接器与知识库进行关联
-    
-    概要：为指定知识库添加或移除数据源连接器，实现自动同步外部数据。
-    
-    参数：
-    - **kb_id**: 知识库ID（必填）
-    - **request**: 请求体
-        - connector_ids: 要关联的连接器ID列表
-    
-    返回：
-    - dict: 操作结果
-        - data: True 表示关联成功，False 表示失败
-    
-    功能：
-    1. 验证知识库ID和连接器ID列表
-    2. 添加新的关联关系
-    3. 移除不再需要的关联
-    4. 对新关联的连接器自动启动同步任务
-    5. 对移除的关联清理相关数据
-    
-    权限要求：
-    - 用户必须对该知识库有操作权限
-    
-    异常处理：
-    - 如果操作失败，返回错误信息
-    """
-    try:
-        req = request.model_dump()
-        errors = Connector2KbService.link_connectors(db, kb_id, req["connector_ids"], user.id)
-        if errors:
-            return get_json_result(data=False, retmsg=errors, retcode=RetCode.SERVER_ERROR)
-        return get_json_result(data=True)
-    except Exception as e:
-        return server_error_response(e)

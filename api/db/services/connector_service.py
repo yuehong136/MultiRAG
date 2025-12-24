@@ -46,6 +46,8 @@ class ConnectorService(CommonService):
             if not task:
                 if status == TaskStatus.SCHEDULE:
                     SyncLogsService.schedule(db, connector_id, c2k.kb_id)
+                    cls.update_by_id(db, connector_id, {"status": status})
+                    return
                 continue
 
             if task.status == TaskStatus.DONE:
@@ -55,6 +57,8 @@ class ConnectorService(CommonService):
                         poll_range_start=task.poll_range_end,
                         total_docs_indexed=task.total_docs_indexed
                     )
+                    cls.update_by_id(db, connector_id, {"status": status})
+                    return
 
             task_dict = task.to_dict()
             task_dict["status"] = status
@@ -118,16 +122,19 @@ class SyncLogsService(CommonService):
             cls.model.id,
             cls.model.connector_id,
             cls.model.kb_id,
+            cls.model.update_date,
             cls.model.poll_range_start,
             cls.model.poll_range_end,
             cls.model.new_docs_indexed,
-            cls.model.error_msg,
+            cls.model.total_docs_indexed,
+            cls.model.full_exception_trace,
             cls.model.error_count,
             Connector.name,
             Connector.source,
             Connector.tenant_id,
             Connector.timeout_secs,
             Knowledgebase.name.label("kb_name"),
+            Knowledgebase.avatar.label("kb_avatar"),
             cls.model.from_beginning.label("reindex"),
             cls.model.status
         ]

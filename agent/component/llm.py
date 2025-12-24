@@ -221,7 +221,7 @@ class LLM(ComponentBase):
         error: str = ""
         output_structure=None
         try:
-            output_structure = None#self._param.outputs['structured']
+            output_structure = self._param.outputs['structured']
         except Exception:
             pass
         if output_structure:
