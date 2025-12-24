@@ -40,7 +40,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
-from api import settings
+from common import globals
 from api.common.check_team_permission import check_kb_team_permission
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result, get_data_error_result, server_error_response
@@ -1978,7 +1978,7 @@ def change_status(
                 continue
 
             status = int(req["status"])
-            if not settings.docStoreConn.update({"doc_id": doc_id}, {"available_int": status},
+            if not globals.docStoreConn.update({"doc_id": doc_id}, {"available_int": status},
                                                 search.index_name_one(kb.tenant_id, kb.name), doc.kb_id):
                 result[doc_id] = {"error": "Database error (docStore update)!"}
             result[doc_id] = {"status": str(req["status"])}
@@ -2025,7 +2025,7 @@ def change_auth(
                                          code=RetCode.ARGUMENT_ERROR)
 
         # auth = str(req["auth"])
-        settings.docStoreConn.update({"doc_id": req["doc_id"]}, {"auth": auths},
+        globals.docStoreConn.update({"doc_id": req["doc_id"]}, {"auth": auths},
                                      search.index_name_one(kb.tenant_id, kb.name), doc.kb_id)
         return construct_json_result(data=True)
     except Exception as e:
@@ -2462,16 +2462,16 @@ def run(
             if req.get("delete", False):
                 TaskService.filter_delete(db, [Task.doc_id == id])
                 try:
-                    if settings.docStoreConn.has_collection(collection_name):
-                        db_type = settings.docStoreConn.dbType()
+                    if globals.docStoreConn.has_collection(collection_name):
+                        db_type = globals.docStoreConn.dbType()
                         if db_type == "milvus":
-                            delete_result = settings.docStoreConn.delete(
+                            delete_result = globals.docStoreConn.delete(
                                 collection_name=collection_name,
                                 filter=f"doc_id == '{{doc_id}}'".format(doc_id=d["id"])
                             )
                         else:
                             # ES/OpenSearch/Infinity
-                            delete_result = settings.docStoreConn.delete(
+                            delete_result = globals.docStoreConn.delete(
                                 condition={"doc_id": d["id"]},
                                 indexName=collection_name,
                                 knowledgebaseId=kb.id
@@ -2539,8 +2539,8 @@ def rename(
             "title_tks": title_tks,
             "title_sm_tks": rag_tokenizer.fine_grained_tokenize(title_tks),
         }
-        if settings.docStoreConn.indexExist(search.index_name_one(tenant_id, kb.name), doc.kb_id):
-            settings.docStoreConn.update(
+        if globals.docStoreConn.indexExist(search.index_name_one(tenant_id, kb.name), doc.kb_id):
+            globals.docStoreConn.update(
                 {"doc_id": req["doc_id"]},
                 milvus_body,
                 search.index_name_one(tenant_id, kb.name),
@@ -2722,14 +2722,14 @@ def change_parser(
             # 删除向量数据库中的数据
             try:
                 collection_name = search.index_name_one(tenant_id, kb.name)
-                db_type = settings.docStoreConn.dbType()
+                db_type = globals.docStoreConn.dbType()
                 if db_type == "milvus":
-                    delete_result = settings.docStoreConn.delete(
+                    delete_result = globals.docStoreConn.delete(
                         collection_name=collection_name,
                         filter=f"doc_id == '{doc.id}'"
                     )
                 else:
-                    delete_result = settings.docStoreConn.delete(
+                    delete_result = globals.docStoreConn.delete(
                         condition={"doc_id": doc.id},
                         indexName=collection_name,
                         knowledgebaseId=kb.id

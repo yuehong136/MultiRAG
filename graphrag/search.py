@@ -319,6 +319,7 @@ class KGSearch(Dealer):
 
 if __name__ == "__main__":
     from api import settings
+    from common import globals
     import argparse
     from common.constants import LLMType
     from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -341,6 +342,6 @@ if __name__ == "__main__":
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         embed_bdl = LLMBundle(db, args.tenant_id, LLMType.EMBEDDING, kb.embd_id)
 
-    kg = KGSearch(settings.docStoreConn)
+    kg = KGSearch(globals.docStoreConn)
     print(kg.retrieval({"question": args.question, "kb_ids": [kb_id]},
                     search.index_name(kb.tenant_id, [kb.name]), [kb_id], embed_bdl, llm_bdl))

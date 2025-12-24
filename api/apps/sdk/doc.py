@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from urllib.parse import quote
 
 from api import settings
+from common import globals
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import FileType
 from common.constants import FileSource, LLMType, ParserType, TaskStatus
@@ -347,7 +348,7 @@ def update_document(
             )
             if not e:
                 return get_error_data_result(retmsg="Document not found!")
-            settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
+            globals.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
     
     # 更新启用状态
     if "enabled" in req:
@@ -357,7 +358,7 @@ def update_document(
                 if not DocumentService.update_by_id(db, doc.id, {"status": str(status)}):
                     return get_error_data_result(retmsg="Database error (Document update)!")
                 
-                settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id), doc.kb_id)
+                globals.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id), doc.kb_id)
                 return get_result(data=True)
             except Exception as e:
                 return server_error_response(e)
@@ -817,7 +818,7 @@ def list_document_chunks(
         if keywords:
             query_conditions["content"] = keywords
         
-        res = settings.docStoreConn.search(
+        res = globals.docStoreConn.search(
             query_conditions,
             search.index_name(tenant_id),
             dataset_id,
@@ -908,7 +909,7 @@ def add_document_chunk(
         chunk_data["q_%d_vec" % len(v[0])] = v[0]
         
         # 保存到搜索引擎
-        settings.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(kb.tenant_id), dataset_id)
+        globals.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(kb.tenant_id), dataset_id)
         
         # 更新文档统计
         DocumentService.increment_chunk_num(
@@ -950,7 +951,7 @@ def delete_document_chunks(
     
     try:
         # 从搜索引擎删除chunks
-        settings.docStoreConn.delete({"id": chunk_ids}, search.index_name(tenant_id), dataset_id)
+        globals.docStoreConn.delete({"id": chunk_ids}, search.index_name(tenant_id), dataset_id)
         
         # 更新文档统计
         DocumentService.increment_chunk_num(
@@ -989,7 +990,7 @@ def update_document_chunk(
     
     try:
         # 获取现有chunk数据
-        res = settings.docStoreConn.get(chunk_id, search.index_name(tenant_id), dataset_id)
+        res = globals.docStoreConn.get(chunk_id, search.index_name(tenant_id), dataset_id)
         if not res:
             return get_error_data_result(retmsg="Chunk not found.")
         
@@ -1033,7 +1034,7 @@ def update_document_chunk(
         chunk_data["update_timestamp_flt"] = datetime.datetime.now().timestamp()
         
         # 保存到搜索引擎
-        settings.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(tenant_id), dataset_id)
+        globals.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(tenant_id), dataset_id)
         
         return get_result(data={"chunk_id": chunk_id, **req})
     except Exception as e:
@@ -1144,7 +1145,7 @@ def retrieval_test(
             question += keyword_extraction(chat_mdl, question)
         
         # 执行检索
-        ranks = settings.retriever.retrieval(
+        ranks = globals.retriever.retrieval(
             question,
             embd_mdl,
             tenant_ids,

@@ -21,12 +21,12 @@ LLM = None
 LLM_FACTORY = None
 LLM_BASE_URL = None
 CHAT_MDL = ""
-EMBEDDING_MDL = ""
+# EMBEDDING_MDL = "" has been moved to common/globals.py
 RERANK_MDL = ""
 ASR_MDL = ""
 IMAGE2TEXT_MDL = ""
 CHAT_CFG = ""
-
+# EMBEDDING_CFG = "" has been moved to common/globals.py
 RERANK_CFG = ""
 ASR_CFG = ""
 IMAGE2TEXT_CFG = ""
@@ -51,13 +51,12 @@ HTTP_APP_KEY = None
 GITHUB_OAUTH = None
 FEISHU_OAUTH = None
 OAUTH_CONFIG = None
-DOC_ENGINE = os.getenv('DOC_ENGINE', 'elasticsearch')
-DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
+# DOC_ENGINE = None has been moved to common/globals.py
+DOC_ENGINE_INFINITY = False
 
+# docStoreConn = None has been moved to common/globals.py
 
-docStoreConn = None
-
-retriever = None
+# retriever = None has been moved to common/globals.py
 kg_retriever = None
 
 # user registration switch
@@ -101,13 +100,6 @@ def get_or_create_secret_key():
 
 
 def init_settings():
-    # global LLM, LLM_FACTORY, LLM_BASE_URL, LIGHTEN, DATABASE_TYPE, DATABASE, FACTORY_LLM_INFOS, REGISTER_ENABLED
-    # LIGHTEN = int(os.environ.get('LIGHTEN', "0"))
-    # DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
-    # DATABASE = decrypt_database_config(name=DATABASE_TYPE)
-    # LLM = get_base_config("user_default_llm", {})
-    # LLM_FACTORY = LLM.get("factory", "ZHIPU-AI")
-    # LLM_BASE_URL = LLM.get("base_url")
     global LLM, LLM_FACTORY, LLM_BASE_URL, FACTORY_LLM_INFOS, REGISTER_ENABLED, ALLOWED_LLM_FACTORIES
     LLM = get_base_config("user_default_llm", {}) or {}
     LLM_DEFAULT_MODELS = LLM.get("default_models", {}) or {}
@@ -125,15 +117,8 @@ def init_settings():
     except Exception:
         FACTORY_LLM_INFOS = []
 
-    global CHAT_MDL, EMBEDDING_MDL, RERANK_MDL, ASR_MDL, IMAGE2TEXT_MDL
+    global CHAT_MDL, RERANK_MDL, ASR_MDL, IMAGE2TEXT_MDL
     global CHAT_CFG, RERANK_CFG, ASR_CFG, IMAGE2TEXT_CFG
-
-    # if LLM_DEFAULT_MODELS:
-    #     CHAT_MDL = LLM_DEFAULT_MODELS.get("chat_model", CHAT_MDL)
-    #     EMBEDDING_MDL = LLM_DEFAULT_MODELS.get("embedding_model", EMBEDDING_MDL)
-    #     RERANK_MDL = LLM_DEFAULT_MODELS.get("rerank_model", RERANK_MDL)
-    #     ASR_MDL = LLM_DEFAULT_MODELS.get("asr_model", ASR_MDL)
-    #     IMAGE2TEXT_MDL = LLM_DEFAULT_MODELS.get("image2text_model", IMAGE2TEXT_MDL)
 
     global API_KEY, PARSERS, HOST_IP, HOST_PORT, SECRET_KEY
     API_KEY = LLM.get("api_key", "")
@@ -142,7 +127,7 @@ def init_settings():
     )
 
     chat_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("chat_model", CHAT_MDL))
-    embedding_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("embedding_model", EMBEDDING_MDL))
+    embedding_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("embedding_model", globals.EMBEDDING_MDL))
     rerank_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("rerank_model", RERANK_MDL))
     asr_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("asr_model", ASR_MDL))
     image2text_entry = _parse_model_entry(LLM_DEFAULT_MODELS.get("image2text_model", IMAGE2TEXT_MDL))
@@ -154,7 +139,7 @@ def init_settings():
     IMAGE2TEXT_CFG = _resolve_per_model_config(image2text_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
 
     CHAT_MDL = CHAT_CFG.get("model", "") or ""
-    EMBEDDING_MDL = os.getenv("TEI_MODEL", "Qwen/Qwen3-Embedding-0.6B") if "tei-" in os.getenv("COMPOSE_PROFILES", "") else ""
+    globals.EMBEDDING_MDL = os.getenv("TEI_MODEL", "Qwen/Qwen3-Embedding-0.6B") if "tei-" in os.getenv("COMPOSE_PROFILES", "") else ""
     RERANK_MDL = RERANK_CFG.get("model", "") or ""
     ASR_MDL = ASR_CFG.get("model", "") or ""
     IMAGE2TEXT_MDL = IMAGE2TEXT_CFG.get("model", "") or ""
@@ -181,26 +166,26 @@ def init_settings():
 
     OAUTH_CONFIG = get_base_config("oauth", {})
 
-    global DOC_ENGINE, DOC_ENGINE_INFINITY, docStoreConn, ES, OB, OS, INFINITY, VASTBASE
-    DOC_ENGINE = os.environ.get("DOC_ENGINE", "milvus")
-    DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
-    lower_case_doc_engine = DOC_ENGINE.lower()
+    global DOC_ENGINE_INFINITY, ES, OB, OS, INFINITY, VASTBASE
+    globals.DOC_ENGINE = os.environ.get("DOC_ENGINE", "milvus")
+    DOC_ENGINE_INFINITY = (globals.DOC_ENGINE.lower() == "infinity")
+    lower_case_doc_engine = globals.DOC_ENGINE.lower()
     if lower_case_doc_engine == "elasticsearch":
         ES = get_base_config("es", {})
-        docStoreConn = core.utils.es_conn.ESConnection()
+        globals.docStoreConn = core.utils.es_conn.ESConnection()
     elif lower_case_doc_engine == "milvus":
-        docStoreConn = core.utils.milvus_conn.MilvusConnection()
+        globals.docStoreConn = core.utils.milvus_conn.MilvusConnection()
     elif lower_case_doc_engine == "infinity":
         INFINITY = get_base_config("infinity", {"uri": "infinity:23817"})
-        docStoreConn = core.utils.infinity_conn.InfinityConnection()
+        globals.docStoreConn = core.utils.infinity_conn.InfinityConnection()
     elif lower_case_doc_engine == "opensearch":
         OS = get_base_config("os", {})
-        docStoreConn = core.utils.opensearch_conn.OSConnection()
+        globals.docStoreConn = core.utils.opensearch_conn.OSConnection()
     elif lower_case_doc_engine == "vastbase":
         VASTBASE = get_base_config("vastbase", {})
-        docStoreConn = core.utils.vastbase_conn.VastBaseConnection()
+        globals.docStoreConn = core.utils.vastbase_conn.VastBaseConnection()
     else:
-        raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
+        raise Exception(f"Not supported doc engine: {globals.DOC_ENGINE}")
 
     # global DOC_ENGINE, docStoreConn, retriever, kg_retriever
     # # 动态加载对应的向量数据库配置到 core.settings
@@ -229,11 +214,11 @@ def init_settings():
     # else:
     #     raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
 
-    global retriever, kg_retriever
-    retriever = search.Dealer(docStoreConn)
+    global kg_retriever
+    globals.retriever = search.Dealer(globals.docStoreConn)
     from graphrag import search as kg_search
 
-    kg_retriever = kg_search.KGSearch(docStoreConn)
+    kg_retriever = kg_search.KGSearch(globals.docStoreConn)
 
     if int(os.environ.get("SANDBOX_ENABLED", "0")):
         global SANDBOX_HOST

@@ -14,7 +14,7 @@ from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
 from sqlalchemy.orm import Session
 from api.db.services.llm_service import LLMBundle
 from common.constants import LLMType
-from api import settings
+from common import globals
 from common.float_utils import get_float
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class QATemplateStorageService:
     def _ensure_collection_exists(self, dim):
         """确保QA模板集合存在"""
         try:
-            if settings.docStoreConn.has_collection(self.collection_name):
+            if globals.docStoreConn.has_collection(self.collection_name):
                 return True, "集合已存在"
 
             analyzer_params = {
@@ -80,7 +80,7 @@ class QATemplateStorageService:
             schema.add_function(bm25_function)
 
             # 创建集合
-            conn = settings.docStoreConn._get_connection()
+            conn = globals.docStoreConn._get_connection()
             conn.create_collection(
                 self.collection_name,
                 schema,
@@ -193,7 +193,7 @@ class QATemplateStorageService:
                 #     insert_data.append(paraphrase_record)
 
             # 使用统一接口，兼容不同向量数据库
-            doc_store_result = settings.docStoreConn.insert(insert_data, self.collection_name)
+            doc_store_result = globals.docStoreConn.insert(insert_data, self.collection_name)
 
             # 检查 insert_count 是否与本批次长度一致
             if doc_store_result.get("insert_count", 0) != len(insert_data):
@@ -278,7 +278,7 @@ class QATemplateStorageService:
                 insert_data.append(record)
 
             # 使用统一接口，兼容不同向量数据库
-            doc_store_result = settings.docStoreConn.insert(insert_data, self.collection_name)
+            doc_store_result = globals.docStoreConn.insert(insert_data, self.collection_name)
 
             # 检查 insert_count 是否与本批次长度一致
             if doc_store_result.get("insert_count", 0) != len(insert_data):
@@ -313,7 +313,7 @@ class QATemplateStorageService:
         self.collection_name = v2_collection_name
         try:
             # 首先检查集合是否已存在
-            if settings.docStoreConn.has_collection(self.collection_name):
+            if globals.docStoreConn.has_collection(self.collection_name):
                 return True, f"V2集合 {self.collection_name} 已存在"
             analyzer_params = {
                 "type": "chinese",
@@ -359,7 +359,7 @@ class QATemplateStorageService:
             schema.add_function(bm25_function)
 
             # 创建集合
-            conn = settings.docStoreConn._get_connection()
+            conn = globals.docStoreConn._get_connection()
             conn.create_collection(
                 self.collection_name,
                 schema,
@@ -399,7 +399,7 @@ class QATemplateStorageService:
     def clear_tenant_templates(self, tenant_id: str) -> dict[str, Any]:
         """清空指定租户的所有QA模板"""
         try:
-            conn = settings.docStoreConn._get_connection()
+            conn = globals.docStoreConn._get_connection()
             
             # 检查并清空V1和V2集合
             base_collection_name = QA_TEMPLATE_COLLECTION
@@ -464,7 +464,7 @@ class QATemplateStorageService:
             failed_qa_ids = []
             success_qa_ids = []
 
-            db_type = settings.docStoreConn.dbType()
+            db_type = globals.docStoreConn.dbType()
             for qa_id in qa_ids:
                 try:
                     if db_type == "milvus":
@@ -472,7 +472,7 @@ class QATemplateStorageService:
                         delete_expr = f'tenant_id == "{tenant_id}" && qa_id == "{qa_id}"'
                         
                         # 先查询要删除的记录数量
-                        query_results = settings.docStoreConn.query(
+                        query_results = globals.docStoreConn.query(
                             collection_name=collection_name,
                             filter=delete_expr,
                             output_fields=["id"]
@@ -484,14 +484,14 @@ class QATemplateStorageService:
                             continue
 
                         # 执行删除操作
-                        delete_result = settings.docStoreConn.delete(
+                        delete_result = globals.docStoreConn.delete(
                             collection_name=collection_name,
                             filter=delete_expr
                         )
                         total_deleted += len(query_results)
                     else:
                         # ES/OpenSearch 使用 condition 参数
-                        delete_result = settings.docStoreConn.delete(
+                        delete_result = globals.docStoreConn.delete(
                             condition={"tenant_id": tenant_id, "qa_id": qa_id},
                             indexName=collection_name,
                             knowledgebaseId=""
@@ -553,9 +553,9 @@ class QATemplateMatchingService:
 
     def _get_available_collection(self):
         """获取可用的集合名称，优先使用V2集合"""
-        if settings.docStoreConn.has_collection(self.v2_collection_name):
+        if globals.docStoreConn.has_collection(self.v2_collection_name):
             return self.v2_collection_name, "v2"
-        elif settings.docStoreConn.has_collection(self.v1_collection_name):
+        elif globals.docStoreConn.has_collection(self.v1_collection_name):
             return self.v1_collection_name, "v1"
         else:
             return None, None
@@ -618,7 +618,7 @@ class QATemplateMatchingService:
             )
             ranker = WeightedRanker(hybrid_weight, 1 - hybrid_weight)
 
-            results = settings.docStoreConn.hybrid_search(
+            results = globals.docStoreConn.hybrid_search(
                 collection_name=collection_name,
                 reqs=[dense_req, sparse_req],
                 ranker=ranker,
@@ -1782,7 +1782,7 @@ class RAGService:
             query_embeddings, _ = embedding_model.encode([query])
 
             # 向量搜索
-            search_results = settings.docStoreConn.search(
+            search_results = globals.docStoreConn.search(
                 collection_name=collection_name,
                 vector=query_embeddings[0].tolist(),
                 filter={"available_int": 1},  # 只搜索可用文档

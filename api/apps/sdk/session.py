@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
 from api import settings
+from common import globals
 from common.constants import LLMType, StatusEnum
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import API4ConversationService
@@ -1107,7 +1108,7 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
             question += keyword_extraction(chat_mdl, question)
 
         labels = label_question(db, question, [kb])
-        ranks = settings.retriever.retrieval(
+        ranks = globals.retriever.retrieval(
             question, embd_mdl, tenant_ids, kb_ids, page, size, similarity_threshold, vector_similarity_weight, top, doc_ids, rerank_mdl=rerank_mdl, highlight=req.get("highlight"), rank_feature=labels
         )
         if use_kg:

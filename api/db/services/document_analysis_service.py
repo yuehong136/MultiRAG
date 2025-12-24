@@ -51,6 +51,7 @@ from graphrag.utils import (
 )
 
 from api import settings
+from common import globals
 from core.settings import PAGERANK_FLD
 
 # asyncio版本的并发限制器 (代替trio.CapacityLimiter)
@@ -276,7 +277,7 @@ class DocumentAnalysisService:
 
         logging.info(f"Fetching chunks from Milvus for doc {doc_id}")
 
-        chunks = settings.retriever.chunk_list(
+        chunks = globals.retriever.chunk_list(
             doc_id=doc_id,
             tenant_id=self.tenant_id,
             kb_ids=[kb_id],

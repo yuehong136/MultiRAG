@@ -33,7 +33,7 @@ from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result, get_allowed_llm_factories
 from common.constants import StatusEnum, LLMType
 from api.db.db_models import TenantLLM, get_db, db_connection
-from common.base64_image import test_image
+from core.utils.base64_image import test_image
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 
 from core.prompts.generator import kb_prompt

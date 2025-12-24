@@ -57,3 +57,4 @@ def id2image(image_id:str|None, storage_get_func: partial):
         return Image.open(BytesIO(blob))
     except Exception as e:
         logging.exception(e)
+

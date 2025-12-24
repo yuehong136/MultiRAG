@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from peewee import MySQLDatabase, PostgresqlDatabase
 
 from agent.component.llm import LLM
-from api import settings
+from common import globals
 from api.apps import manager
 from api.db import CanvasCategory, FileType
 from api.db.db_models import get_db, APIToken, Task
@@ -575,8 +575,8 @@ def rerun(
         return get_data_error_result(retmsg=f"`{doc['name']}` is processing...")
     
     # 删除向量数据库中的数据
-    if settings.docStoreConn.indexExist(search.index_name(user.id, [doc["kb_name"]]), doc["kb_id"]):
-        settings.docStoreConn.delete(
+    if globals.docStoreConn.indexExist(search.index_name(user.id, [doc["kb_name"]]), doc["kb_id"]):
+        globals.docStoreConn.delete(
             {"doc_id": doc["id"]},
             search.index_name(user.id, [doc["kb_name"]]),
             doc["kb_id"]

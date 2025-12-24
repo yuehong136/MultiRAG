@@ -11,6 +11,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api import settings
+from common import globals
 from common.constants import RetCode
 from api.utils.api_utils import build_error_result, apikey_dependency
 from core.app.tag import label_question
@@ -140,7 +141,7 @@ async def retrieval(
         if not doc_ids and metadata_condition is not None:
             doc_ids = ['-999']
             
-        ranks = settings.retriever.retrieval(
+        ranks = globals.retriever.retrieval(
             question,
             embd_mdl,
             kb.tenant_id,

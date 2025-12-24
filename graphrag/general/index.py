@@ -21,6 +21,7 @@ import networkx as nx
 import trio
 
 from api import settings
+from common import globals
 from api.db.db_models import db_connection
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -57,7 +58,7 @@ async def run_graphrag(
     start = trio.current_time()
     tenant_id, kb_id, doc_id = row["tenant_id"], str(row["kb_id"]), row["doc_id"]
     chunks = []
-    for d in settings.retriever.chunk_list(doc_id, tenant_id, [kb_id], fields=["content_with_weight", "doc_id"], sort_by_position=True):
+    for d in globals.retriever.chunk_list(doc_id, tenant_id, [kb_id], fields=["content_with_weight", "doc_id"], sort_by_position=True):
         chunks.append(d["content_with_weight"])
 
     with trio.fail_after(max(120, len(chunks) * 60 * 10) if enable_timeout_assertion else 10000000000):
@@ -174,7 +175,7 @@ async def run_graphrag_for_kb(
         chunks = []
         current_chunk = ""
 
-        for d in settings.retriever.chunk_list(
+        for d in globals.retriever.chunk_list(
                 doc_id,
                 tenant_id,
                 [kb_id],
@@ -403,14 +404,14 @@ async def generate_subgraph(
     # 缓存 index_name，避免重复查询
     index_name = search.index_name(tenant_id, [kb_name])
     await trio.to_thread.run_sync(
-        settings.docStoreConn.delete,
+        globals.docStoreConn.delete,
         {"knowledge_graph_kwd": "subgraph", "source_id": doc_id},
         index_name,
         kb_id
     )
 
     await trio.to_thread.run_sync(
-        settings.docStoreConn.insert,
+        globals.docStoreConn.insert,
         [{"id": cid, **chunk}],
         index_name,
         kb_id
@@ -529,7 +530,7 @@ async def extract_community(
     index_name = search.index_name(tenant_id, [kb_name])
 
     await trio.to_thread.run_sync(
-        lambda: settings.docStoreConn.delete(
+        lambda: globals.docStoreConn.delete(
             {"knowledge_graph_kwd": "community_report", "kb_id": kb_id},
             index_name,
             kb_id,
@@ -537,7 +538,7 @@ async def extract_community(
     )
     es_bulk_size = 4
     for b in range(0, len(chunks), es_bulk_size):
-        doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(chunks[b : b + es_bulk_size], index_name, kb_id))
+        doc_store_result = await trio.to_thread.run_sync(lambda: globals.docStoreConn.insert(chunks[b : b + es_bulk_size], index_name, kb_id))
         if doc_store_result:
             error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
             raise Exception(error_message)

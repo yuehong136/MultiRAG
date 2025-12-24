@@ -10,9 +10,8 @@ from api.apps import manager
 from common.constants import LLMType
 from api.db.db_models import get_db
 from api.db.services.llm_service import LLMBundle
-from api.settings import docStoreConn
+from common.globals import docStoreConn
 from api.service.semantic_layer_service.models import SemanticTextData, OwnerType, SemanticElementType
-from core.utils.milvus_conn import MilvusConnection
 
 
 class TextEmbeddingService:

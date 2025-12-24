@@ -29,6 +29,7 @@ from api.db.services.file_service import FileService
 from api.db import UserTenantRole, FileType
 from common.misc_utils import download_img, get_uuid
 from api import settings
+from common import globals
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from common.connection_utils import construct_response
 from common.constants import RetCode
@@ -650,7 +651,7 @@ def user_register(db: Session, user_id: str, user: dict):
         "id": user_id,
         "name": user["nickname"] + "‘s Kingdom",
         "llm_id": settings.CHAT_MDL,
-        "embd_id": settings.EMBEDDING_MDL,
+        "embd_id": globals.EMBEDDING_MDL,
         "asr_id": settings.ASR_MDL,
         "parser_ids": settings.PARSERS,
         "img2txt_id": settings.IMAGE2TEXT_MDL,

@@ -21,6 +21,7 @@ from api.db.services.api_service import APITokenService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
 from api import settings
+from common import globals
 from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
 from api.versions import get_multirag_version
 from common.time_utils import current_timestamp, datetime_format
@@ -127,7 +128,7 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
     res = {}
     st = timer()
     try:
-        res["doc_engine"] = settings.docStoreConn.health()
+        res["doc_engine"] = globals.docStoreConn.health()
         res["doc_engine"]["elapsed"] = "{:.1f}".format((timer() - st) * 1000.0)
     except Exception as e:
         res["doc_engine"] = {

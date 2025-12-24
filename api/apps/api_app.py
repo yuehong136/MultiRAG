@@ -28,7 +28,7 @@ from api.db.services.task_service import queue_tasks, TaskService
 from api.db.services.user_service import UserTenantService
 from api.db.services.tenant_llm_service import TenantLLMService
 
-from api import settings
+from common import globals
 from common.misc_utils import get_uuid
 from common.constants import RetCode
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result, \
@@ -672,7 +672,7 @@ async def list_chunks(request: Request, db: Session = Depends(get_db)):
         else:
             return get_json_result(data=False, retmsg="Can't find doc_name or doc_id")
 
-        res = settings.retriever.chunk_list(doc_id=doc_id, tenant_id=tenant_id)
+        res = globals.retriever.chunk_list(doc_id=doc_id, tenant_id=tenant_id)
         res = [
             {
                 "content": res_item["content_with_weight"],
@@ -985,7 +985,7 @@ def retrieval(request, question, db: Session = Depends(get_db),):
         if req.get("keyword", False):
             chat_mdl = TenantLLMService.model_instance(db, kbs[0].tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
-        ranks = settings.retriever.retrieval(question, embd_mdl, kbs[0].tenant_id, kb_ids, page, size,
+        ranks = globals.retriever.retrieval(question, embd_mdl, kbs[0].tenant_id, kb_ids, page, size,
                                       similarity_threshold, vector_similarity_weight, top,
                                       doc_ids, rerank_mdl=rerank_mdl)
         for c in ranks["chunks"]:

@@ -5,6 +5,7 @@ from timeit import default_timer as timer
 from sqlalchemy import text
 
 from api import settings
+from common import globals
 from api.db.db_models import engine, get_pool_status
 from core import settings as rag_settings
 from core.utils.redis_conn import REDIS_CONN
@@ -76,7 +77,7 @@ def check_redis() -> tuple[bool, dict]:
 def check_doc_engine() -> tuple[bool, dict]:
     st = timer()
     try:
-        meta = settings.docStoreConn.health()
+        meta = globals.docStoreConn.health()
         # treat any successful call as ok
         return True, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", **(meta or {})}
     except Exception as e:

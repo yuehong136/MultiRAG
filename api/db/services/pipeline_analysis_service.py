@@ -20,6 +20,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy.orm import Session
 
 from api import settings
+from common import globals
 from common.constants import LLMType
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
@@ -346,7 +347,7 @@ class PipelineAnalysisService:
                     raise ValueError(f"Knowledgebase {kb_id} not found")
                 
                 # 从 Milvus 获取
-                query_result = settings.docStoreConn.search(
+                query_result = globals.docStoreConn.search(
                     {"doc_id": doc_id},
                     search.index_name(self.tenant_id),
                     kb_id,

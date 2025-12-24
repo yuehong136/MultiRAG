@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from api import settings
+from common import globals
 from api.db.db_models import get_db
 from api.db.services.user_service import UserTenantService
 from api.db.services.qa_service import (
@@ -1471,8 +1472,8 @@ def check_collection_status(
         v2_collection = f"{QA_TEMPLATE_COLLECTION}_v2"
         
         # 检查集合存在性
-        v1_exists = settings.docStoreConn.has_collection(v1_collection)
-        v2_exists = settings.docStoreConn.has_collection(v2_collection)
+        v1_exists = globals.docStoreConn.has_collection(v1_collection)
+        v2_exists = globals.docStoreConn.has_collection(v2_collection)
         
         # 统计记录数量
         v1_count = 0
@@ -1480,7 +1481,7 @@ def check_collection_status(
         
         if v1_exists:
             try:
-                v1_results = settings.docStoreConn.query(
+                v1_results = globals.docStoreConn.query(
                     collection_name=v1_collection,
                     filter=f'tenant_id == "{tenant_id}"',
                     output_fields=["id"]
@@ -1491,7 +1492,7 @@ def check_collection_status(
         
         if v2_exists:
             try:
-                v2_results = settings.docStoreConn.query(
+                v2_results = globals.docStoreConn.query(
                     collection_name=v2_collection,
                     filter=f'tenant_id == "{tenant_id}"',
                     output_fields=["id"]

@@ -1,12 +1,10 @@
 from typing import Any
 
-import requests
 
-from api import settings
+from common import globals
 from common.constants import LLMType
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.settings import SCRIPT_SCHEDULER_PORT
 from core.app.tag import label_question
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
@@ -50,7 +48,7 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         if self.rerank_id:
             rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
         kb_names = list([kb.name for kb in kbs])
-        kbinfos = settings.retriever.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
+        kbinfos = globals.retriever.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
                                                  self.top_n,
                                                  self.similarity_threshold,
                                                  1 - self.keywords_similarity_weight,
@@ -89,7 +87,7 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         if self.rerank_id:
             rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
         kb_names = list([kb.name for kb in kbs])
-        kbinfos = settings.retriever.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
+        kbinfos = globals.retriever.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
                                                  self.top_n,
                                                  self.similarity_threshold,
                                                  1 - self.keywords_similarity_weight,

@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from api import settings
+from common import globals
 from common.constants import FileSource, StatusEnum
 from api.db.db_models import File, get_db
 from api.db.services.document_service import DocumentService
@@ -265,10 +265,10 @@ def update_dataset(
                 return get_error_data_result(retmsg="'pagerank' can only be set when doc_engine is elasticsearch")
 
             if req["pagerank"] > 0:
-                settings.docStoreConn.update({"kb_id": kb.id}, {PAGERANK_FLD: req["pagerank"]}, search.index_name(kb.tenant_id), kb.id)
+                globals.docStoreConn.update({"kb_id": kb.id}, {PAGERANK_FLD: req["pagerank"]}, search.index_name(kb.tenant_id), kb.id)
             else:
                 # Elasticsearch requires PAGERANK_FLD be non-zero!
-                settings.docStoreConn.update({"exists": PAGERANK_FLD}, {"remove": PAGERANK_FLD}, search.index_name(kb.tenant_id), kb.id)
+                globals.docStoreConn.update({"exists": PAGERANK_FLD}, {"remove": PAGERANK_FLD}, search.index_name(kb.tenant_id), kb.id)
 
         if not KnowledgebaseService.update_by_id(db, kb.id, req):
             return get_error_data_result(retmsg="Update dataset error.(Database error)")
@@ -375,10 +375,10 @@ def get_knowledge_graph(
     }
 
     obj = {"graph": {}, "mind_map": {}}
-    if not settings.docStoreConn.indexExist(search.index_name_one(kb.tenant_id, kb.name), dataset_id):
+    if not globals.docStoreConn.indexExist(search.index_name_one(kb.tenant_id, kb.name), dataset_id):
         return get_result(data=obj)
     
-    sres = settings.retriever.search(req, search.index_name_one(kb.tenant_id,kb.name), [dataset_id])
+    sres = globals.retriever.search(req, search.index_name_one(kb.tenant_id,kb.name), [dataset_id])
     if not len(sres.ids):
         return get_result(data=obj)
 
@@ -426,7 +426,7 @@ def delete_knowledge_graph(
         )
     
     kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    settings.docStoreConn.delete(
+    globals.docStoreConn.delete(
         {"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, 
         search.index_name_one(kb.tenant_id, kb.name),
         dataset_id

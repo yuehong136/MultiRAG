@@ -14,11 +14,11 @@ from api.db.services import UserService
 from api.db.services.canvas_service import CanvasTemplateService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-# from api.db.services.llm_service import LLMFactoriesService, LLMService, TenantLLMService, LLMBundle
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.llm_service import LLMService, LLMBundle, get_init_tenant_llm
 from api.db.services.user_service import TenantService, UserTenantService
 from api import settings
+from common import globals
 from common.file_utils import get_project_base_directory
 from api.db.db_models import GuardDimension
 from scripts.init_ai_guard_system import init_ai_guard_system
@@ -44,7 +44,7 @@ def init_superuser(db: Session):
         "id": user_info["id"],
         "name": user_info["nickname"] + "'s Kingdom",
         "llm_id": settings.CHAT_MDL,
-        "embd_id": settings.EMBEDDING_MDL,
+        "embd_id": globals.EMBEDDING_MDL,
         "asr_id": settings.ASR_MDL,
         "parser_ids": settings.PARSERS,
         "img2txt_id": settings.IMAGE2TEXT_MDL

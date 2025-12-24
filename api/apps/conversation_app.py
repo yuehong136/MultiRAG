@@ -27,6 +27,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
 from common.constants import LLMType
 from api import settings
+from common import globals
 from api.utils.api_utils import server_error_response, get_data_error_result
 from common.misc_utils import get_uuid
 from common.constants import RetCode
@@ -1103,7 +1104,7 @@ def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends
     #
     # search_mode_dict = request.get_search_mode_dict()
     #
-    # ranks = settings.retriever.retrieval(
+    # ranks = globals.retriever.retrieval(
     #     question=req["question"],
     #     filter_exp=filter_exp,
     #     embd_mdl=embd_mdl,

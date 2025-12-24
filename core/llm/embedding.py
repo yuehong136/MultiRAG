@@ -34,8 +34,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 from zhipuai import ZhipuAI
 
 from api import settings
-from api.utils.file_utils import get_home_cache_dir
 from common import globals
+from api.utils.file_utils import get_home_cache_dir
 from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, truncate
 
@@ -149,9 +149,9 @@ class BuiltinEmbed(Base):
         embedding_cfg = globals.EMBEDDING_CFG
         if not BuiltinEmbed._model and "tei-" in os.getenv("COMPOSE_PROFILES", ""):
             with BuiltinEmbed._model_lock:
-                BuiltinEmbed._model_name = settings.EMBEDDING_MDL
-                BuiltinEmbed._max_tokens = BuiltinEmbed.MAX_TOKENS.get(settings.EMBEDDING_MDL, 500)
-                BuiltinEmbed._model = HuggingFaceEmbed(embedding_cfg["api_key"], settings.EMBEDDING_MDL, base_url=embedding_cfg["base_url"])
+                BuiltinEmbed._model_name = globals.EMBEDDING_MDL
+                BuiltinEmbed._max_tokens = BuiltinEmbed.MAX_TOKENS.get(globals.EMBEDDING_MDL, 500)
+                BuiltinEmbed._model = HuggingFaceEmbed(embedding_cfg["api_key"], globals.EMBEDDING_MDL, base_url=embedding_cfg["base_url"])
         self._model = BuiltinEmbed._model
         self._model_name = BuiltinEmbed._model_name
         self._max_tokens = BuiltinEmbed._max_tokens

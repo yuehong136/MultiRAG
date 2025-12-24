@@ -30,6 +30,7 @@ from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api import settings
+from common import globals
 from common.time_utils import current_timestamp, datetime_format
 from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.app.resume import forbidden_select_fields4resume
@@ -453,7 +454,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     kb_names = list([kb.name for kb in kbs])
     print("正在检索的知识库 --> ", kb_names)
 
-    retriever = settings.retriever
+    retriever = globals.retriever
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
     attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
@@ -776,7 +777,7 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
 
         logging.debug(f"{question} get SQL(refined): {sql}")
         tried_times += 1
-        return settings.retriever.sql_retrieval(sql, format="json"), sql
+        return globals.retriever.sql_retrieval(sql, format="json"), sql
 
     tbl, sql = get_table()
     if tbl is None:
@@ -917,7 +918,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     embedding_list = list(set([kb.embd_id for kb in kbs]))
 
     is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
-    retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
+    retriever = globals.retriever if not is_knowledge_graph else settings.kg_retriever
 
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_llm_name)
@@ -1006,7 +1007,7 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
             if not doc_ids:
                 doc_ids = None
 
-    ranks = settings.retriever.retrieval(
+    ranks = globals.retriever.retrieval(
         question=question,
         filter_exp="",
         embd_mdl=embd_mdl,

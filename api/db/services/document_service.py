@@ -30,8 +30,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
 from api.utils.db_utils import bulk_insert_into_db
-# from api.settings import docStoreConn
-from api import settings
+from common import globals
 from core.settings import get_svr_queue_name, SVR_CONSUMER_GROUP_NAME
 from core.nlp import search, rag_tokenizer
 from core.utils.storage_factory import STORAGE_IMPL
@@ -1767,10 +1766,10 @@ class DocumentService(CommonService):
         page_size = 1000
         all_chunk_ids = []
         while True:
-            chunks = settings.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
+            chunks = globals.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
                                                   page * page_size, page_size, collection_name,
                                                   [doc.kb_id])
-            chunk_ids = settings.docStoreConn.getChunkIds(chunks)
+            chunk_ids = globals.docStoreConn.getChunkIds(chunks)
             if not chunk_ids:
                 break
             all_chunk_ids.extend(chunk_ids)
@@ -1784,32 +1783,32 @@ class DocumentService(CommonService):
 
         try:
             # 检查集合是否存在并删除向量数据库中的数据
-            if settings.docStoreConn.has_collection(collection_name):
-                db_type = settings.docStoreConn.dbType()
+            if globals.docStoreConn.has_collection(collection_name):
+                db_type = globals.docStoreConn.dbType()
                 if db_type == "milvus":
-                    settings.docStoreConn.delete(
+                    globals.docStoreConn.delete(
                         collection_name=collection_name,
                         filter=f"doc_id == '{doc_id}'"
                     )
                 else:
-                    settings.docStoreConn.delete(
+                    globals.docStoreConn.delete(
                         condition={"doc_id": doc_id},
                         indexName=collection_name,
                         knowledgebaseId=doc.kb_id
                     )
-            # todo 待测试【settings.docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
+            # todo 待测试【globals.docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
             # kb_id = document["kb_id"]  # 使用从数据库重新获取的kb_id
-            # graph_source = settings.docStoreConn.getFields(
-            #     settings.docStoreConn.search(["source_id"], [], {"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [kb_id]), ["source_id"]
+            # graph_source = globals.docStoreConn.getFields(
+            #     globals.docStoreConn.search(["source_id"], [], {"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [kb_id]), ["source_id"]
             # )
             # if len(graph_source) > 0 and doc_id in list(graph_source.values())[0]["source_id"]:
-            #     settings.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc_id},
+            #     globals.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc_id},
             #                                 {"remove": {"source_id": doc_id}},
             #                                 search.index_name(tenant_id, [kb.name]), kb_id)
-            #     settings.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]},
+            #     globals.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]},
             #                                 {"removed_kwd": "Y"},
             #                                 search.index_name(tenant_id, [kb.name]), kb_id)
-            #     settings.docStoreConn.delete({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
+            #     globals.docStoreConn.delete({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
             #                                 search.index_name(tenant_id, [kb.name]), kb_id)
         except Exception as e:
             return e
