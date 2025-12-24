@@ -7,7 +7,6 @@ from sqlalchemy import text
 from api import settings
 from common import globals
 from api.db.db_models import engine, get_pool_status
-from core import settings as rag_settings
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.es_conn import ESConnection
@@ -289,7 +288,7 @@ def get_database_status() -> dict:
 def check_minio_alive():
     start_time = timer()
     try:
-        response = requests.get(f'http://{rag_settings.MINIO["host"]}/minio/health/live')
+        response = requests.get(f'http://{globals.MINIO["host"]}/minio/health/live')
         if response.status_code == 200:
             return {'status': "alive", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
         else:

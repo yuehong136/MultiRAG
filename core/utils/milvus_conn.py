@@ -41,7 +41,7 @@ from pymilvus.orm.types import DataType
 from pymilvus import __version__
 
 from common.file_utils import get_project_base_directory
-from core import settings
+from common import globals
 import numpy as np
 from core.nlp import is_english
 from core.settings import TAG_FLD, PAGERANK_FLD
@@ -84,13 +84,13 @@ def validate_param(
 @singleton
 class MilvusConnection(DocStoreConnection):
     def __init__(self):
-        uri = settings.MILVUS.get("hosts", "http://localhost:19530")
-        user = settings.MILVUS.get("username", "")
-        password = settings.MILVUS.get("password", "")
-        db_name = settings.MILVUS.get("db_name", "")
-        token = settings.MILVUS.get("token", "")
-        timeout = settings.MILVUS.get("timeout", None)
-        kwargs = settings.MILVUS.get("kwargs", {})
+        uri = globals.MILVUS.get("hosts", "http://localhost:19530")
+        user = globals.MILVUS.get("username", "")
+        password = globals.MILVUS.get("password", "")
+        db_name = globals.MILVUS.get("db_name", "")
+        token = globals.MILVUS.get("token", "")
+        timeout = globals.MILVUS.get("timeout", None)
+        kwargs = globals.MILVUS.get("kwargs", {})
         self._using = self._create_connection(
             uri, user, password, db_name, token, timeout=timeout, **kwargs
         )
@@ -4009,7 +4009,7 @@ class MilvusConnection(DocStoreConnection):
             server_type = utility.get_server_type(using=self._using)
 
             res = {
-                'cluster_name': settings.MILVUS.get("hosts", "milvus"),
+                'cluster_name': globals.MILVUS.get("hosts", "milvus"),
                 'status': 'green',  # Milvus 连接成功即为 green
                 'server_version': server_version,
                 'server_type': server_type,

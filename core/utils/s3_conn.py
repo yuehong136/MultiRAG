@@ -5,13 +5,13 @@ from botocore.config import Config
 import time
 from io import BytesIO
 from common.decorator import singleton
-from core import settings
+from common import globals
 
 @singleton
 class MultiRAGS3:
     def __init__(self):
         self.conn = None
-        self.s3_config = settings.S3
+        self.s3_config = globals.S3
         self.access_key = self.s3_config.get('access_key', None)
         self.secret_key = self.s3_config.get('secret_key', None)
         self.session_token = self.s3_config.get('session_token', None)

@@ -87,8 +87,8 @@ async def upload_media_redirect(
         # 1. 定义存储桶和文件名
         # 建议使用一个专门的临时桶，如果未配置则使用默认桶
         # 注意：MinIO/OSS 的 bucket 名称通常有格式要求
-        from core import settings as core_settings
-        bucket = core_settings.OSS.get("bucket") or core_settings.MINIO.get("bucket") or "multimodal-temp"
+        from common import globals
+        bucket = globals.OSS.get("bucket") or globals.MINIO.get("bucket") or "multimodal-temp"
         
         ext = file.filename.split('.')[-1].lower() if '.' in file.filename else "bin"
         unique_filename = f"volc_upload/{get_uuid()}.{ext}"

@@ -1386,14 +1386,14 @@ async def upload_file_to_presigned_url(file: UploadFile) -> tuple[str, str | Non
     Returns:
         (url, media_type): 预签名URL和媒体类型
     """
-    from core import settings as core_settings
+    from common import globals
 
     content = await file.read()
     if not content:
         raise ValueError("Empty file content")
 
-    bucket = (core_settings.OSS.get("bucket") or
-              core_settings.MINIO.get("bucket") or
+    bucket = (globals.OSS.get("bucket") or
+              globals.MINIO.get("bucket") or
               "multimodal-temp")
 
     ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "bin"

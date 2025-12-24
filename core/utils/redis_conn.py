@@ -14,8 +14,8 @@ from datetime import datetime
 # import valkey as redis
 import redis
 import logging
-from core import settings
 from common.decorator import singleton
+from common import globals
 # from valkey.lock import Lock
 from redis.lock import Lock
 import trio
@@ -57,7 +57,7 @@ class RedisDB:
 
     def __init__(self):
         self.REDIS = None
-        self.config = settings.REDIS
+        self.config = globals.REDIS
         self.__open__()
 
     def register_scripts(self) -> None:

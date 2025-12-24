@@ -6,8 +6,8 @@ import time
 import copy
 import psycopg2
 from psycopg2 import pool
-from api import settings
 from core.settings import PAGERANK_FLD, TAG_FLD
+from common import globals
 from common.decorator import singleton
 from common.file_utils import get_project_base_directory
 from core.nlp import is_english
@@ -35,13 +35,13 @@ def field_keyword(field_name: str):
 class VastBaseConnection(DocStoreConnection):
     def __init__(self):
         # 从配置加载连接参数
-        self.host = str(settings.VASTBASE.get("host", "127.0.0.1"))
-        self.port = str(settings.VASTBASE.get("port", 5433))  # 确保是字符串
-        self.database = str(settings.VASTBASE.get("database", "datav"))
-        self.user = str(settings.VASTBASE.get("user", "datav"))
-        self.password = str(settings.VASTBASE.get("password", ""))
-        self.max_connections = settings.VASTBASE.get("max_connections", 20)
-        self.schema = str(settings.VASTBASE.get("schema", "public"))
+        self.host = str(globals.VASTBASE.get("host", "127.0.0.1"))
+        self.port = str(globals.VASTBASE.get("port", 5433))  # 确保是字符串
+        self.database = str(globals.VASTBASE.get("database", "datav"))
+        self.user = str(globals.VASTBASE.get("user", "datav"))
+        self.password = str(globals.VASTBASE.get("password", ""))
+        self.max_connections = globals.VASTBASE.get("max_connections", 20)
+        self.schema = str(globals.VASTBASE.get("schema", "public"))
 
         self.connection_pool = None
         logger.info(f"使用 VastBase {self.host}:{self.port}/{self.database} 作为文档存储引擎")

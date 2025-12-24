@@ -1,6 +1,6 @@
 from minio import Minio
 from minio.error import S3Error
-from core import settings
+from common import globals
 import io
 
 
@@ -14,9 +14,9 @@ class MinioOperator:
     #     )
 
     def __init__(self):
-        self.client = Minio(settings.MINIO["host"],
-                            access_key=settings.MINIO["user"],
-                            secret_key=settings.MINIO["password"],
+        self.client = Minio(globals.MINIO["host"],
+                            access_key=globals.MINIO["user"],
+                            secret_key=globals.MINIO["password"],
                             secure=False
                             )
 
