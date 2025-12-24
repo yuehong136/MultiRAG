@@ -13,6 +13,7 @@ from copy import deepcopy
 from datetime import datetime
 from functools import wraps
 from typing import Callable
+import trio
 
 from fastapi import Request, Response, Depends
 from fastapi.responses import JSONResponse
@@ -22,8 +23,8 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
+from api.db.services.tenant_llm_service import LLMFactoriesService
 from api import settings
-import trio
 
 from core.utils.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from common.connection_utils import timeout
@@ -725,10 +726,8 @@ def get_allowed_llm_factories(db) -> list:
     Returns:
         list: 允许的LLM工厂对象列表
     """
-    from api.db.services.tenant_llm_service import LLMFactoriesService
-    
-    factories = LLMFactoriesService.get_all(db)
+    factories = list(LLMFactoriesService.get_all(db))
     if settings.ALLOWED_LLM_FACTORIES is None:
-        return list(factories)
+        return factories
     
     return [factory for factory in factories if factory.name in settings.ALLOWED_LLM_FACTORIES]
