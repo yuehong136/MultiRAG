@@ -1142,6 +1142,12 @@
             "status": "1",
             "llm": [
                 {
+                    "llm_name": "MiniMax-M2.1",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "mdl_type": "chat"
+                },
+                {
                     "llm_name": "MiniMax-M2",
                     "tags": "LLM,CHAT,200k",
                     "max_tokens": 200000,
