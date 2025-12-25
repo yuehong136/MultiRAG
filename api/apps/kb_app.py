@@ -25,10 +25,9 @@ from api.db.services.file_service import FileService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import TaskService, GRAPH_RAPTOR_FAKE_DOC_ID
 from api.db.services.user_service import TenantService, UserTenantService
-from common import globals
 from api.utils.api_utils import server_error_response, get_data_error_result, get_error_data_result, get_parser_config
 from api.db import VALID_FILE_TYPES
-from common.constants import StatusEnum, FileSource, LLMType, PipelineTaskType, VALID_TASK_STATUS
+from common.constants import RetCode, PipelineTaskType, StatusEnum, VALID_TASK_STATUS, FileSource, LLMType, PAGERANK_FLD
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import get_json_result
@@ -37,7 +36,7 @@ from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
 from common.constants import RetCode
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from core.utils.doc_store_conn import OrderByExpr
 
 router = APIRouter()
@@ -226,8 +225,8 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
             new_coll = search.index_name_one(kb.tenant_id, req_data["name"])
 
             # 2 确认原集合存在
-            if globals.docStoreConn.has_collection(old_coll):
-                globals.docStoreConn.rename_collection(old_coll, new_coll)
+            if settings.docStoreConn.has_collection(old_coll):
+                settings.docStoreConn.rename_collection(old_coll, new_coll)
                 logging.info(f"Milvus collection renamed: {old_coll} → {new_coll}")
 
         if kb.pagerank != req_data.get("pagerank", 0):
@@ -238,7 +237,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
 
             if req_data.get("pagerank", 0) > 0:
                 try:
-                    globals.docStoreConn.update(
+                    settings.docStoreConn.update(
                         {"kb_id": kb.id},
                         {"pagerank_fea": req_data["pagerank"]},
                         search.index_name_one(kb.tenant_id, kb.name),
@@ -250,7 +249,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
             else:
                 # 移除PageRank（设置为0）
                 try:
-                    globals.docStoreConn.update(
+                    settings.docStoreConn.update(
                         {"kb_id": id},
                         {"remove": "pagerank_fea"},  # 使用与ES相同的格式
                         search.index_name_one(kb.tenant_id, kb.name),
@@ -416,19 +415,19 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
                 FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
             # 删除文档与文件的关联记录
             File2DocumentService.delete_by_document_id(db, doc_id)
-            STORAGE_IMPL.rm(b, n)
+            settings.STORAGE_IMPL.rm(b, n)
         FileService.filter_delete(
             db, [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kb_name])
 
         # 删除 MinIO 存储桶
-        STORAGE_IMPL.remove_bucket(kb_id)
+        settings.STORAGE_IMPL.remove_bucket(kb_id)
 
         # 删除知识库本身，如果失败则返回错误信息
         if not KnowledgebaseService.delete_by_id(db, req_data["kb_id"]):
             return get_data_error_result(retmsg="Database error (Knowledgebase removal)!")
         tenants = UserTenantService.query(db, user_id=user.id)
         for tenant in tenants:
-            globals.docStoreConn.deleteIdx(search.index_name_one(tenant.tenant_id, kb_name), req_data["kb_id"])
+            settings.docStoreConn.deleteIdx(search.index_name_one(tenant.tenant_id, kb_name), req_data["kb_id"])
         # 知识库删除成功，返回成功标志
         return get_json_result(data=True)
     except Exception as e:
@@ -447,7 +446,7 @@ def list_tags(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     tenants = UserTenantService.get_tenants_by_user_id(db, user.id)
     tags = []
     for tenant in tenants:
-        tags += globals.retriever.all_tags(tenant["tenant_id"], [kb_id])
+        tags += settings.retriever.all_tags(tenant["tenant_id"], [kb_id])
     return get_json_result(data=tags)
 
 
@@ -464,7 +463,7 @@ def list_tags_from_kbs(kb_ids: str, db: Session = Depends(get_db), user=Depends(
     tenants = UserTenantService.get_tenants_by_user_id(db, user.id)
     tags = []
     for tenant in tenants:
-        tags += globals.retriever.all_tags(tenant["tenant_id"], kb_ids)
+        tags += settings.retriever.all_tags(tenant["tenant_id"], kb_ids)
     return get_json_result(data=tags)
 
 
@@ -479,7 +478,7 @@ def rm_tags(kb_id: str, request: RemoveTagsRequest, db: Session = Depends(get_db
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
     for tag in request.tags:
-        globals.docStoreConn.update(
+        settings.docStoreConn.update(
             {"tag_kwd": tag, "kb_id": [kb_id]},
             {"remove": {"tag_kwd": tag}},
             search.index_name_one(kb.tenant_id, kb.name),
@@ -498,7 +497,7 @@ def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get
         )
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
-    globals.docStoreConn.update(
+    settings.docStoreConn.update(
         {"tag_kwd": request.from_tag, "kb_id": [kb_id]},
         {
             "remove": {"tag_kwd": request.from_tag.strip()},
@@ -524,9 +523,9 @@ def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(mana
         "knowledge_graph_kwd": ["graph"]
     }
     obj = {"graph": {}, "mind_map": {}}
-    if not globals.docStoreConn.indexExist(search.index_name(kb.tenant_id, [kb.name]), kb_id):
+    if not settings.docStoreConn.indexExist(search.index_name(kb.tenant_id, [kb.name]), kb_id):
         return get_json_result(data=obj)
-    sres = globals.retriever.search(req, search.index_name(kb.tenant_id, [kb.name]), [kb_id])
+    sres = settings.retriever.search(req, search.index_name(kb.tenant_id, [kb.name]), [kb_id])
     if not len(sres.ids):
         return get_json_result(data=obj)
 
@@ -558,7 +557,7 @@ def delete_knowledge_graph(kb_id, db: Session = Depends(get_db), user=Depends(ma
         )
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
-    globals.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id, [kb.name]), kb_id)
+    settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id, [kb.name]), kb_id)
 
     return get_json_result(data=True)
 
@@ -1533,13 +1532,13 @@ def delete_kb_task(
             task_id = kb.graphrag_task_id
             kb_task_finish_at = "graphrag_task_finish_at"
             cancel_task(task_id)
-            globals.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id), kb_id)
+            settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id), kb_id)
         case PipelineTaskType.RAPTOR:
             kb_task_id_field = "raptor_task_id"
             task_id = kb.raptor_task_id
             kb_task_finish_at = "raptor_task_finish_at"
             cancel_task(task_id)
-            globals.docStoreConn.delete({"raptor_kwd": ["raptor"]}, search.index_name(kb.tenant_id), kb_id)
+            settings.docStoreConn.delete({"raptor_kwd": ["raptor"]}, search.index_name(kb.tenant_id), kb_id)
         case PipelineTaskType.MINDMAP:
             kb_task_id_field = "mindmap_task_id"
             task_id = kb.mindmap_task_id
@@ -1665,7 +1664,7 @@ def check_embedding(
         return get_error_data_result(retmsg="Invalid Knowledgebase ID")
 
     emb_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, embd_id)
-    samples = sample_random_chunks_with_vectors(globals.docStoreConn, tenant_id=kb.tenant_id, kb_id=kb_id, kb_name=kb.name, n=n)
+    samples = sample_random_chunks_with_vectors(settings.docStoreConn, tenant_id=kb.tenant_id, kb_id=kb_id, kb_name=kb.name, n=n)
 
     results, eff_sims = [], []
     for ck in samples:

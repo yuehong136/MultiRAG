@@ -10,9 +10,7 @@ import numpy as np
 from pymilvus import AnnSearchRequest, WeightedRanker
 
 from api.db.db_models import db_connection
-from api.db.services.knowledgebase_service import KnowledgebaseService
 from core.prompts.generator import relevant_chunks_with_toc
-from core.settings import TAG_FLD, PAGERANK_FLD
 from core.nlp import rag_tokenizer, query, is_english
 from core.utils.doc_store_conn import (
     DocStoreConnection,
@@ -24,6 +22,7 @@ from core.utils.doc_store_conn import (
 )
 from common.string_utils import remove_redundant_spaces
 from common.float_utils import get_float
+from common.constants import TAG_FLD, PAGERANK_FLD
 
 
 def index_name(uid, kb_names):
@@ -1276,6 +1275,7 @@ class Dealer:
                    offset=0,
                    fields=["docnm_kwd", "content_with_weight", "img_id"],
                    sort_by_position: bool = False):
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         condition = {"doc_id": doc_id}
 
         fields_set = set(fields or [])
@@ -1314,6 +1314,7 @@ class Dealer:
         return res
 
     def all_tags(self, tenant_id: str, kb_ids: list[str], S=1000):
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         if not self.dataStore.indexExist(index_name_one(tenant_id, kb.kb_name), kb_ids[0]):
@@ -1322,6 +1323,7 @@ class Dealer:
         return self.dataStore.getAggregation(res, "tag_kwd")
 
     def all_tags_in_portion(self, tenant_id: str, kb_ids: list[str], S=1000):
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids, ["tag_kwd"])
@@ -1330,6 +1332,7 @@ class Dealer:
         return {t: (c + 1) / (total + S) for t, c in res}
 
     def tag_content(self, tenant_id: str, kb_ids: list[str], doc, all_tags, topn_tags=3, keywords_topn=30, S=1000):
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         idx_nm = index_name(tenant_id, [kb.kb_name])
@@ -1345,6 +1348,7 @@ class Dealer:
         return True
 
     def tag_query(self, question: str, tenant_ids: str | list[str], kb_ids: list[str], all_tags, topn_tags=3, S=1000):
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         if isinstance(tenant_ids, str):
@@ -1380,6 +1384,7 @@ class Dealer:
             return []
 
         # 从 chunks 中提取实际的 kb_id，查询对应的知识库名称
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         kb_id_set = set(ck.get("kb_id") for ck in chunks if ck.get("kb_id"))
         with db_connection() as db:
             kbs = KnowledgebaseService.get_by_ids(db, list(kb_id_set))

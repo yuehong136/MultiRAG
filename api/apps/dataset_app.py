@@ -30,13 +30,12 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService
-from api import settings
+from common import settings
 from common.misc_utils import get_uuid
 from common.constants import RetCode
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str
 from api.utils.file_utils import filename_type, thumbnail
 from core.app import book, laws, manual, naive, one, paper, presentation, qa, resume, table, picture
-from core.utils.storage_factory import STORAGE_IMPL
 from api.apps import manager
 from pydantic import BaseModel, Field
 
@@ -428,7 +427,7 @@ async def upload_documents(
 
             # 生成文件在存储系统中的唯一位置
             location = filename
-            while STORAGE_IMPL.obj_exist(dataset_id, location):
+            while settings.STORAGE_IMPL.obj_exist(dataset_id, location):
                 location += "_"
 
             # 读取文件内容并上传到存储系统
@@ -437,7 +436,7 @@ async def upload_documents(
             if blob == b'':
                 warnings.warn(f"[WARNING]: The content of the file {filename} is empty.")
 
-            STORAGE_IMPL.put(dataset_id, location, blob)
+            settings.STORAGE_IMPL.put(dataset_id, location, blob)
 
             # 构建文档数据库记录的字典
             doc = {
@@ -525,7 +524,7 @@ async def delete_document(
         FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == file_to_doc[0].file_id])
         File2DocumentService.delete_by_document_id(db, document_id)
 
-        STORAGE_IMPL.rm(dataset_id, location)
+        settings.STORAGE_IMPL.rm(dataset_id, location)
     except Exception as e:
         errors += str(e)
 
@@ -699,7 +698,7 @@ async def download_document(
                                 detail=f"This document '{document_id}' cannot be found!")
 
         doc_id, doc_location = File2DocumentService.get_storage_address(db, doc_id=document_id)
-        file_stream = STORAGE_IMPL.get(doc_id, doc_location)
+        file_stream = settings.STORAGE_IMPL.get(doc_id, doc_location)
         if not file_stream:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This file is empty.")
 
@@ -870,7 +869,7 @@ async def parsing_document_internal(db: Session, id: str):
         doc_attributes = DocumentService.get_by_id(db, id).to_dict()
         doc_id = doc_attributes["id"]
         bucket, doc_name = File2DocumentService.get_storage_address(db, doc_id=doc_id)
-        binary = STORAGE_IMPL.get(bucket, doc_name)
+        binary = settings.STORAGE_IMPL.get(bucket, doc_name)
         parser_name = doc_attributes["parser_id"]
         if binary:
             res = doc_parse(binary, doc_name, parser_name, tenant_id, doc_id)

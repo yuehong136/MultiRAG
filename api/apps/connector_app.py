@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from api import settings
 from api.apps import manager
 from api.db import InputType
 from common.constants import TaskStatus

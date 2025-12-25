@@ -10,38 +10,30 @@ import logging
 import os
 import sys
 import inspect
-from sqlalchemy.exc import OperationalError, DisconnectionError
+from sqlalchemy import create_engine, Column, String, DateTime, BigInteger, event, Integer, Float, Boolean, Text, text
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
+from sqlalchemy.exc import OperationalError, DisconnectionError, SQLAlchemyError
 from sqlalchemy.inspection import inspect as sa_inspect
-from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, BigInteger, text
 from sqlalchemy.dialects.postgresql import JSONB
 import typing
-from datetime import datetime, timezone
 import uuid
 from datetime import datetime, timezone
 import time
 import functools
 import hashlib
-
-from sqlalchemy import String, DateTime, BigInteger, event
-from sqlalchemy import create_engine, Column
-from sqlalchemy.orm import sessionmaker, declarative_base, Session
-from sqlalchemy.exc import SQLAlchemyError
-
-from common.config_utils import decrypt_database_config
-
 from alembic.config import Config
 from alembic import command
 from alembic.script import ScriptDirectory
 from alembic.runtime.migration import MigrationContext
 
 # from common.time_utils import current_timestamp, timestamp_to_date, date_string_to_timestamp
+from common.config_utils import decrypt_database_config
 from common.constants import ParserType
 
 DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
 DATABASE = decrypt_database_config(name=DATABASE_TYPE)
 database_config = DATABASE
 
-# DATABASE_URL = "postgresql://postgres:123456@127.0.0.1:5432/postgres"
 DATABASE_URL = (
     f"{database_config['name']}://"
     f"{database_config['user']}:{database_config['password']}@"

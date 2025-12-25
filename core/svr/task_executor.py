@@ -46,17 +46,15 @@ from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, has_canceled, CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID
 from api.db.services.file2document_service import File2DocumentService
-from api import settings
-from common import globals
 from api.versions import get_multirag_version
 from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, \
     email, tag
 from core.nlp import search, rag_tokenizer, add_positions, concat_img
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from core.settings import DOC_MAXIMUM_SIZE, DOC_BULK_SIZE, EMBEDDING_BATCH_SIZE, SVR_CONSUMER_GROUP_NAME, get_svr_queue_name, get_svr_queue_names, print_rag_settings, TAG_FLD, PAGERANK_FLD
+from common.constants import PAGERANK_FLD, TAG_FLD, SVR_CONSUMER_GROUP_NAME
 from common.token_utils import num_tokens_from_string, truncate
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from graphrag.utils import chat_limiter
 
 BATCH_SIZE = 64
@@ -74,17 +72,17 @@ def delete_chunks_by_doc_id(collection_name: str, doc_id: str, kb_id: str = "") 
     Returns:
         删除的记录数
     """
-    db_type = globals.docStoreConn.dbType()
+    db_type = settings.docStoreConn.dbType()
     try:
         if db_type == "milvus":
             # Milvus 使用 filter 参数
-            return globals.docStoreConn.delete(
+            return settings.docStoreConn.delete(
                 collection_name=collection_name,
                 filter=f"doc_id == '{doc_id}'"
             )
         else:
             # ES/OpenSearch/Infinity 使用 condition 参数
-            return globals.docStoreConn.delete(
+            return settings.docStoreConn.delete(
                 condition={"doc_id": doc_id},
                 indexName=collection_name,
                 knowledgebaseId=kb_id
@@ -250,7 +248,7 @@ async def collect(db: Session):
     global CONSUMER_NAME, DONE_TASKS, FAILED_TASKS
     global UNACKED_ITERATOR
 
-    svr_queue_names = get_svr_queue_names()
+    svr_queue_names = settings.get_svr_queue_names()
     try:
         if not UNACKED_ITERATOR:
             UNACKED_ITERATOR = REDIS_CONN.get_unacked_iterator(svr_queue_names, SVR_CONSUMER_GROUP_NAME, CONSUMER_NAME)
@@ -396,14 +394,14 @@ async def collect(db: Session):
 
 
 async def get_storage_binary(bucket, name):
-    return await trio.to_thread.run_sync(lambda: STORAGE_IMPL.get(bucket, name))
+    return await trio.to_thread.run_sync(lambda: settings.STORAGE_IMPL.get(bucket, name))
 
 
 @timeout(60 * 80, 1)
 async def build_chunks(task, progress_callback, db: Session):
-    if task["size"] > DOC_MAXIMUM_SIZE:
+    if task["size"] > settings.DOC_MAXIMUM_SIZE:
         set_progress(db, task["id"], prog=-1, msg="File size exceeds( <= %dMb )" %
-                                                  (int(DOC_MAXIMUM_SIZE / 1024 / 1024)))
+                                                  (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))
         return []
 
     chunker = FACTORY[task["parser_id"].lower()]
@@ -468,7 +466,7 @@ async def build_chunks(task, progress_callback, db: Session):
                 d["img_id"] = ""
                 docs.append(d)
                 return
-            await image2id(d, partial(STORAGE_IMPL.put, tenant_id=task["tenant_id"]), d["pk"], task["kb_id"])
+            await image2id(d, partial(settings.STORAGE_IMPL.put, tenant_id=task["tenant_id"]), d["pk"], task["kb_id"])
             docs.append(d)
         except Exception:
             logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
@@ -532,7 +530,7 @@ async def build_chunks(task, progress_callback, db: Session):
         examples = []
         all_tags = get_tags_from_cache(kb_ids)
         if not all_tags:
-            all_tags = globals.retriever.all_tags_in_portion(tenant_id, kb_ids, S)
+            all_tags = settings.retriever.all_tags_in_portion(tenant_id, kb_ids, S)
             set_tags_to_cache(kb_ids, all_tags)
         else:
             all_tags = json.loads(all_tags)
@@ -545,7 +543,7 @@ async def build_chunks(task, progress_callback, db: Session):
             if task_canceled:
                 progress_callback(-1, msg="Task has been canceled.")
                 return
-            if globals.retriever.tag_content(tenant_id, kb_ids, d, all_tags, topn_tags=topn_tags, S=S) and len(d[TAG_FLD]) > 0:
+            if settings.retriever.tag_content(tenant_id, kb_ids, d, all_tags, topn_tags=topn_tags, S=S) and len(d[TAG_FLD]) > 0:
                 examples.append({"content": d["content_with_weight"], TAG_FLD: d[TAG_FLD]})
             else:
                 docs_to_tag.append(d)
@@ -616,11 +614,11 @@ async def init_kb(row, kb_name):
     """
     idxnm = search.index_name_one(row["tenant_id"], kb_name)
     kb_id = row.get("kb_id", "")
-    db_type = globals.docStoreConn.dbType()
+    db_type = settings.docStoreConn.dbType()
 
     # 对于 ES/OpenSearch/Infinity，使用通用的 indexExist/createIdx 接口
     if db_type != "milvus":
-        if await trio.to_thread.run_sync(lambda: globals.docStoreConn.indexExist(idxnm, kb_id)):
+        if await trio.to_thread.run_sync(lambda: settings.docStoreConn.indexExist(idxnm, kb_id)):
             return
         # 获取向量维度（用于 createIdx）
         vector_dim = 768  # 默认维度
@@ -636,11 +634,11 @@ async def init_kb(row, kb_name):
         except Exception as e:
             logging.warning(f"获取嵌入模型维度失败，使用默认维度 {vector_dim}: {str(e)}")
         # 创建索引
-        await trio.to_thread.run_sync(lambda: globals.docStoreConn.createIdx(idxnm, kb_id, vector_dim))
+        await trio.to_thread.run_sync(lambda: settings.docStoreConn.createIdx(idxnm, kb_id, vector_dim))
         return
 
     # 对于 Milvus，使用特有的 has_collection/create_collection_with_mapping 接口
-    if await trio.to_thread.run_sync(lambda: globals.docStoreConn.has_collection(idxnm)):
+    if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(idxnm)):
         return
 
     # 加载基础mapping配置
@@ -680,7 +678,7 @@ async def init_kb(row, kb_name):
         auto_dimensions[f"q_{vector_dim}_vec"] = vector_dim
 
     # 创建集合
-    await trio.to_thread.run_sync(lambda: globals.docStoreConn.create_collection_with_mapping(idxnm, mapping, auto_dimensions))
+    await trio.to_thread.run_sync(lambda: settings.docStoreConn.create_collection_with_mapping(idxnm, mapping, auto_dimensions))
 
 
 def convert_data_types(data, schema):
@@ -770,7 +768,7 @@ def convert_data_types(data, schema):
 
 
 async def get_schema(collection_name):
-    schema = await trio.to_thread.run_sync(lambda: globals.docStoreConn.describe_collection(collection_name))
+    schema = await trio.to_thread.run_sync(lambda: settings.docStoreConn.describe_collection(collection_name))
     return schema
 
 
@@ -812,9 +810,9 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
         return mdl.encode([truncate(c, mdl.max_length - 10) for c in txts])
 
     cnts_ = np.array([])
-    for i in range(0, len(cnts), EMBEDDING_BATCH_SIZE):
+    for i in range(0, len(cnts), settings.EMBEDDING_BATCH_SIZE):
         async with embed_limiter:
-            vts, c = await trio.to_thread.run_sync(lambda: batch_encode(cnts[i: i + EMBEDDING_BATCH_SIZE]))
+            vts, c = await trio.to_thread.run_sync(lambda: batch_encode(cnts[i: i + settings.EMBEDDING_BATCH_SIZE]))
         if len(cnts_) == 0:
             cnts_ = vts
         else:
@@ -896,19 +894,19 @@ async def run_dataflow(db: Session, task: dict):
 
             vects = np.array([])
             texts = [o.get("questions", o.get("summary", o["text"])) for o in chunks]
-            delta = 0.20 / (len(texts) // EMBEDDING_BATCH_SIZE + 1)
+            delta = 0.20 / (len(texts) // settings.EMBEDDING_BATCH_SIZE + 1)
             prog = 0.8
-            for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+            for i in range(0, len(texts), settings.EMBEDDING_BATCH_SIZE):
                 async with embed_limiter:
-                    vts, c = await trio.to_thread.run_sync(lambda: batch_encode(texts[i: i + EMBEDDING_BATCH_SIZE]))
+                    vts, c = await trio.to_thread.run_sync(lambda: batch_encode(texts[i: i + settings.EMBEDDING_BATCH_SIZE]))
                 if len(vects) == 0:
                     vects = vts
                 else:
                     vects = np.concatenate((vects, vts), axis=0)
                 embedding_token_consumption += c
                 prog += delta
-                if i % (len(texts) // EMBEDDING_BATCH_SIZE / 100 + 1) == 1:
-                    set_progress(db, task_id, prog=prog, msg=f"{i + 1} / {len(texts) // EMBEDDING_BATCH_SIZE}")
+                if i % (len(texts) // settings.EMBEDDING_BATCH_SIZE / 100 + 1) == 1:
+                    set_progress(db, task_id, prog=prog, msg=f"{i + 1} / {len(texts) // settings.EMBEDDING_BATCH_SIZE}")
 
             assert len(vects) == len(chunks)
             for i, ck in enumerate(chunks):
@@ -1025,7 +1023,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
         vctr_nm = "vector"
     for doc_id in doc_ids:
         # 使用真实的doc_id查询chunks，而不是row["doc_id"]（fake_doc_id）
-        for d in globals.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
+        for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
             chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
 
     raptor = Raptor(
@@ -1637,7 +1635,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             else:
                 vctr_nm = "vector"
 
-            for d in globals.retriever.chunk_list(
+            for d in settings.retriever.chunk_list(
                     doc_id, tenant_id, [kb_id],
                     fields=["content_with_weight", vctr_nm],
                     sort_by_position=True
@@ -2050,7 +2048,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 async def delete_image(kb_id, chunk_id):
     try:
         async with minio_limiter:
-            STORAGE_IMPL.delete(kb_id, chunk_id)
+            settings.STORAGE_IMPL.delete(kb_id, chunk_id)
     except Exception:
         logging.exception(f"Deleting image of chunk {chunk_id} got exception")
         raise
@@ -2079,9 +2077,9 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     failed_inserts = []
 
     # 循环分批插入
-    for b in range(0, len(chunks), DOC_BULK_SIZE):
+    for b in range(0, len(chunks), settings.DOC_BULK_SIZE):
         # 取出本批次要插入的chunks
-        chunk_batch = chunks[b: b + DOC_BULK_SIZE]
+        chunk_batch = chunks[b: b + settings.DOC_BULK_SIZE]
 
         # 将本批次内的数据先做类型转换
         converted_batch = []
@@ -2091,11 +2089,11 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
 
         try:
             # 根据数据库类型调用不同的insert方法
-            db_type = globals.docStoreConn.dbType()
+            db_type = settings.docStoreConn.dbType()
             if db_type == "milvus":
                 # Milvus 使用 collection_name 和 data 参数
                 # insert 返回 list[str]：空列表表示成功，非空列表包含错误信息
-                doc_store_errors = await trio.to_thread.run_sync(lambda: globals.docStoreConn.insert(
+                doc_store_errors = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
                     rows=converted_batch,
                     indexName=collection_name
                 ))
@@ -2117,7 +2115,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                         es_doc["id"] = es_doc["pk"]
                     es_batch.append(es_doc)
 
-                errors = await trio.to_thread.run_sync(lambda: globals.docStoreConn.insert(
+                errors = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
                     documents=es_batch,
                     indexName=collection_name,
                     knowledgebaseId=task_dataset_id
@@ -2135,7 +2133,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 "Insert chunk error, detail info please check log file. Please check doc store status!"
             )
             try:
-                if await trio.to_thread.run_sync(lambda: globals.docStoreConn.has_collection(collection_name)):
+                if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
                     # 删除本批次已经尝试插入的记录
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
@@ -2169,7 +2167,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             logging.warning(f"insert_milvus update_chunk_ids failed since task {task_id} is unknown.")
             # 如果TaskService中没有这个task，则删除已插入数据并退出
             try:
-                if await trio.to_thread.run_sync(lambda: globals.docStoreConn.has_collection(collection_name)):
+                if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
                             doc_id = chunk['doc_id']
@@ -2187,7 +2185,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     # 统计并记录插入结果
     if successful_inserts:
         total_insert_count = sum(item.get("insert_count", 0) for item in successful_inserts)
-        db_type = globals.docStoreConn.dbType()
+        db_type = settings.docStoreConn.dbType()
         logging.info(
             f"Successfully inserted {total_insert_count} chunks into {db_type} index '{collection_name}'"
         )
@@ -2289,7 +2287,7 @@ async def do_handle_task(db, task):
     progress_callback = partial(set_progress, db, task_id, task_from_page, task_to_page)
 
     # FIXME: workaround, Infinity doesn't support table parsing method, this check is to notify user
-    lower_case_doc_engine = globals.DOC_ENGINE.lower()
+    lower_case_doc_engine = settings.DOC_ENGINE.lower()
     if lower_case_doc_engine == 'infinity' and task['parser_id'].lower() == 'table':
         error_message = "Table parsing method is not supported by Infinity, please use other parsing methods or use Elasticsearch as the document engine."
         progress_callback(-1, msg=error_message)
@@ -2437,9 +2435,9 @@ async def do_handle_task(db, task):
     #         raise
     #
     # # 循环分批插入
-    # for b in range(0, chunk_count, DOC_BULK_SIZE):
+    # for b in range(0, chunk_count, settings.DOC_BULK_SIZE):
     #     # 取出本批次要插入的 chunks
-    #     chunk_batch = chunks[b: b + DOC_BULK_SIZE]
+    #     chunk_batch = chunks[b: b + settings.DOC_BULK_SIZE]
     #
     #     # 将本批次内的数据先做类型转换
     #     converted_batch = []
@@ -2452,8 +2450,8 @@ async def do_handle_task(db, task):
     #
     #     doc_store_result = {}
     #     try:
-    #         # 调用自定义的 globals.docStoreConn.insert 方法
-    #         doc_store_result = await trio.to_thread.run_sync(lambda: globals.docStoreConn.insert(
+    #         # 调用自定义的 settings.docStoreConn.insert 方法
+    #         doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
     #             collection_name=collection_name,
     #             data=converted_batch
     #         ))
@@ -2476,11 +2474,11 @@ async def do_handle_task(db, task):
     #             "Insert chunk error, detail info please check log file. Please also check Milvus status!"
     #         )
     #         try:
-    #             if globals.docStoreConn.has_collection(collection_name):
+    #             if settings.docStoreConn.has_collection(collection_name):
     #                 # 删除本批次已经尝试插入的记录（这里按 doc_id 删除，可根据业务实际情况调整 filter 条件）
     #                 for chunk in chunk_batch:
     #                     if "doc_id" in chunk:
-    #                         globals.docStoreConn.delete(
+    #                         settings.docStoreConn.delete(
     #                             collection_name=collection_name,
     #                             filter=f"doc_id == '{chunk['doc_id']}'"
     #                         )
@@ -2513,10 +2511,10 @@ async def do_handle_task(db, task):
     #         logging.warning(f"do_handle_task update_chunk_ids failed since task {task['id']} is unknown.")
     #         # 如果 TaskService 中没有这个 task，则删除已插入数据并退出
     #         try:
-    #             if globals.docStoreConn.has_collection(collection_name):
+    #             if settings.docStoreConn.has_collection(collection_name):
     #                 for chunk in chunk_batch:
     #                     if "doc_id" in chunk:
-    #                         await trio.to_thread.run_sync(lambda: globals.docStoreConn.delete(
+    #                         await trio.to_thread.run_sync(lambda: settings.docStoreConn.delete(
     #                             collection_name=collection_name,
     #                             filter=f"doc_id == '{chunk['doc_id']}'"
     #                         ))
@@ -2535,7 +2533,7 @@ async def do_handle_task(db, task):
     # 如果任务被取消，则清理已插入的数据并返回
     if TaskService.do_cancel(db, task_id):
         try:
-            if await trio.to_thread.run_sync(lambda: globals.docStoreConn.has_collection(collection_name)):
+            if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
                 await trio.to_thread.run_sync(
                     lambda: delete_chunks_by_doc_id(collection_name, task_doc_id, task_dataset_id)
                 )
@@ -2668,7 +2666,7 @@ async def report_status():
     while True:
         try:
             now = datetime.now()
-            group_info = REDIS_CONN.queue_info(get_svr_queue_name(0), SVR_CONSUMER_GROUP_NAME)
+            group_info = REDIS_CONN.queue_info(settings.get_svr_queue_name(0), SVR_CONSUMER_GROUP_NAME)
             if group_info is not None:
                 PENDING_TASKS = int(group_info.get("pending", 0))
                 LAG_TASKS = int(group_info.get("lag", 0))
@@ -2732,9 +2730,9 @@ async def main():
     logging.info(f'MultiRAG version: {get_multirag_version()}')
     show_configs()
     settings.init_settings()
-    from common import globals
-    logging.info(f'globals.EMBEDDING_CFG: {globals.EMBEDDING_CFG}')
-    print_rag_settings()
+    settings.check_and_install_torch()
+    logging.info(f'settings.EMBEDDING_CFG: {settings.EMBEDDING_CFG}')
+    settings.print_rag_settings()
     if sys.platform != "win32":
         signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)
         signal.signal(signal.SIGUSR2, stop_tracemalloc)

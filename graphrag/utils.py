@@ -23,8 +23,6 @@ import trio
 import xxhash
 from networkx.readwrite import json_graph
 
-from api import settings
-from common import globals
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.misc_utils import get_uuid
@@ -32,6 +30,7 @@ from common.connection_utils import timeout
 from core.nlp import rag_tokenizer, search
 from core.utils.doc_store_conn import OrderByExpr
 from core.utils.redis_conn import REDIS_CONN
+from common import settings
 
 GRAPH_FIELD_SEP = "<SEP>"
 
@@ -343,7 +342,7 @@ def get_relation(tenant_id, kb_id, from_ent_name, to_ent_name, size=1):
 
     # 缓存 index_name，避免重复查询
     index_name = search.index_name(tenant_id, [kb_name])
-    milvus_res = globals.retriever.search(conds, index_name, [kb_id] if isinstance(kb_id, str) else kb_id)
+    milvus_res = settings.retriever.search(conds, index_name, [kb_id] if isinstance(kb_id, str) else kb_id)
     for id in milvus_res.ids:
         try:
             if size == 1:
@@ -396,8 +395,8 @@ async def does_graph_contains(tenant_id, kb_id, doc_id):
 
     # 缓存 index_name，避免重复查询
     index_name = search.index_name(tenant_id, [kb_name])
-    res = await trio.to_thread.run_sync(lambda: globals.docStoreConn.search(fields, [], condition, [], OrderByExpr(), 0, 1, index_name, [kb_id]))
-    fields2 = globals.docStoreConn.getFields(res, fields)
+    res = await trio.to_thread.run_sync(lambda: settings.docStoreConn.search(fields, [], condition, [], OrderByExpr(), 0, 1, index_name, [kb_id]))
+    fields2 = settings.docStoreConn.getFields(res, fields)
     graph_doc_ids = set()
     for chunk_id in fields2.keys():
         graph_doc_ids = set(fields2[chunk_id]["source_id"])
@@ -412,7 +411,7 @@ async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
 
     # 缓存 index_name，避免重复查询
     index_name = search.index_name(tenant_id, [kb_name])
-    res = await trio.to_thread.run_sync(lambda: globals.retriever.search(conds, index_name, [kb_id]))
+    res = await trio.to_thread.run_sync(lambda: settings.retriever.search(conds, index_name, [kb_id]))
     doc_ids = []
     if res.total == 0:
         return doc_ids
@@ -429,7 +428,7 @@ async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
 
     # 缓存 index_name，避免重复查询
     index_name = search.index_name(tenant_id, [kb_name])
-    res = await trio.to_thread.run_sync(lambda: globals.retriever.search(conds, index_name, [kb_id]))
+    res = await trio.to_thread.run_sync(lambda: settings.retriever.search(conds, index_name, [kb_id]))
     if not res.total == 0:
         for id in res.ids:
             try:
@@ -458,7 +457,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
     index_name = search.index_name(tenant_id, [kb_name])
 
     await trio.to_thread.run_sync(
-        globals.docStoreConn.delete,
+        settings.docStoreConn.delete,
         {"knowledge_graph_kwd": ["graph", "subgraph"]},
         index_name,
         kb_id
@@ -466,7 +465,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
 
     if change.removed_nodes:
         await trio.to_thread.run_sync(
-            globals.docStoreConn.delete,
+            settings.docStoreConn.delete,
             {"knowledge_graph_kwd": ["entity"], "entity_kwd": sorted(change.removed_nodes)},
             index_name,
             kb_id
@@ -477,7 +476,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
         async def del_edges(from_node, to_node):
             async with chat_limiter:
                 await trio.to_thread.run_sync(
-                    globals.docStoreConn.delete,
+                    settings.docStoreConn.delete,
                     {"knowledge_graph_kwd": ["relation"],
                      "from_entity_kwd": from_node,
                      "to_entity_kwd": to_node},
@@ -551,7 +550,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
     for b in range(0, len(chunks), es_bulk_size):
         with trio.fail_after(3 if enable_timeout_assertion else 30000000):
             doc_store_result = await trio.to_thread.run_sync(
-                lambda: globals.docStoreConn.insert(
+                lambda: settings.docStoreConn.insert(
                     chunks[b : b + es_bulk_size],
                     index_name,
                     kb_id
@@ -610,7 +609,7 @@ def merge_tuples(list1, list2):
 
 
 async def get_entity_type2samples(idxnms, kb_ids: list):
-    milvus_res = await trio.to_thread.run_sync(lambda: globals.retriever.search({"knowledge_graph_kwd": "ty2ents", "kb_id": kb_ids, "size": 10000, "fields": ["content_with_weight"]}, idxnms, kb_ids))
+    milvus_res = await trio.to_thread.run_sync(lambda: settings.retriever.search({"knowledge_graph_kwd": "ty2ents", "kb_id": kb_ids, "size": 10000, "fields": ["content_with_weight"]}, idxnms, kb_ids))
 
     res = defaultdict(list)
     for id in milvus_res.ids:
@@ -652,10 +651,10 @@ async def rebuild_graph(tenant_id, kb_id, exclude_rebuild=None):
 
     for i in range(0, 1024 * bs, bs):
         es_res = await trio.to_thread.run_sync(
-            lambda: globals.docStoreConn.search(flds, [], {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"]}, [], OrderByExpr(), i, bs, index_name, [kb_id])
+            lambda: settings.docStoreConn.search(flds, [], {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"]}, [], OrderByExpr(), i, bs, index_name, [kb_id])
         )
-        # tot = globals.docStoreConn.getTotal(es_res)
-        es_res = globals.docStoreConn.getFields(es_res, flds)
+        # tot = settings.docStoreConn.getTotal(es_res)
+        es_res = settings.docStoreConn.getFields(es_res, flds)
 
         if len(es_res) == 0:
             break

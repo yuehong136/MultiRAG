@@ -10,8 +10,6 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
-from api import settings
-from common import globals
 from common.constants import LLMType, StatusEnum
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import API4ConversationService
@@ -30,7 +28,8 @@ from common.constants import RetCode
 from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required, validate_request
 from core.app.tag import label_question
 from core.prompts.template import load_prompt
-from core.prompts.generator import cross_languages, keyword_extraction, chunks_format
+from core.prompts.generator import cross_languages, gen_meta_filter, keyword_extraction, chunks_format
+from common import settings
 
 router = APIRouter()
 
@@ -1108,7 +1107,7 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
             question += keyword_extraction(chat_mdl, question)
 
         labels = label_question(db, question, [kb])
-        ranks = globals.retriever.retrieval(
+        ranks = settings.retriever.retrieval(
             question, embd_mdl, tenant_ids, kb_ids, page, size, similarity_threshold, vector_similarity_weight, top, doc_ids, rerank_mdl=rerank_mdl, highlight=req.get("highlight"), rank_feature=labels
         )
         if use_kg:

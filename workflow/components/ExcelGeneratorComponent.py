@@ -4,7 +4,7 @@ import json
 
 import pyexcel
 
-from common import globals
+from common import settings
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Component import Component, ComponentParameter
 from workflow.basic.Node import ValueTypeOfIODefinition, Batch
@@ -74,15 +74,15 @@ class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
         # ExcelGeneratorComponent.create_excel(headers, data, "/Users/naimehao/PycharmProjects/multrag/workflow/temp/"+complete_file_name)
         # 上传到MinIO
         minio_operator = MinioOperator()
-        minio_operator.create_bucket(bucket_name=globals.MINIO["workflow_bucket"])
+        minio_operator.create_bucket(bucket_name=settings.MINIO["workflow_bucket"])
         if excel_file[1] is not None:
-            minio_operator.upload_file_from_memory(bucket_name=globals.MINIO["workflow_bucket"],
+            minio_operator.upload_file_from_memory(bucket_name=settings.MINIO["workflow_bucket"],
                                                    object_name=complete_file_name,
                                                    file_data=excel_file[1])
         else:
             raise Exception("无法生成Excel文件，请检查输入数据是否正确")
         file_info = {
-            "bucket_name": globals.MINIO["workflow_bucket"],
+            "bucket_name": settings.MINIO["workflow_bucket"],
             "object_name": complete_file_name
         }
         json_str = json.dumps(file_info)

@@ -12,7 +12,7 @@ from minio import Minio, S3Error
 from minio.commonconfig import CopySource
 from io import BytesIO
 from common.decorator import singleton
-from common import globals
+from common import settings
 
 
 @singleton
@@ -31,21 +31,21 @@ class MultiRAGMinio:
         try:
             # Create connection parameters dictionary
             conn_params = {
-                "endpoint": globals.MINIO["host"],
-                "access_key": globals.MINIO["user"],
-                "secret_key": globals.MINIO["password"],
+                "endpoint": settings.MINIO["host"],
+                "access_key": settings.MINIO["user"],
+                "secret_key": settings.MINIO["password"],
                 "secure": False
             }
 
             # Only add region parameter if it's not empty
-            if globals.MINIO["region"]:
-                conn_params["region"] = globals.MINIO["region"]
+            if settings.MINIO["region"]:
+                conn_params["region"] = settings.MINIO["region"]
 
             # Initialize MinIO client with the parameters
             self.conn = Minio(**conn_params)
         except Exception:
             logging.exception(
-                "Fail to connect %s " % globals.MINIO["host"])
+                "Fail to connect %s " % settings.MINIO["host"])
 
     def __close__(self):
         del self.conn

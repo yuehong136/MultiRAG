@@ -12,7 +12,7 @@ from auth import init_default_admin
 from common.log_utils import init_root_logger
 from common.constants import SERVICE_CONF
 from common.config_utils import show_configs
-from api import settings
+from common import settings
 from config import load_configurations, SERVICE_CONFIGS
 from api.common.exceptions import setup_exception_handlers
 

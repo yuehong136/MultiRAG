@@ -27,15 +27,12 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import queue_tasks, TaskService
 from api.db.services.user_service import UserTenantService
 from api.db.services.tenant_llm_service import TenantLLMService
-
-from common import globals
-from common.misc_utils import get_uuid
-from common.constants import RetCode
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result, \
     generate_confirmation_token
-
 from api.utils.file_utils import filename_type, thumbnail
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
+from common.misc_utils import get_uuid
+from common.constants import RetCode
 from common.time_utils import current_timestamp, datetime_format
 from core.app.tag import label_question
 from core.prompts.generator import keyword_extraction
@@ -597,10 +594,10 @@ async def upload(request: Request, db: Session = Depends(get_db)):
             return get_data_error_result(retmsg="This type of file has not been supported yet!")
 
         location = filename
-        while STORAGE_IMPL.obj_exist(kb_id, location):
+        while settings.STORAGE_IMPL.obj_exist(kb_id, location):
             location += "_"
         blob = await file.read()
-        STORAGE_IMPL.put(kb_id, location, blob)
+        settings.STORAGE_IMPL.put(kb_id, location, blob)
         doc = {
             "id": get_uuid(),
             "kb_id": kb.id,
@@ -672,7 +669,7 @@ async def list_chunks(request: Request, db: Session = Depends(get_db)):
         else:
             return get_json_result(data=False, retmsg="Can't find doc_name or doc_id")
 
-        res = globals.retriever.chunk_list(doc_id=doc_id, tenant_id=tenant_id)
+        res = settings.retriever.chunk_list(doc_id=doc_id, tenant_id=tenant_id)
         res = [
             {
                 "content": res_item["content_with_weight"],
@@ -786,7 +783,7 @@ async def document_rm(request: DocumentRemoveRequest, db: Session = Depends(get_
             FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
             File2DocumentService.delete_by_document_id(db, doc_id)
 
-            STORAGE_IMPL.rm(b, n)
+            settings.STORAGE_IMPL.rm(b, n)
         except Exception as e:
             errors += str(e)
 
@@ -891,7 +888,7 @@ async def completion_faq(request: CompletionFAQRequest, db: Session = Depends(ge
                 if ans["reference"]["chunks"][chunk_idx]["img_id"]:
                     try:
                         bkt, nm = ans["reference"]["chunks"][chunk_idx]["img_id"].split("-")
-                        response = STORAGE_IMPL.get(bkt, nm)
+                        response = settings.STORAGE_IMPL.get(bkt, nm)
                         data_type_picture["url"] = base64.b64encode(response).decode('utf-8')
                         data.append(data_type_picture)
                         break
@@ -936,7 +933,7 @@ async def completion_faq(request: CompletionFAQRequest, db: Session = Depends(ge
             if ans["reference"]["chunks"][chunk_idx]["img_id"]:
                 try:
                     bkt, nm = ans["reference"]["chunks"][chunk_idx]["img_id"].split("-")
-                    response = STORAGE_IMPL.get(bkt, nm)
+                    response = settings.STORAGE_IMPL.get(bkt, nm)
                     data_type_picture["url"] = base64.b64encode(response).decode('utf-8')
                     data.append(data_type_picture)
                     break
@@ -985,7 +982,7 @@ def retrieval(request, question, db: Session = Depends(get_db),):
         if req.get("keyword", False):
             chat_mdl = TenantLLMService.model_instance(db, kbs[0].tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
-        ranks = globals.retriever.retrieval(question, embd_mdl, kbs[0].tenant_id, kb_ids, page, size,
+        ranks = settings.retriever.retrieval(question, embd_mdl, kbs[0].tenant_id, kb_ids, page, size,
                                       similarity_threshold, vector_similarity_weight, top,
                                       doc_ids, rerank_mdl=rerank_mdl)
         for c in ranks["chunks"]:

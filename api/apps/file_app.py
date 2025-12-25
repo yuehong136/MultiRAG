@@ -26,13 +26,12 @@ from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from api import settings
 from api.utils.api_utils import get_json_result, construct_error_response, get_data_error_result
 from common.misc_utils import get_uuid
 from common.constants import RetCode
 from api.utils.file_utils import filename_type
 from api.utils.web_utils import CONTENT_TYPE_MAP
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from api.apps import manager
 from pydantic import BaseModel, Field
 
@@ -87,8 +86,7 @@ async def upload_media_redirect(
         # 1. 定义存储桶和文件名
         # 建议使用一个专门的临时桶，如果未配置则使用默认桶
         # 注意：MinIO/OSS 的 bucket 名称通常有格式要求
-        from common import globals
-        bucket = globals.OSS.get("bucket") or globals.MINIO.get("bucket") or "multimodal-temp"
+        bucket = settings.OSS.get("bucket") or settings.MINIO.get("bucket") or "multimodal-temp"
         
         ext = file.filename.split('.')[-1].lower() if '.' in file.filename else "bin"
         unique_filename = f"volc_upload/{get_uuid()}.{ext}"
@@ -99,15 +97,15 @@ async def upload_media_redirect(
         # 2. 上传文件
         # STORAGE_IMPL 会自动处理 MinIO/OSS/S3 的差异
         try:
-            STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
+            settings.STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
         except TypeError:
             # Fallback for storage backends that don't support content_type
-            STORAGE_IMPL.put(bucket, unique_filename, content)
+            settings.STORAGE_IMPL.put(bucket, unique_filename, content)
 
         # 3. 获取预签名 URL (有效期 1小时)
         # 这是关键：这个 URL 是带签名的，AI 服务可以通过公网访问并下载
         expires = 3600
-        url = STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=expires)
+        url = settings.STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=expires)
 
         if not url:
              raise Exception("Failed to generate presigned URL")
@@ -188,12 +186,12 @@ async def upload(
 
             filetype = filename_type(file_obj_names[file_len - 1])
             location = file_obj_names[file_len - 1]
-            while STORAGE_IMPL.obj_exist(last_folder.id, location):
+            while settings.STORAGE_IMPL.obj_exist(last_folder.id, location):
                 location += "_"
             blob = await file_obj.read()
             filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
                                       parent_id=last_folder.id)
-            STORAGE_IMPL.put(last_folder.id, location, blob)
+            settings.STORAGE_IMPL.put(last_folder.id, location, blob)
             file_data = {
                 "id": get_uuid(),
                 "parent_id": last_folder.id,
@@ -418,7 +416,7 @@ async def rm(
         """删除单个文件及其关联的文档"""
         try:
             if file.location:
-                STORAGE_IMPL.rm(file.parent_id, file.location)
+                settings.STORAGE_IMPL.rm(file.parent_id, file.location)
         except Exception:
             logging.exception(f"Fail to remove object: {file.parent_id}/{file.location}")
         
@@ -535,7 +533,7 @@ async def get_file(
             return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
         b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
-        file_content = STORAGE_IMPL.get(b, n)
+        file_content = settings.STORAGE_IMPL.get(b, n)
         if not file_content:
             raise HTTPException(status_code=404, detail="File not found in storage")
 
@@ -643,12 +641,12 @@ async def move(
 
             new_location = filename
             # 处理文件名冲突
-            while STORAGE_IMPL.obj_exist(dest_folder.id, new_location):
+            while settings.STORAGE_IMPL.obj_exist(dest_folder.id, new_location):
                 new_location += "_"
 
             try:
                 # 移动存储层的文件
-                STORAGE_IMPL.move(old_parent_id, old_location, dest_folder.id, new_location)
+                settings.STORAGE_IMPL.move(old_parent_id, old_location, dest_folder.id, new_location)
             except Exception as storage_err:
                 raise RuntimeError(f"Move file failed at storage layer: {str(storage_err)}")
 

@@ -5,7 +5,7 @@ from typing import Any
 import aiohttp
 from aiohttp import ClientTimeout
 
-from api.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
+from common.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.utils import dict_arrays_to_array_dicts, match_parameters, map_schema_with_values
 from workflow_v2.workflow_logging_config import WorkflowContextLogger

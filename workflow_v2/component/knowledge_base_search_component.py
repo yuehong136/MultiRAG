@@ -1,7 +1,7 @@
 from typing import Any
 
 
-from common import globals
+from common import settings
 from common.constants import LLMType
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -48,7 +48,7 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         if self.rerank_id:
             rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
         kb_names = list([kb.name for kb in kbs])
-        kbinfos = globals.retriever.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
+        kbinfos = settings.retriever.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
                                                  self.top_n,
                                                  self.similarity_threshold,
                                                  1 - self.keywords_similarity_weight,
@@ -87,7 +87,7 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         if self.rerank_id:
             rerank_mdl = LLMBundle(self.db, kbs[0].tenant_id, LLMType.RERANK, self.rerank_id)
         kb_names = list([kb.name for kb in kbs])
-        kbinfos = globals.retriever.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
+        kbinfos = settings.retriever.retrieval(query, "", embd_mdl, kbs[0].tenant_id, kb_names, 1,
                                                  self.top_n,
                                                  self.similarity_threshold,
                                                  1 - self.keywords_similarity_weight,

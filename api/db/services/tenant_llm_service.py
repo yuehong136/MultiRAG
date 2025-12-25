@@ -20,8 +20,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from api import settings
-from common import globals
+from common import settings
 from common.constants import LLMType
 from api.db.db_models import LLMFactories, TenantLLM, db_connection
 from api.db.services.common_service import CommonService
@@ -128,7 +127,7 @@ class TenantLLMService(CommonService):
         if model_config:
             model_config = model_config.to_dict()
         elif llm_type == LLMType.EMBEDDING.value and fid == 'Builtin' and "tei-" in os.getenv("COMPOSE_PROFILES", "") and mdlnm == os.getenv('TEI_MODEL', ''):
-            embedding_cfg = globals.EMBEDDING_CFG
+            embedding_cfg = settings.EMBEDDING_CFG
             model_config = {"llm_factory": 'Builtin', "api_key": embedding_cfg["api_key"], "llm_name": mdlnm, "api_base": embedding_cfg["base_url"]}
         else:
             raise LookupError(f"Model({mdlnm}@{fid}) not authorized")

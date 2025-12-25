@@ -40,7 +40,6 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
-from common import globals
 from api.common.check_team_permission import check_kb_team_permission
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result, get_data_error_result, server_error_response
@@ -50,7 +49,7 @@ from api.utils.file_utils import filename_type, thumbnail
 from common.file_utils import get_project_base_directory
 from api.utils.web_utils import CONTENT_TYPE_MAP, html2pdf, is_valid_url
 from core.nlp import search, rag_tokenizer
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from api.apps import manager
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -839,9 +838,9 @@ def web_crawl(
             raise RuntimeError("This type of file has not been supported yet!")
 
         location = filename
-        while STORAGE_IMPL.obj_exist(kb_id, location):
+        while settings.STORAGE_IMPL.obj_exist(kb_id, location):
             location += "_"
-        STORAGE_IMPL.put(kb_id, location, blob)
+        settings.STORAGE_IMPL.put(kb_id, location, blob)
         doc = {
             "id": get_uuid(),
             "kb_id": kb.id,
@@ -1978,7 +1977,7 @@ def change_status(
                 continue
 
             status = int(req["status"])
-            if not globals.docStoreConn.update({"doc_id": doc_id}, {"available_int": status},
+            if not settings.docStoreConn.update({"doc_id": doc_id}, {"available_int": status},
                                                 search.index_name_one(kb.tenant_id, kb.name), doc.kb_id):
                 result[doc_id] = {"error": "Database error (docStore update)!"}
             result[doc_id] = {"status": str(req["status"])}
@@ -2025,7 +2024,7 @@ def change_auth(
                                          code=RetCode.ARGUMENT_ERROR)
 
         # auth = str(req["auth"])
-        globals.docStoreConn.update({"doc_id": req["doc_id"]}, {"auth": auths},
+        settings.docStoreConn.update({"doc_id": req["doc_id"]}, {"auth": auths},
                                      search.index_name_one(kb.tenant_id, kb.name), doc.kb_id)
         return construct_json_result(data=True)
     except Exception as e:
@@ -2462,16 +2461,16 @@ def run(
             if req.get("delete", False):
                 TaskService.filter_delete(db, [Task.doc_id == id])
                 try:
-                    if globals.docStoreConn.has_collection(collection_name):
-                        db_type = globals.docStoreConn.dbType()
+                    if settings.docStoreConn.has_collection(collection_name):
+                        db_type = settings.docStoreConn.dbType()
                         if db_type == "milvus":
-                            delete_result = globals.docStoreConn.delete(
+                            delete_result = settings.docStoreConn.delete(
                                 collection_name=collection_name,
                                 filter=f"doc_id == '{{doc_id}}'".format(doc_id=d["id"])
                             )
                         else:
                             # ES/OpenSearch/Infinity
-                            delete_result = globals.docStoreConn.delete(
+                            delete_result = settings.docStoreConn.delete(
                                 condition={"doc_id": d["id"]},
                                 indexName=collection_name,
                                 knowledgebaseId=kb.id
@@ -2539,8 +2538,8 @@ def rename(
             "title_tks": title_tks,
             "title_sm_tks": rag_tokenizer.fine_grained_tokenize(title_tks),
         }
-        if globals.docStoreConn.indexExist(search.index_name_one(tenant_id, kb.name), doc.kb_id):
-            globals.docStoreConn.update(
+        if settings.docStoreConn.indexExist(search.index_name_one(tenant_id, kb.name), doc.kb_id):
+            settings.docStoreConn.update(
                 {"doc_id": req["doc_id"]},
                 milvus_body,
                 search.index_name_one(tenant_id, kb.name),
@@ -2566,7 +2565,7 @@ def get_document(
 
         b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
 
-        file_content = STORAGE_IMPL.get(b, n)
+        file_content = settings.STORAGE_IMPL.get(b, n)
         if not file_content:
             raise HTTPException(status_code=404, detail="File not found in storage")
 
@@ -2722,14 +2721,14 @@ def change_parser(
             # 删除向量数据库中的数据
             try:
                 collection_name = search.index_name_one(tenant_id, kb.name)
-                db_type = globals.docStoreConn.dbType()
+                db_type = settings.docStoreConn.dbType()
                 if db_type == "milvus":
-                    delete_result = globals.docStoreConn.delete(
+                    delete_result = settings.docStoreConn.delete(
                         collection_name=collection_name,
                         filter=f"doc_id == '{doc.id}'"
                     )
                 else:
-                    delete_result = globals.docStoreConn.delete(
+                    delete_result = settings.docStoreConn.delete(
                         condition={"doc_id": doc.id},
                         indexName=collection_name,
                         knowledgebaseId=kb.id
@@ -2794,7 +2793,7 @@ def get_image(
         bkt, nm = image_id.split("-")
 
         # 获取文件内容
-        file_content = STORAGE_IMPL.get(bkt, nm)
+        file_content = settings.STORAGE_IMPL.get(bkt, nm)
 
         # 确认 file_content 是字节流对象
         if not isinstance(file_content, (bytes, bytearray)):

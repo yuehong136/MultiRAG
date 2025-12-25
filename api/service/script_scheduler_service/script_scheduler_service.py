@@ -1,14 +1,14 @@
 import aiohttp
-from typing import Dict, Any
+from typing import Any
 
-from api.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
+from common.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
 from errors.exceptions import ScriptRunningError
 
 
 class ScriptSchedulerService:
 
     @staticmethod
-    async def run_temporary_script(script: str, args: Dict[str, Any], user_id: str):
+    async def run_temporary_script(script: str, args: dict[str, Any], user_id: str):
         """运行临时脚本"""
         async with aiohttp.ClientSession() as session:
             url = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}/api/v1/script-scheduler/run-temporary-script"
@@ -26,7 +26,7 @@ class ScriptSchedulerService:
                 return response_data.get('data')
 
     @staticmethod
-    async def run_plugin_script(plugin_id: str, script: str, args: Dict[str, Any], user_id: str):
+    async def run_plugin_script(plugin_id: str, script: str, args: dict[str, Any], user_id: str):
         """运行插件脚本"""
         async with aiohttp.ClientSession() as session:
             url = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}/api/v1/script-scheduler/run-plugin-script"

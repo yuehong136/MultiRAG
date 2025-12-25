@@ -16,8 +16,7 @@
 
 import argparse
 import json
-from api import settings
-from common import globals
+
 import networkx as nx
 import logging
 import trio
@@ -31,6 +30,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import TenantService
 from graphrag.general.index import update_graph
 from graphrag.light.graph_extractor import GraphExtractor
+from common import settings
 
 settings.init_settings()
 
@@ -67,7 +67,7 @@ async def main():
 
     chunks = [
         d["content_with_weight"]
-        for d in globals.retriever.chunk_list(
+        for d in settings.retriever.chunk_list(
             args.doc_id,
             args.tenant_id,
             [kb_id],

@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from api import settings
 from api.constants import DATASET_NAME_LIMIT
 from common.constants import StatusEnum
 from api.db.db_models import get_db

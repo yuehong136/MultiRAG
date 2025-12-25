@@ -21,7 +21,6 @@ from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType, StatusEnum, ParserType
 from api.db.db_models import Dialog
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
@@ -29,9 +28,6 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
-from api import settings
-from common import globals
-from common.time_utils import current_timestamp, datetime_format
 from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
@@ -41,7 +37,10 @@ from core.prompts.generator import kb_prompt, message_fit_in, keyword_extraction
     citation_prompt, cross_languages, gen_meta_filter, PROMPT_JINJA_ENV, ASK_SUMMARY
 from common.token_utils import num_tokens_from_string
 from core.utils.tavily_conn import Tavily
+from common.constants import LLMType, StatusEnum, ParserType
 from common.string_utils import remove_redundant_spaces
+from common import settings
+from common.time_utils import current_timestamp, datetime_format
 
 
 class DialogService(CommonService):
@@ -455,7 +454,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     kb_names = list([kb.name for kb in kbs])
     print("正在检索的知识库 --> ", kb_names)
 
-    retriever = globals.retriever
+    retriever = settings.retriever
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
     attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
@@ -778,7 +777,7 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
 
         logging.debug(f"{question} get SQL(refined): {sql}")
         tried_times += 1
-        return globals.retriever.sql_retrieval(sql, format="json"), sql
+        return settings.retriever.sql_retrieval(sql, format="json"), sql
 
     tbl, sql = get_table()
     if tbl is None:
@@ -919,7 +918,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     embedding_list = list(set([kb.embd_id for kb in kbs]))
 
     is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
-    retriever = globals.retriever if not is_knowledge_graph else settings.kg_retriever
+    retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_llm_name)
@@ -1008,7 +1007,7 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
             if not doc_ids:
                 doc_ids = None
 
-    ranks = globals.retriever.retrieval(
+    ranks = settings.retriever.retrieval(
         question=question,
         filter_exp="",
         embd_mdl=embd_mdl,

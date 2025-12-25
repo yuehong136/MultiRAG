@@ -10,7 +10,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy import inspect
 
-from api import settings
 from api.apps import smtp_mail_server
 from api.db import UserTenantRole
 from common.constants import StatusEnum
@@ -26,6 +25,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService, UserService, TenantService
 from api.utils.api_utils import get_json_result
 from api.utils.web_utils import send_invite_email
+from common import settings
 
 router = APIRouter()
 

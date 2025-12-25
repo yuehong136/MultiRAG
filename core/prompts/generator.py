@@ -13,7 +13,7 @@ from api.db.db_models import db_connection
 from common.misc_utils import hash_str2int
 from core.nlp import rag_tokenizer
 from core.prompts.template import load_prompt
-from core.settings import TAG_FLD
+from common.constants import TAG_FLD
 from common.token_utils import encoder, num_tokens_from_string
 
 STOP_TOKEN = "<|STOP|>"

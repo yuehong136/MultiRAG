@@ -22,7 +22,6 @@ from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc
 
 from api.constants import IMG_BASE64_PREFIX, FILE_NAME_LEN_LIMIT
 from api.db import FileType, UserTenantRole, CanvasCategory
-from common.constants import LLMType, ParserType, TaskStatus, StatusEnum
 from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, File2Document, File, UserCanvas, \
     User
 from api.db.services.common_service import CommonService
@@ -30,10 +29,9 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
 from api.utils.db_utils import bulk_insert_into_db
-from common import globals
-from core.settings import get_svr_queue_name, SVR_CONSUMER_GROUP_NAME
+from common import settings
+from common.constants import LLMType, ParserType, TaskStatus, StatusEnum, SVR_CONSUMER_GROUP_NAME
 from core.nlp import search, rag_tokenizer
-from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.doc_store_conn import OrderByExpr
 
@@ -1766,10 +1764,10 @@ class DocumentService(CommonService):
         page_size = 1000
         all_chunk_ids = []
         while True:
-            chunks = globals.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
+            chunks = settings.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
                                                   page * page_size, page_size, collection_name,
                                                   [doc.kb_id])
-            chunk_ids = globals.docStoreConn.getChunkIds(chunks)
+            chunk_ids = settings.docStoreConn.getChunkIds(chunks)
             if not chunk_ids:
                 break
             all_chunk_ids.extend(chunk_ids)
@@ -1783,32 +1781,32 @@ class DocumentService(CommonService):
 
         try:
             # 检查集合是否存在并删除向量数据库中的数据
-            if globals.docStoreConn.has_collection(collection_name):
-                db_type = globals.docStoreConn.dbType()
+            if settings.docStoreConn.has_collection(collection_name):
+                db_type = settings.docStoreConn.dbType()
                 if db_type == "milvus":
-                    globals.docStoreConn.delete(
+                    settings.docStoreConn.delete(
                         collection_name=collection_name,
                         filter=f"doc_id == '{doc_id}'"
                     )
                 else:
-                    globals.docStoreConn.delete(
+                    settings.docStoreConn.delete(
                         condition={"doc_id": doc_id},
                         indexName=collection_name,
                         knowledgebaseId=doc.kb_id
                     )
-            # todo 待测试【globals.docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
+            # todo 待测试【settings.docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
             # kb_id = document["kb_id"]  # 使用从数据库重新获取的kb_id
-            # graph_source = globals.docStoreConn.getFields(
-            #     globals.docStoreConn.search(["source_id"], [], {"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [kb_id]), ["source_id"]
+            # graph_source = settings.docStoreConn.getFields(
+            #     settings.docStoreConn.search(["source_id"], [], {"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [kb_id]), ["source_id"]
             # )
             # if len(graph_source) > 0 and doc_id in list(graph_source.values())[0]["source_id"]:
-            #     globals.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc_id},
+            #     settings.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc_id},
             #                                 {"remove": {"source_id": doc_id}},
             #                                 search.index_name(tenant_id, [kb.name]), kb_id)
-            #     globals.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]},
+            #     settings.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]},
             #                                 {"removed_kwd": "Y"},
             #                                 search.index_name(tenant_id, [kb.name]), kb_id)
-            #     globals.docStoreConn.delete({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
+            #     settings.docStoreConn.delete({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
             #                                 search.index_name(tenant_id, [kb.name]), kb_id)
         except Exception as e:
             return e
@@ -2566,7 +2564,7 @@ def queue_raptor_o_graphrag_tasks(db, sample_doc_id, ty, priority, fake_doc_id="
     task["doc_id"] = fake_doc_id
     task["doc_ids"] = doc_ids
     DocumentService.begin2parse(db, sample_doc_id["id"])
-    assert REDIS_CONN.queue_product(get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
+    assert REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
     return task["id"]
 
 
@@ -2650,7 +2648,7 @@ async def queue_analyze_v2_task(db, doc_id, kb_id, config, user_id, file=None, p
         "priority": priority
     }
     
-    success = REDIS_CONN.queue_product(get_svr_queue_name(priority), message=queue_message)
+    success = REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=queue_message)
     
     if not success:
         logging.error(f"Failed to send task {task_id} to Redis queue")
@@ -2662,7 +2660,7 @@ async def queue_analyze_v2_task(db, doc_id, kb_id, config, user_id, file=None, p
 
 
 def get_queue_length(priority):
-    group_info = REDIS_CONN.queue_info(get_svr_queue_name(priority), SVR_CONSUMER_GROUP_NAME)
+    group_info = REDIS_CONN.queue_info(settings.get_svr_queue_name(priority), SVR_CONSUMER_GROUP_NAME)
     if not group_info:
         return 0
     return int(group_info.get("lag", 0) or 0)

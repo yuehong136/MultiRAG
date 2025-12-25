@@ -4,11 +4,9 @@ from timeit import default_timer as timer
 
 from sqlalchemy import text
 
-from api import settings
-from common import globals
 from api.db.db_models import engine, get_pool_status
 from core.utils.redis_conn import REDIS_CONN
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from core.utils.es_conn import ESConnection
 from core.utils.milvus_conn import MilvusConnection
 from core.utils.infinity_conn import InfinityConnection
@@ -76,7 +74,7 @@ def check_redis() -> tuple[bool, dict]:
 def check_doc_engine() -> tuple[bool, dict]:
     st = timer()
     try:
-        meta = globals.docStoreConn.health()
+        meta = settings.docStoreConn.health()
         # treat any successful call as ok
         return True, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", **(meta or {})}
     except Exception as e:
@@ -86,7 +84,7 @@ def check_doc_engine() -> tuple[bool, dict]:
 def check_storage() -> tuple[bool, dict]:
     st = timer()
     try:
-        STORAGE_IMPL.health()
+        settings.STORAGE_IMPL.health()
         return True, {"elapsed": f"{(timer() - st) * 1000.0:.1f}"}
     except Exception as e:
         return False, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", "error": str(e)}
@@ -288,7 +286,7 @@ def get_database_status() -> dict:
 def check_minio_alive():
     start_time = timer()
     try:
-        response = requests.get(f'http://{globals.MINIO["host"]}/minio/health/live')
+        response = requests.get(f'http://{settings.MINIO["host"]}/minio/health/live')
         if response.status_code == 200:
             return {'status': "alive", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
         else:

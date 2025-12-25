@@ -18,27 +18,24 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, Discriminator, model_validator
 from sqlalchemy.orm import Session
 
+from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.dialog_service import meta_filter
 from api.db.services.search_service import SearchService
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.llm_service import LLMBundle
+from api.db.services.user_service import UserTenantService
+from api.db.services.document_service import DocumentService
+from api.utils.api_utils import server_error_response, get_data_error_result
+from api.utils.api_utils import get_json_result
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
 from core.prompts.generator import keyword_extraction, cross_languages, gen_meta_filter
-from common.constants import LLMType, ParserType
-from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMBundle
-from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import server_error_response, get_data_error_result
-from api.db.services.document_service import DocumentService
-from api import settings
-from common import globals
-from core.settings import PAGERANK_FLD
-from api.utils.api_utils import get_json_result
+from common import settings
+from common.constants import RetCode, LLMType, ParserType, PAGERANK_FLD
 from core.utils.doc_store_conn import OrderByExpr
-from api.apps import manager
 from common.string_utils import remove_redundant_spaces
-from common.constants import RetCode
 
 router = APIRouter()
 
@@ -378,10 +375,10 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
         if request.available_int:
             query["available_int"] = request.available_int
             # query_count["available_int"] = request["available_int"]
-        # total = globals.retriever.count(query_count, search.index_name_one(tenant_id, kb.name)).total
-        # sres = globals.retriever.search(query, search.index_name_one(tenant_id, kb.name))
-        # total = globals.retriever.search(query_count, search.index_name_one(tenant_id, kb.name), kb_ids).total
-        sres = globals.retriever.search(query, search.index_name_one(tenant_id, kb.name), kb_ids, highlight=["content_ltks"])
+        # total = settings.retriever.count(query_count, search.index_name_one(tenant_id, kb.name)).total
+        # sres = settings.retriever.search(query, search.index_name_one(tenant_id, kb.name))
+        # total = settings.retriever.search(query_count, search.index_name_one(tenant_id, kb.name), kb_ids).total
+        sres = settings.retriever.search(query, search.index_name_one(tenant_id, kb.name), kb_ids, highlight=["content_ltks"])
         res = {"total": sres.total, "chunks": [], "doc": doc.to_dict()}
         for id in sres.ids:
             d = {
@@ -532,7 +529,7 @@ def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
             kb_ids = KnowledgebaseService.get_kb_ids(db, tenant.tenant_id)
             for kb_id in kb_ids:
                 kb = KnowledgebaseService.get_by_id(db, kb_id)
-                chunk = globals.docStoreConn.get(chunk_id, search.index_name_one(tenant.tenant_id, kb.name), kb_ids)
+                chunk = settings.docStoreConn.get(chunk_id, search.index_name_one(tenant.tenant_id, kb.name), kb_ids)
                 if chunk:
                     break
         if chunk is None:
@@ -632,7 +629,7 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
         match_exprs = []
         if request.question:
             embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
-            dealer = search.Dealer(globals.docStoreConn)
+            dealer = search.Dealer(settings.docStoreConn)
             # 使用固定的 topk 以确保 total 保持一致
             match_exprs.append(
                 dealer.get_vector(
@@ -643,7 +640,7 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
                 )
             )
 
-        search_res = globals.docStoreConn.search(
+        search_res = settings.docStoreConn.search(
             request.fields,
             [],
             condition,
@@ -655,8 +652,8 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
             [kb.id]
         )
 
-        total = globals.docStoreConn.getTotal(search_res)
-        field_data = globals.docStoreConn.getFields(search_res, request.fields)
+        total = settings.docStoreConn.getTotal(search_res)
+        field_data = settings.docStoreConn.getFields(search_res, request.fields)
         distances = field_data.pop("distance", [])
 
         rows = []
@@ -875,7 +872,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         # 更新数据库
         update_condition = {"id": request.chunk_id}  # 主键查询条件
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
-        globals.docStoreConn.update(update_condition, d, search.index_name_one(tenant_id, kb.name), doc.kb_id)
+        settings.docStoreConn.update(update_condition, d, search.index_name_one(tenant_id, kb.name), doc.kb_id)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
@@ -959,7 +956,7 @@ def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depe
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
         for cid in req["chunk_ids"]:
-            if not globals.docStoreConn.update({"id": cid},
+            if not settings.docStoreConn.update({"id": cid},
                                                 {"available_int": int(req["available_int"])},
                                                 search.index_name_one(DocumentService.get_tenant_id(db, req["doc_id"]), kb.name),
                                                 doc.kb_id):
@@ -1109,7 +1106,6 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
 }
 ```
     """
-    from core.utils.storage_factory import STORAGE_IMPL
     req = request.model_dump()
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
@@ -1120,11 +1116,11 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
             return get_data_error_result(retmsg="KnowledgeBase not found!")
 
         collection_name = search.index_name_one(kb.tenant_id, kb.name)
-        db_type = globals.docStoreConn.dbType()
+        db_type = settings.docStoreConn.dbType()
         if db_type == "milvus":
-            delete_result = globals.docStoreConn.delete(collection_name=collection_name, ids=req["chunk_ids"])
+            delete_result = settings.docStoreConn.delete(collection_name=collection_name, ids=req["chunk_ids"])
         else:
-            delete_result = globals.docStoreConn.delete(
+            delete_result = settings.docStoreConn.delete(
                 condition={"id": req["chunk_ids"]},
                 indexName=collection_name,
                 knowledgebaseId=kb.id
@@ -1135,8 +1131,8 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
         chunk_number = len(deleted_chunk_ids)
         DocumentService.decrement_chunk_num(db, doc.id, doc.kb_id, 1, chunk_number, 0)
         for cid in deleted_chunk_ids:
-            if STORAGE_IMPL.obj_exist(doc.kb_id, cid):
-                STORAGE_IMPL.rm(doc.kb_id, cid)
+            if settings.STORAGE_IMPL.obj_exist(doc.kb_id, cid):
+                settings.STORAGE_IMPL.rm(doc.kb_id, cid)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
@@ -1339,7 +1335,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         d["vector"] = v.tolist()  # 始终保存到标准vector字段以保持兼容性
         d[f"q_{vector_dim}_vec"] = v.tolist()  # 同时保存到维度特定字段
 
-        globals.docStoreConn.insert([d], search.index_name_one(tenant_id, kb.name), kb.id)
+        settings.docStoreConn.insert([d], search.index_name_one(tenant_id, kb.name), kb.id)
 
         DocumentService.increment_chunk_num(
             db, doc.id, doc.kb_id, c, 1, 0)
@@ -1609,7 +1605,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
 
         # 当调用retrieval函数时，传递维度信息
         # 注意：kb_ids 参数应传递知识库 ID 列表，而不是名称列表，用于 ES 的 kb_id 过滤
-        ranks = globals.retriever.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
+        ranks = settings.retriever.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
                                request.size, request.similarity_threshold, request.vector_similarity_weight,
                                request.top_k, doc_ids, rerank_mdl=rerank_mdl,
                                highlight=request.highlight if request.highlight is not None else False,
@@ -1753,7 +1749,7 @@ def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depends(man
     tenant_id = DocumentService.get_tenant_id(db, doc_id)
     kb_names = KnowledgebaseService.get_kb_ids(db, tenant_id)
     # todo 因为search参数里缺少knowledge_graph_kwd ，所以暂时无法使用，后续需要调整milvus集合创建的schema
-    sres = globals.retriever.search(req, search.index_name_one(tenant_id, kb_names))
+    sres = settings.retriever.search(req, search.index_name_one(tenant_id, kb_names))
     obj = {"graph": {}, "mind_map": {}}
     for id in sres.ids[:2]:
         ty = sres.field[id]["knowledge_graph_kwd"]

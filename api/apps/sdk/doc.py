@@ -13,8 +13,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 
-from api import settings
-from common import globals
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import FileType
 from common.constants import FileSource, LLMType, ParserType, TaskStatus
@@ -34,7 +32,7 @@ from core.app.qa import beAdoc, rmPrefix
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from common.string_utils import remove_redundant_spaces
 
 MAXIMUM_OF_UPLOADING_FILES = 256
@@ -348,7 +346,7 @@ def update_document(
             )
             if not e:
                 return get_error_data_result(retmsg="Document not found!")
-            globals.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
+            settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
     
     # 更新启用状态
     if "enabled" in req:
@@ -358,7 +356,7 @@ def update_document(
                 if not DocumentService.update_by_id(db, doc.id, {"status": str(status)}):
                     return get_error_data_result(retmsg="Database error (Document update)!")
                 
-                globals.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id), doc.kb_id)
+                settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id), doc.kb_id)
                 return get_result(data=True)
             except Exception as e:
                 return server_error_response(e)
@@ -435,11 +433,11 @@ def download_document(
         return get_error_data_result(retmsg="This document has been deleted")
     
     try:
-        STORAGE_IMPL.obj_exist(file.location)
+        settings.STORAGE_IMPL.obj_exist(file.location)
         
         def file_generator():
             try:
-                for chunk in STORAGE_IMPL.get(file.location):
+                for chunk in settings.STORAGE_IMPL.get(file.location):
                     yield chunk
             except Exception:
                 yield b""
@@ -818,7 +816,7 @@ def list_document_chunks(
         if keywords:
             query_conditions["content"] = keywords
         
-        res = globals.docStoreConn.search(
+        res = settings.docStoreConn.search(
             query_conditions,
             search.index_name(tenant_id),
             dataset_id,
@@ -909,7 +907,7 @@ def add_document_chunk(
         chunk_data["q_%d_vec" % len(v[0])] = v[0]
         
         # 保存到搜索引擎
-        globals.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(kb.tenant_id), dataset_id)
+        settings.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(kb.tenant_id), dataset_id)
         
         # 更新文档统计
         DocumentService.increment_chunk_num(
@@ -951,7 +949,7 @@ def delete_document_chunks(
     
     try:
         # 从搜索引擎删除chunks
-        globals.docStoreConn.delete({"id": chunk_ids}, search.index_name(tenant_id), dataset_id)
+        settings.docStoreConn.delete({"id": chunk_ids}, search.index_name(tenant_id), dataset_id)
         
         # 更新文档统计
         DocumentService.increment_chunk_num(
@@ -990,7 +988,7 @@ def update_document_chunk(
     
     try:
         # 获取现有chunk数据
-        res = globals.docStoreConn.get(chunk_id, search.index_name(tenant_id), dataset_id)
+        res = settings.docStoreConn.get(chunk_id, search.index_name(tenant_id), dataset_id)
         if not res:
             return get_error_data_result(retmsg="Chunk not found.")
         
@@ -1034,7 +1032,7 @@ def update_document_chunk(
         chunk_data["update_timestamp_flt"] = datetime.datetime.now().timestamp()
         
         # 保存到搜索引擎
-        globals.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(tenant_id), dataset_id)
+        settings.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(tenant_id), dataset_id)
         
         return get_result(data={"chunk_id": chunk_id, **req})
     except Exception as e:
@@ -1145,7 +1143,7 @@ def retrieval_test(
             question += keyword_extraction(chat_mdl, question)
         
         # 执行检索
-        ranks = globals.retriever.retrieval(
+        ranks = settings.retriever.retrieval(
             question,
             embd_mdl,
             tenant_ids,

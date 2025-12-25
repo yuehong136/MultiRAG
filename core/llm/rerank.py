@@ -27,7 +27,7 @@ import requests
 from huggingface_hub import snapshot_download
 from yarl import URL
 
-from api import settings
+from common import settings
 from api.utils.file_utils import get_home_cache_dir
 from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, truncate, total_token_count_from_response

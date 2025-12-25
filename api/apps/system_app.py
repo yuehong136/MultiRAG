@@ -12,7 +12,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Body, Response
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, field_validator, ConfigDict, ValidationError
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Annotated, Any
 
 from api.apps.api_app import generate_confirmation_token
@@ -20,12 +20,10 @@ from api.db.db_models import APIToken, get_db, DATABASE_TYPE, get_pool_status
 from api.db.services.api_service import APITokenService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
-from api import settings
-from common import globals
 from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
 from api.versions import get_multirag_version
 from common.time_utils import current_timestamp, datetime_format
-from core.utils.storage_factory import STORAGE_IMPL, STORAGE_IMPL_TYPE
+from common import settings
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN
 from api.apps import manager
@@ -128,7 +126,7 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
     res = {}
     st = timer()
     try:
-        res["doc_engine"] = globals.docStoreConn.health()
+        res["doc_engine"] = settings.docStoreConn.health()
         res["doc_engine"]["elapsed"] = "{:.1f}".format((timer() - st) * 1000.0)
     except Exception as e:
         res["doc_engine"] = {
@@ -140,15 +138,15 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
 
     st = timer()
     try:
-        STORAGE_IMPL.health()
+        settings.STORAGE_IMPL.health()
         res["storage"] = {
-            "storage": STORAGE_IMPL_TYPE.lower(),
+            "storage": settings.STORAGE_IMPL_TYPE.lower(),
             "status": "green",
             "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
         }
     except Exception as e:
         res["storage"] = {
-            "storage": STORAGE_IMPL_TYPE.lower(),
+            "storage": settings.STORAGE_IMPL_TYPE.lower(),
             "status": "red",
             "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
             "error": str(e),

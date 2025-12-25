@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 from typing import Any, List, Dict
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
@@ -20,7 +20,7 @@ from api.db.services.guard_service_service import GuardServiceService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from core.app import naive
 import xxhash
 
@@ -785,7 +785,7 @@ def detect_batch_documents(
                 
                 # 从MinIO获取文件内容
                 try:
-                    binary = STORAGE_IMPL.get(bucket, name)
+                    binary = settings.STORAGE_IMPL.get(bucket, name)
                     if not binary:
                         raise Exception("无法从存储获取文档内容")
                 except Exception as e:
@@ -1365,7 +1365,7 @@ def detect_document_chunks(
         
         # 从MinIO获取文件内容
         try:
-            binary = STORAGE_IMPL.get(bucket, name)
+            binary = settings.STORAGE_IMPL.get(bucket, name)
             if not binary:
                 return get_data_error_result(retmsg="无法从存储获取文档内容")
         except Exception as e:

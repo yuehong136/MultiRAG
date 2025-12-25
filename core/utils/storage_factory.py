@@ -1,37 +1,18 @@
-import os
-from enum import Enum
-
-from core.utils.azure_sas_conn import MultiRAGAzureSasBlob
-from core.utils.azure_spn_conn import MultiRAGAzureSpnBlob
-from core.utils.minio_conn import MultiRAGMinio
-from core.utils.opendal_conn import OpenDALStorage
-from core.utils.s3_conn import MultiRAGS3
-from core.utils.oss_conn import MultiRAGOSS
-
-
-class Storage(Enum):
-    MINIO = 1
-    AZURE_SPN = 2
-    AZURE_SAS = 3
-    AWS_S3 = 4
-    OSS = 5
-    OPENDAL = 6
-
-
-class StorageFactory:
-    storage_mapping = {
-        Storage.MINIO: MultiRAGMinio,
-        Storage.AZURE_SPN: MultiRAGAzureSpnBlob,
-        Storage.AZURE_SAS: MultiRAGAzureSasBlob,
-        Storage.AWS_S3: MultiRAGS3,
-        Storage.OSS: MultiRAGOSS,
-        Storage.OPENDAL: OpenDALStorage
-    }
-
-    @classmethod
-    def create(cls, storage: Storage):
-        return cls.storage_mapping[storage]()
-
-
-STORAGE_IMPL_TYPE = os.getenv('STORAGE_IMPL', 'MINIO')
-STORAGE_IMPL = StorageFactory.create(Storage[STORAGE_IMPL_TYPE])
+#
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+# This file has been merged into common/settings.py
+# Please use "from common import settings" instead
+# For STORAGE_IMPL, use "settings.STORAGE_IMPL"

@@ -7,16 +7,14 @@
 @desc: SQLAdmin 认证中间件
 """
 import logging
-from typing import Optional
 
 from sqladmin.authentication import AuthenticationBackend
 from starlette.requests import Request
-from starlette.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from api.db.db_models import SessionLocal
 from api.db.services import UserService
-from api import settings
+from common import settings
 
 
 class AdminAuth(AuthenticationBackend):

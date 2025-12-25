@@ -4,7 +4,7 @@ import os
 import numpy as np
 from huggingface_hub import snapshot_download
 import threading
-from api import settings
+from common import settings
 from api.utils.file_utils import get_home_cache_dir
 from common.token_utils import num_tokens_from_string, truncate
 from core.llm.embedding_model.base import Base

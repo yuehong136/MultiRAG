@@ -19,7 +19,6 @@ from common.constants import StatusEnum
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
-from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from common.misc_utils import get_uuid
 from common.constants import RetCode

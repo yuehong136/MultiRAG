@@ -12,7 +12,7 @@ class YoudaoEmbed(Base):
     def __init__(self, key: str | None = None, model_name: str = "maidalun1020/bce-embedding-base_v1", base_url: str | None = None, **kwargs):
         # super().__init__(key, model_name)
         model_path = self.get_model_path(model_name.split("/")[-1] if "/" in model_name else model_name)
-        from api import settings
+        from common import settings
         if not settings.LIGHTEN and not YoudaoEmbed._client:
             from BCEmbedding import EmbeddingModel as qanthing
             try:

@@ -29,7 +29,6 @@ from agent.component.agent_with_tools import Agent, AgentParam
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.llm_service import LLMService, LLMBundle
 from api.db.services.user_service import TenantService
-from api import settings
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result, get_allowed_llm_factories
 from common.constants import StatusEnum, LLMType
 from api.db.db_models import TenantLLM, get_db, db_connection
@@ -40,7 +39,7 @@ from core.prompts.generator import kb_prompt
 from core.utils.tavily_conn import Tavily
 from api.db.services.mcp_server_service import MCPServerService
 from api.utils.web_utils import CONTENT_TYPE_MAP
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from common.misc_utils import get_uuid
 from core.utils.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
 
@@ -135,7 +134,7 @@ class ChatAgentAdapter:
                 logging.debug(f"Tool callback: component_id={component_id}, args={args}")
 
             def get_variable_value(self, var_name):
-                return self.globals.get(var_name, "")
+                return self.settings.get(var_name, "")
 
             def set_variable_value(self, var_name, value):
                 self.globals[var_name] = value
@@ -1386,14 +1385,12 @@ async def upload_file_to_presigned_url(file: UploadFile) -> tuple[str, str | Non
     Returns:
         (url, media_type): 预签名URL和媒体类型
     """
-    from common import globals
-
     content = await file.read()
     if not content:
         raise ValueError("Empty file content")
 
-    bucket = (globals.OSS.get("bucket") or
-              globals.MINIO.get("bucket") or
+    bucket = (settings.OSS.get("bucket") or
+              settings.MINIO.get("bucket") or
               "multimodal-temp")
 
     ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "bin"
@@ -1401,12 +1398,12 @@ async def upload_file_to_presigned_url(file: UploadFile) -> tuple[str, str | Non
     content_type = CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
 
     try:
-        STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
+        settings.STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
     except TypeError:
         # Fallback for storage backends that don't support content_type
-        STORAGE_IMPL.put(bucket, unique_filename, content)
+        settings.STORAGE_IMPL.put(bucket, unique_filename, content)
 
-    url = STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=3600)
+    url = settings.STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=3600)
     if not url:
         raise Exception("Failed to generate presigned URL")
 

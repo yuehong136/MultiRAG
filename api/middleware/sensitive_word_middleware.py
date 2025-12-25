@@ -12,13 +12,11 @@ import logging
 from typing import Callable
 
 from fastapi import Request, Response
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from sqlalchemy.orm import Session
 
 from api.db.db_models import SessionLocal
 from api.utils.api_utils import get_json_result
-from api import settings
+from common import settings
 from common.constants import RetCode
 
 
@@ -223,7 +221,6 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
             if auth_header and auth_header.startswith("Bearer "):
                 try:
                     import jwt
-                    from api import settings
                     from api.db.db_models import SessionLocal
                     from api.db.services.user_service import UserService
                     

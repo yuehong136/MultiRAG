@@ -12,23 +12,19 @@ import asyncio
 import logging
 import re
 import time
-from collections import Counter, defaultdict
 from copy import deepcopy
 
-import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy.orm import Session
 
-from api import settings
-from common import globals
+from common import settings
 from common.constants import LLMType
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.metadata_extractor import BatchMetadataExtractor
-from core.nlp import naive_merge, rag_tokenizer
+from core.nlp import naive_merge
 from core.nlp.term_weight import Dealer as TermWeightDealer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 
 logger = logging.getLogger(__name__)
 
@@ -347,7 +343,7 @@ class PipelineAnalysisService:
                     raise ValueError(f"Knowledgebase {kb_id} not found")
                 
                 # 从 Milvus 获取
-                query_result = globals.docStoreConn.search(
+                query_result = settings.docStoreConn.search(
                     {"doc_id": doc_id},
                     search.index_name(self.tenant_id),
                     kb_id,

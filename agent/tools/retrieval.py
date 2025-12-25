@@ -23,8 +23,7 @@ from api.db.services.dialog_service import meta_filter
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api import settings
-from common import globals
+from common import settings
 from common.connection_utils import timeout
 from core.app.tag import label_question
 from core.prompts.generator import cross_languages, kb_prompt, gen_meta_filter
@@ -143,7 +142,7 @@ class Retrieval(ToolBase, ABC):
             if kbs:
                 kb_names = list([kb.name for kb in kbs])
                 query = re.sub(r"^user[:：\s]*", "", query, flags=re.IGNORECASE)
-                kbinfos = globals.retriever.retrieval(
+                kbinfos = settings.retriever.retrieval(
                     query,
                     embd_mdl,
                     tenant_ids,
@@ -161,7 +160,7 @@ class Retrieval(ToolBase, ABC):
                 # TOC增强和知识图谱检索
                 if self._param.toc_enhance:
                     chat_mdl = LLMBundle(db, self._canvas._tenant_id, LLMType.CHAT)
-                    cks = globals.retriever.retrieval_by_toc(query, kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, self._param.top_n)
+                    cks = settings.retriever.retrieval_by_toc(query, kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, self._param.top_n)
                     if cks:
                         kbinfos["chunks"] = cks
                 if self._param.use_kg:

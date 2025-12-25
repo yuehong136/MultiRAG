@@ -3,7 +3,7 @@ from typing import Generator, Any
 
 from abc import ABC, abstractmethod
 
-from api.settings import AIFORBI_BASE_URL, AIFORBI_API_KEY, AIFORBI_MODEL_ID
+from common.settings import AIFORBI_BASE_URL, AIFORBI_API_KEY, AIFORBI_MODEL_ID
 
 
 class BaseLLMClient(ABC):

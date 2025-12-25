@@ -8,7 +8,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi_login import LoginManager
 from sqlalchemy.orm import Session
 
-from api import settings
+from common import settings
 from api.common.exceptions import AdminException, UserNotFoundError
 from api.db.services import UserService
 from api.db.db_models import get_db, SessionLocal

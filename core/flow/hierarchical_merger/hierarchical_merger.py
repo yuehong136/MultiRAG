@@ -26,7 +26,7 @@ from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.hierarchical_merger.schema import HierarchicalMergerFromUpstream
 from core.nlp import concat_img
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 
 
 class HierarchicalMergerParam(ProcessParamBase):

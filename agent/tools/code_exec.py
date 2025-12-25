@@ -21,7 +21,7 @@ from strenum import StrEnum
 from typing import Optional
 from pydantic import BaseModel, Field, field_validator
 from agent.tools.base import ToolParamBase, ToolBase, ToolMeta
-from api import settings
+from common import settings
 from common.connection_utils import timeout
 
 

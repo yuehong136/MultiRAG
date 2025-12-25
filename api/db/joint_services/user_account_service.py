@@ -18,8 +18,6 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from api import settings
-from common import globals
 from api.utils.api_utils import group_by
 from api.db import FileType, UserTenantRole#, ActiveEnum
 from api.db.services.api_service import APITokenService, API4ConversationService
@@ -38,7 +36,7 @@ from api.db.services.task_service import TaskService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService, UserService, UserTenantService
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from core.nlp import search
 
 
@@ -73,7 +71,7 @@ def create_new_user(db: Session, user_info: dict) -> dict:
         "id": user_id,
         "name": user_info["nickname"] + "'s Kingdom",
         "llm_id": settings.CHAT_MDL,
-        "embd_id": globals.EMBEDDING_MDL,
+        "embd_id": settings.EMBEDDING_MDL,
         "asr_id": settings.ASR_MDL,
         "parser_ids": settings.PARSERS,
         "img2txt_id": settings.IMAGE2TEXT_MDL,
@@ -197,8 +195,8 @@ def delete_user_data(db: Session, user_id: str) -> dict:
             if kb_ids:
                 # step1.1.1 delete files in storage, remove bucket
                 for kb_id in kb_ids:
-                    if STORAGE_IMPL.bucket_exists(kb_id):
-                        STORAGE_IMPL.remove_bucket(kb_id)
+                    if settings.STORAGE_IMPL.bucket_exists(kb_id):
+                        settings.STORAGE_IMPL.remove_bucket(kb_id)
                 done_msg += f"- Removed {len(kb_ids)} dataset's buckets.\n"
                 # step1.1.2 delete file and document info in db
                 doc_ids = DocumentService.get_all_doc_ids_by_kb_ids(db, kb_ids)
@@ -220,17 +218,17 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                     done_msg += f"- Deleted {file2doc_delete_res} document-file relation records.\n"
                 # step1.1.3 delete chunk in es
                 chunk_delete_count = 0
-                db_type = globals.docStoreConn.dbType()
+                db_type = settings.docStoreConn.dbType()
                 for kb_id, kb_name in zip(kb_ids, kb_names):
                     collection_name = search.index_name_one(tenant_id, kb_name)
-                    if globals.docStoreConn.has_collection(collection_name):
+                    if settings.docStoreConn.has_collection(collection_name):
                         if db_type == "milvus":
-                            result = globals.docStoreConn.delete(
+                            result = settings.docStoreConn.delete(
                                 collection_name=collection_name,
                                 filter=f"kb_id == '{kb_id}'"
                             )
                         else:
-                            result = globals.docStoreConn.delete(
+                            result = settings.docStoreConn.delete(
                                 condition={"kb_id": kb_id},
                                 indexName=collection_name,
                                 knowledgebaseId=kb_id
@@ -273,7 +271,7 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                     if created_files:
                         # step2.1.1.1 delete file in storage
                         for f in created_files:
-                            STORAGE_IMPL.rm(f.parent_id, f.location)
+                            settings.STORAGE_IMPL.rm(f.parent_id, f.location)
                         done_msg += f"- Deleted {len(created_files)} uploaded file.\n"
                         # step2.1.1.2 delete file record
                         file_delete_res = FileService.delete_by_ids(db, [f.id for f in created_files])
@@ -291,24 +289,24 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                     # chunks in {'tenant_id': {'kb_id': [{'id': doc_id}]}} structure
                     chunk_delete_res = 0
                     kb_doc_info = {}
-                    db_type = globals.docStoreConn.dbType()
+                    db_type = settings.docStoreConn.dbType()
                     for _tenant_id, kb_doc in kb_grouped_doc.items():
                         for _kb_id, docs in kb_doc.items():
                             # 获取 kb_name (所有 docs 都来自同一个 kb，所以取第一个即可)
                             kb_name = docs[0].get("kb_name")
                             collection_name = search.index_name_one(_tenant_id, kb_name)
-                            if globals.docStoreConn.has_collection(collection_name):
+                            if settings.docStoreConn.has_collection(collection_name):
                                 doc_ids = [d["id"] for d in docs]
                                 if db_type == "milvus":
                                     # 构建 filter 表达式
                                     doc_id_list = "', '".join(doc_ids)
-                                    result = globals.docStoreConn.delete(
+                                    result = settings.docStoreConn.delete(
                                         collection_name=collection_name,
                                         filter=f"doc_id in ['{doc_id_list}']"
                                     )
                                 else:
                                     # ES/OpenSearch 使用 condition 参数
-                                    result = globals.docStoreConn.delete(
+                                    result = settings.docStoreConn.delete(
                                         condition={"doc_id": doc_ids},
                                         indexName=collection_name,
                                         knowledgebaseId=_kb_id
