@@ -73,7 +73,7 @@ class SyncBase:
                 ''.join(traceback.format_exception(None, ex, ex.__traceback__)).strip()
             ])
             with db_connection() as db:
-                SyncLogsService.update_by_id(db, task["id"], {"status": TaskStatus.FAIL, "full_exception_trace": msg})
+                SyncLogsService.update_by_id(db, task["id"], {"status": TaskStatus.FAIL, "full_exception_trace": msg, "error_msg": str(ex)})
 
         with db_connection() as db:
             SyncLogsService.schedule(db, task["connector_id"], task["kb_id"], task["poll_range_start"])
