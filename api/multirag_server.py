@@ -35,7 +35,7 @@ from common.file_utils import get_project_base_directory
 
 from api.db.db_models import init_database_tables as init_web_db, upgrade_database_tables as upgrade_database, SessionLocal
 from api.db.init_data import init_web_data
-from api.versions import get_multirag_version
+from common.versions import get_multirag_version
 import uvicorn
 # from common.config_utils import show_configs
 from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions

@@ -13,6 +13,7 @@ from common.log_utils import init_root_logger
 from common.constants import SERVICE_CONF
 from common.config_utils import show_configs
 from common import settings
+from common.versions import get_multirag_version
 from config import load_configurations, SERVICE_CONFIGS
 from api.common.exceptions import setup_exception_handlers
 
@@ -61,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     SERVICE_CONFIGS.configs = load_configurations(SERVICE_CONF)
 
     show_configs()
+    logging.info(f'MultiRAG version: {get_multirag_version()}')
 
     # 初始化默认管理员账号
     from api.db.db_models import SessionLocal

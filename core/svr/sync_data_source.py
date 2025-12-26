@@ -18,7 +18,7 @@ import trio
 import faulthandler
 from common.constants import FileSource, TaskStatus
 from common import settings
-from api.versions import get_multirag_version
+from common.versions import get_multirag_version
 from common.data_source.confluence_connector import ConfluenceConnector
 from common.data_source.utils import load_all_docs_from_checkpoint_connector
 
