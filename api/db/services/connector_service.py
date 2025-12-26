@@ -104,7 +104,7 @@ class SyncLogsService(CommonService):
         connector_id: str | None = None,
         page_number: int | None = None,
         items_per_page: int = 15
-    ) -> list[dict]:
+    ) -> tuple[list[dict], int]:
         """
         获取同步任务列表
 
@@ -165,13 +165,14 @@ class SyncLogsService(CommonService):
             )
 
         stmt = stmt.distinct().order_by(sa_desc(cls.model.update_time))
+        total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar()
 
         if page_number:
             offset = (page_number - 1) * items_per_page
             stmt = stmt.offset(offset).limit(items_per_page)
 
         rows = db.execute(stmt).mappings().all()
-        return [dict(row) for row in rows]
+        return [dict(row) for row in rows], total
 
     @classmethod
     def start(cls, db: Session, task_id: str, connector_id: str):
@@ -223,6 +224,15 @@ class SyncLogsService(CommonService):
             reindex: 是否重新索引
             total_docs_indexed: 已索引文档总数
         """
+        try:
+            if cls.query_count(db, kb_id=kb_id, connector_id=connector_id) > 100:
+                rm_objs = cls.query(db, kb_id=kb_id, connector_id=connector_id, order_by="update_time", desc=False, limit=70)
+                rm_ids = [m.id for m in rm_objs]
+                deleted = cls.delete_by_ids(db, rm_ids)
+                logger.info(f"[SyncLogService] Cleaned {deleted} old logs.")
+        except Exception as e:
+            logger.exception(e)
+
         try:
             # 检查是否已有调度中的任务
             existing = cls.query(db, kb_id=kb_id, connector_id=connector_id, status=TaskStatus.SCHEDULE)
@@ -343,12 +353,10 @@ class SyncLogsService(CommonService):
 
         doc_ids = []
         errs, doc_blob_pairs = FileService.upload_document(db, kb, files, tenant_id, None, src)
-
-        if not errs:
-            kb_table_num_map = {}
-            for doc, _ in doc_blob_pairs:
-                DocumentService.run(db, tenant_id, doc, kb_table_num_map)
-                doc_ids.append(doc["id"])
+        kb_table_num_map = {}
+        for doc, _ in doc_blob_pairs:
+            DocumentService.run(db, tenant_id, doc, kb_table_num_map)
+            doc_ids.append(doc["id"])
 
         return errs, doc_ids
 

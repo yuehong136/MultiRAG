@@ -203,7 +203,6 @@ def _manage_async_retrieval(
                     start_time=start_time,
                     end_time=end_time,
                 ):
-                    print(doc)
                     yield doc
 
     def run_and_yield() -> Iterable[Document]:

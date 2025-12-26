@@ -273,8 +273,8 @@ def list_logs(
     ```
     """
     try:
-        logs = SyncLogsService.list_sync_tasks(db, connector_id, page, page_size)
-        return get_json_result(data=logs)
+        arr, total = SyncLogsService.list_sync_tasks(db, connector_id, page, page_size)
+        return get_json_result(data={"total": total, "logs": arr})
     except Exception as e:
         return server_error_response(e)
 
