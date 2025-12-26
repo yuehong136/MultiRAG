@@ -1145,7 +1145,7 @@ def trace_graphrag(
 
     task = TaskService.get_by_id(db, task_id)
     if not task:
-        return get_error_data_result(retmsg="GraphRAG Task Not Found or Error Occurred")
+        return get_json_result(data={})
 
     return get_json_result(data=task.to_dict())
 

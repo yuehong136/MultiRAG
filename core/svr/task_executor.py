@@ -54,6 +54,7 @@ from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as
 from common.constants import PAGERANK_FLD, TAG_FLD, SVR_CONSUMER_GROUP_NAME
 from common.token_utils import num_tokens_from_string, truncate
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
+from common.exceptions import TaskCanceledException
 from common import settings
 from graphrag.utils import chat_limiter
 
@@ -147,11 +148,6 @@ def signal_handler(sig, frame):
     stop_event.set()
     time.sleep(1)
     sys.exit(0)
-
-
-class TaskCanceledException(Exception):
-    def __init__(self, msg):
-        self.msg = msg
 
 
 def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing...", enable_sse=False):
