@@ -201,6 +201,7 @@ class KnowledgebaseService(CommonService):
         # will get all permitted kb, be cautious.
         fields = [
             cls.model.name,
+            cls.model.avatar,
             cls.model.language,
             cls.model.permission,
             cls.model.doc_num,
@@ -231,6 +232,7 @@ class KnowledgebaseService(CommonService):
             for kb in kb_batch:
                 res.append({
                     "name": kb.name,
+                    "avatar": kb.avatar,
                     "language": kb.language,
                     "permission": kb.permission,
                     "doc_num": kb.doc_num,

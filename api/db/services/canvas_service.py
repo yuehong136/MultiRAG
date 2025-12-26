@@ -106,6 +106,7 @@ class UserCanvasService(CommonService):
         # will get all permitted agents, be cautious
         fields = [
             cls.model.id,
+            cls.model.avatar,
             cls.model.title,
             cls.model.permission,
             cls.model.canvas_type,
@@ -132,6 +133,7 @@ class UserCanvasService(CommonService):
             # 将查询结果转换为字典
             for agent in ag_batch:
                 res.append({
+                    "avatar": agent.avatar,
                     "title": agent.title,
                     "permission": agent.permission,
                     "canvas_type": agent.canvas_type,

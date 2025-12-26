@@ -683,6 +683,7 @@ class AdminCLI(Cmd):
             if res_json.get('code') == 0:
                 data = res_json.get('data')
                 if data is not None:
+                    data.pop('avatar', None)
                     self._print_table_simple(data)
                 else:
                     print(f"No data available for user {user_name}")
@@ -786,6 +787,8 @@ class AdminCLI(Cmd):
             if res_json.get('code') == 0:
                 data = res_json.get('data')
                 if data is not None:
+                    for t in data:
+                        t.pop('avatar', None)
                     self._print_table_simple(data)
                 else:
                     print(f"No datasets available for user {user_name}")
@@ -806,6 +809,8 @@ class AdminCLI(Cmd):
             if res_json.get('code') == 0:
                 data = res_json.get('data')
                 if data is not None:
+                    for t in data:
+                        t.pop('avatar', None)
                     self._print_table_simple(data)
                 else:
                     print(f"No agents available for user {user_name}")

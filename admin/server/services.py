@@ -23,6 +23,7 @@ class UserMgr:
         result = []
         for user in users:
             result.append({
+                'avatar': user.avatar,
                 'email': user.email,
                 'nickname': user.nickname,
                 'create_date': user.create_date,
@@ -56,6 +57,7 @@ class UserMgr:
         
         user = users[0]
         return {
+            'avatar': user.avatar,
             'email': user.email,
             'nickname': user.nickname,
             'language': user.language,
@@ -221,7 +223,8 @@ class UserServiceMgr:
         return [{
             'title': r['title'],
             'permission': r['permission'],
-            'canvas_category': r['canvas_category'].split('_')[0]
+            'canvas_category': r['canvas_category'].split('_')[0],
+            'avatar': r['avatar']
         } for r in res]
 
 class ServiceMgr:
