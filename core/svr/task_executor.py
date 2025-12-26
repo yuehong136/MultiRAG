@@ -1031,7 +1031,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
         raptor_config["threshold"]
     )
     original_length = len(chunks)
-    chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback)
+    chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback, row["id"])
     doc = {
         "doc_id": fake_doc_id,
         "kb_id": [str(row["kb_id"])],
@@ -2350,6 +2350,8 @@ async def do_handle_task(db, task):
                 callback=progress_callback,
                 doc_ids=task.get("doc_ids", []),
             )
+        if fake_doc_ids := task.get("doc_ids", []):
+            task_doc_id = fake_doc_ids[0] # use the first document ID to represent this task for logging purposes
     # Either using graphrag or Standard chunking methods
     elif task_type == "graphrag":
         kb = KnowledgebaseService.get_by_id(db, task_dataset_id)
