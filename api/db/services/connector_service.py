@@ -90,6 +90,27 @@ class ConnectorService(CommonService):
         rows = db.execute(stmt).mappings().all()
         return [dict(row) for row in rows]
 
+    @classmethod
+    def rebuild(cls, db: Session, connector_id: str, kb_id: str, tenant_id: str) -> str | None:
+        """
+        重建连接器与知识库的关联
+
+        Args:
+            db: 数据库会话
+            connector_id: 连接器ID
+            kb_id: 知识库ID
+            tenant_id: 租户ID
+
+        Returns:
+            错误信息（如果有）
+        """
+        conn = cls.get_by_id(db, connector_id)
+        if not conn:
+            return "连接器不存在"
+        SyncLogsService.filter_delete(db, [SyncLogs.connector_id == connector_id, SyncLogs.kb_id == kb_id])
+        docs = DocumentService.query(db, source_type=f"{conn.source}/{conn.id}")
+        return FileService.delete_docs(db, [d.id for d in docs], tenant_id)
+
 
 class SyncLogsService(CommonService):
     """
@@ -136,6 +157,7 @@ class SyncLogsService(CommonService):
             Connector.timeout_secs,
             Knowledgebase.name.label("kb_name"),
             Knowledgebase.avatar.label("kb_avatar"),
+            Connector2Kb.auto_parse,
             cls.model.from_beginning.label("reindex"),
             cls.model.status
         ]
@@ -147,7 +169,7 @@ class SyncLogsService(CommonService):
             select(*columns)
             .select_from(cls.model)
             .join(Connector, cls.model.connector_id == Connector.id)
-            .join(Connector2Kb, cls.model.kb_id == Connector2Kb.kb_id)
+            .join(Connector2Kb, (cls.model.kb_id == Connector2Kb.kb_id) & (cls.model.connector_id == Connector2Kb.connector_id))
             .join(Knowledgebase, cls.model.kb_id == Knowledgebase.id)
         )
 
@@ -328,7 +350,7 @@ class SyncLogsService(CommonService):
         cls.update_by_id(db, task_id, update_data)
 
     @classmethod
-    def duplicate_and_parse(cls, db: Session, kb, docs: list, tenant_id, src: str):
+    def duplicate_and_parse(cls, db: Session, kb, docs: list, tenant_id, src: str, auto_parse=True):
         """
         复制并解析文档
 
@@ -338,6 +360,7 @@ class SyncLogsService(CommonService):
             docs: 文档列表
             tenant_id: 当前租户id
             src: 来源
+            auto_parse: 是否自动解析
 
         Returns:
             (错误列表, 文档ID列表)
@@ -347,7 +370,7 @@ class SyncLogsService(CommonService):
 
         # 将文档转换为 (blob, filename) 元组格式
         files = [
-            (d["blob"], d["semantic_identifier"] + f".{d['extension']}")
+            (d["blob"], d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d['extension'][::-1]) < 0 else ""))
             for d in docs
         ]
 
@@ -355,8 +378,10 @@ class SyncLogsService(CommonService):
         errs, doc_blob_pairs = FileService.upload_document(db, kb, files, tenant_id, None, src)
         kb_table_num_map = {}
         for doc, _ in doc_blob_pairs:
-            DocumentService.run(db, tenant_id, doc, kb_table_num_map)
             doc_ids.append(doc["id"])
+            if not auto_parse or auto_parse == "0":
+                continue
+            DocumentService.run(db, tenant_id, doc, kb_table_num_map)
 
         return errs, doc_ids
 
@@ -395,20 +420,20 @@ class Connector2KbService(CommonService):
     def link_connectors(cls, db: Session, kb_id: str, connector_ids: list[str], tenant_id: str) -> str:
         """
         关联连接器到知识库（与 link_kb 相反的方向）
-        
+
         Args:
             db: 数据库会话
             kb_id: 知识库ID
             connector_ids: 连接器ID列表
             tenant_id: 租户ID
-            
+
         Returns:
             错误信息（如果有）
         """
         # 获取现有关联
         arr = cls.query(db, kb_id=kb_id)
         old_conn_ids = [a.connector_id for a in arr]
-        
+
         # 添加新关联
         for conn_id in connector_ids:
             if conn_id in old_conn_ids:
@@ -419,38 +444,32 @@ class Connector2KbService(CommonService):
                 "kb_id": kb_id
             })
             SyncLogsService.schedule(db, conn_id, kb_id, reindex=True)
-        
+
         # 删除不再需要的关联
         errs = []
         for conn_id in old_conn_ids:
             if conn_id in connector_ids:
                 continue
-            
+
             # 删除关联
             cls.filter_delete(db, [cls.model.kb_id == kb_id, cls.model.connector_id == conn_id])
-            
+
             # 获取连接器信息
             conn = ConnectorService.get_by_id(db, conn_id)
             if not conn:
                 continue
-            
-            # 取消调度中的同步任务
+
+            # 取消调度中或运行中的同步任务（不删除已同步的文档）
             SyncLogsService.filter_update(
                 db,
                 [
                     SyncLogs.connector_id == conn_id,
                     SyncLogs.kb_id == kb_id,
-                    SyncLogs.status == TaskStatus.SCHEDULE
+                    SyncLogs.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING])
                 ],
                 {"status": TaskStatus.CANCEL}
             )
-            
-            # 删除相关文档
-            docs = DocumentService.query(db, source_type=f"{conn.source}/{conn.id}")
-            err = FileService.delete_docs(db, [d.id for d in docs], tenant_id)
-            if err:
-                errs.append(err)
-        
+
         return "\n".join(errs)
 
     @classmethod

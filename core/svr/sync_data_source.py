@@ -60,7 +60,7 @@ class SyncBase:
 
                         e, kb = KnowledgebaseService.get_by_id(task["kb_id"])
                         with db_connection() as db:
-                            err, dids = SyncLogsService.duplicate_and_parse(db, kb, docs, task["tenant_id"], f"{self.SOURCE_NAME}/{task['connector_id']}")
+                            err, dids = SyncLogsService.duplicate_and_parse(db, kb, docs, task["tenant_id"], f"{self.SOURCE_NAME}/{task['connector_id']}", task.get("auto_parse", "1"))
                             SyncLogsService.increase_docs(db, task["id"], min_update, max_update, len(docs), "\n".join(err), len(err))
                         doc_num += len(docs)
 

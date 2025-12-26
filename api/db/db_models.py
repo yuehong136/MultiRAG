@@ -1407,12 +1407,14 @@ class Connector2Kb(BaseModel):
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     connector_id = Column(String(32), index=True, nullable=False, doc="Connector ID")
     kb_id = Column(String(32), index=True, nullable=False, doc="Knowledgebase ID")
+    auto_parse = Column(String(1), nullable=False, default="1", doc="Auto parse (0: disabled, 1: enabled)")
 
     def to_dict(self):
         return {
             "id": self.id,
             "connector_id": self.connector_id,
-            "kb_id": self.kb_id
+            "kb_id": self.kb_id,
+            "auto_parse": self.auto_parse
         }
 
 

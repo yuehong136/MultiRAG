@@ -47,6 +47,11 @@ class LinkKbRequest(BaseModel):
     kb_ids: list[str]
 
 
+class RebuildRequest(BaseModel):
+    """重建连接器请求"""
+    kb_id: str
+
+
 # ==================== 接口定义 ====================
 
 @router.post("/set", summary="创建或更新连接器", response_description="连接器信息")
@@ -384,6 +389,56 @@ def link_kb(
         errors = Connector2KbService.link_kb(db, connector_id, req["kb_ids"], user.id)
         if errors:
             return get_json_result(data=False, retmsg=errors, retcode=RetCode.SERVER_ERROR)
+        return get_json_result(data=True)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.put("/{connector_id}/rebuild", summary="重建连接器", response_description="操作结果")
+def rebuild(
+    connector_id: str,
+    request: RebuildRequest,
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    ### PUT `/{connector_id}/rebuild` 重建连接器
+
+    **功能描述**:
+    重建连接器与指定知识库的关联，删除已同步的文档并重新开始同步。
+
+    ---
+
+    ### 路径参数
+
+    | 参数          | 类型   | 描述       |
+    |---------------|--------|------------|
+    | `connector_id`| string | 连接器ID   |
+
+    ### 请求体 (Request Body)
+
+    | 字段     | 类型   | 必填 | 描述           |
+    |----------|--------|------|----------------|
+    | `kb_id`  | string | 是   | 知识库ID       |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": true
+    }
+    ```
+    """
+    try:
+        req = request.model_dump()
+        err = ConnectorService.rebuild(db, connector_id, req["kb_id"], user.id)
+        if err:
+            return get_json_result(data=False, retmsg=err, retcode=RetCode.SERVER_ERROR)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
