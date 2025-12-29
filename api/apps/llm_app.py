@@ -747,7 +747,7 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
 
     try:
         fac = get_allowed_llm_factories(db)
-        # fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI"]]
+        # fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI", "Builtin"]]
         fac = [f.to_dict() for f in fac if f.name not in []]
         llms = LLMService.get_all(db)
         mdl_types = {}
