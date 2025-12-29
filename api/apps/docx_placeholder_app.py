@@ -102,6 +102,186 @@ def save_docx_log(request_id: str, stage: str, file_content: bytes, json_data: d
     return request_dir
 
 
+def analyze_document_structure(doc: Document) -> dict:
+    """
+    分析文档结构，生成调试信息
+
+    Args:
+        doc: python-docx Document 对象
+
+    Returns:
+        文档结构分析结果
+    """
+    structure = {
+        "body_paragraphs": [],
+        "tables": [],
+        "summary": {
+            "total_body_paragraphs": 0,
+            "total_tables": 0,
+            "total_table_cells": 0,
+            "placeholders_found": [],
+            "potentially_split_placeholders": [],
+        }
+    }
+
+    all_placeholders = set()
+
+    # 分析正文段落
+    for para_idx, paragraph in enumerate(doc.paragraphs):
+        para_info = _analyze_paragraph(paragraph, f"body_para{para_idx}")
+        structure["body_paragraphs"].append(para_info)
+
+        # 收集占位符
+        if para_info["contains_placeholder_pattern"]:
+            found = extract_placeholders_from_text(para_info["full_text"])
+            all_placeholders.update(found)
+
+        # 检查是否有拆分的占位符
+        if para_info["is_split"]:
+            structure["summary"]["potentially_split_placeholders"].append({
+                "location": para_info["location"],
+                "full_text": para_info["full_text"],
+                "runs_detail": para_info["runs_detail"],
+            })
+
+    # 分析表格
+    for table_idx, table in enumerate(doc.tables):
+        table_info = {
+            "table_index": table_idx,
+            "rows": []
+        }
+
+        for row_idx, row in enumerate(table.rows):
+            row_info = {
+                "row_index": row_idx,
+                "cells": []
+            }
+
+            for cell_idx, cell in enumerate(row.cells):
+                cell_info = {
+                    "cell_index": cell_idx,
+                    "paragraphs": []
+                }
+
+                for para_idx, paragraph in enumerate(cell.paragraphs):
+                    location = f"table{table_idx}_row{row_idx}_cell{cell_idx}_para{para_idx}"
+                    para_info = _analyze_paragraph(paragraph, location)
+                    cell_info["paragraphs"].append(para_info)
+
+                    # 收集占位符
+                    if para_info["contains_placeholder_pattern"]:
+                        found = extract_placeholders_from_text(para_info["full_text"])
+                        all_placeholders.update(found)
+
+                    # 检查是否有拆分的占位符
+                    if para_info["is_split"]:
+                        structure["summary"]["potentially_split_placeholders"].append({
+                            "location": para_info["location"],
+                            "full_text": para_info["full_text"],
+                            "runs_detail": para_info["runs_detail"],
+                        })
+
+                row_info["cells"].append(cell_info)
+                structure["summary"]["total_table_cells"] += 1
+
+            table_info["rows"].append(row_info)
+
+        structure["tables"].append(table_info)
+
+    # 更新汇总
+    structure["summary"]["total_body_paragraphs"] = len(doc.paragraphs)
+    structure["summary"]["total_tables"] = len(doc.tables)
+    structure["summary"]["placeholders_found"] = [f"${num}" for num in sorted(all_placeholders)]
+    structure["summary"]["split_placeholder_count"] = len(structure["summary"]["potentially_split_placeholders"])
+
+    return structure
+
+
+def _analyze_paragraph(paragraph, location: str) -> dict:
+    """
+    分析单个段落的结构
+
+    Args:
+        paragraph: python-docx Paragraph 对象
+        location: 段落位置标识
+
+    Returns:
+        段落分析结果
+    """
+    para_text = paragraph.text if paragraph.text else ""
+
+    runs_detail = []
+    for i, run in enumerate(paragraph.runs):
+        run_info = {
+            "run_index": i,
+            "text": run.text if run.text else "",
+            "bold": run.bold,
+            "italic": run.italic,
+            "underline": run.underline is not None and run.underline != False,
+        }
+        runs_detail.append(run_info)
+
+    contains_placeholder = bool(PLACEHOLDER_PATTERN.search(para_text)) if para_text else False
+
+    # 检查占位符是否被拆分
+    is_split = False
+    if contains_placeholder:
+        # 检查是否有任何单个 run 包含完整的占位符
+        has_complete_in_run = any(
+            PLACEHOLDER_PATTERN.search(run["text"]) for run in runs_detail
+        )
+        if not has_complete_in_run:
+            is_split = True
+
+    return {
+        "location": location,
+        "full_text": para_text,
+        "runs_count": len(paragraph.runs),
+        "runs_detail": runs_detail,
+        "contains_placeholder_pattern": contains_placeholder,
+        "is_split": is_split,
+    }
+
+
+def save_document_structure(request_id: str, structure: dict):
+    """
+    保存文档结构分析结果到文件
+
+    Args:
+        request_id: 请求唯一标识符
+        structure: 文档结构分析结果
+    """
+    request_dir = os.path.join(DOCX_LOG_DIR, request_id)
+    if not os.path.exists(request_dir):
+        os.makedirs(request_dir)
+
+    structure_path = os.path.join(request_dir, "document_structure.json")
+    with open(structure_path, "w", encoding="utf-8") as f:
+        json.dump(structure, f, ensure_ascii=False, indent=2)
+
+    # 输出汇总日志
+    summary = structure["summary"]
+    logger.info(f"[document_structure] ===== 文档结构分析 =====")
+    logger.info(f"[document_structure] 正文段落数: {summary['total_body_paragraphs']}")
+    logger.info(f"[document_structure] 表格数: {summary['total_tables']}")
+    logger.info(f"[document_structure] 表格单元格数: {summary['total_table_cells']}")
+    logger.info(f"[document_structure] 发现占位符: {summary['placeholders_found']}")
+    logger.info(f"[document_structure] 疑似被拆分的占位符数: {summary['split_placeholder_count']}")
+
+    if summary["potentially_split_placeholders"]:
+        logger.warning(f"[document_structure] ⚠️ 发现可能被拆分的占位符:")
+        for item in summary["potentially_split_placeholders"]:
+            logger.warning(f"[document_structure]   位置: {item['location']}")
+            logger.warning(f"[document_structure]   完整文本: {item['full_text']}")
+            logger.warning(f"[document_structure]   Run 拆分情况:")
+            for run in item["runs_detail"]:
+                logger.warning(f"[document_structure]     Run[{run['run_index']}]: '{run['text']}'")
+
+    logger.info(f"[document_structure] 结构分析已保存至: {structure_path}")
+
+    return structure_path
+
+
 def extract_placeholders_from_text(text: str) -> set:
     """
     从文本中提取占位符编号
@@ -153,6 +333,7 @@ def extract_placeholders_from_document(doc: Document) -> list:
 def fill_placeholders_in_paragraph(paragraph, fill_dict: dict) -> bool:
     """
     填充段落中的占位符，保留原有格式（如下划线）
+    支持处理占位符被拆分到多个 run 的情况
 
     Args:
         paragraph: python-docx Paragraph 对象
@@ -161,42 +342,77 @@ def fill_placeholders_in_paragraph(paragraph, fill_dict: dict) -> bool:
     Returns:
         是否进行了替换
     """
-    if not paragraph.text:
+    para_text = paragraph.text if paragraph.text else ""
+
+    if not para_text:
         return False
 
     # 检查是否包含占位符
-    if not PLACEHOLDER_PATTERN.search(paragraph.text):
+    if not PLACEHOLDER_PATTERN.search(para_text):
+        return False
+
+    # 构建 run 的位置映射
+    runs = paragraph.runs
+    run_texts = [run.text if run.text else "" for run in runs]
+
+    # 合并所有 run 的文本
+    combined_text = "".join(run_texts)
+
+    # 检查合并后的文本是否包含占位符
+    if not PLACEHOLDER_PATTERN.search(combined_text):
+        return False
+
+    # 构建字符到 run 的映射
+    char_to_run = []  # char_to_run[i] = (run_index, position_in_run)
+    for run_idx, text in enumerate(run_texts):
+        for char_idx in range(len(text)):
+            char_to_run.append((run_idx, char_idx))
+
+    # 找到所有占位符的位置
+    matches = list(PLACEHOLDER_PATTERN.finditer(combined_text))
+
+    if not matches:
         return False
 
     replaced = False
 
-    # 逐个 run 处理，保留每个 run 的格式
-    for run in paragraph.runs:
-        if not run.text:
-            continue
+    # 从后往前替换，避免位置偏移问题
+    for match in reversed(matches):
+        start_pos = match.start()
+        end_pos = match.end()
+        num = match.group(1)
+        key = f"${num}"
+        value = fill_dict.get(key, "")
+        if value is None:
+            value = ""
 
-        # 检查当前 run 是否包含占位符
-        if not PLACEHOLDER_PATTERN.search(run.text):
-            continue
+        # 找出占位符跨越了哪些 run
+        start_run_idx, start_char_idx = char_to_run[start_pos]
+        end_run_idx, end_char_idx = char_to_run[end_pos - 1]
 
-        original_run_text = run.text
+        if start_run_idx == end_run_idx:
+            # 占位符在单个 run 内，直接替换
+            run = runs[start_run_idx]
+            original_text = run.text
+            new_text = original_text[:start_char_idx] + str(value) + original_text[end_char_idx + 1:]
+            run.text = new_text
+        else:
+            # 占位符跨越多个 run
+            # 策略：在第一个 run 中放置替换值，清空中间和最后的 run 中属于占位符的部分
 
-        # 替换当前 run 中的占位符
-        def replace_match(match):
-            nonlocal replaced
-            num = match.group(1)
-            key = f"${num}"
-            value = fill_dict.get(key, "")
-            if value is None:
-                value = ""
-            replaced = True
-            return str(value)
+            # 处理第一个 run：保留占位符之前的内容 + 替换值
+            first_run = runs[start_run_idx]
+            first_run.text = first_run.text[:start_char_idx] + str(value)
 
-        new_run_text = PLACEHOLDER_PATTERN.sub(replace_match, original_run_text)
+            # 处理中间的 run（如果有）：清空
+            for mid_run_idx in range(start_run_idx + 1, end_run_idx):
+                runs[mid_run_idx].text = ""
 
-        # 更新 run 的文本，保留原有格式（包括下划线等）
-        if new_run_text != original_run_text:
-            run.text = new_run_text
+            # 处理最后一个 run：保留占位符之后的内容
+            last_run = runs[end_run_idx]
+            last_run.text = last_run.text[end_char_idx + 1:]
+
+        replaced = True
 
     return replaced
 
@@ -470,11 +686,15 @@ async def fill_placeholders(
         # Step 3: 读取文档
         doc = Document(BytesIO(input_file_content))
 
-        # Step 4: 填充占位符
+        # Step 4: 分析文档结构（独立的调试流程）
+        doc_structure = analyze_document_structure(doc)
+        save_document_structure(request_id, doc_structure)
+
+        # Step 5: 填充占位符
         replace_count = fill_placeholders_in_document(doc, fill_data)
         logger.info(f"[fill_placeholders] 共替换了 {replace_count} 处占位符")
 
-        # Step 5: 保存填充后的文档到内存流
+        # Step 6: 保存填充后的文档到内存流
         output_stream = BytesIO()
         doc.save(output_stream)
         output_stream.seek(0)
@@ -484,10 +704,10 @@ async def fill_placeholders(
         save_docx_log(request_id, "output", output_file_content)
         logger.info(f"[fill_placeholders] 请求ID: {request_id} 处理完成")
 
-        # Step 6: 将文档转为 Base64 数据
+        # Step 7: 将文档转为 Base64 数据
         base64_encoded_file = base64.b64encode(output_file_content).decode("utf-8")
 
-        # Step 7: 返回结果
+        # Step 8: 返回结果
         response_data = {
             "file": base64_encoded_file
         }
