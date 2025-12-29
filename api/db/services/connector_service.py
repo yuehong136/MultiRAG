@@ -495,6 +495,7 @@ class Connector2KbService(CommonService):
                 Connector.id,
                 Connector.source,
                 Connector.name,
+                cls.model.auto_parse,
                 Connector.status
             )
             .select_from(cls.model)
