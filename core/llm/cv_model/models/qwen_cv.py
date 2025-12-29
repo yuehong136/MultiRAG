@@ -1,3 +1,6 @@
+import tempfile
+from pathlib import Path
+
 from core.llm.cv_model.models.gptv4 import GptV4
 
 
