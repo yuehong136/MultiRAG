@@ -109,7 +109,9 @@ class ConnectorService(CommonService):
             return "连接器不存在"
         SyncLogsService.filter_delete(db, [SyncLogs.connector_id == connector_id, SyncLogs.kb_id == kb_id])
         docs = DocumentService.query(db, source_type=f"{conn.source}/{conn.id}")
-        return FileService.delete_docs(db, [d.id for d in docs], tenant_id)
+        err = FileService.delete_docs(db, [d.id for d in docs], tenant_id)
+        SyncLogsService.schedule(db, connector_id, kb_id, reindex=True)
+        return err
 
 
 class SyncLogsService(CommonService):
@@ -417,14 +419,14 @@ class Connector2KbService(CommonService):
     model = Connector2Kb
 
     @classmethod
-    def link_connectors(cls, db: Session, kb_id: str, connector_ids: list[str], tenant_id: str) -> str:
+    def link_connectors(cls, db: Session, kb_id: str, connectors: list[dict], tenant_id: str) -> str:
         """
         关联连接器到知识库（与 link_kb 相反的方向）
 
         Args:
             db: 数据库会话
             kb_id: 知识库ID
-            connector_ids: 连接器ID列表
+            connectors: 连接器列表，每个元素包含 id 和可选的 auto_parse 字段
             tenant_id: 租户ID
 
         Returns:
@@ -435,13 +437,17 @@ class Connector2KbService(CommonService):
         old_conn_ids = [a.connector_id for a in arr]
 
         # 添加新关联
-        for conn_id in connector_ids:
+        connector_ids = []
+        for conn in connectors:
+            conn_id = conn["id"]
+            connector_ids.append(conn_id)
             if conn_id in old_conn_ids:
                 continue
             cls.insert(db, **{
                 "id": get_uuid(),
                 "connector_id": conn_id,
-                "kb_id": kb_id
+                "kb_id": kb_id,
+                "auto_parse": conn.get("auto_parse", "1")
             })
             SyncLogsService.schedule(db, conn_id, kb_id, reindex=True)
 

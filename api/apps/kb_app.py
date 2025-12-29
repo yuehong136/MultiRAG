@@ -260,7 +260,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
                     logging.error(f"移除知识库 {kb.id} 的 PageRank 失败: {str(e)}")
 
         # 处理 connectors 关联
-        errors = Connector2KbService.link_connectors(db, kb.id, [conn["id"] for conn in connectors], user.id)
+        errors = Connector2KbService.link_connectors(db, kb.id, [conn for conn in connectors], user.id)
         if errors:
             logging.error(f"Link KB errors: {errors}")
 
