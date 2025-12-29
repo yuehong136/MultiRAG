@@ -13,6 +13,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+from functools import partial
+import json
 import os
 import re
 from abc import ABC
@@ -35,7 +37,7 @@ class RetrievalParam(ToolParamBase):
     """
 
     def __init__(self):
-        self.meta:ToolMeta = {
+        self.meta: ToolMeta = {
             "name": "search_my_dateset",
             "description": "This tool can be utilized for relevant content searching in the datasets.",
             "parameters": {
@@ -61,7 +63,7 @@ class RetrievalParam(ToolParamBase):
         self.use_kg = False
         self.cross_languages = []
         self.toc_enhance = False
-        self.meta_data_filter={}
+        self.meta_data_filter = {}
 
     def check(self):
         self.check_decimal_float(self.similarity_threshold, "[Retrieval] Similarity threshold")
@@ -75,6 +77,7 @@ class RetrievalParam(ToolParamBase):
                 "type": "line"
             }
         }
+
 
 class Retrieval(ToolBase, ABC):
     component_name = "Retrieval"
@@ -96,10 +99,8 @@ class Retrieval(ToolBase, ABC):
                 for nm_or_id in kb_nm_list:
                     e, kb = KnowledgebaseService.get_by_name(db, nm_or_id, self._canvas._tenant_id)
                     if not e:
-                        kb = KnowledgebaseService.get_by_id(db, nm_or_id)
-                        if not kb:
-                            raise Exception(f"Dataset({nm_or_id}) does not exist.")
-                    kb_ids.append(kb.id)
+                        raise Exception(f"Dataset({nm_or_id}) does not exist.")
+                kb_ids.append(kb.id)
 
             filtered_kb_ids: list[str] = list(set([kb_id for kb_id in kb_ids if kb_id]))
             kbs = KnowledgebaseService.get_by_ids(db, filtered_kb_ids)
@@ -118,7 +119,7 @@ class Retrieval(ToolBase, ABC):
                 rerank_mdl = LLMBundle(db, kbs[0].tenant_id, LLMType.RERANK, self._param.rerank_id)
 
             vars = self.get_input_elements_from_text(kwargs["query"])
-            vars = {k:o["value"] for k,o in vars.items()}
+            vars = {k: o["value"] for k, o in vars.items()}
             query = self.string_format(kwargs["query"], vars)
 
             doc_ids=[]
@@ -131,7 +132,35 @@ class Retrieval(ToolBase, ABC):
                     if not doc_ids:
                         doc_ids = None
                 elif self._param.meta_data_filter.get("method") == "manual":
-                    doc_ids.extend(meta_filter(metas, self._param.meta_data_filter["manual"]))
+                    filters = self._param.meta_data_filter["manual"]
+                    for flt in filters:
+                        pat = re.compile(self.variable_ref_patt)
+                        s = flt["value"]
+                        out_parts = []
+                        last = 0
+
+                        for m in pat.finditer(s):
+                            out_parts.append(s[last:m.start()])
+                            key = m.group(1)
+                            v = self._canvas.get_variable_value(key)
+                            if v is None:
+                                rep = ""
+                            elif isinstance(v, partial):
+                                buf = []
+                                for chunk in v():
+                                    buf.append(chunk)
+                                rep = "".join(buf)
+                            elif isinstance(v, str):
+                                rep = v
+                            else:
+                                rep = json.dumps(v, ensure_ascii=False)
+
+                            out_parts.append(rep)
+                            last = m.end()
+
+                        out_parts.append(s[last:])
+                        flt["value"] = "".join(out_parts)
+                    doc_ids.extend(meta_filter(metas, filters))
                     if not doc_ids:
                         doc_ids = None
 
@@ -175,7 +204,7 @@ class Retrieval(ToolBase, ABC):
                 kbinfos = {"chunks": [], "doc_aggs": []}
 
             if self._param.use_kg and kbs:
-                ck = settings.kg_retrievaler.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, LLMType.CHAT))
+                ck = settings.kg_retriever.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, LLMType.CHAT))
                 if ck["content_with_weight"]:
                     ck["content"] = ck["content_with_weight"]
                     del ck["content_with_weight"]
