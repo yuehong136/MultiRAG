@@ -1804,6 +1804,19 @@ wheels = [
 ]
 
 [[package]]
+name = "google-auth-oauthlib"
+version = "1.2.3"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "google-auth" },
+    { name = "requests-oauthlib" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/86/a6/c6336a6ceb682709a4aa39e2e6b5754a458075ca92359512b6cbfcb25ae3/google_auth_oauthlib-1.2.3.tar.gz", hash = "sha256:eb09e450d3cc789ecbc2b3529cb94a713673fd5f7a22c718ad91cf75aedc2ea4" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/38/07/a54c100da461ffc5968457823fcc665a48fb4b875c68bcfecbfe24a10dbe/google_auth_oauthlib-1.2.3-py3-none-any.whl", hash = "sha256:7c0940e037677f25e71999607493640d071212e7f3c15aa0febea4c47a5a0680" },
+]
+
+[[package]]
 name = "google-cloud-aiplatform"
 version = "1.70.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -3279,7 +3292,7 @@ wheels = [
 
 [[package]]
 name = "multirag"
-version = "0.9.0"
+version = "0.9.6"
 source = { virtual = "." }
 dependencies = [
     { name = "akshare" },
@@ -3328,6 +3341,7 @@ dependencies = [
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
     { name = "filelock" },
     { name = "flagembedding" },
+    { name = "google-auth-oauthlib" },
     { name = "google-genai" },
     { name = "google-generativeai" },
     { name = "google-search-results" },
@@ -3499,6 +3513,7 @@ requires-dist = [
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = ">=0.3.6,<0.4.0" },
     { name = "filelock", specifier = "==3.15.4" },
     { name = "flagembedding", specifier = "==1.2.10" },
+    { name = "google-auth-oauthlib", specifier = ">=1.2.0,<2.0.0" },
     { name = "google-genai", specifier = ">=1.41.0,<2.0.0" },
     { name = "google-generativeai", specifier = ">=0.8.1,<0.9.0" },
     { name = "google-generativeai", specifier = ">=0.8.3" },
