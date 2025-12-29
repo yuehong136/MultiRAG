@@ -384,6 +384,21 @@ class AdminCLI(Cmd):
                 print(str(e))
                 print(f"Can't access {self.host}, port: {self.port}")
 
+    def _format_service_detail_table(self, data):
+        if not any([isinstance(v, list) for v in data.values()]):
+            # normal table
+            return data
+        # handle task_executor heartbeats map, for example {'name': [{'done': 2, 'now': timestamp1}, {'done': 3, 'now': timestamp2}]
+        task_executor_list = []
+        for k, v in data.items():
+            # display latest status
+            heartbeats = sorted(v, key=lambda x: x["now"], reverse=True)
+            task_executor_list.append({
+                "task_executor_name": k,
+                **heartbeats[0],
+            })
+        return task_executor_list
+
     def _print_table_simple(self, data):
         if not data:
             print("No data to print")
@@ -607,7 +622,8 @@ class AdminCLI(Cmd):
                         if isinstance(extra_info['message'], str):
                             print(extra_info['message'])
                         else:
-                            self._print_table_simple(extra_info['message'])
+                            data = self._format_service_detail_table(extra_info['message'])
+                            self._print_table_simple(data)
             else:
                 print(f"Service {service_name} is {status}")
                 if 'extra' in res_data and 'message' in res_data['extra']:

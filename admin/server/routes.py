@@ -86,7 +86,7 @@ class ServiceResponse(BaseModel):
     id: int
     name: str
     host: str
-    port: int
+    port: int | str
     service_type: str
     status: str | None = None
     extra: dict | None = None

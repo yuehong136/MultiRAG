@@ -121,6 +121,9 @@ redis:
   # Redis数据库的主机名和端口
   host: '127.0.0.1:6379'
 
+task_executor:
+  message_queue_type: 'redis'
+
 user_default_llm:
   factory: 'ZHIPU-AI'
   api_key: '622531847aa342ad9da7e62b83930d56.mV8uJ8BoWMa8lfra'

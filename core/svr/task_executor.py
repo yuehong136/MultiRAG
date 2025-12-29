@@ -1,4 +1,5 @@
 import random
+import socket
 import sys
 import threading
 import time
@@ -2657,6 +2658,17 @@ async def handle_task():
             db.commit()  # 提交事务
 
 
+async def get_server_ip() -> str:
+    # get ip by udp
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception as e:
+        logging.error(str(e))
+        return 'Unknown'
+
+
 async def report_status():
     global CONSUMER_NAME, BOOT_AT, PENDING_TASKS, LAG_TASKS, DONE_TASKS, FAILED_TASKS
     REDIS_CONN.sadd("TASKEXE", CONSUMER_NAME)
@@ -2669,8 +2681,12 @@ async def report_status():
                 PENDING_TASKS = int(group_info.get("pending", 0))
                 LAG_TASKS = int(group_info.get("lag", 0))
 
+            pid = os.getpid()
+            ip_address = await get_server_ip()
             current = copy.deepcopy(CURRENT_TASKS)
             heartbeat = json.dumps({
+                "ip_address": ip_address,
+                "pid": pid,
                 "name": CONSUMER_NAME,
                 "now": now.astimezone().isoformat(timespec="milliseconds"),
                 "boot_at": BOOT_AT,
