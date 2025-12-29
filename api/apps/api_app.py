@@ -629,10 +629,7 @@ async def upload(request: Request, db: Session = Depends(get_db)):
     if "run" in form.keys():
         if form.get("run").strip() == "1":
             try:
-                info = {"run": 1, "progress": 0}
-                info["progress_msg"] = ""
-                info["chunk_num"] = 0
-                info["token_num"] = 0
+                info = {"run": 1, "progress": 0, "progress_msg": "", "chunk_num": 0, "token_num": 0}
                 DocumentService.update_by_id(db, doc["id"], info)
                 tenant_id = DocumentService.get_tenant_id(db, doc["id"])
                 if not tenant_id:
@@ -823,8 +820,7 @@ async def completion_faq(request: CompletionFAQRequest, db: Session = Depends(ge
         return get_data_error_result(retmsg="Conversation not found!")
     if "quote" not in req: req["quote"] = True
 
-    msg = []
-    msg.append({"role": "user", "content": req["word"]})
+    msg = [{"role": "user", "content": req["word"]}]
 
     if not msg[-1].get("id"): msg[-1]["id"] = get_uuid()
     message_id = msg[-1]["id"]

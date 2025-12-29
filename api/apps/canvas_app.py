@@ -1114,23 +1114,24 @@ def test_db_connect(
             ibm_db.close(conn)
             return get_json_result(data="Database Connection Successful!")
         elif req["db_type"] == 'trino':
-            def _parse_catalog_schema(db: str):
-                if not db:
+            def _parse_catalog_schema(db_name: str):
+                if not db_name:
                     return None, None
-                if "." in db:
-                    c, s = db.split(".", 1)
-                elif "/" in db:
-                    c, s = db.split("/", 1)
+                if "." in db_name:
+                    catalog_name, schema_name = db_name.split(".", 1)
+                elif "/" in db_name:
+                    catalog_name, schema_name = db_name.split("/", 1)
                 else:
-                    c, s = db, "default"
-                return c, s
+                    catalog_name, schema_name = db_name, "default"
+                return catalog_name, schema_name
 
             try:
                 import trino
                 import os
                 from trino.auth import BasicAuthentication
-            except Exception:
-                return server_error_response("Missing dependency 'trino'. Please install: pip install trino")
+            except Exception as e:
+                return server_error_response(
+                    f"Missing dependency 'trino'. Please install: pip install trino, detail: {e}")
 
             catalog, schema = _parse_catalog_schema(req["database"])
             if not catalog:
@@ -1452,10 +1453,10 @@ def trace(
     - 日志存储在Redis中
     """
     try:
-        bin_data = REDIS_CONN.get(f"{canvas_id}-{message_id}-logs")
-        if not bin_data:
+        binary = REDIS_CONN.get(f"{canvas_id}-{message_id}-logs")
+        if not binary:
             return get_json_result(data={})
-        return get_json_result(data=json.loads(bin_data))
+        return get_json_result(data=json.loads(binary.encode("utf-8")))
     except Exception as e:
         logging.exception(e)
         return get_json_result(data={})
