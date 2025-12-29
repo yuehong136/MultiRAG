@@ -1338,7 +1338,8 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                     "name": o_dict["llm_name"],
                     "used_token": o_dict["used_tokens"],
                     "api_base": o_dict["api_base"] or "",
-                    "max_tokens": o_dict["max_tokens"] or 8192
+                    "max_tokens": o_dict["max_tokens"] or 8192,
+                    "status": o_dict["status"] or "1"
                 })
         else:
             res = {}
@@ -1351,7 +1352,8 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                 res[o.llm_factory]["llm"].append({
                     "type": o.mdl_type,
                     "name": o.llm_name,
-                    "used_token": o.used_tokens
+                    "used_token": o.used_tokens,
+                    "status": o.status
                 })
         return get_json_result(data=res)
     except Exception as e:
@@ -1759,9 +1761,10 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
     weighted = ["Youdao", "FastEmbed", "BAAI"] if settings.LIGHTEN != 0 else []
     try:
         objs = TenantLLMService.query(db, tenant_id=user.id)
-        facts = set(o.llm_factory for o in objs if o.api_key)
+        facts = set(o.llm_factory for o in objs if o.api_key and o.status==StatusEnum.VALID.value)
+        status = {(o.llm_name + "@" + o.llm_factory) for o in objs if o.status == StatusEnum.VALID.value}
         llms = LLMService.get_all(db)
-        llms = [m.to_dict() for m in llms if m.status == StatusEnum.VALID.value and m.fid not in weighted]
+        llms = [m.to_dict() for m in llms if m.status == StatusEnum.VALID.value and m.fid not in weighted and (m.fid == 'Builtin' or (m.llm_name + "@" + m.fid) in status)]
 
         for m in llms:
             m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in self_deployed
