@@ -726,7 +726,7 @@ def get_allowed_llm_factories(db) -> list:
     Returns:
         list: 允许的LLM工厂对象列表
     """
-    factories = list(LLMFactoriesService.get_all(db))
+    factories = list(LLMFactoriesService.get_all(db, reverse=True, order_by="rank"))
     if settings.ALLOWED_LLM_FACTORIES is None:
         return factories
     

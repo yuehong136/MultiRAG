@@ -98,8 +98,8 @@ function task_exe() {
   local jemalloc="$(pkg-config --variable=libdir jemalloc)/libjemalloc.so"
   echo "[entrypoint] TaskExecutor ${hid}_${cid} 启动..."
   while true; do
-    LD_PRELOAD="${jemalloc}" "${PY}" -m core.svr.task_executor "${hid}_${cid}" || true
-    echo "[entrypoint] TaskExecutor ${hid}_${cid} 崩溃，1 秒后重启..."
+    LD_PRELOAD="${jemalloc}" "${PY}" -m core.svr.task_executor "${hid}_${cid}" &
+    wait
     sleep 1
   done &
 }
@@ -112,8 +112,8 @@ start_server() {
 start_admin_server() {
   echo "[entrypoint] 启动 Admin Server (端口 8130)..."
   while true; do
-    "${PY}" admin/server/admin_server.py || true
-    echo "[entrypoint] Admin Server 崩溃，1 秒后重启..."
+    "${PY}" admin/server/admin_server.py &
+    wait
     sleep 1
   done &
 }
@@ -192,8 +192,8 @@ fi
 if [[ "${ENABLE_DATASYNC}" -eq 1 ]]; then
   echo "[entrypoint] 启动数据源同步服务..."
   while true; do
-    "${PY}" -m core.svr.sync_data_source || true
-    echo "[entrypoint] 数据源同步服务崩溃，1 秒后重启..."
+    "${PY}" -m core.svr.sync_data_source &
+    wait
     sleep 1
   done &
 fi

@@ -2458,6 +2458,15 @@ class DocumentService(CommonService):
         )
         cancelled = db.execute(cancelled_query).scalar() or 0
 
+        # downloaded: source_type != "local" (从外部数据源同步的文档)
+        downloaded_query = select(func.count()).select_from(cls.model).where(
+            and_(
+                cls.model.kb_id == kb_id,
+                cls.model.source_type != "local"
+            )
+        )
+        downloaded = db.execute(downloaded_query).scalar() or 0
+
         # 统计其他状态的文档
         stats_query = select(
             # finished: progress == 1
@@ -2505,6 +2514,7 @@ class DocumentService(CommonService):
             "finished": int(result.finished) if result else 0,
             "failed": int(result.failed) if result else 0,
             "cancelled": int(cancelled),
+            "downloaded": int(downloaded),
         }
 
 

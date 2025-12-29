@@ -553,6 +553,7 @@ class LLMFactories(BaseModel):
     name = Column(String(128), primary_key=True, index=False, nullable=False, doc="LLM factory name")
     logo = Column(Text, index=False, nullable=True)
     tags = Column(String(255), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, ASR")
+    rank = Column(Integer, index=False, default=0)
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 

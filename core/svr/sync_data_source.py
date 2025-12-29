@@ -247,6 +247,15 @@ func_factory = {
 
 async def dispatch_tasks():
     async with trio.open_nursery() as nursery:
+        while True:
+            try:
+                with db_connection() as db:
+                    list(SyncLogsService.list_sync_tasks(db)[0])
+                break
+            except Exception as e:
+                logging.warning(f"DB is not ready yet: {e}")
+                await trio.sleep(3)
+
         with db_connection() as db:
             tasks = SyncLogsService.list_sync_tasks(db)[0]
         for task in tasks:
