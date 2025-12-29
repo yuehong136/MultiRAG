@@ -270,6 +270,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         kb = kb.to_dict()
         # 使用filtered_data而不是req_data，避免包含None值
         kb.update(filtered_data)
+        kb["connectors"] = connectors
 
         return get_json_result(data=kb)
     except Exception as e:

@@ -1320,7 +1320,7 @@ class LiteLLMBase(ABC):
         "TogetherAI",
         "Anthropic",
         "Ollama",
-        "Meituan",
+        "LongCat",
         "CometAPI",
         "SILICONFLOW",
         "OpenRouter",
