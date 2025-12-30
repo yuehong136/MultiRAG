@@ -40,7 +40,7 @@ import signal
 import trio
 # import exceptiongroup
 import faulthandler
-from common.constants import LLMType, ParserType, PipelineTaskType
+from common.constants import LLMType, ParserType, PipelineTaskType, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, has_canceled, CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID
@@ -273,7 +273,7 @@ async def collect(db: Session):
         # Redis消息已包含fake_doc_id和doc_ids，先使用它
         task = msg
 
-        if task.get("task_type") in ["graphrag", "raptor", "mindmap"]:
+        if task.get("task_type") in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
             # 尝试从数据库获取完整配置（tenant_id, parser_config等）
             db_task = TaskService.get_task(db, msg["id"], msg.get("doc_ids", []))
 
@@ -2444,7 +2444,7 @@ async def do_handle_task(db, task):
     # async def delete_image(kb_id, chunk_id):
     #     try:
     #         async with minio_limiter:
-    #             STORAGE_IMPL.delete(kb_id, chunk_id)
+    #             settings.STORAGE_IMPL.delete(kb_id, chunk_id)
     #     except Exception:
     #         logging.exception("Deleting image of chunk {}/{}/{} got exception".format(task["location"], task["name"], chunk_id))
     #         raise
@@ -2658,7 +2658,7 @@ async def handle_task():
                 # analyze_v2 任务不记录 pipeline 操作日志（临时 doc_id，无对应 Document 记录）
                 if task_type != "analyze_v2":
                     task_document_ids = []
-                    if task_type in ["graphrag", "raptor", "mindmap"]:
+                    if task_type in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
                         task_document_ids = task["doc_ids"]
                     if not task.get("dataflow_id", ""):
                         PipelineOperationLogService.record_pipeline_operation(db, document_id=task["doc_id"],

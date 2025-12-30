@@ -15,7 +15,6 @@ from typing import Any
 
 import trio
 import xxhash
-from pymilvus import MilvusException
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc
@@ -30,7 +29,7 @@ from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
 from api.utils.db_utils import bulk_insert_into_db
 from common import settings
-from common.constants import LLMType, ParserType, TaskStatus, StatusEnum, SVR_CONSUMER_GROUP_NAME
+from common.constants import LLMType, ParserType, TaskStatus, StatusEnum, SVR_CONSUMER_GROUP_NAME, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
 from core.nlp import search, rag_tokenizer
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.doc_store_conn import OrderByExpr
@@ -465,7 +464,7 @@ class DocumentService(CommonService):
         # 读取文件二进制
         from api.db.services.file2document_service import File2DocumentService
         bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_id)
-        file_bin = STORAGE_IMPL.get(bucket, name)
+        file_bin = settings.STORAGE_IMPL.get(bucket, name)
 
         # 合并解析配置
         from api.utils.api_utils import get_parser_config
@@ -791,7 +790,7 @@ class DocumentService(CommonService):
                 
                 # 读取文件
                 bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_id)
-                file_bin = STORAGE_IMPL.get(bucket, name)
+                file_bin = settings.STORAGE_IMPL.get(bucket, name)
                 
                 # 获取PDF总页数
                 try:
@@ -1773,11 +1772,11 @@ class DocumentService(CommonService):
             all_chunk_ids.extend(chunk_ids)
             page += 1
         for cid in all_chunk_ids:
-            if STORAGE_IMPL.obj_exist(doc.kb_id, cid):
-                STORAGE_IMPL.rm(doc.kb_id, cid)
+            if settings.STORAGE_IMPL.obj_exist(doc.kb_id, cid):
+                settings.STORAGE_IMPL.rm(doc.kb_id, cid)
         if doc.thumbnail and not doc.thumbnail.startswith(IMG_BASE64_PREFIX):
-            if STORAGE_IMPL.obj_exist(doc.kb_id, doc.thumbnail):
-                STORAGE_IMPL.rm(doc.kb_id, doc.thumbnail)
+            if settings.STORAGE_IMPL.obj_exist(doc.kb_id, doc.thumbnail):
+                settings.STORAGE_IMPL.rm(doc.kb_id, doc.thumbnail)
 
         try:
             # 检查集合是否存在并删除向量数据库中的数据
@@ -1831,14 +1830,22 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_unfinished_docs(cls, db: Session):
+        # Subquery to get doc_ids with unfinished tasks
+        unfinished_task_query = db.query(Task.doc_id).filter(
+            Task.progress >= 0,
+            Task.progress < 1
+        ).subquery()
+
         query = db.query(
             cls.model.id, cls.model.process_begin_at, cls.model.parser_config,
             cls.model.progress_msg, cls.model.run, cls.model.parser_id
         ).filter(
             cls.model.status == StatusEnum.VALID.value,
             cls.model.type != FileType.VIRTUAL.value,
-            cls.model.progress < 1,
-            cls.model.progress > 0
+            or_(
+                and_(cls.model.progress < 1, cls.model.progress > 0),
+                cls.model.id.in_(unfinished_task_query)  # including unfinished tasks like GraphRAG, RAPTOR and Mindmap
+            )
         )
         rows = query.all()
         return [dict(row._mapping) for row in rows]
@@ -2178,13 +2185,17 @@ class DocumentService(CommonService):
         return query.count()
 
     @classmethod
-    def begin2parse(cls, db: Session, doc_id: str):
-        cls.update_by_id(db, doc_id, {
-            "progress": random.random() * 1 / 100.,
+    def begin2parse(cls, db: Session, doc_id: str, keep_progress: bool = False):
+        info = {
             "progress_msg": "Task is queued...",
             "process_begin_at": get_format_time(),
-            "run": TaskStatus.RUNNING.value
-        })
+        }
+        if not keep_progress:
+            info["progress"] = random.random() * 1 / 100.
+            info["run"] = TaskStatus.RUNNING.value
+            # keep the doc in DONE state when keep_progress=True for GraphRAG, RAPTOR and Mindmap tasks
+
+        cls.update_by_id(db, doc_id, info)
 
     @classmethod
     def update_meta_fields(cls, db: Session, doc_id, meta_fields):
@@ -2239,9 +2250,14 @@ class DocumentService(CommonService):
                 bad = 0
                 doc = DocumentService.get_by_id(db, doc_id)
                 status = doc.run  # TaskStatus.RUNNING.value
+                doc_progress = doc.progress if doc and doc.progress else 0.0
+                special_task_running = False
                 priority = 0
 
                 for t in tsks:
+                    task_type = (t.task_type or "").lower()
+                    if task_type in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
+                        special_task_running = True
                     if 0 <= t.progress < 1:
                         finished = False
 
@@ -2260,12 +2276,14 @@ class DocumentService(CommonService):
                     prg = 1
                     status = TaskStatus.DONE.value
 
+                # only for special task and parsed docs and unfinished
+                freeze_progress = special_task_running and doc_progress >= 1 and not finished
                 msg = "\n".join(sorted(msg))
                 info = {
                     "process_duration": datetime.timestamp(datetime.now()) - d["process_begin_at"].timestamp(),
                     "run": status
                 }
-                if prg != 0:
+                if prg != 0 and not freeze_progress:
                     info["progress"] = prg
                 if msg:
                     info["progress_msg"] = msg
@@ -2574,7 +2592,7 @@ def queue_raptor_o_graphrag_tasks(db, sample_doc_id, ty, priority, fake_doc_id="
 
     task["doc_id"] = fake_doc_id
     task["doc_ids"] = doc_ids
-    DocumentService.begin2parse(db, sample_doc_id["id"])
+    DocumentService.begin2parse(db, sample_doc_id["id"], keep_progress=True)
     assert REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
     return task["id"]
 
@@ -2617,7 +2635,7 @@ async def queue_analyze_v2_task(db, doc_id, kb_id, config, user_id, file=None, p
         
         # 保存到 MinIO 临时位置
         temp_location = f"temp/analyze_v2/{task_id}/{fname}"
-        STORAGE_IMPL.put("multirag-temp", temp_location, file_content)
+        settings.STORAGE_IMPL.put("multirag-temp", temp_location, file_content)
         
         temp_file_path = temp_location
         logging.info(f"Saved temp file to MinIO: {temp_location}")
