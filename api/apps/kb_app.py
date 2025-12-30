@@ -1723,4 +1723,4 @@ def check_embedding(
     }
     if summary["avg_cos_sim"] > 0.9:
         return get_json_result(data={"summary": summary, "results": results})
-    return get_json_result(retcode=RetCode.NOT_EFFECTIVE, retmsg="failed", data={"summary": summary, "results": results})
+    return get_json_result(retcode=RetCode.NOT_EFFECTIVE, retmsg="Embedding model switch failed: the average similarity between old and new vectors is below 0.9, indicating incompatible vector spaces.", data={"summary": summary, "results": results})
