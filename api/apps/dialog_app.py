@@ -479,16 +479,16 @@ async def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
     - 失败时返回错误信息
     """
     try:
-        diags = DialogService.query(
+        conversations = DialogService.query(
             db,
             tenant_id=user.id,
             status=StatusEnum.VALID.value,
             reverse=True,
             order_by="create_time")
-        diags = [d.to_dict() for d in diags]
-        for d in diags:
-            d["kb_ids"], d["kb_names"] = get_kb_names(d["kb_ids"], db)
-        return get_json_result(data=diags)
+        conversations = [d.to_dict() for d in conversations]
+        for conversation in conversations:
+            conversation["kb_ids"], conversation["kb_names"] = get_kb_names(conversation["kb_ids"], db)
+        return get_json_result(data=conversations)
     except Exception as e:
         return server_error_response(e)
 

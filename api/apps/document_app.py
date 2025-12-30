@@ -1682,7 +1682,7 @@ def web_parse(
 
 
 @router.post('/infos', summary="获取文档信息", response_description="成功获取文档信息")
-def docinfos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)):
+def doc_infos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)):
     for doc_id in doc_ids:
         if not DocumentService.accessible(db, doc_id, user.id):
             return get_json_result(

@@ -325,9 +325,9 @@ async def active_required(user=Depends(manager)):
 
 
 # 定义一个函数，用于搜索API和应用页面的路径
-def search_pages_path(pages_dir):
-    app_path_list = [path for path in pages_dir.glob("*_app.py") if not path.name.startswith(".")]
-    api_path_list = [path for path in pages_dir.glob("*sdk/*.py") if not path.name.startswith(".")]
+def search_pages_path(page_path):
+    app_path_list = [path for path in page_path.glob("*_app.py") if not path.name.startswith(".")]
+    api_path_list = [path for path in page_path.glob("*sdk/*.py") if not path.name.startswith(".")]
     app_path_list.extend(api_path_list)
     return app_path_list
 
@@ -360,8 +360,8 @@ pages_dir = [
 ]
 
 # 遍历页面目录，注册每个找到的页面
-for dir in pages_dir:
-    for path in search_pages_path(dir):
+for directory in pages_dir:
+    for path in search_pages_path(directory):
         register_page(path)
 
 

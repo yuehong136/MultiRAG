@@ -327,7 +327,6 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
         if not conv:
             return get_data_error_result(retmsg="Conversation not found!")
         tenants = UserTenantService.query(db, user_id=user.id)
-        avatar = None
         for tenant in tenants:
             dialog = DialogService.query(db, tenant_id=tenant.tenant_id, id=conv.dialog_id)
             if dialog and len(dialog) > 0:

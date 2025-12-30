@@ -1128,7 +1128,6 @@ def test_db_connect(
             try:
                 import trino
                 import os
-                from trino.auth import BasicAuthentication
             except Exception as e:
                 return server_error_response(
                     f"Missing dependency 'trino'. Please install: pip install trino, detail: {e}")
@@ -1141,7 +1140,7 @@ def test_db_connect(
 
             auth = None
             if http_scheme == "https" and req.get("password"):
-                auth = BasicAuthentication(req.get("username") or "ragflow", req["password"])
+                auth = trino.auth.BasicAuthentication(req.get("username") or "ragflow", req["password"])
 
             conn = trino.dbapi.connect(
                 host=req["host"],

@@ -417,8 +417,8 @@ async def rm(
         try:
             if file.location:
                 settings.STORAGE_IMPL.rm(file.parent_id, file.location)
-        except Exception:
-            logging.exception(f"Fail to remove object: {file.parent_id}/{file.location}")
+        except Exception as e:
+            logging.exception(f"Fail to remove object: {file.parent_id}/{file.location}, error: {e}")
         
         # 删除关联的文档
         informs = File2DocumentService.get_by_file_id(db, file.id)
