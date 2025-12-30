@@ -1022,6 +1022,8 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
 
     res = []
     tk_count = 0
+    max_errors = int(os.environ.get("RAPTOR_MAX_ERRORS", 3))
+
     async def generate(chunks, did):
         nonlocal tk_count, res
         raptor = Raptor(
@@ -1030,7 +1032,8 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
             embd_mdl,
             raptor_config["prompt"],
             raptor_config["max_token"],
-            raptor_config["threshold"]
+            raptor_config["threshold"],
+            max_errors=max_errors,
         )
         original_length = len(chunks)
         chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback, row["id"])
@@ -1794,7 +1797,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                             embd_model=embd_mdl,
                             prompt=raptor_prompt,
                             max_token=raptor_config.get("max_token", 512),
-                            threshold=raptor_config.get("threshold", 0.1)
+                            threshold=raptor_config.get("threshold", 0.1),
+                            max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
                         )
                         chapter_results = await raptor(
                             chapter_raptor_inputs,
@@ -1895,7 +1899,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                         embd_model=embd_mdl,
                         prompt=raptor_prompt,
                         max_token=raptor_config.get("max_token", 512),
-                        threshold=raptor_config.get("threshold", 0.1)
+                        threshold=raptor_config.get("threshold", 0.1),
+                        max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
                     )
 
                     cluster_results = await raptor(
