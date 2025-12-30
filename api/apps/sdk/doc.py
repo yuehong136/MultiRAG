@@ -6,7 +6,7 @@ from io import BytesIO
 from typing import Any, Literal, Annotated
 
 import xxhash
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, Discriminator, model_validator
 from sqlalchemy.exc import OperationalError
@@ -175,18 +175,20 @@ class RetrievalTestRequest(BaseModel):
 async def upload_documents(
     dataset_id: str,
     files: list[UploadFile] = File(...),
+    parent_path: str | None = Form(None, description="Optional nested path under the parent folder. Uses '/' separators."),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     """
     上传文档到数据集
-    
+
     Args:
         dataset_id: 数据集ID
         files: 上传的文件列表
+        parent_path: 可选的父文件夹路径，使用 '/' 分隔
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         上传的文档信息列表
     """
@@ -206,7 +208,7 @@ async def upload_documents(
     if not kb:
         raise HTTPException(status_code=404, detail=f"Can't find the dataset with ID {dataset_id}!")
     
-    err, uploaded_files = FileService.upload_document(db, kb, files, tenant_id)
+    err, uploaded_files = FileService.upload_document(db, kb, files, tenant_id, parent_path=parent_path)
     if err:
         return get_result(retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
     

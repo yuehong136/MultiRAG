@@ -41,6 +41,7 @@ def vision_figure_parser_figure_data_wrapper(figures_data_without_positions):
         if isinstance(figure_data[1], Image.Image) and _is_valid_image_size(figure_data[1])
     ]
 
+
 def vision_figure_parser_docx_wrapper(sections,tbls,callback=None,**kwargs):
     try:
         with db_connection() as db:
@@ -58,7 +59,8 @@ def vision_figure_parser_docx_wrapper(sections,tbls,callback=None,**kwargs):
             callback(0.8, f"Visual model error: {e}. Skipping figure parsing enhancement.")
     return tbls
 
-def vision_figure_parser_pdf_wrapper(tbls,callback=None,**kwargs):
+
+def vision_figure_parser_pdf_wrapper(tbls, callback=None, **kwargs):
     try:
         with db_connection() as db:
             vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
@@ -81,6 +83,7 @@ def vision_figure_parser_pdf_wrapper(tbls,callback=None,**kwargs):
         except Exception as e:
             callback(0.8, f"Visual model error: {e}. Skipping figure parsing enhancement.")
     return tbls
+
 
 shared_executor = ThreadPoolExecutor(max_workers=10)
 
