@@ -84,8 +84,12 @@ class Retrieval(ToolBase, ABC):
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 12)))
     def _invoke(self, **kwargs):
+        if self.check_if_canceled("Retrieval processing"):
+            return
+
         if not kwargs.get("query"):
             self.set_output("formalized_content", self._param.empty_response)
+            return
 
         with db_connection() as db:
             kb_ids: list[str] = []
@@ -185,11 +189,16 @@ class Retrieval(ToolBase, ABC):
                     rerank_mdl=rerank_mdl,
                     rank_feature=label_question(db, query, kbs),
                 )
-                
+
+                if self.check_if_canceled("Retrieval processing"):
+                    return
+
                 # TOC增强和知识图谱检索
                 if self._param.toc_enhance:
                     chat_mdl = LLMBundle(db, self._canvas._tenant_id, LLMType.CHAT)
                     cks = settings.retriever.retrieval_by_toc(query, kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, self._param.top_n)
+                    if self.check_if_canceled("Retrieval processing"):
+                        return
                     if cks:
                         kbinfos["chunks"] = cks
                 if self._param.use_kg:
@@ -198,6 +207,8 @@ class Retrieval(ToolBase, ABC):
                                                            kb_ids,
                                                            embd_mdl,
                                                            LLMBundle(db, self._canvas.get_tenant_id(), LLMType.CHAT))
+                    if self.check_if_canceled("Retrieval processing"):
+                        return
                     if ck["content_with_weight"]:
                         kbinfos["chunks"].insert(0, ck)
             else:
@@ -205,6 +216,8 @@ class Retrieval(ToolBase, ABC):
 
             if self._param.use_kg and kbs:
                 ck = settings.kg_retriever.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, LLMType.CHAT))
+                if self.check_if_canceled("Retrieval processing"):
+                    return
                 if ck["content_with_weight"]:
                     ck["content"] = ck["content_with_weight"]
                     del ck["content_with_weight"]

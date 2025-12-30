@@ -492,7 +492,7 @@ def run(
     
     # Agent模式 - SSE流式响应
     try:
-        canvas = Canvas(cvs.dsl, user.id, req["id"])
+        canvas = Canvas(cvs.dsl, user.id)
     except Exception as e:
         return server_error_response(e)
     
@@ -502,12 +502,12 @@ def run(
                 yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
             cvs.dsl = json.loads(str(canvas))
             UserCanvasService.update_by_id(db, req["id"], cvs.to_dict())
+
         except Exception as e:
             logging.exception(e)
-            yield "data:" + json.dumps(
-                {"code": 500, "message": str(e), "data": False},
-                ensure_ascii=False
-            ) + "\n\n"
+            yield "data:" + json.dumps({"code": 500, "message": str(e), "data": False}, ensure_ascii=False) + "\n\n"
+        finally:
+            canvas.cancel_task()
     
     return StreamingResponse(
         sse(),

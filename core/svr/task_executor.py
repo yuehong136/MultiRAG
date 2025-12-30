@@ -8,7 +8,6 @@ import concurrent.futures
 import json_repair
 
 from api.db.db_models import db_connection
-from api.db.services.canvas_service import UserCanvasService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from common.connection_utils import timeout
@@ -19,7 +18,6 @@ from common.config_utils import show_configs
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from graphrag.general.index import run_graphrag_for_kb
 from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
-from core.flow.pipeline import Pipeline
 from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text
 import logging
 from datetime import datetime
@@ -840,6 +838,9 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
 
 
 async def run_dataflow(db: Session, task: dict):
+    from api.db.services.canvas_service import UserCanvasService
+    from core.flow.pipeline import Pipeline
+
     task_start_ts = timer()
     dataflow_id = task["dataflow_id"]
     doc_id = task["doc_id"]
@@ -2580,6 +2581,7 @@ async def do_handle_task(db, task):
 
 
 async def handle_task():
+
     global DONE_TASKS, FAILED_TASKS
     with db_connection() as db:
         task_dict = None  # 确保变量初始化
