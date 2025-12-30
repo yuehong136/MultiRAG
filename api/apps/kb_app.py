@@ -146,7 +146,7 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
         parser_config = get_parser_config(parser_id, None)
         
         # 使用封装的方法创建payload
-        req_data = KnowledgebaseService.create_with_name(
+        payload = KnowledgebaseService.create_with_name(
             db=db,
             name=dataset_name,
             tenant_id=user.id,
@@ -156,12 +156,14 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
             description=req_data.get("description"),
             permission=req_data.get("permission")
         )
+
+        code = payload.get("code")
+        if code:
+            return get_data_error_result(retcode=code, retmsg=payload.get("message"))
         
-        if not KnowledgebaseService.save(db, **req_data):
+        if not KnowledgebaseService.save(db, **payload):
             return get_data_error_result()
-        return get_json_result(data={"kb_id": req_data["id"]})
-    except ValueError as e:
-        return get_data_error_result(retmsg=str(e))
+        return get_json_result(data={"kb_id": payload["id"]})
     except Exception as e:
         return server_error_response(e)
 
