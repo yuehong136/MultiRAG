@@ -1834,7 +1834,7 @@ class DocumentService(CommonService):
         unfinished_task_query = db.query(Task.doc_id).filter(
             Task.progress >= 0,
             Task.progress < 1
-        ).subquery()
+        ).scalar_subquery()
 
         query = db.query(
             cls.model.id, cls.model.process_begin_at, cls.model.parser_config,
