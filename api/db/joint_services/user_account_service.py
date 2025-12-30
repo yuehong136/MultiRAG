@@ -18,7 +18,6 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from api import settings
 from api.utils.api_utils import group_by
 from api.db import FileType, UserTenantRole#, ActiveEnum
 from api.db.services.api_service import APITokenService, API4ConversationService
@@ -37,7 +36,7 @@ from api.db.services.task_service import TaskService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService, UserService, UserTenantService
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from core.nlp import search
 
 
@@ -196,8 +195,8 @@ def delete_user_data(db: Session, user_id: str) -> dict:
             if kb_ids:
                 # step1.1.1 delete files in storage, remove bucket
                 for kb_id in kb_ids:
-                    if STORAGE_IMPL.bucket_exists(kb_id):
-                        STORAGE_IMPL.remove_bucket(kb_id)
+                    if settings.STORAGE_IMPL.bucket_exists(kb_id):
+                        settings.STORAGE_IMPL.remove_bucket(kb_id)
                 done_msg += f"- Removed {len(kb_ids)} dataset's buckets.\n"
                 # step1.1.2 delete file and document info in db
                 doc_ids = DocumentService.get_all_doc_ids_by_kb_ids(db, kb_ids)
@@ -272,7 +271,7 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                     if created_files:
                         # step2.1.1.1 delete file in storage
                         for f in created_files:
-                            STORAGE_IMPL.rm(f.parent_id, f.location)
+                            settings.STORAGE_IMPL.rm(f.parent_id, f.location)
                         done_msg += f"- Deleted {len(created_files)} uploaded file.\n"
                         # step2.1.1.2 delete file record
                         file_delete_res = FileService.delete_by_ids(db, [f.id for f in created_files])

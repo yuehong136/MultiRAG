@@ -16,7 +16,7 @@ import re
 import numpy as np
 from PIL import Image
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from deepdoc.vision import OCR
@@ -82,6 +82,9 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
     return []
 
 
+MIN_IMAGE_DIMENSION = 10  # 视觉模型要求图像宽高至少为10像素
+
+
 def vision_llm_chunk(binary, vision_model, prompt=None, callback=None):
     """
     A simple wrapper to process image to markdown texts via VLM.
@@ -94,9 +97,22 @@ def vision_llm_chunk(binary, vision_model, prompt=None, callback=None):
     img = binary
     txt = ""
 
+    # 检查图像尺寸是否满足视觉模型的最低要求
+    if hasattr(img, 'size'):
+        width, height = img.size
+        if width < MIN_IMAGE_DIMENSION or height < MIN_IMAGE_DIMENSION:
+            # 图像太小，跳过视觉模型处理
+            return ""
+
     try:
         with io.BytesIO() as img_binary:
-            img.save(img_binary, format="JPEG")
+            try:
+                img.save(img_binary, format="JPEG")
+            except Exception:
+                img_binary.seek(0)
+                img_binary.truncate()
+                img.save(img_binary, format="PNG")
+
             img_binary.seek(0)
             ans = clean_markdown_block(vision_model.describe_with_prompt(img_binary.read(), prompt))
             txt += "\n" + ans

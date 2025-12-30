@@ -10,8 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from api.db import StatusEnum
-# from api.db.database import get_db
+from common.constants import StatusEnum
 from api.db.db_models import WritingChapter, WritingProject, WritingReferenceMaterial, get_db
 from api.db.services.project_service import ProjectService
 from api.db.services.chapter_service import ChapterService

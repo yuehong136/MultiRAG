@@ -31,10 +31,12 @@ core/flow/utils/
    - 核心算法是否改变？
    - 参数签名是否变化？
    - 返回格式是否调整？
+   - 依赖库 API 是否有更新？（如 check_installation 返回值变化）
 
 3. **同步更新 utils**
    - 更新核心逻辑
    - 更新参考注释（行号）
+   - 更新错误处理逻辑
    - 测试验证
 
 ### 注释规范
@@ -129,10 +131,4 @@ python -m pytest tests/test_flow_utils.py -k "splitter"
 2. **明确对应关系**：一个组件 → 一个 utils
 3. **便于追踪**：注释标注参考来源
 4. **易于维护**：清晰的目录结构
-
-## 🔗 相关文档
-
-- `analyze_v2_core_flow_utils组织结构说明.md` - 详细设计说明
-- `analyze_v2_core_flow集成完成说明.md` - 功能使用说明
-- `analyze_v2_提取core_flow核心逻辑方案.md` - 方案评估
 

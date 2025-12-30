@@ -1,14 +1,14 @@
+from datetime import datetime
+import json
 import os
 import requests
 from timeit import default_timer as timer
 
 from sqlalchemy import text
 
-from api import settings
 from api.db.db_models import engine, get_pool_status
-from core import settings as rag_settings
 from core.utils.redis_conn import REDIS_CONN
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from core.utils.es_conn import ESConnection
 from core.utils.milvus_conn import MilvusConnection
 from core.utils.infinity_conn import InfinityConnection
@@ -86,7 +86,7 @@ def check_doc_engine() -> tuple[bool, dict]:
 def check_storage() -> tuple[bool, dict]:
     st = timer()
     try:
-        STORAGE_IMPL.health()
+        settings.STORAGE_IMPL.health()
         return True, {"elapsed": f"{(timer() - st) * 1000.0:.1f}"}
     except Exception as e:
         return False, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", "error": str(e)}
@@ -288,7 +288,7 @@ def get_database_status() -> dict:
 def check_minio_alive():
     start_time = timer()
     try:
-        response = requests.get(f'http://{rag_settings.MINIO["host"]}/minio/health/live')
+        response = requests.get(f'http://{settings.MINIO["host"]}/minio/health/live')
         if response.status_code == 200:
             return {'status': "alive", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
         else:
@@ -316,7 +316,10 @@ def get_redis_info():
 def check_multirag_server_alive():
     start_time = timer()
     try:
-        response = requests.get(f'http://{settings.HOST_IP}:{settings.HOST_PORT}/v1/system/ping')
+        url = f'http://{settings.HOST_IP}:{settings.HOST_PORT}/v1/system/ping'
+        if '0.0.0.0' in url:
+            url = url.replace('0.0.0.0', '127.0.0.1')
+        response = requests.get(url)
         if response.status_code == 200:
             return {'status': "alive", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
         else:
@@ -325,6 +328,26 @@ def check_multirag_server_alive():
         return {
             "status": "timeout",
             "message": f"error: {str(e)}",
+        }
+
+
+def check_task_executor_alive():
+    task_executor_heartbeats = {}
+    try:
+        task_executors = REDIS_CONN.smembers("TASKEXE")
+        now = datetime.now().timestamp()
+        for task_executor_id in task_executors:
+            heartbeats = REDIS_CONN.zrangebyscore(task_executor_id, now - 60 * 30, now)
+            heartbeats = [json.loads(heartbeat) for heartbeat in heartbeats]
+            task_executor_heartbeats[task_executor_id] = heartbeats
+        if task_executor_heartbeats:
+            return {"status": "alive", "message": task_executor_heartbeats}
+        else:
+            return {"status": "timeout", "message": "Not found any task executor."}
+    except Exception as e:
+        return {
+            "status": "timeout",
+            "message": f"error: {str(e)}"
         }
 
 

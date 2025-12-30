@@ -1,4 +1,5 @@
 import random
+import socket
 import sys
 import threading
 import time
@@ -7,25 +8,18 @@ import concurrent.futures
 import json_repair
 
 from api.db.db_models import db_connection
-from api.db.services.canvas_service import UserCanvasService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
-from api.utils.api_utils import timeout
-from api.utils.base64_image import image2id
-from api.utils.log_utils import init_root_logger, get_project_base_directory
-from api.utils.configs import show_configs
+from common.connection_utils import timeout
+from common.file_utils import get_project_base_directory
+from core.utils.base64_image import image2id
+from common.log_utils import init_root_logger
+from common.config_utils import show_configs
+from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from graphrag.general.index import run_graphrag_for_kb
 from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
-from core.flow.pipeline import Pipeline
 from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text
 import logging
-# for module in ["pdfminer"]:
-#     module_logger = logging.getLogger(module)
-#     module_logger.setLevel(logging.WARNING)
-# for module in ["sqlalchemy"]:
-#     module_logger = logging.getLogger(module)
-#     module_logger.handlers.clear()
-#     module_logger.propagate = True
 from datetime import datetime
 import json
 import os
@@ -34,7 +28,7 @@ import copy
 import re
 from functools import partial
 
-from pymilvus import MilvusException, DataType
+from pymilvus import DataType
 
 import numpy as np
 from sqlalchemy.orm.exc import NoResultFound
@@ -42,26 +36,25 @@ from sqlalchemy.orm import Session
 
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
-import tracemalloc
 import signal
 import trio
 # import exceptiongroup
 import faulthandler
-from api.db import LLMType, ParserType, PipelineTaskType
+from common.constants import LLMType, ParserType, PipelineTaskType, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, has_canceled, CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID
 from api.db.services.file2document_service import File2DocumentService
-from api import settings
-from api.versions import get_multirag_version
+from common.versions import get_multirag_version
 from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, \
     email, tag
 from core.nlp import search, rag_tokenizer, add_positions, concat_img
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from core.settings import DOC_MAXIMUM_SIZE, DOC_BULK_SIZE, EMBEDDING_BATCH_SIZE, SVR_CONSUMER_GROUP_NAME, get_svr_queue_name, get_svr_queue_names, print_rag_settings, TAG_FLD, PAGERANK_FLD
-from core.utils import num_tokens_from_string, truncate
+from common.constants import PAGERANK_FLD, TAG_FLD, SVR_CONSUMER_GROUP_NAME
+from common.token_utils import num_tokens_from_string, truncate
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
-from core.utils.storage_factory import STORAGE_IMPL
+from common.exceptions import TaskCanceledException
+from common import settings
 from graphrag.utils import chat_limiter
 
 BATCH_SIZE = 64
@@ -156,82 +149,6 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
-# SIGUSR1 handler: start tracemalloc and take snapshot
-def start_tracemalloc_and_snapshot(signum, frame):
-    if not tracemalloc.is_tracing():
-        logging.info("start tracemalloc")
-        tracemalloc.start()
-    else:
-        logging.info("tracemalloc is already running")
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    snapshot_file = f"snapshot_{timestamp}.trace"
-    snapshot_file = os.path.abspath(os.path.join(get_project_base_directory(), "logs", f"{os.getpid()}_snapshot_{timestamp}.trace"))
-
-    snapshot = tracemalloc.take_snapshot()
-    snapshot.dump(snapshot_file)
-    current, peak = tracemalloc.get_traced_memory()
-    if sys.platform == "win32":
-        import psutil
-        process = psutil.Process()
-        max_rss = process.memory_info().rss / 1024
-    else:
-        import resource
-        max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    logging.info(f"taken snapshot {snapshot_file}. max RSS={max_rss / 1000:.2f} MB, current memory usage: {current / 10**6:.2f} MB, Peak memory usage: {peak / 10**6:.2f} MB")
-
-
-# SIGUSR2 handler: stop tracemalloc
-def stop_tracemalloc(signum, frame):
-    if tracemalloc.is_tracing():
-        logging.info("stop tracemalloc")
-        tracemalloc.stop()
-    else:
-        logging.info("tracemalloc not running")
-
-
-class TaskCanceledException(Exception):
-    def __init__(self, msg):
-        self.msg = msg
-
-
-# def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing..."):
-#     """
-#     同步执行的进度更新工具函数。
-#     - 不再把 db 传进 TaskService.update_progress；
-#     - 直接调用 _update_progress_sync，避免协程里再 await；
-#     - 避免关闭外层传进来的 db（由上层负责）。
-#     """
-#     try:
-#         if prog is not None and prog < 0:
-#             msg = "[ERROR]" + msg
-#
-#         cancel = TaskService.do_cancel(db, task_id)
-#         if cancel:
-#             msg += " [Canceled]"
-#             prog = -1
-#
-#         if to_page > 0 and msg and from_page < to_page:
-#             msg = f"Page({from_page + 1}~{to_page + 1}): " + msg
-#         if msg:
-#             msg = datetime.now().strftime("%H:%M:%S") + " " + msg
-#
-#         info = {"progress_msg": msg}
-#         if prog is not None:
-#             info["progress"] = prog
-#
-#         # ★ 关键：同步直接调用核心，不传 db
-#         TaskService._update_progress_sync(task_id, info)
-#
-#         if cancel:
-#             raise TaskCanceledException(msg)
-#
-#         logging.info(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}")
-#
-#     except NoResultFound:
-#         logging.warning("set_progress(%s): 记录不存在，无法更新进度", task_id)
-#     except Exception:
-#         logging.exception(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, got exception")
 def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="Processing...", enable_sse=False):
     """
     更新任务进度（支持双写模式）
@@ -326,7 +243,7 @@ async def collect(db: Session):
     global CONSUMER_NAME, DONE_TASKS, FAILED_TASKS
     global UNACKED_ITERATOR
 
-    svr_queue_names = get_svr_queue_names()
+    svr_queue_names = settings.get_svr_queue_names()
     try:
         if not UNACKED_ITERATOR:
             UNACKED_ITERATOR = REDIS_CONN.get_unacked_iterator(svr_queue_names, SVR_CONSUMER_GROUP_NAME, CONSUMER_NAME)
@@ -356,13 +273,16 @@ async def collect(db: Session):
         # Redis消息已包含fake_doc_id和doc_ids，先使用它
         task = msg
 
-        if task.get("task_type") in ["graphrag", "raptor", "mindmap"]:
+        if task.get("task_type") in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
             # 尝试从数据库获取完整配置（tenant_id, parser_config等）
             db_task = TaskService.get_task(db, msg["id"], msg.get("doc_ids", []))
 
             if db_task:
                 # 成功获取数据库配置，合并数据
                 task = db_task
+                if task:
+                    task["doc_id"] = msg["doc_id"]
+                    task["doc_ids"] = msg.get("doc_ids", []) or []
                 # Redis消息中的这两个字段需要覆盖数据库的
                 task["doc_id"] = msg["doc_id"]  # 保持使用fake_doc_id
                 task["doc_ids"] = msg.get("doc_ids", []) or []  # 文档列表
@@ -469,14 +389,14 @@ async def collect(db: Session):
 
 
 async def get_storage_binary(bucket, name):
-    return await trio.to_thread.run_sync(lambda: STORAGE_IMPL.get(bucket, name))
+    return await trio.to_thread.run_sync(lambda: settings.STORAGE_IMPL.get(bucket, name))
 
 
 @timeout(60 * 80, 1)
 async def build_chunks(task, progress_callback, db: Session):
-    if task["size"] > DOC_MAXIMUM_SIZE:
+    if task["size"] > settings.DOC_MAXIMUM_SIZE:
         set_progress(db, task["id"], prog=-1, msg="File size exceeds( <= %dMb )" %
-                                                  (int(DOC_MAXIMUM_SIZE / 1024 / 1024)))
+                                                  (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))
         return []
 
     chunker = FACTORY[task["parser_id"].lower()]
@@ -541,7 +461,7 @@ async def build_chunks(task, progress_callback, db: Session):
                 d["img_id"] = ""
                 docs.append(d)
                 return
-            await image2id(d, partial(STORAGE_IMPL.put, tenant_id=task["tenant_id"]), d["pk"], task["kb_id"])
+            await image2id(d, partial(settings.STORAGE_IMPL.put, tenant_id=task["tenant_id"]), d["pk"], task["kb_id"])
             docs.append(d)
         except Exception:
             logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
@@ -617,7 +537,7 @@ async def build_chunks(task, progress_callback, db: Session):
             task_canceled = has_canceled(task["id"])
             if task_canceled:
                 progress_callback(-1, msg="Task has been canceled.")
-                return
+                return None
             if settings.retriever.tag_content(tenant_id, kb_ids, d, all_tags, topn_tags=topn_tags, S=S) and len(d[TAG_FLD]) > 0:
                 examples.append({"content": d["content_with_weight"], TAG_FLD: d[TAG_FLD]})
             else:
@@ -677,6 +597,7 @@ def build_TOC(task, docs, progress_callback):
         d["page_num_int"] = 100000000
         d["pk"] = xxhash.xxh64((d["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
         return d
+    return None
 
 
 async def init_kb(row, kb_name):
@@ -885,9 +806,9 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
         return mdl.encode([truncate(c, mdl.max_length - 10) for c in txts])
 
     cnts_ = np.array([])
-    for i in range(0, len(cnts), EMBEDDING_BATCH_SIZE):
+    for i in range(0, len(cnts), settings.EMBEDDING_BATCH_SIZE):
         async with embed_limiter:
-            vts, c = await trio.to_thread.run_sync(lambda: batch_encode(cnts[i: i + EMBEDDING_BATCH_SIZE]))
+            vts, c = await trio.to_thread.run_sync(lambda: batch_encode(cnts[i: i + settings.EMBEDDING_BATCH_SIZE]))
         if len(cnts_) == 0:
             cnts_ = vts
         else:
@@ -918,6 +839,9 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
 
 
 async def run_dataflow(db: Session, task: dict):
+    from api.db.services.canvas_service import UserCanvasService
+    from core.flow.pipeline import Pipeline
+
     task_start_ts = timer()
     dataflow_id = task["dataflow_id"]
     doc_id = task["doc_id"]
@@ -969,19 +893,19 @@ async def run_dataflow(db: Session, task: dict):
 
             vects = np.array([])
             texts = [o.get("questions", o.get("summary", o["text"])) for o in chunks]
-            delta = 0.20 / (len(texts) // EMBEDDING_BATCH_SIZE + 1)
+            delta = 0.20 / (len(texts) // settings.EMBEDDING_BATCH_SIZE + 1)
             prog = 0.8
-            for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+            for i in range(0, len(texts), settings.EMBEDDING_BATCH_SIZE):
                 async with embed_limiter:
-                    vts, c = await trio.to_thread.run_sync(lambda: batch_encode(texts[i: i + EMBEDDING_BATCH_SIZE]))
+                    vts, c = await trio.to_thread.run_sync(lambda: batch_encode(texts[i: i + settings.EMBEDDING_BATCH_SIZE]))
                 if len(vects) == 0:
                     vects = vts
                 else:
                     vects = np.concatenate((vects, vts), axis=0)
                 embedding_token_consumption += c
                 prog += delta
-                if i % (len(texts) // EMBEDDING_BATCH_SIZE / 100 + 1) == 1:
-                    set_progress(db, task_id, prog=prog, msg=f"{i + 1} / {len(texts) // EMBEDDING_BATCH_SIZE}")
+                if i % (len(texts) // settings.EMBEDDING_BATCH_SIZE / 100 + 1) == 1:
+                    set_progress(db, task_id, prog=prog, msg=f"{i + 1} / {len(texts) // settings.EMBEDDING_BATCH_SIZE}")
 
             assert len(vects) == len(chunks)
             for i, ck in enumerate(chunks):
@@ -1091,48 +1015,63 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
 
     raptor_config = kb_parser_config.get("raptor", {})
 
-    chunks = []
     if vector_size != 768:
         vctr_nm = "q_%d_vec" % vector_size
     else:
         vctr_nm = "vector"
-    for doc_id in doc_ids:
-        # 使用真实的doc_id查询chunks，而不是row["doc_id"]（fake_doc_id）
-        for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
-            chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
 
-    raptor = Raptor(
-        raptor_config.get("max_cluster", 64),
-        chat_mdl,
-        embd_mdl,
-        raptor_config["prompt"],
-        raptor_config["max_token"],
-        raptor_config["threshold"]
-    )
-    original_length = len(chunks)
-    chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback)
-    doc = {
-        "doc_id": fake_doc_id,
-        "kb_id": [str(row["kb_id"])],
-        "docnm_kwd": row["name"],
-        "title_tks": rag_tokenizer.tokenize(row["name"])
-    }
-    if row["pagerank"]:
-        doc[PAGERANK_FLD] = int(row["pagerank"])
     res = []
     tk_count = 0
-    for content, vctr in chunks[original_length:]:
-        d = copy.deepcopy(doc)
-        d["pk"] = xxhash.xxh64((content + str(fake_doc_id)).encode("utf-8")).hexdigest()
-        d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
-        d["create_timestamp_flt"] = datetime.now().timestamp()
-        d[vctr_nm] = vctr.tolist()
-        # d["vector"] = vctr.tolist() # todo 怎么合理发挥我们支持两种向量字段的特性呢？
-        d["content_with_weight"] = content
-        d["content_ltks"] = rag_tokenizer.tokenize(content)
-        d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
-        res.append(d)
-        tk_count += num_tokens_from_string(content)
+    async def generate(chunks, did):
+        nonlocal tk_count, res
+        raptor = Raptor(
+            raptor_config.get("max_cluster", 64),
+            chat_mdl,
+            embd_mdl,
+            raptor_config["prompt"],
+            raptor_config["max_token"],
+            raptor_config["threshold"]
+        )
+        original_length = len(chunks)
+        chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback, row["id"])
+        doc = {
+            "doc_id": did,
+            "kb_id": [str(row["kb_id"])],
+            "docnm_kwd": row["name"],
+            "title_tks": rag_tokenizer.tokenize(row["name"]),
+            "raptor_kwd": "raptor"
+        }
+        if row["pagerank"]:
+            doc[PAGERANK_FLD] = int(row["pagerank"])
+
+        for content, vctr in chunks[original_length:]:
+            d = copy.deepcopy(doc)
+            d["pk"] = xxhash.xxh64((content + str(did)).encode("utf-8")).hexdigest()
+            d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
+            d["create_timestamp_flt"] = datetime.now().timestamp()
+            d[vctr_nm] = vctr.tolist()
+            # d["vector"] = vctr.tolist() # todo 怎么合理发挥我们支持两种向量字段的特性呢？
+            d["content_with_weight"] = content
+            d["content_ltks"] = rag_tokenizer.tokenize(content)
+            d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
+            res.append(d)
+            tk_count += num_tokens_from_string(content)
+
+    if raptor_config.get("scope", "file") == "file":
+        for x, doc_id in enumerate(doc_ids):
+            chunks = []
+            for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
+                chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
+            await generate(chunks, doc_id)
+            callback(prog=(x + 1.)/len(doc_ids))
+    else:
+        chunks = []
+        for doc_id in doc_ids:
+            for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
+                chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
+
+        await generate(chunks, fake_doc_id)
+
     return res, tk_count
 
 
@@ -1305,7 +1244,20 @@ def _get_default_metadata_fields():
     return [
         {
             "field_name": "document_summary",
-            "prompt": "Summarize the document concisely in 150-200 words with chinese.",
+            "prompt": """## 角色
+你是一个文档摘要专家。
+
+## 任务
+为给定的文本内容生成简洁的摘要。
+
+## 要求
+- 摘要长度控制在 150-200 字。
+- 准确捕捉主题和关键要点。
+- 保持内容连贯、结构清晰。
+- 聚焦最重要的信息。
+- 摘要必须与给定文本内容使用相同的语言。
+- 只输出摘要文本，不要输出其他内容。
+""",
             "source": "global_summary",
             "call_mode": "single",
             "post_process": "none",
@@ -1314,7 +1266,20 @@ def _get_default_metadata_fields():
         },
         {
             "field_name": "semantic_tags",
-            "prompt": " use chinese, Extract 3-5 semantic tags that represent the main themes. Output comma-separated.",
+            "prompt": """## 角色
+你是一个文本分析专家。
+
+## 任务
+从给定的文本内容中提取最重要的关键词/短语。
+
+## 要求
+- 总结文本内容，提取最重要的 3-5 个关键词/短语。
+- 关键词必须彼此独立，语义上不能有重叠。
+- 缩写词与全称合并（优先使用全称）。
+- 关键词必须与给定文本内容使用相同的语言。
+- 关键词之间用英文逗号分隔。
+- 只输出关键词，不要输出其他内容。
+""",
             "source": "cluster_summaries",
             "call_mode": "batch",
             "post_process": "counter_top10",
@@ -1618,7 +1583,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 video_config = {"llm_id": video_llm_name}
                 logging.info(f"Using simplified parse_method mode: {parse_method}")
 
-            def _parser_callback(prog, msg):
+            def _parser_callback(prog, msg=""):
                 callback(prog=0.15 + prog * 0.05, msg=msg)
 
             parsed_result = await parse_file(
@@ -2096,7 +2061,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 async def delete_image(kb_id, chunk_id):
     try:
         async with minio_limiter:
-            STORAGE_IMPL.delete(kb_id, chunk_id)
+            settings.STORAGE_IMPL.delete(kb_id, chunk_id)
     except Exception:
         logging.exception(f"Deleting image of chunk {chunk_id} got exception")
         raise
@@ -2118,16 +2083,16 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         schema: 集合 schema，用于数据类型转换 (ES 返回空 schema)
 
     Returns:
-        成功返回True，失败返回None
+        成功返回True，失败返回False
     """
     # 用于记录成功和失败的插入信息
     successful_inserts = []
     failed_inserts = []
 
     # 循环分批插入
-    for b in range(0, len(chunks), DOC_BULK_SIZE):
+    for b in range(0, len(chunks), settings.DOC_BULK_SIZE):
         # 取出本批次要插入的chunks
-        chunk_batch = chunks[b: b + DOC_BULK_SIZE]
+        chunk_batch = chunks[b: b + settings.DOC_BULK_SIZE]
 
         # 将本批次内的数据先做类型转换
         converted_batch = []
@@ -2140,20 +2105,18 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             db_type = settings.docStoreConn.dbType()
             if db_type == "milvus":
                 # Milvus 使用 collection_name 和 data 参数
-                doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
-                    collection_name=collection_name,
-                    data=converted_batch
+                # insert 返回 list[str]：空列表表示成功，非空列表包含错误信息
+                doc_store_errors = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
+                    rows=converted_batch,
+                    indexName=collection_name
                 ))
-                # 检查insert_count是否与本批次长度一致
-                if doc_store_result.get("insert_count", 0) != len(converted_batch):
-                    error_message = (
-                        f"Insert count mismatch: expected {len(converted_batch)}, "
-                        f"got {doc_store_result.get('insert_count', 0)}."
-                    )
+                # 检查是否有错误（非空列表表示有错误）
+                if doc_store_errors:
+                    error_message = f"Insert failed: {doc_store_errors}"
                     progress_callback(-1, msg=error_message)
                     raise Exception(error_message)
                 # 记录成功插入
-                successful_inserts.append(doc_store_result)
+                successful_inserts.append({"insert_count": len(converted_batch)})
             else:
                 # ES/OpenSearch/Infinity 使用 documents, indexName, knowledgebaseId 参数
                 # ES 要求文档有 "id" 字段，Milvus 使用 "pk"，需要做映射
@@ -2195,13 +2158,13 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 logging.exception(f"Failed to rollback inserted chunks: {e}")
             logging.exception("Insert error:")
             logging.error("Data being inserted: %s", converted_batch)
-            return None  # 出错后返回None
+            return False  # 出错后返回False
 
         # 检查任务是否被取消
         task_canceled = has_canceled(task_id)
         if task_canceled:
             progress_callback(-1, msg="Task has been canceled.")
-            return None
+            return False
 
         # 每插入一定批次，做一次进度回调
         if b % 128 == 0:
@@ -2230,7 +2193,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 for chunk_id in chunk_ids:
                     nursery.start_soon(delete_image, task_dataset_id, chunk_id)
             progress_callback(-1, msg=f"Chunk updates failed since task {task_id} is unknown.")
-            return None
+            return False
 
     # 统计并记录插入结果
     if successful_inserts:
@@ -2346,7 +2309,7 @@ async def do_handle_task(db, task):
     task_canceled = has_canceled(task_id)
     if task_canceled:
         progress_callback(-1, msg="Task has been canceled.")
-        return
+        return None
 
     try:
         # bind embedding model
@@ -2385,6 +2348,7 @@ async def do_handle_task(db, task):
                         "threshold": 0.1,
                         "max_cluster": 64,
                         "random_seed": 0,
+                        "scope": "file"
                     },
                 }
             )
@@ -2404,6 +2368,8 @@ async def do_handle_task(db, task):
                 callback=progress_callback,
                 doc_ids=task.get("doc_ids", []),
             )
+        if fake_doc_ids := task.get("doc_ids", []):
+            task_doc_id = fake_doc_ids[0] # use the first document ID to represent this task for logging purposes
     # Either using graphrag or Standard chunking methods
     elif task_type == "graphrag":
         kb = KnowledgebaseService.get_by_id(db, task_dataset_id)
@@ -2479,15 +2445,15 @@ async def do_handle_task(db, task):
     # async def delete_image(kb_id, chunk_id):
     #     try:
     #         async with minio_limiter:
-    #             STORAGE_IMPL.delete(kb_id, chunk_id)
+    #             settings.STORAGE_IMPL.delete(kb_id, chunk_id)
     #     except Exception:
     #         logging.exception("Deleting image of chunk {}/{}/{} got exception".format(task["location"], task["name"], chunk_id))
     #         raise
     #
     # # 循环分批插入
-    # for b in range(0, chunk_count, DOC_BULK_SIZE):
+    # for b in range(0, chunk_count, settings.DOC_BULK_SIZE):
     #     # 取出本批次要插入的 chunks
-    #     chunk_batch = chunks[b: b + DOC_BULK_SIZE]
+    #     chunk_batch = chunks[b: b + settings.DOC_BULK_SIZE]
     #
     #     # 将本批次内的数据先做类型转换
     #     converted_batch = []
@@ -2615,6 +2581,7 @@ async def do_handle_task(db, task):
 
 
 async def handle_task():
+
     global DONE_TASKS, FAILED_TASKS
     with db_connection() as db:
         task_dict = None  # 确保变量初始化
@@ -2692,7 +2659,7 @@ async def handle_task():
                 # analyze_v2 任务不记录 pipeline 操作日志（临时 doc_id，无对应 Document 记录）
                 if task_type != "analyze_v2":
                     task_document_ids = []
-                    if task_type in ["graphrag", "raptor", "mindmap"]:
+                    if task_type in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
                         task_document_ids = task["doc_ids"]
                     if not task.get("dataflow_id", ""):
                         PipelineOperationLogService.record_pipeline_operation(db, document_id=task["doc_id"],
@@ -2709,6 +2676,17 @@ async def handle_task():
             db.commit()  # 提交事务
 
 
+async def get_server_ip() -> str:
+    # get ip by udp
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception as e:
+        logging.error(str(e))
+        return 'Unknown'
+
+
 async def report_status():
     global CONSUMER_NAME, BOOT_AT, PENDING_TASKS, LAG_TASKS, DONE_TASKS, FAILED_TASKS
     REDIS_CONN.sadd("TASKEXE", CONSUMER_NAME)
@@ -2716,13 +2694,17 @@ async def report_status():
     while True:
         try:
             now = datetime.now()
-            group_info = REDIS_CONN.queue_info(get_svr_queue_name(0), SVR_CONSUMER_GROUP_NAME)
+            group_info = REDIS_CONN.queue_info(settings.get_svr_queue_name(0), SVR_CONSUMER_GROUP_NAME)
             if group_info is not None:
                 PENDING_TASKS = int(group_info.get("pending", 0))
                 LAG_TASKS = int(group_info.get("lag", 0))
 
+            pid = os.getpid()
+            ip_address = await get_server_ip()
             current = copy.deepcopy(CURRENT_TASKS)
             heartbeat = json.dumps({
+                "ip_address": ip_address,
+                "pid": pid,
                 "name": CONSUMER_NAME,
                 "now": now.astimezone().isoformat(timespec="milliseconds"),
                 "boot_at": BOOT_AT,
@@ -2780,9 +2762,9 @@ async def main():
     logging.info(f'MultiRAG version: {get_multirag_version()}')
     show_configs()
     settings.init_settings()
-    from api.settings import EMBEDDING_CFG
-    logging.info(f'api.settings.EMBEDDING_CFG: {EMBEDDING_CFG}')
-    print_rag_settings()
+    settings.check_and_install_torch()
+    logging.info(f'settings.EMBEDDING_CFG: {settings.EMBEDDING_CFG}')
+    settings.print_rag_settings()
     if sys.platform != "win32":
         signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)
         signal.signal(signal.SIGUSR2, stop_tracemalloc)

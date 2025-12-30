@@ -25,10 +25,11 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.db import LLMType
-from api import settings
+from common.constants import LLMType
+from common import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from common.misc_utils import get_uuid
+from common.constants import RetCode
 from api.utils.api_utils import get_json_result
 from api.apps import manager
 # from graphrag.general.mind_map_extractor import MindMapExtractor
@@ -333,7 +334,7 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
                 avatar = dialog[0].icon
                 break
         else:
-            return get_json_result(data=False, retmsg=f'Only owner of conversation authorized for this operation.', retcode=settings.RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg=f'Only owner of conversation authorized for this operation.', retcode=RetCode.OPERATING_ERROR)
 
         for ref in conv.reference:
             if isinstance(ref, list):
@@ -414,7 +415,7 @@ async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), 
             else:
                 return get_json_result(
                     data=False, retmsg=f'Only owner of conversation authorized for this operation.',
-                    retcode=settings.RetCode.OPERATING_ERROR)
+                    retcode=RetCode.OPERATING_ERROR)
             ConversationService.delete_by_id(db, cid)
         return get_json_result(data=True)
     except Exception as e:
@@ -439,7 +440,7 @@ async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=
         if not DialogService.query(db, tenant_id=user.id, id=dialog_id):
             return get_json_result(
                 data=False, retmsg=f'Only owner of dialog authorized for this operation.',
-                retcode=settings.RetCode.OPERATING_ERROR)
+                retcode=RetCode.OPERATING_ERROR)
         convs = ConversationService.query(
             db,
             dialog_id=dialog_id,

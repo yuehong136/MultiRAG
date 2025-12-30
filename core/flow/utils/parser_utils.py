@@ -23,7 +23,7 @@ import trio
 import numpy as np
 from PIL import Image
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from deepdoc.parser import ExcelParser
@@ -158,7 +158,7 @@ class FlowParser:
         **method_kwargs
     ) -> dict:
         """
-        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 214-300 行）
+        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 214-301 行）
         
         Args:
             parse_method: 
@@ -209,8 +209,9 @@ class FlowParser:
                     mineru_delete_output = bool(mineru_delete_output)
             pdf_parser = MinerUParser(mineru_path=mineru_executable, mineru_api=mineru_api)
             
-            if not pdf_parser.check_installation():
-                raise RuntimeError("MinerU not found or server not accessible. Please install it via: pip install -U 'mineru[core]'.")
+            ok, reason = pdf_parser.check_installation()
+            if not ok:
+                raise RuntimeError(f"MinerU not found or server not accessible: {reason}. Please install it via: pip install -U 'mineru[core]'.")
             
             lines, _ = await _to_thread(
                 pdf_parser.parse_pdf,
@@ -673,10 +674,27 @@ class FlowParser:
                 body_text, body_html = [], []
                 
                 def _add_content(m, content_type):
+                    def _decode_payload(payload, charset, target_list):
+                        try:
+                            target_list.append(payload.decode(charset))
+                        except (UnicodeDecodeError, LookupError):
+                            for enc in ["utf-8", "gb2312", "gbk", "gb18030", "latin1"]:
+                                try:
+                                    target_list.append(payload.decode(enc))
+                                    break
+                                except UnicodeDecodeError:
+                                    continue
+                            else:
+                                target_list.append(payload.decode("utf-8", errors="ignore"))
+                    
                     if content_type == "text/plain":
-                        body_text.append(m.get_payload(decode=True).decode(m.get_content_charset()))
+                        payload = msg.get_payload(decode=True)
+                        charset = msg.get_content_charset() or "utf-8"
+                        _decode_payload(payload, charset, body_text)
                     elif content_type == "text/html":
-                        body_html.append(m.get_payload(decode=True).decode(m.get_content_charset()))
+                        payload = msg.get_payload(decode=True)
+                        charset = msg.get_content_charset() or "utf-8"
+                        _decode_payload(payload, charset, body_html)
                     elif "multipart" in content_type:
                         if m.is_multipart():
                             for part in m.iter_parts():

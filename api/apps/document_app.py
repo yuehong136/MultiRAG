@@ -17,7 +17,6 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form, Body, Request
 from fastapi.responses import StreamingResponse
-from pymilvus import MilvusException
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 from starlette.status import (
@@ -28,7 +27,8 @@ from starlette.status import (
 )
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
-from api.db import VALID_FILE_TYPES, VALID_TASK_STATUS, FileType, TaskStatus, ParserType, FileSource, db_models
+from api.db import VALID_FILE_TYPES, FileType
+from common.constants import VALID_TASK_STATUS, TaskStatus, ParserType
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task
@@ -37,18 +37,19 @@ from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks, queue_dataflow
+from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
-from api import settings
 from api.common.check_team_permission import check_kb_team_permission
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result, get_data_error_result, server_error_response
 from common.misc_utils import get_uuid
-from api.utils.file_utils import filename_type, thumbnail, get_project_base_directory
+from common.constants import RetCode
+from api.utils.file_utils import filename_type, thumbnail
+from common.file_utils import get_project_base_directory
 from api.utils.web_utils import CONTENT_TYPE_MAP, html2pdf, is_valid_url
 from core.nlp import search, rag_tokenizer
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from api.apps import manager
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -379,6 +380,21 @@ class WebParseOptions(BaseModel):
     )
     include_favicon: bool | None = Field(default=None, description="是否包含 favicon（默认 False）")
 
+    # 图片去噪选项
+    clean_images: bool | None = Field(
+        default=True,
+        description="是否启用图片去噪功能，自动过滤 logo、统计像素图、占位图等无用图片（默认 True）"
+    )
+    image_filter_mode: Literal["strict", "balanced", "minimal"] | None = Field(
+        default=None,
+        description=(
+            "图片过滤模式（仅在 clean_images=True 时生效）：\n"
+            "- strict（默认）：最大程度过滤（logo + 模板 + 统计 + 占位图）\n"
+            "- balanced：中等过滤（统计 + 占位图，保留可能的内容图）\n"
+            "- minimal：最小过滤（仅删除明确的统计像素图）"
+        ),
+    )
+
     @field_validator("limit", "max_depth", "timeout", mode="before")
     @classmethod
     def _empty_str_to_none_and_cast_int(cls, v):
@@ -591,23 +607,23 @@ async def upload(
     - **自动解析**: 上传后文件会自动进入解析队列等待处理
     """
     if not kb_id:
-        return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
     if not files:
-        return construct_json_result(data=False, message='No file part!', code=settings.RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='No file part!', code=RetCode.ARGUMENT_ERROR)
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
     if not check_kb_team_permission(db, kb, user.id):
-        return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+        return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
     file_contents = []
     for file in files:
         if file.filename == "":
-            return get_json_result(data=False, retmsg="No file selected!", retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
         if len(file.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
             return get_json_result(data=False, retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
-                                   retcode=settings.RetCode.ARGUMENT_ERROR)
+                                   retcode=RetCode.ARGUMENT_ERROR)
 
         file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
     # 确保 labels 是 list 或 None
@@ -620,20 +636,19 @@ async def upload(
             raise ValueError('Invalid JSON format for "labels".')
     elif labels is not None:
         raise ValueError('Labels must be a JSON-encoded list of strings or None.')
-    # err, files = FileService.upload_document(db, kb, file_contents, user)
-    err, files = FileService.upload_document(db, kb, file_contents, user, labels)  # 传递labels参数
+    err, files = FileService.upload_document(db, kb, file_contents, user.id, labels)  # 传递labels参数
 
     # if err:
-    #     return get_json_result(data=files, retmsg="\n".join(err), retcode=settings.RetCode.SERVER_ERROR)
+    #     return get_json_result(data=files, retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
     if err:
-        return construct_json_result(data=False, message="\n".join(err), code=settings.RetCode.SERVER_ERROR)
+        return construct_json_result(data=False, message="\n".join(err), code=RetCode.SERVER_ERROR)
 
     if not files:
         return get_json_result(data=files,
                                retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.",
-                               retcode=settings.RetCode.DATA_ERROR)
+                               retcode=RetCode.DATA_ERROR)
 
-    return construct_json_result(data=files, code=settings.RetCode.SUCCESS)
+    return construct_json_result(data=files, code=RetCode.SUCCESS)
 
 
 @router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页")
@@ -799,12 +814,12 @@ def web_crawl(
     url = request_body.url
     if not is_valid_url(url):
         return construct_json_result(data=False, message='The URL format is invalid',
-                                     code=settings.RetCode.ARGUMENT_ERROR)
+                                     code=RetCode.ARGUMENT_ERROR)
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
     if not check_kb_team_permission(db, kb, user.id):
-        return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+        return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
     blob = html2pdf(url)
     if not blob:
@@ -823,9 +838,9 @@ def web_crawl(
             raise RuntimeError("This type of file has not been supported yet!")
 
         location = filename
-        while STORAGE_IMPL.obj_exist(kb_id, location):
+        while settings.STORAGE_IMPL.obj_exist(kb_id, location):
             location += "_"
-        STORAGE_IMPL.put(kb_id, location, blob)
+        settings.STORAGE_IMPL.put(kb_id, location, blob)
         doc = {
             "id": get_uuid(),
             "kb_id": kb.id,
@@ -862,25 +877,25 @@ def create_document(
     req = request_body.model_dump()
     kb_id = req["kb_id"]
     if not kb_id:
-        return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
     if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
         return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
-                                     code=settings.RetCode.ARGUMENT_ERROR)
+                                     code=RetCode.ARGUMENT_ERROR)
 
     if req["name"].strip() == "":
         return construct_json_result(data=False, message="File name can't be empty.",
-                                     code=settings.RetCode.ARGUMENT_ERROR)
+                                     code=RetCode.ARGUMENT_ERROR)
     req["name"] = req["name"].strip()
 
     try:
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         if not kb:
             return construct_json_result(data=False, message="Can't find this knowledgebase!",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=RetCode.ARGUMENT_ERROR)
 
         if DocumentService.query(db, name=req["name"], kb_id=kb_id):
             return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=RetCode.ARGUMENT_ERROR)
 
         kb_root_folder = FileService.get_kb_folder(db, kb.tenant_id)
         if not kb_root_folder:
@@ -906,7 +921,7 @@ def create_document(
             "location": "",
             "size": 0
         })
-        return construct_json_result(data=doc.to_dict(), code=settings.RetCode.SUCCESS)
+        return construct_json_result(data=doc.to_dict(), code=RetCode.SUCCESS)
     except Exception as e:
         return construct_error_response(e)
 
@@ -1075,7 +1090,7 @@ def list_docs(
     - **搜索范围**: 关键词搜索仅匹配文档名称，不包含文档内容
     """
     if not kb_id:
-        return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
 
     tenants = UserTenantService.query(db, user_id=user.id)
     for tenant in tenants:
@@ -1084,7 +1099,7 @@ def list_docs(
     else:
         return get_json_result(
             data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-            retcode=settings.RetCode.OPERATING_ERROR)
+            retcode=RetCode.OPERATING_ERROR)
 
     try:
         docs, tol = DocumentService.get_by_kb_id(db, kb_id, page, page_size, orderby, desc, keywords)
@@ -1093,6 +1108,8 @@ def list_docs(
         for doc_item in docs:
             if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
                 doc_item['thumbnail'] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
+            if doc_item.get("source_type"):
+                doc_item["source_type"] = doc_item["source_type"].split("/")[0]
 
         return construct_json_result(data={"total": tol, "docs": docs})
     except Exception as e:
@@ -1311,7 +1328,7 @@ def list_docs(
     - **时间过滤**: `create_time_from` 和 `create_time_to` 为 Unix 时间戳，0 表示不限制
     """
     if not kb_id:
-        return construct_json_result(data=False, message='Lack of "KB ID"', code=settings.RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
 
     tenants = UserTenantService.query(db, user_id=user.id)
     for tenant in tenants:
@@ -1320,7 +1337,7 @@ def list_docs(
     else:
         return get_json_result(
             data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-            retcode=settings.RetCode.OPERATING_ERROR)
+            retcode=RetCode.OPERATING_ERROR)
 
     # 验证 run_status 参数
     run_status = filter_params.run_status
@@ -1330,7 +1347,7 @@ def list_docs(
             return construct_json_result(
                 data=False,
                 message=f"Invalid filter run status conditions: {', '.join(invalid_status)}",
-                code=settings.RetCode.ARGUMENT_ERROR
+                code=RetCode.ARGUMENT_ERROR
             )
 
     # 验证 types 参数
@@ -1341,7 +1358,7 @@ def list_docs(
             return construct_json_result(
                 data=False,
                 message=f"Invalid filter conditions: {', '.join(invalid_types)} type{'s' if len(invalid_types) > 1 else ''}",
-                code=settings.RetCode.ARGUMENT_ERROR
+                code=RetCode.ARGUMENT_ERROR
             )
 
     suffix = filter_params.suffix
@@ -1363,6 +1380,8 @@ def list_docs(
         for doc_item in docs:
             if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
                 doc_item['thumbnail'] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
+            if doc_item.get("source_type"):
+                doc_item["source_type"] = doc_item["source_type"].split("/")[0]
 
         return construct_json_result(data={"total": tol, "docs": docs})
     except Exception as e:
@@ -1394,7 +1413,7 @@ def get_filter(
     kb_id = req.get("kb_id")
 
     if not kb_id:
-        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
 
     # 验证用户是否有权访问该知识库
     tenants = UserTenantService.query(db, user_id=user.id)
@@ -1403,7 +1422,7 @@ def get_filter(
             break
     else:
         return get_json_result(data=False, retmsg="Only owner of knowledgebase authorized for this operation.",
-                               retcode=settings.RetCode.OPERATING_ERROR)
+                               retcode=RetCode.OPERATING_ERROR)
 
     keywords = req.get("keywords", "")
     suffix = req.get("suffix", [])
@@ -1468,6 +1487,8 @@ def web_parse(
     | `format`           | `"markdown" | "text"`        | `markdown`| Tavily：返回格式。markdown 更快；text 为纯文本，可能增加延迟                            |
     | `timeout`          | `int (1~60)`                   | `自动`     | Tavily：最大等待秒数。未指定时：basic=10s，advanced=30s                                 |
     | `include_favicon`  | `boolean`                      | `False`    | Tavily：是否包含 favicon                                                                |
+    | `clean_images`     | `boolean`                      | `False`    | **图片去噪**：是否启用图片去噪功能，自动过滤 logo、统计像素图、占位图等无用图片         |
+    | `image_filter_mode`| `"strict" | "balanced" | "minimal"` | `strict`   | **过滤模式**（仅在 clean_images=true 时生效）：strict=最大过滤；balanced=中等过滤；minimal=最小过滤 |
 
     #### WebParseCredentials
     | 字段       | 类型     | 必填 | 说明                          |
@@ -1478,7 +1499,7 @@ def web_parse(
 
     ### 响应 (Response)
 
-    #### 成功响应 (200)
+    #### 成功响应 (200) - 默认情况（未启用图片清洗）
     ```json
     {
       "retcode": 0,
@@ -1486,7 +1507,7 @@ def web_parse(
       "data": {
         "provider": "tavily",
         "url": "https://example.com",
-        "texts": ["解析出的纯文本1", "解析出的纯文本2"],
+        "texts": ["解析出的纯文本（Markdown格式）"],
         "raw": {
           "results": [
             {"url": "https://example.com", "raw_content": "...", "images": [], "favicon": "..."}
@@ -1498,6 +1519,60 @@ def web_parse(
       }
     }
     ```
+
+    #### 成功响应 (200) - 启用图片清洗 (clean_images=true)
+    ```json
+    {
+      "retcode": 0,
+      "retmsg": "success",
+      "data": {
+        "provider": "tavily",
+        "url": "https://example.com",
+        "texts": ["已清洗的纯文本（无用图片已删除）"],
+        "filtered_images": [
+          "https://example.com/article/image1.png",
+          "https://example.com/article/image2.png"
+        ],
+        "image_cleaning_stats": {
+          "enabled": true,
+          "mode": "strict",
+          "total_images": 5,
+          "dropped_count": 3,
+          "kept_count": 2,
+          "dropped_details": [
+            {"url": "https://example.com/logo.png", "reason": "strict_pattern"},
+            {"url": "https://example.com/_visitcount?id=1", "reason": "force_drop_tracking"},
+            {"url": "https://example.com/blank.gif", "reason": "force_drop_blank_gif"}
+          ]
+        },
+        "raw": {
+          "results": [
+            {
+              "url": "https://example.com",
+              "raw_content": "原始未清洗的内容（包含所有图片）",
+              "images": ["url1", "url2", "url3", "url4", "url5"],
+              "favicon": "..."
+            }
+          ],
+          "failed_results": [],
+          "response_time": 1.23,
+          "request_id": "uuid"
+        }
+      }
+    }
+    ```
+
+    **返回字段说明**:
+    - `texts`: 清洗后的 Markdown 文本数组（仅当 clean_images=true 时会删除无用图片）
+    - `filtered_images`: 过滤后保留的图片 URL 列表（仅在 clean_images=true 时返回）
+    - `image_cleaning_stats`: 图片清洗统计信息（仅在 clean_images=true 时返回）
+      - `enabled`: 是否启用图片清洗
+      - `mode`: 使用的过滤模式
+      - `total_images`: 原始图片总数
+      - `dropped_count`: 被删除的图片数量
+      - `kept_count`: 保留的图片数量
+      - `dropped_details`: 被删除图片的详细信息（URL + 删除原因）
+    - `raw`: 原始响应数据（完全不变，包含所有原始图片和内容）
 
     #### 错误响应
     - **400: 参数错误/未配置凭据**
@@ -1524,6 +1599,23 @@ def web_parse(
     ---
 
     ### 使用示例
+
+    #### 示例 1: 基础网页解析
+    ```json
+    {
+      "url": "https://example.com/article",
+      "provider": "tavily",
+      "options": {
+        "extract_depth": "advanced",
+        "format": "markdown",
+        "include_images": false,
+        "timeout": 20
+      },
+      "credentials": {"api_key": "tvly-***"}
+    }
+    ```
+
+    #### 示例 2: 启用图片去噪（严格模式）
     ```json
     {
       "url": "https://jw.dhu.edu.cn/2025/0623/c22070a363167/page.htm",
@@ -1531,9 +1623,24 @@ def web_parse(
       "options": {
         "extract_depth": "advanced",
         "format": "markdown",
-        "include_images": false,
-        "include_favicon": false,
+        "include_images": true,
+        "clean_images": true,
+        "image_filter_mode": "strict",
         "timeout": 20
+      },
+      "credentials": {"api_key": "tvly-***"}
+    }
+    ```
+
+    #### 示例 3: 图片去噪（平衡模式）
+    ```json
+    {
+      "url": "https://example.com/news",
+      "provider": "tavily",
+      "options": {
+        "include_images": true,
+        "clean_images": true,
+        "image_filter_mode": "balanced"
       },
       "credentials": {"api_key": "tvly-***"}
     }
@@ -1544,8 +1651,18 @@ def web_parse(
     ### 注意事项
     - `provider = tavily` 需有效 `api_key`；未来支持从凭据表自动注入后可不在请求体传递。
     - `extract_depth/format/timeout` 语义遵循 Tavily 官方文档；`timeout` 范围 1~60 秒。
-    - `texts` 返回的是清洗后的纯文本；原始字段请在 `raw.results[*].raw_content` 获取。
+    - `texts` 返回的是处理后的文本；原始未处理内容请在 `raw.results[*].raw_content` 获取。
     - `jinareader` 为预留 provider，集成后在同一接口下直接可用。
+
+    **图片去噪功能说明**:
+    - `clean_images=true` 时会自动过滤网页中的装饰性图片（logo、统计像素图、占位图等），保留正文配图
+    - 过滤模式说明：
+      - `strict`（默认）：最大程度过滤，删除所有站点 logo、模板图片、统计图、占位图
+      - `balanced`：中等过滤，删除统计图和模板图片，保留可能的内容图（如站点 logo）
+      - `minimal`：最小过滤，仅删除明确的统计像素图和占位图
+    - `filtered_images` 字段包含过滤后保留的图片 URL 列表
+    - `image_cleaning_stats` 提供详细的过滤统计信息，包括删除原因
+    - 所有原始数据（包括被删除的图片）完整保留在 `raw` 字段中
     """
     try:
         url = request.url
@@ -1571,7 +1688,7 @@ def docinfos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(man
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
+                retcode=RetCode.AUTHENTICATION_ERROR
             )
     docs = DocumentService.get_by_ids(db, doc_ids)
     # 将每个文档对象转换为字典
@@ -1589,7 +1706,7 @@ def thumbnails(
         user=Depends(manager)
 ):
     if not doc_ids:
-        return construct_json_result(data=False, message='Lack of "Document ID"', code=settings.RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='Lack of "Document ID"', code=RetCode.ARGUMENT_ERROR)
 
     try:
         docs = DocumentService.get_thumbnails(db, doc_ids)
@@ -1828,7 +1945,7 @@ def change_status(
     req = request_body.model_dump()
     if str(req["status"]) not in ["0", "1"]:
         return construct_json_result(data=False, message='"Status" must be either 0 or 1!',
-                                     code=settings.RetCode.ARGUMENT_ERROR)
+                                     code=RetCode.ARGUMENT_ERROR)
 
     # 处理兼容性：优先使用 doc_ids，如果不存在则使用 doc_id
     doc_ids = req.get("doc_ids")
@@ -1841,7 +1958,7 @@ def change_status(
 
     if not doc_ids:
         return construct_json_result(data=False, message="Document ID(s) required!",
-                                     code=settings.RetCode.ARGUMENT_ERROR)
+                                     code=RetCode.ARGUMENT_ERROR)
 
     result = {}
     for doc_id in doc_ids:
@@ -1886,17 +2003,17 @@ def change_auth(
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            retcode=RetCode.AUTHENTICATION_ERROR)
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
             return construct_json_result(data=False, message="Document not found!",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=RetCode.ARGUMENT_ERROR)
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         if not kb:
             return construct_json_result(data=False, message="Can't find this knowledgebase!",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=RetCode.ARGUMENT_ERROR)
         if isinstance(auths, str):
             try:
                 auths = json.loads(auths)
@@ -1908,14 +2025,14 @@ def change_auth(
             raise ValueError('Auth must be a JSON-encoded list of strings or None.')
         if not DocumentService.update_by_id(db, req["doc_id"], {"auth": json.dumps(auths) if auths else None}):
             return construct_json_result(data=False, message="Database error (Document update)!",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=RetCode.ARGUMENT_ERROR)
 
         # auth = str(req["auth"])
         settings.docStoreConn.update({"doc_id": req["doc_id"]}, {"auth": auths},
                                      search.index_name_one(kb.tenant_id, kb.name), doc.kb_id)
         return construct_json_result(data=True)
     except Exception as e:
-        return construct_json_result(code=settings.RetCode.ARGUMENT_ERROR, message=str(e))
+        return construct_json_result(code=RetCode.ARGUMENT_ERROR, message=str(e))
 
 
 @router.post("/rm", summary="删除文档", response_description="成功删除文档")
@@ -2110,61 +2227,12 @@ def rm(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
+                retcode=RetCode.AUTHENTICATION_ERROR
             )
-
-    root_folder = FileService.get_root_folder(db, user.id)
-    pf_id = root_folder["id"]
-    FileService.init_knowledgebase_docs(db, pf_id, user.id)
-    errors = ""
-    kb_table_num_map = {}
-    for doc_id in doc_ids:
-        try:
-            doc = DocumentService.get_by_id(db, doc_id)
-            if not doc:
-                return construct_json_result(data=False, message="Document not found!",
-                                             code=settings.RetCode.ARGUMENT_ERROR)
-            tenant_id = DocumentService.get_tenant_id(db, doc_id)
-            if not tenant_id:
-                return construct_json_result(data=False, message="Tenant not found!",
-                                             code=settings.RetCode.ARGUMENT_ERROR)
-
-            # 在删除文档前先保存需要的属性
-            doc_parser = doc.parser_id
-            kb_id = doc.kb_id
-
-            b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
-
-            TaskService.filter_delete(db, [Task.doc_id == doc_id])
-
-            if not DocumentService.remove_document(db, doc, tenant_id):
-                return construct_json_result(data=False, message="Database error (Document removal)!",
-                                             code=settings.RetCode.ARGUMENT_ERROR)
-
-            f2d = File2DocumentService.get_by_document_id(db, doc_id)
-            deleted_file_count = 0
-            if f2d:
-                deleted_file_count = FileService.filter_delete(db,
-                                                               [db_models.File.source_type == FileSource.KNOWLEDGEBASE,
-                                                                db_models.File.id == f2d[0].file_id])
-            File2DocumentService.delete_by_document_id(db, doc_id)
-            if deleted_file_count > 0:
-                STORAGE_IMPL.rm(b, n)
-
-            # 使用之前保存的属性值，而不是访问已删除的对象
-            if doc_parser == ParserType.TABLE:
-                if kb_id not in kb_table_num_map:
-                    counts = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="", run_status=[TaskStatus.DONE],
-                                                            types=[])
-                    kb_table_num_map[kb_id] = counts
-                kb_table_num_map[kb_id] -= 1
-                if kb_table_num_map[kb_id] <= 0:
-                    KnowledgebaseService.delete_field_map(db, kb_id)
-        except Exception as e:
-            errors += str(e)
+    errors = FileService.delete_docs(db, doc_ids, user.id)
 
     if errors:
-        return construct_json_result(data=False, message=errors, code=settings.RetCode.SERVER_ERROR)
+        return construct_json_result(data=False, message=errors, code=RetCode.SERVER_ERROR)
 
     return construct_json_result(data=True)
 
@@ -2359,7 +2427,7 @@ def run(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
+                retcode=RetCode.AUTHENTICATION_ERROR
             )
 
     try:
@@ -2377,7 +2445,7 @@ def run(
             tenant_id = kb.tenant_id
             if not tenant_id:
                 return construct_json_result(data=False, message="Tenant not found!",
-                                             code=settings.RetCode.ARGUMENT_ERROR)
+                                             code=RetCode.ARGUMENT_ERROR)
 
             if str(req["run"]) == TaskStatus.CANCEL.value:
                 if str(d["run"]) == TaskStatus.RUNNING.value:
@@ -2413,30 +2481,13 @@ def run(
                             )
                         if delete_result is None:
                             return construct_json_result(data=False, message="Doc store delete failed!",
-                                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                                         code=RetCode.ARGUMENT_ERROR)
                 except Exception as e:
-                    return construct_json_result(data=False, message=str(e), code=settings.RetCode.ARGUMENT_ERROR)
+                    return construct_json_result(data=False, message=str(e), code=RetCode.ARGUMENT_ERROR)
 
             if str(req["run"]) == TaskStatus.RUNNING.value:
                 doc = d
-                doc["tenant_id"] = tenant_id
-
-                doc_parser = doc.get("parser_id", ParserType.NAIVE)
-                if doc_parser == ParserType.TABLE:
-                    kb_id = doc.get("kb_id")
-                    if not kb_id:
-                        continue
-                    if kb_id not in kb_table_num_map:
-                        count = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="",
-                                                               run_status=[TaskStatus.DONE], types=[])
-                        kb_table_num_map[kb_id] = count
-                        if kb_table_num_map[kb_id] <= 0:
-                            KnowledgebaseService.delete_field_map(db, kb_id)
-                if doc.get("pipeline_id", ""):
-                    queue_dataflow(db, tenant_id, flow_id=doc["pipeline_id"], task_id=get_uuid(), doc_id=id)
-                else:
-                    bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])
-                    queue_tasks(db, doc, bucket, name, 0)
+                DocumentService.run(db, tenant_id, doc, kb_table_num_map)
         return construct_json_result(data=True)
     except Exception as e:
         return construct_error_response(e)
@@ -2454,29 +2505,29 @@ def rename(
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
             return construct_json_result(data=False, message="Document not found!",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=RetCode.ARGUMENT_ERROR)
         if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(doc.name.lower()).suffix:
             return construct_json_result(data=False, message="The extension of file can't be changed",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=RetCode.ARGUMENT_ERROR)
         if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
             return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=RetCode.ARGUMENT_ERROR)
 
         for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
             if d.name == req["name"]:
                 return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
-                                             code=settings.RetCode.ARGUMENT_ERROR)
+                                             code=RetCode.ARGUMENT_ERROR)
 
         if not DocumentService.update_by_id(db, req["doc_id"], {"name": req["name"]}):
             return construct_json_result(data=False, message="Database error (Document rename)!",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=RetCode.ARGUMENT_ERROR)
 
         informs = File2DocumentService.get_by_document_id(db, req["doc_id"])
         if informs:
@@ -2514,11 +2565,11 @@ def get_document(
         doc = DocumentService.get_by_id(db, doc_id)
         if not doc:
             return construct_json_result(data=False, message="Document not found!",
-                                         code=settings.RetCode.ARGUMENT_ERROR)
+                                         code=RetCode.ARGUMENT_ERROR)
 
         b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
 
-        file_content = STORAGE_IMPL.get(b, n)
+        file_content = settings.STORAGE_IMPL.get(b, n)
         if not file_content:
             raise HTTPException(status_code=404, detail="File not found in storage")
 
@@ -2632,7 +2683,7 @@ def change_parser(
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
 
     doc = DocumentService.get_by_id(db, req["doc_id"])
@@ -2746,7 +2797,7 @@ def get_image(
         bkt, nm = image_id.split("-")
 
         # 获取文件内容
-        file_content = STORAGE_IMPL.get(bkt, nm)
+        file_content = settings.STORAGE_IMPL.get(bkt, nm)
 
         # 确认 file_content 是字节流对象
         if not isinstance(file_content, (bytes, bytearray)):
@@ -2823,7 +2874,7 @@ async def parse(
     if url:
         if not is_valid_url(url):
             return get_json_result(
-                data=False, retmsg='The URL format is invalid', retcode=settings.RetCode.ARGUMENT_ERROR)
+                data=False, retmsg='The URL format is invalid', retcode=RetCode.ARGUMENT_ERROR)
         download_path = os.path.join(get_project_base_directory(), "logs/downloads")
         os.makedirs(download_path, exist_ok=True)
         from seleniumwire.webdriver import Chrome, ChromeOptions
@@ -2860,7 +2911,7 @@ async def parse(
             r = re.search(r'filename=\"([^\"]+)\"', str(res_headers))
             if not r or not r.group(1):
                 return get_json_result(
-                    data=False, retmsg="Cannot identify downloaded file", retcode=settings.RetCode.ARGUMENT_ERROR
+                    data=False, retmsg="Cannot identify downloaded file", retcode=RetCode.ARGUMENT_ERROR
                 )
 
             class File:
@@ -2877,7 +2928,7 @@ async def parse(
 
             if not r or r.group(1):
                 return get_json_result(
-                    data=False, retmsg="Can't not identify downloaded file", retcode=settings.RetCode.ARGUMENT_ERROR)
+                    data=False, retmsg="Can't not identify downloaded file", retcode=RetCode.ARGUMENT_ERROR)
             f = File(r.group(1), os.path.join(download_path, r.group(1)))
             txt = FileService.parse_docs([f], user.id)
             return get_json_result(data=txt)
@@ -2885,7 +2936,7 @@ async def parse(
             logging.exception("[ERROR] URL processing failed")
             # traceback.print_exc()
             return get_json_result(
-                retcode=settings.RetCode.SERVER_ERROR,
+                retcode=RetCode.SERVER_ERROR,
                 retmsg=str(e),
                 data=False
             )
@@ -2895,7 +2946,7 @@ async def parse(
 
     if not files:
         return get_json_result(
-            data=False, retmsg='No file part!', retcode=settings.RetCode.ARGUMENT_ERROR)
+            data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
 
     try:
         # 读取每个文件的内容为字节数据，并将文件名与内容作为元组传递给 parse_docs
@@ -2911,7 +2962,7 @@ async def parse(
         logging.exception("[ERROR] File processing failed")
         # traceback.print_exc()
         return get_json_result(
-            retcode=settings.RetCode.SERVER_ERROR,
+            retcode=RetCode.SERVER_ERROR,
             retmsg=str(e),
             data=False
         )
@@ -2934,20 +2985,20 @@ def set_meta(
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
 
     if not isinstance(req["meta"], dict):
         return get_json_result(
             data=False, retmsg='Meta data should be in Json map format, like {"key": "value"}',
-            retcode=settings.RetCode.ARGUMENT_ERROR)
+            retcode=RetCode.ARGUMENT_ERROR)
 
     for value in req["meta"].values():
         if not isinstance(value, (str, int, float)):
             return get_json_result(
                 data=False,
                 retmsg=f"The type is not supported: {value}",
-                retcode=settings.RetCode.ARGUMENT_ERROR,
+                retcode=RetCode.ARGUMENT_ERROR,
             )
 
     try:
@@ -3545,22 +3596,22 @@ async def preview_chunks(
             try:
                 data = await raw_req.json()
             except json.JSONDecodeError as e:
-                return _error_response(settings.RetCode.ARGUMENT_ERROR, f"Invalid JSON: {e.msg}", HTTP_400_BAD_REQUEST)
+                return _error_response(RetCode.ARGUMENT_ERROR, f"Invalid JSON: {e.msg}", HTTP_400_BAD_REQUEST)
             except Exception:
                 req = PreviewChunksRequest()
             else:
                 try:
                     req = PreviewChunksRequest.model_validate(data)
                 except ValidationError as e:
-                    return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
+                    return _error_response(RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
                 except Exception as e:
-                    return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
+                    return _error_response(RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
         # 参数校验：支持 doc_id、文件上传或批次续取
         if file is None and not req.doc_id and not req.batch_id:
             return get_json_result(
                 data=False,
                 retmsg='Either `doc_id` or `file` or `batch_id` is required.',
-                retcode=settings.RetCode.ARGUMENT_ERROR
+                retcode=RetCode.ARGUMENT_ERROR
             )
 
         # 分支一：文件预览（直传或批次续取）
@@ -3586,7 +3637,7 @@ async def preview_chunks(
                 return get_json_result(
                     data=False,
                     retmsg='Either supply `file` for preview or provide `batch_id/batch_size` for batch mode.',
-                    retcode=settings.RetCode.ARGUMENT_ERROR
+                    retcode=RetCode.ARGUMENT_ERROR
                 )
 
             file_bytes = await file.read()
@@ -3606,7 +3657,7 @@ async def preview_chunks(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
+                retcode=RetCode.AUTHENTICATION_ERROR
             )
         if req.batch_size or req.batch_id:
             data = await DocumentService.preview_document_chunks_batched(
@@ -3631,19 +3682,19 @@ async def preview_chunks(
         raise
     except NotImplementedError as e:
         return _error_response(
-            settings.RetCode.ARGUMENT_ERROR,
+            RetCode.ARGUMENT_ERROR,
             str(e),
             HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             data=False,
         )
     except (LookupError, FileNotFoundError) as e:
-        return _error_response(settings.RetCode.NOT_FOUND, str(e), HTTP_404_NOT_FOUND)
+        return _error_response(RetCode.NOT_FOUND, str(e), HTTP_404_NOT_FOUND)
     except ValueError as e:
-        return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
+        return _error_response(RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
     except ValidationError as e:
-        return _error_response(settings.RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
+        return _error_response(RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
     except Exception as e:
-        return _error_response(settings.RetCode.SERVER_ERROR, str(e), HTTP_500_INTERNAL_SERVER_ERROR)
+        return _error_response(RetCode.SERVER_ERROR, str(e), HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @router.post("/run_analyze_v2", summary="启动文档分析任务 V2（异步，数据库持久化，推荐）",
@@ -4193,7 +4244,7 @@ async def run_analyze_v2(
 
         return construct_json_result(
             data=response_data,
-            code=settings.RetCode.SUCCESS,
+            code=RetCode.SUCCESS,
             message="Task created successfully"
         )
 
@@ -4347,7 +4398,7 @@ async def trace_analyze(
             "error_msg": task.progress_msg if status == "failed" else None
         }
 
-        return construct_json_result(data=result_data, code=settings.RetCode.SUCCESS)
+        return construct_json_result(data=result_data, code=RetCode.SUCCESS)
 
     except HTTPException:
         raise
@@ -4847,7 +4898,7 @@ async def analyze_document_v2(
             dedup_strategy=request.dedup_strategy
         )
 
-        return construct_json_result(data=result, code=settings.RetCode.SUCCESS, message="success")
+        return construct_json_result(data=result, code=RetCode.SUCCESS, message="success")
 
     except HTTPException:
         raise

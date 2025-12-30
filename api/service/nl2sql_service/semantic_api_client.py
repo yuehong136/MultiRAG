@@ -14,11 +14,10 @@ import aiohttp
 import time
 import hashlib
 import hmac
-from typing import List, Dict, Any, Optional, Union, Callable
 from urllib.parse import urljoin
 
 from api.service.askdata_service.event.event_utils import send_event
-from api.settings import DCS_SERVER_PROTOCOL, DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SEMANTIC_SERVER_ACCESS_KEY, \
+from common.settings import DCS_SERVER_PROTOCOL, DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SEMANTIC_SERVER_ACCESS_KEY, \
     DCS_SEMANTIC_SERVER_SECRET_KEY
 
 # 配置日志
@@ -108,7 +107,7 @@ class SemanticApiClient:
         if self.token:
             self.headers["Authorization"] = f"Bearer {self.token}"
 
-    def _generate_signature(self) -> Dict[str, str]:
+    def _generate_signature(self) -> dict[str, str]:
         """生成API请求签名"""
         timestamp = str(int(time.time()))
         access_key = DCS_SEMANTIC_SERVER_ACCESS_KEY
@@ -132,9 +131,9 @@ class SemanticApiClient:
             self,
             method: str,
             api_path: str,
-            params: Dict = None,
-            data: Dict = None
-    ) -> Dict:
+            params: dict = None,
+            data: dict = None
+    ) -> dict:
         """
         发送请求并处理响应
 
@@ -207,9 +206,9 @@ class SemanticApiClient:
             self,
             method: str,
             api_path: str,
-            params: Dict = None,
-            data: Dict = None
-    ) -> Dict:
+            params: dict = None,
+            data: dict = None
+    ) -> dict:
         """
         异步发送请求并处理响应
 
@@ -280,16 +279,16 @@ class SemanticApiClient:
 
     async def get_dimension_info_by_keyword_async(
             self,
-            keyword: Union[str, List[str]],
-            dataset_ids: List[str],
+            keyword: str | list[str],
+            dataset_ids: list[str],
             fuzzy_match: bool = True,
             page_size: int = 100,
             max_pages: int = 100,
             extract_rows: bool = True,
             max_concurrent: int = 5,
             deduplicate_by_dimension_id: bool = True,
-            event_id: Optional[str] = None
-    ) -> Union[Dict, List[Dict]]:
+            event_id: str | None = None
+    ) -> dict | list[dict]:
         """
         异步获取所有维度信息（支持多关键词，自动分页，并发请求，支持维度ID去重）
 
@@ -521,16 +520,16 @@ class SemanticApiClient:
 
     async def get_dimension_by_dimension_value_async(
             self,
-            keyword: Union[str, List[str]],
-            dataset_ids: List[str],
+            keyword: str | list[str],
+            dataset_ids: list[str],
             fuzzy_match: bool = True,
             page_size: int = 100,
             max_pages: int = 100,
             extract_rows: bool = True,
             max_concurrent: int = 5,
             deduplicate_by_dimension_id: bool = True,
-            event_id: Optional[str] = None
-    ) -> Union[Dict, List[Dict]]:
+            event_id: str | None = None
+    ) -> dict | list[dict]:
         """
         异步搜索维度值（支持多关键词，自动分页，并发请求，支持维度ID去重）
 
@@ -770,12 +769,12 @@ class SemanticApiClient:
 
     async def get_hc_dimension_by_dimension_value_async(
             self,
-            keyword_list: List[str],
-            dataset_ids: List[str],
-            exclude_dim_ids: List[str] = None,
+            keyword_list: list[str],
+            dataset_ids: list[str],
+            exclude_dim_ids: list[str] = None,
             fuzzy_match: bool = True,
-            event_id: Optional[str] = None
-    ) -> List[Dict]:
+            event_id: str | None = None
+    ) -> list[dict]:
         """
         异步获取HC维度信息（通过维度值搜索）
         """
@@ -856,16 +855,16 @@ class SemanticApiClient:
 
     async def get_metric_info_by_keyword_async(
             self,
-            keyword: Union[str, List[str]],
-            dataset_ids: List[str],
+            keyword: str | list[str],
+            dataset_ids: list[str],
             fuzzy_match: bool = True,
             page_size: int = 100,
             max_pages: int = 100,
             extract_rows: bool = True,
             max_concurrent: int = 5,
             deduplicate_by_metric_id: bool = True,
-            event_id: Optional[str] = None
-    ) -> Union[Dict, List[Dict]]:
+            event_id: str | None = None
+    ) -> dict | list[dict]:
         """
         异步获取指标信息（支持多关键词，自动分页，并发请求，支持指标ID去重）
 
@@ -1106,10 +1105,10 @@ class SemanticApiClient:
 
     async def get_dimension_info_by_id_async(
             self,
-            dimension_ids: Union[str, List[str]],
+            dimension_ids: str | list[str],
             max_concurrent: int = 5,
-            event_id: Optional[str] = None
-    ) -> List[Dict]:
+            event_id: str | None = None
+    ) -> list[dict]:
         """
         异步获取维度详情信息（支持单个ID或ID列表，并发请求）
 
@@ -1237,10 +1236,10 @@ class SemanticApiClient:
 
     async def get_metric_info_by_id_async(
             self,
-            metric_ids: Union[str, List[str]],
+            metric_ids: str | list[str],
             max_concurrent: int = 5,
-            event_id: Optional[str] = None
-    ) -> List[Dict]:
+            event_id: str | None = None
+    ) -> list[dict]:
         """
         异步获取指标详情信息（支持单个ID或ID列表，并发请求）
 
@@ -1378,9 +1377,9 @@ class SemanticApiClient:
 
     async def get_model_detail_async(
             self,
-            model_ids: Union[str, List[str]],
+            model_ids: str | list[str],
             max_concurrent: int = 5
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         异步获取模型详情信息（支持单个ID或ID列表，并发请求）
 
@@ -1507,9 +1506,9 @@ class SemanticApiClient:
 
     async def get_model_relationships_async(
             self,
-            model_ids: Union[str, List[str]],
+            model_ids: str | list[str],
             max_concurrent: int = 5
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         异步获取模型关系信息（支持单个ID或ID列表，并发请求，根据模型关系去重）
 
@@ -1674,10 +1673,10 @@ class SemanticApiClient:
 
     async def get_dataset_detail_async(
             self,
-            dataset_ids: Union[str, List[str]],
+            dataset_ids: str | list[str],
             max_concurrent: int = 5,
-            event_id: Optional[str] = None
-    ) -> List[Dict]:
+            event_id: str | None = None
+    ) -> list[dict]:
         """
         异步获取数据集详情信息（支持单个ID或ID列表，并发请求）
 
@@ -1840,15 +1839,15 @@ class SemanticApiClient:
 
     async def get_business_term_info_async(
             self,
-            keyword: Union[str, List[str]],
-            domain_ids: List[str],
+            keyword: str | list[str],
+            domain_ids: list[str],
             fuzzy_match: bool = True,
             page_size: int = 100,
             max_pages: int = 10,
             extract_rows: bool = True,
             max_concurrent: int = 5,
             deduplicate_by_term_id: bool = True  # New parameter for deduplication
-    ) -> Union[Dict, List[Dict]]:
+    ) -> list | list[list]:
         """
         异步获取业务术语信息（支持多关键词，自动分页，并发请求，支持术语ID去重）
 
@@ -2107,12 +2106,12 @@ class SemanticApiClient:
 
     async def get_dimension_values_async(
             self,
-            dimension_ids: Union[str, List[str]],
+            dimension_ids: str | list[str],
             page_size: int = 100,
             max_pages: int = 100,
             max_concurrent: int = 5,
-            event_id: Optional[str] = None
-    ) -> Dict[str, List[Dict]]:
+            event_id: str | None = None
+    ) -> dict[str, list[dict]]:
         """
         异步获取维度值列表（支持单个维度ID或维度ID列表，自动分页，并发请求）
 
@@ -2295,7 +2294,7 @@ class SemanticApiClient:
     async def get_model_inds_and_dims_by_model_id_async(
             self,
             model_id: str
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """
         异步获取单个模型的指标和维度信息。
 
@@ -2358,7 +2357,7 @@ class SemanticApiClient:
             page_index: int = 1,
             page_size: int = 100,
             fuzzy_match: bool = True
-    ) -> Dict:
+    ) -> dict:
         """
         异步获取高基数维度中的维度值（支持模糊匹配和指定页面）
 
@@ -2466,10 +2465,10 @@ class SemanticApiClient:
     async def get_user_semantic_permissions_async(
             self,
             user_id: str,
-            dataset_id_list: Optional[List[str]] = None,
-            model_id_list: Optional[List[str]] = None,
-            event_id: Optional[str] = None
-    ) -> Optional[Dict]:
+            dataset_id_list: list[str] | None = None,
+            model_id_list: list[str] | None = None,
+            event_id: str | None = None
+    ) -> dict | None:
         logger.info(f"\n=== 获取用户语义权限信息 ===")
         logger.info(f"用户ID: {user_id}")
         if dataset_id_list:

@@ -38,7 +38,7 @@ from api.admin.admin_models import (
     SearchAdmin,
 )
 # 总计：37 个模型视图
-from api import settings
+from common import settings
 
 
 def setup_admin(app: FastAPI) -> Admin:

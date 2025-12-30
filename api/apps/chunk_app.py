@@ -8,7 +8,6 @@
 """
 import datetime
 import json
-import logging
 from typing import Literal, Annotated, Any
 
 import numpy as np
@@ -19,24 +18,23 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, Discriminator, model_validator
 from sqlalchemy.orm import Session
 
+from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.dialog_service import meta_filter
 from api.db.services.search_service import SearchService
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.llm_service import LLMBundle
+from api.db.services.user_service import UserTenantService
+from api.db.services.document_service import DocumentService
+from api.utils.api_utils import server_error_response, get_data_error_result
+from api.utils.api_utils import get_json_result
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
 from core.prompts.generator import keyword_extraction, cross_languages, gen_meta_filter
-from api.db import LLMType, ParserType
-from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMBundle
-from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import server_error_response, get_data_error_result
-from api.db.services.document_service import DocumentService
-from api import settings
-from core.settings import PAGERANK_FLD
-from api.utils.api_utils import get_json_result
+from common import settings
+from common.constants import RetCode, LLMType, ParserType, PAGERANK_FLD
 from core.utils.doc_store_conn import OrderByExpr
-from api.apps import manager
 from common.string_utils import remove_redundant_spaces
 
 router = APIRouter()
@@ -414,7 +412,7 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
     except Exception as e:
         if str(e).find("not_found") > 0:
             return get_json_result(data=False, retmsg=f'No chunk found!',
-                                   retcode=settings.RetCode.DATA_ERROR)
+                                   retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
 
 
@@ -565,7 +563,7 @@ def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     except Exception as e:
         if str(e).find("NotFoundError") >= 0:
             return get_json_result(data=False, retmsg='Chunk not found!',
-                                   retcode=settings.RetCode.DATA_ERROR)
+                                   retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
 
 
@@ -632,11 +630,12 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
         if request.question:
             embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
             dealer = search.Dealer(settings.docStoreConn)
+            # 使用固定的 topk 以确保 total 保持一致
             match_exprs.append(
                 dealer.get_vector(
                     request.question,
                     embd_mdl,
-                    topk=request.size,
+                    topk=1024,
                     similarity=request.similarity if request.similarity is not None else 0.1
                 )
             )
@@ -653,8 +652,8 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
             [kb.id]
         )
 
-        total = settings.docStoreConn.getTotal(search_res)
-        field_data = settings.docStoreConn.getFields(search_res, request.fields)
+        total = settings.docStoreConn.get_total(search_res)
+        field_data = settings.docStoreConn.get_fields(search_res, request.fields)
         distances = field_data.pop("distance", [])
 
         rows = []
@@ -1107,7 +1106,6 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
 }
 ```
     """
-    from core.utils.storage_factory import STORAGE_IMPL
     req = request.model_dump()
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
@@ -1133,8 +1131,8 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
         chunk_number = len(deleted_chunk_ids)
         DocumentService.decrement_chunk_num(db, doc.id, doc.kb_id, 1, chunk_number, 0)
         for cid in deleted_chunk_ids:
-            if STORAGE_IMPL.obj_exist(doc.kb_id, cid):
-                STORAGE_IMPL.rm(doc.kb_id, cid)
+            if settings.STORAGE_IMPL.obj_exist(doc.kb_id, cid):
+                settings.STORAGE_IMPL.rm(doc.kb_id, cid)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
@@ -1555,7 +1553,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
     kb_ids = request.kb_ids
     question = request.question
     if not kb_ids:
-        return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=settings.RetCode.DATA_ERROR)
+        return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=RetCode.DATA_ERROR)
 
     if request.search_id:
         search_config = SearchService.get_detail(db, request.get("search_id", "")).get("search_config", {})
@@ -1582,7 +1580,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             else:
                 return get_json_result(
                     data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-                    retcode=settings.RetCode.OPERATING_ERROR)
+                    retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, request.kb_ids[0])
         if not kb:
@@ -1629,7 +1627,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
     except Exception as e:
         if str(e).find("not_found") > 0:
             return get_json_result(data=False, retmsg=f'No chunk found! Check the chunk status please!',
-                                   retcode=settings.RetCode.DATA_ERROR)
+                                   retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
 
 

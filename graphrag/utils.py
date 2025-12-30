@@ -23,14 +23,14 @@ import trio
 import xxhash
 from networkx.readwrite import json_graph
 
-from api import settings
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.misc_utils import get_uuid
-from api.utils.api_utils import timeout
+from common.connection_utils import timeout
 from core.nlp import rag_tokenizer, search
 from core.utils.doc_store_conn import OrderByExpr
 from core.utils.redis_conn import REDIS_CONN
+from common import settings
 
 GRAPH_FIELD_SEP = "<SEP>"
 
@@ -396,7 +396,7 @@ async def does_graph_contains(tenant_id, kb_id, doc_id):
     # 缓存 index_name，避免重复查询
     index_name = search.index_name(tenant_id, [kb_name])
     res = await trio.to_thread.run_sync(lambda: settings.docStoreConn.search(fields, [], condition, [], OrderByExpr(), 0, 1, index_name, [kb_id]))
-    fields2 = settings.docStoreConn.getFields(res, fields)
+    fields2 = settings.docStoreConn.get_fields(res, fields)
     graph_doc_ids = set()
     for chunk_id in fields2.keys():
         graph_doc_ids = set(fields2[chunk_id]["source_id"])
@@ -653,8 +653,8 @@ async def rebuild_graph(tenant_id, kb_id, exclude_rebuild=None):
         es_res = await trio.to_thread.run_sync(
             lambda: settings.docStoreConn.search(flds, [], {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"]}, [], OrderByExpr(), i, bs, index_name, [kb_id])
         )
-        # tot = settings.docStoreConn.getTotal(es_res)
-        es_res = settings.docStoreConn.getFields(es_res, flds)
+        # tot = settings.docStoreConn.get_total(es_res)
+        es_res = settings.docStoreConn.get_fields(es_res, flds)
 
         if len(es_res) == 0:
             break

@@ -12,22 +12,19 @@ import asyncio
 import logging
 import re
 import time
-from collections import Counter, defaultdict
 from copy import deepcopy
 
-import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy.orm import Session
 
-from api import settings
-from api.db import LLMType
+from common import settings
+from common.constants import LLMType
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.metadata_extractor import BatchMetadataExtractor
-from core.nlp import naive_merge, rag_tokenizer
+from core.nlp import naive_merge
 from core.nlp.term_weight import Dealer as TermWeightDealer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 
 logger = logging.getLogger(__name__)
 
@@ -1087,30 +1084,38 @@ class PipelineAnalysisService:
         return [
             {
                 "field_name": "semantic_tags",
-                "prompt": """Extract 3-5 key semantic tags from the content.
+                "prompt": """## 角色
+你是一个文本分析专家。
 
-Requirements:
-- Tags should be DISTINCT (no semantic overlap)
-- Merge abbreviations with full terms (prefer full terms)
-- Use the same language as the content
-- Output comma separated list
+## 任务
+从给定的文本内容中提取最重要的关键词/短语。
 
-Output format: tag1, tag2, tag3""",
+## 要求
+- 总结文本内容，提取最重要的 5 个关键词/短语。
+- 关键词必须彼此独立，语义上不能有重叠。
+- 缩写词与全称合并（优先使用全称）。
+- 关键词必须与给定文本内容使用相同的语言。
+- 关键词之间用英文逗号分隔。
+- 只输出关键词，不要输出其他内容。""",
                 "aggregate": "merge",
                 "temperature": 0.2,
                 "max_tokens": 100
             },
             {
                 "field_name": "short_summary",
-                "prompt": """Generate a concise summary of the content (150-200 words).
+                "prompt": """## 角色
+你是一个文档摘要专家。
 
-Requirements:
-- Capture the main theme and key points
-- Keep it coherent and well-structured
-- Use the same language as the content
-- Focus on the most important information
+## 任务
+为给定的文本内容生成简洁的摘要。
 
-Output: summary text only""",
+## 要求
+- 摘要长度控制在 150-200 字。
+- 准确捕捉主题和关键要点。
+- 保持内容连贯、结构清晰。
+- 聚焦最重要的信息。
+- 摘要必须与给定文本内容使用相同的语言。
+- 只输出摘要文本，不要输出其他内容。""",
                 "aggregate": "concat",
                 "temperature": 0.3,
                 "max_tokens": 400

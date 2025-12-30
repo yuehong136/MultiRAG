@@ -15,13 +15,12 @@ from typing import Any
 
 import trio
 import xxhash
-from pymilvus import MilvusException
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc
 
 from api.constants import IMG_BASE64_PREFIX, FILE_NAME_LEN_LIMIT
-from api.db import FileType, TaskStatus, StatusEnum, UserTenantRole, CanvasCategory
+from api.db import FileType, UserTenantRole, CanvasCategory
 from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, File2Document, File, UserCanvas, \
     User
 from api.db.services.common_service import CommonService
@@ -29,11 +28,9 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
 from api.utils.db_utils import bulk_insert_into_db
-# from api.settings import docStoreConn
-from api import settings
-from core.settings import get_svr_queue_name, SVR_CONSUMER_GROUP_NAME
+from common import settings
+from common.constants import LLMType, ParserType, TaskStatus, StatusEnum, SVR_CONSUMER_GROUP_NAME, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
 from core.nlp import search, rag_tokenizer
-from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.doc_store_conn import OrderByExpr
 
@@ -467,7 +464,7 @@ class DocumentService(CommonService):
         # 读取文件二进制
         from api.db.services.file2document_service import File2DocumentService
         bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_id)
-        file_bin = STORAGE_IMPL.get(bucket, name)
+        file_bin = settings.STORAGE_IMPL.get(bucket, name)
 
         # 合并解析配置
         from api.utils.api_utils import get_parser_config
@@ -793,7 +790,7 @@ class DocumentService(CommonService):
                 
                 # 读取文件
                 bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_id)
-                file_bin = STORAGE_IMPL.get(bucket, name)
+                file_bin = settings.STORAGE_IMPL.get(bucket, name)
                 
                 # 获取PDF总页数
                 try:
@@ -1035,7 +1032,7 @@ class DocumentService(CommonService):
 
     @classmethod
     def _get_allowed_parsers_for_filename(cls, filename: str) -> set[str]:
-        from api.db import ParserType
+        from common.constants import ParserType
         import re
         f = (filename or "").lower()
         if re.search(r"\.pdf$", f):
@@ -1067,12 +1064,12 @@ class DocumentService(CommonService):
             return {ParserType.EMAIL.value}
         if re.search(r"\.(mp3|wav|aac|flac|ogg|aiff|au|midi|wma|da|wave|realaudio|vqf|oggvorbis|ape)$", f):
             return {ParserType.AUDIO.value}
-        from api.db import ParserType as PT
+        from common.constants import ParserType as PT
         return {PT.NAIVE.value}
 
     @classmethod
     def _get_module_by_parser_id(cls, parser_id: str):
-        from api.db import ParserType
+        from common.constants import ParserType
         from core.app import (
             naive,
             paper,
@@ -1119,7 +1116,7 @@ class DocumentService(CommonService):
         # 默认按扩展名推断
         import re
         f = (filename or "").lower()
-        from api.db import ParserType
+        from common.constants import ParserType
         if re.search(r"\.(ppt|pptx)$", f):
             return cls._get_module_by_parser_id(ParserType.PRESENTATION.value), ParserType.PRESENTATION.value
         if re.search(r"\.(csv|xlsx?|xls)$", f):
@@ -1769,17 +1766,17 @@ class DocumentService(CommonService):
             chunks = settings.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
                                                   page * page_size, page_size, collection_name,
                                                   [doc.kb_id])
-            chunk_ids = settings.docStoreConn.getChunkIds(chunks)
+            chunk_ids = settings.docStoreConn.get_chunk_ids(chunks)
             if not chunk_ids:
                 break
             all_chunk_ids.extend(chunk_ids)
             page += 1
         for cid in all_chunk_ids:
-            if STORAGE_IMPL.obj_exist(doc.kb_id, cid):
-                STORAGE_IMPL.rm(doc.kb_id, cid)
+            if settings.STORAGE_IMPL.obj_exist(doc.kb_id, cid):
+                settings.STORAGE_IMPL.rm(doc.kb_id, cid)
         if doc.thumbnail and not doc.thumbnail.startswith(IMG_BASE64_PREFIX):
-            if STORAGE_IMPL.obj_exist(doc.kb_id, doc.thumbnail):
-                STORAGE_IMPL.rm(doc.kb_id, doc.thumbnail)
+            if settings.STORAGE_IMPL.obj_exist(doc.kb_id, doc.thumbnail):
+                settings.STORAGE_IMPL.rm(doc.kb_id, doc.thumbnail)
 
         try:
             # 检查集合是否存在并删除向量数据库中的数据
@@ -1798,7 +1795,7 @@ class DocumentService(CommonService):
                     )
             # todo 待测试【settings.docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
             # kb_id = document["kb_id"]  # 使用从数据库重新获取的kb_id
-            # graph_source = settings.docStoreConn.getFields(
+            # graph_source = settings.docStoreConn.get_fields(
             #     settings.docStoreConn.search(["source_id"], [], {"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [kb_id]), ["source_id"]
             # )
             # if len(graph_source) > 0 and doc_id in list(graph_source.values())[0]["source_id"]:
@@ -1833,14 +1830,22 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_unfinished_docs(cls, db: Session):
+        # Subquery to get doc_ids with unfinished tasks
+        unfinished_task_query = db.query(Task.doc_id).filter(
+            Task.progress >= 0,
+            Task.progress < 1
+        ).scalar_subquery()
+
         query = db.query(
             cls.model.id, cls.model.process_begin_at, cls.model.parser_config,
             cls.model.progress_msg, cls.model.run, cls.model.parser_id
         ).filter(
             cls.model.status == StatusEnum.VALID.value,
             cls.model.type != FileType.VIRTUAL.value,
-            cls.model.progress < 1,
-            cls.model.progress > 0
+            or_(
+                and_(cls.model.progress < 1, cls.model.progress > 0),
+                cls.model.id.in_(unfinished_task_query)  # including unfinished tasks like GraphRAG, RAPTOR and Mindmap
+            )
         )
         rows = query.all()
         return [dict(row._mapping) for row in rows]
@@ -2180,12 +2185,17 @@ class DocumentService(CommonService):
         return query.count()
 
     @classmethod
-    def begin2parse(cls, db: Session, doc_id: str):
-        cls.update_by_id(db, doc_id, {
-            "progress": random.random() * 1 / 100.,
+    def begin2parse(cls, db: Session, doc_id: str, keep_progress: bool = False):
+        info = {
             "progress_msg": "Task is queued...",
-            "process_begin_at": get_format_time()
-        })
+            "process_begin_at": get_format_time(),
+        }
+        if not keep_progress:
+            info["progress"] = random.random() * 1 / 100.
+            info["run"] = TaskStatus.RUNNING.value
+            # keep the doc in DONE state when keep_progress=True for GraphRAG, RAPTOR and Mindmap tasks
+
+        cls.update_by_id(db, doc_id, info)
 
     @classmethod
     def update_meta_fields(cls, db: Session, doc_id, meta_fields):
@@ -2240,9 +2250,14 @@ class DocumentService(CommonService):
                 bad = 0
                 doc = DocumentService.get_by_id(db, doc_id)
                 status = doc.run  # TaskStatus.RUNNING.value
+                doc_progress = doc.progress if doc and doc.progress else 0.0
+                special_task_running = False
                 priority = 0
 
                 for t in tsks:
+                    task_type = (t.task_type or "").lower()
+                    if task_type in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
+                        special_task_running = True
                     if 0 <= t.progress < 1:
                         finished = False
 
@@ -2261,12 +2276,14 @@ class DocumentService(CommonService):
                     prg = 1
                     status = TaskStatus.DONE.value
 
+                # only for special task and parsed docs and unfinished
+                freeze_progress = special_task_running and doc_progress >= 1 and not finished
                 msg = "\n".join(sorted(msg))
                 info = {
                     "process_duration": datetime.timestamp(datetime.now()) - d["process_begin_at"].timestamp(),
                     "run": status
                 }
-                if prg != 0:
+                if prg != 0 and not freeze_progress:
                     info["progress"] = prg
                 if msg:
                     info["progress_msg"] = msg
@@ -2344,7 +2361,80 @@ class DocumentService(CommonService):
                 txt = item.get("raw_content") or ""
                 if txt:
                     texts.append(txt)
-            return {"provider": provider_lc, "url": url, "texts": texts, "raw": raw}
+
+            # 图片去噪处理
+            filtered_images: list[str] | None = None
+            image_cleaning_stats: dict | None = None
+
+            clean_images = options.get("clean_images") if options else None
+            if clean_images:
+                from common.image_utils import ImageFilter
+
+                filter_mode = options.get("image_filter_mode", "strict")
+
+                # 处理每个 result 的文本和图片
+                all_dropped_details = []
+                total_images_count = 0
+                kept_images_set = set()
+
+                # 清洗文本中的图片引用
+                cleaned_texts = []
+                for idx, item in enumerate(raw.get("results", []) or []):
+                    raw_content = item.get("raw_content") or ""
+                    if raw_content:
+                        cleaned_text, dropped_from_text, total_in_text = ImageFilter.clean_markdown_images(
+                            raw_content, mode=filter_mode, base_url=url
+                        )
+                        cleaned_texts.append(cleaned_text)
+                        all_dropped_details.extend(dropped_from_text)
+
+                # 过滤图片 URL 列表
+                for item in raw.get("results", []) or []:
+                    original_images = item.get("images") or []
+                    total_images_count += len(original_images)
+
+                    kept_urls, dropped_from_array = ImageFilter.filter_image_urls(
+                        original_images, mode=filter_mode, base_url=url
+                    )
+                    kept_images_set.update(kept_urls)
+                    all_dropped_details.extend(dropped_from_array)
+
+                # 去重 dropped_details（基于 URL）
+                seen_urls = set()
+                unique_dropped = []
+                for detail in all_dropped_details:
+                    if detail["url"] not in seen_urls:
+                        seen_urls.add(detail["url"])
+                        unique_dropped.append(detail)
+
+                # 更新 texts 和构建返回数据
+                if cleaned_texts:
+                    texts = cleaned_texts
+
+                # 从保留列表中移除所有被删除的图片（修复文本清洗与URL过滤的矛盾）
+                dropped_urls = {detail["url"] for detail in unique_dropped}
+                filtered_images = sorted([url for url in kept_images_set if url not in dropped_urls])
+
+                dropped_count = len(unique_dropped)
+                kept_count = total_images_count - dropped_count
+
+                image_cleaning_stats = {
+                    "enabled": True,
+                    "mode": filter_mode,
+                    "total_images": total_images_count,
+                    "dropped_count": dropped_count,
+                    "kept_count": kept_count,
+                    "dropped_details": unique_dropped,
+                }
+
+            # 构建返回数据
+            result = {"provider": provider_lc, "url": url, "texts": texts, "raw": raw}
+            if filtered_images is not None:
+                result["filtered_images"] = filtered_images
+            if image_cleaning_stats is not None:
+                result["image_cleaning_stats"] = image_cleaning_stats
+
+            return result
 
         elif provider_lc == "jinareader":
             # 预留：未来在 core/utils/jina_conn.py 中实现后在此对接
@@ -2385,6 +2475,15 @@ class DocumentService(CommonService):
             )
         )
         cancelled = db.execute(cancelled_query).scalar() or 0
+
+        # downloaded: source_type != "local" (从外部数据源同步的文档)
+        downloaded_query = select(func.count()).select_from(cls.model).where(
+            and_(
+                cls.model.kb_id == kb_id,
+                cls.model.source_type != "local"
+            )
+        )
+        downloaded = db.execute(downloaded_query).scalar() or 0
 
         # 统计其他状态的文档
         stats_query = select(
@@ -2433,7 +2532,32 @@ class DocumentService(CommonService):
             "finished": int(result.finished) if result else 0,
             "failed": int(result.failed) if result else 0,
             "cancelled": int(cancelled),
+            "downloaded": int(downloaded),
         }
+
+
+    @classmethod
+    def run(cls, db: Session, tenant_id: str, doc: dict, kb_table_num_map: dict):
+        from api.db.services.task_service import queue_dataflow, queue_tasks
+        from api.db.services.file2document_service import File2DocumentService
+
+        doc["tenant_id"] = tenant_id
+        doc_parser = doc.get("parser_id", ParserType.NAIVE)
+        if doc_parser == ParserType.TABLE:
+            kb_id = doc.get("kb_id")
+            if not kb_id:
+                return
+            if kb_id not in kb_table_num_map:
+                count = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="", run_status=[TaskStatus.DONE], types=[])
+                kb_table_num_map[kb_id] = count
+                if kb_table_num_map[kb_id] <= 0:
+                    KnowledgebaseService.delete_field_map(db, kb_id)
+        if doc.get("pipeline_id", ""):
+            queue_dataflow(db, tenant_id, flow_id=doc["pipeline_id"], task_id=get_uuid(), doc_id=doc["id"])
+        else:
+            bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])
+            queue_tasks(db, doc, bucket, name, 0)
+
 
 def queue_raptor_o_graphrag_tasks(db, sample_doc_id, ty, priority, fake_doc_id="", doc_ids=[]):
     """
@@ -2468,8 +2592,8 @@ def queue_raptor_o_graphrag_tasks(db, sample_doc_id, ty, priority, fake_doc_id="
 
     task["doc_id"] = fake_doc_id
     task["doc_ids"] = doc_ids
-    DocumentService.begin2parse(db, sample_doc_id["id"])
-    assert REDIS_CONN.queue_product(get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
+    DocumentService.begin2parse(db, sample_doc_id["id"], keep_progress=True)
+    assert REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
     return task["id"]
 
 
@@ -2511,7 +2635,7 @@ async def queue_analyze_v2_task(db, doc_id, kb_id, config, user_id, file=None, p
         
         # 保存到 MinIO 临时位置
         temp_location = f"temp/analyze_v2/{task_id}/{fname}"
-        STORAGE_IMPL.put("multirag-temp", temp_location, file_content)
+        settings.STORAGE_IMPL.put("multirag-temp", temp_location, file_content)
         
         temp_file_path = temp_location
         logging.info(f"Saved temp file to MinIO: {temp_location}")
@@ -2553,7 +2677,7 @@ async def queue_analyze_v2_task(db, doc_id, kb_id, config, user_id, file=None, p
         "priority": priority
     }
     
-    success = REDIS_CONN.queue_product(get_svr_queue_name(priority), message=queue_message)
+    success = REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=queue_message)
     
     if not success:
         logging.error(f"Failed to send task {task_id} to Redis queue")
@@ -2565,7 +2689,7 @@ async def queue_analyze_v2_task(db, doc_id, kb_id, config, user_id, file=None, p
 
 
 def get_queue_length(priority):
-    group_info = REDIS_CONN.queue_info(get_svr_queue_name(priority), SVR_CONSUMER_GROUP_NAME)
+    group_info = REDIS_CONN.queue_info(settings.get_svr_queue_name(priority), SVR_CONSUMER_GROUP_NAME)
     if not group_info:
         return 0
     return int(group_info.get("lag", 0) or 0)

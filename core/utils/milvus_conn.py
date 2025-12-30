@@ -40,12 +40,12 @@ from pymilvus.orm.iterator import QueryIterator, SearchIterator
 from pymilvus.orm.types import DataType
 from pymilvus import __version__
 
-from api.utils.file_utils import get_project_base_directory
-from core import settings
+from common.file_utils import get_project_base_directory
+from common import settings
 import numpy as np
 from core.nlp import is_english
-from core.settings import TAG_FLD, PAGERANK_FLD
-from core.utils import singleton
+from common.constants import TAG_FLD, PAGERANK_FLD
+from common.decorator import singleton
 from core.utils.doc_store_conn import (
     DocStoreConnection,
     MatchExpr,
@@ -930,12 +930,13 @@ class MilvusConnection(DocStoreConnection):
             # 创建副本避免修改原始数据
             new_row = copy.deepcopy(row)
 
-            # 确保主键字段：优先使用 pk，若无则用 id 补齐 pk（Milvus schema 主键为 pk）
+            # 确保主键字段：pk 和 id 双向补齐（Milvus schema 主键为 pk）
+            if "pk" not in new_row and "id" not in new_row:
+                raise ValueError("Insert requires primary key 'pk' or 'id'")
             if "pk" not in new_row:
-                if "id" in new_row:
-                    new_row["pk"] = new_row["id"]
-                else:
-                    raise ValueError("Insert requires primary key 'pk' (or provide 'id' to map to pk)")
+                new_row["pk"] = new_row["id"]
+            if "id" not in new_row:
+                new_row["id"] = new_row["pk"]
 
             # 处理特殊字段
             if "kb_id" in new_row and isinstance(new_row["kb_id"], list):
@@ -1045,8 +1046,8 @@ class MilvusConnection(DocStoreConnection):
 
         # 构建过滤条件
         filter_expr = ""
+        filter_parts = []
         if condition:
-            filter_parts = []
             for k, v in condition.items():
                 if k == "pk" or not v:
                     continue
@@ -1062,6 +1063,17 @@ class MilvusConnection(DocStoreConnection):
                     filter_parts.append(f"{v}")
                 elif k == "content_with_weight":
                     filter_parts.append(f"{v}")
+                elif k == "exists":
+                    # Filter where field exists and is not empty
+                    field_name = v
+                    filter_parts.append(f'{field_name} != ""')
+                elif k == "must_not":
+                    # Handle negative conditions
+                    if isinstance(v, dict):
+                        for kk, vv in v.items():
+                            if kk == "exists":
+                                # Filter where field doesn't exist or is empty
+                                filter_parts.append(f'{vv} == ""')
                 elif isinstance(v, list):
                     values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
                     filter_parts.append(f"{k} in [{','.join(values)}]")
@@ -1072,6 +1084,10 @@ class MilvusConnection(DocStoreConnection):
 
             if filter_parts:
                 filter_expr = " && ".join(filter_parts)
+            else:
+                # Milvus query requires a valid filter expression
+                # Use a default expression that matches all records
+                filter_expr = "pk != ''"
 
         text_exprs: list[MatchTextExpr] = []
         dense_expr: MatchDenseExpr | None = None
@@ -1106,11 +1122,13 @@ class MilvusConnection(DocStoreConnection):
                         continue
 
                     # 执行条件查询
+                    # 使用一个合理的最大值来获取足够的数据，然后在内存中分页
+                    # Milvus 最大限制是 16384，我们使用 10000 作为合理的默认值
                     results = conn.query(
                         collection_name,
                         filter_expr,
                         output_fields=selectFields,
-                        # limit=limit
+                        limit=10000
                     )
 
                     if results:
@@ -1305,7 +1323,7 @@ class MilvusConnection(DocStoreConnection):
     搜索结果的辅助函数
     """
 
-    def getTotal(self, res):
+    def get_total(self, res):
         """获取结果总数"""
         if isinstance(res, tuple):
             return res[1]
@@ -1313,7 +1331,7 @@ class MilvusConnection(DocStoreConnection):
             return len(res)
         return 0
 
-    def getChunkIds(self, res):
+    def get_chunk_ids(self, res):
         """获取块ID列表，兼容不同版本的Milvus"""
         # 检查结果是否为元组，如果是则提取第一个元素
         if isinstance(res, tuple):
@@ -1332,7 +1350,7 @@ class MilvusConnection(DocStoreConnection):
 
         return chunk_ids
 
-    def getFields(self, res, fields: list[str]) -> dict[str, dict]:
+    def get_fields(self, res, fields: list[str]) -> dict[str, dict]:
         """获取指定字段的值，兼容不同版本的Milvus"""
         result = {}
         # 初始化distance为空列表
@@ -1425,14 +1443,14 @@ class MilvusConnection(DocStoreConnection):
 
         return result
 
-    def getHighlight(self, res, keywords: list[str], fieldnm: str):
+    def get_highlight(self, res, keywords: list[str], fieldnm: str):
         """
         生成高亮文本（应用层实现，支持中英文）
         - res：可以是 list 或 (list, …) 形式
         - keywords：待高亮关键词列表
         - fieldnm：要高亮的字段名
         返回 {doc_id: snippet} 格式的字典
-        
+
         参考 infinity_conn.py 实现，支持中文高亮
         """
         ans: dict[str, str] = {}
@@ -1440,13 +1458,13 @@ class MilvusConnection(DocStoreConnection):
         # 兼容 tuple 包装
         results = res[0] if isinstance(res, tuple) else res
         if not isinstance(results, list):
-            logger.warning(f"getHighlight: results 不是列表，类型: {type(results)}")
+            logger.warning(f"get_highlight: results 不是列表，类型: {type(results)}")
             return ans
 
-        logger.info(f"getHighlight: 收到 {len(results)} 条结果，{len(keywords)} 个关键词: {keywords}")
+        logger.info(f"get_highlight: 收到 {len(results)} 条结果，{len(keywords)} 个关键词: {keywords}")
 
         for item in results:
-            # 采用与 getFields 完全相同的逻辑
+            # 采用与 get_fields 完全相同的逻辑
             # 兼容低版本使用'id'和高版本使用'pk'的情况
             doc_id = None
             if "pk" in item:
@@ -1455,25 +1473,25 @@ class MilvusConnection(DocStoreConnection):
                 doc_id = item.get("id")
 
             if doc_id is None:
-                logger.warning(f"getHighlight: 无法获取 doc_id，item keys: {list(item.keys()) if hasattr(item, 'keys') else 'no keys'}")
+                logger.warning(f"get_highlight: 无法获取 doc_id，item keys: {list(item.keys()) if hasattr(item, 'keys') else 'no keys'}")
                 continue
 
-            # 提取待高亮文本（完全按照 getFields 的逻辑）
+            # 提取待高亮文本（完全按照 get_fields 的逻辑）
             text = None
             # 首先检查顶层是否有该字段
             if fieldnm in item:
                 text = item.get(fieldnm)
-                logger.debug(f"getHighlight: doc_id={doc_id}, 从顶层获取 {fieldnm}")
+                logger.debug(f"get_highlight: doc_id={doc_id}, 从顶层获取 {fieldnm}")
             # 然后检查entity字典是否有该字段
             elif "entity" in item and isinstance(item["entity"], dict) and fieldnm in item["entity"]:
                 text = item["entity"].get(fieldnm)
-                logger.debug(f"getHighlight: doc_id={doc_id}, 从 entity 获取 {fieldnm}")
-            
+                logger.debug(f"get_highlight: doc_id={doc_id}, 从 entity 获取 {fieldnm}")
+
             if not isinstance(text, str):
-                logger.warning(f"getHighlight: doc_id={doc_id}, 无法获取文本字段 {fieldnm}")
+                logger.warning(f"get_highlight: doc_id={doc_id}, 无法获取文本字段 {fieldnm}")
                 continue
-            
-            logger.debug(f"getHighlight: doc_id={doc_id}, 获取到文本，长度: {len(text)}")
+
+            logger.debug(f"get_highlight: doc_id={doc_id}, 获取到文本，长度: {len(text)}")
 
             # 检查是否已经包含高亮标签（避免重复处理）
             if re.search(r"<em>[^<>]+</em>", text, flags=re.IGNORECASE | re.MULTILINE):
@@ -1525,7 +1543,7 @@ class MilvusConnection(DocStoreConnection):
 
         return ans
 
-    def getAggregation(self, res, fieldnm: str) -> list[tuple]:
+    def get_aggregation(self, res, fieldnm: str) -> list[tuple]:
         """获取聚合结果 (Milvus不支持直接聚合，需要在应用层实现)"""
         # 获取结果列表
         if isinstance(res, tuple):
@@ -3983,7 +4001,7 @@ class MilvusConnection(DocStoreConnection):
         - 资源组信息
         """
         try:
-            from api.utils.common import convert_bytes
+            from common.misc_utils import convert_bytes
             from pymilvus import Collection
 
             # 基础信息

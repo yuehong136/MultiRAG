@@ -22,14 +22,14 @@ import trio
 import numpy as np
 from sqlalchemy.orm import Session
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from core.nlp import rag_tokenizer
 from core.nlp.term_weight import Dealer as TermWeightDealer
-from core.utils import truncate
-from api.utils.api_utils import timeout
+from common.token_utils import truncate
+from common.connection_utils import timeout
 
 # ⭐ 遵循项目规范：从 core.prompts.prompts 导入
 from core.prompts.generator import (
@@ -50,8 +50,8 @@ from graphrag.utils import (
     set_embed_cache
 )
 
-from api import settings
-from core.settings import PAGERANK_FLD
+from common import settings
+from common.constants import PAGERANK_FLD
 
 # asyncio版本的并发限制器 (代替trio.CapacityLimiter)
 import os

@@ -15,13 +15,13 @@ from pydantic import BaseModel, Field, Discriminator, model_validator, field_val
 from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.dialog_service import DialogService
-from api.db import StatusEnum
+from common.constants import StatusEnum
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
-from api import settings
 from api.utils.api_utils import server_error_response, get_data_error_result
 from common.misc_utils import get_uuid
+from common.constants import RetCode
 from api.utils.api_utils import get_json_result
 
 
@@ -582,7 +582,7 @@ async def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=D
             else:
                 return get_json_result(
                     data=False, retmsg=f'Only owner of dialog authorized for this operation.',
-                    retcode=settings.RetCode.OPERATING_ERROR)
+                    retcode=RetCode.OPERATING_ERROR)
             dialog_list.append({"id": id, "status": StatusEnum.INVALID.value})
         DialogService.update_many_by_id(db, dialog_list)
         # DialogService.delete_by_id(db, id)

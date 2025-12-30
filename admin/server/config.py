@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from urllib.parse import urlparse
 
-from api.utils.configs import read_config
+from common.config_utils import read_config
 
 
 class ServiceConfigs:
@@ -238,11 +238,13 @@ class MultiRAGServerConfig(BaseConfig):
 
 class TaskExecutorConfig(BaseConfig):
     """任务执行器配置"""
+    message_queue_type: str
 
     def to_dict(self) -> dict[str, Any]:
         result = super().to_dict()
         if 'extra' not in result:
-            result['extra'] = {}
+            result['extra'] = dict()
+        result['extra']['message_queue_type'] = self.message_queue_type
         return result
 
 
@@ -505,7 +507,17 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                 # 管理后台配置（不加入服务列表，单独处理）
                 logging.info(f"Admin service config: {v}")
                 pass
-                
+
+            case "task_executor":
+                name: str = 'task_executor'
+                host: str = v.get('host', '')
+                port: int = v.get('port', 0)
+                message_queue_type: str = v.get('message_queue_type')
+                config = TaskExecutorConfig(id=id_count, name=name, host=host, port=port, message_queue_type=message_queue_type,
+                                            service_type="task_executor", detail_func_name="check_task_executor_alive")
+                configurations.append(config)
+                id_count += 1
+
             case _:
                 # 其他配置项（如 oauth, authentication 等）跳过
                 logging.debug(f"Skipping configuration key: {k}")

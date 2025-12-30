@@ -1,8 +1,7 @@
 import pathlib
 import re
-from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -19,7 +18,7 @@ from common.misc_utils import get_uuid
 from api.utils.api_utils import get_error_data_result, get_result, server_error_response, token_required, \
     get_json_result
 from api.utils.file_utils import filename_type
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 
 router = APIRouter()
 
@@ -106,7 +105,7 @@ def upload_files(
 
             filetype = filename_type(file_obj_names[file_len - 1])
             location = file_obj_names[file_len - 1]
-            while STORAGE_IMPL.obj_exist(last_folder.id, location):
+            while settings.STORAGE_IMPL.obj_exist(last_folder.id, location):
                 location += "_"
             blob = file_obj.file.read()
             filename = duplicate_name(FileService.query, name=file_obj_names[file_len - 1], parent_id=last_folder.id)
@@ -122,7 +121,7 @@ def upload_files(
                 "size": len(blob),
             }
             file = FileService.insert(db, file_data)
-            STORAGE_IMPL.put(last_folder.id, location, blob)
+            settings.STORAGE_IMPL.put(last_folder.id, location, blob)
             file_res.append(file.to_json())
         return get_result(data=file_res)
     except Exception as e:
@@ -344,10 +343,10 @@ def delete_files(
                     e, file = FileService.get_by_id(inner_file_id)
                     if not e:
                         return get_error_data_result(retmsg="File not found!")
-                    STORAGE_IMPL.rm(file.parent_id, file.location)
+                    settings.STORAGE_IMPL.rm(file.parent_id, file.location)
                 FileService.delete_folder_by_pf_id(tenant_id, file_id)
             else:
-                STORAGE_IMPL.rm(file.parent_id, file.location)
+                settings.STORAGE_IMPL.rm(file.parent_id, file.location)
                 if not FileService.delete(file):
                     return get_error_data_result(retmsg="Database error (File removal)!")
 
@@ -437,10 +436,10 @@ def download_file(
         if not e:
             return get_error_data_result(retmsg="Document not found!")
 
-        blob = STORAGE_IMPL.get(file.parent_id, file.location)
+        blob = settings.STORAGE_IMPL.get(file.parent_id, file.location)
         if not blob:
             b, n = File2DocumentService.get_storage_address(file_id=file_id)
-            blob = STORAGE_IMPL.get(b, n)
+            blob = settings.STORAGE_IMPL.get(b, n)
 
         # 确定文件的MIME类型
         ext = re.search(r"\.([^.]+)$", file.name)

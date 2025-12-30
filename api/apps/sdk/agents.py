@@ -1,14 +1,19 @@
 import json
+import logging
 import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from agent.canvas import Canvas
+from api.db import CanvasCategory
 from api.db.db_models import get_db
 from api.db.services.canvas_service import UserCanvasService
-from api.settings import RetCode
+from api.db.services.user_canvas_version import UserCanvasVersionService
+from common.constants import RetCode
 from common.misc_utils import get_uuid
 from api.utils.api_utils import get_error_data_result, get_result, token_required
 
@@ -185,3 +190,76 @@ def delete_agent(
 
     UserCanvasService.delete_by_id(db, agent_id)
     return get_result(data=True)
+
+
+class WebhookRequest(BaseModel):
+    id: str
+    query: str | None = None
+    files: list | None = None
+    user_id: str | None = None
+
+
+@router.post("/webhook/{agent_id}", summary="Webhook触发代理")
+def webhook(
+    agent_id: str,
+    request: WebhookRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required)
+):
+    """
+    通过Webhook触发代理执行
+    
+    Args:
+        agent_id: 代理ID
+        request: Webhook请求参数
+        db: 数据库会话
+        tenant_id: 租户ID
+    
+    Returns:
+        SSE流式响应
+    """
+    req = request.model_dump()
+    if not UserCanvasService.accessible(db, req["id"], tenant_id):
+        return get_error_data_result(retmsg='Only owner of canvas authorized for this operation.')
+
+    cvs = UserCanvasService.get_by_id(db, req["id"])
+    if not cvs:
+        return get_error_data_result(retmsg="canvas not found.")
+
+    if not isinstance(cvs.dsl, str):
+        cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
+
+    if cvs.canvas_category == CanvasCategory.DataFlow:
+        return get_error_data_result(retmsg="Dataflow can not be triggered by webhook.")
+
+    try:
+        canvas = Canvas(cvs.dsl, tenant_id, agent_id)
+    except Exception as e:
+        return get_error_data_result(retmsg=str(e))
+
+    def sse():
+        nonlocal canvas
+        try:
+            for ans in canvas.run(
+                query=req.get("query", ""),
+                files=req.get("files", []),
+                user_id=req.get("user_id", tenant_id),
+                webhook_payload=req
+            ):
+                yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
+
+            cvs.dsl = json.loads(str(canvas))
+            UserCanvasService.update_by_id(db, req["id"], cvs.to_dict())
+        except Exception as e:
+            logging.exception(e)
+            yield "data:" + json.dumps({"code": 500, "message": str(e), "data": False}, ensure_ascii=False) + "\n\n"
+
+    return StreamingResponse(
+        sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )

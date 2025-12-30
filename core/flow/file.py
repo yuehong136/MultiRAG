@@ -41,7 +41,7 @@ class File(ProcessBase):
                     return
 
             #     b, n = File2DocumentService.get_storage_address(db, doc_id=self._canvas._doc_id)
-            # self.set_output("blob", STORAGE_IMPL.get(b, n))
+            # self.set_output("blob", settings.STORAGE_IMPL.get(b, n))
             self.set_output("name", doc.name)
         else:
             file = kwargs.get("file")

@@ -33,13 +33,15 @@ from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from zhipuai import ZhipuAI
 
-from api import settings
+from common import settings
 from api.utils.file_utils import get_home_cache_dir
-from api.utils.log_utils import log_exception
-from core.utils import num_tokens_from_string, truncate
+from common.log_utils import log_exception
+from common.token_utils import num_tokens_from_string, truncate
 
 
 class Base(ABC):
+    _supports_multimodal: bool = False  # Override to True in models that support multimodal input
+
     def __init__(self, key, model_name, **kwargs):
         """
         Constructor for abstract base class.
@@ -499,6 +501,46 @@ class JinaEmbed(Base):
 
     def encode_queries(self, text):
         embds, cnt = self.encode([text])
+        return np.array(embds[0]), cnt
+
+
+class JinaMultiVecEmbed(Base):
+    _FACTORY_NAME = "Jina"
+
+    def __init__(self, key, model_name="jina-embeddings-v4", base_url="https://api.jina.ai/v1/embeddings"):
+        self.base_url = "https://api.jina.ai/v1/embeddings"
+        self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
+        self.model_name = model_name
+
+    def encode(self, texts: list[str | bytes], task="retrieval.passage"):
+        batch_size = 16
+        ress = []
+        token_count = 0
+        input = []
+        for text in texts:
+            if isinstance(text, str):
+                input.append({"text": text})
+            elif isinstance(text, bytes):
+                img_b64s = None
+                try:
+                    base64.b64decode(text, validate=True)
+                    img_b64s = text.decode('utf8')
+                except Exception:
+                    img_b64s = base64.b64encode(text).decode('utf8')
+                input.append({"image": img_b64s})  # base64 encoded image
+        for i in range(0, len(texts), batch_size):
+            data = {"model": self.model_name, "task": task, "truncate": True, "return_multivector": True, "input": input[i: i + batch_size]}
+            response = requests.post(self.base_url, headers=self.headers, json=data)
+            try:
+                res = response.json()
+                ress.extend([d["embeddings"] for d in res["data"]])
+                token_count += self.total_token_count(res)
+            except Exception as _e:
+                log_exception(_e, response)
+        return np.array(ress), token_count
+
+    def encode_queries(self, text):
+        embds, cnt = self.encode([text], task="retrieval.query")
         return np.array(embds[0]), cnt
 
 
@@ -1022,6 +1064,7 @@ class VolcEngineEmbeddingRequest(BaseModel):
 
 class VolcEngineEmbed(Base):
     _FACTORY_NAME = "VolcEngine"
+    _supports_multimodal = True  # VolcEngine supports multimodal embeddings (images, videos)
 
     def __init__(self, key, model_name, base_url="https://ark.cn-beijing.volces.com/api/v3", **kwargs):
         base_url = base_url or "https://ark.cn-beijing.volces.com/api/v3"
@@ -1044,6 +1087,8 @@ class VolcEngineEmbed(Base):
         endpoint_id = key_payload.get("endpoint_id", "")
         derived_model_name = f"{ep_id}{endpoint_id}".strip()
         self.model_name = derived_model_name or model_name
+        # 保留原始模型名称用于 vision 检测（endpoint_id 可能不包含 vision 关键字）
+        self._original_model_name = model_name or ""
         if not self.model_name:
             raise ValueError("VolcEngine 模型名称缺失，请配置 ep_id + endpoint_id 或显式传入 model_name")
 
@@ -1054,11 +1099,17 @@ class VolcEngineEmbed(Base):
         self.default_dimensions = kwargs.get("dimensions") or key_payload.get("dimensions")
         self.default_encoding_format = kwargs.get("encoding_format") or key_payload.get("encoding_format") or "float"
         self.session = requests.Session()
+        # 同时检查派生模型名称和原始模型名称，确保 vision 模型被正确识别
         model_lower = self.model_name.lower()
+        original_lower = self._original_model_name.lower()
+        is_vision_by_name = any(
+            k in model_lower or k in original_lower
+            for k in ["vision", "multimodal", "vl"]
+        )
         self.force_multimodal = bool(
             key_payload.get("force_multimodal")
             or kwargs.get("force_multimodal")
-            or ("vision" in model_lower or "multimodal" in model_lower)
+            or is_vision_by_name
         )
         if key_payload.get("force_text_endpoint") or kwargs.get("force_text_endpoint"):
             self.force_multimodal = False
@@ -1068,8 +1119,10 @@ class VolcEngineEmbed(Base):
             return np.array([]), 0
 
         # 再次确认是否强制多模态 (防止初始化后 model_name 变更或其他原因)
+        # 同时检查派生模型名称和原始模型名称
         model_lower = self.model_name.lower()
-        is_vision_model = any(k in model_lower for k in ["vision", "multimodal", "vl"])
+        original_lower = getattr(self, "_original_model_name", "").lower()
+        is_vision_model = any(k in model_lower or k in original_lower for k in ["vision", "multimodal", "vl"])
         should_use_multimodal = self.force_multimodal or is_vision_model
 
         if all(isinstance(item, str) for item in texts) and not should_use_multimodal:

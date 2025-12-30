@@ -13,8 +13,8 @@ from api.db.db_models import db_connection
 from common.misc_utils import hash_str2int
 from core.nlp import rag_tokenizer
 from core.prompts.template import load_prompt
-from core.settings import TAG_FLD
-from core.utils import encoder, num_tokens_from_string
+from common.constants import TAG_FLD
+from common.token_utils import encoder, num_tokens_from_string
 
 STOP_TOKEN = "<|STOP|>"
 COMPLETE_TASK = "complete_task"
@@ -141,6 +141,7 @@ KEYWORD_PROMPT_TEMPLATE = load_prompt("keyword_prompt")
 QUESTION_PROMPT_TEMPLATE = load_prompt("question_prompt")
 VISION_LLM_DESCRIBE_PROMPT = load_prompt("vision_llm_describe_prompt")
 VISION_LLM_FIGURE_DESCRIBE_PROMPT = load_prompt("vision_llm_figure_describe_prompt")
+STRUCTURED_OUTPUT_PROMPT = load_prompt("structured_output_prompt")
 
 ANALYZE_TASK_SYSTEM = load_prompt("analyze_task_system")
 ANALYZE_TASK_USER = load_prompt("analyze_task_user")
@@ -228,7 +229,7 @@ def question_proposal(chat_mdl, content, topn=3):
 def full_question(db: Session, tenant_id=None, llm_id=None, messages=None, language=None, chat_mdl=None):
     if messages is None:
         messages = []
-    from api.db import LLMType
+    from common.constants import LLMType
     from api.db.services.llm_service import LLMBundle
     from api.db.services.tenant_llm_service import TenantLLMService
 
@@ -262,7 +263,7 @@ def full_question(db: Session, tenant_id=None, llm_id=None, messages=None, langu
 
 
 def cross_languages(db, tenant_id, llm_id, query, languages=None):
-    from api.db import LLMType
+    from common.constants import LLMType
     from api.db.services.llm_service import LLMBundle
     from api.db.services.tenant_llm_service import TenantLLMService
 
@@ -449,6 +450,11 @@ def reflect(chat_mdl, history: list[dict], tool_call_res: list[Tuple], user_defi
 
 def form_message(system_prompt, user_prompt):
     return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+
+
+def structured_output_prompt(schema=None) -> str:
+    template = PROMPT_JINJA_ENV.from_string(STRUCTURED_OUTPUT_PROMPT)
+    return template.render(schema=schema)
 
 
 def tool_call_summary(chat_mdl, name: str, params: dict, result: str, user_defined_prompts: dict={}) -> str:

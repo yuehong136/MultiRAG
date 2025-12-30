@@ -24,12 +24,13 @@ import trio
 from common.misc_utils import get_uuid
 from graphrag.query_analyze_prompt import PROMPTS
 from graphrag.utils import get_entity_type2samples, get_llm_cache, set_llm_cache, get_relation
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 from core.utils.doc_store_conn import OrderByExpr
 
 from core.nlp.search import Dealer, index_name
 from api.db.db_models import SessionLocal
 from common.float_utils import get_float
+from common import settings
 
 
 class KGSearch(Dealer):
@@ -69,7 +70,7 @@ class KGSearch(Dealer):
     def _ent_info_from_(self, milvus_res, sim_thr=0.3):
         res = {}
         flds = ["content_with_weight", "_score", "entity_kwd", "rank_flt", "n_hop_with_weight"]
-        milvus_res = self.dataStore.getFields(milvus_res, flds)
+        milvus_res = self.dataStore.get_fields(milvus_res, flds)
 
         for _, ent in milvus_res.items():
             for f in flds:
@@ -89,7 +90,7 @@ class KGSearch(Dealer):
 
     def _relation_info_from_(self, milvus_res, sim_thr=0.3):
         res = {}
-        milvus_res = self.dataStore.getFields(milvus_res, ["content_with_weight", "_score", "from_entity_kwd", "to_entity_kwd",
+        milvus_res = self.dataStore.get_fields(milvus_res, ["content_with_weight", "_score", "from_entity_kwd", "to_entity_kwd",
                                                    "weight_int"])
         for _, ent in milvus_res.items():
             if get_float(ent["_score"]) < sim_thr:
@@ -304,7 +305,7 @@ class KGSearch(Dealer):
         fltr["entities_kwd"] = entities
         comm_res = self.dataStore.search(fields, [], fltr, [],
                                          OrderByExpr(), 0, topn, idxnms, kb_ids)
-        comm_res_fields = self.dataStore.getFields(comm_res, fields)
+        comm_res_fields = self.dataStore.get_fields(comm_res, fields)
         txts = []
         for ii, (_, row) in enumerate(comm_res_fields.items()):
             obj = json.loads(row["content_with_weight"])
@@ -318,9 +319,8 @@ class KGSearch(Dealer):
 
 
 if __name__ == "__main__":
-    from api import settings
     import argparse
-    from api.db import LLMType
+    from common.constants import LLMType
     from api.db.services.knowledgebase_service import KnowledgebaseService
     from api.db.services.llm_service import LLMBundle
     from api.db.services.user_service import TenantService

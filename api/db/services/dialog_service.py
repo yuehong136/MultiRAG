@@ -21,7 +21,6 @@ from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from api.db import LLMType, StatusEnum, ParserType
 from api.db.db_models import Dialog
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
@@ -29,8 +28,6 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
-from api import settings
-from common.time_utils import current_timestamp, datetime_format
 from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
@@ -38,9 +35,12 @@ from core.nlp import extract_between
 from core.nlp.search import index_name
 from core.prompts.generator import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
     citation_prompt, cross_languages, gen_meta_filter, PROMPT_JINJA_ENV, ASK_SUMMARY
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 from core.utils.tavily_conn import Tavily
+from common.constants import LLMType, StatusEnum, ParserType
 from common.string_utils import remove_redundant_spaces
+from common import settings
+from common.time_utils import current_timestamp, datetime_format
 
 
 class DialogService(CommonService):
@@ -371,12 +371,13 @@ def meta_filter(metas: dict, filters: list[dict]):
     def filter_out(v2docs, operator, value):
         ids = []
         for input, docids in v2docs.items():
-            try:
-                input = float(input)
-                value = float(value)
-            except Exception:
-                input = str(input)
-                value = str(value)
+            if operator in ["=", "≠", ">", "<", "≥", "≤"]:
+                try:
+                    input = float(input)
+                    value = float(value)
+                except Exception:
+                    input = str(input)
+                    value = str(value)
 
             for conds in [
                     (operator == "contains", str(value).lower() in str(input).lower()),
@@ -717,7 +718,12 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
 
 def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_ids=None):
-    sys_prompt = "You are a Database Administrator. You need to determine if the user's question is related to the table data, and if so, write the appropriate SQL query."
+    sys_prompt = """
+    You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question. 
+    Ensure that:
+    1. Field names should not start with a digit. If any field name starts with a digit, use double quotes around it.
+    2. Write only the SQL, no explanations or additional text.
+    """
     user_prompt = """
     Table name: {};
     Table of database fields are as follows:
@@ -750,6 +756,7 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
         sql = re.sub(r".*select ", "select ", sql.lower())
         sql = re.sub(r" +", " ", sql)
         sql = re.sub(r"([;；]|```).*", "", sql)
+        sql = re.sub(r"&", "and", sql)
         if sql[:len("select ")] != "select ":
             return None, None
         if not re.search(r"((sum|avg|max|min)\(|group by )", sql.lower()):

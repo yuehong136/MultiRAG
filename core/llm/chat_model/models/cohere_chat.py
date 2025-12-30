@@ -2,7 +2,7 @@ from copy import deepcopy
 
 from core.llm.chat_model.base import Base
 from core.nlp import is_english
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 
 
 class CoHereChat(Base):

@@ -10,7 +10,7 @@ from datetime import datetime
 from sqlalchemy import and_, or_, func, desc, asc
 from sqlalchemy.orm import Session
 
-from api.db import StatusEnum
+from common.constants import StatusEnum
 from api.db.db_models import Search, User
 from api.db.services.common_service import CommonService
 # from common.time_utils import current_timestamp, datetime_format

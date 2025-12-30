@@ -11,7 +11,7 @@ import openai
 from openai import OpenAI
 from strenum import StrEnum
 from core.nlp import is_chinese, is_english
-from core.utils import num_tokens_from_string, total_token_count_from_response
+from common.token_utils import num_tokens_from_string, total_token_count_from_response
 import logging
 import time
 

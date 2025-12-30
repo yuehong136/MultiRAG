@@ -1,13 +1,12 @@
 import aiohttp
-from typing import Optional
 
-from api.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
+from common.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
 
 
 class PluginService:
 
     @staticmethod
-    async def install_dep(plugin_id: str, package_name: str, package_version: Optional[str] = None):
+    async def install_dep(plugin_id: str, package_name: str, package_version: str | None = None):
         """
         安装插件依赖
 

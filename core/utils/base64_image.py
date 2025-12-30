@@ -9,12 +9,15 @@ test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAIAAAD/gAIDAAAA6ElEQVR4nO3
 test_image = base64.b64decode(test_image_base64)
 
 
-async def image2id(d: dict, storage_put_func: partial, objname: str, bucket: str="imagetemps"):
+async def image2id(d: dict, storage_put_func: partial, objname:str, bucket:str="imagetemps"):
     import logging
     from io import BytesIO
     import trio
     from core.svr.task_executor import minio_limiter
-    if not d.get("image"):
+    if "image" not in d:
+        return
+    if not d["image"]:
+        del d["image"]
         return
 
     with BytesIO() as output_buffer:
@@ -54,3 +57,4 @@ def id2image(image_id:str|None, storage_get_func: partial):
         return Image.open(BytesIO(blob))
     except Exception as e:
         logging.exception(e)
+

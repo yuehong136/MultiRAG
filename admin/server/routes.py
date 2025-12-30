@@ -10,6 +10,7 @@ from services import UserMgr, ServiceMgr, UserServiceMgr
 from roles import RoleMgr
 from api.common.exceptions import AdminException
 from api.db.db_models import get_db
+from common.versions import get_multirag_version
 
 
 # ========== 请求/响应模型定义 ==========
@@ -85,7 +86,7 @@ class ServiceResponse(BaseModel):
     id: int
     name: str
     host: str
-    port: int
+    port: int | str
     service_type: str
     status: str | None = None
     extra: dict | None = None
@@ -570,6 +571,21 @@ async def get_user_permission(user_name: str, user=Depends(admin_manager)) -> AP
     """获取用户权限"""
     try:
         res = RoleMgr.get_user_permission(user_name)
+        return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/version",
+    response_model=APIResponse[dict],
+    summary="获取版本信息",
+    description="获取 MultiRAG 版本信息"
+)
+async def show_version(user=Depends(admin_manager)) -> APIResponse[dict]:
+    """获取版本信息"""
+    try:
+        res = {"version": get_multirag_version()}
         return success_response(res)
     except Exception as e:
         return error_response(str(e), 500)

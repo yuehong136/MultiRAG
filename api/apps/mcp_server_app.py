@@ -10,12 +10,11 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from api import settings
-from api.db import VALID_MCP_SERVER_TYPES
 from api.db.db_models import get_db, MCPServer
 from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.user_service import TenantService
 from common.misc_utils import get_uuid
+from common.constants import RetCode, VALID_MCP_SERVER_TYPES
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response, get_mcp_tools
 from api.utils.web_utils import get_float, safe_json_parse
 from core.utils.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
@@ -237,7 +236,7 @@ def detail(
         mcp_server = MCPServerService.get_or_none(db, id=mcp_id, tenant_id=user.id)
 
         if mcp_server is None:
-            return get_json_result(retcode=settings.RetCode.NOT_FOUND, data=None)
+            return get_json_result(retcode=RetCode.NOT_FOUND, data=None)
 
         return get_json_result(data=mcp_server.to_dict())
     except Exception as e:

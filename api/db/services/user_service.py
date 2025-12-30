@@ -17,12 +17,13 @@ from sqlalchemy import func
 # from passlib.context import CryptContext
 import bcrypt
 
-from api.db import UserTenantRole, StatusEnum
+from api.db import UserTenantRole
+from common.constants import StatusEnum
 from api.db.db_models import User, Tenant, UserTenant
 from api.db.services.common_service import CommonService
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
-from core.settings import MINIO
+from common import settings
 
 
 # # 创建密码上下文
@@ -262,8 +263,8 @@ class TenantService(CommonService):
 
     @classmethod
     def user_gateway(cls, db: Session, tenant_id):
-        hashobj = hashlib.sha256(tenant_id.encode("utf-8"))
-        return int(hashobj.hexdigest(), 16)%len(MINIO)
+        hash_obj = hashlib.sha256(tenant_id.encode("utf-8"))
+        return int(hash_obj.hexdigest(), 16)%len(settings.MINIO)
 
 
 class UserTenantService(CommonService):

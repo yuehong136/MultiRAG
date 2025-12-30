@@ -5,7 +5,7 @@ from typing import Any, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 
 logger = logging.getLogger(__name__)

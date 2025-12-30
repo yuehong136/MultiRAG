@@ -4,9 +4,9 @@ import re
 import numpy as np
 from huggingface_hub import snapshot_download
 
-from api import settings
+from common import settings
 from api.utils.file_utils import get_home_cache_dir
-from core.llm import DefaultEmbedding
+from core.llm.embedding import DefaultEmbedding
 
 
 class FastEmbed(DefaultEmbedding):

@@ -2,8 +2,6 @@ NAME_LENGTH_LIMIT = 2**10
 
 IMG_BASE64_PREFIX = "data:image/png;base64,"
 
-SERVICE_CONF = "service_conf.yaml"
-
 API_VERSION = "v1"
 MULTI_RAG_SERVICE_NAME = "multirag"
 REQUEST_WAIT_SEC = 2

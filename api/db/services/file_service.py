@@ -16,16 +16,19 @@ from pathlib import Path
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, select
 
-from api.db import FileType, KNOWLEDGEBASE_FOLDER_NAME, FileSource, ParserType
-from api.db.db_models import File, Document, Knowledgebase, File2Document
+from api.db import KNOWLEDGEBASE_FOLDER_NAME, FileType
+from common.constants import FileSource, ParserType, TaskStatus
+from api.db.db_models import Document, File, File2Document, Knowledgebase, Task
 from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from common.misc_utils import get_uuid
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.task_service import TaskService
 from api.utils.file_utils import filename_type, read_potential_broken_pdf, thumbnail_img
 from core.llm.cv_model.models.gptv4 import GptV4
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 
 
 class FileService(CommonService):
@@ -348,12 +351,12 @@ class FileService(CommonService):
             raise RuntimeError("Database error (File move)!")
 
     @classmethod
-    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: list, current_user, labels: list[str] | None = None) -> tuple[list[str], list[dict]]:
+    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: list, user_id, labels: list[str] | None = None, src: str="local") -> tuple[list[str], list[dict]]:
         # 初始化根文件夹和知识库文件夹
-        root_folder = cls.get_root_folder(db, current_user.id)
+        root_folder = cls.get_root_folder(db, user_id)
         pf_id = root_folder["id"]
-        cls.init_knowledgebase_docs(db, pf_id, current_user.id)
-        kb_root_folder = cls.get_kb_folder(db, current_user.id)
+        cls.init_knowledgebase_docs(db, pf_id, user_id)
+        kb_root_folder = cls.get_kb_folder(db, user_id)
         kb_folder = cls.new_a_file_from_kb(db, kb.tenant_id, kb.name, kb_root_folder["id"])
 
         err, files_info = [], []
@@ -370,14 +373,14 @@ class FileService(CommonService):
                     raise RuntimeError("This type of file has not been supported yet!")
 
                 location = filename
-                while STORAGE_IMPL.obj_exist(kb.id, location):
+                while settings.STORAGE_IMPL.obj_exist(kb.id, location):
                     location += "_"
 
                 # 如果是PDF文件，尝试修复可能损坏的PDF
                 if filetype == FileType.PDF.value:
                     file_blob = read_potential_broken_pdf(file_blob)
 
-                STORAGE_IMPL.put(kb.id, location, file_blob)
+                settings.STORAGE_IMPL.put(kb.id, location, file_blob)
 
                 # # 根据 labels 是否有值来决定 id 的生成方式
                 # if labels:
@@ -391,7 +394,7 @@ class FileService(CommonService):
                 thumbnail_location = ""
                 if img is not None:
                     thumbnail_location = f"thumbnail_{file_id}.png"
-                    STORAGE_IMPL.put(kb.id, thumbnail_location, img)
+                    settings.STORAGE_IMPL.put(kb.id, thumbnail_location, img)
 
                 doc = {
                     "id": file_id,
@@ -399,9 +402,10 @@ class FileService(CommonService):
                     "parser_id": cls.get_parser(filetype, filename, kb.parser_id),
                     "pipeline_id": kb.pipeline_id,
                     "parser_config": kb.parser_config,
-                    "created_by": current_user.id,
+                    "created_by": user_id,
                     "type": filetype,
                     "name": filename,
+                    "source_type": src,
                     "suffix": Path(filename).suffix.lstrip("."),
                     "location": location,
                     "size": len(file_blob),
@@ -488,9 +492,56 @@ class FileService(CommonService):
     @staticmethod
     def get_blob(user_id, location):
         bname = f"{user_id}-downloads"
-        return  STORAGE_IMPL.get(bname, location)
+        return  settings.STORAGE_IMPL.get(bname, location)
 
     @staticmethod
     def put_blob(user_id, location, blob):
         bname = f"{user_id}-downloads"
-        return  STORAGE_IMPL.put(bname, location, blob)
+        return  settings.STORAGE_IMPL.put(bname, location, blob)
+
+    @classmethod
+    def delete_docs(cls, db: Session, doc_ids, tenant_id):
+        root_folder = FileService.get_root_folder(db, tenant_id)
+        pf_id = root_folder["id"]
+        FileService.init_knowledgebase_docs(db, pf_id, tenant_id)
+        errors = ""
+        kb_table_num_map = {}
+        for doc_id in doc_ids:
+            try:
+                doc = DocumentService.get_by_id(db, doc_id)
+                if not doc:
+                    raise Exception("Document not found!")
+                tenant_id = DocumentService.get_tenant_id(db, doc_id)
+                if not tenant_id:
+                    raise Exception("Tenant not found!")
+
+                # 在删除文档前保存需要的属性，避免访问已删除对象
+                doc_parser = doc.parser_id
+                kb_id = doc.kb_id
+
+                b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
+
+                TaskService.filter_delete(db, [Task.doc_id == doc_id])
+                if not DocumentService.remove_document(db, doc, tenant_id):
+                    raise Exception("Database error (Document removal)!")
+
+                f2d = File2DocumentService.get_by_document_id(db, doc_id)
+                deleted_file_count = 0
+                if f2d:
+                    deleted_file_count = FileService.filter_delete(
+                        db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
+                File2DocumentService.delete_by_document_id(db, doc_id)
+                if deleted_file_count > 0:
+                    settings.STORAGE_IMPL.rm(b, n)
+
+                if doc_parser == ParserType.TABLE:
+                    if kb_id not in kb_table_num_map:
+                        counts = DocumentService.count_by_kb_id(db, kb_id=kb_id, keywords="", run_status=[TaskStatus.DONE], types=[])
+                        kb_table_num_map[kb_id] = counts
+                    kb_table_num_map[kb_id] -= 1
+                    if kb_table_num_map[kb_id] <= 0:
+                        KnowledgebaseService.delete_field_map(db, kb_id)
+            except Exception as e:
+                errors += str(e)
+
+        return errors

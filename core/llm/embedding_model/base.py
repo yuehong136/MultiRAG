@@ -1,5 +1,5 @@
 from abc import ABC
-from core.utils import total_token_count_from_response
+from common.token_utils import total_token_count_from_response
 
 
 class Base(ABC):

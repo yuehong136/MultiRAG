@@ -10,9 +10,7 @@ import numpy as np
 from pymilvus import AnnSearchRequest, WeightedRanker
 
 from api.db.db_models import db_connection
-from api.db.services.knowledgebase_service import KnowledgebaseService
 from core.prompts.generator import relevant_chunks_with_toc
-from core.settings import TAG_FLD, PAGERANK_FLD
 from core.nlp import rag_tokenizer, query, is_english
 from core.utils.doc_store_conn import (
     DocStoreConnection,
@@ -24,6 +22,7 @@ from core.utils.doc_store_conn import (
 )
 from common.string_utils import remove_redundant_spaces
 from common.float_utils import get_float
+from common.constants import TAG_FLD, PAGERANK_FLD
 
 
 def index_name(uid, kb_names):
@@ -226,12 +225,12 @@ class Dealer:
             return list(kwds)
 
         def _build_result(results, kwds: list[str] | None = None):
-            total = self.dataStore.getTotal(results)
+            total = self.dataStore.get_total(results)
             keywords = _process_keywords(kwds)
-            ids = self.dataStore.getChunkIds(results)
-            highlight_rst = self.dataStore.getHighlight(results, keywords, "content_with_weight")
-            aggs = self.dataStore.getAggregation(results, "docnm_kwd")
-            fields = self.dataStore.getFields(results, src + ["_score"])
+            ids = self.dataStore.get_chunk_ids(results)
+            highlight_rst = self.dataStore.get_highlight(results, keywords, "content_with_weight")
+            aggs = self.dataStore.get_aggregation(results, "docnm_kwd")
+            fields = self.dataStore.get_fields(results, src + ["_score"])
             return self.SearchResult(
                 total=total,
                 ids=ids,
@@ -349,7 +348,7 @@ class Dealer:
                 kb_ids,
                 rank_feature=rank_feature,
             )
-            total = self.dataStore.getTotal(res)
+            total = self.dataStore.get_total(res)
 
             # 若召回为 0 且使用嵌入，放宽阈值重试一次
             if emb_mdl and total == 0:
@@ -496,10 +495,10 @@ class Dealer:
     #                     kwds.add(kk)
     #
     #             # 处理结果和高亮
-    #             ids = self.dataStore.getChunkIds(results)
+    #             ids = self.dataStore.get_chunk_ids(results)
     #             keywords = list(kwds)
-    #             highlight_results = self.dataStore.getHighlight(results, keywords, "content_with_weight")
-    #             aggs = self.dataStore.getAggregation(results, "docnm_kwd")
+    #             highlight_results = self.dataStore.get_highlight(results, keywords, "content_with_weight")
+    #             aggs = self.dataStore.get_aggregation(results, "docnm_kwd")
     #
     #             # 创建搜索结果对象
     #             return self.SearchResult(
@@ -508,7 +507,7 @@ class Dealer:
     #                 query_vector=q_vec,
     #                 aggregation=aggs,
     #                 highlight=highlight_results,
-    #                 field=self.dataStore.getFields(results, src),
+    #                 field=self.dataStore.get_fields(results, src),
     #                 keywords=keywords
     #             )
     #
@@ -547,17 +546,17 @@ class Dealer:
     #                 kwds.add(kk)
     #
     #         # 处理结果和高亮
-    #         ids = self.dataStore.getChunkIds(results)
+    #         ids = self.dataStore.get_chunk_ids(results)
     #         keywords = list(kwds)
-    #         highlight_results = self.dataStore.getHighlight(results, keywords, "content_with_weight")
-    #         aggs = self.dataStore.getAggregation(results, "docnm_kwd")
+    #         highlight_results = self.dataStore.get_highlight(results, keywords, "content_with_weight")
+    #         aggs = self.dataStore.get_aggregation(results, "docnm_kwd")
     #         return self.SearchResult(
     #             total=total,
     #             ids=ids,
     #             query_vector=q_vec,
     #             aggregation=aggs,
     #             highlight=highlight_results,
-    #             field=self.dataStore.getFields(results, src),
+    #             field=self.dataStore.get_fields(results, src),
     #             keywords=keywords
     #         )
     #
@@ -569,7 +568,7 @@ class Dealer:
     #             orderBy.asc("top_int")
     #             orderBy.desc("create_timestamp_flt")
     #         res = self.dataStore.search(src, [], filters, [], orderBy, offset, limit, idx_names, kb_ids)
-    #         total = self.dataStore.getTotal(res)
+    #         total = self.dataStore.get_total(res)
     #         logging.debug(f"Dealer.search TOTAL: {total}")
     #     else:
     #         # If query string exists, use highlight fields if needed
@@ -583,7 +582,7 @@ class Dealer:
     #             matchExprs = [matchText]
     #             res = self.dataStore.search(src, highlightFields, filters, matchExprs, orderBy, offset, limit,
     #                                         idx_names, kb_ids, rank_feature=rank_feature)
-    #             total = self.dataStore.getTotal(res)
+    #             total = self.dataStore.get_total(res)
     #             logging.debug(f"Dealer.search TOTAL: {total}")
     #         else:
     #             # If embedding model exists, use fusion search (text + vector)
@@ -597,7 +596,7 @@ class Dealer:
     #
     #             res, total = self.dataStore.search(src, highlightFields, filters, matchExprs, orderBy, offset, limit,
     #                                         idx_names, kb_ids, rank_feature=rank_feature)
-    #             # total = self.dataStore.getTotal(res)
+    #             # total = self.dataStore.get_total(res)
     #             logging.debug(f"Dealer.search TOTAL: {total}")
     #
     #             # If no results, try with lower match threshold
@@ -607,7 +606,7 @@ class Dealer:
     #                 matchDense.extra_options["similarity"] = 0.17
     #                 res = self.dataStore.search(src, highlightFields, filters, [matchText, matchDense, fusionExpr],
     #                                             orderBy, offset, limit, idx_names, kb_ids, rank_feature=rank_feature)
-    #                 total = self.dataStore.getTotal(res)
+    #                 total = self.dataStore.get_total(res)
     #                 logging.debug(f"Dealer.search 2 TOTAL: {total}")
     #
     #         # Process keywords
@@ -622,10 +621,10 @@ class Dealer:
     #
     #     # Get results
     #     logging.debug(f"TOTAL: {total}")
-    #     ids = self.dataStore.getChunkIds(res)
+    #     ids = self.dataStore.get_chunk_ids(res)
     #     keywords = list(kwds)
-    #     highlight_results = self.dataStore.getHighlight(res, keywords, "content_with_weight")
-    #     aggs = self.dataStore.getAggregation(res, "docnm_kwd")
+    #     highlight_results = self.dataStore.get_highlight(res, keywords, "content_with_weight")
+    #     aggs = self.dataStore.get_aggregation(res, "docnm_kwd")
     #
     #     # Return search result object
     #     return self.SearchResult(
@@ -634,7 +633,7 @@ class Dealer:
     #         query_vector=q_vec,
     #         aggregation=aggs,
     #         highlight=highlight_results,
-    #         field=self.dataStore.getFields(res, src),
+    #         field=self.dataStore.get_fields(res, src),
     #         keywords=keywords
     #     )
 
@@ -751,14 +750,14 @@ class Dealer:
     #                 continue
     #             kwds.add(kk)
     #
-    #     aggs = self.getAggregation(search_results, "docnm_kwd")
+    #     aggs = self.get_aggregation(search_results, "docnm_kwd")
     #     if req.get("vector"):
     #         return self.SearchResult(
     #             total=total,
     #             ids=ids,
     #             query_vector=query_vector,
     #             aggregation=aggs,
-    #             highlight=self.getHighlight(search_results, keywords, "content_with_weight"),
+    #             highlight=self.get_highlight(search_results, keywords, "content_with_weight"),
     #             field=fields,
     #             keywords=list(kwds)
     #         )
@@ -772,13 +771,13 @@ class Dealer:
     #             keywords=list(kwds)
     #         )
 
-    def getAggregation(self, res, g):
+    def get_aggregation(self, res, g):
         if not "aggregations" in res or "aggs_" + g not in res["aggregations"]:
             return
         bkts = res["aggregations"]["aggs_" + g]["buckets"]
         return [(b["key"], b["doc_count"]) for b in bkts]
 
-    def getHighlight(self, res, keywords, fieldnm):
+    def get_highlight(self, res, keywords, fieldnm):
         ans = {}
         for d in res[0]:
             # 从字典中提取 'entity' 部分
@@ -1276,6 +1275,7 @@ class Dealer:
                    offset=0,
                    fields=["docnm_kwd", "content_with_weight", "img_id"],
                    sort_by_position: bool = False):
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         condition = {"doc_id": doc_id}
 
         fields_set = set(fields or [])
@@ -1300,7 +1300,7 @@ class Dealer:
         for p in range(offset, max_count, bs):
             milvus_res = self.dataStore.search(fields, [], condition, [], orderBy, p, bs, index_name(tenant_id, [kb.name]),
                                            kb_ids)
-            dict_chunks = self.dataStore.getFields(milvus_res, fields)
+            dict_chunks = self.dataStore.get_fields(milvus_res, fields)
             # 直接删除系统字段
             system_fields = ['distance']
             for field in system_fields:
@@ -1314,28 +1314,31 @@ class Dealer:
         return res
 
     def all_tags(self, tenant_id: str, kb_ids: list[str], S=1000):
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         if not self.dataStore.indexExist(index_name_one(tenant_id, kb.kb_name), kb_ids[0]):
             return []
         res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids, ["tag_kwd"])
-        return self.dataStore.getAggregation(res, "tag_kwd")
+        return self.dataStore.get_aggregation(res, "tag_kwd")
 
     def all_tags_in_portion(self, tenant_id: str, kb_ids: list[str], S=1000):
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids, ["tag_kwd"])
-        res = self.dataStore.getAggregation(res, "tag_kwd")
+        res = self.dataStore.get_aggregation(res, "tag_kwd")
         total = np.sum([c for _, c in res])
         return {t: (c + 1) / (total + S) for t, c in res}
 
     def tag_content(self, tenant_id: str, kb_ids: list[str], doc, all_tags, topn_tags=3, keywords_topn=30, S=1000):
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         idx_nm = index_name(tenant_id, [kb.kb_name])
         match_txt = self.qryr.paragraph(doc["title_tks"] + " " + doc["content_ltks"], doc.get("important_kwd", []), keywords_topn)
         res = self.dataStore.search([], [], {}, [match_txt], OrderByExpr(), 0, 0, idx_nm, kb_ids, ["tag_kwd"])
-        aggs = self.dataStore.getAggregation(res, "tag_kwd")
+        aggs = self.dataStore.get_aggregation(res, "tag_kwd")
         if not aggs:
             return False
         cnt = np.sum([c for _, c in aggs])
@@ -1345,6 +1348,7 @@ class Dealer:
         return True
 
     def tag_query(self, question: str, tenant_ids: str | list[str], kb_ids: list[str], all_tags, topn_tags=3, S=1000):
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         if isinstance(tenant_ids, str):
@@ -1353,7 +1357,7 @@ class Dealer:
             idx_nms = [index_name(tid, [kb.kb_name]) for tid in tenant_ids]
         match_txt, _ = self.qryr.question(question, min_match=0.0)
         res = self.dataStore.search([], [], {}, [match_txt], OrderByExpr(), 0, 0, idx_nms, kb_ids, ["tag_kwd"])
-        aggs = self.dataStore.getAggregation(res, "tag_kwd")
+        aggs = self.dataStore.get_aggregation(res, "tag_kwd")
         if not aggs:
             return {}
         cnt = np.sum([c for _, c in aggs])
@@ -1380,6 +1384,7 @@ class Dealer:
             return []
 
         # 从 chunks 中提取实际的 kb_id，查询对应的知识库名称
+        from api.db.services.knowledgebase_service import KnowledgebaseService
         kb_id_set = set(ck.get("kb_id") for ck in chunks if ck.get("kb_id"))
         with db_connection() as db:
             kbs = KnowledgebaseService.get_by_ids(db, list(kb_id_set))
@@ -1410,7 +1415,7 @@ class Dealer:
                                        OrderByExpr(), 0, 128, idx_nms,
                                        kb_ids)
         toc = []
-        dict_chunks = self.dataStore.getFields(es_res, ["content_with_weight"])
+        dict_chunks = self.dataStore.get_fields(es_res, ["content_with_weight"])
         for _, doc in dict_chunks.items():
             try:
                 toc.extend(json.loads(doc["content_with_weight"]))

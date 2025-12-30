@@ -4,8 +4,8 @@ import asyncio
 import json
 import random
 import string
-from typing import List, Any, Dict
-from api.settings import DCS_SERVER_PROTOCOL, DCS_SERVER_HOST, DCS_SERVER_PORT
+from typing import Any
+from common.settings import DCS_SERVER_PROTOCOL, DCS_SERVER_HOST, DCS_SERVER_PORT
 
 
 def generate_random_prefix(length: int = 5) -> str:
@@ -70,7 +70,7 @@ async def query_data_from_zt_by_sql(sql: str) -> dict:
         }
 
 
-async def query_data_with_params(sql: str, dataset_wid: int, sql_params: List[Any]) -> dict:
+async def query_data_with_params(sql: str, dataset_wid: int, sql_params: list[Any]) -> dict:
     """
     发送异步非阻塞请求到AI数据查询接口（参数化查询）
 

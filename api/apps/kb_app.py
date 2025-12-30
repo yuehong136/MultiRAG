@@ -18,25 +18,25 @@ from sqlalchemy.orm import Session
 import numpy as np
 
 from api.db.db_models import File, get_db
-# from api.db.services import duplicate_name
+from api.db.services.connector_service import Connector2KbService
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import TaskService, GRAPH_RAPTOR_FAKE_DOC_ID
 from api.db.services.user_service import TenantService, UserTenantService
-from api import settings
-from api.utils.api_utils import server_error_response, get_data_error_result, get_error_data_result
-from common.misc_utils import get_uuid
-from api.db import StatusEnum, FileSource, LLMType, PipelineTaskType, VALID_TASK_STATUS, VALID_FILE_TYPES
+from api.utils.api_utils import server_error_response, get_data_error_result, get_error_data_result, get_parser_config
+from api.db import VALID_FILE_TYPES
+from common.constants import RetCode, PipelineTaskType, StatusEnum, VALID_TASK_STATUS, FileSource, LLMType, PAGERANK_FLD
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import get_json_result
 from api.apps import manager
 from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
+from common.constants import RetCode
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from core.utils.doc_store_conn import OrderByExpr
 
 router = APIRouter()
@@ -60,6 +60,7 @@ class UpdateKnowledgebaseRequest(BaseModel):
     parser_config: dict | None = None
     embd_id: str | None = None
     pagerank: int | None = 0
+    connectors: list[dict] | None = None
 
 
 class RemoveKnowledgebaseRequest(BaseModel):
@@ -111,6 +112,8 @@ class CheckEmbeddingRequest(BaseModel):
 def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
     dataset_name = req_data["name"]
+    
+    # 验证数据集名称
     if not isinstance(dataset_name, str):
         return get_data_error_result(retmsg="Dataset name must be string.")
     if dataset_name.strip() == "":
@@ -118,6 +121,7 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
     if len(dataset_name.encode("utf-8")) > DATASET_NAME_LIMIT:
         return get_data_error_result(
             retmsg=f"Dataset name length is {len(dataset_name)} which is larger than {DATASET_NAME_LIMIT}")
+    
     # 验证 Milvus 集合名逻辑
     if not re.match(MILVUS_NAME_PATTERN, dataset_name):
         return get_data_error_result(
@@ -125,61 +129,39 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
         )
 
     dataset_name = dataset_name.strip()
-    # 检查数据库中是否已存在同名知识库
+    
+    # 检查数据库中是否已存在同名知识库（直接报错，不自动去重）
     existing_kb = KnowledgebaseService.query(
         db=db,
         name=dataset_name,
         tenant_id=user.id,
         status=StatusEnum.VALID.value
     )
-
     if existing_kb:
-        # 如果已存在同名知识库，返回错误信息
         return get_data_error_result(retmsg=f"已存在该知识库名: {existing_kb[0].name}，请调整！")
 
-    req_data["name"] = dataset_name
-
     try:
-        req_data["id"] = get_uuid()
-        req_data["tenant_id"] = user.id
-        req_data["created_by"] = user.id
-        if not req_data.get("parser_id"):
-            req_data["parser_id"] = "naive"
-        t = TenantService.get_by_id(db, user.id)
-        if not t:
-            return get_data_error_result(retmsg="Tenant not found.")
-        req_data["embd_id"] = t.embd_id if req_data["embd_id"] is None else req_data["embd_id"]
-        req_data["parser_config"] = {
-            "layout_recognize": "DeepDOC",
-            "chunk_token_num": 512,
-            "delimiter": "\n",
-            "auto_keywords": 0,
-            "auto_questions": 0,
-            "html4excel": False,
-            "topn_tags": 3,
-            "raptor": {
-                "use_raptor": True,
-                "prompt": "Please summarize the following paragraphs. Be careful with the numbers, do not make things up. Paragraphs as following:\n      {cluster_content}\nThe above is the content you need to summarize.",
-                "max_token": 256,
-                "threshold": 0.1,
-                "max_cluster": 64,
-                "random_seed": 0
-            },
-            "graphrag": {
-                "use_graphrag": False,
-                "entity_types": [
-                    "organization",
-                    "person",
-                    "geo",
-                    "event",
-                    "category"
-                ],
-                "method": "light"
-            }
-        }
+        # 生成parser_config
+        parser_id = req_data.get("parser_id") or "naive"
+        parser_config = get_parser_config(parser_id, None)
+        
+        # 使用封装的方法创建payload
+        req_data = KnowledgebaseService.create_with_name(
+            db=db,
+            name=dataset_name,
+            tenant_id=user.id,
+            parser_id=parser_id,
+            embd_id=req_data.get("embd_id"),
+            parser_config=parser_config,
+            description=req_data.get("description"),
+            permission=req_data.get("permission")
+        )
+        
         if not KnowledgebaseService.save(db, **req_data):
             return get_data_error_result()
         return get_json_result(data={"kb_id": req_data["id"]})
+    except ValueError as e:
+        return get_data_error_result(retmsg=str(e))
     except Exception as e:
         return server_error_response(e)
 
@@ -200,13 +182,13 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     try:
         if not KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"]):
             return get_json_result(
                 data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-                retcode=settings.RetCode.OPERATING_ERROR)
+                retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
         if not kb:
@@ -216,13 +198,19 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
             return get_json_result(
                 data=False,
                 retmsg='The chunking method Tag has not been supported by milvus yet.',
-                retcode=settings.RetCode.OPERATING_ERROR
+                retcode=RetCode.OPERATING_ERROR
             )
 
         if req_data["name"].lower() != kb.name.lower() \
                 and len(KnowledgebaseService.query(db, name=req_data["name"], tenant_id=user.id,
                                                    status=StatusEnum.VALID.value)) > 1:
             return get_data_error_result(retmsg="Duplicated knowledgebase name.")
+
+        # 提取 connectors 字段，不写入知识库表
+        connectors = []
+        if "connectors" in req_data:
+            connectors = req_data["connectors"]
+            del req_data["connectors"]
 
         # 过滤掉None值，避免将None写入数据库
         filtered_data = {k: v for k, v in req_data.items() if v is not None and k != "kb_id"}
@@ -271,12 +259,18 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
                 except Exception as e:
                     logging.error(f"移除知识库 {kb.id} 的 PageRank 失败: {str(e)}")
 
+        # 处理 connectors 关联
+        errors = Connector2KbService.link_connectors(db, kb.id, [conn for conn in connectors], user.id)
+        if errors:
+            logging.error(f"Link KB errors: {errors}")
+
         kb = KnowledgebaseService.get_by_id(db, kb.id)
         if not kb:
             return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
         kb = kb.to_dict()
         # 使用filtered_data而不是req_data，避免包含None值
         kb.update(filtered_data)
+        kb["connectors"] = connectors
 
         return get_json_result(data=kb)
     except Exception as e:
@@ -294,11 +288,13 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         else:
             return get_json_result(
                 data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-                retcode=settings.RetCode.OPERATING_ERROR)
+                retcode=RetCode.OPERATING_ERROR)
         kb = KnowledgebaseService.get_detail(db, kb_id)
         if not kb:
             return get_data_error_result(retmsg="Can't find this knowledgebase!")
         kb["size"] = DocumentService.get_total_size_by_kb_id(db, kb_id=kb["id"],keywords="", run_status=[], types=[])
+        kb["connectors"] = Connector2KbService.list_connectors(db, kb_id)
+        
         for key in ["graphrag_task_finish_at", "raptor_task_finish_at", "mindmap_task_finish_at"]:
             if finish_at := kb.get(key):
                 kb[key] = finish_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -388,7 +384,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     try:
         # 查询知识库，确保只有知识库的创建者有权限删除
@@ -397,7 +393,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
             # 如果知识库不存在或用户无权限删除，返回错误信息
             return get_json_result(
                 data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
-                retcode=settings.RetCode.OPERATING_ERROR)
+                retcode=RetCode.OPERATING_ERROR)
 
         # 提前保存知识库名称，避免访问被删除对象
         kb_name = kbs[0].name
@@ -419,12 +415,12 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
                 FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
             # 删除文档与文件的关联记录
             File2DocumentService.delete_by_document_id(db, doc_id)
-            STORAGE_IMPL.rm(b, n)
+            settings.STORAGE_IMPL.rm(b, n)
         FileService.filter_delete(
             db, [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kb_name])
 
         # 删除 MinIO 存储桶
-        STORAGE_IMPL.remove_bucket(kb_id)
+        settings.STORAGE_IMPL.remove_bucket(kb_id)
 
         # 删除知识库本身，如果失败则返回错误信息
         if not KnowledgebaseService.delete_by_id(db, req_data["kb_id"]):
@@ -445,7 +441,7 @@ def list_tags(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     tenants = UserTenantService.get_tenants_by_user_id(db, user.id)
     tags = []
@@ -462,7 +458,7 @@ def list_tags_from_kbs(kb_ids: str, db: Session = Depends(get_db), user=Depends(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
+                retcode=RetCode.AUTHENTICATION_ERROR
             )
     tenants = UserTenantService.get_tenants_by_user_id(db, user.id)
     tags = []
@@ -477,7 +473,7 @@ def rm_tags(kb_id: str, request: RemoveTagsRequest, db: Session = Depends(get_db
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
@@ -497,7 +493,7 @@ def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
@@ -519,7 +515,7 @@ def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(mana
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     req = {
@@ -557,7 +553,7 @@ def delete_knowledge_graph(kb_id, db: Session = Depends(get_db), user=Depends(ma
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
@@ -587,7 +583,7 @@ def get_meta(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
+                retcode=RetCode.AUTHENTICATION_ERROR
             )
 
     try:
@@ -640,7 +636,7 @@ async def get_basic_info(
             return get_json_result(
                 data=False,
                 retmsg='No authorization.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR
+                retcode=RetCode.AUTHENTICATION_ERROR
             )
 
         # 获取统计信息
@@ -718,7 +714,7 @@ def list_pipeline_logs(
     - 可用于追踪文件处理进度和排查处理失败的原因
     """
     if not kb_id:
-        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
 
     page_number = int(page)
     items_per_page = int(page_size)
@@ -813,7 +809,7 @@ def list_pipeline_dataset_logs(
     - 可用于审计和问题排查
     """
     if not kb_id:
-        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
 
     page_number = int(page)
     items_per_page = int(page_size)
@@ -882,7 +878,7 @@ def delete_pipeline_logs(
     - 删除日志不影响实际的文件处理结果，只是清理记录
     """
     if not kb_id:
-        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
 
     log_ids = request_body.log_ids
 
@@ -946,7 +942,7 @@ def pipeline_log_detail(
     - 错误日志会包含详细的错误堆栈
     """
     if not log_id:
-        return get_json_result(data=False, retmsg='Lack of "Pipeline log ID"', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Lack of "Pipeline log ID"', retcode=RetCode.ARGUMENT_ERROR)
 
     log = PipelineOperationLogService.get_by_id(db, log_id)
     if not log:
@@ -1149,7 +1145,7 @@ def trace_graphrag(
 
     task = TaskService.get_by_id(db, task_id)
     if not task:
-        return get_error_data_result(retmsg="GraphRAG Task Not Found or Error Occurred")
+        return get_json_result(data={})
 
     return get_json_result(data=task.to_dict())
 
@@ -1527,26 +1523,29 @@ def delete_kb_task(
     if not pipeline_task_type or pipeline_task_type not in [PipelineTaskType.GRAPH_RAG, PipelineTaskType.RAPTOR, PipelineTaskType.MINDMAP]:
         return get_error_data_result(retmsg="Invalid task type")
 
+    def cancel_task(task_id):
+        REDIS_CONN.set(f"{task_id}-cancel", "x")
+
     match pipeline_task_type:
         case PipelineTaskType.GRAPH_RAG:
-            settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id), kb_id)
             kb_task_id_field = "graphrag_task_id"
             task_id = kb.graphrag_task_id
             kb_task_finish_at = "graphrag_task_finish_at"
+            cancel_task(task_id)
+            settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id), kb_id)
         case PipelineTaskType.RAPTOR:
             kb_task_id_field = "raptor_task_id"
             task_id = kb.raptor_task_id
             kb_task_finish_at = "raptor_task_finish_at"
+            cancel_task(task_id)
+            settings.docStoreConn.delete({"raptor_kwd": ["raptor"]}, search.index_name(kb.tenant_id), kb_id)
         case PipelineTaskType.MINDMAP:
             kb_task_id_field = "mindmap_task_id"
             task_id = kb.mindmap_task_id
             kb_task_finish_at = "mindmap_task_finish_at"
+            cancel_task(task_id)
         case _:
             return get_error_data_result(retmsg="Internal Error: Invalid task type")
-
-    def cancel_task(task_id):
-        REDIS_CONN.set(f"{task_id}-cancel", "x")
-    cancel_task(task_id)
 
     ok = KnowledgebaseService.update_by_id(db, kb_id, {kb_task_id_field: "", kb_task_finish_at: None})
     if not ok:
@@ -1607,7 +1606,7 @@ def check_embedding(
             offset=0, limit=1,
             indexNames=idx_names, knowledgebaseIds=[kb_id]
         )
-        total = doc_store_conn.getTotal(res0)
+        total = doc_store_conn.get_total(res0)
         if total <= 0:
             return []
 
@@ -1624,7 +1623,7 @@ def check_embedding(
                 offset=off, limit=1,
                 indexNames=idx_names, knowledgebaseIds=[kb_id]
             )
-            ids = doc_store_conn.getChunkIds(res1)
+            ids = doc_store_conn.get_chunk_ids(res1)
             if not ids:
                 continue
 
@@ -1657,7 +1656,7 @@ def check_embedding(
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR
+            retcode=RetCode.AUTHENTICATION_ERROR
         )
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
@@ -1705,4 +1704,4 @@ def check_embedding(
     }
     if summary["avg_cos_sim"] > 0.99:
         return get_json_result(data={"summary": summary, "results": results})
-    return get_json_result(retcode=settings.RetCode.NOT_EFFECTIVE, retmsg="failed", data={"summary": summary, "results": results})
+    return get_json_result(retcode=RetCode.NOT_EFFECTIVE, retmsg="failed", data={"summary": summary, "results": results})

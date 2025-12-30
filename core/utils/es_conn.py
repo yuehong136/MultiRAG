@@ -24,11 +24,11 @@ import copy
 from elasticsearch import Elasticsearch, NotFoundError
 from elasticsearch_dsl import UpdateByQuery, Q, Search, Index
 from elastic_transport import ConnectionTimeout
-from api import settings
-from core.settings import TAG_FLD, PAGERANK_FLD
-from core.utils import singleton
-from api.utils.file_utils import get_project_base_directory
-from api.utils.common import convert_bytes
+from common.constants import TAG_FLD, PAGERANK_FLD
+from common import settings
+from common.decorator import singleton
+from common.file_utils import get_project_base_directory
+from common.misc_utils import convert_bytes
 from core.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr, MatchTextExpr, MatchDenseExpr, \
     FusionExpr
 from core.nlp import is_english, rag_tokenizer
@@ -75,7 +75,7 @@ class ESConnection(DocStoreConnection):
             settings.ES["hosts"].split(","),
             basic_auth=(settings.ES["username"], settings.ES[
                 "password"]) if "username" in settings.ES and "password" in settings.ES else None,
-            verify_certs=False,
+            verify_certs= settings.ES.get("verify_certs", False),
             timeout=600
         )
         if self.es:
@@ -170,6 +170,17 @@ class ESConnection(DocStoreConnection):
                 else:
                     bqry.filter.append(
                         Q("bool", must_not=Q("range", available_int={"lt": 1})))
+                continue
+            if k == "exists":
+                # ES native exists query
+                bqry.filter.append(Q("exists", field=v))
+                continue
+            if k == "must_not":
+                # Handle negative conditions
+                if isinstance(v, dict):
+                    for kk, vv in v.items():
+                        if kk == "exists":
+                            bqry.must_not.append(Q("exists", field=vv))
                 continue
             if not v:
                 continue
@@ -472,12 +483,12 @@ class ESConnection(DocStoreConnection):
     Helper functions for search result
     """
 
-    def getTotal(self, res):
+    def get_total(self, res):
         if isinstance(res["hits"]["total"], type({})):
             return res["hits"]["total"]["value"]
         return res["hits"]["total"]
 
-    def getChunkIds(self, res):
+    def get_chunk_ids(self, res):
         return [d["_id"] for d in res["hits"]["hits"]]
 
     def __getSource(self, res):
@@ -488,7 +499,7 @@ class ESConnection(DocStoreConnection):
             rr.append(d["_source"])
         return rr
 
-    def getFields(self, res, fields: list[str]) -> dict[str, dict]:
+    def get_fields(self, res, fields: list[str]) -> dict[str, dict]:
         res_fields = {}
         if not fields:
             return {}
@@ -510,7 +521,7 @@ class ESConnection(DocStoreConnection):
                 res_fields[d["id"]] = m
         return res_fields
 
-    def getHighlight(self, res, keywords: list[str], fieldnm: str):
+    def get_highlight(self, res, keywords: list[str], fieldnm: str):
         ans = {}
         for d in res["hits"]["hits"]:
             hlts = d.get("highlight")
@@ -535,7 +546,7 @@ class ESConnection(DocStoreConnection):
 
         return ans
 
-    def getAggregation(self, res, fieldnm: str):
+    def get_aggregation(self, res, fieldnm: str):
         agg_field = "aggs_" + fieldnm
         if "aggregations" not in res or agg_field not in res["aggregations"]:
             return list()

@@ -4,7 +4,7 @@ import json
 
 import pyexcel
 
-from core import settings
+from common import settings
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Component import Component, ComponentParameter
 from workflow.basic.Node import ValueTypeOfIODefinition, Batch

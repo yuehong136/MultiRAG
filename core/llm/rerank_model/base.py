@@ -1,6 +1,6 @@
 from abc import ABC
 import numpy as np
-from core.utils import total_token_count_from_response
+from common.token_utils import total_token_count_from_response
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))

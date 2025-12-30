@@ -14,11 +14,20 @@ from datetime import datetime
 # import valkey as redis
 import redis
 import logging
-from core import settings
-from core.utils import singleton
+from common.decorator import singleton
+from common import settings
 # from valkey.lock import Lock
 from redis.lock import Lock
 import trio
+
+REDIS = {}
+try:
+    REDIS = settings.decrypt_database_config(name="redis")
+except Exception:
+    try:
+        REDIS = settings.get_base_config("redis", {})
+    except Exception:
+        REDIS = {}
 
 class RedisMsg:
     def __init__(self, consumer, queue_name, group_name, msg_id, message):
@@ -57,7 +66,7 @@ class RedisDB:
 
     def __init__(self):
         self.REDIS = None
-        self.config = settings.REDIS
+        self.config = REDIS
         self.__open__()
 
     def register_scripts(self) -> None:
@@ -91,6 +100,7 @@ class RedisDB:
 
         if self.REDIS.get(a) == b:
             return True
+        return False
 
     def info(self):
         info = self.REDIS.info()
@@ -111,7 +121,7 @@ class RedisDB:
 
     def exist(self, k):
         if not self.REDIS:
-            return
+            return None
         try:
             return self.REDIS.exists(k)
         except Exception as e:
@@ -120,7 +130,7 @@ class RedisDB:
 
     def get(self, k):
         if not self.REDIS:
-            return
+            return None
         try:
             return self.REDIS.get(k)
         except Exception as e:

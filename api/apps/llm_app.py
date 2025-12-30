@@ -17,7 +17,8 @@ from typing import Any, Literal
 import base64
 from array import array
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Body, Form, File, UploadFile
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
@@ -28,16 +29,18 @@ from agent.component.agent_with_tools import Agent, AgentParam
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.llm_service import LLMService, LLMBundle
 from api.db.services.user_service import TenantService
-from api import settings
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
-from api.db import StatusEnum, LLMType
+from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result, get_allowed_llm_factories
+from common.constants import StatusEnum, LLMType
 from api.db.db_models import TenantLLM, get_db, db_connection
-from api.utils.base64_image import test_image
+from core.utils.base64_image import test_image
 from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
 
 from core.prompts.generator import kb_prompt
 from core.utils.tavily_conn import Tavily
 from api.db.services.mcp_server_service import MCPServerService
+from api.utils.web_utils import CONTENT_TYPE_MAP
+from common import settings
+from common.misc_utils import get_uuid
 from core.utils.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
 
 
@@ -131,7 +134,7 @@ class ChatAgentAdapter:
                 logging.debug(f"Tool callback: component_id={component_id}, args={args}")
 
             def get_variable_value(self, var_name):
-                return self.globals.get(var_name, "")
+                return self.settings.get(var_name, "")
 
             def set_variable_value(self, var_name, value):
                 self.globals[var_name] = value
@@ -647,6 +650,7 @@ class VolcEmbeddingMedia(BaseModel):
 
 class EmbeddingsMultiModalRequest(EmbeddingsRequest):
     media: list[VolcEmbeddingMedia] | None = Field(default=None, description="多模态输入，按火山格式提供；与 input 同时存在时会分批调用")
+    merge_mode: str = Field(default="independent", description="多文件处理模式: independent=每个文件独立向量（默认）, merged=合并为单个向量")
 
 
 class FinePromptRequest(BaseModel):
@@ -742,8 +746,8 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
     """
 
     try:
-        fac = LLMFactoriesService.get_all(db)
-        # fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI"]]
+        fac = get_allowed_llm_factories(db)
+        # fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI", "Builtin"]]
         fac = [f.to_dict() for f in fac if f.name not in []]
         llms = LLMService.get_all(db)
         mdl_types = {}
@@ -972,6 +976,12 @@ POST
     factory = req["llm_factory"]
     api_key = req.get("api_key", "x")
     llm_name = req["llm_name"]
+
+    # 验证工厂是否在允许列表中
+    allowed_factories = get_allowed_llm_factories(db)
+    allowed_factory_names = [f.name for f in allowed_factories]
+    if factory not in allowed_factory_names:
+        return get_data_error_result(retmsg=f"LLM factory {factory} is not allowed")
 
     def apikey_json(keys):
         nonlocal req
@@ -1328,7 +1338,8 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                     "name": o_dict["llm_name"],
                     "used_token": o_dict["used_tokens"],
                     "api_base": o_dict["api_base"] or "",
-                    "max_tokens": o_dict["max_tokens"] or 8192
+                    "max_tokens": o_dict["max_tokens"] or 8192,
+                    "status": o_dict["status"] or "1"
                 })
         else:
             res = {}
@@ -1341,39 +1352,118 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                 res[o.llm_factory]["llm"].append({
                     "type": o.mdl_type,
                     "name": o.llm_name,
-                    "used_token": o.used_tokens
+                    "used_token": o.used_tokens,
+                    "status": o.status
                 })
         return get_json_result(data=res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== Embeddings 文件上传辅助函数 ====================
+
+# 支持的媒体文件扩展名
+IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "webp", "svg", "ico", "avif", "heic"}
+VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv", "webm", "wmv", "flv"}
+
+
+def get_media_type_from_ext(filename: str) -> Literal["image_url", "video_url"] | None:
+    """根据文件扩展名判断媒体类型"""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext in IMAGE_EXTENSIONS:
+        return "image_url"
+    elif ext in VIDEO_EXTENSIONS:
+        return "video_url"
+    return None
+
+
+async def upload_file_to_presigned_url(file: UploadFile) -> tuple[str, str | None]:
+    """
+    上传文件到对象存储并返回预签名URL
+
+    Args:
+        file: FastAPI UploadFile 对象
+
+    Returns:
+        (url, media_type): 预签名URL和媒体类型
+    """
+    content = await file.read()
+    if not content:
+        raise ValueError("Empty file content")
+
+    bucket = (settings.OSS.get("bucket") or
+              settings.MINIO.get("bucket") or
+              "multimodal-temp")
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "bin"
+    unique_filename = f"embeddings_upload/{get_uuid()}.{ext}"
+    content_type = CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
+
+    try:
+        settings.STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
+    except TypeError:
+        # Fallback for storage backends that don't support content_type
+        settings.STORAGE_IMPL.put(bucket, unique_filename, content)
+
+    url = settings.STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=3600)
+    if not url:
+        raise Exception("Failed to generate presigned URL")
+
+    media_type = get_media_type_from_ext(file.filename) if file.filename else None
+    return url, media_type
+
+
+# ==================== Embeddings 接口 ====================
+
 @router.post('/embeddings', summary="文本/多模态向量化（2025标准）", response_description="返回OpenAI风格的embedding结果")
-def embeddings_api(request: EmbeddingsMultiModalRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def embeddings_api(
+    request_body: EmbeddingsMultiModalRequest | None = Body(None),
+    request_form: str | None = Form(None, alias="request", description="请求JSON（multipart时使用）"),
+    files: list[UploadFile] | None = File(None, description="上传的媒体文件列表"),
+    merge_mode_form: str | None = Form(None, alias="merge_mode", description="多文件处理模式: independent|merged"),
+    raw_req: Request = None,
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
     """
     ### POST `/v1/llm/embeddings` 文本向量化服务（2025标准）
 
 **功能描述**:
 此接口提供标准化的文本与多模态向量化服务。支持按租户默认嵌入模型或显式指定模型进行编码，可同时提交纯文本、图片 URL、视频 URL 组合内容，并返回与 OpenAI Embeddings 接口一致的响应结构（object=list, data=[...], model, usage）。
 
+**支持两种请求模式**:
+1. **JSON Body 模式**：Content-Type: application/json，直接传递 JSON 请求体
+2. **Multipart 模式**：Content-Type: multipart/form-data，支持文件上传
+
 ---
 
-### 请求体 (Request Body)
+### 请求参数
+
+#### JSON Body 模式
 
 | 字段              | 类型                  | 必填 | 默认值     | 描述                                                                 |
 |-------------------|-----------------------|------|-----------|----------------------------------------------------------------------|
-| `model`           | `string`              | 否   | 租户默认   | 嵌入模型名称；不填则使用当前租户的默认嵌入模型（`Tenant.embd_id`）。 |
+| `model`           | `string`              | 否   | 租户默认   | 嵌入模型名称；不填则使用当前租户的默认嵌入模型。 |
 | `input`           | `string or string[]`  | 否   | -         | 待向量化文本；支持单条或批量，纯多模态场景可为空。                   |
-| `media`           | `object[]`            | 否   | -         | 多模态输入列表，元素支持 `type=text|image_url|video_url`。若与 `input` 同时出现，将融合为单个向量。 |
+| `media`           | `object[]`            | 否   | -         | 多模态输入列表，元素支持 `type=text|image_url|video_url`。 |
 | `input_type`      | `string`              | 否   | `document`| `document` 或 `query`；部分模型会对查询向量做专项优化。              |
 | `encoding_format` | `string`              | 否   | `float`   | `float` 返回浮点数组；`base64` 返回 float32 打包后的 base64 字符串。  |
+| `merge_mode`      | `string`              | 否   | `independent` | `independent` 每个输入独立返回向量（默认）；`merged` 融合为单向量。 |
 | `user`            | `string`              | 否   | -         | 可选的用户标识，用于审计或配额统计。                                  |
+
+#### Multipart 模式（支持文件上传）
+
+| 字段              | 类型                  | 必填 | 描述                                                                 |
+|-------------------|-----------------------|------|----------------------------------------------------------------------|
+| `request`         | `string`              | 否   | JSON 格式的请求体（同上述 JSON Body 模式的内容）                     |
+| `files`           | `file[]`              | 否   | 上传的媒体文件列表（图片、视频），将自动转换为临时URL                |
+| `merge_mode`      | `string`              | 否   | 多文件处理模式，覆盖 request 中的 merge_mode                         |
 
 ---
 
 ### 请求示例
 
-#### 批量文档向量（返回 float 数组）
+#### 批量文档向量（JSON Body）
 ```json
 {
   "model": "text-embedding-3-small",
@@ -1383,68 +1473,49 @@ def embeddings_api(request: EmbeddingsMultiModalRequest, db: Session = Depends(g
 }
 ```
 
-#### 单条查询向量（返回 base64 编码）
-```json
-{
-  "model": "text-embedding-3-small",
-  "input": "what is multirag?",
-  "input_type": "query",
-  "encoding_format": "base64"
-}
+#### 上传文件（Multipart）
+```bash
+curl -X POST "/v1/llm/embeddings" \\
+  -F 'request={"model":"doubao-embedding-vision-250615"}' \\
+  -F "files=@/path/to/image.png" \\
+  -F "merge_mode=merged"
 ```
 
-#### 同时包含文本 + 图片 + 视频的多模态向量
-```json
-{
-  "model": "doubao-embedding-vision-250615",
-  "input": ["这是一段辅助描述"],
-  "media": [
-    {
-      "type": "image_url",
-      "image_url": {
-        "url": "https://ark-project.tos-cn-beijing.volces.com/doc_image/tower.png"
-      }
-    },
-    {
-      "type": "video_url",
-      "video_url": {
-        "url": "https://ark-project.tos-cn-beijing.volces.com/doc_video/ark_vlm_video_input.mp4"
-      }
-    },
-    {
-      "type": "text",
-      "text": "视频和图片里有什么?"
-    }
-  ]
-}
+#### 多文件独立向量（Multipart）
+```bash
+curl -X POST "/v1/llm/embeddings" \\
+  -F 'request={"model":"doubao-embedding-vision-250615"}' \\
+  -F "files=@/path/to/image1.png" \\
+  -F "files=@/path/to/image2.jpg" \\
+  -F "merge_mode=independent"
 ```
 
 ---
 
 ### 成功响应 (Response 200)
 
-#### 返回 float 数组
+#### 融合模式（merge_mode=merged）
 ```json
 {
   "object": "list",
   "data": [
-    { "object": "embedding", "index": 0, "embedding": [0.0123, -0.0456, 0.0789] },
-    { "object": "embedding", "index": 1, "embedding": [0.0021, -0.0345, 0.0678] }
+    { "object": "embedding", "index": 0, "embedding": [0.0123, -0.0456, 0.0789] }
   ],
-  "model": "text-embedding-3-small",
+  "model": "doubao-embedding-vision-250615",
   "usage": { "prompt_tokens": 42, "total_tokens": 42 }
 }
 ```
 
-#### 返回 base64 字符串
+#### 独立模式（merge_mode=independent）
 ```json
 {
   "object": "list",
   "data": [
-    { "object": "embedding", "index": 0, "embedding": "AAABP0AAAD8..." }
+    { "object": "embedding", "index": 0, "embedding": [...] },
+    { "object": "embedding", "index": 1, "embedding": [...] }
   ],
-  "model": "text-embedding-3-small",
-  "usage": { "prompt_tokens": 21, "total_tokens": 21 }
+  "model": "doubao-embedding-vision-250615",
+  "usage": { "prompt_tokens": 84, "total_tokens": 84 }
 }
 ```
 
@@ -1452,43 +1523,63 @@ def embeddings_api(request: EmbeddingsMultiModalRequest, db: Session = Depends(g
 
 ### 错误响应
 
+- **400: Invalid JSON**
 - **404: Tenant not found**
-  ```json
-  { "detail": "Tenant not found!" }
-  ```
-
-- **404: Embedding model not available**（模型不可用或未授权）
-  ```json
-  { "detail": "Embedding model not available: <reason>" }
-  ```
-
-- **500: Internal Server Error**（生成向量失败或其他内部错误）
-  ```json
-  { "detail": "Embedding generation failed: <error>" }
-  ```
-
----
-
-### 主要流程
-
-1. 解析请求体，确定 `model`、`input`、`input_type`、`encoding_format`。
-2. 若未显式指定 `model`，使用当前租户配置的默认嵌入模型。
-3. 若存在 `media`，会与 `input` 文本合并后调用多模态接口，**整个提交仅返回一个融合向量**。
-4. 无 `media` 时根据 `input_type`：
-   - `document` 调用批量 `encode(inputs)`。
-   - `query` 单条调用 `encode_queries(text)`；多条查询按条调用以保留模型的查询优化路径。
-5. 根据 `encoding_format` 将向量以 `float` 或 `base64(float32)` 的形式返回。
-6. 统一返回 OpenAI 风格响应，包含 `data`、`model` 与 `usage`。
-
----
-
-### 注意事项
-
-- 若 `input` 为字符串则自动转为单元素数组处理。
-- 多模态请求会将 `input` 与 `media` 合并为单个输入列表，返回一个融合后的向量。
-- `usage.prompt_tokens` 与 `usage.total_tokens` 返回底层模型统计的已用 token 数。
-- `base64` 编码采用 float32 打包后再进行 base64 编码，便于网络传输和前端存储。
+- **404: Embedding model not available**
+- **500: Embedding generation failed**
+- **500: File upload failed**
     """
+    # ==================== 双模式请求解析 ====================
+    if request_form is not None:
+        # Multipart 模式：从 form 字段解析 JSON
+        try:
+            request = EmbeddingsMultiModalRequest.model_validate_json(request_form)
+        except ValidationError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid request JSON: {str(e)}")
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+    elif request_body is not None:
+        # JSON Body 模式
+        request = request_body
+    else:
+        # 兜底：从原始请求解析
+        try:
+            data = await raw_req.json()
+            request = EmbeddingsMultiModalRequest.model_validate(data)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+        except ValidationError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid request: {str(e)}")
+        except Exception:
+            request = EmbeddingsMultiModalRequest()
+
+    # ==================== 处理上传的文件 ====================
+    # 获取合并模式（优先 Form 参数，其次 JSON 中的参数）
+    actual_merge_mode = merge_mode_form or request.merge_mode or "independent"
+
+    # 处理上传的文件，转换为临时URL
+    uploaded_media: list[VolcEmbeddingMedia] = []
+    if files:
+        for file in files:
+            if file.size and file.size > 0:
+                try:
+                    url, media_type = await upload_file_to_presigned_url(file)
+                    if media_type == "image_url":
+                        uploaded_media.append(VolcEmbeddingMedia(
+                            type="image_url",
+                            image_url={"url": url}
+                        ))
+                    elif media_type == "video_url":
+                        uploaded_media.append(VolcEmbeddingMedia(
+                            type="video_url",
+                            video_url={"url": url}
+                        ))
+                    else:
+                        logging.warning(f"Unsupported media type for file: {file.filename}, skipping")
+                except Exception as e:
+                    logging.exception(f"Failed to upload file: {file.filename}")
+                    raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+
     req = request.model_dump()
 
     tenants = TenantService.get_info_by(db, user.id)
@@ -1502,7 +1593,8 @@ def embeddings_api(request: EmbeddingsMultiModalRequest, db: Session = Depends(g
     else:
         inputs = raw_input if isinstance(raw_input, list) else [raw_input]
         inputs = [item for item in inputs if isinstance(item, str) and item]
-    media_items: list[VolcEmbeddingMedia] = request.media or []
+    # 合并 JSON 中的 media 和上传的文件
+    media_items: list[VolcEmbeddingMedia] = (request.media or []) + uploaded_media
     model_name = req.get("model")
     input_type = (req.get("input_type") or "document").lower()
     encoding_format = (req.get("encoding_format") or "float").lower()
@@ -1515,26 +1607,68 @@ def embeddings_api(request: EmbeddingsMultiModalRequest, db: Session = Depends(g
     try:
         vectors: list[Any]
         used_tokens: int
+        import numpy as np
 
         # 检查是否是视觉模型（强制多模态）
         is_vision_model = model_name and any(k in model_name.lower() for k in ["vision", "multimodal", "vl"])
 
+        # 检查模型是否支持多模态输入
+        supports_multimodal = getattr(emb_bundle.mdl, "_supports_multimodal", False) or is_vision_model
+        if media_items and not supports_multimodal:
+            model_display_name = emb_bundle.llm_name or getattr(emb_bundle.mdl, "model_name", "Unknown")
+            raise HTTPException(
+                status_code=400,
+                detail=f"The embedding model '{model_display_name}' does not support multimodal inputs (images, videos). "
+                       "Please use a multimodal embedding model (e.g., VolcEngine) for media content, or remove media items from the request."
+            )
+
         if media_items or is_vision_model:
-            normalized_media = [media.model_dump(by_alias=True) if isinstance(media, VolcEmbeddingMedia) else media for media in media_items]
-            combined_inputs: list[Any] = [ {"type": "text", "text": text} for text in inputs ] + normalized_media
-            payload = {
-                "model": req.get("model") or emb_bundle.llm_name or getattr(emb_bundle.mdl, "model_name", None),
-                "input": combined_inputs,
-            }
-            # 如果是 vision 模型，必须通过 payload 形式传递，并在底层触发多模态路由
-            embedding, used_tokens = emb_bundle.encode([payload])
-            
-            # 修复：正确处理 numpy array 和 list，提取第一条向量
-            import numpy as np
-            if isinstance(embedding, (list, tuple, np.ndarray)) and len(embedding) > 0:
-                vectors = [embedding[0]]
+            # ==================== 多模态向量化 ====================
+            if actual_merge_mode == "independent":
+                # 独立模式（默认）：每个输入独立生成向量
+                vectors = []
+                total_tokens = 0
+
+                # 处理文本输入
+                for text in inputs:
+                    if input_type == "query":
+                        vec, tk = emb_bundle.encode_queries(text)
+                    else:
+                        vecs, tk = emb_bundle.encode([text])
+                        vec = vecs[0] if len(vecs) > 0 else vecs
+                    vectors.append(vec)
+                    total_tokens += tk
+
+                # 处理媒体输入（每个独立调用）
+                for media in media_items:
+                    media_payload = {
+                        "model": req.get("model") or emb_bundle.llm_name or getattr(emb_bundle.mdl, "model_name", None),
+                        "input": [media.model_dump(by_alias=True)]
+                    }
+                    embedding, tk = emb_bundle.encode([media_payload])
+                    if isinstance(embedding, (list, tuple, np.ndarray)) and len(embedding) > 0:
+                        vectors.append(embedding[0])
+                    else:
+                        vectors.append(embedding)
+                    total_tokens += tk
+
+                used_tokens = total_tokens
             else:
-                vectors = [embedding]
+                # 融合模式：所有输入合并为单个向量
+                normalized_media = [media.model_dump(by_alias=True) if isinstance(media, VolcEmbeddingMedia) else media for media in media_items]
+                combined_inputs: list[Any] = [{"type": "text", "text": text} for text in inputs] + normalized_media
+                payload = {
+                    "model": req.get("model") or emb_bundle.llm_name or getattr(emb_bundle.mdl, "model_name", None),
+                    "input": combined_inputs,
+                }
+                # 如果是 vision 模型，必须通过 payload 形式传递，并在底层触发多模态路由
+                embedding, used_tokens = emb_bundle.encode([payload])
+
+                # 修复：正确处理 numpy array 和 list，提取第一条向量
+                if isinstance(embedding, (list, tuple, np.ndarray)) and len(embedding) > 0:
+                    vectors = [embedding[0]]
+                else:
+                    vectors = [embedding]
         elif input_type == "query":
             if len(inputs) == 1:
                 vec, used_tokens = emb_bundle.encode_queries(inputs[0])
@@ -1627,9 +1761,10 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
     weighted = ["Youdao", "FastEmbed", "BAAI"] if settings.LIGHTEN != 0 else []
     try:
         objs = TenantLLMService.query(db, tenant_id=user.id)
-        facts = set(o.llm_factory for o in objs if o.api_key)
+        facts = set(o.llm_factory for o in objs if o.api_key and o.status==StatusEnum.VALID.value)
+        status = {(o.llm_name + "@" + o.llm_factory) for o in objs if o.status == StatusEnum.VALID.value}
         llms = LLMService.get_all(db)
-        llms = [m.to_dict() for m in llms if m.status == StatusEnum.VALID.value and m.fid not in weighted]
+        llms = [m.to_dict() for m in llms if m.status == StatusEnum.VALID.value and m.fid not in weighted and (m.fid == 'Builtin' or (m.llm_name + "@" + m.fid) in status)]
 
         for m in llms:
             m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in self_deployed
@@ -1640,7 +1775,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
         for o in objs:
             if o.llm_name + "@" + o.llm_factory in llm_set:
                 continue
-            llms.append({"llm_name": o.llm_name, "mdl_type": o.mdl_type, "fid": o.llm_factory, "available": True})
+            llms.append({"llm_name": o.llm_name, "mdl_type": o.mdl_type, "fid": o.llm_factory, "available": True, "status": StatusEnum.VALID.value})
 
         res = {}
         for m in llms:

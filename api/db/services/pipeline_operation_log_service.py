@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, asc, desc as sa_desc, select
 from sqlalchemy.orm import Session
 
-from api.db import VALID_PIPELINE_TASK_TYPES, PipelineTaskType
+from common.constants import VALID_PIPELINE_TASK_TYPES, PipelineTaskType
 from api.db.db_models import Document, PipelineOperationLog
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.common_service import CommonService
@@ -104,14 +104,14 @@ class PipelineOperationLogService(CommonService):
         document = DocumentService.get_by_id(db, referred_document_id)
         if not document:
             logging.warning(f"Document for referred_document_id {referred_document_id} not found")
-            return
+            return None
         DocumentService.update_progress_immediately(db, [document.to_dict()])
         document = DocumentService.get_by_id(db, referred_document_id)
         if not document:
             logging.warning(f"Document for referred_document_id {referred_document_id} not found")
-            return
+            return None
         if document.progress not in [1, -1]:
-            return
+            return None
         operation_status = document.run
 
         if pipeline_id:
@@ -165,7 +165,7 @@ class PipelineOperationLogService(CommonService):
             document_name=document.name,
             document_suffix=document.suffix,
             document_type=document.type,
-            source_from="",  # TODO: add in the future
+            source_from=document.source_type.split("/")[0] if document.source_type else "",
             progress=document.progress,
             progress_msg=document.progress_msg,
             process_begin_at=document.process_begin_at,

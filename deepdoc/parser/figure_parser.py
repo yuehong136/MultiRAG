@@ -17,12 +17,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PIL import Image
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
-from api.utils.api_utils import timeout
-from core.app.picture import vision_llm_chunk as picture_vision_llm_chunk
+from common.connection_utils import timeout
+from core.app.picture import vision_llm_chunk as picture_vision_llm_chunk, MIN_IMAGE_DIMENSION
 from core.prompts.generator import vision_llm_figure_describe_prompt
+
+
+def _is_valid_image_size(img: Image.Image) -> bool:
+    """检查图像尺寸是否满足视觉模型的最低要求"""
+    width, height = img.size
+    return width >= MIN_IMAGE_DIMENSION and height >= MIN_IMAGE_DIMENSION
+
 
 def vision_figure_parser_figure_data_wrapper(figures_data_without_positions):
     return [
@@ -31,7 +38,7 @@ def vision_figure_parser_figure_data_wrapper(figures_data_without_positions):
             [(0, 0, 0, 0, 0)],
         )
         for figure_data in figures_data_without_positions
-        if isinstance(figure_data[1], Image.Image)
+        if isinstance(figure_data[1], Image.Image) and _is_valid_image_size(figure_data[1])
     ]
 
 def vision_figure_parser_docx_wrapper(sections,tbls,callback=None,**kwargs):
@@ -62,7 +69,8 @@ def vision_figure_parser_pdf_wrapper(tbls,callback=None,**kwargs):
         def is_figure_item(item):
             return (
                 isinstance(item[0][0], Image.Image) and
-                isinstance(item[0][1], list)
+                isinstance(item[0][1], list) and
+                _is_valid_image_size(item[0][0])  # 过滤尺寸太小的图像
             )
         figures_data = [item for item in tbls if is_figure_item(item)]
         try:
@@ -75,6 +83,8 @@ def vision_figure_parser_pdf_wrapper(tbls,callback=None,**kwargs):
     return tbls
 
 shared_executor = ThreadPoolExecutor(max_workers=10)
+
+
 class VisionFigureParser:
     def __init__(self, vision_model, figures_data, *args, **kwargs):
         self.vision_model = vision_model
@@ -92,11 +102,17 @@ class VisionFigureParser:
             if len(item) == 2 and isinstance(item[0], tuple) and len(item[0]) == 2 and isinstance(item[1], list) and isinstance(item[1][0], tuple) and len(item[1][0]) == 5:
                 img_desc = item[0]
                 assert len(img_desc) == 2 and isinstance(img_desc[0], Image.Image) and isinstance(img_desc[1], list), "Should be (figure, [description])"
+                # 跳过尺寸太小的图像
+                if not _is_valid_image_size(img_desc[0]):
+                    continue
                 self.figures.append(img_desc[0])
                 self.descriptions.append(img_desc[1])
                 self.positions.append(item[1])
             else:
                 assert len(item) == 2 and isinstance(item[0], Image.Image) and isinstance(item[1], list), f"Unexpected form of figure data: get {len(item)=}, {item=}"
+                # 跳过尺寸太小的图像
+                if not _is_valid_image_size(item[0]):
+                    continue
                 self.figures.append(item[0])
                 self.descriptions.append(item[1])
 
@@ -119,6 +135,11 @@ class VisionFigureParser:
 
     def __call__(self, **kwargs):
         callback = kwargs.get("callback", lambda prog, msg: None)
+
+        # ⚠️ 多线程安全：禁用 db session 以避免跨线程 session 冲突
+        # TenantLLMService.increase_usage 会在 db 为 None 时自动创建独立连接
+        if hasattr(self.vision_model, 'db'):
+            self.vision_model.db = None
 
         @timeout(30, 3)
         def process(figure_idx, figure_binary):

@@ -2,7 +2,7 @@ from urllib.parse import urljoin
 from openai import OpenAI
 import numpy as np
 
-from api.utils.log_utils import log_exception
+from common.log_utils import log_exception
 from core.llm.embedding_model.base import Base
 
 

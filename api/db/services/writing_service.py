@@ -14,7 +14,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from api.db.db_models import WritingChapter, WritingProject, WritingChapterContent, WritingReferenceMaterial
-from api.db import StatusEnum, LLMType
+from common.constants import StatusEnum, LLMType
 from api.db.services.chapter_service import ChapterService
 from api.db.services.common_service import CommonService
 from api.db.services.user_service import TenantService

@@ -6,7 +6,7 @@
 @date：2024/7/30 18:00
 @desc:
 """
-from api.utils.log_utils import init_root_logger
+from common.log_utils import init_root_logger
 from plugin import GlobalPluginManager
 init_root_logger("multirag_server")
 # init_root_logger("multirag_server")
@@ -30,15 +30,14 @@ import uuid
 from api.apps import app
 from api.db.runtime_config import RuntimeConfig
 from api.db.services.document_service import DocumentService
-from api import settings
-from api import utils
+from common import settings
+from common.file_utils import get_project_base_directory
 
 from api.db.db_models import init_database_tables as init_web_db, upgrade_database_tables as upgrade_database, SessionLocal
 from api.db.init_data import init_web_data
-from api.versions import get_multirag_version
+from common.versions import get_multirag_version
 import uvicorn
-# from api.utils.configs import show_configs
-# from core.settings import print_rag_settings
+# from common.config_utils import show_configs
 from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions
 from core.utils.redis_conn import RedisDistributedLock
 
@@ -96,7 +95,7 @@ if __name__ == '__main__':
 #  /_/  /_/   \__,_/  /_/   \__/  /_/           /_/ |_|  /_/  |_|   \____/
 #
 #                         ╔╦╗ ┬ ┬ ┬  ┌┬┐ ┬ ┬─┐ ┌─┐ ╔═╗
-#                         ║║║ │ │ │   │  │ ├┬┘ ├─┤ ║ ╦    【——v0.9.0——】
+#                         ║║║ │ │ │   │  │ ├┬┘ ├─┤ ║ ╦    【——v0.9.7——】
 #                         ╩ ╩ └─┘ ┴─┘ ┴  ┴ ┴└─ ┴ ┴ ╚═╝
 # ============================================================================
 #                 """)
@@ -104,7 +103,7 @@ if __name__ == '__main__':
 ============================================================================   
                 __  ___      ____  _ ____  ___   ______
                /  |/  /_  __/ / /_(_) __ \/   | / ____/
-              / /|_/ / / / / / __/ / /_/ / /| |/ / __   v0.9.0
+              / /|_/ / / / / / __/ / /_/ / /| |/ / __   v0.9.7
              / /  / / /_/ / / /_/ / _, _/ ___ / /_/ /
             /_/  /_/\__,_/_/\__/_/_/ |_/_/  |_\____/
 ============================================================================
@@ -112,7 +111,7 @@ if __name__ == '__main__':
 
     # ============ 版本和环境信息 ============
     logging.info(f'MultiRAG version: {get_multirag_version()}')
-    logging.info(f'project base: {utils.file_utils.get_project_base_directory()}')
+    logging.info(f'project base: {get_project_base_directory()}')
 
     # ============ 命令行参数解析 ============
     import argparse
@@ -179,7 +178,7 @@ if __name__ == '__main__':
     # • 路由注册
     # 
     # 【lifespan 函数（应用启动时）】：
-    # • print_rag_settings() - 打印 RAG 配置
+    # • settings.print_rag_settings() - 打印 RAG 配置
     # • show_configs() - 显示配置信息
     # • update_progress thread - 进度更新后台线程
     # • SMTP mail server - 邮件服务初始化

@@ -23,7 +23,7 @@ from abc import ABC
 import requests
 
 from agent.component.base import ComponentBase, ComponentParamBase
-from api.utils.api_utils import timeout
+from common.connection_utils import timeout
 from deepdoc.parser import HtmlParser
 
 
@@ -56,6 +56,9 @@ class Invoke(ComponentBase, ABC):
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 3)))
     def _invoke(self, **kwargs):
+        if self.check_if_canceled("Invoke processing"):
+            return
+
         args = {}
         for para in self._param.variables:
             if para.get("value"):
@@ -89,6 +92,9 @@ class Invoke(ComponentBase, ABC):
 
         last_e = ""
         for _ in range(self._param.max_retries + 1):
+            if self.check_if_canceled("Invoke processing"):
+                return
+
             try:
                 if method == "get":
                     response = requests.get(url=url, params=args, headers=headers, proxies=proxies, timeout=self._param.timeout)
@@ -113,43 +119,6 @@ class Invoke(ComponentBase, ABC):
                     if self._param.datatype.lower() == "json":
                         response = requests.post(url=url, json=args, headers=headers, proxies=proxies, timeout=self._param.timeout)
                     else:
-                        for _ in range(self._param.max_retries + 1):
-                            try:
-                                if method == "get":
-                                    response = requests.get(url=url, params=args, headers=headers, proxies=proxies,
-                                                            timeout=self._param.timeout)
-                                    if self._param.clean_html:
-                                        sections = HtmlParser()(None, response.content)
-                                        self.set_output("result", "\n".join(sections))
-                                    else:
-                                        self.set_output("result", response.text)
-
-                                if method == "put":
-                                    if self._param.datatype.lower() == "json":
-                                        response = requests.put(url=url, json=args, headers=headers, proxies=proxies, timeout=self._param.timeout)
-                                    else:
-                                        response = requests.put(url=url, data=args, headers=headers, proxies=proxies, timeout=self._param.timeout)
-                                    if self._param.clean_html:
-                                        sections = HtmlParser()(None, response.content)
-                                        self.set_output("result", "\n".join(sections))
-                                    else:
-                                        self.set_output("result", response.text)
-
-                                if method == "post":
-                                    if self._param.datatype.lower() == "json":
-                                        response = requests.post(url=url, json=args, headers=headers, proxies=proxies, timeout=self._param.timeout)
-                                    else:
-                                        response = requests.post(url=url, data=args, headers=headers, proxies=proxies, timeout=self._param.timeout)
-                                    if self._param.clean_html:
-                                        self.set_output("result", "\n".join(sections))
-                                    else:
-                                        self.set_output("result", response.text)
-
-                                return self.output("result")
-                            except Exception as e:
-                                last_e = e
-                                logging.exception(f"Http request error: {e}")
-                                time.sleep(self._param.delay_after_error)
                         response = requests.post(url=url, data=args, headers=headers, proxies=proxies, timeout=self._param.timeout)
                     if self._param.clean_html:
                         self.set_output("result", "\n".join(sections))
@@ -158,6 +127,9 @@ class Invoke(ComponentBase, ABC):
 
                 return self.output("result")
             except Exception as e:
+                if self.check_if_canceled("Invoke processing"):
+                    return
+
                 last_e = e
                 logging.exception(f"Http request error: {e}")
                 time.sleep(self._param.delay_after_error)

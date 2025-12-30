@@ -17,17 +17,18 @@
 import copy
 import re
 from io import BytesIO
+import os
+import sys
+import uuid
+from pathlib import Path
 
 from PIL import Image
 
-from api.db import LLMType
-from api.db.db_models import db_connection
-from api.db.services.llm_service import LLMBundle
-from deepdoc.parser.pdf_parser import VisionParser
 from core.nlp import tokenize, is_english
 from core.nlp import rag_tokenizer
 from deepdoc.parser import PdfParser, PptParser, PlainParser
 from PyPDF2 import PdfReader as pdf2_read
+from core.app.naive import by_plaintext, PARSERS
 
 
 class Ppt(PptParser):
@@ -38,16 +39,109 @@ class Ppt(PptParser):
         import aspose.slides as slides
         import aspose.pydrawing as drawing
         imgs = []
-        with slides.Presentation(BytesIO(fnm)) as presentation:
-            for i, slide in enumerate(presentation.slides[from_page: to_page]):
+
+        # fnm 既可能是二进制（task 里传入的 binary），也可能是文件路径（某些调用路径）。
+        ppt_bytes: bytes
+        if isinstance(fnm, (bytes, bytearray, memoryview)):
+            ppt_bytes = bytes(fnm)
+        else:
+            ppt_bytes = Path(fnm).read_bytes()
+
+        def slide_to_pil(slide):
+            """
+            兼容不同 Aspose.Slides Python 包/版本：
+            - 某些版本提供 Slide.get_thumbnail(scaleX, scaleY) 并支持保存到 BytesIO。
+            - 新版常见为 Slide.get_image(...)，返回 IImage；优先写入 BytesIO（aspose.slides.ImageFormat），不行再落盘兜底。
+            """
+            def _is_gdiplus_missing(err: Exception) -> bool:
+                msg = str(err)
+                return ("libgdiplus" in msg) or ("Gdip" in msg) or ("DllNotFoundException" in msg)
+
+            def _gdiplus_hint() -> str:
+                # Aspose.Slides for Python via .NET 渲染图片通常依赖 GDI+（libgdiplus / System.Drawing.Common）。
+                # 不同系统的安装方式不同，这里给出通用指引，避免只针对本地开发机。
+                if os.name == "posix":
+                    if sys.platform == "darwin":
+                        return (
+                            "macOS：请安装 libgdiplus（例如通过 Homebrew 安装 mono-libgdiplus），"
+                            "必要时配置 DYLD_FALLBACK_LIBRARY_PATH 指向其 lib 目录。"
+                        )
+                    return "Linux：请安装 libgdiplus（Debian/Ubuntu 通常为 `apt-get install libgdiplus`）。"
+                if os.name == "nt":
+                    return (
+                        "Windows：请确保 System.Drawing 相关运行时/依赖可用（例如安装 .NET 运行时及相关组件）。"
+                    )
+                return "请安装/配置 libgdiplus（GDI+）相关依赖后重试。"
+
+            # 1) 旧 API：get_thumbnail
+            if hasattr(slide, "get_thumbnail"):
+                with BytesIO() as buffered:
+                    try:
+                        slide.get_thumbnail(0.1, 0.1).save(
+                            buffered, drawing.imaging.ImageFormat.jpeg
+                        )
+                    except Exception as e:
+                        if _is_gdiplus_missing(e):
+                            raise RuntimeError(
+                                "Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。"
+                                + _gdiplus_hint()
+                            ) from e
+                        raise
+                    buffered.seek(0)
+                    return Image.open(buffered).copy()
+
+            # 2) 新 API：get_image
+            #    注意：IImage.save 的 format 类型是 aspose.slides.ImageFormat（不是 aspose.pydrawing.imaging.ImageFormat）
+            if hasattr(slide, "get_image"):
+                try:
+                    img = slide.get_image(0.1, 0.1)
+                except Exception as e:
+                    if _is_gdiplus_missing(e):
+                        raise RuntimeError(
+                            "Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。"
+                            + _gdiplus_hint()
+                        ) from e
+                    raise
+                # 2.1) 优先写入内存流
                 try:
                     with BytesIO() as buffered:
-                        slide.get_thumbnail(
-                            0.1, 0.1).save(
-                            buffered, drawing.imaging.ImageFormat.jpeg)
+                        img.save(buffered, slides.ImageFormat.JPEG)
                         buffered.seek(0)
-                        imgs.append(Image.open(buffered).copy())
-                except RuntimeError as e:
+                        return Image.open(buffered).copy()
+                except Exception:
+                    # 2.2) 兜底：落盘再读回（兼容部分绑定对 BytesIO 不友好的情况）
+                    pass
+
+            # 3) 兜底：临时文件（格式由后缀决定）
+            tmp_root = Path(os.getenv("MULTIRAG_TMP_DIR", Path.cwd() / ".cache" / "aspose_slides"))
+            tmp_root.mkdir(parents=True, exist_ok=True)
+            tmp_path = tmp_root / f"slide_{uuid.uuid4().hex}.jpg"
+            try:
+                try:
+                    img = slide.get_image(0.1, 0.1) if hasattr(slide, "get_image") else None
+                except Exception as e:
+                    if _is_gdiplus_missing(e):
+                        raise RuntimeError(
+                            "Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。"
+                            + _gdiplus_hint()
+                        ) from e
+                    raise
+                if img is None:
+                    raise AttributeError("Slide has neither get_thumbnail nor get_image")
+                img.save(str(tmp_path))
+                return Image.open(tmp_path).copy()
+            finally:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    # 临时文件删除失败不应中断解析流程
+                    pass
+
+        with slides.Presentation(BytesIO(ppt_bytes)) as presentation:
+            for i, slide in enumerate(presentation.slides[from_page: to_page]):
+                try:
+                    imgs.append(slide_to_pil(slide))
+                except Exception as e:
                     raise RuntimeError(f'ppt parse error at page {i+1}, original error: {str(e)}') from e
         assert len(imgs) == len(
             txts), "Slides text and image do not match: {} vs. {}".format(len(imgs), len(txts))
@@ -85,7 +179,7 @@ class Pdf(PdfParser):
             res.append((lines, self.page_images[i]))
         callback(0.9, "Page {}~{}: Parsing finished".format(
             from_page, min(to_page, self.total_page)))
-        return res
+        return res, []
 
 
 class PlainPdf(PlainParser):
@@ -96,7 +190,7 @@ class PlainPdf(PlainParser):
         for page in self.pdf.pages[from_page: to_page]:
             page_txt.append(page.extract_text())
         callback(0.9, "Parsing finished")
-        return [(txt, None) for txt in page_txt]
+        return [(txt, None) for txt in page_txt], []
 
 
 def chunk(filename, binary=None, from_page=0, to_page=100000,
@@ -131,20 +225,34 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         return res
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
         layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
-        if layout_recognizer == "DeepDOC":
-            pdf_parser = Pdf()
-            sections = pdf_parser(filename, binary, from_page=from_page, to_page=to_page, callback=callback)
-        elif layout_recognizer == "Plain Text":
-            pdf_parser = PlainParser()
-            sections, _ = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
-        else:
-            with db_connection() as db:
-                vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=layout_recognizer, lang=lang)
-            pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
-            sections, _ = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page,
-                                      callback=callback)
 
+        if isinstance(layout_recognizer, bool):
+            layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"
+
+        name = layout_recognizer.strip().lower()
+        parser = PARSERS.get(name, by_plaintext)
+        callback(0.1, "Start to parse.")
+
+        sections, _, _ = parser(
+            filename=filename,
+            binary=binary,
+            from_page=from_page,
+            to_page=to_page,
+            lang=lang,
+            callback=callback,
+            pdf_cls=Pdf,
+            layout_recognizer=layout_recognizer,
+            **kwargs
+        )
+
+        if not sections:
+            return []
+
+        if name in ["tcadp", "docling", "mineru"]:
+            parser_config["chunk_token_num"] = 0
+        
         callback(0.8, "Finish parsing.")
+
         for pn, (txt, img) in enumerate(sections):
             d = copy.deepcopy(doc)
             pn += from_page

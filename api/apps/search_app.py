@@ -10,14 +10,14 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from api import settings
 from api.constants import DATASET_NAME_LIMIT
-from api.db import StatusEnum
+from common.constants import StatusEnum
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService, UserTenantService
 from common.misc_utils import get_uuid
+from common.constants import RetCode
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from api.apps import manager
 
@@ -295,13 +295,13 @@ def update(request: UpdateSearchRequest, db: Session = Depends(get_db), user=Dep
 
     # 检查权限
     if not SearchService.accessible4deletion(db, search_id, user.id):
-        return get_json_result(data=False, retmsg="No authorization.", retcode=settings.RetCode.AUTHENTICATION_ERROR)
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     try:
         # 获取现有搜索应用
         search_apps = SearchService.query(db, tenant_id=tenant_id, id=search_id)
         if not search_apps:
-            return get_json_result(data=False, retmsg=f"Cannot find search {search_id}", retcode=settings.RetCode.DATA_ERROR)
+            return get_json_result(data=False, retmsg=f"Cannot find search {search_id}", retcode=RetCode.DATA_ERROR)
 
         search_app = search_apps[0]
 
@@ -431,7 +431,7 @@ def detail(search_id: str = Query(..., description="搜索应用ID"), db: Sessio
                 break
 
         if not has_permission:
-            return get_json_result(data=False, retmsg="Has no permission for this operation.", retcode=settings.RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg="Has no permission for this operation.", retcode=RetCode.OPERATING_ERROR)
 
         # 获取搜索详情
         search = SearchService.get_detail(db, search_id)
@@ -652,7 +652,7 @@ def rm(request: RemoveSearchRequest, db: Session = Depends(get_db), user=Depends
 
     # 检查权限
     if not SearchService.accessible4deletion(db, search_id, user.id):
-        return get_json_result(data=False, retmsg="No authorization.", retcode=settings.RetCode.AUTHENTICATION_ERROR)
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     try:
         # 软删除搜索应用

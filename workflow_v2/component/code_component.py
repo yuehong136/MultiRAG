@@ -1,7 +1,7 @@
 from typing import Any
 
 import aiohttp
-from api.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
+from common.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 

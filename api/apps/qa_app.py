@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
-from api import settings
 from api.db.db_models import get_db
 from api.db.services.user_service import UserTenantService
 from api.db.services.qa_service import (
@@ -26,6 +25,7 @@ from api.db.services.qa_service import (
 )
 from api.apps import manager
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
+from common import settings
 
 
 logger = logging.getLogger(__name__)

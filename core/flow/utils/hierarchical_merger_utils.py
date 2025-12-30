@@ -10,7 +10,6 @@ core/flow/hierarchical_merger 的纯函数提取
 @project: multirag
 @date: 2025-11-10
 """
-import asyncio
 import logging
 import re
 from copy import deepcopy

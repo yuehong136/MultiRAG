@@ -7,6 +7,7 @@ from Cryptodome.Cipher import PKCS1_v1_5 as Cipher_pkcs1_v1_5
 from typing import Dict, List, Any
 from lark import Lark, Transformer, Tree
 import requests
+import getpass
 
 GRAMMAR = r"""
 start: command
@@ -35,6 +36,7 @@ sql_command: list_services
            | revoke_permission
            | alter_user_role
            | show_user_permission
+           | show_version
 
 // meta command definition
 meta_command: "\\" meta_command_name [meta_args]
@@ -76,6 +78,7 @@ FOR: "FOR"i
 RESOURCES: "RESOURCES"i
 ON: "ON"i
 SET: "SET"i
+VERSION: "VERSION"i
 
 list_services: LIST SERVICES ";"
 show_service: SHOW SERVICE NUMBER ";"
@@ -103,6 +106,8 @@ grant_permission: GRANT action_list ON identifier TO ROLE identifier ";"
 revoke_permission: REVOKE action_list ON identifier FROM ROLE identifier ";"
 alter_user_role: ALTER USER quoted_string SET ROLE identifier ";"
 show_user_permission: SHOW USER PERMISSION quoted_string ";"
+
+show_version: SHOW VERSION ";"
 
 action_list: identifier ("," identifier)*
 
@@ -229,6 +234,9 @@ class AdminTransformer(Transformer):
         user_name = items[3]
         return {"type": "show_user_permission", "user_name": user_name}
 
+    def show_version(self, items):
+        return {"type": "show_version"}
+
     def action_list(self, items):
         return items
 
@@ -342,7 +350,7 @@ class AdminCLI(Cmd):
             if single_command:
                 admin_passwd = arguments['password']
             else:
-                admin_passwd = input(f"password for {self.admin_account}: ").strip()
+                admin_passwd = getpass.getpass(f"password for {self.admin_account}: ").strip()
             try:
                 self.admin_password = encrypt(admin_passwd)
                 response = self.session.post(url, json={'email': self.admin_account, 'password': self.admin_password})
@@ -359,7 +367,7 @@ class AdminCLI(Cmd):
                             self.session.headers.update({
                                 'Content-Type': 'application/json',
                                 'Authorization': auth_header,
-                                'User-Agent': 'MultiRAG-CLI/0.9.0'
+                                'User-Agent': 'MultiRAG-CLI/0.9.7'
                             })
                             print("Authentication successful.")
                             return True
@@ -375,6 +383,21 @@ class AdminCLI(Cmd):
             except Exception as e:
                 print(str(e))
                 print(f"Can't access {self.host}, port: {self.port}")
+
+    def _format_service_detail_table(self, data):
+        if not any([isinstance(v, list) for v in data.values()]):
+            # normal table
+            return data
+        # handle task_executor heartbeats map, for example {'name': [{'done': 2, 'now': timestamp1}, {'done': 3, 'now': timestamp2}]
+        task_executor_list = []
+        for k, v in data.items():
+            # display latest status
+            heartbeats = sorted(v, key=lambda x: x["now"], reverse=True)
+            task_executor_list.append({
+                "task_executor_name": k,
+                **heartbeats[0],
+            })
+        return task_executor_list
 
     def _print_table_simple(self, data):
         if not data:
@@ -548,6 +571,8 @@ class AdminCLI(Cmd):
                 self._alter_user_role(command_dict)
             case 'show_user_permission':
                 self._show_user_permission(command_dict)
+            case 'show_version':
+                self._show_version(command_dict)
             case 'meta':
                 self._handle_meta_command(command_dict)
             case _:
@@ -597,7 +622,8 @@ class AdminCLI(Cmd):
                         if isinstance(extra_info['message'], str):
                             print(extra_info['message'])
                         else:
-                            self._print_table_simple(extra_info['message'])
+                            data = self._format_service_detail_table(extra_info['message'])
+                            self._print_table_simple(data)
             else:
                 print(f"Service {service_name} is {status}")
                 if 'extra' in res_data and 'message' in res_data['extra']:
@@ -673,6 +699,7 @@ class AdminCLI(Cmd):
             if res_json.get('code') == 0:
                 data = res_json.get('data')
                 if data is not None:
+                    data.pop('avatar', None)
                     self._print_table_simple(data)
                 else:
                     print(f"No data available for user {user_name}")
@@ -776,6 +803,8 @@ class AdminCLI(Cmd):
             if res_json.get('code') == 0:
                 data = res_json.get('data')
                 if data is not None:
+                    for t in data:
+                        t.pop('avatar', None)
                     self._print_table_simple(data)
                 else:
                     print(f"No datasets available for user {user_name}")
@@ -796,6 +825,8 @@ class AdminCLI(Cmd):
             if res_json.get('code') == 0:
                 data = res_json.get('data')
                 if data is not None:
+                    for t in data:
+                        t.pop('avatar', None)
                     self._print_table_simple(data)
                 else:
                     print(f"No agents available for user {user_name}")
@@ -953,6 +984,16 @@ class AdminCLI(Cmd):
         else:
             print(
                 f"Fail to show user: {user_name_str} permission, code: {res_json['code']}, message: {res_json['message']}")
+
+    def _show_version(self, command):
+        print("show_version")
+        url = f'http://{self.host}:{self.port}/api/v1/admin/version'
+        response = self.session.get(url)
+        res_json = response.json()
+        if response.status_code == 200:
+            self._print_table_simple(res_json['data'])
+        else:
+            print(f"Fail to show version, code: {res_json['code']}, message: {res_json['message']}")
 
     def _handle_meta_command(self, command):
         meta_command = command['command']

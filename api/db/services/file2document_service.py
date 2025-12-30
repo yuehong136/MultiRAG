@@ -11,7 +11,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 
-from api.db import FileSource
+from common.constants import FileSource
 from api.db.db_models import File2Document, File
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService

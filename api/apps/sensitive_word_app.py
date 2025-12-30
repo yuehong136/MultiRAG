@@ -24,7 +24,7 @@ from api.db.db_models import get_db
 # )
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from common.misc_utils import get_uuid
-from api import settings
+from common import settings
 
 router = APIRouter()
 

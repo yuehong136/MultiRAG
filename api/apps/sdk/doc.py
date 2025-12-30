@@ -13,9 +13,9 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 
-from api import settings
 from api.constants import FILE_NAME_LEN_LIMIT
-from api.db import FileSource, FileType, LLMType, ParserType, TaskStatus
+from api.db import FileType
+from common.constants import FileSource, LLMType, ParserType, TaskStatus
 from api.db.db_models import File as FileModel, Task, get_db
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -24,6 +24,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.dialog_service import meta_filter, convert_conditions
+from common.constants import RetCode
 
 from api.db.services.task_service import TaskService, queue_tasks
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
@@ -31,7 +32,7 @@ from core.app.qa import beAdoc, rmPrefix
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from common.string_utils import remove_redundant_spaces
 
 MAXIMUM_OF_UPLOADING_FILES = 256
@@ -190,16 +191,16 @@ async def upload_documents(
         上传的文档信息列表
     """
     if not files:
-        return get_error_data_result(retmsg="No file part!", retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_error_data_result(retmsg="No file part!", retcode=RetCode.ARGUMENT_ERROR)
     
     if len(files) > MAXIMUM_OF_UPLOADING_FILES:
         return get_error_data_result(retmsg=f"You try to upload {len(files)} files, which exceeds the maximum number: {MAXIMUM_OF_UPLOADING_FILES}")
     
     for file_obj in files:
         if file_obj.filename == "":
-            return get_result(retmsg="No file selected!", retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_result(retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
         if len(file_obj.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
-            return get_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=RetCode.ARGUMENT_ERROR)
     
     kb = KnowledgebaseService.get_by_id(db, dataset_id)
     if not kb:
@@ -207,7 +208,7 @@ async def upload_documents(
     
     err, uploaded_files = FileService.upload_document(db, kb, files, tenant_id)
     if err:
-        return get_result(retmsg="\n".join(err), retcode=settings.RetCode.SERVER_ERROR)
+        return get_result(retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
     
     # 重命名键名
     renamed_doc_list = []
@@ -283,12 +284,12 @@ def update_document(
         if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
             return get_result(
                 retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
-                retcode=settings.RetCode.ARGUMENT_ERROR,
+                retcode=RetCode.ARGUMENT_ERROR,
             )
         if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(doc.name.lower()).suffix:
             return get_result(
                 retmsg="The extension of file can't be changed",
-                retcode=settings.RetCode.ARGUMENT_ERROR,
+                retcode=RetCode.ARGUMENT_ERROR,
             )
         
         for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
@@ -432,11 +433,11 @@ def download_document(
         return get_error_data_result(retmsg="This document has been deleted")
     
     try:
-        STORAGE_IMPL.obj_exist(file.location)
+        settings.STORAGE_IMPL.obj_exist(file.location)
         
         def file_generator():
             try:
-                for chunk in STORAGE_IMPL.get(file.location):
+                for chunk in settings.STORAGE_IMPL.get(file.location):
                     yield chunk
             except Exception:
                 yield b""
@@ -1009,11 +1010,23 @@ def update_document_chunk(
         # 更新重要关键词
         if "important_keywords" in req:
             chunk_data["important_keywords"] = req["important_keywords"]
-        
+
+        if "questions" in req:
+            if not isinstance(req["questions"], list):
+                return get_error_data_result("`questions` should be a list")
+            chunk_data["question_kwd"] = [str(q).strip() for q in req.get("questions", []) if str(q).strip()]
+            chunk_data["question_tks"] = rag_tokenizer.tokenize("\n".join(req["questions"]))
+
         # 更新可用状态
         if "available" in req:
             chunk_data["available_int"] = 1 if req["available"] else 0
-        
+
+        # 更新位置
+        if "positions" in req:
+            if not isinstance(req["positions"], list):
+                return get_error_data_result("`positions` should be a list")
+            chunk_data["position_int"] = req["positions"]
+
         # 更新修改时间
         chunk_data["update_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         chunk_data["update_timestamp_flt"] = datetime.datetime.now().timestamp()
@@ -1068,7 +1081,7 @@ def retrieval_test(
     if len(embd_nms) != 1:
         return get_result(
             retmsg='Datasets use different embedding models.',
-            retcode=settings.RetCode.DATA_ERROR,
+            retcode=RetCode.DATA_ERROR,
         )
     
     if "question" not in req:
@@ -1187,6 +1200,6 @@ def retrieval_test(
         if str(e).find("not_found") > 0:
             return get_result(
                 retmsg="No chunk found! Check the chunk status please!",
-                retcode=settings.RetCode.DATA_ERROR,
+                retcode=RetCode.DATA_ERROR,
             )
         return server_error_response(e)

@@ -1,6 +1,6 @@
 from minio import Minio
 from minio.error import S3Error
-from core import settings
+from common import settings
 import io
 
 

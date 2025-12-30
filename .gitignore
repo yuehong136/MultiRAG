@@ -202,4 +202,11 @@ multirag_cli.egg-info
 # warp
 WARP.md
 
+admin/release
+
+tests
+
+.claude
+
+docs
 temp/

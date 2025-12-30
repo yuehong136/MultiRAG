@@ -1,9 +1,9 @@
 import numpy as np
 import requests
 
-from api.utils.log_utils import log_exception
+from common.log_utils import log_exception
 from core.llm.rerank_model.base import Base
-from core.utils import truncate
+from common.token_utils import truncate
 
 
 class JinaRerank(Base):

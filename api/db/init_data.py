@@ -7,18 +7,19 @@ from copy import deepcopy
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from api.db import LLMType, UserTenantRole
-from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM, SessionLocal
+from api.db import UserTenantRole
+from common.constants import LLMType
+from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM, db_connection
 from api.db.services import UserService
 from api.db.services.canvas_service import CanvasTemplateService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-# from api.db.services.llm_service import LLMFactoriesService, LLMService, TenantLLMService, LLMBundle
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.llm_service import LLMService, LLMBundle, get_init_tenant_llm
 from api.db.services.user_service import TenantService, UserTenantService
-from api import settings
-from api.utils.file_utils import get_project_base_directory
+from common import settings
+from common import settings
+from common.file_utils import get_project_base_directory
 from api.db.db_models import GuardDimension
 from scripts.init_ai_guard_system import init_ai_guard_system
 # from api.common.base64 import encode_to_base64
@@ -123,13 +124,6 @@ def init_superuser(db: Session):
 
 def init_llm_factory(db: Session):
     LLMFactoriesService.filter_delete(db, [1 == 1])
-    
-    try:
-        LLMService.filter_delete(db, [(LLM.fid == "MiniMax" or LLM.fid == "Minimax")])
-        LLMService.filter_delete(db, [(LLM.fid == "cohere")])
-    except Exception:
-        pass
-
     factory_llm_infos = settings.FACTORY_LLM_INFOS
     for factory_llm_info in factory_llm_infos:
         info = deepcopy(factory_llm_info)
@@ -154,7 +148,7 @@ def init_llm_factory(db: Session):
     LLMFactoriesService.filter_delete(db, [LLMFactories.name == "QAnything"])
     LLMService.filter_delete(db, [LLM.fid == "QAnything"])
     TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "QAnything"], {"llm_factory": "Youdao"})
-    TenantLLMService.filter_update(db, [TenantLLMService.model.llm_factory == "cohere"], {"llm_factory": "Cohere"})
+    TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "cohere"], {"llm_factory": "Cohere"})
     TenantService.filter_update(db, [1 == 1], {
         "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"})
     # insert openai two embedding models to the current openai user.
@@ -176,7 +170,6 @@ def init_llm_factory(db: Session):
     #         break
     doc_count = DocumentService.get_all_kb_doc_count(db)
     for kb_id in KnowledgebaseService.get_all_ids(db):
-        # KnowledgebaseService.update_by_id(db, kb_id, {"doc_num": DocumentService.get_kb_doc_count(db, kb_id)})
         KnowledgebaseService.update_document_number_in_init(db, kb_id=kb_id, doc_num=doc_count.get(kb_id, 0))
 
 
@@ -259,44 +252,67 @@ def init_guard_system_wrapper(db: Session, tenant_id: str, user_id: str):
         raise
 
 
-def init_web_data(db: Session = SessionLocal()):
+def _init_web_data_with_db(db: Session) -> None:
     start_time = time.time()
+    try:
+        init_llm_factory(db)
 
-    init_llm_factory(db)
+        # 获取所有用户（只查询一次）
+        all_users = UserService.get_all(db)
 
-    # 获取所有用户（只查询一次）
-    all_users = UserService.get_all(db)
+        # 如果没有用户，创建超级用户
+        if len(all_users) == 0:
+            # 额外检查：通过邮箱查询是否已经存在超级用户
+            existing_admin = UserService.query_user_onlywith_email(db, "admin@datav.com")
+            if not existing_admin:
+                init_superuser(db)
+                # 重新获取用户列表
+                all_users = UserService.get_all(db)
+            else:
+                logging.info("超级用户已存在，跳过初始化")
+                all_users = [existing_admin]
 
-    # 如果没有用户，创建超级用户
-    if len(all_users) == 0:
-        # 额外检查：通过邮箱查询是否已经存在超级用户
-        existing_admin = UserService.query_user_onlywith_email(db, "admin@datav.com")
-        if not existing_admin:
-            init_superuser(db)
-            # 重新获取用户列表
-            all_users = UserService.get_all(db)
+        add_graph_templates(db)
+
+        # 初始化AI安全护栏系统
+        # 检查是否已有guard数据
+        existing_guard_data = db.query(GuardDimension).count()
+        if existing_guard_data == 0:
+            # 未初始化，查找超级用户
+            superuser = next((user for user in all_users if user.is_superuser), None)
+
+            if superuser:
+                logging.info(f"使用超级用户 {superuser.id} 初始化AI安全护栏系统")
+                init_guard_system_wrapper(db, tenant_id=superuser.id, user_id=superuser.id)
+            else:
+                logging.warning("未找到超级用户，跳过AI安全护栏系统初始化")
         else:
-            logging.info("超级用户已存在，跳过初始化")
-            all_users = [existing_admin]
+            logging.info("AI安全护栏系统已存在数据，跳过初始化")
 
-    add_graph_templates(db)
+        logging.info("init web data success:{}".format(time.time() - start_time))
+    except Exception:
+        # 对外部传入的 db：这里 rollback 只负责清理当前函数内造成的脏事务状态
+        # （具体 commit 发生在各 Service 内部）
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
 
-    # 初始化AI安全护栏系统
-    # 检查是否已有guard数据
-    existing_guard_data = db.query(GuardDimension).count()
-    if existing_guard_data == 0:
-        # 未初始化，查找超级用户
-        superuser = next((user for user in all_users if user.is_superuser), None)
 
-        if superuser:
-            logging.info(f"使用超级用户 {superuser.id} 初始化AI安全护栏系统")
-            init_guard_system_wrapper(db, tenant_id=superuser.id, user_id=superuser.id)
-        else:
-            logging.warning("未找到超级用户，跳过AI安全护栏系统初始化")
-    else:
-        logging.info(f"AI安全护栏系统已存在数据，跳过初始化")
+def init_web_data(db: Session | None = None):
+    """
+    初始化默认数据。
 
-    logging.info("init web data success:{}".format(time.time() - start_time))
+    为什么默认走 `db_connection()`：
+    - 统一会话创建/异常回滚/关闭的逻辑
+    - 避免 `SessionLocal()` 作为默认参数在 import 阶段就创建 Session（多进程部署会踩坑）
+    - 仍支持外部传入 db（比如想复用同一个 session 做一串初始化）
+    """
+    if db is None:
+        with db_connection() as _db:
+            return _init_web_data_with_db(_db)
+    return _init_web_data_with_db(db)
 
 
 if __name__ == '__main__':

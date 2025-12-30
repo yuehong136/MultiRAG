@@ -12,7 +12,6 @@ core/flow/splitter 的纯函数提取
 """
 import asyncio
 import logging
-from typing import Literal
 
 import trio
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser

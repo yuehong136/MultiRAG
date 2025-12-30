@@ -3,9 +3,9 @@ from urllib.parse import urljoin
 import numpy as np
 import requests
 
-from api.utils.log_utils import log_exception
+from common.log_utils import log_exception
 from core.llm.rerank_model.base import Base
-from core.utils import truncate, num_tokens_from_string
+from common.token_utils import truncate, num_tokens_from_string
 
 
 class OpenAI_APIRerank(Base):

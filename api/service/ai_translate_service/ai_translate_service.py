@@ -4,12 +4,10 @@ import json
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import TenantService
 from api.service.ai_translate_service.llm_prompts import PromptTemplateLoader
-from api.service.ai_translate_service.utils.llm_client import AsyncLLMClient
-from api.settings import AI_TRANSLATE_MODEL_ID
 from errors.exceptions import AITranslateException
 
 

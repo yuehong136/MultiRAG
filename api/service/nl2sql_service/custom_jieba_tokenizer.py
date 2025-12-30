@@ -5,10 +5,9 @@ import logging
 import time
 import hashlib
 import hmac
-from typing import List, Set, Optional, Dict
 from pathlib import Path
 
-from api.settings import DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SERVER_PROTOCOL, DCS_SEMANTIC_SERVER_ACCESS_KEY, \
+from common.settings import DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SERVER_PROTOCOL, DCS_SEMANTIC_SERVER_ACCESS_KEY, \
     DCS_SEMANTIC_SERVER_SECRET_KEY
 
 # 配置日志
@@ -21,7 +20,7 @@ logger = logging.getLogger("tokenizer")
 CURRENT_DIR = Path(os.path.dirname(__file__))
 
 
-def _generate_signature() -> Dict[str, str]:
+def _generate_signature() -> dict[str, str]:
     """生成API请求签名"""
     timestamp = str(int(time.time()))
     access_key = DCS_SEMANTIC_SERVER_ACCESS_KEY
@@ -43,7 +42,7 @@ def _generate_signature() -> Dict[str, str]:
     }
 
 
-def load_stopwords(file_path: Optional[str] = None) -> Set[str]:
+def load_stopwords(file_path: str | None = None) -> set[str]:
     """
     加载停用词列表
 
@@ -73,8 +72,8 @@ def load_stopwords(file_path: Optional[str] = None) -> Set[str]:
         return set()
 
 
-async def custom_tokenize_with_semantic_words(text: str, dataset_id_list: List[str], remove_stopwords: bool = True,
-                                              stopwords_path: str = None) -> List[str]:
+async def custom_tokenize_with_semantic_words(text: str, dataset_id_list: list[str], remove_stopwords: bool = True,
+                                              stopwords_path: str = None) -> list[str]:
     """
     使用自定义词典对文本进行分词（异步版本）
 
@@ -91,7 +90,7 @@ async def custom_tokenize_with_semantic_words(text: str, dataset_id_list: List[s
     tokenizer = jieba.Tokenizer()
 
     # 内部方法：从API异步获取自定义词列表
-    async def _fetch_custom_words_from_api(dataset_id_list: List[str]) -> List[str]:
+    async def _fetch_custom_words_from_api(dataset_id_list: list[str]) -> list[str]:
         """异步从API获取自定义词列表"""
         api_path = "/api/drm/semanticOpenApi/getSemanticWords"
         api_url = f"{DCS_SERVER_PROTOCOL}://{DCS_SERVER_HOST}:{DCS_SERVER_PORT}{api_path}"
@@ -236,7 +235,7 @@ async def custom_tokenize_with_semantic_words(text: str, dataset_id_list: List[s
     return words
 
 
-def custom_tokenize(text: str, remove_stopwords: bool = True, stopwords_path: str = None) -> List[str]:
+def custom_tokenize(text: str, remove_stopwords: bool = True, stopwords_path: str = None) -> list[str]:
     """
     直接进行分词，不调用API
 

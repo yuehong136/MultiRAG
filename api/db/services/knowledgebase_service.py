@@ -10,10 +10,14 @@ from datetime import datetime
 
 from sqlalchemy import func, update, or_, and_
 from sqlalchemy.orm import Session
-from api.db import StatusEnum, TenantPermission
+from api.db import TenantPermission
+from common.constants import StatusEnum
 from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document, UserCanvas
 from api.db.services.common_service import CommonService
 from common.time_utils import current_timestamp, datetime_format
+from api.db.services.user_service import TenantService
+from common.misc_utils import get_uuid
+from api.constants import DATASET_NAME_LIMIT
 
 
 class KnowledgebaseService(CommonService):
@@ -34,7 +38,7 @@ class KnowledgebaseService(CommonService):
             If all documents are parsed successfully, returns (True, None)
             If any document is not fully parsed, returns (False, error_message)
         """
-        from api.db import TaskStatus
+        from common.constants import TaskStatus
         from api.db.services.document_service import DocumentService
 
         # Get knowledge base information
@@ -197,6 +201,7 @@ class KnowledgebaseService(CommonService):
         # will get all permitted kb, be cautious.
         fields = [
             cls.model.name,
+            cls.model.avatar,
             cls.model.language,
             cls.model.permission,
             cls.model.doc_num,
@@ -227,6 +232,7 @@ class KnowledgebaseService(CommonService):
             for kb in kb_batch:
                 res.append({
                     "name": kb.name,
+                    "avatar": kb.avatar,
                     "language": kb.language,
                     "permission": kb.permission,
                     "doc_num": kb.doc_num,
@@ -412,6 +418,75 @@ class KnowledgebaseService(CommonService):
         return [id[0] for id in ids]
 
     @classmethod
+    def create_with_name(
+        cls,
+        db: Session,
+        *,
+        name: str,
+        tenant_id: str,
+        parser_id: str | None = None,
+        embd_id: str | None = None,
+        parser_config: dict | None = None,
+        **kwargs
+    ):
+        """Create a dataset (knowledgebase) by name with kb_app defaults.
+
+        This encapsulates the creation logic used in kb_app.create so other callers
+        (including RESTFul endpoints) can reuse the same behavior.
+
+        Args:
+            db: Database session
+            name: Dataset name
+            tenant_id: Tenant ID
+            parser_id: Parser ID (chunk method)
+            embd_id: Embedding model ID (if None, uses tenant's default)
+            parser_config: Parser configuration (must be provided by caller)
+            **kwargs: Other fields (description, permission, etc.)
+
+        Returns:
+            dict: payload dictionary for creating knowledgebase
+        
+        Raises:
+            ValueError: If validation fails
+        """
+        # Validate name (basic checks, MILVUS pattern check should be done by caller)
+        if not isinstance(name, str):
+            raise ValueError("Dataset name must be string.")
+        dataset_name = name.strip()
+        if dataset_name == "":
+            raise ValueError("Dataset name can't be empty.")
+        if len(dataset_name.encode("utf-8")) > DATASET_NAME_LIMIT:
+            raise ValueError(f"Dataset name length is {len(dataset_name)} which is larger than {DATASET_NAME_LIMIT}")
+
+        # Verify tenant exists
+        t = TenantService.get_by_id(db, tenant_id)
+        if not t:
+            raise ValueError("Tenant not found.")
+
+        # Build payload
+        kb_id = get_uuid()
+        payload = {
+            "id": kb_id,
+            "name": dataset_name,
+            "tenant_id": tenant_id,
+            "created_by": tenant_id,
+            "parser_id": (parser_id or "naive"),
+            **kwargs
+        }
+
+        # Handle embd_id: use tenant default if not provided
+        if embd_id is None:
+            payload["embd_id"] = t.embd_id
+        else:
+            payload["embd_id"] = embd_id
+
+        # Parser config must be provided by caller to avoid circular import
+        if parser_config is not None:
+            payload["parser_config"] = parser_config
+
+        return payload
+
+    @classmethod
     def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name):
         """
         # Get list of knowledge bases with filtering and pagination
@@ -527,7 +602,7 @@ class KnowledgebaseService(CommonService):
         # 先检查知识库是否存在
         kb = cls.get_by_id(db, kb_id)
         if not kb:
-            return
+            return None
 
         try:
             # 使用SQLAlchemy的update语句直接更新doc_num字段

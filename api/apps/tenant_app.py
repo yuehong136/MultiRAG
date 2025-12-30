@@ -10,12 +10,13 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy import inspect
 
-from api import settings
 from api.apps import smtp_mail_server
-from api.db import UserTenantRole, StatusEnum
+from api.db import UserTenantRole
+from common.constants import StatusEnum
 from api.db.db_models import UserTenant, TenantLLM, Tenant, File, User, get_db
 from api.db.services.file_service import FileService
 from common.misc_utils import get_uuid
+from common.constants import RetCode
 from common.time_utils import delta_seconds
 from api.apps import manager
 from api.utils.api_utils import server_error_response, get_data_error_result
@@ -24,6 +25,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService, UserService, TenantService
 from api.utils.api_utils import get_json_result
 from api.utils.web_utils import send_invite_email
+from common import settings
 
 router = APIRouter()
 
@@ -66,7 +68,7 @@ def user_list(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            retcode=RetCode.AUTHENTICATION_ERROR)
     try:
         users = UserTenantService.get_by_tenant_id(db, tenant_id)
         for u in users:
@@ -94,7 +96,7 @@ async def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(m
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            retcode=RetCode.AUTHENTICATION_ERROR)
     invite_user_email = email
     invite_users = UserService.query(db, email=invite_user_email)
     if not invite_users:
@@ -174,13 +176,13 @@ def rm(tenant_id, user_id, db: Session = Depends(get_db), user=Depends(manager))
         return get_json_result(
             data=False,
             retmsg='No authorization.',
-            retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            retcode=RetCode.AUTHENTICATION_ERROR)
     try:
         if target_role == UserTenantRole.OWNER and not is_self:
             return get_json_result(
                 data=False,
                 retmsg='Owner cannot be removed by others.',
-                retcode=settings.RetCode.AUTHENTICATION_ERROR)
+                retcode=RetCode.AUTHENTICATION_ERROR)
         UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id, UserTenant.user_id == user_id])
         if target_role == UserTenantRole.OWNER:
             UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id])

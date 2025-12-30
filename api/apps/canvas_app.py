@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from peewee import MySQLDatabase, PostgresqlDatabase
 
 from agent.component.llm import LLM
-from api import settings
+from common import settings
 from api.apps import manager
 from api.db import CanvasCategory, FileType
 from api.db.db_models import get_db, APIToken, Task
@@ -36,7 +36,7 @@ from api.db.services.pipeline_operation_log_service import PipelineOperationLogS
 from api.db.services.task_service import queue_dataflow, CANVAS_DEBUG_DOC_ID, TaskService
 from api.db.services.user_service import TenantService
 from api.db.services.user_canvas_version import UserCanvasVersionService
-from api.settings import RetCode
+from common.constants import RetCode
 from common.misc_utils import get_uuid
 from api.utils.api_utils import (
     get_json_result,
@@ -492,7 +492,7 @@ def run(
     
     # Agent模式 - SSE流式响应
     try:
-        canvas = Canvas(cvs.dsl, user.id, req["id"])
+        canvas = Canvas(cvs.dsl, user.id)
     except Exception as e:
         return server_error_response(e)
     
@@ -502,12 +502,12 @@ def run(
                 yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
             cvs.dsl = json.loads(str(canvas))
             UserCanvasService.update_by_id(db, req["id"], cvs.to_dict())
+
         except Exception as e:
             logging.exception(e)
-            yield "data:" + json.dumps(
-                {"code": 500, "message": str(e), "data": False},
-                ensure_ascii=False
-            ) + "\n\n"
+            yield "data:" + json.dumps({"code": 500, "message": str(e), "data": False}, ensure_ascii=False) + "\n\n"
+        finally:
+            canvas.cancel_task()
     
     return StreamingResponse(
         sse(),
@@ -1114,23 +1114,24 @@ def test_db_connect(
             ibm_db.close(conn)
             return get_json_result(data="Database Connection Successful!")
         elif req["db_type"] == 'trino':
-            def _parse_catalog_schema(db: str):
-                if not db:
+            def _parse_catalog_schema(db_name: str):
+                if not db_name:
                     return None, None
-                if "." in db:
-                    c, s = db.split(".", 1)
-                elif "/" in db:
-                    c, s = db.split("/", 1)
+                if "." in db_name:
+                    catalog_name, schema_name = db_name.split(".", 1)
+                elif "/" in db_name:
+                    catalog_name, schema_name = db_name.split("/", 1)
                 else:
-                    c, s = db, "default"
-                return c, s
+                    catalog_name, schema_name = db_name, "default"
+                return catalog_name, schema_name
 
             try:
                 import trino
                 import os
                 from trino.auth import BasicAuthentication
-            except Exception:
-                return server_error_response("Missing dependency 'trino'. Please install: pip install trino")
+            except Exception as e:
+                return server_error_response(
+                    f"Missing dependency 'trino'. Please install: pip install trino, detail: {e}")
 
             catalog, schema = _parse_catalog_schema(req["database"])
             if not catalog:
@@ -1452,10 +1453,10 @@ def trace(
     - 日志存储在Redis中
     """
     try:
-        bin_data = REDIS_CONN.get(f"{canvas_id}-{message_id}-logs")
-        if not bin_data:
+        binary = REDIS_CONN.get(f"{canvas_id}-{message_id}-logs")
+        if not binary:
             return get_json_result(data={})
-        return get_json_result(data=json.loads(bin_data))
+        return get_json_result(data=json.loads(binary.encode("utf-8")))
     except Exception as e:
         logging.exception(e)
         return get_json_result(data={})

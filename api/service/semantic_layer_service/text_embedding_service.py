@@ -7,12 +7,11 @@ from pymilvus import CollectionSchema, DataType
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.db_models import get_db
 from api.db.services.llm_service import LLMBundle
-from api.settings import docStoreConn
+from common import settings
 from api.service.semantic_layer_service.models import SemanticTextData, OwnerType, SemanticElementType
-from core.utils.milvus_conn import MilvusConnection
 
 
 class TextEmbeddingService:
@@ -21,7 +20,7 @@ class TextEmbeddingService:
     def __init__(self, db: Session, user: Any):
         self.db = db
         self.user = user
-        self.vector_database = docStoreConn
+        self.vector_database = settings.docStoreConn
 
     async def save_semantic_text_to_embedding(self, semantic_data: SemanticTextData):
         """将单条文本转为向量并保存到数据库"""

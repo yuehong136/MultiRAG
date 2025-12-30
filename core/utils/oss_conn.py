@@ -19,8 +19,8 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 import time
 from io import BytesIO
-from core.utils import singleton
-from core import settings
+from common.decorator import singleton
+from common import settings
 
 
 @singleton
@@ -142,7 +142,7 @@ class MultiRAGOSS:
                 logging.exception(f"fail get {bucket}/{fnm}")
                 self.__open__()
                 time.sleep(1)
-        return
+        return None
 
     @use_prefix_path
     @use_default_bucket
@@ -171,4 +171,4 @@ class MultiRAGOSS:
                 logging.exception(f"fail get url {bucket}/{fnm}")
                 self.__open__()
                 time.sleep(1)
-        return
+        return None

@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db, SessionLocal
 from api.db.services import UserService
-from api import settings
+from common import settings
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
 from datetime import datetime
@@ -101,10 +101,9 @@ async def lifespan(app: FastAPI):
     # 1. 显示配置信息
     # 注意：settings.init_settings() 已在模块级别执行（见上方）
     # 无需重复初始化，避免资源浪费
-    from api.utils.configs import show_configs
-    from core.settings import print_rag_settings
+    from common.config_utils import show_configs
     show_configs()
-    print_rag_settings()
+    settings.print_rag_settings()
     
     # 2. 启动工作流状态管理器
     logging.info("Starting workflow state manager...")

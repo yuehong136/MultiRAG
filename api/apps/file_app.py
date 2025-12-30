@@ -19,18 +19,19 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from api.common.check_team_permission import check_file_team_permission
-from api.db import FileType, FileSource
+from api.db import FileType
+from common.constants import FileSource
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from api import settings
 from api.utils.api_utils import get_json_result, construct_error_response, get_data_error_result
 from common.misc_utils import get_uuid
+from common.constants import RetCode
 from api.utils.file_utils import filename_type
 from api.utils.web_utils import CONTENT_TYPE_MAP
-from core.utils.storage_factory import STORAGE_IMPL
+from common import settings
 from api.apps import manager
 from pydantic import BaseModel, Field
 
@@ -80,13 +81,12 @@ async def upload_media_redirect(
     try:
         content = await file.read()
         if not content:
-            return get_json_result(data=False, retmsg='No file content!', retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg='No file content!', retcode=RetCode.ARGUMENT_ERROR)
 
         # 1. 定义存储桶和文件名
         # 建议使用一个专门的临时桶，如果未配置则使用默认桶
         # 注意：MinIO/OSS 的 bucket 名称通常有格式要求
-        from core import settings as core_settings
-        bucket = core_settings.OSS.get("bucket") or core_settings.MINIO.get("bucket") or "multimodal-temp"
+        bucket = settings.OSS.get("bucket") or settings.MINIO.get("bucket") or "multimodal-temp"
         
         ext = file.filename.split('.')[-1].lower() if '.' in file.filename else "bin"
         unique_filename = f"volc_upload/{get_uuid()}.{ext}"
@@ -97,15 +97,15 @@ async def upload_media_redirect(
         # 2. 上传文件
         # STORAGE_IMPL 会自动处理 MinIO/OSS/S3 的差异
         try:
-            STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
+            settings.STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
         except TypeError:
             # Fallback for storage backends that don't support content_type
-            STORAGE_IMPL.put(bucket, unique_filename, content)
+            settings.STORAGE_IMPL.put(bucket, unique_filename, content)
 
         # 3. 获取预签名 URL (有效期 1小时)
         # 这是关键：这个 URL 是带签名的，AI 服务可以通过公网访问并下载
         expires = 3600
-        url = STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=expires)
+        url = settings.STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=expires)
 
         if not url:
              raise Exception("Failed to generate presigned URL")
@@ -146,18 +146,18 @@ async def upload(
         pf_id = root_folder["id"]
 
     if not files:
-        return get_json_result(data=False, retmsg='No file part!', retcode=settings.RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
 
     for file_obj in files:
         if file_obj.filename == '':
-            return get_json_result(data=False, retmsg='No file selected!', retcode=settings.RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg='No file selected!', retcode=RetCode.ARGUMENT_ERROR)
 
     try:
         pf_folder = FileService.get_by_id(db, pf_id)
         if not pf_folder:
             return get_data_error_result(retmsg="Can't find this folder!")
         for file_obj in files:
-            MAX_FILE_NUM_PER_USER = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
+            MAX_FILE_NUM_PER_USER: int = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
             if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, user.id):
                 return get_data_error_result(retmsg="Exceed the maximum file number of a free user!")
 
@@ -186,12 +186,12 @@ async def upload(
 
             filetype = filename_type(file_obj_names[file_len - 1])
             location = file_obj_names[file_len - 1]
-            while STORAGE_IMPL.obj_exist(last_folder.id, location):
+            while settings.STORAGE_IMPL.obj_exist(last_folder.id, location):
                 location += "_"
             blob = await file_obj.read()
             filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
                                       parent_id=last_folder.id)
-            STORAGE_IMPL.put(last_folder.id, location, blob)
+            settings.STORAGE_IMPL.put(last_folder.id, location, blob)
             file_data = {
                 "id": get_uuid(),
                 "parent_id": last_folder.id,
@@ -242,7 +242,7 @@ async def create(
 
     try:
         if not FileService.is_parent_folder_exist(db, pf_id):
-            return get_json_result(data=False, retmsg="Parent Folder Doesn't Exist!", retcode=settings.RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg="Parent Folder Doesn't Exist!", retcode=RetCode.OPERATING_ERROR)
         if FileService.query(db, name=req["name"], parent_id=pf_id):
             return get_data_error_result(retmsg="Duplicated folder name in the same folder.")
 
@@ -416,7 +416,7 @@ async def rm(
         """删除单个文件及其关联的文档"""
         try:
             if file.location:
-                STORAGE_IMPL.rm(file.parent_id, file.location)
+                settings.STORAGE_IMPL.rm(file.parent_id, file.location)
         except Exception:
             logging.exception(f"Fail to remove object: {file.parent_id}/{file.location}")
         
@@ -446,11 +446,11 @@ async def rm(
         for file_id in file_ids:
             file = FileService.get_by_id(db, file_id)
             if not file:
-                return get_data_error_result(retmsg="File or Folder not found!")
+                return get_data_error_result(retmsg="File or folder not found!")
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
             if not check_file_team_permission(db, file, user.id):
-                return get_json_result(data=False, retmsg="No authorization.", retcode=settings.RetCode.AUTHENTICATION_ERROR)
+                return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
             if file.source_type == FileSource.KNOWLEDGEBASE:
                 continue
@@ -488,11 +488,11 @@ async def rename(
         if not file:
             return get_data_error_result(retmsg="File not found!")
         if not check_file_team_permission(db, file, user.id):
-            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
         if file.type != FileType.FOLDER.value \
                 and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
             return get_json_result(data=False, retmsg="The extension of file can't be changed",
-                                         retcode=settings.RetCode.ARGUMENT_ERROR)
+                                         retcode=RetCode.ARGUMENT_ERROR)
         for f in FileService.query(db, name=req["name"], pf_id=file.parent_id):
             if f.name == req["name"]:
                 return get_data_error_result(retmsg="Duplicated file name in the same folder.")
@@ -530,10 +530,10 @@ async def get_file(
         if not file:
             return get_data_error_result(retmsg="Document not found!")
         if not check_file_team_permission(db, file, user.id):
-            return get_json_result(data=False, retmsg='No authorization.', retcode=settings.RetCode.AUTHENTICATION_ERROR)
+            return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
         b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
-        file_content = STORAGE_IMPL.get(b, n)
+        file_content = settings.STORAGE_IMPL.get(b, n)
         if not file_content:
             raise HTTPException(status_code=404, detail="File not found in storage")
 
@@ -580,7 +580,7 @@ async def move(
         # 先检查目标文件夹是否存在
         dest_folder = FileService.get_by_id(db, dest_parent_id)
         if not dest_folder:
-            return get_data_error_result(retmsg="Parent Folder not found!")
+            return get_data_error_result(retmsg="Parent folder not found!")
         
         # 检查源文件是否存在
         files = FileService.get_by_ids(db, file_ids)
@@ -594,14 +594,14 @@ async def move(
         for file_id in file_ids:
             file = files_dict.get(file_id)
             if not file:
-                return get_data_error_result(retmsg="File or Folder not found!")
+                return get_data_error_result(retmsg="File or folder not found!")
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
             if not check_file_team_permission(db, file, user.id):
                 return get_json_result(
                     data=False,
                     retmsg="No authorization.",
-                    retcode=settings.RetCode.AUTHENTICATION_ERROR
+                    retcode=RetCode.AUTHENTICATION_ERROR
                 )
         
         def _move_entry_recursive(source_file_entry, dest_folder):
@@ -641,12 +641,12 @@ async def move(
 
             new_location = filename
             # 处理文件名冲突
-            while STORAGE_IMPL.obj_exist(dest_folder.id, new_location):
+            while settings.STORAGE_IMPL.obj_exist(dest_folder.id, new_location):
                 new_location += "_"
 
             try:
                 # 移动存储层的文件
-                STORAGE_IMPL.move(old_parent_id, old_location, dest_folder.id, new_location)
+                settings.STORAGE_IMPL.move(old_parent_id, old_location, dest_folder.id, new_location)
             except Exception as storage_err:
                 raise RuntimeError(f"Move file failed at storage layer: {str(storage_err)}")
 

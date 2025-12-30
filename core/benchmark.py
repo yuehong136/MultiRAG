@@ -1,17 +1,14 @@
 import json
 import os
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api import settings
+from common import settings
 from common.misc_utils import get_uuid
-from api.utils.file_utils import get_project_base_directory
+from common.file_utils import get_project_base_directory
 from core.nlp import tokenize, search
-# from core.utils.milvus_conn import MILVUS_CONNECTION
 from ranx import evaluate
 import pandas as pd
 from tqdm import tqdm

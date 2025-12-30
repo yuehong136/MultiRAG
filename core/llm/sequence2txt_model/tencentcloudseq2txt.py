@@ -2,7 +2,7 @@ import json
 import re
 
 from core.llm.sequence2txt_model.base import Base
-from core.utils import num_tokens_from_string
+from common.token_utils import num_tokens_from_string
 
 
 class TencentCloudSeq2txt(Base):

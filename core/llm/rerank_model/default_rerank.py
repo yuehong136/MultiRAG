@@ -6,10 +6,10 @@ from collections.abc import Iterable
 import numpy as np
 from huggingface_hub import snapshot_download
 
-from api.utils.log_utils import log_exception
+from common.log_utils import log_exception
 from core.llm.rerank_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
-from core.utils import num_tokens_from_string, truncate
+from common.token_utils import num_tokens_from_string, truncate
 
 
 class DefaultRerank(Base):
@@ -28,7 +28,7 @@ class DefaultRerank(Base):
         ^_-
 
         """
-        from api import settings
+        from common import settings
         if not settings.LIGHTEN and not DefaultRerank._model:
             import torch
             from FlagEmbedding import FlagReranker

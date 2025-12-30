@@ -2,7 +2,7 @@ import re
 
 from sqlalchemy.orm import Session
 
-from api.db import ActiveEnum
+from common.constants import ActiveEnum
 from api.db.joint_services.user_account_service import create_new_user, delete_user_data
 from api.db.services import UserService
 from api.db.services.canvas_service import UserCanvasService
@@ -23,6 +23,7 @@ class UserMgr:
         result = []
         for user in users:
             result.append({
+                'avatar': user.avatar,
                 'email': user.email,
                 'nickname': user.nickname,
                 'create_date': user.create_date,
@@ -56,6 +57,7 @@ class UserMgr:
         
         user = users[0]
         return {
+            'avatar': user.avatar,
             'email': user.email,
             'nickname': user.nickname,
             'language': user.language,
@@ -221,7 +223,8 @@ class UserServiceMgr:
         return [{
             'title': r['title'],
             'permission': r['permission'],
-            'canvas_category': r['canvas_category'].split('_')[0]
+            'canvas_category': r['canvas_category'].split('_')[0],
+            'avatar': r['avatar']
         } for r in res]
 
 class ServiceMgr:
@@ -241,6 +244,10 @@ class ServiceMgr:
                     config_dict['status'] = 'timeout'
             except Exception:
                 config_dict['status'] = 'timeout'
+            if not config_dict['host']:
+                config_dict['host'] = '-'
+            if not config_dict['port']:
+                config_dict['port'] = '-'
             result.append(config_dict)
         return result
 

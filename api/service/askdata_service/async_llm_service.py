@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy.orm import Session
 
-from api.db import LLMType
+from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.service.askdata_service.event.event_manager import event_manager
 

@@ -8,11 +8,11 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi_login import LoginManager
 from sqlalchemy.orm import Session
 
-from api import settings
+from common import settings
 from api.common.exceptions import AdminException, UserNotFoundError
 from api.db.services import UserService
 from api.db.db_models import get_db, SessionLocal
-from api.db import ActiveEnum, StatusEnum
+from common.constants import ActiveEnum, StatusEnum
 from api.utils.crypt import decrypt
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format, get_format_time

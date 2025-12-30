@@ -3,7 +3,7 @@ from typing import Generator, Any
 
 from abc import ABC, abstractmethod
 
-from api.settings import AI_TRANSLATE_BASE_URL, AI_TRANSLATE_API_KEY, AI_TRANSLATE_MODEL_ID
+from common.settings import AI_TRANSLATE_BASE_URL, AI_TRANSLATE_API_KEY, AI_TRANSLATE_MODEL_ID
 
 
 class BaseLLMClient(ABC):

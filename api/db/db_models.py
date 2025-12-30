@@ -10,9 +10,10 @@ import logging
 import os
 import sys
 import inspect
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import create_engine, Column, String, DateTime, BigInteger, event, Integer, Float, Boolean, Text, text
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
+from sqlalchemy.exc import OperationalError, DisconnectionError, SQLAlchemyError
 from sqlalchemy.inspection import inspect as sa_inspect
-from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, BigInteger, text
 from sqlalchemy.dialects.postgresql import JSONB
 import typing
 import uuid
@@ -20,27 +21,19 @@ from datetime import datetime, timezone
 import time
 import functools
 import hashlib
-
-from sqlalchemy import String, DateTime, BigInteger, event
-from sqlalchemy import create_engine, Column
-from sqlalchemy.orm import sessionmaker, declarative_base, Session
-from sqlalchemy.exc import SQLAlchemyError
-
-from api.utils.configs import decrypt_database_config
-
 from alembic.config import Config
 from alembic import command
 from alembic.script import ScriptDirectory
 from alembic.runtime.migration import MigrationContext
 
 # from common.time_utils import current_timestamp, timestamp_to_date, date_string_to_timestamp
-
+from common.config_utils import decrypt_database_config
+from common.constants import ParserType
 
 DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
 DATABASE = decrypt_database_config(name=DATABASE_TYPE)
 database_config = DATABASE
 
-# DATABASE_URL = "postgresql://postgres:123456@127.0.0.1:5432/postgres"
 DATABASE_URL = (
     f"{database_config['name']}://"
     f"{database_config['user']}:{database_config['password']}@"
@@ -144,6 +137,13 @@ def receive_checkout(dbapi_conn, connection_record, connection_proxy):
         # 检测连接是否在不同进程中使用（多进程场景）
         logging.warning(
             f"[连接池] 连接跨进程使用 | 创建进程: {pid}, 当前进程: {os.getpid()}"
+        )
+        # ⚠️ 关键：跨进程复用连接会导致连接异常/莫名断开。
+        # 使用 SQLAlchemy 官方推荐的 invalidate() 方法使连接失效，
+        # 连接池会自动丢弃该连接并新建连接（自愈机制）
+        connection_record.invalidate()
+        raise DisconnectionError(
+            f"DB connection belongs to PID {pid}, cannot be used in PID {os.getpid()}"
         )
 
 
@@ -553,6 +553,7 @@ class LLMFactories(BaseModel):
     name = Column(String(128), primary_key=True, index=False, nullable=False, doc="LLM factory name")
     logo = Column(Text, index=False, nullable=True)
     tags = Column(String(255), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, ASR")
+    rank = Column(Integer, index=False, default=0)
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
@@ -581,6 +582,7 @@ class TenantLLM(BaseModel):
     api_base = Column(String(255), index=False, nullable=True)
     max_tokens = Column(Integer, index=True, nullable=False, default=8192)
     used_tokens = Column(Integer, index=True, nullable=False, default=0)
+    status = Column(String(1), index=True, nullable=False, default="1", doc="is it validate(0: wasted, 1: validate)")
 
 
 class TenantLangfuse(BaseModel):
@@ -816,7 +818,7 @@ class Knowledgebase(BaseModel):
     chunk_num = Column(Integer, index=True, nullable=False, default=0)
     similarity_threshold = Column(Float, index=True, nullable=False, default=0.2)
     vector_similarity_weight = Column(Float, index=True, nullable=False, default=0.3)
-    parser_id = Column(String(32), index=True, nullable=False, doc="default parser ID")
+    parser_id = Column(String(32), index=True, nullable=False, default=ParserType.NAIVE.value, doc="default parser ID")
     pipeline_id = Column(String(32), index=True, nullable=True, doc="Pipeline ID")
     parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]]})
     pagerank = Column(Integer, index=False, nullable=False, default=0)
@@ -1358,6 +1360,104 @@ class PipelineOperationLog(BaseModel):
     operation_status = Column(String(32), index=True, nullable=False, doc="Operation status")
     avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
     status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted, 1: validate)")
+
+
+class Connector(BaseModel):
+    """数据源连接器"""
+    __tablename__ = "t_ai_connectors"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id = Column(String(32), index=True, nullable=False, doc="Tenant ID")
+    name = Column(String(128), index=False, nullable=False, doc="Search name")
+    source = Column(String(128), index=True, nullable=False, doc="Data source")
+    input_type = Column(String(128), index=True, nullable=False, doc="poll/event/..")
+    config = Column(JSONB, index=False, nullable=False, default=dict)
+    refresh_freq = Column(Integer, index=False, nullable=False, default=0)
+    prune_freq = Column(Integer, index=False, nullable=False, default=0)
+    timeout_secs = Column(Integer, index=False, nullable=False, default=3600)
+    indexing_start = Column(DateTime, index=True, nullable=True)
+    status = Column(String(16), index=True, nullable=True, default="schedule", doc="schedule")
+
+    def __str__(self):
+        return self.name
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "tenant_id": self.tenant_id,
+            "name": self.name,
+            "source": self.source,
+            "input_type": self.input_type,
+            "config": self.config,
+            "refresh_freq": self.refresh_freq,
+            "prune_freq": self.prune_freq,
+            "timeout_secs": self.timeout_secs,
+            "indexing_start": self.indexing_start,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+
+class Connector2Kb(BaseModel):
+    """连接器与知识库关联表"""
+    __tablename__ = "t_ai_connector2kb"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    connector_id = Column(String(32), index=True, nullable=False, doc="Connector ID")
+    kb_id = Column(String(32), index=True, nullable=False, doc="Knowledgebase ID")
+    auto_parse = Column(String(1), nullable=False, default="1", doc="Auto parse (0: disabled, 1: enabled)")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "connector_id": self.connector_id,
+            "kb_id": self.kb_id,
+            "auto_parse": self.auto_parse
+        }
+
+
+class SyncLogs(BaseModel):
+    """同步日志表"""
+    __tablename__ = "t_ai_sync_logs"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    connector_id = Column(String(32), index=True, nullable=False, doc="Connector ID")
+    status = Column(String(128), index=True, nullable=False, doc="Processing status")
+    from_beginning = Column(String(1), index=False, nullable=True, default="0")
+    new_docs_indexed = Column(Integer, index=False, nullable=False, default=0)
+    total_docs_indexed = Column(Integer, index=False, nullable=False, default=0)
+    docs_removed_from_index = Column(Integer, index=False, nullable=False, default=0)
+    error_msg = Column(Text, index=False, nullable=False, default="", doc="process message")
+    error_count = Column(Integer, index=False, nullable=False, default=0)
+    full_exception_trace = Column(Text, index=False, nullable=True, default="", doc="process message")
+    time_started = Column(DateTime, index=True, nullable=True)
+    poll_range_start = Column(String(255), index=True, nullable=True, doc="ISO datetime with timezone")
+    poll_range_end = Column(String(255), index=True, nullable=True, doc="ISO datetime with timezone")
+    kb_id = Column(String(32), index=True, nullable=False, doc="Knowledgebase ID")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "connector_id": self.connector_id,
+            "status": self.status,
+            "from_beginning": self.from_beginning,
+            "new_docs_indexed": self.new_docs_indexed,
+            "total_docs_indexed": self.total_docs_indexed,
+            "docs_removed_from_index": self.docs_removed_from_index,
+            "error_msg": self.error_msg,
+            "error_count": self.error_count,
+            "full_exception_trace": self.full_exception_trace,
+            "time_started": self.time_started,
+            "poll_range_start": self.poll_range_start,
+            "poll_range_end": self.poll_range_end,
+            "kb_id": self.kb_id,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
 
 '''
 拥有权限，采用这种方式

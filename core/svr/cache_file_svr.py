@@ -5,10 +5,9 @@ import traceback
 from sqlalchemy.orm import Session
 
 from api.db.db_models import SessionLocal
-# from api.db.database import SessionLocal
 from api.db.services.task_service import TaskService
-from core.utils.storage_factory import STORAGE_IMPL
 from core.utils.redis_conn import REDIS_CONN
+from common import settings
 
 
 
@@ -17,7 +16,7 @@ def collect(db: Session):
     logging.debug(doc_locations)
     if len(doc_locations) == 0:
         time.sleep(1)
-        return
+        return None
     return doc_locations
 
 def main(db: Session):
@@ -32,7 +31,7 @@ def main(db: Session):
                     key = "{}/{}".format(kb_id, loc)
                     if REDIS_CONN.exist(key):
                         continue
-                    file_bin = STORAGE_IMPL.get(kb_id, loc)
+                    file_bin = settings.STORAGE_IMPL.get(kb_id, loc)
                     REDIS_CONN.transaction(key, file_bin, 12 * 60)
                     logging.info("CACHE: {}".format(loc))
                 except Exception as e:
