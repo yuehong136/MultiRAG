@@ -22,7 +22,6 @@ import re
 import time
 from abc import ABC
 from copy import deepcopy
-from typing import Any
 from urllib.parse import urljoin
 
 import json_repair
@@ -1328,6 +1327,7 @@ class LiteLLMBase(ABC):
         "01.AI",
         "GiteeAI",
         "302.AI",
+        "Jiekou.AI",
         "MiniMax",
     ]
 
