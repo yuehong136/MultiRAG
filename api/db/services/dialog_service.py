@@ -887,7 +887,7 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
 
 def tts(tts_mdl, text):
     if not tts_mdl or not text:
-        return
+        return None
     bin = b""
     for chunk in tts_mdl.tts(text):
         bin += chunk

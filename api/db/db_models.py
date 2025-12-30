@@ -954,7 +954,7 @@ class Conversation(BaseModel):
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     dialog_id = Column(String(32), index=True, nullable=False)
-    name = Column(String(255), index=True, nullable=True, doc="converastion name")
+    name = Column(String(255), index=True, nullable=True, doc="conversation name")
     message = Column(JSONB, index=False, nullable=True)
     reference = Column(JSONB, index=False, nullable=True, default=[])
     user_id = Column(String(32), index=True, nullable=True, doc="user_id")

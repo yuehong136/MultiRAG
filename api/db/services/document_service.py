@@ -9,8 +9,12 @@
 import json
 import logging
 import random
+import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime
+from io import BytesIO
 from typing import Any
 
 import trio
@@ -142,7 +146,7 @@ class DocumentService(CommonService):
     def check_doc_health(cls, db: Session, tenant_id: str, filename):
         import os
         MAX_FILE_NUM_PER_USER = int(os.environ.get("MAX_FILE_NUM_PER_USER", 0))
-        if MAX_FILE_NUM_PER_USER > 0 and DocumentService.get_doc_count(db, tenant_id) >= MAX_FILE_NUM_PER_USER:
+        if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, tenant_id):
             raise RuntimeError("Exceed the maximum file number of a free user!")
         if len(filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
             raise RuntimeError("Exceed the maximum length of file name!")
@@ -2695,134 +2699,145 @@ def get_queue_length(priority):
     return int(group_info.get("lag", 0) or 0)
 
 
-# def doc_upload_and_parse(conversation_id, file_objs, user_id):
-#     from core.app import presentation, picture, naive, audio, email
-#     from api.db.services.dialog_service import ConversationService, DialogService
-#     from api.db.services.file_service import FileService
-#     from api.db.services.llm_service import LLMBundle
-#     from api.db.services.user_service import TenantService
-#     from api.db.services.api_service import API4ConversationService
-#
-#     e, conv = ConversationService.get_by_id(conversation_id)
-#     if not e:
-#         e, conv = API4ConversationService.get_by_id(conversation_id)
-#     assert e, "Conversation not found!"
-#
-#     e, dia = DialogService.get_by_id(conv.dialog_id)
-#     kb_id = dia.kb_ids[0]
-#     e, kb = KnowledgebaseService.get_by_id(kb_id)
-#     if not e:
-#         raise LookupError("Can't find this knowledgebase!")
-#
-#     idxnm = search.index_name(kb.tenant_id)
-#     if not ELASTICSEARCH.indexExist(idxnm):
-#         ELASTICSEARCH.createIdx(idxnm, json.load(
-#             open(os.path.join(get_project_base_directory(), "conf", "mapping.json"), "r")))
-#
-#     embd_mdl = LLMBundle(kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id, lang=kb.language)
-#
-#     err, files = FileService.upload_document(kb, file_objs, user_id)
-#     assert not err, "\n".join(err)
-#
-#     def dummy(prog=None, msg=""):
-#         pass
-#
-#     FACTORY = {
-#         ParserType.PRESENTATION.value: presentation,
-#         ParserType.PICTURE.value: picture,
-#         ParserType.AUDIO.value: audio,
-#         ParserType.EMAIL.value: email
-#     }
-#     parser_config = {"chunk_token_num": 4096, "delimiter": "\n!?;。；！？", "layout_recognize": False}
-#     exe = ThreadPoolExecutor(max_workers=12)
-#     threads = []
-#     for d, blob in files:
-#         kwargs = {
-#             "callback": dummy,
-#             "parser_config": parser_config,
-#             "from_page": 0,
-#             "to_page": 100000,
-#             "tenant_id": kb.tenant_id,
-#             "lang": kb.language
-#         }
-#         threads.append(exe.submit(FACTORY.get(d["parser_id"], naive).chunk, d["name"], blob, **kwargs))
-#
-#     for (docinfo, _), th in zip(files, threads):
-#         docs = []
-#         doc = {
-#             "doc_id": docinfo["id"],
-#             "kb_id": [kb.id]
-#         }
-#         for ck in th.result():
-#             d = deepcopy(doc)
-#             d.update(ck)
-#             md5 = hashlib.md5()
-#             md5.update((ck["content_with_weight"] +
-#                         str(d["doc_id"])).encode("utf-8"))
-#             d["_id"] = md5.hexdigest()
-#             d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
-#             d["create_timestamp_flt"] = datetime.now().timestamp()
-#             if not d.get("image"):
-#                 docs.append(d)
-#                 continue
-#
-#             output_buffer = BytesIO()
-#             if isinstance(d["image"], bytes):
-#                 output_buffer = BytesIO(d["image"])
-#             else:
-#                 d["image"].save(output_buffer, format='JPEG')
-#
-#             MINIO.put(kb.id, d["_id"], output_buffer.getvalue())
-#             d["img_id"] = "{}-{}".format(kb.id, d["_id"])
-#             d.pop("image", None)
-#             docs.append(d)
-#
-#     parser_ids = {d["id"]: d["parser_id"] for d, _ in files}
-#     docids = [d["id"] for d, _ in files]
-#     chunk_counts = {id: 0 for id in docids}
-#     token_counts = {id: 0 for id in docids}
-#     es_bulk_size = 64
-#
-#     def embedding(doc_id, cnts, batch_size=16):
-#         nonlocal embd_mdl, chunk_counts, token_counts
-#         vects = []
-#         for i in range(0, len(cnts), batch_size):
-#             vts, c = embd_mdl.encode(cnts[i: i + batch_size])
-#             vects.extend(vts.tolist())
-#             chunk_counts[doc_id] += len(cnts[i:i + batch_size])
-#             token_counts[doc_id] += c
-#         return vects
-#
-#     _, tenant = TenantService.get_by_id(kb.tenant_id)
-#     llm_bdl = LLMBundle(kb.tenant_id, LLMType.CHAT, tenant.llm_id)
-#     for doc_id in docids:
-#         cks = [c for c in docs if c["doc_id"] == doc_id]
-#
-#         if parser_ids[doc_id] != ParserType.PICTURE.value:
-#             mindmap = MindMapExtractor(llm_bdl)
-#             try:
-#                 mind_map = json.dumps(mindmap([c["content_with_weight"] for c in docs if c["doc_id"] == doc_id]).output,
-#                                       ensure_ascii=False, indent=2)
-#                 if len(mind_map) < 32: raise Exception("Few content: " + mind_map)
-#                 cks.append({
-#                     "id": get_uuid(),
-#                     "doc_id": doc_id,
-#                     "kb_id": [kb.id],
-#                     "content_with_weight": mind_map,
-#                     "knowledge_graph_kwd": "mind_map"
-#                 })
-#             except Exception:
-#                 logging.exception("Mind map generation error")
-#
-#         vects = embedding(doc_id, [c["content_with_weight"] for c in cks])
-#         assert len(cks) == len(vects)
-#         for i, d in enumerate(cks):
-#             v = vects[i]
-#             d["q_%d_vec" % len(v)] = v
-#         for b in range(0, len(cks), es_bulk_size):
-#             ELASTICSEARCH.bulk(cks[b:b + es_bulk_size], idxnm)
-#
-#         DocumentService.increment_chunk_num(
-#             doc_id, kb.id, token_counts[doc_id], chunk_counts[doc_id], 0)
-#
-#     return [d["id"] for d,_ in files]
+def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
+    from api.db.services.api_service import API4ConversationService
+    from api.db.services.conversation_service import ConversationService
+    from api.db.services.dialog_service import DialogService
+    from api.db.services.file_service import FileService
+    from api.db.services.llm_service import LLMBundle
+    from api.db.services.user_service import TenantService
+    from core.app import audio, email, naive, picture, presentation
+
+    conv = ConversationService.get_by_id(db, conversation_id)
+    if not conv:
+        conv = API4ConversationService.get_by_id(db, conversation_id)
+    assert conv, "Conversation not found!"
+
+    dia = DialogService.get_by_id(db, conv.dialog_id)
+    if not dia.kb_ids:
+        raise LookupError("No knowledge base associated with this conversation. "
+                          "Please add a knowledge base before uploading documents")
+    kb_id = dia.kb_ids[0]
+    kb = KnowledgebaseService.get_by_id(db, kb_id)
+    if not kb:
+        raise LookupError("Can't find this knowledgebase!")
+
+    embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id, lang=kb.language)
+
+    err, files = FileService.upload_document(db, kb, file_objs, user_id)
+    assert not err, "\n".join(err)
+
+    def dummy(prog=None, msg=""):
+        pass
+
+    FACTORY = {
+        ParserType.PRESENTATION.value: presentation,
+        ParserType.PICTURE.value: picture,
+        ParserType.AUDIO.value: audio,
+        ParserType.EMAIL.value: email
+    }
+    parser_config = {"chunk_token_num": 4096, "delimiter": "\n!?;。；！？", "layout_recognize": "Plain Text"}
+    exe = ThreadPoolExecutor(max_workers=12)
+    threads = []
+    doc_nm = {}
+    for d, blob in files:
+        doc_nm[d["id"]] = d["name"]
+    for d, blob in files:
+        kwargs = {
+            "callback": dummy,
+            "parser_config": parser_config,
+            "from_page": 0,
+            "to_page": 100000,
+            "tenant_id": kb.tenant_id,
+            "lang": kb.language
+        }
+        threads.append(exe.submit(FACTORY.get(d["parser_id"], naive).chunk, d["name"], blob, **kwargs))
+
+    for (docinfo, _), th in zip(files, threads):
+        docs = []
+        doc = {
+            "doc_id": docinfo["id"],
+            "kb_id": [kb.id]
+        }
+        for ck in th.result():
+            d = deepcopy(doc)
+            d.update(ck)
+            d["id"] = xxhash.xxh64((ck["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
+            d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
+            d["create_timestamp_flt"] = datetime.now().timestamp()
+            if not d.get("image"):
+                docs.append(d)
+                continue
+
+            output_buffer = BytesIO()
+            if isinstance(d["image"], bytes):
+                output_buffer = BytesIO(d["image"])
+            else:
+                d["image"].save(output_buffer, format='JPEG')
+
+            settings.STORAGE_IMPL.put(kb.id, d["id"], output_buffer.getvalue())
+            d["img_id"] = "{}-{}".format(kb.id, d["id"])
+            d.pop("image", None)
+            docs.append(d)
+
+    parser_ids = {d["id"]: d["parser_id"] for d, _ in files}
+    docids = [d["id"] for d, _ in files]
+    chunk_counts = {id: 0 for id in docids}
+    token_counts = {id: 0 for id in docids}
+    es_bulk_size = 64
+
+    def embedding(doc_id, cnts, batch_size=16):
+        nonlocal embd_mdl, chunk_counts, token_counts
+        vectors = []
+        for i in range(0, len(cnts), batch_size):
+            vts, c = embd_mdl.encode(cnts[i: i + batch_size])
+            vectors.extend(vts.tolist())
+            chunk_counts[doc_id] += len(cnts[i:i + batch_size])
+            token_counts[doc_id] += c
+        return vectors
+
+    idxnm = search.index_name(kb.tenant_id, [kb.name])
+    try_create_idx = True
+
+    tenant = TenantService.get_by_id(db, kb.tenant_id)
+    llm_bdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT, tenant.llm_id)
+    for doc_id in docids:
+        cks = [c for c in docs if c["doc_id"] == doc_id]
+
+        if parser_ids[doc_id] != ParserType.PICTURE.value:
+            from graphrag.general.mind_map_extractor import MindMapExtractor
+            mindmap = MindMapExtractor(llm_bdl)
+            try:
+                mind_map = trio.run(mindmap, [c["content_with_weight"] for c in docs if c["doc_id"] == doc_id])
+                mind_map = json.dumps(mind_map.output, ensure_ascii=False, indent=2)
+                if len(mind_map) < 32:
+                    raise Exception("Few content: " + mind_map)
+                cks.append({
+                    "id": get_uuid(),
+                    "doc_id": doc_id,
+                    "kb_id": [kb.id],
+                    "docnm_kwd": doc_nm[doc_id],
+                    "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", doc_nm[doc_id])),
+                    "content_ltks": rag_tokenizer.tokenize("summary summarize 总结 概况 file 文件 概括"),
+                    "content_with_weight": mind_map,
+                    "knowledge_graph_kwd": "mind_map"
+                })
+            except Exception:
+                logging.exception("Mind map generation error")
+
+        vectors = embedding(doc_id, [c["content_with_weight"] for c in cks])
+        assert len(cks) == len(vectors)
+        for i, d in enumerate(cks):
+            v = vectors[i]
+            d["q_%d_vec" % len(v)] = v
+        for b in range(0, len(cks), es_bulk_size):
+            if try_create_idx:
+                if not settings.docStoreConn.indexExist(idxnm, kb_id):
+                    settings.docStoreConn.createIdx(idxnm, kb_id, len(vectors[0]))
+                try_create_idx = False
+            settings.docStoreConn.insert(cks[b:b + es_bulk_size], idxnm, kb_id)
+
+        DocumentService.increment_chunk_num(
+            db, doc_id, kb.id, token_counts[doc_id], chunk_counts[doc_id], 0)
+
+    return [d["id"] for d, _ in files]
