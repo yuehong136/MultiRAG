@@ -47,7 +47,8 @@ RUN apt update && apt -y install ca-certificates && \
     build-essential libglib2.0-0 libglx-mesa0 pkg-config libicu-dev libatk-bridge2.0-0 \
     libpython3-dev libjemalloc-dev nginx ghostscript \
     libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus  python3-pip pipx tcl-dev pkg-config \
-    fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg && \
+    fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg \
+    pandoc texlive && \
     # 安装uv
     pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
     pip3 config set global.trusted-host pypi.tuna.tsinghua.edu.cn; \

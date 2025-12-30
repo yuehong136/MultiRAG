@@ -16,7 +16,7 @@ from io import BytesIO
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form, Body, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 from starlette.status import (
@@ -2589,6 +2589,31 @@ def get_document(
         encoded_filename = quote(doc.name)
         response = StreamingResponse(file_stream, media_type=media_type)
         response.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{encoded_filename}"
+        return response
+    except Exception as e:
+        return construct_error_response(e)
+
+
+@router.get("/download/{attachment_id}", summary="下载附件", response_description="成功获取附件内容")
+def download_attachment(
+        attachment_id: str,
+        ext: str = "markdown",
+        user=Depends(manager)
+):
+    """
+    下载 Message 组件导出的附件文件
+
+    参数：
+    - **attachment_id**: 附件ID（必填）
+    - **ext**: 文件扩展名（可选，默认为 markdown）
+
+    返回：
+    - 附件文件内容
+    """
+    try:
+        data = settings.STORAGE_IMPL.get(user.id, attachment_id)
+        response = Response(content=data)
+        response.headers["Content-Type"] = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
         return response
     except Exception as e:
         return construct_error_response(e)

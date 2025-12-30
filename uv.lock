@@ -3406,6 +3406,7 @@ dependencies = [
     { name = "pymilvus" },
     { name = "pymysql" },
     { name = "pyodbc" },
+    { name = "pypandoc" },
     { name = "pypdf" },
     { name = "pypdf2" },
     { name = "pytest" },
@@ -3585,6 +3586,7 @@ requires-dist = [
     { name = "pymilvus", specifier = ">=2.5.11" },
     { name = "pymysql", specifier = ">=1.1.1,<2.0.0" },
     { name = "pyodbc", specifier = ">=5.2.0,<6.0.0" },
+    { name = "pypandoc", specifier = ">=1.16" },
     { name = "pypdf", specifier = "==6.0.0" },
     { name = "pypdf2", specifier = ">=3.0.1,<4.0.0" },
     { name = "pytest", specifier = ">=8.3.0,<9.0.0" },
@@ -4978,6 +4980,15 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/9f/26/e25b4a374b4639e0c235527bbe31c0524f26eda701d79456a7e1877f4cc5/pyopenssl-25.0.0.tar.gz", hash = "sha256:cd2cef799efa3936bb08e8ccb9433a575722b9dd986023f1cabc4ae64e9dac16" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/ca/d7/eb76863d2060dcbe7c7e6cccfd95ac02ea0b9acc37745a0d99ff6457aefb/pyOpenSSL-25.0.0-py3-none-any.whl", hash = "sha256:424c247065e46e76a37411b9ab1782541c23bb658bf003772c3405fbaa128e90" },
+]
+
+[[package]]
+name = "pypandoc"
+version = "1.16.2"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/0b/18/9f5f70567b97758625335209b98d5cb857e19aa1a9306e9749567a240634/pypandoc-1.16.2.tar.gz", hash = "sha256:7a72a9fbf4a5dc700465e384c3bb333d22220efc4e972cb98cf6fc723cdca86b" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/bb/e9/b145683854189bba84437ea569bfa786f408c8dc5bc16d8eb0753f5583bf/pypandoc-1.16.2-py3-none-any.whl", hash = "sha256:c200c1139c8e3247baf38d1e9279e85d9f162499d1999c6aa8418596558fe79b" },
 ]
 
 [[package]]
