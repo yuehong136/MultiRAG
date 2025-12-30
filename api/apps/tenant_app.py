@@ -79,7 +79,7 @@ def user_list(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post('/<tenant_id>/user', summary="新增租户下用户", response_model=dict)
-async def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager)):
+def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager)):
     """
     添加新用户到指定租户。
 

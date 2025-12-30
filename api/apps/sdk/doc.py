@@ -172,7 +172,7 @@ class RetrievalTestRequest(BaseModel):
 
 
 @router.post("/datasets/{dataset_id}/documents", summary="上传文档")
-async def upload_documents(
+def upload_documents(
     dataset_id: str,
     files: list[UploadFile] = File(...),
     parent_path: str | None = Form(None, description="Optional nested path under the parent folder. Uses '/' separators."),

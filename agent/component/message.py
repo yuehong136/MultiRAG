@@ -17,7 +17,6 @@ import json
 import os
 import random
 import re
-import pypandoc
 import logging
 import tempfile
 from functools import partial
@@ -177,6 +176,10 @@ class Message(ComponentBase):
         return ""
 
     def _convert_content(self, content):
+        if not self._param.output_format:
+            return
+
+        import pypandoc
         doc_id = get_uuid()
         
         if self._param.output_format.lower() not in {"markdown", "html", "pdf", "docx"}:

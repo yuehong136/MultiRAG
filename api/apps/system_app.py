@@ -69,7 +69,7 @@ class TokenResponse(BaseModel):
     update_time: int
 
 @router.get("/version", summary="获取版本", response_description="成功获取版本")
-async def version(user=Depends(manager)):
+def version(user=Depends(manager)):
     """
     获取系统版本信息的接口说明文档。
 
@@ -93,7 +93,7 @@ async def version(user=Depends(manager)):
 
 
 @router.get("/status", summary="获取系统状态", response_description="成功获取系统状态")
-async def status(db: Session = Depends(get_db), user=Depends(manager)):
+def status(db: Session = Depends(get_db), user=Depends(manager)):
     """
     检查系统状态的接口说明文档。
 
@@ -230,7 +230,7 @@ async def status(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.get("/healthz", summary="健康检查", response_description="返回系统健康状态")
-async def healthz(response: Response):
+def healthz(response: Response):
     """
     健康检查接口
     

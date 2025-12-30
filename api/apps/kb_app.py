@@ -146,7 +146,7 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
         parser_config = get_parser_config(parser_id, None)
         
         # 使用封装的方法创建payload
-        payload = KnowledgebaseService.create_with_name(
+        e, res = KnowledgebaseService.create_with_name(
             db=db,
             name=dataset_name,
             tenant_id=user.id,
@@ -157,13 +157,12 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
             permission=req_data.get("permission")
         )
 
-        code = payload.get("code")
-        if code:
-            return get_data_error_result(retcode=code, retmsg=payload.get("message"))
+        if not e:
+            return res  # 直接返回错误响应
         
-        if not KnowledgebaseService.save(db, **payload):
+        if not KnowledgebaseService.save(db, **res):
             return get_data_error_result()
-        return get_json_result(data={"kb_id": payload["id"]})
+        return get_json_result(data={"kb_id": res["id"]})
     except Exception as e:
         return server_error_response(e)
 
@@ -596,7 +595,7 @@ def get_meta(
 
 
 @router.get("/basic_info", summary="获取知识库文档处理统计信息", response_description="返回文档处理状态统计")
-async def get_basic_info(
+def get_basic_info(
     kb_id: str = Query(..., description="知识库ID"),
     db: Session = Depends(get_db),
     user=Depends(manager)

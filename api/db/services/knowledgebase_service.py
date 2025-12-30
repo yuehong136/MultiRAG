@@ -18,6 +18,7 @@ from common.time_utils import current_timestamp, datetime_format
 from api.db.services.user_service import TenantService
 from common.misc_utils import get_uuid
 from api.constants import DATASET_NAME_LIMIT
+from api.utils.api_utils import get_data_error_result
 
 
 class KnowledgebaseService(CommonService):
@@ -444,22 +445,23 @@ class KnowledgebaseService(CommonService):
             **kwargs: Other fields (description, permission, etc.)
 
         Returns:
-            dict: payload dictionary for creating knowledgebase, or
-                  {"code": RetCode, "message": str} if validation fails
+            tuple: (success, result)
+                - success (bool): True if validation passed, False otherwise
+                - result: payload dictionary if success, error response if failed
         """
         # Validate name (basic checks, MILVUS pattern check should be done by caller)
         if not isinstance(name, str):
-            return {"code": RetCode.DATA_ERROR, "message": "Dataset name must be string."}
+            return False, get_data_error_result(retmsg="Dataset name must be string.")
         dataset_name = name.strip()
         if len(dataset_name) == 0:
-            return {"code": RetCode.DATA_ERROR, "message": "Dataset name can't be empty."}
+            return False, get_data_error_result(retmsg="Dataset name can't be empty.")
         if len(dataset_name.encode("utf-8")) > DATASET_NAME_LIMIT:
-            return {"code": RetCode.DATA_ERROR, "message": f"Dataset name length is {len(dataset_name)} which is larger than {DATASET_NAME_LIMIT}"}
+            return False, get_data_error_result(retmsg=f"Dataset name length is {len(dataset_name)} which is larger than {DATASET_NAME_LIMIT}")
 
         # Verify tenant exists
         t = TenantService.get_by_id(db, tenant_id)
         if not t:
-            return {"code": RetCode.DATA_ERROR, "message": "Tenant does not exist."}
+            return False, get_data_error_result(retmsg="Tenant not found.")
 
         # Build payload
         kb_id = get_uuid()
@@ -482,7 +484,7 @@ class KnowledgebaseService(CommonService):
         if parser_config is not None:
             payload["parser_config"] = parser_config
 
-        return payload
+        return True, payload
 
     @classmethod
     def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name):

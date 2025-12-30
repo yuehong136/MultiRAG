@@ -42,7 +42,7 @@ router = APIRouter()
 
 
 @router.post('/new_token', summary="生成新的API令牌", response_description="成功生成新的API令牌")
-async def new_token(request: NewTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def new_token(request: NewTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     生成新的API令牌
 
@@ -83,7 +83,7 @@ async def new_token(request: NewTokenRequest, db: Session = Depends(get_db), use
 
 
 @router.get('/token_list', summary="获取API令牌列表", response_description="成功获取API令牌列表")
-async def token_list(
+def token_list(
     dialog_id: str | None = Query(None, alias="dialog_id"),
     canvas_id: str | None = Query(None, alias="canvas_id"),
     db: Session = Depends(get_db),
@@ -119,7 +119,7 @@ async def token_list(
 
 
 @router.post('/rm', summary="删除API令牌", response_description="成功删除API令牌")
-async def rm(request: RemoveTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rm(request: RemoveTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
    删除API令牌
 
@@ -145,7 +145,7 @@ async def rm(request: RemoveTokenRequest, db: Session = Depends(get_db), user=De
 
 
 @router.get('/stats', summary="获取API使用统计", response_description="成功获取API使用统计")
-async def stats(from_date: str = None, to_date: str = None, canvas_id: str = None, db: Session = Depends(get_db), user=Depends(manager)):
+def stats(from_date: str = None, to_date: str = None, canvas_id: str = None, db: Session = Depends(get_db), user=Depends(manager)):
     """
    获取API使用统计
 

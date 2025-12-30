@@ -444,7 +444,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
 
 
 @router.get('/get', summary="获取对话", response_description="成功获取对话")
-async def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取对话
 
@@ -468,7 +468,7 @@ async def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manage
         return server_error_response(e)
 
 @router.get('/list', summary="列出对话", response_description="成功列出对话")
-async def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
+def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
     """
     列出对话
 
@@ -558,7 +558,7 @@ def list_dialogs_next(
 
 
 @router.post('/rm', summary="删除对话应用", response_description="成功删除对话应用")
-async def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除对话
 

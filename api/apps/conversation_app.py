@@ -238,7 +238,7 @@ router = APIRouter()
 
 
 @router.post('/set', summary="设置会话", response_description="成功设置会话")
-async def set_conversation(request: SetConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def set_conversation(request: SetConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     设置会话
 
@@ -308,7 +308,7 @@ async def set_conversation(request: SetConversationRequest, db: Session = Depend
 
 
 @router.get('/get', summary="获取会话", response_description="成功获取会话")
-async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取会话
 
@@ -348,7 +348,7 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
 
 
 @router.get('/getsse/{dialog_id}', summary="获取对话信息（支持SSE）", response_description="成功获取对话信息")
-async def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = None):
+def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = None):
     """
     获取对话信息（支持SSE）
 
@@ -388,7 +388,7 @@ async def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request
         return server_error_response(e)
 
 @router.post('/rm', summary="删除会话", response_description="成功删除会话")
-async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除会话
 
@@ -422,7 +422,7 @@ async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), 
 
 
 @router.get('/list', summary="列出会话", response_description="成功列出会话")
-async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     列出会话
 
@@ -884,7 +884,7 @@ def asr_upload(file: UploadFile = File(...), llm_name: str | None = None, db: Se
 
 
 @router.post('/delete_msg', summary="删除信息", response_description="成功删除信息")
-async def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除消息
 
@@ -934,7 +934,7 @@ async def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), u
 
 
 @router.post('/thumbup', summary="点赞", response_description="成功点赞")
-async def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     点赞接口
 
@@ -984,7 +984,7 @@ async def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=D
 
 
 @router.post('/ask', summary="问答接口", response_description="返回答案")
-async def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     问答接口
 
@@ -997,6 +997,8 @@ async def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), use
 
     返回:
     - 实时流式返回答案数据
+    
+    注意: 虽然此函数定义为同步，但返回 StreamingResponse，FastAPI 会正确处理。
     """
     req = request.model_dump()
     uid = user.id
@@ -1129,7 +1131,7 @@ def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends
 
 # 定义 related_questions 接口
 @router.post('/related_questions', summary="生成相关问题", response_description="返回相关问题")
-async def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     生成相关问题
 

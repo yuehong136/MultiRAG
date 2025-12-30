@@ -219,7 +219,7 @@ async def upload(
 
 
 @router.post("/create", summary="创建文件或文件夹", response_description="成功创建文件或文件夹")
-async def create(
+def create(
         request_body: CreateRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -279,7 +279,7 @@ async def create(
 
 
 @router.get("/list", summary="列出文件或文件夹", response_description="成功列出文件或文件夹")
-async def list_files(
+def list_files(
         parent_id: str | None = None,
         keywords: str = "",
         page: int = 1,
@@ -324,7 +324,7 @@ async def list_files(
 
 
 @router.get("/root_folder", summary="获取根文件夹", response_description="成功获取根文件夹")
-async def get_root_folder(
+def get_root_folder(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -342,7 +342,7 @@ async def get_root_folder(
 
 
 @router.get("/parent_folder", summary="获取父文件夹", response_description="成功获取父文件夹")
-async def get_parent_folder(
+def get_parent_folder(
         file_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -368,7 +368,7 @@ async def get_parent_folder(
 
 
 @router.get("/all_parent_folder", summary="获取所有父文件夹", response_description="成功获取所有父文件夹")
-async def get_all_parent_folders(
+def get_all_parent_folders(
         file_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -395,7 +395,7 @@ async def get_all_parent_folders(
 
 
 @router.post("/rm", summary="删除文件或文件夹", response_description="成功删除文件或文件夹")
-async def rm(
+def rm(
         request_body: RemoveRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -468,7 +468,7 @@ async def rm(
 
 
 @router.post("/rename", summary="重命名文件或文件夹", response_description="成功重命名文件或文件夹")
-async def rename(
+def rename(
         request_body: RenameRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -511,7 +511,7 @@ async def rename(
 
 
 @router.get("/get/{file_id}", summary="获取文件", response_description="成功获取文件")
-async def get_file(
+def get_file(
         file_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -557,7 +557,7 @@ async def get_file(
 
 
 @router.post("/mv", summary="移动文件或文件夹", response_description="成功移动文件或文件夹")
-async def move(
+def move(
         request_body: MoveRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)

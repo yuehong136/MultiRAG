@@ -25,7 +25,6 @@ from typing import Any, Union, Tuple
 
 from agent.component import component_class
 from agent.component.base import ComponentBase
-from api.db.services.file_service import FileService
 from api.db.services.task_service import has_canceled
 from common.misc_utils import get_uuid, hash_str2int
 from common.exceptions import TaskCanceledException
@@ -138,7 +137,7 @@ class Graph:
                 return n["data"]["name"]
         return ""
 
-    def run(self, **kwargs):
+    async def run(self, **kwargs):
         raise NotImplementedError()
 
     def get_component(self, cpn_id) -> Union[None, dict[str, Any]]:
@@ -549,6 +548,7 @@ class Canvas(Graph):
         return self.components[cpnnm]["obj"].get_input_elements()
 
     def get_files(self, files: Union[None, list[dict]]) -> list[str]:
+        from api.db.services.file_service import FileService
         if not files:
             return []
 

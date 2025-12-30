@@ -331,7 +331,7 @@ async def get_sql_and_table_config(
 
 
 @router.get("/events/{event_id}")
-async def subscribe_to_event(request: Request, event_id: str):
+def subscribe_to_event(request: Request, event_id: str):
     """
     订阅指定事件ID的SSE端点
 
@@ -456,7 +456,7 @@ async def analyze_user_query_background_task(
 
 @router.post("/analyze-user-query-streaming/{custom_event_id}", response_model=ResponseSchema,
              summary="使用自定义事件ID启动流式聊天")
-async def analyze_user_query_streaming(
+def analyze_user_query_streaming(
         custom_event_id: str,
         background_tasks: BackgroundTasks,
         db: Session = Depends(get_db),
@@ -993,7 +993,7 @@ async def generate_wide_table_sql(
 
 
 @router.post("/stop-request/{ask_id}", response_model=ResponseSchema, summary="停止请求处理")
-async def stop_request(ask_id: str) -> ResponseSchema:
+def stop_request(ask_id: str) -> ResponseSchema:
     """
     停止指定ask_id的请求处理
 

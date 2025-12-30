@@ -312,7 +312,7 @@ async def filter_openapi_get(
 @router.get("/openapi-filter-health",
             summary="OpenAPI过滤服务健康检查",
             response_description="返回服务健康状态")
-async def filter_service_health():
+def filter_service_health():
     """
     OpenAPI过滤服务健康检查
 
@@ -398,7 +398,7 @@ async def filter_service_health():
 @router.post("/openapi-filter-validate",
              summary="验证OpenAPI过滤规则",
              response_description="返回规则验证结果")
-async def validate_filter_rule(
+def validate_filter_rule(
         rule: FilterRule = Body(..., description="要验证的过滤规则"),
         user=Depends(manager)
 ):

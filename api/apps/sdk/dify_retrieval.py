@@ -96,7 +96,7 @@ class RetrievalRequestModel(BaseModel):
 
 
 @router.post('/retrieval', summary="Dify 检索接口")
-async def retrieval(
+def retrieval(
     request_data: RetrievalRequestModel,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(apikey_dependency)

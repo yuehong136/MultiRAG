@@ -539,7 +539,7 @@ from fastapi.responses import StreamingResponse
 
 
 @router.get("/events/{event_id}")
-async def subscribe_to_event(request: Request, event_id: str):
+def subscribe_to_event(request: Request, event_id: str):
     """
     订阅指定事件ID的SSE端点
 

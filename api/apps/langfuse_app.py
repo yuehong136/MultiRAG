@@ -20,7 +20,7 @@ router = APIRouter()
 
 @router.post('/api_key', summary="设置Langfuse API密钥")
 @router.put('/api_key', summary="更新Langfuse API密钥")
-async def set_api_key(request: LangfuseKeysRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def set_api_key(request: LangfuseKeysRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     设置或更新Langfuse API密钥
 
@@ -75,7 +75,7 @@ async def set_api_key(request: LangfuseKeysRequest, db: Session = Depends(get_db
 
 
 @router.get('/api_key', summary="获取Langfuse API密钥")
-async def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
+def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取Langfuse API密钥
 
@@ -109,7 +109,7 @@ async def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.delete('/api_key', summary="删除Langfuse API密钥")
-async def delete_api_key(db: Session = Depends(get_db), user=Depends(manager)):
+def delete_api_key(db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除Langfuse API密钥
 

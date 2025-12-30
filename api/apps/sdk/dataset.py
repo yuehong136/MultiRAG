@@ -95,7 +95,7 @@ def create_dataset(
         parser_config = get_parser_config(final_parser_id, req.get("parser_config"))
         
         # 使用封装的方法创建payload（会自动处理embd_id默认值）
-        req = KnowledgebaseService.create_with_name(
+        e, payload = KnowledgebaseService.create_with_name(
             db=db,
             name=req.pop("name"),
             tenant_id=tenant_id,
@@ -107,16 +107,20 @@ def create_dataset(
             permission=req.get("permission")
         )
 
+        # 检查创建是否失败
+        if not e:
+            return payload  # 直接返回错误响应
+
         # 验证embedding model的可用性
         if embd_id:  # 如果用户指定了embd_id，需要验证
-            ok, err = verify_embedding_availability(req["embd_id"], tenant_id)
+            ok, err = verify_embedding_availability(db, payload["embd_id"], tenant_id)
             if not ok:
                 return err
 
-        if not KnowledgebaseService.save(db, **req):
+        if not KnowledgebaseService.save(db, **payload):
             return get_error_data_result(retmsg="Create dataset error.(Database error)")
 
-        ok, k = KnowledgebaseService.get_by_id(db, req["id"])
+        ok, k = KnowledgebaseService.get_by_id(db, payload["id"])
         if not ok:
             return get_error_data_result(retmsg="Dataset created failed")
 
