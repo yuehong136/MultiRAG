@@ -172,7 +172,44 @@ _term() {
 }
 trap _term SIGTERM SIGINT
 
+# --------------------------- 配置文件生成 -----------------------------------
+# 从模板生成 service_conf.yaml，支持环境变量替换
+# 参考 ragflow 的做法：模板内置在镜像中，每次启动都重新生成
+#
+# 环境变量控制：
+#   SKIP_CONFIG_GENERATE=1  跳过配置生成（运维直接挂载配置文件时使用）
+#
+generate_config() {
+  local CONF_DIR="${MULTIRAG_CONF_DIR:-/multirag/configs}"
+  local TEMPLATE_DIR="${MULTIRAG_TEMPLATE_DIR:-/multirag/docker}"
+  local TEMPLATE_FILE="${TEMPLATE_DIR}/service_conf.yaml.template"
+  local CONF_FILE="${CONF_DIR}/service_conf.yaml"
+
+  # 如果设置了跳过配置生成，直接返回（运维直接挂载配置文件的场景）
+  if [[ "${SKIP_CONFIG_GENERATE:-0}" == "1" ]]; then
+    echo "[entrypoint] SKIP_CONFIG_GENERATE=1，跳过配置生成"
+    return 0
+  fi
+
+  # 检查模板文件是否存在
+  if [[ ! -f "${TEMPLATE_FILE}" ]]; then
+    echo "[entrypoint] 模板文件不存在: ${TEMPLATE_FILE}，跳过配置生成"
+    return 0
+  fi
+
+  # 从模板生成配置文件
+  echo "[entrypoint] 从模板生成配置文件: ${TEMPLATE_FILE} -> ${CONF_FILE}"
+  rm -f "${CONF_FILE}"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    eval "echo \"$line\"" >> "${CONF_FILE}"
+  done < "${TEMPLATE_FILE}"
+  echo "[entrypoint] 配置文件生成完成"
+}
+
 # --------------------------- 启动流程 ---------------------------------------
+# 生成配置文件（从模板）
+generate_config
+
 ensure_docling
 ensure_mineru
 

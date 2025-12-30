@@ -13,6 +13,7 @@ import core.utils
 import core.utils.milvus_conn
 import core.utils.es_conn
 import core.utils.infinity_conn
+import core.utils.ob_conn
 import core.utils.opensearch_conn
 import core.utils.vastbase_conn
 from core.utils.azure_sas_conn import MultiRAGAzureSasBlob
@@ -94,6 +95,7 @@ INFINITY = {}
 AZURE = {}
 S3 = {}
 MINIO = {}
+OB = {}
 OSS = {}
 OS = {}
 
@@ -256,11 +258,11 @@ def init_settings():
     FEISHU_OAUTH = get_base_config("oauth", {}).get("feishu")
     OAUTH_CONFIG = get_base_config("oauth", {})
 
-    global DOC_ENGINE, docStoreConn, ES, OS, INFINITY, MILVUS, VASTBASE
+    global DOC_ENGINE, docStoreConn, ES, OB, OS, INFINITY, MILVUS, VASTBASE
     DOC_ENGINE = os.environ.get("DOC_ENGINE", "milvus")
     # DOC_ENGINE = os.environ.get('DOC_ENGINE', "opensearch")
     lower_case_doc_engine = DOC_ENGINE.lower()
-    
+
     if lower_case_doc_engine == "elasticsearch":
         ES = get_base_config("es", {})
         docStoreConn = core.utils.es_conn.ESConnection()
@@ -273,6 +275,9 @@ def init_settings():
     elif lower_case_doc_engine == "opensearch":
         OS = get_base_config("os", {})
         docStoreConn = core.utils.opensearch_conn.OSConnection()
+    elif lower_case_doc_engine == "oceanbase":
+        OB = get_base_config("oceanbase", {})
+        docStoreConn = core.utils.ob_conn.OBConnection()
     elif lower_case_doc_engine == "vastbase":
         VASTBASE = get_base_config("vastbase", {})
         docStoreConn = core.utils.vastbase_conn.VastBaseConnection()

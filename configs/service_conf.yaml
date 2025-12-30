@@ -113,6 +113,15 @@ infinity:
   uri: 'infinity:23817'
   db_name: 'default_db'
 
+oceanbase:
+  scheme: 'oceanbase' # set 'mysql' to create connection using mysql config
+  config:
+    db_name: 'test'
+    user: 'root@multirag'
+    password: 'dxl_multi_rag'
+    host: 'localhost'
+    port: 2881
+
 redis:
   # Redis数据库的编号
   db: 1

@@ -182,6 +182,7 @@ COPY plugin plugin
 COPY common common
 
 # 添加并配置entrypoint
+COPY docker/service_conf.yaml.template ./configs/service_conf.yaml.template
 COPY ./docker/entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 

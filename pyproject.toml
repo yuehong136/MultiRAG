@@ -192,6 +192,7 @@ dependencies = [
     "pip==25.3",
     "pyvector-vastbase==1.0.2",
     "pypandoc>=1.16",
+    "pyobvector==0.2.18",
 ]
 
 [tool.uv]
