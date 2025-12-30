@@ -1021,7 +1021,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
 
     res = []
     tk_count = 0
-    async def generate(chunks):
+    async def generate(chunks, did):
         nonlocal tk_count, res
         raptor = Raptor(
             raptor_config.get("max_cluster", 64),
@@ -1034,7 +1034,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
         original_length = len(chunks)
         chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback, row["id"])
         doc = {
-            "doc_id": fake_doc_id,
+            "doc_id": did,
             "kb_id": [str(row["kb_id"])],
             "docnm_kwd": row["name"],
             "title_tks": rag_tokenizer.tokenize(row["name"]),
@@ -1045,7 +1045,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
 
         for content, vctr in chunks[original_length:]:
             d = copy.deepcopy(doc)
-            d["pk"] = xxhash.xxh64((content + str(fake_doc_id)).encode("utf-8")).hexdigest()
+            d["pk"] = xxhash.xxh64((content + str(did)).encode("utf-8")).hexdigest()
             d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
             d["create_timestamp_flt"] = datetime.now().timestamp()
             d[vctr_nm] = vctr.tolist()
@@ -1061,16 +1061,15 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
             chunks = []
             for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
                 chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
-            callback(progress=(x + 1.)/len(doc_ids))
-            await generate(chunks)
-
+            await generate(chunks, doc_id)
+            callback(prog=(x + 1.)/len(doc_ids))
     else:
         chunks = []
         for doc_id in doc_ids:
             for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
                 chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
 
-        await generate(chunks)
+        await generate(chunks, fake_doc_id)
 
     return res, tk_count
 

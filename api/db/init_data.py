@@ -136,6 +136,7 @@ def init_llm_factory(db: Session):
         info = deepcopy(factory_llm_info)
         llm_infos = info.pop("llm")
         try:
+            LLMFactoriesService.filter_delete(db, [LLMFactories.name == factory_llm_info["name"]])
             LLMFactoriesService.save(db, **info)
         except Exception:
             pass
