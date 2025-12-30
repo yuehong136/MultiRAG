@@ -98,7 +98,7 @@ class MultiRAGMinio:
                 logging.exception(f"Fail to get {bucket}/{filename}")
                 self.__open__()
                 time.sleep(1)
-        return
+        return None
 
     def obj_exist(self, bucket, filename, tenant_id=None):
         try:
@@ -139,7 +139,7 @@ class MultiRAGMinio:
                 logging.exception(f"Fail to get_presigned {bucket}/{fnm}:")
                 self.__open__()
                 time.sleep(1)
-        return
+        return None
 
     def remove_bucket(self, bucket):
         """

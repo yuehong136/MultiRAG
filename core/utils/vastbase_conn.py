@@ -1836,7 +1836,7 @@ class VastBaseConnection(DocStoreConnection):
     Helper functions for search result
     """
 
-    def getTotal(self, res: tuple[list[dict], int] | list[dict]) -> int:
+    def get_total(self, res: tuple[list[dict], int] | list[dict]) -> int:
         """
         从搜索结果中获取总命中数
 
@@ -1850,7 +1850,7 @@ class VastBaseConnection(DocStoreConnection):
             return res[1]
         return len(res)
 
-    def getChunkIds(self, res: tuple[list[dict], int] | list[dict]) -> list[str]:
+    def get_chunk_ids(self, res: tuple[list[dict], int] | list[dict]) -> list[str]:
         """
         从搜索结果中提取所有文档块 ID
 
@@ -1867,7 +1867,7 @@ class VastBaseConnection(DocStoreConnection):
 
         return [doc.get("id", "") for doc in results if doc.get("id")]
 
-    def getFields(self, res: tuple[list[dict], int] | list[dict], fields: list[str]) -> dict[str, dict]:
+    def get_fields(self, res: tuple[list[dict], int] | list[dict], fields: list[str]) -> dict[str, dict]:
         """
         从搜索结果中提取指定字段，按文档 ID 组织
 
@@ -1907,7 +1907,7 @@ class VastBaseConnection(DocStoreConnection):
 
         return result_dict
 
-    def getHighlight(
+    def get_highlight(
         self,
         res: tuple[list[dict], int] | list[dict],
         keywords: list[str],
@@ -1993,7 +1993,7 @@ class VastBaseConnection(DocStoreConnection):
 
         return highlight_dict
 
-    def getAggregation(
+    def get_aggregation(
         self,
         res: tuple[list[dict], int] | list[dict],
         fieldnm: str

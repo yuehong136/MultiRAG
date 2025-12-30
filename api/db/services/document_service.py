@@ -1766,7 +1766,7 @@ class DocumentService(CommonService):
             chunks = settings.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
                                                   page * page_size, page_size, collection_name,
                                                   [doc.kb_id])
-            chunk_ids = settings.docStoreConn.getChunkIds(chunks)
+            chunk_ids = settings.docStoreConn.get_chunk_ids(chunks)
             if not chunk_ids:
                 break
             all_chunk_ids.extend(chunk_ids)
@@ -1795,7 +1795,7 @@ class DocumentService(CommonService):
                     )
             # todo 待测试【settings.docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
             # kb_id = document["kb_id"]  # 使用从数据库重新获取的kb_id
-            # graph_source = settings.docStoreConn.getFields(
+            # graph_source = settings.docStoreConn.get_fields(
             #     settings.docStoreConn.search(["source_id"], [], {"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [kb_id]), ["source_id"]
             # )
             # if len(graph_source) > 0 and doc_id in list(graph_source.values())[0]["source_id"]:

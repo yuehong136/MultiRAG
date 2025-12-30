@@ -537,7 +537,7 @@ async def build_chunks(task, progress_callback, db: Session):
             task_canceled = has_canceled(task["id"])
             if task_canceled:
                 progress_callback(-1, msg="Task has been canceled.")
-                return
+                return None
             if settings.retriever.tag_content(tenant_id, kb_ids, d, all_tags, topn_tags=topn_tags, S=S) and len(d[TAG_FLD]) > 0:
                 examples.append({"content": d["content_with_weight"], TAG_FLD: d[TAG_FLD]})
             else:
@@ -597,6 +597,7 @@ def build_TOC(task, docs, progress_callback):
         d["page_num_int"] = 100000000
         d["pk"] = xxhash.xxh64((d["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
         return d
+    return None
 
 
 async def init_kb(row, kb_name):
@@ -2082,7 +2083,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         schema: 集合 schema，用于数据类型转换 (ES 返回空 schema)
 
     Returns:
-        成功返回True，失败返回None
+        成功返回True，失败返回False
     """
     # 用于记录成功和失败的插入信息
     successful_inserts = []
@@ -2157,13 +2158,13 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 logging.exception(f"Failed to rollback inserted chunks: {e}")
             logging.exception("Insert error:")
             logging.error("Data being inserted: %s", converted_batch)
-            return None  # 出错后返回None
+            return False  # 出错后返回False
 
         # 检查任务是否被取消
         task_canceled = has_canceled(task_id)
         if task_canceled:
             progress_callback(-1, msg="Task has been canceled.")
-            return None
+            return False
 
         # 每插入一定批次，做一次进度回调
         if b % 128 == 0:
@@ -2192,7 +2193,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 for chunk_id in chunk_ids:
                     nursery.start_soon(delete_image, task_dataset_id, chunk_id)
             progress_callback(-1, msg=f"Chunk updates failed since task {task_id} is unknown.")
-            return None
+            return False
 
     # 统计并记录插入结果
     if successful_inserts:
@@ -2308,7 +2309,7 @@ async def do_handle_task(db, task):
     task_canceled = has_canceled(task_id)
     if task_canceled:
         progress_callback(-1, msg="Task has been canceled.")
-        return
+        return None
 
     try:
         # bind embedding model

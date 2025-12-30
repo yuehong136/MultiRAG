@@ -70,7 +70,7 @@ class KGSearch(Dealer):
     def _ent_info_from_(self, milvus_res, sim_thr=0.3):
         res = {}
         flds = ["content_with_weight", "_score", "entity_kwd", "rank_flt", "n_hop_with_weight"]
-        milvus_res = self.dataStore.getFields(milvus_res, flds)
+        milvus_res = self.dataStore.get_fields(milvus_res, flds)
 
         for _, ent in milvus_res.items():
             for f in flds:
@@ -90,7 +90,7 @@ class KGSearch(Dealer):
 
     def _relation_info_from_(self, milvus_res, sim_thr=0.3):
         res = {}
-        milvus_res = self.dataStore.getFields(milvus_res, ["content_with_weight", "_score", "from_entity_kwd", "to_entity_kwd",
+        milvus_res = self.dataStore.get_fields(milvus_res, ["content_with_weight", "_score", "from_entity_kwd", "to_entity_kwd",
                                                    "weight_int"])
         for _, ent in milvus_res.items():
             if get_float(ent["_score"]) < sim_thr:
@@ -305,7 +305,7 @@ class KGSearch(Dealer):
         fltr["entities_kwd"] = entities
         comm_res = self.dataStore.search(fields, [], fltr, [],
                                          OrderByExpr(), 0, topn, idxnms, kb_ids)
-        comm_res_fields = self.dataStore.getFields(comm_res, fields)
+        comm_res_fields = self.dataStore.get_fields(comm_res, fields)
         txts = []
         for ii, (_, row) in enumerate(comm_res_fields.items()):
             obj = json.loads(row["content_with_weight"])

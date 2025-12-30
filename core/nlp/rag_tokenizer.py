@@ -34,7 +34,7 @@ class RagTokenizer:
     def rkey_(self, line):
         return str(("DD" + (line[::-1].lower())).encode("utf-8"))[2:-1]
 
-    def loadDict_(self, fnm):
+    def _load_dict(self, fnm):
         logging.info(f"[HUQIE]:Build trie from {fnm}")
         try:
             of = open(fnm, "r", encoding='utf-8')
@@ -84,18 +84,18 @@ class RagTokenizer:
             self.trie_ = datrie.Trie(string.printable)
 
         # load data from dict file and save to trie file
-        self.loadDict_(self.DIR_ + ".txt")
+        self._load_dict(self.DIR_ + ".txt")
 
-    def loadUserDict(self, fnm):
+    def load_user_dict(self, fnm):
         try:
             self.trie_ = datrie.Trie.load(fnm + ".trie")
             return
         except Exception:
             self.trie_ = datrie.Trie(string.printable)
-        self.loadDict_(fnm)
+        self._load_dict(fnm)
 
-    def addUserDict(self, fnm):
-        self.loadDict_(fnm)
+    def add_user_dict(self, fnm):
+        self._load_dict(fnm)
 
     def _strQ2B(self, ustring):
         """Convert full-width characters to half-width characters"""
@@ -220,7 +220,7 @@ class RagTokenizer:
         logging.debug("[SC] {} {} {} {} {}".format(tks, len(tks), L, F, B / len(tks) + L + F))
         return tks, B / len(tks) + L + F
 
-    def sortTks_(self, tkslist):
+    def _sort_tokens(self, tkslist):
         res = []
         for tfts in tkslist:
             tks, s = self.score_(tfts)
@@ -245,7 +245,7 @@ class RagTokenizer:
 
         return " ".join(res)
 
-    def maxForward_(self, line):
+    def _max_forward(self, line):
         res = []
         s = 0
         while s < len(line):
@@ -269,7 +269,7 @@ class RagTokenizer:
 
         return self.score_(res)
 
-    def maxBackward_(self, line):
+    def _max_backward(self, line):
         res = []
         s = len(line) - 1
         while s >= 0:
@@ -335,8 +335,8 @@ class RagTokenizer:
                 continue
 
             # use maxforward for the first time
-            tks, s = self.maxForward_(L)
-            tks1, s1 = self.maxBackward_(L)
+            tks, s = self._max_forward(L)
+            tks1, s1 = self._max_backward(L)
             if self.DEBUG:
                 logging.debug("[FW] {} {}".format(tks, s))
                 logging.debug("[BW] {} {}".format(tks1, s1))
@@ -368,7 +368,7 @@ class RagTokenizer:
                 # backward tokens from_i to i are different from forward tokens from _j to j.
                 tkslist = []
                 self.dfs_("".join(tks[_j:j]), 0, [], tkslist)
-                res.append(" ".join(self.sortTks_(tkslist)[0][0]))
+                res.append(" ".join(self._sort_tokens(tkslist)[0][0]))
 
                 same = 1
                 while i + same < len(tks1) and j + same < len(tks) and tks1[i + same] == tks[j + same]:
@@ -384,7 +384,7 @@ class RagTokenizer:
                 assert "".join(tks1[_i:]) == "".join(tks[_j:])
                 tkslist = []
                 self.dfs_("".join(tks[_j:]), 0, [], tkslist)
-                res.append(" ".join(self.sortTks_(tkslist)[0][0]))
+                res.append(" ".join(self._sort_tokens(tkslist)[0][0]))
 
         res = " ".join(res)
         logging.debug("[TKS] {}".format(self.merge_(res)))
@@ -412,7 +412,7 @@ class RagTokenizer:
             if len(tkslist) < 2:
                 res.append(tk)
                 continue
-            stk = self.sortTks_(tkslist)[1][0]
+            stk = self._sort_tokens(tkslist)[1][0]
             if len(stk) == len(tk):
                 stk = tk
             else:
@@ -446,14 +446,13 @@ def is_number(s):
 
 
 def is_alphabet(s):
-    if (s >= u'\u0041' and s <= u'\u005a') or (
-            s >= u'\u0061' and s <= u'\u007a'):
+    if (u'\u0041' <= s <= u'\u005a') or (u'\u0061' <= s <= u'\u007a'):
         return True
     else:
         return False
 
 
-def naiveQie(txt):
+def naive_qie(txt):
     tks = []
     for t in txt.split():
         if tks and re.match(r".*[a-zA-Z]$", tks[-1]
@@ -468,14 +467,14 @@ tokenize = tokenizer.tokenize
 fine_grained_tokenize = tokenizer.fine_grained_tokenize
 tag = tokenizer.tag
 freq = tokenizer.freq
-loadUserDict = tokenizer.loadUserDict
-addUserDict = tokenizer.addUserDict
+load_user_dict = tokenizer.load_user_dict
+add_user_dict = tokenizer.add_user_dict
 tradi2simp = tokenizer._tradi2simp
 strQ2B = tokenizer._strQ2B
 
 if __name__ == '__main__':
     tknzr = RagTokenizer(debug=True)
-    # huqie.addUserDict("/tmp/tmp.new.tks.dict")
+    # huqie.add_user_dict("/tmp/tmp.new.tks.dict")
     tks = tknzr.tokenize(
         "哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈")
     logging.info(tknzr.fine_grained_tokenize(tks))
@@ -505,7 +504,7 @@ if __name__ == '__main__':
     if len(sys.argv) < 2:
         sys.exit()
     tknzr.DEBUG = False
-    tknzr.loadUserDict(sys.argv[1])
+    tknzr.load_user_dict(sys.argv[1])
     of = open(sys.argv[2], "r")
     while True:
         line = of.readline()

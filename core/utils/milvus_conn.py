@@ -1323,7 +1323,7 @@ class MilvusConnection(DocStoreConnection):
     搜索结果的辅助函数
     """
 
-    def getTotal(self, res):
+    def get_total(self, res):
         """获取结果总数"""
         if isinstance(res, tuple):
             return res[1]
@@ -1331,7 +1331,7 @@ class MilvusConnection(DocStoreConnection):
             return len(res)
         return 0
 
-    def getChunkIds(self, res):
+    def get_chunk_ids(self, res):
         """获取块ID列表，兼容不同版本的Milvus"""
         # 检查结果是否为元组，如果是则提取第一个元素
         if isinstance(res, tuple):
@@ -1350,7 +1350,7 @@ class MilvusConnection(DocStoreConnection):
 
         return chunk_ids
 
-    def getFields(self, res, fields: list[str]) -> dict[str, dict]:
+    def get_fields(self, res, fields: list[str]) -> dict[str, dict]:
         """获取指定字段的值，兼容不同版本的Milvus"""
         result = {}
         # 初始化distance为空列表
@@ -1443,14 +1443,14 @@ class MilvusConnection(DocStoreConnection):
 
         return result
 
-    def getHighlight(self, res, keywords: list[str], fieldnm: str):
+    def get_highlight(self, res, keywords: list[str], fieldnm: str):
         """
         生成高亮文本（应用层实现，支持中英文）
         - res：可以是 list 或 (list, …) 形式
         - keywords：待高亮关键词列表
         - fieldnm：要高亮的字段名
         返回 {doc_id: snippet} 格式的字典
-        
+
         参考 infinity_conn.py 实现，支持中文高亮
         """
         ans: dict[str, str] = {}
@@ -1458,13 +1458,13 @@ class MilvusConnection(DocStoreConnection):
         # 兼容 tuple 包装
         results = res[0] if isinstance(res, tuple) else res
         if not isinstance(results, list):
-            logger.warning(f"getHighlight: results 不是列表，类型: {type(results)}")
+            logger.warning(f"get_highlight: results 不是列表，类型: {type(results)}")
             return ans
 
-        logger.info(f"getHighlight: 收到 {len(results)} 条结果，{len(keywords)} 个关键词: {keywords}")
+        logger.info(f"get_highlight: 收到 {len(results)} 条结果，{len(keywords)} 个关键词: {keywords}")
 
         for item in results:
-            # 采用与 getFields 完全相同的逻辑
+            # 采用与 get_fields 完全相同的逻辑
             # 兼容低版本使用'id'和高版本使用'pk'的情况
             doc_id = None
             if "pk" in item:
@@ -1473,25 +1473,25 @@ class MilvusConnection(DocStoreConnection):
                 doc_id = item.get("id")
 
             if doc_id is None:
-                logger.warning(f"getHighlight: 无法获取 doc_id，item keys: {list(item.keys()) if hasattr(item, 'keys') else 'no keys'}")
+                logger.warning(f"get_highlight: 无法获取 doc_id，item keys: {list(item.keys()) if hasattr(item, 'keys') else 'no keys'}")
                 continue
 
-            # 提取待高亮文本（完全按照 getFields 的逻辑）
+            # 提取待高亮文本（完全按照 get_fields 的逻辑）
             text = None
             # 首先检查顶层是否有该字段
             if fieldnm in item:
                 text = item.get(fieldnm)
-                logger.debug(f"getHighlight: doc_id={doc_id}, 从顶层获取 {fieldnm}")
+                logger.debug(f"get_highlight: doc_id={doc_id}, 从顶层获取 {fieldnm}")
             # 然后检查entity字典是否有该字段
             elif "entity" in item and isinstance(item["entity"], dict) and fieldnm in item["entity"]:
                 text = item["entity"].get(fieldnm)
-                logger.debug(f"getHighlight: doc_id={doc_id}, 从 entity 获取 {fieldnm}")
-            
+                logger.debug(f"get_highlight: doc_id={doc_id}, 从 entity 获取 {fieldnm}")
+
             if not isinstance(text, str):
-                logger.warning(f"getHighlight: doc_id={doc_id}, 无法获取文本字段 {fieldnm}")
+                logger.warning(f"get_highlight: doc_id={doc_id}, 无法获取文本字段 {fieldnm}")
                 continue
-            
-            logger.debug(f"getHighlight: doc_id={doc_id}, 获取到文本，长度: {len(text)}")
+
+            logger.debug(f"get_highlight: doc_id={doc_id}, 获取到文本，长度: {len(text)}")
 
             # 检查是否已经包含高亮标签（避免重复处理）
             if re.search(r"<em>[^<>]+</em>", text, flags=re.IGNORECASE | re.MULTILINE):
@@ -1543,7 +1543,7 @@ class MilvusConnection(DocStoreConnection):
 
         return ans
 
-    def getAggregation(self, res, fieldnm: str) -> list[tuple]:
+    def get_aggregation(self, res, fieldnm: str) -> list[tuple]:
         """获取聚合结果 (Milvus不支持直接聚合，需要在应用层实现)"""
         # 获取结果列表
         if isinstance(res, tuple):

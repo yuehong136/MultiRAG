@@ -652,8 +652,8 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
             [kb.id]
         )
 
-        total = settings.docStoreConn.getTotal(search_res)
-        field_data = settings.docStoreConn.getFields(search_res, request.fields)
+        total = settings.docStoreConn.get_total(search_res)
+        field_data = settings.docStoreConn.get_fields(search_res, request.fields)
         distances = field_data.pop("distance", [])
 
         rows = []

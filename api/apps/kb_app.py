@@ -1606,7 +1606,7 @@ def check_embedding(
             offset=0, limit=1,
             indexNames=idx_names, knowledgebaseIds=[kb_id]
         )
-        total = doc_store_conn.getTotal(res0)
+        total = doc_store_conn.get_total(res0)
         if total <= 0:
             return []
 
@@ -1623,7 +1623,7 @@ def check_embedding(
                 offset=off, limit=1,
                 indexNames=idx_names, knowledgebaseIds=[kb_id]
             )
-            ids = doc_store_conn.getChunkIds(res1)
+            ids = doc_store_conn.get_chunk_ids(res1)
             if not ids:
                 continue
 

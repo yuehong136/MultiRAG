@@ -51,6 +51,8 @@ class MultiRAGAzureSpnBlob:
                 logging.exception(f"Fail put {bucket}/{fnm}")
                 self.__open__()
                 time.sleep(1)
+                return None
+        return None
 
     def rm(self, bucket, fnm):
         try:
@@ -68,7 +70,7 @@ class MultiRAGAzureSpnBlob:
                 logging.exception(f"fail get {bucket}/{fnm}")
                 self.__open__()
                 time.sleep(1)
-        return
+        return None
 
     def obj_exist(self, bucket, fnm):
         try:
@@ -86,4 +88,4 @@ class MultiRAGAzureSpnBlob:
                 logging.exception(f"fail get {bucket}/{fnm}")
                 self.__open__()
                 time.sleep(1)
-        return
+        return None
