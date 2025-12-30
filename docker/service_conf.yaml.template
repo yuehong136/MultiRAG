@@ -222,8 +222,6 @@ tcadp_config:
   secret_id: '${TENCENT_SECRET_ID:-tencent_secret_id}'
   secret_key: '${TENCENT_SECRET_KEY:-tencent_secret_key}'
   region: '${TENCENT_REGION:-tencent_region}'
-  table_result_type: '1'
-  markdown_image_response_type: '1'
 
 script_scheduler:
   # 如果源码部署，则使用localhost，如果docker部署，则使用宿主机的ip

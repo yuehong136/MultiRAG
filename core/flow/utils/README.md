@@ -46,7 +46,7 @@ core/flow/utils/
 ```python
 async def parse_audio(...):
     """
-    音频解析（参考 core/flow/parser/parser.py._audio 第 412-429 行）
+    音频解析（参考 core/flow/parser/parser.py._audio 第 541-558 行）
                 ↑                              ↑           ↑
              组件文件                        方法名      行号范围
     """
@@ -61,11 +61,52 @@ async def parse_audio(...):
 ```python
 from core.flow.utils import parse_file, split_chunks
 
-# 解析
+# 解析（使用默认 deepdoc）
 parsed = await parse_file(filename, binary, tenant_id)
 
 # 切分
 chunks = await split_chunks(parsed, overlapped_percent=0.1)
+```
+
+### 使用 TCADP parser（腾讯云 ADP）
+
+```python
+from core.flow.utils import parse_file
+
+# PDF 使用 TCADP 解析
+parsed = await parse_file(
+    filename="document.pdf",
+    binary=file_content,
+    tenant_id=tenant_id,
+    pdf_config={
+        "parse_method": "tcadp parser",
+        "output_format": "json",
+        "table_result_type": "1",
+        "markdown_image_response_type": "1"
+    }
+)
+
+# Excel 使用 TCADP 解析
+parsed = await parse_file(
+    filename="data.xlsx",
+    binary=file_content,
+    tenant_id=tenant_id,
+    excel_config={
+        "parse_method": "tcadp parser",
+        "output_format": "html"
+    }
+)
+
+# PPT 使用 TCADP 解析（支持 .ppt 和 .pptx）
+parsed = await parse_file(
+    filename="presentation.pptx",
+    binary=file_content,
+    tenant_id=tenant_id,
+    slides_config={
+        "parse_method": "tcadp parser",
+        "output_format": "json"
+    }
+)
 ```
 
 ### 高级组合
@@ -119,11 +160,11 @@ python -m pytest tests/test_flow_utils.py -k "splitter"
 
 | 文件 | 行数 | 类 | 函数 |
 |------|------|---|------|
-| parser_utils.py | 916 | 1 | 10 |
+| parser_utils.py | 1021 | 1 | 10 |
 | splitter_utils.py | 251 | 1 | 3 |
 | hierarchical_merger_utils.py | 208 | 1 | 2 |
 | extractor_utils.py | 122 | 1 | 2 |
-| **总计** | **1497** | **4** | **17** |
+| **总计** | **1602** | **4** | **17** |
 
 ## 🎯 设计原则
 

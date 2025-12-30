@@ -1430,7 +1430,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
     ⭐ 完全基于 core/flow 组件实现，支持灵活配置
 
     功能特性：
-    - Parser: 文档解析（支持 PDF/Word/Excel/图片/音视频等，支持 VLM 图片理解）
+    - Parser: 文档解析（支持 PDF/Word/Excel/PPT/图片/音视频等，支持 VLM 图片理解）
     - HierarchicalMerger: 层次化章节合并
     - RAPTOR: 递归摘要聚类
     - Extractor: 元数据字段提取
@@ -1439,10 +1439,24 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
     Args:
         task: 任务信息，task["chunk_ids"] 中包含配置：
             config.processing_strategy: 处理策略 (auto/simple/hierarchical/raptor/hybrid)
-            config.parse_method: 解析方法（用于 VLM）
+            config.parse_method: 解析方法
                 - "deepdoc": 深度解析（默认）
+                - "plain_text": 纯文本解析
+                - "mineru": MinerU 解析
+                - "tcadp parser": 腾讯云 ADP 解析（支持 PDF/Excel/PPT）
                 - "qwen-vl-plus": VLM 视觉理解（对每张原始图片）
                 - "ocr": OCR 识别（对每张原始图片）
+            config.table_result_type: TCADP 表格结果类型（默认 "1"）
+            config.markdown_image_response_type: TCADP 图片响应类型（默认 "1"）
+            config.parser_config: 完整解析器配置（优先级高于 parse_method）
+                - pdf: {"parse_method": "deepdoc", "output_format": "json"}
+                - excel: {"parse_method": "deepdoc", "output_format": "html"}
+                - slides: {"parse_method": "deepdoc", "output_format": "json"}
+                - image: {"parse_method": "ocr", "lang": "Chinese"}
+                - word: {"output_format": "json"}
+                - markdown: {"output_format": "json"}
+                - email: {"output_format": "json", "fields": [...]}
+                - video: {"llm_id": "..."}
             config.hierarchical_config: 层次化配置
                 - levels: 标题正则表达式列表
                 - hierarchy: 层级（0=章节，1=章+节）
@@ -1468,14 +1482,18 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             "structure": {文档结构信息（如有）}
         }
 
-    图片理解功能：
-        应该在 Parser 阶段配置，而不是在 hierarchical_config 中。
-        
-        正确配置：
+    示例配置 - 使用 TCADP 解析 Excel/PPT：
         {
-            "parse_method": "qwen-vl-plus",  // VLM 处理每张原始图片
-            "image_system_prompt": "描述这张图片的关键信息",  // Parser 配置
-            "image_lang": "Chinese"
+            "parse_method": "tcadp parser",
+            "table_result_type": "1",
+            "markdown_image_response_type": "1"
+        }
+
+    示例配置 - 使用 VLM 处理图片：
+        {
+            "parse_method": "qwen-vl-plus",
+            "image_system_prompt": "描述这张图片的关键信息",
+            "lang": "Chinese"
         }
     """
     # 解析任务配置
@@ -1551,26 +1569,38 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             
             parser_config_dict = config.get("parser_config")  # 完整方式（优先）
             
+            # TCADP parser 特有参数（腾讯云 ADP 解析）
+            tcadp_table_result_type = config.get("table_result_type", "1")
+            tcadp_markdown_image_response_type = config.get("markdown_image_response_type", "1")
+            
             if parser_config_dict:
                 # 方式 1：使用 parser_config 字典（用户一次性配置所有文件类型）
                 pdf_config = parser_config_dict.get("pdf", {"parse_method": "deepdoc", "output_format": "json"})
                 image_config = parser_config_dict.get("image", {"parse_method": "ocr", "lang": "Chinese"})
-                excel_config = parser_config_dict.get("excel", {"output_format": "html"})
+                excel_config = parser_config_dict.get("excel", {"parse_method": "deepdoc", "output_format": "html"})
                 word_config = parser_config_dict.get("word", {"output_format": "json"})
                 email_config = parser_config_dict.get("email", {"output_format": "json", "fields": None})
                 video_config = parser_config_dict.get("video", {"llm_id": config.get("video_llm_name")})
+                slides_config = parser_config_dict.get("slides", {"parse_method": "deepdoc", "output_format": "json"})
+                markdown_config = parser_config_dict.get("markdown", {"output_format": "json"})
                 logging.info(f"Using parser_config dictionary mode")
             else:
                 # 方式 2：使用简化参数（自动应用到所有文件类型）
                 parse_method = config.get("parse_method", "deepdoc")
                 output_format = config.get("output_format", "json")
 
+                # PDF 支持的 parse_method: deepdoc, plain_text, mineru, tcadp parser, 或 VLM 模型名
+                pdf_parse_method = parse_method
+                if parse_method in ["auto", "ocr", "vlm"]:
+                    pdf_parse_method = "deepdoc"
+                
                 pdf_config = {
-                    "parse_method": parse_method if parse_method in ["deepdoc", "plain_text", "mineru"] else (
-                        parse_method if parse_method not in ["auto", "ocr", "vlm"] else "deepdoc"
-                    ),
+                    "parse_method": pdf_parse_method,
                     "output_format": output_format,
-                    "lang": config.get("lang", "Chinese")
+                    "lang": config.get("lang", "Chinese"),
+                    # TCADP 参数（仅当 parse_method 为 tcadp parser 时生效）
+                    "table_result_type": tcadp_table_result_type,
+                    "markdown_image_response_type": tcadp_markdown_image_response_type,
                 }
                 image_config = {
                     "parse_method": parse_method,  # ✅ 直接传递，支持任何 VLM 模型名
@@ -1578,15 +1608,35 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     "lang": config.get("lang", "Chinese"),
                     "system_prompt": config.get("image_system_prompt")
                 }
-                excel_config = {"output_format": output_format}
+                # Excel 支持的 parse_method: deepdoc, tcadp parser
+                excel_parse_method = "deepdoc"
+                if parse_method.lower() == "tcadp parser":
+                    excel_parse_method = "tcadp parser"
+                excel_config = {
+                    "parse_method": excel_parse_method,
+                    "output_format": output_format if output_format in ["html", "json", "markdown"] else "html",
+                    "table_result_type": tcadp_table_result_type,
+                    "markdown_image_response_type": tcadp_markdown_image_response_type,
+                }
                 word_config = {"output_format": output_format}
                 email_config = {"output_format": output_format, "fields": config.get("email_fields")}
                 video_llm_name = config.get("video_llm_name")
                 if not video_llm_name:
                     candidate = config.get("parse_method")
-                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm"]:
+                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm", "tcadp parser"]:
                         video_llm_name = candidate
                 video_config = {"llm_id": video_llm_name}
+                # PPT/Slides 支持的 parse_method: deepdoc, tcadp parser
+                slides_parse_method = "deepdoc"
+                if parse_method.lower() == "tcadp parser":
+                    slides_parse_method = "tcadp parser"
+                slides_config = {
+                    "parse_method": slides_parse_method,
+                    "output_format": "json",  # PPT 目前只支持 json
+                    "table_result_type": tcadp_table_result_type,
+                    "markdown_image_response_type": tcadp_markdown_image_response_type,
+                }
+                markdown_config = {"output_format": output_format if output_format in ["json", "text"] else "json"}
                 logging.info(f"Using simplified parse_method mode: {parse_method}")
 
             def _parser_callback(prog, msg=""):
@@ -1601,6 +1651,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 word_config=word_config,
                 image_config=image_config,
                 email_config=email_config,
+                slides_config=slides_config,
+                markdown_config=markdown_config,
                 video_config=video_config,
                 callback=_parser_callback
             )

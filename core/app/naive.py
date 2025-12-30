@@ -122,7 +122,7 @@ def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=No
         with db_connection() as db:
             vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=kwargs.get("layout_recognizer", ""), lang=kwargs.get("lang", "Chinese"))
         pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
-    
+
     sections, tables = pdf_parser(
         filename if not binary else binary,
         from_page=from_page,
@@ -662,18 +662,47 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
         if name in ["tcadp", "docling", "mineru"]:
             parser_config["chunk_token_num"] = 0
-        
+
         res = tokenize_table(tables, doc, is_english)
         callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.(csv|xlsx?)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
-        excel_parser = ExcelParser()
-        if parser_config.get("html4excel"):
-            sections = [(_, "") for _ in excel_parser.html(binary, 12) if _]
+
+        # Check if tcadp_parser is selected for spreadsheet files
+        layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
+        if layout_recognizer == "TCADP Parser":
+            table_result_type = parser_config.get("table_result_type", "1")
+            markdown_image_response_type = parser_config.get("markdown_image_response_type", "1")
+            tcadp_parser = TCADPParser(
+                table_result_type=table_result_type,
+                markdown_image_response_type=markdown_image_response_type
+            )
+            if not tcadp_parser.check_installation():
+                callback(-1, "TCADP parser not available. Please check Tencent Cloud API configuration.")
+                return res
+
+            # Determine file type based on extension
+            file_type = "XLSX" if re.search(r"\.xlsx?$", filename, re.IGNORECASE) else "CSV"
+
+            sections, tables = tcadp_parser.parse_pdf(
+                filepath=filename,
+                binary=binary,
+                callback=callback,
+                output_dir=os.environ.get("TCADP_OUTPUT_DIR", ""),
+                file_type=file_type
+            )
+            parser_config["chunk_token_num"] = 0
+            res = tokenize_table(tables, doc, is_english)
+            callback(0.8, "Finish parsing.")
         else:
-            sections = [(_, "") for _ in excel_parser(binary) if _]
-        parser_config["chunk_token_num"] = 12800
+            # Default DeepDOC parser
+            excel_parser = ExcelParser()
+            if parser_config.get("html4excel"):
+                sections = [(_, "") for _ in excel_parser.html(binary, 12) if _]
+            else:
+                sections = [(_, "") for _ in excel_parser(binary) if _]
+            parser_config["chunk_token_num"] = 12800
 
     elif re.search(r"\.(txt|py|js|java|c|cpp|h|php|go|ts|sh|cs|kt|sql)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")

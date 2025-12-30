@@ -97,7 +97,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        音频解析（参考 core/flow/parser/parser.py._audio 第 412-429 行）
+        音频解析（参考 core/flow/parser/parser.py._audio 第 541-558 行）
         
         Returns:
             {"output_format": "text", "text": "转录文本"}
@@ -158,7 +158,7 @@ class FlowParser:
         **method_kwargs
     ) -> dict:
         """
-        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 214-301 行）
+        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 214-309 行）
         
         Args:
             parse_method: 
@@ -314,7 +314,14 @@ class FlowParser:
         **method_kwargs
     ) -> dict:
         """
-        Excel 解析（参考 core/flow/parser/parser.py._spreadsheet 第 301-313 行）
+        Excel 解析（参考 core/flow/parser/parser.py._spreadsheet 第 312-396 行）
+        
+        Args:
+            parse_method: 
+                - deepdoc: 默认 ExcelParser
+                - tcadp parser: 腾讯云 ADP 解析
+            output_format: html/json/markdown
+            method_kwargs: 解析器特定参数（如 table_result_type、markdown_image_response_type）
         
         Returns:
             {"output_format": "html", "html": "<table>..."}
@@ -322,6 +329,79 @@ class FlowParser:
         if callback:
             callback(0.1, "Start to work on a Spreadsheet.")
         
+        method = (parse_method or "deepdoc").lower()
+        
+        # Handle TCADP parser
+        if method == "tcadp parser":
+            table_result_type = method_kwargs.get("table_result_type", "1")
+            markdown_image_response_type = method_kwargs.get("markdown_image_response_type", "1")
+            tcadp_parser = TCADPParser(
+                table_result_type=table_result_type,
+                markdown_image_response_type=markdown_image_response_type
+            )
+            install_result = tcadp_parser.check_installation()
+            if isinstance(install_result, tuple):
+                ok, reason = install_result
+            else:
+                ok = bool(install_result)
+                reason = "" if ok else "Unknown reason"
+            if not ok:
+                raise RuntimeError(f"TCADP parser not available. Please check Tencent Cloud API configuration. {reason}".strip())
+            
+            # Determine file type based on extension
+            if re.search(r"\.xlsx?$", filename, re.IGNORECASE):
+                file_type = "XLSX"
+            else:
+                file_type = "CSV"
+            
+            if callback:
+                callback(0.2, f"Using TCADP parser for {file_type} file.")
+            
+            sections, tables = await _to_thread(
+                tcadp_parser.parse_pdf,
+                filepath=filename,
+                binary=binary,
+                callback=callback,
+                file_type=file_type,
+                file_start_page=1,
+                file_end_page=1000
+            )
+            
+            # Process TCADP parser output based on configured output_format
+            if output_format == "html":
+                # For HTML output, combine sections and tables into HTML
+                html_content = ""
+                for section, position_tag in sections:
+                    if section:
+                        html_content += section + "\n"
+                for table in tables:
+                    if table:
+                        html_content += table + "\n"
+                return {"output_format": "html", "html": html_content}
+            
+            elif output_format == "json":
+                # For JSON output, create a list of text items
+                result = []
+                for section, position_tag in sections:
+                    if section:
+                        result.append({"text": section})
+                for table in tables:
+                    if table:
+                        result.append({"text": table})
+                return {"output_format": "json", "json": result}
+            
+            elif output_format == "markdown":
+                # For markdown output, combine into markdown
+                md_content = ""
+                for section, position_tag in sections:
+                    if section:
+                        md_content += section + "\n\n"
+                for table in tables:
+                    if table:
+                        md_content += table + "\n\n"
+                return {"output_format": "markdown", "markdown": md_content}
+        
+        # Default DeepDOC parser
         spreadsheet_parser = ExcelParser()
         
         if output_format == "html":
@@ -342,7 +422,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        Word 文档解析（参考 core/flow/parser/parser.py._word 第 314-327 行）
+        Word 文档解析（参考 core/flow/parser/parser.py._word 第 398-408 行）
         
         Returns:
             {"output_format": "json", "json": [sections with images]}
@@ -407,7 +487,14 @@ class FlowParser:
         **method_kwargs
     ) -> dict:
         """
-        PPT 解析（参考 core/flow/parser/parser.py._slides 第 329-346 行）
+        PPT 解析（参考 core/flow/parser/parser.py._slides 第 409-477 行）
+        
+        Args:
+            parse_method: 
+                - deepdoc: 默认 RAGFlowPptParser（仅支持 .pptx）
+                - tcadp parser: 腾讯云 ADP 解析（支持 .ppt 和 .pptx）
+            output_format: 目前只支持 json
+            method_kwargs: 解析器特定参数（如 table_result_type、markdown_image_response_type）
         
         Returns:
             {"output_format": "json", "json": [sections]}
@@ -440,6 +527,9 @@ class FlowParser:
                 file_type = "PPTX"
             else:
                 file_type = "PPT"
+            
+            if callback:
+                callback(0.2, f"Using TCADP parser for {file_type} file.")
             
             sections, tables = await _to_thread(
                 tcadp_parser.parse_pdf,
@@ -512,7 +602,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        Markdown 解析（参考 core/flow/parser/parser.py._markdown 第 347-379 行）
+        Markdown 解析（参考 core/flow/parser/parser.py._markdown 第 476-507 行）
         
         Returns:
             {"output_format": "json", "json": [sections with images]}
@@ -553,7 +643,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        图片解析（参考 core/flow/parser/parser.py._image 第 381-410 行）
+        图片解析（参考 core/flow/parser/parser.py._image 第 510-539 行）
         
         Args:
             parse_method: 
@@ -607,7 +697,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        视频解析（参考 core/flow/parser/parser.py._video 第 431-440 行）
+        视频解析（参考 core/flow/parser/parser.py._video 第 560-569 行）
         
         Returns:
             {"output_format": "text", "text": "视频描述"}
@@ -632,7 +722,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        邮件解析（参考 core/flow/parser/parser.py._email 第 442-557 行）
+        邮件解析（参考 core/flow/parser/parser.py._email 第 571-699 行）
         
         Args:
             output_format: json 或 text
@@ -788,7 +878,7 @@ async def parse_file(
     """
     使用 core/flow 逻辑解析文件，返回结构化结果（保留位置信息）
 
-    参考：core/flow/parser/parser.py._invoke 的逻辑（第 559-600 行）
+    参考：core/flow/parser/parser.py._invoke 的逻辑（第 701-743 行）
     根据文件扩展名自动路由到对应的解析方法
     
     Args:
@@ -837,7 +927,7 @@ async def parse_file(
     if video_config is None:
         video_config = {}
     
-    # 根据扩展名路由（参考 core/flow/parser/parser.py 第 551-556 行）
+    # 根据扩展名路由（参考 core/flow/parser/parser.py 第 701-743 行）
     # 音频文件
     if ext in ["mp3", "wav", "aac", "flac", "ogg", "aiff", "au", "midi", "wma", "da", "wave", "ape"]:
         return await FlowParser.parse_audio(filename, binary, tenant_id, callback)

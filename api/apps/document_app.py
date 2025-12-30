@@ -195,11 +195,11 @@ class AnalyzeDocumentRequest(BaseModel):
     # Parser 配置（简化方式）
     parse_method: str | None = Field(
         default="deepdoc",
-        description="解析方法：deepdoc/plain_text/mineru/ocr 或 VLM 模型名（如 qwen-vl-plus）"
+        description="解析方法：deepdoc/plain_text/mineru/tcadp parser/ocr 或 VLM 模型名（如 qwen-vl-plus）。tcadp parser 使用腾讯云 ADP 解析，支持 PDF/Excel/PPT"
     )
     output_format: str | None = Field(
         default="json",
-        description="输出格式：json（保留位置）/text/markdown"
+        description="输出格式：json（保留位置）/text/markdown/html"
     )
     lang: str | None = Field(
         default="Chinese",
@@ -221,6 +221,15 @@ class AnalyzeDocumentRequest(BaseModel):
         default=None,
         description="邮件需要提取的字段（from/to/subject/body等）"
     )
+    # TCADP parser 特有参数（腾讯云 ADP 解析）
+    table_result_type: str | None = Field(
+        default="1",
+        description="TCADP 表格结果类型（默认 '1'）"
+    )
+    markdown_image_response_type: str | None = Field(
+        default="1",
+        description="TCADP 图片响应类型（默认 '1'）"
+    )
     
     # Parser 配置（完整方式）- 参考 core/flow/parser/parser.py 的 setups 结构
     parser_config: dict | None = Field(
@@ -230,9 +239,17 @@ class AnalyzeDocumentRequest(BaseModel):
         示例：{
             "pdf": {"parse_method": "deepdoc", "output_format": "json", "lang": "Chinese"},
             "image": {"parse_method": "qwen-vl-plus", "lang": "Chinese", "system_prompt": "..."},
-            "excel": {"output_format": "html"},
+            "excel": {"parse_method": "deepdoc", "output_format": "html"},
+            "slides": {"parse_method": "deepdoc", "output_format": "json"},
             "word": {"output_format": "json"},
-            "email": {"output_format": "json", "fields": ["from", "to", "subject", "body"]}
+            "markdown": {"output_format": "json"},
+            "email": {"output_format": "json", "fields": ["from", "to", "subject", "body"]},
+            "video": {"llm_id": "qwen-vl-plus"}
+        }
+        TCADP parser 配置示例（支持 PDF/Excel/PPT）：{
+            "pdf": {"parse_method": "tcadp parser", "table_result_type": "1", "markdown_image_response_type": "1"},
+            "excel": {"parse_method": "tcadp parser", "output_format": "html"},
+            "slides": {"parse_method": "tcadp parser", "output_format": "json"}
         }
         """
     )
@@ -3781,20 +3798,24 @@ async def run_analyze_v2(
     ```json
     {
       // ========== Parser 配置方式 1：简化方式（推荐简单场景） ==========
-      "parse_method": "deepdoc",        // 默认值："deepdoc"，可选：deepdoc/plain_text/mineru/ocr 或 VLM模型名
+      "parse_method": "deepdoc",        // 默认值："deepdoc"，可选：deepdoc/plain_text/mineru/tcadp parser/ocr 或 VLM模型名
       "output_format": "json",          // 默认值："json"，可选：json/text/markdown/html
       "lang": "Chinese",                // 默认值："Chinese"，VLM 模式使用
       "image_llm_name": null,           // 默认值：null，图片文件 VLM 模型名（parse_method="vlm"时）
       "image_system_prompt": null,      // 默认值：null，图片 VLM 自定义提示词
       "video_llm_name": null,           // 默认值：null，视频文件 VLM 模型名
       "email_fields": null,             // 默认值：null，邮件字段列表
+      "table_result_type": "1",         // 默认值："1"，TCADP 表格结果类型（parse_method="tcadp parser"时生效）
+      "markdown_image_response_type": "1", // 默认值："1"，TCADP 图片响应类型（parse_method="tcadp parser"时生效）
       
       // ========== Parser 配置方式 2：完整方式（推荐代码调用） ==========
       "parser_config": {                // 默认值：null，按文件类型单独配置（优先级高于简化方式）
         "pdf": {
-          "parse_method": "deepdoc",    // deepdoc/plain_text/mineru/VLM模型名
+          "parse_method": "deepdoc",    // deepdoc/plain_text/mineru/tcadp parser/VLM模型名
           "output_format": "json",      // json/markdown
-          "lang": "Chinese"             // VLM 模式使用
+          "lang": "Chinese",            // VLM 模式使用
+          "table_result_type": "1",     // TCADP 表格结果类型
+          "markdown_image_response_type": "1"  // TCADP 图片响应类型
         },
         "image": {
           "parse_method": "ocr",        // ocr/VLM模型名
@@ -3802,14 +3823,25 @@ async def run_analyze_v2(
           "system_prompt": "描述图片内容"  // VLM 自定义提示词
         },
         "excel": {
+          "parse_method": "deepdoc",    // deepdoc/tcadp parser
           "output_format": "html"       // html/json/markdown
+        },
+        "slides": {
+          "parse_method": "deepdoc",    // deepdoc/tcadp parser（tcadp 支持 .ppt 和 .pptx）
+          "output_format": "json"       // 目前只支持 json
         },
         "word": {
           "output_format": "json"       // json/markdown
         },
+        "markdown": {
+          "output_format": "json"       // json/text
+        },
         "email": {
           "output_format": "json",      // json/text
           "fields": ["from", "to", "subject", "body"]
+        },
+        "video": {
+          "llm_id": "qwen-vl-plus"      // VLM 模型名
         }
       },
       
@@ -4236,6 +4268,9 @@ async def run_analyze_v2(
             "image_system_prompt": request.image_system_prompt,
             "video_llm_name": request.video_llm_name,
             "email_fields": request.email_fields,
+            # TCADP parser 特有参数
+            "table_result_type": request.table_result_type,
+            "markdown_image_response_type": request.markdown_image_response_type,
             # 处理策略
             "processing_strategy": request.processing_strategy,
             "hierarchical_config": request.hierarchical_config.model_dump() if request.hierarchical_config else None,
