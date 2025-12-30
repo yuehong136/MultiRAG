@@ -124,19 +124,11 @@ def init_superuser(db: Session):
 
 def init_llm_factory(db: Session):
     LLMFactoriesService.filter_delete(db, [1 == 1])
-    
-    try:
-        LLMService.filter_delete(db, [(LLM.fid == "MiniMax" or LLM.fid == "Minimax")])
-        LLMService.filter_delete(db, [(LLM.fid == "cohere")])
-    except Exception:
-        pass
-
     factory_llm_infos = settings.FACTORY_LLM_INFOS
     for factory_llm_info in factory_llm_infos:
         info = deepcopy(factory_llm_info)
         llm_infos = info.pop("llm")
         try:
-            LLMFactoriesService.filter_delete(db, [LLMFactories.name == factory_llm_info["name"]])
             LLMFactoriesService.save(db, **info)
         except Exception:
             pass
@@ -156,7 +148,7 @@ def init_llm_factory(db: Session):
     LLMFactoriesService.filter_delete(db, [LLMFactories.name == "QAnything"])
     LLMService.filter_delete(db, [LLM.fid == "QAnything"])
     TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "QAnything"], {"llm_factory": "Youdao"})
-    TenantLLMService.filter_update(db, [TenantLLMService.model.llm_factory == "cohere"], {"llm_factory": "Cohere"})
+    TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "cohere"], {"llm_factory": "Cohere"})
     TenantService.filter_update(db, [1 == 1], {
         "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"})
     # insert openai two embedding models to the current openai user.
@@ -178,7 +170,6 @@ def init_llm_factory(db: Session):
     #         break
     doc_count = DocumentService.get_all_kb_doc_count(db)
     for kb_id in KnowledgebaseService.get_all_ids(db):
-        # KnowledgebaseService.update_by_id(db, kb_id, {"doc_num": DocumentService.get_kb_doc_count(db, kb_id)})
         KnowledgebaseService.update_document_number_in_init(db, kb_id=kb_id, doc_num=doc_count.get(kb_id, 0))
 
 
