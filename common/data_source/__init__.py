@@ -31,7 +31,7 @@ from .confluence_connector import ConfluenceConnector
 from .discord_connector import DiscordConnector
 from .dropbox_connector import DropboxConnector
 from .google_drive.connector import GoogleDriveConnector
-# from .jira.connector import JiraConnector
+from .jira.connector import JiraConnector
 from .sharepoint_connector import SharePointConnector
 from .teams_connector import TeamsConnector
 # from .webdav_connector import WebDAVConnector
@@ -55,7 +55,7 @@ __all__ = [
     "DiscordConnector",
     "DropboxConnector",
     "GoogleDriveConnector",
-    # "JiraConnector",
+    "JiraConnector",
     "SharePointConnector",
     "TeamsConnector",
     # "WebDAVConnector",
