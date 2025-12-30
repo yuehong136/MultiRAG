@@ -5,7 +5,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,TTS,TEXT RE-RANK,SPEECH2TEXT,MODERATION",
             "status": "1",
-            "rank": "99",
+            "rank": "999",
             "llm": [
                 {
                     "llm_name": "gpt-5",
@@ -175,7 +175,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
-            "rank": "92",
+            "rank": "930",
             "llm": [
                 {
                     "llm_name": "grok-4",
@@ -291,7 +291,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,TEXT RE-RANK,TTS,SPEECH2TEXT,MODERATION",
             "status": "1",
-            "rank": "94",
+            "rank": "950",
             "llm": [
                 {
                     "llm_name": "Moonshot-Kimi-K2-Instruct",
@@ -660,7 +660,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,SPEECH2TEXT,MODERATION",
             "status": "1",
-            "rank": "93",
+            "rank": "940",
             "llm": [
                {
                     "llm_name": "glm-4.7",
@@ -806,7 +806,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,SPEECH2TEXT,MODERATION",
             "status": "1",
-            "rank": "84",
+            "rank": "830",
             "llm": []
         },
         {
@@ -828,6 +828,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,SPEECH2TEXT,MODERATION",
             "status": "1",
+            "rank": "890",
             "llm": []
         },
         {
@@ -842,7 +843,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,IMAGE2TEXT",
             "status": "1",
-            "rank": "95",
+            "rank": "960",
             "llm": [
                 {
                     "llm_name": "kimi-thinking-preview",
@@ -983,7 +984,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
-            "rank": "96",
+            "rank": "970",
             "llm": [
                 {
                     "llm_name": "deepseek-chat",
@@ -1182,7 +1183,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
-            "rank": "82",
+            "rank": "810",
             "llm": [
                 {
                     "llm_name": "MiniMax-M2.1",
@@ -1203,7 +1204,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,MODERATION",
             "status": "1",
-            "rank": "90",
+            "rank": "910",
             "llm": [
                 {
                     "llm_name": "codestral-latest",
@@ -1297,7 +1298,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,SPEECH2TEXT,MODERATION",
             "status": "1",
-            "rank": "85",
+            "rank": "850",
             "llm": [
                 {
                     "llm_name": "gpt-4o-mini",
@@ -1382,7 +1383,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING",
             "status": "1",
-            "rank": "86",
+            "rank": "860",
             "llm": []
         },
         {
@@ -1390,7 +1391,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,IMAGE2TEXT",
             "status": "1",
-            "rank": "97",
+            "rank": "980",
             "llm": [
                 {
                     "llm_name": "gemini-2.5-flash",
@@ -1446,7 +1447,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
-            "rank": "81",
+            "rank": "800",
             "llm": [
                 {
                     "llm_name": "gemma2-9b-it",
@@ -1506,6 +1507,7 @@
             "logo": "",
             "tags": "LLM,IMAGE2TEXT",
             "status": "1",
+            "rank": "840",
             "llm": []
         },
         {
@@ -1556,7 +1558,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING, TEXT RE-RANK",
             "status": "1",
-            "rank": "80",
+            "rank": "790",
             "llm": [
                 {
                     "llm_name": "01-ai/yi-large",
@@ -2311,7 +2313,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING, TEXT RE-RANK",
             "status": "1",
-            "rank": "89",
+            "rank": "900",
             "llm": [
                 {
                     "llm_name": "command-r-plus",
@@ -2590,7 +2592,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,TEXT RE-RANK,IMAGE2TEXT",
             "status": "1",
-            "rank": "79",
+            "rank": "780",
             "llm": [
                 {
                     "llm_name": "THUDM/GLM-4.1V-9B-Thinking",
@@ -3155,7 +3157,7 @@
             "logo": "",
             "tags": "LLM,TTS",
             "status": "1",
-            "rank": "83",
+            "rank": "820",
             "llm": []
         },
         {
@@ -3163,7 +3165,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
-            "rank": "88",
+            "rank": "880",
             "llm": [
                 {
                     "llm_name": "ernie-4.5-8k-preview",
@@ -3220,7 +3222,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
-            "rank": "98",
+            "rank": "990",
             "llm": [
                 {
                     "llm_name": "claude-opus-4-1-20250805",
@@ -3408,7 +3410,7 @@
             "logo": "",
             "tags": "TEXT EMBEDDING,TEXT RE-RANK",
             "status": "1",
-            "rank": "91",
+            "rank": "920",
             "llm": []
         },
         {
@@ -4587,7 +4589,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
-            "rank": "87",
+            "rank": "870",
             "llm": [
                 {
                     "llm_name": "LongCat-Flash-Chat",
