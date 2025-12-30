@@ -106,7 +106,7 @@ class RedisDB:
         info = self.REDIS.info()
         return {
             'redis_version': info.get("redis_version", "Unknown"),  # Redis版本
-            'server_mode': info.get("server_mode", "standalone"),  # 服务器模式: standalone(单机), sentinel(哨兵), cluster(集群)
+            'server_mode': info["server_mode"] if "server_mode" in info else info.get("redis_mode", ""),  # 服务器模式: standalone(单机), sentinel(哨兵), cluster(集群)
             'used_memory': info.get("used_memory_human", "N/A"),  # 已使用内存(人类可读格式)
             'total_system_memory': info.get("total_system_memory_human", "N/A"),  # 系统总内存(人类可读格式)
             'mem_fragmentation_ratio': info.get("mem_fragmentation_ratio", 0.0),  # 内存碎片比率

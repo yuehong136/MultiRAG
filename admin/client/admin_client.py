@@ -385,35 +385,30 @@ class AdminCLI(Cmd):
                 print(f"Can't access {self.host}, port: {self.port}")
 
     def _format_service_detail_table(self, data):
-        # 如果 data 不是字典（如列表），直接返回
+        # 如果 data 是列表，直接返回
+        if isinstance(data, list):
+            return data
+        # 如果 data 不是字典，直接返回
         if not isinstance(data, dict):
             return data
 
-        # 检查是否是 task_executor heartbeats 格式
-        # heartbeats 格式: {'name': [{'done': 2, 'now': timestamp1}, ...]}
-        is_heartbeats_format = False
-        for v in data.values():
-            if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict) and 'now' in v[0]:
-                is_heartbeats_format = True
-                break
-
-        if not is_heartbeats_format:
+        # 检查是否所有值都是列表（task_executor heartbeats 格式）
+        if not all([isinstance(v, list) for v in data.values()]):
             # 非 heartbeats 格式，直接返回原始数据
             return data
 
         # handle task_executor heartbeats map
+        # heartbeats 格式: {'name': [{'done': 2, 'now': timestamp1}, ...]}
         task_executor_list = []
         for k, v in data.items():
-            if not isinstance(v, list) or len(v) == 0:
-                continue
-            if not isinstance(v[0], dict) or 'now' not in v[0]:
-                continue
-            # display latest status
-            heartbeats = sorted(v, key=lambda x: x["now"], reverse=True)
+            heartbeats = v
+            if heartbeats and isinstance(heartbeats[0], dict) and 'now' in heartbeats[0]:
+                # display latest status
+                heartbeats = sorted(heartbeats, key=lambda x: x["now"], reverse=True)
             task_executor_list.append({
                 "task_executor_name": k,
                 **heartbeats[0],
-            })
+            } if heartbeats else {"task_executor_name": k})
         return task_executor_list
 
     def _print_table_simple(self, data):
@@ -424,7 +419,8 @@ class AdminCLI(Cmd):
             # handle single row data
             data = [data]
 
-        columns = list(data[0].keys())
+        columns = list(set().union(*(d.keys() for d in data)))
+        columns.sort()
         col_widths = {}
 
         def get_string_width(text):
