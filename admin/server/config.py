@@ -7,29 +7,6 @@ from urllib.parse import urlparse
 
 from common.config_utils import read_config
 
-
-class ServiceConfigs:
-    configs = dict
-
-    """服务配置管理器"""
-    def __init__(self):
-        self.configs: list[BaseModel] = []
-        self.lock = threading.Lock()
-
-
-SERVICE_CONFIGS = ServiceConfigs
-
-
-class ServiceType(Enum):
-    """服务类型枚举"""
-    METADATA = "metadata"
-    RETRIEVAL = "retrieval"
-    MESSAGE_QUEUE = "message_queue"
-    MULTIRAG_SERVER = "multirag_server"
-    TASK_EXECUTOR = "task_executor"
-    FILE_STORE = "file_store"
-
-
 class BaseConfig(BaseModel):
     """基础配置模型"""
     id: int
@@ -50,6 +27,28 @@ class BaseConfig(BaseModel):
             'port': self.port,
             'service_type': self.service_type
         }
+
+
+class ServiceConfigs:
+    configs = list[BaseConfig]
+
+    """服务配置管理器"""
+    def __init__(self):
+        self.configs: list[BaseModel] = []
+        self.lock = threading.Lock()
+
+
+SERVICE_CONFIGS = ServiceConfigs
+
+
+class ServiceType(Enum):
+    """服务类型枚举"""
+    METADATA = "metadata"
+    RETRIEVAL = "retrieval"
+    MESSAGE_QUEUE = "message_queue"
+    MULTIRAG_SERVER = "multirag_server"
+    TASK_EXECUTOR = "task_executor"
+    FILE_STORE = "file_store"
 
 
 class MetaConfig(BaseConfig):
@@ -157,6 +156,30 @@ class InfinityConfig(RetrievalConfig):
             result['extra'] = {}
         extra_dict = result['extra'].copy()
         extra_dict['db_name'] = self.db_name
+        result['extra'] = extra_dict
+        return result
+
+
+class VastBaseConfig(RetrievalConfig):
+    """VastBase 配置"""
+    database: str
+    user: str
+    password: str
+    db_schema: str | None = None
+    max_connections: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result = super().to_dict()
+        if 'extra' not in result:
+            result['extra'] = {}
+        extra_dict = result['extra'].copy()
+        extra_dict['database'] = self.database
+        extra_dict['user'] = self.user
+        extra_dict['password'] = self.password
+        if self.db_schema:
+            extra_dict['schema'] = self.db_schema
+        if self.max_connections:
+            extra_dict['max_connections'] = self.max_connections
         result['extra'] = extra_dict
         return result
 
@@ -451,7 +474,35 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                 )
                 configurations.append(config)
                 id_count += 1
-                
+
+            case "vastbase":
+                # VastBase 向量数据库配置
+                name = 'vastbase'
+                host = v.get('host', '127.0.0.1')
+                port = v.get('port', 5433)
+                database = v.get('database', 'datav')
+                user = v.get('user', 'datav')
+                password = v.get('password', '')
+                db_schema = v.get('schema', 'public')
+                max_connections = v.get('max_connections')
+
+                config = VastBaseConfig(
+                    id=id_count,
+                    name=name,
+                    host=host,
+                    port=port,
+                    service_type="retrieval",
+                    retrieval_type="vastbase",
+                    database=database,
+                    user=user,
+                    password=password,
+                    db_schema=db_schema,
+                    max_connections=max_connections,
+                    detail_func_name="get_vastbase_status"
+                )
+                configurations.append(config)
+                id_count += 1
+
             case "minio":
                 # MinIO 对象存储配置
                 name = 'minio'

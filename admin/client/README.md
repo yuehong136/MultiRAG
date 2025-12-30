@@ -4,7 +4,7 @@
 
 Admin Service is a dedicated management component designed to monitor, maintain, and administrate the MultiRAG system. It provides comprehensive tools for ensuring system stability, performing operational tasks, and managing users and permissions efficiently.
 
-The service offers real-time monitoring of critical components, including the MultiRAG server, Task Executor processes, and dependent services such as MySQL, Elasticsearch, Redis, and MinIO. It automatically checks their health status, resource usage, and uptime, and performs restarts in case of failures to minimize downtime.
+The service offers real-time monitoring of critical components, including the MultiRAG server, Task Executor processes, and dependent services such as PostgreSQL/MySQL, Milvus, Elasticsearch, Infinity, VastBase, Redis, and MinIO. It automatically checks their health status, resource usage, and uptime, and performs restarts in case of failures to minimize downtime.
 
 For user and system management, it supports listing, creating, modifying, and deleting users and their associated resources like knowledge bases and Agents.
 
@@ -123,14 +123,17 @@ admin> list users;
 +-------------------------------+------------------------+-----------+-------------+
 
 admin> list services;
-+----+------------+-----------------+-------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------------------+
-| id | name       | host            | port  | service_type    | status  | extra                                                                                                                                      |
-+----+------------+-----------------+-------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------------------+
-| 0  | multirag_0 | 127.0.0.1       | 8123  | multirag_server | Alive   | {'secret_key': 'multirag', 'admin_require_superuser': False}                                                                               |
-| 1  | postgresql | 127.0.0.1       | 5432  | metadata        | Alive   | {'meta_type': 'postgresql', 'username': 'usr_ai', 'password': '123456', 'dbname': 'postgres', 'max_connections': 100, 'stale_timeout': 30} |
-| 2  | minio      | 127.0.0.1       | 9000  | file_store      | Alive   | {'store_type': 'minio', 'user': 'minioadmin', 'password': '12345678', 'workflow_bucket': 'multirag-workflow'}                              |
-| 3  | milvus     | 127.0.0.1       | 19530 | retrieval       | Alive   | {'retrieval_type': 'milvus', 'username': 'root', 'password': 'Milvus'}                                                                     |
-| 4  | infinity   | infinity        | 23817 | retrieval       | Timeout | {'retrieval_type': 'infinity', 'db_name': 'default_db'}                                                                                    |
-| 5  | redis      | 127.0.0.1       | 6379  | message_queue   | Alive   | {'mq_type': 'redis', 'database': 1}                                                                                                        |
-+----+------------+-----------------+-------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------------------+
++----+---------------+-----------------+-------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------------------+
+| id | name          | host            | port  | service_type    | status  | extra                                                                                                                                      |
++----+---------------+-----------------+-------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------------------+
+| 0  | multirag_0    | 127.0.0.1       | 8123  | multirag_server | Alive   | {'secret_key': 'multirag', 'admin_require_superuser': False}                                                                               |
+| 1  | postgresql    | 127.0.0.1       | 5432  | metadata        | Alive   | {'meta_type': 'postgresql', 'username': 'usr_ai', 'password': '123456', 'dbname': 'postgres', 'max_connections': 100, 'stale_timeout': 30} |
+| 2  | minio         | 127.0.0.1       | 9000  | file_store      | Alive   | {'store_type': 'minio', 'user': 'minioadmin', 'password': '12345678', 'workflow_bucket': 'multirag-workflow'}                              |
+| 3  | milvus        | 127.0.0.1       | 19530 | retrieval       | Alive   | {'retrieval_type': 'milvus', 'username': 'root', 'password': 'Milvus'}                                                                     |
+| 4  | elasticsearch | localhost       | 1200  | retrieval       | Timeout | {'retrieval_type': 'elasticsearch', 'username': 'elastic', 'password': 'infini_rag_flow'}                                                  |
+| 5  | infinity      | infinity        | 23817 | retrieval       | Timeout | {'retrieval_type': 'infinity', 'db_name': 'default_db'}                                                                                    |
+| 6  | vastbase      | 192.168.188.210 | 5434  | retrieval       | Timeout | {'retrieval_type': 'vastbase', 'database': 'datav', 'user': 'datav', 'schema': 'public'}                                                   |
+| 7  | redis         | 127.0.0.1       | 6379  | message_queue   | Alive   | {'mq_type': 'redis', 'database': 1}                                                                                                        |
+| 8  | task_executor | -               | -     | task_executor   | Alive   | {'message_queue_type': 'redis'}                                                                                                            |
++----+---------------+-----------------+-------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------------------+
 ```

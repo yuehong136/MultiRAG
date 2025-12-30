@@ -1,3 +1,4 @@
+import logging
 import re
 
 from sqlalchemy.orm import Session
@@ -242,7 +243,8 @@ class ServiceMgr:
                     config_dict['status'] = service_detail['status']
                 else:
                     config_dict['status'] = 'timeout'
-            except Exception:
+            except Exception as e:
+                logging.warning(f"Can't get service details, error: {e}")
                 config_dict['status'] = 'timeout'
             if not config_dict['host']:
                 config_dict['host'] = '-'
@@ -264,18 +266,14 @@ class ServiceMgr:
     @staticmethod
     def get_service_details(service_id: int):
         """获取服务详情"""
-        service_id = int(service_id)
+        service_idx = int(service_id)
         configs = SERVICE_CONFIGS.configs
 
-        # 查找对应的配置对象
-        service_config = None
-        for c in configs:
-            if c.id == service_id:
-                service_config = c
-                break
+        # 检查索引是否有效
+        if service_idx < 0 or service_idx >= len(configs):
+            raise AdminException(f"invalid service_index: {service_idx}")
 
-        if not service_config:
-            raise AdminException(f"invalid service_id: {service_id}")
+        service_config = configs[service_idx]
 
         # 获取基本配置信息
         result = service_config.to_dict()

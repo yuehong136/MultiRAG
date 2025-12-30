@@ -385,12 +385,29 @@ class AdminCLI(Cmd):
                 print(f"Can't access {self.host}, port: {self.port}")
 
     def _format_service_detail_table(self, data):
-        if not any([isinstance(v, list) for v in data.values()]):
-            # normal table
+        # 如果 data 不是字典（如列表），直接返回
+        if not isinstance(data, dict):
             return data
-        # handle task_executor heartbeats map, for example {'name': [{'done': 2, 'now': timestamp1}, {'done': 3, 'now': timestamp2}]
+
+        # 检查是否是 task_executor heartbeats 格式
+        # heartbeats 格式: {'name': [{'done': 2, 'now': timestamp1}, ...]}
+        is_heartbeats_format = False
+        for v in data.values():
+            if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict) and 'now' in v[0]:
+                is_heartbeats_format = True
+                break
+
+        if not is_heartbeats_format:
+            # 非 heartbeats 格式，直接返回原始数据
+            return data
+
+        # handle task_executor heartbeats map
         task_executor_list = []
         for k, v in data.items():
+            if not isinstance(v, list) or len(v) == 0:
+                continue
+            if not isinstance(v[0], dict) or 'now' not in v[0]:
+                continue
             # display latest status
             heartbeats = sorted(v, key=lambda x: x["now"], reverse=True)
             task_executor_list.append({
