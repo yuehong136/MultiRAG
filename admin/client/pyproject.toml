@@ -1,6 +1,6 @@
 [project]
 name = "multirag-cli"
-version = "0.9.6"
+version = "0.9.7"
 description = "Admin Service's client of [MultiRAG](http://122.112.170.159:8888/scdf/ai/multrag.git). The Admin Service provides user management and system monitoring. "
 authors = [{ name = "Xiaolong Du", email = "du13013901711@163.com" }]
 license = { text = "Apache License, Version 2.0" }
