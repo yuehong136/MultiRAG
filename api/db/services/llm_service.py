@@ -4,6 +4,7 @@ import re
 from functools import partial
 from typing import Generator, Any
 from sqlalchemy.orm import Session
+from common.constants import LLMType
 from api.db.db_models import LLM
 from api.db.services.common_service import CommonService
 from api.db.services.tenant_llm_service import LLM4Tenant, TenantLLMService
@@ -19,6 +20,14 @@ class LLMService(CommonService):
 def get_init_tenant_llm(db, user_id):
     from common import settings
     tenant_llm = []
+
+    model_configs = {
+        LLMType.CHAT: settings.CHAT_CFG,
+        LLMType.EMBEDDING: settings.EMBEDDING_CFG,
+        LLMType.SPEECH2TEXT: settings.ASR_CFG,
+        LLMType.IMAGE2TEXT: settings.IMAGE2TEXT_CFG,
+        LLMType.RERANK: settings.RERANK_CFG,
+    }
 
     seen = set()
     factory_configs = []
@@ -42,8 +51,8 @@ def get_init_tenant_llm(db, user_id):
                     "llm_factory": factory_config["factory"],
                     "llm_name": llm.llm_name,
                     "mdl_type": llm.mdl_type,
-                    "api_key": factory_config["api_key"],
-                    "api_base": factory_config["base_url"],
+                    "api_key": model_configs.get(llm.model_type, {}).get("api_key", factory_config["api_key"]),
+                    "api_base": model_configs.get(llm.model_type, {}).get("base_url", factory_config["base_url"]),
                     "max_tokens": llm.max_tokens if llm.max_tokens else 8192,
                 }
             )
