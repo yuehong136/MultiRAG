@@ -50,6 +50,8 @@ class VariableAssigner(ComponentBase, ABC):
             return
         else:
             for item in self._param.variables:
+                if any([not item.get("variable"), not item.get("operator"), not item.get("parameter")]):
+                    assert "Variable is not complete."
                 variable = item["variable"]
                 operator = item["operator"]
                 parameter = item["parameter"]
@@ -125,7 +127,8 @@ class VariableAssigner(ComponentBase, ABC):
         elif len(variable) != 0 and not isinstance(parameter, type(variable[0])):
             return "ERROR:PARAMETER_NOT_LIST_ELEMENT_TYPE"
         else:
-            return variable + parameter
+            variable.append(parameter)
+            return variable
 
     def _extend(self, variable, parameter):
         parameter = self._canvas.get_variable_value(parameter)
@@ -187,3 +190,6 @@ class VariableAssigner(ComponentBase, ABC):
                 return variable / parameter
         else:
             return "ERROR:VARIABLE_NOT_NUMBER or PARAMETER_NOT_NUMBER"
+
+    def thoughts(self) -> str:
+        return "Assign variables from canvas."
