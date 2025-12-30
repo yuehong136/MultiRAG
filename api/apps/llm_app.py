@@ -41,7 +41,7 @@ from api.db.services.mcp_server_service import MCPServerService
 from api.utils.web_utils import CONTENT_TYPE_MAP
 from common import settings
 from common.misc_utils import get_uuid
-from core.utils.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
+from common.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
 
 
 class ChatAgentAdapter:

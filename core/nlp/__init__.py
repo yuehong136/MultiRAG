@@ -139,13 +139,13 @@ def qbullets_category(sections):
             if re.match(pro, sec) and not not_bullet(sec):
                 hits[i] += 1
                 break
-    maxium = 0
+    maximum = 0
     res = -1
     for i, h in enumerate(hits):
-        if h <= maxium:
+        if h <= maximum:
             continue
         res = i
-        maxium = h
+        maximum = h
     return res, QUESTION_PATTERN[res]
 
 
@@ -206,13 +206,13 @@ def bullets_category(sections):
                 if re.match(p, sec) and not not_bullet(sec):
                     hits[i] += 1
                     break
-    maxium = 0
+    maximum = 0
     res = -1
     for i, h in enumerate(hits):
-        if h <= maxium:
+        if h <= maximum:
             continue
         res = i
-        maxium = h
+        maximum = h
     return res
 
 

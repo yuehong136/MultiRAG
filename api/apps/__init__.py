@@ -153,7 +153,7 @@ async def lifespan(app: FastAPI):
     stop_event.set()
 
     logging.info("Shutting down MCP sessions...")
-    from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions
+    from common.mcp_tool_call_conn import shutdown_all_mcp_sessions
     shutdown_all_mcp_sessions()
 
     logging.info("Shutting down workflow state manager...")

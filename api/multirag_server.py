@@ -38,7 +38,7 @@ from api.db.init_data import init_web_data
 from common.versions import get_multirag_version
 import uvicorn
 # from common.config_utils import show_configs
-from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions
+from common.mcp_tool_call_conn import shutdown_all_mcp_sessions
 from core.utils.redis_conn import RedisDistributedLock
 
 stop_event = threading.Event()
