@@ -2,10 +2,13 @@
 # MultiRAG 基础设施服务配置
 # 此文件定义所有基础设施服务（数据库、缓存、存储等），供主 docker-compose.yml 通过 include 引用
 #
-# 使用方式：
-# 1. 在 docker-compose.yml 中通过 include 引用此文件
-# 2. 使用 profiles 按需启用服务：
-#    - postgresql: PostgreSQL 数据库（必需）
+# 服务分类：
+# 1. 必需服务（默认启动，无需指定 profile）：
+#    - postgres: PostgreSQL 数据库
+#    - redis: Redis 缓存
+#    - minio: MinIO 对象存储
+#
+# 2. 可选服务（需要指定 profile 启动）：
 #    - elasticsearch: Elasticsearch 搜索引擎
 #    - opensearch: OpenSearch 搜索引擎
 #    - infinity: Infinity 向量数据库
@@ -13,12 +16,15 @@
 #    - oceanbase: OceanBase 向量数据库
 #    - sandbox: 沙箱执行器
 #    - tei-cpu / tei-gpu: Text Embeddings Inference 服务
+#    - kibana: Elasticsearch 可视化
 
 services:
+  # ==========================================================
+  # 必需服务（默认启动）
+  # ==========================================================
+
   # ========== PostgreSQL 数据库服务 ==========
   postgres:
-    profiles:
-      - postgresql
     image: postgres:16-alpine
     container_name: multirag-postgres
     env_file: .env
@@ -38,6 +44,10 @@ services:
       timeout: 10s
       retries: 120
     restart: on-failure
+
+  # ==========================================================
+  # 可选服务（需要指定 profile 启动）
+  # ==========================================================
 
   # ========== Elasticsearch 搜索引擎 ==========
   es01:
@@ -279,8 +289,6 @@ services:
 
   # ========== MinIO 对象存储 ==========
   minio:
-    profiles:
-      - minio
     image: quay.io/minio/minio:RELEASE.2025-06-13T11-33-47Z
     container_name: multirag-minio
     command: ["server", "--console-address", ":9001", "/data"]
@@ -305,8 +313,6 @@ services:
   # ========== Redis 缓存服务 ==========
   # 使用数组语法避免参数引用问题（参照 ragflow 3fe71ab7 提交）
   redis:
-    profiles:
-      - redis
     image: valkey/valkey:8
     container_name: multirag-redis
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
