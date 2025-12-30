@@ -26,7 +26,7 @@ from api.db.services.file2document_service import File2DocumentService
 from common.misc_utils import get_uuid
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService
-from api.utils.file_utils import filename_type, read_potential_broken_pdf, thumbnail_img
+from api.utils.file_utils import filename_type, read_potential_broken_pdf, thumbnail_img, sanitize_path
 from core.llm.cv_model.models.gptv4 import GptV4
 from common import settings
 
@@ -273,11 +273,12 @@ class FileService(CommonService):
         current_id = start_id
         while current_id:
             file = cls.get_by_id(db, current_id)
-            if file.parent_id != file.id:
+            if file and file.parent_id != file.id:
                 parent_folders.append(file)
                 current_id = file.parent_id
             else:
-                parent_folders.append(file)
+                if file:
+                    parent_folders.append(file)
                 break
         return parent_folders
 
@@ -351,13 +352,15 @@ class FileService(CommonService):
             raise RuntimeError("Database error (File move)!")
 
     @classmethod
-    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: list, user_id, labels: list[str] | None = None, src: str="local") -> tuple[list[str], list[dict]]:
+    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: list, user_id, labels: list[str] | None = None, src: str="local", parent_path: str | None = None) -> tuple[list[str], list[dict]]:
         # 初始化根文件夹和知识库文件夹
         root_folder = cls.get_root_folder(db, user_id)
         pf_id = root_folder["id"]
         cls.init_knowledgebase_docs(db, pf_id, user_id)
         kb_root_folder = cls.get_kb_folder(db, user_id)
         kb_folder = cls.new_a_file_from_kb(db, kb.tenant_id, kb.name, kb_root_folder["id"])
+
+        safe_parent_path = sanitize_path(parent_path)
 
         err, files_info = [], []
         for file_blob, filename in file_objs:  # 解包元组
@@ -372,7 +375,7 @@ class FileService(CommonService):
                 if filetype == FileType.OTHER.value:
                     raise RuntimeError("This type of file has not been supported yet!")
 
-                location = filename
+                location = filename if not safe_parent_path else f"{safe_parent_path}/{filename}"
                 while settings.STORAGE_IMPL.obj_exist(kb.id, location):
                     location += "_"
 
