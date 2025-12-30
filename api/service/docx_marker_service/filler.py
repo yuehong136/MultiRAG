@@ -9,7 +9,12 @@
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
+
 from docx import Document
+
+if TYPE_CHECKING:
+    from docx.document import Document as DocumentType
 
 
 def parse_insert_path(path: str) -> tuple[str, str | None]:
@@ -42,7 +47,7 @@ def parse_path(path: str) -> list[tuple[str, int]]:
     return [(name, int(idx)) for name, idx in matches]
 
 
-def get_element_by_path(doc: Document, path: str):
+def get_element_by_path(doc: "DocumentType", path: str):
     """
     根据 path 获取 docx 中对应的元素
 
@@ -247,7 +252,7 @@ def insert_paragraph_at(cell, ref_para_index: int, position: str, text: str):
         # 如果是最后一个段落的 after，新段落已经在末尾，无需移动
 
 
-def get_parent_element_by_path(doc: Document, path: str):
+def get_parent_element_by_path(doc: "DocumentType", path: str):
     """
     获取 path 指向元素的父元素，用于插入操作
 
