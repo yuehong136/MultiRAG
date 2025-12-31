@@ -7,6 +7,7 @@
 @desc: 数据源连接器相关服务
 """
 import logging
+import os
 from datetime import datetime
 
 from sqlalchemy import select, func, text
@@ -180,13 +181,21 @@ class SyncLogsService(CommonService):
             stmt = stmt.where(cls.model.connector_id == connector_id)
         else:
             # 计算时间间隔，查询需要执行的定时任务
-            # PostgreSQL 语法: NOW() - (refresh_freq * INTERVAL '1 minute')
-            interval_expr = func.now() - (Connector.refresh_freq * text("INTERVAL '1 minute'"))
+            # 根据数据库类型选择正确的 INTERVAL 语法
+            database_type = os.getenv("DB_TYPE", "postgresql")
+            if "postgres" in database_type.lower():
+                # PostgreSQL 使用 make_interval 函数
+                interval_expr = func.now() - func.make_interval(mins=Connector.refresh_freq)
+                time_condition = cls.model.update_date < interval_expr
+            else:
+                # MySQL 使用 TIMESTAMPDIFF 函数
+                # TIMESTAMPDIFF(MINUTE, update_date, NOW()) > refresh_freq
+                time_condition = func.timestampdiff(text("MINUTE"), cls.model.update_date, func.now()) > Connector.refresh_freq
             stmt = stmt.where(
                 Connector.input_type == InputType.POLL,
                 Connector.status == TaskStatus.SCHEDULE,
                 cls.model.status == TaskStatus.SCHEDULE,
-                cls.model.update_date < interval_expr
+                time_condition
             )
 
         stmt = stmt.distinct().order_by(sa_desc(cls.model.update_time))
