@@ -62,13 +62,19 @@ def update_progress():
         except Exception:
             logging.exception("update_progress exception")
         finally:
+            # ⚠️ 关键修复：先关闭数据库连接，再等待
+            # 这样连接可以立即归还到连接池，避免占用期间阻塞其他请求
+            if db:
+                try:
+                    db.close()
+                except Exception:
+                    pass
             try:
                 redis_lock.release()
             except Exception:
-                logging.exception("update_progress exception")
+                pass
+            # 等待下一次循环（此时连接已归还）
             stop_event.wait(6)
-            if db:
-                db.close()
 
 def signal_handler(sig, frame):
     logging.info("Received interrupt signal, shutting down...")

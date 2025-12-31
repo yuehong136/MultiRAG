@@ -47,6 +47,17 @@ RUN apt update && apt -y install ca-certificates && \
     build-essential libglib2.0-0 libglx-mesa0 pkg-config libicu-dev libatk-bridge2.0-0 \
     libpython3-dev libjemalloc-dev nginx ghostscript \
     libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus  python3-pip pipx tcl-dev pkg-config \
+    fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg && \
+    # 安装 MSSQL ODBC 驱动 (pyodbc 依赖)
+    curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - && \
+    curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list > /etc/apt/sources.list.d/mssql-release.list && \
+    apt update && \
+    arch="$(uname -m)"; \
+    if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then \
+        ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql18; \
+    else \
+        ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql17; \
+    fi && \
     fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg \
     pandoc texlive && \
     # 安装uv
@@ -182,7 +193,6 @@ COPY plugin plugin
 COPY common common
 
 # 添加并配置entrypoint
-COPY docker/service_conf.yaml.template ./configs/service_conf.yaml.template
 COPY ./docker/entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
