@@ -262,13 +262,13 @@ class UserCanvasService(CommonService):
 # ---------------------------
 # 推理流程（SSE / OpenAI 兼容）
 # ---------------------------
-def completion(
+async def completion(
     db: Session,
     tenant_id: str,
     agent_id: str,
     session_id: str | None = None,
     **kwargs,
-) -> Iterable[str]:
+):
     """
     FastAPI 里可直接作为 StreamingResponse 的迭代器：
         return StreamingResponse(completion(db, tenant_id, agent_id, **payload), media_type="text/event-stream")
@@ -320,7 +320,7 @@ def completion(
 
     # 流式运行
     txt = ""
-    for ans in canvas.run(query=query, files=files, user_id=user_id, inputs=inputs):
+    async for ans in canvas.run(query=query, files=files, user_id=user_id, inputs=inputs):
         ans["session_id"] = session_id
         if ans["event"] == "message":
             txt += ans["data"]["content"]
@@ -341,7 +341,7 @@ def completion(
     API4ConversationService.append_message(db, conv.id, conv.to_dict())
 
 
-def completion_openai(
+async def completion_openai(
     db: Session,
     tenant_id: str,
     agent_id: str,
@@ -349,7 +349,7 @@ def completion_openai(
     session_id: str | None = None,
     stream: bool = True,
     **kwargs,
-) -> Iterable[str | dict]:
+):
     """
     OpenAI 兼容适配器，基于 completion() 函数封装。
     - 调用 completion() 获取内部 SSE 流
@@ -364,7 +364,7 @@ def completion_openai(
     if stream:
         completion_tokens = 0
         try:
-            for ans in completion(
+            async for ans in completion(
                 db=db,
                 tenant_id=tenant_id,
                 agent_id=agent_id,
@@ -429,7 +429,7 @@ def completion_openai(
         try:
             all_content = ""
             reference = {}
-            for ans in completion(
+            async for ans in completion(
                 db=db,
                 tenant_id=tenant_id,
                 agent_id=agent_id,

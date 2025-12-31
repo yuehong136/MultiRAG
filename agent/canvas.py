@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import asyncio
 import base64
 import json
 import logging
@@ -270,6 +271,8 @@ class Canvas(Graph):
             "sys.conversation_turns": 0,
             "sys.files": []
         }
+        self._thread_pool = ThreadPoolExecutor(max_workers=5)
+        self._loop = None
         super().__init__(dsl, tenant_id, task_id)
 
     def load(self):
@@ -315,8 +318,9 @@ class Canvas(Graph):
                 else:
                     self.globals[k] = None
 
-    def run(self, **kwargs):
+    async def run(self, **kwargs):
         st = time.perf_counter()
+        self._loop = asyncio.get_running_loop()
         self.message_id = get_uuid()
         created_at = int(time.time())
         self.add_user_input(kwargs.get("query"))
@@ -362,31 +366,37 @@ class Canvas(Graph):
         yield decorate("workflow_started", {"inputs": kwargs.get("inputs")})
         self.retrieval.append({"chunks": {}, "doc_aggs": {}})
 
-        def _run_batch(f, t):
+        async def _run_batch(f, t):
             if self.is_canceled():
                 msg = f"Task {self.task_id} has been canceled during batch execution."
                 logging.info(msg)
                 raise TaskCanceledException(msg)
 
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                thr = []
-                i = f
-                while i < t:
-                    cpn = self.get_component_obj(self.path[i])
-                    if cpn.component_name.lower() in ["begin", "userfillup"]:
-                        thr.append(executor.submit(cpn.invoke, inputs=kwargs.get("inputs", {})))
-                        i += 1
+            loop = asyncio.get_running_loop()
+            tasks = []
+            i = f
+            while i < t:
+                cpn = self.get_component_obj(self.path[i])
+                if cpn.component_name.lower() in ["begin", "userfillup"]:
+                    tasks.append(loop.run_in_executor(
+                        self._thread_pool,
+                        partial(cpn.invoke, inputs=kwargs.get("inputs", {}))
+                    ))
+                    i += 1
+                else:
+                    for _, ele in cpn.get_input_elements().items():
+                        if isinstance(ele, dict) and ele.get("_cpn_id") and ele.get("_cpn_id") not in self.path[:i] and self.path[0].lower().find("userfillup") < 0:
+                            self.path.pop(i)
+                            t -= 1
+                            break
                     else:
-                        for _, ele in cpn.get_input_elements().items():
-                            if isinstance(ele, dict) and ele.get("_cpn_id") and ele.get("_cpn_id") not in self.path[:i] and self.path[0].lower().find("userfillup") < 0:
-                                self.path.pop(i)
-                                t -= 1
-                                break
-                        else:
-                            thr.append(executor.submit(cpn.invoke, **cpn.get_input()))
-                            i += 1
-                for t in thr:
-                    t.result()
+                        tasks.append(loop.run_in_executor(
+                            self._thread_pool,
+                            partial(cpn.invoke, **cpn.get_input())
+                        ))
+                        i += 1
+            if tasks:
+                await asyncio.gather(*tasks)
 
         def _node_finished(cpn_obj):
             return decorate("node_finished", {
@@ -413,7 +423,7 @@ class Canvas(Graph):
                     "component_type": self.get_component_type(self.path[i]),
                     "thoughts": self.get_component_thoughts(self.path[i])
                 })
-            _run_batch(idx, to)
+            await _run_batch(idx, to)
             to = len(self.path)
             # post processing of components invocation
             for i in range(idx, to):

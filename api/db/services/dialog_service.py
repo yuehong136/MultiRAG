@@ -31,7 +31,6 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
-from core.nlp import extract_between
 from core.nlp.search import index_name
 from core.prompts.generator import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
     citation_prompt, cross_languages, gen_meta_filter, PROMPT_JINJA_ENV, ASK_SUMMARY
@@ -365,7 +364,7 @@ def convert_conditions(metadata_condition):
 ]
 
 
-def meta_filter(metas: dict, filters: list[dict]):
+def meta_filter(metas: dict, filters: list[dict], logic: str = "and"):
     doc_ids = set([])
 
     def filter_out(v2docs, operator, value):
@@ -409,7 +408,10 @@ def meta_filter(metas: dict, filters: list[dict]):
             if not doc_ids:
                 doc_ids = set(ids)
             else:
-                doc_ids = doc_ids & set(ids)
+                if logic == "and":
+                    doc_ids = doc_ids & set(ids)
+                else:
+                    doc_ids = doc_ids | set(ids)
             if not doc_ids:
                 return []
     return list(doc_ids)
@@ -495,12 +497,12 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     if dialog.meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(db, dialog.kb_ids)
         if dialog.meta_data_filter.get("method") == "auto":
-            filters = gen_meta_filter(chat_mdl, metas, questions[-1])
-            attachments.extend(meta_filter(metas, filters))
+            filters: dict = gen_meta_filter(chat_mdl, metas, questions[-1])
+            attachments.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
             if not attachments:
                 attachments = None
         elif dialog.meta_data_filter.get("method") == "manual":
-            attachments.extend(meta_filter(metas, dialog.meta_data_filter["manual"]))
+            attachments.extend(meta_filter(metas, dialog.meta_data_filter["manual"], dialog.meta_data_filter.get("logic", "and")))
             if not attachments:
                 attachments = None
 
@@ -897,28 +899,12 @@ def tts(tts_mdl, text):
 def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
     if search_config is None:
         search_config = {}
-    similarity_threshold = 0.1,
-    vector_similarity_weight = 0.3,
-    top = 1024,
-    doc_ids = []
-    rerank_id = ""
+    doc_ids = search_config.get("doc_ids", [])
     rerank_mdl = None
-
-    if search_config:
-        if search_config.get("kb_ids", []):
-            kb_ids = search_config.get("kb_ids", [])
-        if search_config.get("chat_id", ""):
-            chat_llm_name = search_config.get("chat_id", "")
-        if search_config.get("similarity_threshold", 0.1):
-            similarity_threshold = search_config.get("similarity_threshold", 0.1)
-        if search_config.get("vector_similarity_weight", 0.3):
-            vector_similarity_weight = search_config.get("vector_similarity_weight", 0.3)
-        if search_config.get("top_k", 1024):
-            top = search_config.get("top_k", 1024)
-        if search_config.get("doc_ids", []):
-            doc_ids = search_config.get("doc_ids", [])
-        if search_config.get("rerank_id", ""):
-            rerank_id = search_config.get("rerank_id", "")
+    kb_ids = search_config.get("kb_ids", kb_ids)
+    chat_llm_name = search_config.get("chat_id", chat_llm_name)
+    rerank_id = search_config.get("rerank_id", "")
+    meta_data_filter = search_config.get("meta_data_filter")
 
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     embedding_list = list(set([kb.embd_id for kb in kbs]))
@@ -933,6 +919,18 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     max_tokens = chat_mdl.max_length
     tenant_ids = list([kb.tenant_id for kb in kbs])
 
+    if meta_data_filter:
+        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        if meta_data_filter.get("method") == "auto":
+            filters: dict = gen_meta_filter(chat_mdl, metas, question)
+            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
+            if not doc_ids:
+                doc_ids = None
+        elif meta_data_filter.get("method") == "manual":
+            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
+            if not doc_ids:
+                doc_ids = None
+
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
     kbinfos = retriever.retrieval(
@@ -943,9 +941,9 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
         kb_names=kb_names,
         page=1,
         page_size=12,
-        similarity_threshold=similarity_threshold,
-        vector_similarity_weight=vector_similarity_weight,
-        top=top,
+        similarity_threshold=search_config.get("similarity_threshold", 0.1),
+        vector_similarity_weight=search_config.get("vector_similarity_weight", 0.3),
+        top=search_config.get("top_k", 1024),
         doc_ids=doc_ids,
         aggs=False,
         rerank_mdl=rerank_mdl,
@@ -1004,12 +1002,12 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
     if meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)
         if meta_data_filter.get("method") == "auto":
-            filters = gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters))
+            filters: dict = gen_meta_filter(chat_mdl, metas, question)
+            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
             if not doc_ids:
                 doc_ids = None
         elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"]))
+            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
             if not doc_ids:
                 doc_ids = None
 

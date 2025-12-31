@@ -237,10 +237,10 @@ def webhook(
     except Exception as e:
         return get_error_data_result(retmsg=str(e))
 
-    def sse():
+    async def sse():
         nonlocal canvas
         try:
-            for ans in canvas.run(
+            async for ans in canvas.run(
                 query=req.get("query", ""),
                 files=req.get("files", []),
                 user_id=req.get("user_id", tenant_id),

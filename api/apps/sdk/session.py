@@ -489,10 +489,10 @@ def chat_completion_openai_like(
 
 
 @router.post("/agents_openai/{agent_id}/chat/completions", summary="代理OpenAI兼容补全")
-def agents_completion_openai_compatibility(
-    agent_id: str, 
-    request: ChatCompletionOpenAIRequest, 
-    db: Session = Depends(get_db), 
+async def agents_completion_openai_compatibility(
+    agent_id: str,
+    request: ChatCompletionOpenAIRequest,
+    db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     req = request.model_dump()
@@ -538,22 +538,20 @@ def agents_completion_openai_compatibility(
         return resp
     else:
         # For non-streaming, just return the response directly
-        response = next(
-            completion_openai(
-                db,
-                tenant_id,
-                agent_id,
-                question,
-                session_id=req.pop("session_id", req.get("id", "") or req.get("metadata", {}).get("id", "")),
-                stream=False,
-                **req,
-            )
-        )
-        return response
+        async for response in completion_openai(
+            db,
+            tenant_id,
+            agent_id,
+            question,
+            session_id=req.pop("session_id", req.get("id", "") or req.get("metadata", {}).get("id", "")),
+            stream=False,
+            **req,
+        ):
+            return response
 
 
 @router.post("/agents/{agent_id}/completions", summary="代理补全")
-def agent_completions(
+async def agent_completions(
     agent_id: str,
     request: AgentCompletionRequest,
     db: Session = Depends(get_db),
@@ -562,9 +560,9 @@ def agent_completions(
     req = request.model_dump()
 
     if req.get("stream", True):
-        def generate():
+        async def generate():
             ans = {}
-            for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
+            async for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
                 if isinstance(answer, str):
                     try:
                         ans = json.loads(answer[5:])  # remove "data:"
@@ -588,7 +586,7 @@ def agent_completions(
     full_content = ""
     reference = {}
     final_ans = ""
-    for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
+    async for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
         try:
             ans = json.loads(answer[5:])
 
@@ -967,9 +965,9 @@ def get_chatbot_info(dialog_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/agentbots/{agent_id}/completions", summary="代理机器人补全")
-def agent_bot_completions(agent_id: str, request: AgentCompletionRequest, db: Session = Depends(get_db)):
+async def agent_bot_completions(agent_id: str, request: AgentCompletionRequest, db: Session = Depends(get_db)):
     req = request.model_dump()
-    
+
     # TODO: 需要重构token验证方式以符合FastAPI模式
 
     if req.get("stream", True):
@@ -984,7 +982,7 @@ def agent_bot_completions(agent_id: str, request: AgentCompletionRequest, db: Se
 
     # TODO: 需要获取正确的tenant_id
     tenant_id = "default"  # 临时解决方案
-    for answer in agent_completion(tenant_id, agent_id, **req):
+    async for answer in agent_completion(tenant_id, agent_id, **req):
         return get_result(data=answer)
 
 
@@ -1070,12 +1068,12 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)
         if meta_data_filter.get("method") == "auto":
             chat_mdl = LLMBundle(tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
-            filters = gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters))
+            filters: dict = gen_meta_filter(chat_mdl, metas, question)
+            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
             if not doc_ids:
                 doc_ids = None
         elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"]))
+            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
             if not doc_ids:
                 doc_ids = None
 

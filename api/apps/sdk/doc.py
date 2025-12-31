@@ -1108,10 +1108,10 @@ def retrieval_test(
     
     # 处理元数据过滤
     if not doc_ids:
-        metadata_condition = req.get("metadata_condition", {})
+        metadata_condition = req.get("metadata_condition", {}) or {}
         if metadata_condition:
             metas = DocumentService.get_meta_by_kbs(db, kb_ids)
-            doc_ids = meta_filter(metas, convert_conditions(metadata_condition))
+            doc_ids = meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and"))
     
     similarity_threshold = float(req.get("similarity_threshold", 0.2))
     vector_similarity_weight = float(req.get("vector_similarity_weight", 0.3))
