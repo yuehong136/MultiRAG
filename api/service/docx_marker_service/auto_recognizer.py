@@ -300,10 +300,13 @@ def is_independent_cell(row, cell_idx, cell) -> bool:
 
 
 def is_merged_cell(cell) -> bool:
-    """判断单元格是否为合并单元格"""
+    """判断单元格是否为合并单元格（垂直合并的非起始单元格）"""
     tc = cell._element
     vmerge = tc.xpath(".//w:vMerge")
-    return vmerge and vmerge[0].get(
+    if not vmerge:
+        return False
+    # 如果有 vMerge 且 val 不是 "restart"，则是合并单元格的非起始部分
+    return vmerge[0].get(
         "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") != "restart"
 
 
@@ -311,7 +314,9 @@ def is_start_of_down_merge(cell) -> bool:
     """判断单元格是否为下合并单元格的开始"""
     tc = cell._element
     vmerge = tc.xpath(".//w:vMerge")
-    return vmerge and vmerge[0].get(
+    if not vmerge:
+        return False
+    return vmerge[0].get(
         "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") == "restart"
 
 
