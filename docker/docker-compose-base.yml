@@ -36,6 +36,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - multirag
     healthcheck:
@@ -203,6 +204,7 @@ services:
     profiles:
       - milvus
     image: milvusdb/milvus:v2.6.7
+    hostname: milvus
     container_name: multirag-milvus
     command: ["milvus", "run", "standalone"]
     security_opt:

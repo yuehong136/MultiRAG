@@ -1,30 +1,49 @@
-# ============================================================
+# docker-compose-macos.yml
 # MultiRAG macOS 专用配置（Apple Silicon）
-# 
-# 用途：在 Apple Silicon Mac (M1/M2/M3) 上运行 x86_64 容器
-# 原理：通过 Rosetta 2 模拟 x86_64 架构
-# 
-# 使用方式：
-#   docker compose -f docker-compose-macos.yml up -d
-#   或指定 profile：
-#   docker compose -f docker-compose-macos.yml --profile tei up -d
 #
-# 注意：
-#   - 需要 Docker Desktop 启用 "Use Rosetta for x86_64/amd64 emulation"
-#   - 性能比原生 ARM 慢约 30-50%
-#   - 主要用于运行没有 ARM 版本的镜像（如 TEI）
-# ============================================================
+# 用途：在 Apple Silicon Mac (M1/M2/M3/M4) 上运行 x86_64 容器
+# 原理：通过 Rosetta 2 模拟 x86_64 架构
+#
+# 使用方式：
+#   # 最小化部署（自动启动 postgres + redis + minio + multirag）
+#   docker compose -f docker-compose-macos.yml --profile cpu up -d
+#
+#   # 加上 Milvus 向量数据库
+#   docker compose -f docker-compose-macos.yml --profile cpu --profile milvus up -d
+#
+#   # 加上 TEI Embedding 服务
+#   docker compose -f docker-compose-macos.yml --profile cpu --profile tei-cpu up -d
+#
+#   # 完整部署（Milvus + TEI）
+#   docker compose -f docker-compose-macos.yml --profile cpu --profile milvus --profile tei-cpu up -d
+#
+# 前提条件：
+#   - Docker Desktop 启用 "Use Rosetta for x86_64/amd64 emulation on Apple Silicon"
+#   - 或使用 OrbStack 并选择 x86-64 (emulated) 架构
+#
+# 性能说明：
+#   - 通过 Rosetta 2 模拟运行，性能约为原生的 50-70%
+#   - 适合开发测试，生产环境建议使用 Linux x86_64 服务器
+#
+# 与主配置文件的区别：
+#   - multirag 服务添加 platform: linux/amd64（强制使用 x86_64 架构）
+#   - TEI 服务使用 macOS 优化配置（更长的启动等待时间）
+#   - 不提供 GPU 版本（macOS 不支持 NVIDIA GPU）
 
-version: '3.8'
+include:
+  - ./docker-compose-base.yml
 
 services:
-  # ========== MultiRAG 主服务 (macOS) ==========
-  multirag:
+  # ========== MultiRAG 主服务 (macOS CPU 版本) ==========
+  # 注意：macOS 只支持 CPU 版本，不支持 GPU
+  multirag-cpu:
+    profiles:
+      - cpu
     platform: linux/amd64
-    image: multirag:latest
+    image: ${MULTIRAG_IMAGE:-multirag:latest}
     container_name: multirag
     restart: unless-stopped
-    
+
     # ========== 端口映射 ==========
     ports:
       # ----------------------------------------------------------
@@ -32,25 +51,34 @@ services:
       # ----------------------------------------------------------
       - "${SVR_WEB_HTTP_PORT:-80}:80"       # HTTP 入口
       - "${SVR_WEB_HTTPS_PORT:-443}:443"    # HTTPS 入口（需配置 SSL 证书）
-      
+
       # ----------------------------------------------------------
       # 直连后端端口（兼容模式 / 调试用）
       # 如需关闭直连，注释以下两行即可
       # ----------------------------------------------------------
       - "${SVR_HTTP_PORT:-8123}:8123"       # 主服务 API 直连
       - "${ADMIN_SVR_HTTP_PORT:-8130}:8130" # 管理后台 API 直连
-    
-    env_file: 
+
+    # 从 .env 文件加载环境变量
+    env_file:
       - ./.env
-    
+
+    # 环境变量配置（可以覆盖 .env 中的配置）
     environment:
+      # 基础配置
       - PYTHONIOENCODING=utf-8
       - LANG=zh_CN.UTF-8
       - LC_ALL=zh_CN.UTF-8
+
+      # Admin Server 端口配置（可选）
       - ADMIN_SVR_HTTP_PORT=8130
+
+      # 任务执行器数量
       - WS=1
+
+      # Web Server 开关（1=启用 Nginx，0=禁用）
       - ENABLE_WEBSERVER=${ENABLE_WEBSERVER:-1}
-    
+
     # ========== 数据卷挂载 ==========
     volumes:
       # ----------------------------------------------------------
@@ -64,76 +92,68 @@ services:
       # SSL 证书（启用 HTTPS 时取消注释）
       # - /path/to/ssl/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
       # - /path/to/ssl/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
-      
+
       # ----------------------------------------------------------
       # 应用配置
       # ----------------------------------------------------------
       - ../configs:/multirag/configs
+      # 挂载模板文件，开发时修改 template 无需重新构建镜像
+      - ./service_conf.yaml.template:/multirag/docker/service_conf.yaml.template
       - ./entrypoint.sh:/multirag/entrypoint.sh
+      # 日志目录
       - ../logs:/multirag/logs
       # 前端静态文件（预留，等前端开发后启用）
       # - ../web/dist:/multirag/web/dist
-    
+      # 源代码挂载（开发模式）
+      # - ../api:/multirag/api
+      # - ../core:/multirag/core
+      # - ../common:/multirag/common
+
+    # 默认命令：启动所有服务（Redis、API Server、TaskExecutor）
+    # 不启动 Admin Server
     command: []
-    
+
+    # 网络配置
     networks:
       - multirag
-    
+
+    # 健康检查（macOS 模拟运行较慢，增加 start_period）
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8123/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
-    
+
+    # 确保主机内部 IP 暴露给容器
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
   # ========== TEI 服务 (macOS - 通过 Rosetta 模拟) ==========
   # TEI 只有 x86_64 版本，必须使用 platform: linux/amd64
-  tei:
+  # 覆盖 base 文件中的 tei-cpu 服务，添加 macOS 特定配置
+  tei-cpu:
     profiles:
-      - tei
+      - tei-cpu
     platform: linux/amd64
-    image: ${TEI_IMAGE_CPU:-infiniflow/text-embeddings-inference:cpu-1.8}
+    image: ${TEI_IMAGE_CPU:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.8}
     hostname: tei
-    container_name: tei-macos
-    restart: unless-stopped
-    
+    container_name: multirag-tei-cpu
     ports:
       - "${TEI_PORT:-6380}:80"
-    
-    env_file: ./.env
-    
+    env_file: .env
     environment:
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
-      - HF_TOKEN=${HF_TOKEN:-}
-    
     volumes:
-      - tei-models:/data
-    
-    command: 
-      - "--model-id"
-      - "${TEI_MODEL:-BAAI/bge-small-en-v1.5}"
-      - "--auto-truncate"
-    
+      - ${TEI_MODEL_CACHE:-tei_data}:/data
     networks:
       - multirag
-    
+    command: ["--model-id", "/data/${TEI_MODEL:-BAAI/bge-small-en-v1.5}", "--auto-truncate"]
+    # macOS 模拟运行较慢，增加 start_period 和重试次数
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/health"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 10
       start_period: 180s
-
-networks:
-  multirag:
-    driver: bridge
-
-volumes:
-  tei-models:
-    driver: local
-
-
-
+    restart: on-failure

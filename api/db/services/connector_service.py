@@ -146,6 +146,7 @@ class SyncLogsService(CommonService):
             cls.model.connector_id,
             cls.model.kb_id,
             cls.model.update_date,
+            cls.model.update_time,  # 添加 update_time，用于 ORDER BY（PostgreSQL DISTINCT 要求）
             cls.model.poll_range_start,
             cls.model.poll_range_end,
             cls.model.new_docs_indexed,
@@ -179,8 +180,8 @@ class SyncLogsService(CommonService):
             stmt = stmt.where(cls.model.connector_id == connector_id)
         else:
             # 计算时间间隔，查询需要执行的定时任务
-            # 使用 text() 来处理原生 SQL 表达式
-            interval_expr = text("NOW() - INTERVAL refresh_freq MINUTE")
+            # PostgreSQL 语法: NOW() - (refresh_freq * INTERVAL '1 minute')
+            interval_expr = func.now() - (Connector.refresh_freq * text("INTERVAL '1 minute'"))
             stmt = stmt.where(
                 Connector.input_type == InputType.POLL,
                 Connector.status == TaskStatus.SCHEDULE,
