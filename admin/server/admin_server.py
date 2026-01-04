@@ -1,6 +1,8 @@
 import logging
 import os
 import uvicorn
+import faulthandler
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -118,6 +120,7 @@ app = create_app()
 
 
 if __name__ == '__main__':
+    faulthandler.enable()
     uvicorn.run(
         "admin_server:app",
         host="0.0.0.0",

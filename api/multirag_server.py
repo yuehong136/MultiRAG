@@ -9,14 +9,6 @@
 from common.log_utils import init_root_logger
 from plugin import GlobalPluginManager
 init_root_logger("multirag_server")
-# init_root_logger("multirag_server")
-# for module in ["pdfminer"]:
-#     module_logger = logging.getLogger(module)
-#     module_logger.setLevel(logging.WARNING)
-# for module in ["sqlalchemy"]:
-#     module_logger = logging.getLogger(module)
-#     module_logger.handlers.clear()
-#     module_logger.propagate = True
 
 import logging
 import os
@@ -26,6 +18,7 @@ import time
 import traceback
 import threading
 import uuid
+import faulthandler
 
 from api.apps import app
 from api.db.runtime_config import RuntimeConfig
@@ -84,6 +77,7 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 if __name__ == '__main__':
+    faulthandler.enable()
     # ============================================================================
     # 启动脚本 - 负责进程级别的初始化和服务器启动
     # 

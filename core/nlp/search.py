@@ -2,7 +2,6 @@ import json
 import logging
 import re
 import math
-import os
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -23,6 +22,7 @@ from core.utils.doc_store_conn import (
 from common.string_utils import remove_redundant_spaces
 from common.float_utils import get_float
 from common.constants import TAG_FLD, PAGERANK_FLD
+from common import settings
 
 
 def index_name(uid, kb_names):
@@ -332,7 +332,8 @@ class Dealer:
             if emb_mdl:
                 match_dense = self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
                 q_vec = match_dense.embedding_data
-                src.append(f"q_{len(q_vec)}_vec")
+                if not settings.DOC_ENGINE_INFINITY:
+                    src.append(f"q_{len(q_vec)}_vec")
                 fusion_expr = FusionExpr("weighted_sum", topk, {"weights": "0.05,0.95"})
                 match_exprs = [match_text, match_dense, fusion_expr]
 
@@ -1156,16 +1157,15 @@ class Dealer:
                 rank_feature=rank_feature
             )
         else:
-            # 使用实际的数据库类型判断，而不是环境变量
+            # 使用实际的数据库类型判断
             db_type = self.dataStore.dbType()
             logging.info(f"db_type: {db_type}, sres.total: {sres.total}, query_vector len: {len(sres.query_vector) if sres.query_vector else 0}")
-            if db_type in ["elasticsearch", "opensearch"]:
-                # ElasticSearch doesn't normalize each way score before fusion.
-                logging.info("进入 ES rerank 分支")
-                sim, tsim, vsim = self.rerank(
-                    sres, question, 1 - vector_similarity_weight, vector_similarity_weight,
-                    rank_feature=rank_feature)
-                logging.info(f"rerank 返回: sim={sim[:3] if len(sim) > 0 else []}, tsim={tsim[:3] if len(tsim) > 0 else []}, vsim={vsim[:3] if len(vsim) > 0 else []}")
+            if settings.DOC_ENGINE_INFINITY:
+                # Don't need rerank here since Infinity normalizes each way score before fusion.
+                sim = [sres.field[id].get("_score", 0.0) for id in sres.ids]
+                sim = [s if s is not None else 0.0 for s in sim]
+                tsim = sim
+                vsim = sim
             elif db_type == "milvus":
                 if req.get("search_mode", {}).get("hybrid"):
                     if "distance" in sres.field and isinstance(sres.field["distance"], list):
@@ -1180,8 +1180,15 @@ class Dealer:
                     sim = np.array([s if s is not None else 0.0 for s in sim_list], dtype=np.float64)
                     tsim = np.zeros(len(sim), dtype=np.float64)
                     vsim = np.zeros(len(sim), dtype=np.float64)
+            elif db_type in ["elasticsearch", "opensearch"]:
+                # ElasticSearch doesn't normalize each way score before fusion.
+                logging.info("进入 ES rerank 分支")
+                sim, tsim, vsim = self.rerank(
+                    sres, question, 1 - vector_similarity_weight, vector_similarity_weight,
+                    rank_feature=rank_feature)
+                logging.info(f"rerank 返回: sim={sim[:3] if len(sim) > 0 else []}, tsim={tsim[:3] if len(tsim) > 0 else []}, vsim={vsim[:3] if len(vsim) > 0 else []}")
             else:
-                # Infinity / 其它已归一化的引擎
+                # 其它已归一化的引擎
                 sim_list = [sres.field[id].get("_score", 0.0) for id in sres.ids]
                 sim = np.array([s if s is not None else 0.0 for s in sim_list], dtype=np.float64)
                 tsim = sim.copy()

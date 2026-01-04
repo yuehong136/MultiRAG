@@ -997,7 +997,7 @@ def update_document_chunk(
         chunk_data = res[chunk_id]
         
         # 更新内容
-        if "content" in req:
+        if "content" in req and req["content"] is not None:
             chunk_data["content_with_weight"] = req["content"]
             tks = rag_tokenizer.tokenize(req["content"])
             chunk_data["content_ltks"] = tks
