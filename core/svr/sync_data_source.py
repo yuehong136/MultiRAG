@@ -18,7 +18,7 @@ from api.db.db_models import db_connection
 from common.constants import FileSource, TaskStatus
 from common import settings
 from common.versions import get_multirag_version
-from common.data_source import BlobStorageConnector, NotionConnector, DiscordConnector, GoogleDriveConnector, MoodleConnector, JiraConnector, DropboxConnector
+from common.data_source import BlobStorageConnector, NotionConnector, DiscordConnector, GoogleDriveConnector, MoodleConnector, JiraConnector, DropboxConnector, WebDAVConnector
 from common.data_source.confluence_connector import ConfluenceConnector
 from common.data_source.interfaces import CheckpointOutputWrapper
 from common.data_source.utils import load_all_docs_from_checkpoint_connector
@@ -49,6 +49,8 @@ class SyncBase:
                     next_update = datetime(1970, 1, 1, tzinfo=timezone.utc)
                     if task["poll_range_start"]:
                         next_update = task["poll_range_start"]
+
+                    failed_docs = 0
                     for document_batch in document_batch_generator:
                         if not document_batch:
                             continue
@@ -69,14 +71,32 @@ class SyncBase:
                             for doc in document_batch
                         ]
 
-                        kb = KnowledgebaseService.get_by_id(task["kb_id"])
-                        with db_connection() as db:
-                            err, dids = SyncLogsService.duplicate_and_parse(db, kb, docs, task["tenant_id"], f"{self.SOURCE_NAME}/{task['connector_id']}", task.get("auto_parse", "1"))
-                            SyncLogsService.increase_docs(db, task["id"], min_update, max_update, len(docs), "\n".join(err), len(err))
-                        doc_num += len(docs)
+                        try:
+                            kb = KnowledgebaseService.get_by_id(task["kb_id"])
+                            with db_connection() as db:
+                                err, dids = SyncLogsService.duplicate_and_parse(db, kb, docs, task["tenant_id"], f"{self.SOURCE_NAME}/{task['connector_id']}", task.get("auto_parse", "1"))
+                                SyncLogsService.increase_docs(db, task["id"], min_update, max_update, len(docs), "\n".join(err), len(err))
+                            doc_num += len(docs)
+                        except Exception as batch_ex:
+                            error_msg = str(batch_ex)
+                            error_code = getattr(batch_ex, 'args', (None,))[0] if hasattr(batch_ex, 'args') else None
+
+                            if error_code == 1267 or "collation" in error_msg.lower():
+                                logging.warning(
+                                    f"Skipping {len(docs)} document(s) due to database collation conflict (error 1267)")
+                                for doc in docs:
+                                    logging.debug(f"Skipped: {doc['semantic_identifier']}")
+                            else:
+                                logging.error(f"Error processing batch of {len(docs)} documents: {error_msg}")
+
+                            failed_docs += len(docs)
+                            continue
 
                     prefix = "[Jira] " if self.SOURCE_NAME == FileSource.JIRA else ""
-                    logging.info(f"{prefix}{doc_num} docs synchronized till {next_update}")
+                    if failed_docs > 0:
+                        logging.info(f"{prefix}{doc_num} docs synchronized till {next_update} ({failed_docs} skipped)")
+                    else:
+                        logging.info(f"{prefix}{doc_num} docs synchronized till {next_update}")
                     with db_connection() as db:
                         SyncLogsService.done(db, task["id"], task["connector_id"])
                     task["poll_range_start"] = next_update
@@ -419,6 +439,37 @@ class Teams(SyncBase):
         pass
 
 
+class WebDAV(SyncBase):
+    SOURCE_NAME: str = FileSource.WEBDAV
+
+    async def _generate(self, task: dict):
+        self.connector = WebDAVConnector(
+            base_url=self.conf["base_url"],
+            remote_path=self.conf.get("remote_path", "/")
+        )
+        self.connector.load_credentials(self.conf["credentials"])
+
+        logging.info(f"Task info: reindex={task['reindex']}, poll_range_start={task['poll_range_start']}")
+
+        if task["reindex"] == "1" or not task["poll_range_start"]:
+            logging.info("Using load_from_state (full sync)")
+            document_batch_generator = self.connector.load_from_state()
+            begin_info = "totally"
+        else:
+            start_ts = task["poll_range_start"].timestamp()
+            end_ts = datetime.now(timezone.utc).timestamp()
+            logging.info(f"Polling WebDAV from {task['poll_range_start']} (ts: {start_ts}) to now (ts: {end_ts})")
+            document_batch_generator = self.connector.poll_source(start_ts, end_ts)
+            begin_info = "from {}".format(task["poll_range_start"])
+
+        logging.info("Connect to WebDAV: {}(path: {}) {}".format(
+            self.conf["base_url"],
+            self.conf.get("remote_path", "/"),
+            begin_info
+        ))
+        return document_batch_generator
+
+
 class Moodle(SyncBase):
     SOURCE_NAME: str = FileSource.MOODLE
 
@@ -463,6 +514,7 @@ func_factory = {
     FileSource.TEAMS: Teams,
     FileSource.MOODLE: Moodle,
     FileSource.DROPBOX: Dropbox,
+    FileSource.WEBDAV: WebDAV,
 }
 
 
