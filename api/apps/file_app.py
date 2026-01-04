@@ -64,9 +64,9 @@ class MoveRequest(BaseModel):
 
 @router.post("/upload_media_redirect", summary="上传媒体并获取临时URL", response_description="成功获取临时公网URL")
 async def upload_media_redirect(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    user=Depends(manager)
+        file: UploadFile = File(...),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
 ):
     """
     上传媒体文件（如视频、图片）到对象存储，并返回临时公网可访问的 URL。
@@ -87,10 +87,10 @@ async def upload_media_redirect(
         # 建议使用一个专门的临时桶，如果未配置则使用默认桶
         # 注意：MinIO/OSS 的 bucket 名称通常有格式要求
         bucket = settings.OSS.get("bucket") or settings.MINIO.get("bucket") or "multimodal-temp"
-        
+
         ext = file.filename.split('.')[-1].lower() if '.' in file.filename else "bin"
         unique_filename = f"volc_upload/{get_uuid()}.{ext}"
-        
+
         # Get content type
         content_type = CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
 
@@ -108,7 +108,7 @@ async def upload_media_redirect(
         url = settings.STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=expires)
 
         if not url:
-             raise Exception("Failed to generate presigned URL")
+            raise Exception("Failed to generate presigned URL")
 
         return get_json_result(data={
             "url": url,
@@ -419,7 +419,7 @@ def rm(
                 settings.STORAGE_IMPL.rm(file.parent_id, file.location)
         except Exception as e:
             logging.exception(f"Fail to remove object: {file.parent_id}/{file.location}, error: {e}")
-        
+
         # 删除关联的文档
         informs = File2DocumentService.get_by_file_id(db, file.id)
         for inform in informs:
@@ -458,7 +458,7 @@ def rm(
             if file.type == FileType.FOLDER.value:
                 _delete_folder_recursive(file, user.id)
                 continue
-            
+
             _delete_single_file(file)
 
         return get_json_result(data=True)
@@ -492,7 +492,7 @@ def rename(
         if file.type != FileType.FOLDER.value \
                 and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
             return get_json_result(data=False, retmsg="The extension of file can't be changed",
-                                         retcode=RetCode.ARGUMENT_ERROR)
+                                   retcode=RetCode.ARGUMENT_ERROR)
         for f in FileService.query(db, name=req["name"], pf_id=file.parent_id):
             if f.name == req["name"]:
                 return get_data_error_result(retmsg="Duplicated file name in the same folder.")
@@ -572,24 +572,24 @@ def move(
     - JSON: 移动结果的JSON响应。
     """
     req = request_body.model_dump()
-    
+
     try:
         file_ids = req["src_file_ids"]
         dest_parent_id = req["dest_file_id"]
-        
+
         # 先检查目标文件夹是否存在
         dest_folder = FileService.get_by_id(db, dest_parent_id)
         if not dest_folder:
             return get_data_error_result(retmsg="Parent folder not found!")
-        
+
         # 检查源文件是否存在
         files = FileService.get_by_ids(db, file_ids)
         if not files:
             return get_data_error_result(retmsg="Source files not found!")
-        
+
         # 使用字典推导式简化代码
         files_dict = {f.id: f for f in files}
-        
+
         # 权限检查
         for file_id in file_ids:
             file = files_dict.get(file_id)
@@ -603,7 +603,7 @@ def move(
                     retmsg="No authorization.",
                     retcode=RetCode.AUTHENTICATION_ERROR
                 )
-        
+
         def _move_entry_recursive(source_file_entry, dest_folder):
             """递归移动文件或文件夹"""
             # 如果是文件夹，递归处理

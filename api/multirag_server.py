@@ -33,8 +33,8 @@ from api.db.services.document_service import DocumentService
 from common import settings
 from common.file_utils import get_project_base_directory
 
-from api.db.db_models import init_database_tables as init_web_db, upgrade_database_tables as upgrade_database, SessionLocal
-from api.db.init_data import init_web_data
+from api.db.db_models import init_database_tables as init_web_db, upgrade_database_tables as upgrade_database, SessionLocal, db_connection
+from api.db.init_data import init_web_data, init_superuser
 from common.versions import get_multirag_version
 import uvicorn
 # from common.config_utils import show_configs
@@ -124,6 +124,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--version', default=False, help="MultiRAG version", action='store_true')
     parser.add_argument('--debug', default=False, help="debug mode", action='store_true')
+    parser.add_argument('--init-superuser', default=False, help="init superuser", action='store_true')
     args = parser.parse_args()
     
     if args.version:
@@ -147,6 +148,15 @@ if __name__ == '__main__':
     logging.info("Initializing database schema...")
     init_web_db()        # 创建数据库表结构
     upgrade_database()   # 执行数据库迁移
+    
+    # 初始化超级用户（如果指定了 --init-superuser 参数）
+    # 必须在数据库表创建后、init_web_data 之前执行
+    if args.init_superuser:
+        logging.info("Initializing superuser...")
+        with db_connection() as db:
+            init_superuser(db)
+        logging.info("Superuser initialization completed")
+    
     init_web_data()      # 初始化默认数据
     logging.info("Database initialization completed")
 

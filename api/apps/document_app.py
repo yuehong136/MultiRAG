@@ -230,7 +230,7 @@ class AnalyzeDocumentRequest(BaseModel):
         default="1",
         description="TCADP 图片响应类型（默认 '1'）"
     )
-    
+
     # Parser 配置（完整方式）- 参考 core/flow/parser/parser.py 的 setups 结构
     parser_config: dict | None = Field(
         default=None,
@@ -3807,7 +3807,7 @@ async def run_analyze_v2(
       "email_fields": null,             // 默认值：null，邮件字段列表
       "table_result_type": "1",         // 默认值："1"，TCADP 表格结果类型（parse_method="tcadp parser"时生效）
       "markdown_image_response_type": "1", // 默认值："1"，TCADP 图片响应类型（parse_method="tcadp parser"时生效）
-      
+
       // ========== Parser 配置方式 2：完整方式（推荐代码调用） ==========
       "parser_config": {                // 默认值：null，按文件类型单独配置（优先级高于简化方式）
         "pdf": {
@@ -3844,17 +3844,17 @@ async def run_analyze_v2(
           "llm_id": "qwen-vl-plus"      // VLM 模型名
         }
       },
-      
+
       // ========== 处理策略 ==========
       "processing_strategy": "auto",    // 默认值："auto"，可选：auto/hierarchical/raptor/hybrid/simple
-      
+
       // ========== 组件配置 ==========
       "splitter_config": {              // 默认值：null，智能切分配置
         "chunk_token_size": 512,        // 默认值：512，范围：100-4096
         "delimiters": null,             // 默认值：null（自动选择），可选：["\n\n", "。", "！", "？"]
         "overlapped_percent": 0.1       // 默认值：0.1（10%重叠），范围：0-0.5
       },
-      
+
       "hierarchical_config": {          // 默认值：null，层次化合并配置
         "levels": [                     // 默认值：[["^#\\s+", "^第...章"], ["^##\\s+", "^\\d+\\.\\s+"]]
           ["^#\\s+", "^第[一二三四五六七八九十]+章"],
@@ -3862,7 +3862,7 @@ async def run_analyze_v2(
         ],
         "hierarchy": 1                  // 默认值：1，范围：0-5
       },
-      
+
       "raptor_config": {                // 默认值：null，RAPTOR 聚类配置
         "max_cluster": 64,              // 默认值：64，范围：2-256
         "max_token": 512,               // 默认值：512，范围：100-2048
@@ -3870,7 +3870,7 @@ async def run_analyze_v2(
         "random_seed": 42,              // 默认值：42
         "prompt": null                  // 默认值：null（使用内置提示词）
       },
-      
+
       "metadata_fields": [              // 默认值：null（使用默认字段：document_summary + semantic_tags）
         {
           "field_name": "document_summary",
@@ -3889,26 +3889,26 @@ async def run_analyze_v2(
           "post_process": "counter_top10"
         }
       ],
-      
+
       "dedup_strategy": "smart"         // 默认值："smart"，可选：smart/semantic/none
     }
     ```
-    
+
     **参数详解：**
-    
+
     **📌 Parser 配置的两种方式**
-    
+
     **方式 1：简化方式**（适合快速测试、前端用户）
     - 使用 `parse_method`、`image_system_prompt` 等顶层参数
     - 系统自动应用到对应的文件类型
     - 示例：`{"parse_method": "qwen-vl-plus", "image_system_prompt": "..."}`
-    
+
     **方式 2：完整方式**（推荐代码调用、批量处理）⭐
     - 使用 `parser_config` 字典，按文件类型单独配置
     - 一次配置，适用所有文件类型
     - 优先级**高于**简化方式
     - 示例：`{"parser_config": {"pdf": {...}, "image": {...}}}`
-    
+
     **优先级规则**：
     ```
     if parser_config:
@@ -3916,9 +3916,9 @@ async def run_analyze_v2(
     else:
         使用 parse_method 等简化参数（自动应用）
     ```
-    
+
     ---
-    
+
     **1. 解析配置（Parser）**
     - `parse_method`: 解析方法（简化方式，默认："deepdoc"）
       - **PDF 专用：**
@@ -3938,18 +3938,18 @@ async def run_analyze_v2(
     - `image_llm_name`: 图片 VLM 模型名（默认：null）
     - `image_system_prompt`: 图片 VLM 提示词（默认：null）
     - `email_fields`: 邮件字段列表（默认：null）
-    
+
     - `parser_config`: 完整配置方式（默认：null，优先级高于简化方式）
       - 按文件类型单独配置：`pdf`、`image`、`excel`、`word`、`email`
       - 每种类型支持的配置见上述简化方式说明
       - **优势**：一次配置，后续上传任何文件都使用对应配置
-    
+
     **2. 切分配置（Splitter）**（默认值：null）
     - `splitter_config`: 使用 core/flow/splitter 逻辑
       - `chunk_token_size`: chunk 大小（默认：512，范围：100-4096）
       - `delimiters`: 分隔符优先级列表（默认：null，自动选择）
       - `overlapped_percent`: 重叠比例（默认：0.1 即 10%，范围：0-0.5）
-    
+
     **3. 处理策略**（默认值："auto"）
     - `processing_strategy`: 文档处理策略
       - `"auto"`: 自动选择（根据文档结构和长度）✅ 默认
@@ -3957,12 +3957,12 @@ async def run_analyze_v2(
       - `"hierarchical"`: 层次化合并（适合有章节的文档）
       - `"raptor"`: RAPTOR 聚类（适合长文档 > 10 chunks）
       - `"hybrid"`: 混合策略（先层次化，再 RAPTOR）
-    
+
     **4. 层次化配置（HierarchicalMerger）**（默认值：null）
     - `hierarchical_config`: 按标题结构分层合并
       - `levels`: 标题层级正则表达式（默认：[["^#\\s+", "^第...章"], ["^##\\s+", "^\\d+\\.\\s+"]]）
       - `hierarchy`: 合并到第几层（默认：1，范围：0-5）
-    
+
     **5. RAPTOR 配置**（默认值：null）
     - `raptor_config`: 聚类递归摘要
       - `max_cluster`: 最大聚类数（默认：64，范围：2-256）
@@ -3970,7 +3970,7 @@ async def run_analyze_v2(
       - `threshold`: 相似度阈值（默认：0.1，范围：0.0-1.0，越小聚类越多）
       - `random_seed`: 随机种子（默认：42，可重现结果）
       - `prompt`: 自定义摘要提示词（默认：null，使用内置提示词）
-    
+
     **6. 元数据提取**（默认值：null，使用默认字段）
     - `metadata_fields`: 灵活的字段提取配置
       - `field_name`: 字段名称（必填）
@@ -3989,13 +3989,13 @@ async def run_analyze_v2(
         - `"concat"`: 拼接（batch 模式）
       - `temperature`: LLM 温度（默认：0.1，范围：0.0-2.0）
       - `max_tokens`: 最大生成 tokens（默认：512，范围：10-4096）
-    
+
     **7. 去重策略**（默认值："smart"）
     - `dedup_strategy`: 标签去重策略
       - `"smart"`: Jaccard + 同义词词典（快速、可控）✅ 默认
       - `"semantic"`: 基于 Embedding（高质量、成本高）
       - `"none"`: 不去重
-    
+
     **⭐ 核心特性（使用 core/flow 逻辑）：**
     - ✅ 保留位置信息（PDF 页码、坐标）
     - ✅ 保留图片关联
@@ -4029,7 +4029,7 @@ async def run_analyze_v2(
         }
       }'
     ```
-    
+
     **示例 4: PDF VLM 视觉理解（扫描件）**
     ```bash
     curl -X POST "http://api/v1/document/run_analyze_v2" \\
@@ -4038,7 +4038,7 @@ async def run_analyze_v2(
         "parse_method": "qwen-vl-plus"
       }'
     ```
-    
+
     **示例 5: 图片 VLM 理解**
     ```bash
     curl -X POST "http://api/v1/document/run_analyze_v2" \\
@@ -4111,18 +4111,18 @@ async def run_analyze_v2(
         ]
       }'
     ```
-    
+
     **完整方式优势**：
     - ✅ 一次配置，适用所有文件类型（PDF/图片/Excel/Word/邮件）
     - ✅ 每种文件类型单独配置解析方式
     - ✅ 适合代码集成、批量处理场景
     - ✅ 完全对齐 core/flow 的 setups 结构
-    
+
     **Python 代码示例**（批量处理）：
     ```python
     import requests
     import json
-    
+
     # 一次性配置所有文件类型
     config = {
         "parser_config": {
@@ -4137,7 +4137,7 @@ async def run_analyze_v2(
             {"field_name": "summary", "prompt": "Summarize the document"}
         ]
     }
-    
+
     # 使用同一套配置处理多个文件
     files = ["report.pdf", "diagram.png", "data.xlsx", "meeting.docx"]
     for filepath in files:
@@ -4190,7 +4190,7 @@ async def run_analyze_v2(
     ```
 
     **📊 参数默认值速查表**:
-    
+
     | 参数 | 默认值 | 说明 |
     |------|--------|------|
     | `parse_method` | `"deepdoc"` | 解析方法 |
@@ -4206,9 +4206,9 @@ async def run_analyze_v2(
     | `dedup_strategy` | `"smart"` | 去重策略 |
     | `temperature` | `0.1` | 元数据提取温度 |
     | `parser_config` | `null` | 完整配置（优先级高） |
-    
+
     ---
-    
+
     **设计理念**:
     参考 `/v1/kb/run_raptor`，采用数据库持久化 + 任务队列架构。
 
@@ -4261,7 +4261,7 @@ async def run_analyze_v2(
             "kb_id": request.kb_id,
             # Parser 配置（支持两种方式）
             "parser_config": request.parser_config,  # 完整方式（优先）
-            "parse_method": request.parse_method,    # 简化方式
+            "parse_method": request.parse_method,  # 简化方式
             "output_format": request.output_format,
             "lang": request.lang,
             "image_llm_name": request.image_llm_name,
@@ -4908,7 +4908,7 @@ async def analyze_document_v2(
         ]
       }'
     ```
-    
+
     **VLM 功能**：在 Parser 阶段对每张原始图片进行 VLM 理解，图片描述会自动融入文本，适用于包含架构图、流程图的技术文档。
     """
     try:
