@@ -1094,6 +1094,7 @@ def retrieval_test(
     question = req["question"]
     doc_ids = req.get("document_ids", [])
     use_kg = req.get("use_kg", False)
+    toc_enhance = req.get("toc_enhance", False)
     langs = req.get("cross_languages", [])
     search_mode_dict = req.get_search_mode_dict()
 
@@ -1162,7 +1163,11 @@ def retrieval_test(
             rank_feature=label_question(db, question, kbs),
             search_mode=search_mode_dict
         )
-        
+        if toc_enhance:
+            chat_mdl = LLMBundle(kb.tenant_id, LLMType.CHAT)
+            cks = settings.retriever.retrieval_by_toc(question, ranks["chunks"], tenant_ids, chat_mdl, size)
+            if cks:
+                ranks["chunks"] = cks
         # 知识图谱增强
         if use_kg:
             ck = settings.kg_retriever.retrieval(
