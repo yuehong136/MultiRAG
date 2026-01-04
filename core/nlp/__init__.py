@@ -612,16 +612,8 @@ def naive_merge(sections: str | list, chunk_token_num=128, delimiter="\n。；�
                 tk_nums.append(num_tokens_from_string(text))
         return cks
 
-    dels = get_delimiters(delimiter)
     for sec, pos in sections:
-        if num_tokens_from_string(sec) < chunk_token_num:
-            add_chunk("\n" + sec, pos)
-            continue
-        split_sec = re.split(r"(%s)" % dels, sec, flags=re.DOTALL)
-        for sub_sec in split_sec:
-            if re.match(f"^{dels}$", sub_sec):
-                continue
-            add_chunk("\n" + sub_sec, pos)
+        add_chunk("\n"+sec, pos)
 
     return cks
 
@@ -684,23 +676,14 @@ def naive_merge_with_images(texts, images, chunk_token_num=128, delimiter="\n。
                 tk_nums.append(num_tokens_from_string(text_seg))
         return cks, result_images
 
-    dels = get_delimiters(delimiter)
     for text, image in zip(texts, images):
         # if text is tuple, unpack it
         if isinstance(text, tuple):
             text_str = text[0]
             text_pos = text[1] if len(text) > 1 else ""
-            split_sec = re.split(r"(%s)" % dels, text_str)
-            for sub_sec in split_sec:
-                if re.match(f"^{dels}$", sub_sec):
-                    continue
-                add_chunk("\n"+sub_sec, image, text_pos)
+            add_chunk("\n"+text_str, image, text_pos)
         else:
-            split_sec = re.split(r"(%s)" % dels, text)
-            for sub_sec in split_sec:
-                if re.match(f"^{dels}$", sub_sec):
-                    continue
-                add_chunk("\n"+sub_sec, image)
+            add_chunk("\n"+text, image)
 
     return cks, result_images
 
@@ -793,15 +776,8 @@ def naive_merge_docx(sections, chunk_token_num=128, delimiter="\n。；！？"):
                 tk_nums.append(num_tokens_from_string(text_seg))
         return cks, images
 
-    dels = get_delimiters(delimiter)
-    pattern = r"(%s)" % dels
-
     for sec, image in sections:
-        split_sec = re.split(pattern, sec)
-        for sub_sec in split_sec:
-            if not sub_sec or re.match(f"^{dels}$", sub_sec):
-                continue
-            add_chunk("\n" + sub_sec, image, "")
+        add_chunk("\n" + sec, image, "")
 
     return cks, images
 
