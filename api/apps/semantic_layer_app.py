@@ -215,7 +215,7 @@ async def save_text_to_embedding(
             ...,
             title="文本信息",
             description="需要转换为向量的文本信息",
-            example={
+            examples=[{
                 "text": "这是一个术语描述的示例文本，该术语代表某个特定的概念。",
                 "type": "TERM_DESC",
                 "original_id": "term_67890",
@@ -223,7 +223,7 @@ async def save_text_to_embedding(
                 "dataset_id": "12345",
                 "theme_domain_id": "12345",
                 "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
-            }
+            }]
         ),
         db: Session = Depends(get_db),
         user=Depends(manager),
@@ -258,10 +258,10 @@ async def delete_embeddings_by_owner_type_and_id(
             ...,
             title="删除请求信息",
             description="指定要删除的实体类型和ID",
-            example={
+            examples=[{
                 "type": "MODEL",
                 "original_id": "12345"
-            }
+            }]
         ),
         db: Session = Depends(get_db),
         user=Depends(manager),
@@ -305,10 +305,10 @@ async def delete_embeddings_by_element_type_and_id(
             ...,
             title="删除请求信息",
             description="指定要删除的元素类型和ID",
-            example={
+            examples=[{
                 "element_type": "METRIC",
                 "original_id": "12345"
-            }
+            }]
         ),
         db: Session = Depends(get_db),
         user=Depends(manager),
@@ -353,7 +353,7 @@ async def save_texts_to_embedding_batch(
             ...,
             title="批量文本信息",
             description="需要批量转换为向量的多条文本信息",
-            example=[
+            examples=[[
                 {
                     "text": "这是第一个示例文本",
                     "type": "DATASET_DESC",
@@ -366,7 +366,7 @@ async def save_texts_to_embedding_batch(
                     "original_id": "67890",
                     "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
                 }
-            ]
+            ]]
         ),
         db: Session = Depends(get_db),
         user=Depends(manager),

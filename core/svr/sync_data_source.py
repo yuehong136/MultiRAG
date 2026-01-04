@@ -18,6 +18,7 @@ from api.db.db_models import db_connection
 from common.constants import FileSource, TaskStatus
 from common import settings
 from common.versions import get_multirag_version
+from common.data_source import BlobStorageConnector, NotionConnector, DiscordConnector, GoogleDriveConnector, MoodleConnector, JiraConnector
 from common.data_source.confluence_connector import ConfluenceConnector
 from common.data_source.interfaces import CheckpointOutputWrapper
 from common.data_source.utils import load_all_docs_from_checkpoint_connector
@@ -25,7 +26,6 @@ from common.data_source.config import INDEX_BATCH_SIZE
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from common.config_utils import show_configs
 from common.log_utils import init_root_logger
-from common.data_source import BlobStorageConnector, NotionConnector, DiscordConnector, GoogleDriveConnector
 
 
 MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
@@ -398,6 +398,37 @@ class Teams(SyncBase):
         pass
 
 
+class Moodle(SyncBase):
+    SOURCE_NAME: str = FileSource.MOODLE
+
+    async def _generate(self, task: dict):
+        self.connector = MoodleConnector(
+            moodle_url=self.conf["moodle_url"],
+            batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE)
+        )
+
+        self.connector.load_credentials(self.conf["credentials"])
+
+        # Determine the time range for synchronization based on reindex or poll_range_start
+        if task["reindex"] == "1" or not task.get("poll_range_start"):
+            document_generator = self.connector.load_from_state()
+            begin_info = "totally"
+        else:
+            poll_start = task["poll_range_start"]
+            if poll_start is None:
+                document_generator = self.connector.load_from_state()
+                begin_info = "totally"
+            else:
+                document_generator = self.connector.poll_source(
+                    poll_start.timestamp(),
+                    datetime.now(timezone.utc).timestamp()
+                )
+                begin_info = "from {}".format(poll_start)
+
+        logging.info("Connect to Moodle: {} {}".format(self.conf["moodle_url"], begin_info))
+        return document_generator
+
+
 func_factory = {
     FileSource.S3: S3,
     FileSource.NOTION: Notion,
@@ -409,6 +440,7 @@ func_factory = {
     FileSource.SHAREPOINT: SharePoint,
     FileSource.SLACK: Slack,
     FileSource.TEAMS: Teams,
+    FileSource.MOODLE: Moodle
 }
 
 

@@ -208,7 +208,7 @@ async def filter_openapi_post(
             response_model=Dict[str, Any])
 async def filter_openapi_get(
         paths: list[str] = Query(..., description="要保留的路径列表"),
-        match: str = Query("exact", description="匹配模式", regex="^(exact|prefix|glob|regex)$"),
+        match: str = Query("exact", description="匹配模式", pattern="^(exact|prefix|glob|regex)$"),
         source: str | None = Query(None, description="外部OpenAPI文档URL"),
         include_tags: list[str] = Query(default=[], description="包含标签"),
         exclude_paths: list[str] = Query(default=[], description="排除路径"),

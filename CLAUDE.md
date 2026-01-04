@@ -167,3 +167,29 @@ MultiRAG supports multiple vector database backends:
 - uv package manager
 - Docker & Docker Compose
 - 16GB+ RAM, 50GB+ disk space
+
+## Code Style Guidelines
+
+### Python 3.12+
+
+| ❌ 避免 | ✅ 推荐 |
+|--------|--------|
+| `List[str]`, `Dict[str, Any]` | `list[str]`, `dict[str, Any]` |
+| `Optional[str]`, `Union[str, int]` | `str \| None`, `str \| int` |
+
+### FastAPI 0.128+
+
+| ❌ 弃用 | ✅ 推荐 |
+|--------|--------|
+| `Query(..., regex="pattern")` | `Query(..., pattern="pattern")` |
+| `Body(..., example={...})` | `Body(..., examples=[{...}])` |
+| `@app.on_event("startup")` | `FastAPI(lifespan=lifespan)` |
+
+### Pydantic V2
+
+| ❌ 弃用 | ✅ 推荐 |
+|--------|--------|
+| `class Config:` 内部类 | `model_config = ConfigDict(...)` |
+| `.dict()` | `.model_dump()` |
+| `.parse_obj()` | `.model_validate()` |
+| `@validator` | `@field_validator` |
