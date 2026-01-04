@@ -148,7 +148,8 @@ def _get_or_create_secret_key():
 
     # Generate a new secure key and warn about it
     new_key = secrets.token_hex(32)
-    logging.warning(f"SECURITY WARNING: Using auto-generated SECRET_KEY. Generated key: {new_key}")
+    # logging.warning(f"SECURITY WARNING: Using auto-generated SECRET_KEY. Generated key: {new_key}")
+    logging.warning(f"SECURITY WARNING: Using auto-generated SECRET_KEY.")
     return new_key
 
 
