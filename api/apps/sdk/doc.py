@@ -206,7 +206,7 @@ def upload_documents(
     
     kb = KnowledgebaseService.get_by_id(db, dataset_id)
     if not kb:
-        raise HTTPException(status_code=404, detail=f"Can't find the dataset with ID {dataset_id}!")
+        raise HTTPException(status_code=RetCode.NOT_FOUND, detail=f"Can't find the dataset with ID {dataset_id}!")
     
     err, uploaded_files = FileService.upload_document(db, kb, files, tenant_id, parent_path=parent_path)
     if err:

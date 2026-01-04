@@ -19,6 +19,7 @@ from api.utils.api_utils import get_error_data_result, get_result, server_error_
     get_json_result
 from api.utils.file_utils import filename_type
 from common import settings
+from common.constants import RetCode
 
 router = APIRouter()
 
@@ -521,7 +522,7 @@ def convert(
         for file_id in file_ids:
             file = files_set[file_id]
             if not file:
-                return get_json_result(retmsg="File not found!", retcode=404)
+                return get_json_result(retmsg="File not found!", retcode=RetCode.NOT_FOUND)
             file_ids_list = [file_id]
             if file.type == FileType.FOLDER.value:
                 file_ids_list = FileService.get_all_innermost_file_ids(db, file_id, [])
@@ -532,22 +533,22 @@ def convert(
                     doc_id = inform.document_id
                     doc = DocumentService.get_by_id(db, doc_id)
                     if not doc:
-                        return get_json_result(retmsg="Document not found!", retcode=404)
+                        return get_json_result(retmsg="Document not found!", retcode=RetCode.NOT_FOUND)
                     tenant_id = DocumentService.get_tenant_id(db, doc_id)
                     if not tenant_id:
-                        return get_json_result(retmsg="Tenant not found!", retcode=404)
+                        return get_json_result(retmsg="Tenant not found!", retcode=RetCode.NOT_FOUND)
                     if not DocumentService.remove_document(db, doc, tenant_id):
-                        return get_json_result(retmsg="Database error (Document removal)!", retcode=404)
+                        return get_json_result(retmsg="Database error (Document removal)!", retcode=RetCode.SERVER_ERROR)
                 File2DocumentService.delete_by_file_id(db, id)
 
                 # insert
                 for kb_id in kb_ids:
                     kb = KnowledgebaseService.get_by_id(db, kb_id)
                     if not kb:
-                        return get_json_result(retmsg="Can't find this knowledgebase!", retcode=404)
+                        return get_json_result(retmsg="Can't find this knowledgebase!", retcode=RetCode.NOT_FOUND)
                     file = FileService.get_by_id(db, id)
                     if not file:
-                        return get_json_result(retmsg="Can't find this file!", retcode=404)
+                        return get_json_result(retmsg="Can't find this file!", retcode=RetCode.NOT_FOUND)
 
                     doc = DocumentService.insert(
                         db,
