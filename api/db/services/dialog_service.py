@@ -502,9 +502,10 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             if not attachments:
                 attachments = None
         elif dialog.meta_data_filter.get("method") == "manual":
-            attachments.extend(meta_filter(metas, dialog.meta_data_filter["manual"], dialog.meta_data_filter.get("logic", "and")))
-            if not attachments:
-                attachments = None
+            conds = dialog.meta_data_filter["manual"]
+            attachments.extend(meta_filter(metas, conds, dialog.meta_data_filter.get("logic", "and")))
+            if conds and not attachments:
+                attachments = ["-999"]
 
     if prompt_config.get("keyword", False):
         questions[-1] += keyword_extraction(chat_mdl, questions[-1])
@@ -928,8 +929,8 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
                 doc_ids = None
         elif meta_data_filter.get("method") == "manual":
             doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
-            if not doc_ids:
-                doc_ids = None
+            if meta_data_filter["manual"] and not doc_ids:
+                doc_ids = ["-999"]
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
@@ -1008,8 +1009,8 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
                 doc_ids = None
         elif meta_data_filter.get("method") == "manual":
             doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
-            if not doc_ids:
-                doc_ids = None
+            if meta_data_filter["manual"] and not doc_ids:
+                doc_ids = ["-999"]
 
     ranks = settings.retriever.retrieval(
         question=question,

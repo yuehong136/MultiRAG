@@ -1074,8 +1074,8 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
                 doc_ids = None
         elif meta_data_filter.get("method") == "manual":
             doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
-            if not doc_ids:
-                doc_ids = None
+            if meta_data_filter["manual"] and not doc_ids:
+                doc_ids = ["-999"]
 
     try:
         tenants = UserTenantService.query(db, user_id=tenant_id)
