@@ -41,7 +41,7 @@ from core.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr
 ATTEMPT_TIME = 2
 OB_QUERY_TIMEOUT = int(os.environ.get("OB_QUERY_TIMEOUT", "100_000_000"))
 
-logger = logging.getLogger('ragflow.ob_conn')
+logger = logging.getLogger('multirag.ob_conn')
 
 column_order_id = Column("_order_id", Integer, nullable=True, comment="chunk order id for maintaining sequence")
 column_group_id = Column("group_id", String(256), nullable=True, comment="group id for external retrieval")
@@ -328,7 +328,7 @@ def _try_with_lock(lock_name: str, process_func, check_func, timeout: int = None
         timeout = int(os.environ.get("OB_DDL_TIMEOUT", "60"))
 
     if not check_func():
-        from rag.utils.redis_conn import RedisDistributedLock
+        from core.utils.redis_conn import RedisDistributedLock
         lock = RedisDistributedLock(lock_name)
         if lock.acquire():
             logger.info(f"acquired lock success: {lock_name}, start processing.")

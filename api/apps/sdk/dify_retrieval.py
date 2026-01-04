@@ -86,7 +86,11 @@ class FusionSearchMode(BaseModel):
 type SearchMode = SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode
 
 # 使用 Discriminator 实现高效的联合类型解析
-SearchModeUnion = Annotated[SearchMode, Discriminator("type")]
+# 注意：Discriminator 必须直接与 Union 类型一起使用，不能使用类型别名
+SearchModeUnion = Annotated[
+    SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode,
+    Discriminator("type")
+]
 
 
 # ============================================================================
