@@ -164,7 +164,7 @@ class VastBaseConfig(RetrievalConfig):
     """VastBase 配置"""
     database: str
     user: str
-    password: str
+    password: str | None = None
     db_schema: str | None = None
     max_connections: int | None = None
 
@@ -175,7 +175,8 @@ class VastBaseConfig(RetrievalConfig):
         extra_dict = result['extra'].copy()
         extra_dict['database'] = self.database
         extra_dict['user'] = self.user
-        extra_dict['password'] = self.password
+        if self.password:
+            extra_dict['password'] = self.password
         if self.db_schema:
             extra_dict['schema'] = self.db_schema
         if self.max_connections:
@@ -482,7 +483,7 @@ def load_configurations(config_path: str) -> list[BaseConfig]:
                 port = v.get('port', 5433)
                 database = v.get('database', 'datav')
                 user = v.get('user', 'datav')
-                password = v.get('password', '')
+                password = v.get('password') or None
                 db_schema = v.get('schema', 'public')
                 max_connections = v.get('max_connections')
 
