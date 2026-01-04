@@ -820,7 +820,7 @@ class Knowledgebase(BaseModel):
     vector_similarity_weight = Column(Float, index=True, nullable=False, default=0.3)
     parser_id = Column(String(32), index=True, nullable=False, default=ParserType.NAIVE.value, doc="default parser ID")
     pipeline_id = Column(String(32), index=True, nullable=True, doc="Pipeline ID")
-    parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]]})
+    parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]], "table_context_size": 0, "image_context_size": 0})
     pagerank = Column(Integer, index=False, nullable=False, default=0)
 
     graphrag_task_id = Column(String(32), index=True, nullable=True, doc="Graph RAG task ID")
@@ -841,7 +841,7 @@ class Document(BaseModel):
     kb_id = Column(String(256), index=True, nullable=False)
     parser_id = Column(String(32), index=True, nullable=False, doc="default parser ID")
     pipeline_id = Column(String(32), index=True, nullable=True, doc="Pipeline ID")
-    parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]]})
+    parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]], "table_context_size": 0, "image_context_size": 0})
     source_type = Column(String(128), index=True, nullable=False, default="local",
                          doc="where dose this document come from")
     type = Column(String(32), index=True, nullable=False, doc="file extension")

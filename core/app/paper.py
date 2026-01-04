@@ -20,7 +20,7 @@ import re
 
 from deepdoc.parser.figure_parser import vision_figure_parser_pdf_wrapper
 from common.constants import ParserType
-from core.nlp import rag_tokenizer, tokenize, tokenize_table, add_positions, bullets_category, title_frequency, tokenize_chunks
+from core.nlp import rag_tokenizer, tokenize, tokenize_table, add_positions, bullets_category, title_frequency, tokenize_chunks, attach_media_context
 from core.app.naive import by_plaintext, PARSERS
 from deepdoc.parser import PdfParser
 import numpy as np
@@ -233,6 +233,10 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         chunks.append(txt)
         last_sid = sec_id
     res.extend(tokenize_chunks(chunks, doc, eng, pdf_parser))
+    table_ctx = max(0, int(parser_config.get("table_context_size", 0) or 0))
+    image_ctx = max(0, int(parser_config.get("image_context_size", 0) or 0))
+    if table_ctx or image_ctx:
+        attach_media_context(res, table_ctx, image_ctx)
     return res
 
 

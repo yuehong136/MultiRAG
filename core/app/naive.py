@@ -32,7 +32,7 @@ from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from common.constants import LLMType
 from core.utils.file_utils import extract_embed_file, extract_links_from_pdf, extract_links_from_docx, extract_html
-from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, tokenize_chunks, tokenize_chunks_with_images, tokenize_table
+from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, tokenize_chunks, tokenize_chunks_with_images, tokenize_table, attach_media_context
 from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownElementExtractor, MarkdownParser, PdfParser, TxtParser
 from deepdoc.parser.figure_parser import VisionFigureParser,vision_figure_parser_docx_wrapper,vision_figure_parser_pdf_wrapper
 from deepdoc.parser.pdf_parser import PlainParser, VisionParser
@@ -619,6 +619,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     parser_config = kwargs.get(
         "parser_config", {
             "chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC", "analyze_hyperlink": True})
+    table_context_size = max(0, int(parser_config.get("table_context_size", 0) or 0))
+    image_context_size = max(0, int(parser_config.get("image_context_size", 0) or 0))
     final_sections = False
     doc = {
         "docnm_kwd": filename,
@@ -689,6 +691,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         logging.info("naive_merge({}): {}".format(filename, timer() - st))
         res.extend(embed_res)
         res.extend(url_res)
+        if table_context_size or image_context_size:
+            attach_media_context(res, table_context_size, image_context_size)
         return res
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
@@ -952,6 +956,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         res.extend(embed_res)
     if url_res:
         res.extend(url_res)
+    if table_context_size or image_context_size:
+        attach_media_context(res, table_context_size, image_context_size)
     return res
 
 

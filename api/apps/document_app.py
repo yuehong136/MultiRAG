@@ -230,6 +230,17 @@ class AnalyzeDocumentRequest(BaseModel):
         default="1",
         description="TCADP 图片响应类型（默认 '1'）"
     )
+    # 媒体上下文配置（为表格/图片添加周围文本）
+    table_context_size: int = Field(
+        default=0,
+        ge=0,
+        description="表格上下文 token 数（0 表示不添加周围文本上下文）"
+    )
+    image_context_size: int = Field(
+        default=0,
+        ge=0,
+        description="图片上下文 token 数（0 表示不添加周围文本上下文）"
+    )
 
     # Parser 配置（完整方式）- 参考 core/flow/parser/parser.py 的 setups 结构
     parser_config: dict | None = Field(
@@ -4078,7 +4089,20 @@ async def run_analyze_v2(
       }'
     ```
 
-    **示例 7: 完整配置方式（推荐代码调用）🆕**
+    **示例 7: 为表格和图片添加上下文（提升检索质量）🆕**
+    ```bash
+    curl -X POST "http://api/v1/document/run_analyze_v2" \\
+      -F "file=@technical_report.pdf" \\
+      -F 'request={
+        "parse_method": "deepdoc",
+        "table_context_size": 256,
+        "image_context_size": 128
+      }'
+    ```
+    > 说明：为表格和图片 chunk 添加周围文本上下文，帮助 RAG 检索时更好地理解媒体内容。
+    > `table_context_size=256` 表示在表格前后各添加约 256 tokens 的上下文文本。
+
+    **示例 8: 完整配置方式（推荐代码调用）🆕**
     ```bash
     curl -X POST "http://api/v1/document/run_analyze_v2" \\
       -F "file=@any_document.pdf" \\
@@ -4196,6 +4220,8 @@ async def run_analyze_v2(
     | `parse_method` | `"deepdoc"` | 解析方法 |
     | `output_format` | `"json"` | 输出格式 |
     | `lang` | `"Chinese"` | 语言 |
+    | `table_context_size` | `0` | 表格上下文 token 数 |
+    | `image_context_size` | `0` | 图片上下文 token 数 |
     | `processing_strategy` | `"auto"` | 处理策略 |
     | `chunk_token_size` | `512` | Chunk 大小 |
     | `overlapped_percent` | `0.1` | 重叠比例（10%） |
@@ -4271,6 +4297,9 @@ async def run_analyze_v2(
             # TCADP parser 特有参数
             "table_result_type": request.table_result_type,
             "markdown_image_response_type": request.markdown_image_response_type,
+            # 媒体上下文配置
+            "table_context_size": request.table_context_size,
+            "image_context_size": request.image_context_size,
             # 处理策略
             "processing_strategy": request.processing_strategy,
             "hierarchical_config": request.hierarchical_config.model_dump() if request.hierarchical_config else None,

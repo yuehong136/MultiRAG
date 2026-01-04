@@ -1573,6 +1573,10 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             tcadp_table_result_type = config.get("table_result_type", "1")
             tcadp_markdown_image_response_type = config.get("markdown_image_response_type", "1")
             
+            # 媒体上下文配置（为表格/图片添加周围文本）
+            table_context_size = config.get("table_context_size", 0) or 0
+            image_context_size = config.get("image_context_size", 0) or 0
+            
             if parser_config_dict:
                 # 方式 1：使用 parser_config 字典（用户一次性配置所有文件类型）
                 pdf_config = parser_config_dict.get("pdf", {"parse_method": "deepdoc", "output_format": "json"})
@@ -1601,6 +1605,9 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     # TCADP 参数（仅当 parse_method 为 tcadp parser 时生效）
                     "table_result_type": tcadp_table_result_type,
                     "markdown_image_response_type": tcadp_markdown_image_response_type,
+                    # 媒体上下文
+                    "table_context_size": table_context_size,
+                    "image_context_size": image_context_size,
                 }
                 image_config = {
                     "parse_method": parse_method,  # ✅ 直接传递，支持任何 VLM 模型名
@@ -1617,8 +1624,15 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     "output_format": output_format if output_format in ["html", "json", "markdown"] else "html",
                     "table_result_type": tcadp_table_result_type,
                     "markdown_image_response_type": tcadp_markdown_image_response_type,
+                    # 媒体上下文
+                    "table_context_size": table_context_size,
+                    "image_context_size": image_context_size,
                 }
-                word_config = {"output_format": output_format}
+                word_config = {
+                    "output_format": output_format,
+                    "table_context_size": table_context_size,
+                    "image_context_size": image_context_size,
+                }
                 email_config = {"output_format": output_format, "fields": config.get("email_fields")}
                 video_llm_name = config.get("video_llm_name")
                 if not video_llm_name:
@@ -1635,8 +1649,15 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     "output_format": "json",  # PPT 目前只支持 json
                     "table_result_type": tcadp_table_result_type,
                     "markdown_image_response_type": tcadp_markdown_image_response_type,
+                    # 媒体上下文
+                    "table_context_size": table_context_size,
+                    "image_context_size": image_context_size,
                 }
-                markdown_config = {"output_format": output_format if output_format in ["json", "text"] else "json"}
+                markdown_config = {
+                    "output_format": output_format if output_format in ["json", "text"] else "json",
+                    "table_context_size": table_context_size,
+                    "image_context_size": image_context_size,
+                }
                 logging.info(f"Using simplified parse_method mode: {parse_method}")
 
             def _parser_callback(prog, msg=""):

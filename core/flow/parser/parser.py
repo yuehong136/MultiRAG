@@ -23,13 +23,10 @@ import trio
 import numpy as np
 from PIL import Image
 
-from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import LLMBundle
-from common.misc_utils import get_uuid
-from core.utils.base64_image import image2id
 from deepdoc.parser import ExcelParser
 from deepdoc.parser.mineru_parser import MinerUParser
 from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
@@ -38,7 +35,11 @@ from core.app.naive import Docx
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.parser.schema import ParserFromUpstream
 from core.llm.cv import Base as VLM
+from core.utils.base64_image import image2id
+from core.nlp import attach_media_context
 from common import settings
+from common.constants import LLMType
+from common.misc_utils import get_uuid
 
 
 class ParserParam(ProcessParamBase):
@@ -83,6 +84,8 @@ class ParserParam(ProcessParamBase):
                     "pdf",
                 ],
                 "output_format": "json",
+                "table_context_size": 0,
+                "image_context_size": 0,
             },
             "spreadsheet": {
                 "parse_method": "deepdoc",  # deepdoc/tcadp_parser
@@ -92,6 +95,8 @@ class ParserParam(ProcessParamBase):
                     "xlsx",
                     "csv",
                 ],
+                "table_context_size": 0,
+                "image_context_size": 0,
             },
             "word": {
                 "suffix": [
@@ -99,18 +104,24 @@ class ParserParam(ProcessParamBase):
                     "docx",
                 ],
                 "output_format": "json",
+                "table_context_size": 0,
+                "image_context_size": 0,
             },
             "text&markdown": {
                 "suffix": ["md", "markdown", "mdx", "txt"],
                 "output_format": "json",
+                "table_context_size": 0,
+                "image_context_size": 0,
             },
             "slides": {
                 "parse_method": "deepdoc",  # deepdoc/tcadp_parser
                 "suffix": [
                     "pptx",
-                    "ppt"
+                    "ppt",
                 ],
                 "output_format": "json",
+                "table_context_size": 0,
+                "image_context_size": 0,
             },
             "image": {
                 "parse_method": "ocr",
@@ -295,6 +306,20 @@ class Parser(ProcessBase):
                 for pn, x0, x1, top, bott in RAGFlowPdfParser.extract_positions(poss):
                     bboxes.append({"page_number": int(pn[0]), "x0": float(x0), "x1": float(x1), "top": float(top), "bottom": float(bott), "text": t})
 
+        for b in bboxes:
+            text_val = b.get("text", "")
+            has_text = isinstance(text_val, str) and text_val.strip()
+            layout = b.get("layout_type")
+            if layout == "figure" or (b.get("image") and not has_text):
+                b["doc_type_kwd"] = "image"
+            elif layout == "table":
+                b["doc_type_kwd"] = "table"
+
+        table_ctx = conf.get("table_context_size", 0) or 0
+        image_ctx = conf.get("image_context_size", 0) or 0
+        if table_ctx or image_ctx:
+            bboxes = attach_media_context(bboxes, table_ctx, image_ctx)
+
         if conf.get("output_format") == "json":
             self.set_output("json", bboxes)
         if conf.get("output_format") == "markdown":
@@ -367,7 +392,12 @@ class Parser(ProcessBase):
                 # Add tables as text
                 for table in tables:
                     if table:
-                        result.append({"text": table})
+                        result.append({"text": table, "doc_type_kwd": "table"})
+
+                table_ctx = conf.get("table_context_size", 0) or 0
+                image_ctx = conf.get("image_context_size", 0) or 0
+                if table_ctx or image_ctx:
+                    result = attach_media_context(result, table_ctx, image_ctx)
 
                 self.set_output("json", result)
 
@@ -402,7 +432,13 @@ class Parser(ProcessBase):
         if conf.get("output_format") == "json":
             sections, tbls = docx_parser(name, binary=blob)
             sections = [{"text": section[0], "image": section[1]} for section in sections if section]
-            sections.extend([{"text": tb, "image": None} for ((_,tb), _) in tbls])
+            sections.extend([{"text": tb, "image": None, "doc_type_kwd": "table"} for ((_, tb), _) in tbls])
+
+            table_ctx = conf.get("table_context_size", 0) or 0
+            image_ctx = conf.get("image_context_size", 0) or 0
+            if table_ctx or image_ctx:
+                sections = attach_media_context(sections, table_ctx, image_ctx)
+
             self.set_output("json", sections)
         elif conf.get("output_format") == "markdown":
             markdown_text = docx_parser.to_markdown(name, binary=blob)
@@ -456,7 +492,12 @@ class Parser(ProcessBase):
                 # Add tables as text
                 for table in tables:
                     if table:
-                        result.append({"text": table})
+                        result.append({"text": table, "doc_type_kwd": "table"})
+
+                table_ctx = conf.get("table_context_size", 0) or 0
+                image_ctx = conf.get("image_context_size", 0) or 0
+                if table_ctx or image_ctx:
+                    result = attach_media_context(result, table_ctx, image_ctx)
 
                 self.set_output("json", result)
         else:
@@ -471,6 +512,10 @@ class Parser(ProcessBase):
             # json
             assert conf.get("output_format") == "json", "have to be json for ppt"
             if conf.get("output_format") == "json":
+                table_ctx = conf.get("table_context_size", 0) or 0
+                image_ctx = conf.get("image_context_size", 0) or 0
+                if table_ctx or image_ctx:
+                    sections = attach_media_context(sections, table_ctx, image_ctx)
                 self.set_output("json", sections)
 
     def _markdown(self, name, blob):
@@ -510,10 +555,14 @@ class Parser(ProcessBase):
 
                 json_results.append(json_result)
 
+            table_ctx = conf.get("table_context_size", 0) or 0
+            image_ctx = conf.get("image_context_size", 0) or 0
+            if table_ctx or image_ctx:
+                json_results = attach_media_context(json_results, table_ctx, image_ctx)
+
             self.set_output("json", json_results)
         else:
             self.set_output("text", "\n".join([section_text for section_text, _ in sections]))
-
 
     def _image(self, name, blob):
         from deepdoc.vision import OCR

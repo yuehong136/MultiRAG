@@ -21,7 +21,7 @@ import re
 from common.constants import ParserType
 from io import BytesIO
 from core.nlp import rag_tokenizer, tokenize, tokenize_table, bullets_category, title_frequency, tokenize_chunks, \
-    docx_question_level
+    docx_question_level, attach_media_context
 from common.token_utils import num_tokens_from_string
 from deepdoc.parser import PdfParser, DocxParser
 from deepdoc.parser.figure_parser import vision_figure_parser_pdf_wrapper, vision_figure_parser_docx_wrapper
@@ -311,6 +311,10 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         tbls = vision_figure_parser_pdf_wrapper(tbls=tbls, callback=callback, **kwargs)
         res = tokenize_table(tbls, doc, eng)
         res.extend(tokenize_chunks(chunks, doc, eng, pdf_parser))
+        table_ctx = max(0, int(parser_config.get("table_context_size", 0) or 0))
+        image_ctx = max(0, int(parser_config.get("image_context_size", 0) or 0))
+        if table_ctx or image_ctx:
+            attach_media_context(res, table_ctx, image_ctx)
         return res
 
     elif re.search(r"\.docx?$", filename, re.IGNORECASE):
@@ -326,6 +330,10 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
                 d["doc_type_kwd"] = "image"
             tokenize(d, text, eng)
             res.append(d)
+        table_ctx = max(0, int(parser_config.get("table_context_size", 0) or 0))
+        image_ctx = max(0, int(parser_config.get("image_context_size", 0) or 0))
+        if table_ctx or image_ctx:
+            attach_media_context(res, table_ctx, image_ctx)
         return res
     else:
         raise NotImplementedError("file type not supported yet(pdf and docx supported)")

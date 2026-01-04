@@ -33,7 +33,7 @@ from deepdoc.parser.ppt_parser import RAGFlowPptParser
 from deepdoc.parser.tcadp_parser import TCADPParser
 from tika import parser as tika_parser
 from core.app.naive import Docx, Markdown as MarkdownParser
-from core.nlp import concat_img
+from core.nlp import concat_img, attach_media_context
 from deepdoc.vision import OCR
 from core.llm.cv import Base as VLM
 
@@ -97,7 +97,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        音频解析（参考 core/flow/parser/parser.py._audio 第 541-558 行）
+        音频解析（参考 core/flow/parser/parser.py._audio 第 598-615 行）
         
         Returns:
             {"output_format": "text", "text": "转录文本"}
@@ -155,10 +155,12 @@ class FlowParser:
         output_format: Literal["json", "markdown"] = "json",
         lang: str = "Chinese",
         callback=None,
+        table_context_size: int = 0,
+        image_context_size: int = 0,
         **method_kwargs
     ) -> dict:
         """
-        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 214-309 行）
+        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 229-334 行）
         
         Args:
             parse_method: 
@@ -169,6 +171,8 @@ class FlowParser:
                 - 其他: VLM 模型名称（如 "qwen-vl-plus"）
             output_format: json（保留位置） 或 markdown
             lang: 语言（VLM 模式使用）
+            table_context_size: 表格上下文 token 数（0 表示不添加）
+            image_context_size: 图片上下文 token 数（0 表示不添加）
             method_kwargs: 解析器特定参数（如 table_result_type、mineru_api 等）
         
         Returns:
@@ -290,6 +294,22 @@ class FlowParser:
                         "text": t
                     })
         
+        # 为图片和表格添加 doc_type_kwd 标记
+        for b in bboxes:
+            text_val = b.get("text", "")
+            has_text = isinstance(text_val, str) and text_val.strip()
+            layout = b.get("layout_type")
+            if layout == "figure" or (b.get("image") and not has_text):
+                b["doc_type_kwd"] = "image"
+            elif layout == "table":
+                b["doc_type_kwd"] = "table"
+        
+        # 添加上下文
+        table_ctx = table_context_size or 0
+        image_ctx = image_context_size or 0
+        if table_ctx or image_ctx:
+            bboxes = attach_media_context(bboxes, table_ctx, image_ctx)
+        
         if output_format == "json":
             return {"output_format": "json", "json": bboxes}
         elif output_format == "markdown":
@@ -311,16 +331,20 @@ class FlowParser:
         callback=None,
         *,
         parse_method: str = "deepdoc",
+        table_context_size: int = 0,
+        image_context_size: int = 0,
         **method_kwargs
     ) -> dict:
         """
-        Excel 解析（参考 core/flow/parser/parser.py._spreadsheet 第 312-396 行）
+        Excel 解析（参考 core/flow/parser/parser.py._spreadsheet 第 336-424 行）
         
         Args:
             parse_method: 
                 - deepdoc: 默认 ExcelParser
                 - tcadp parser: 腾讯云 ADP 解析
             output_format: html/json/markdown
+            table_context_size: 表格上下文 token 数（0 表示不添加）
+            image_context_size: 图片上下文 token 数（0 表示不添加）
             method_kwargs: 解析器特定参数（如 table_result_type、markdown_image_response_type）
         
         Returns:
@@ -387,7 +411,13 @@ class FlowParser:
                         result.append({"text": section})
                 for table in tables:
                     if table:
-                        result.append({"text": table})
+                        result.append({"text": table, "doc_type_kwd": "table"})
+                
+                table_ctx = table_context_size or 0
+                image_ctx = image_context_size or 0
+                if table_ctx or image_ctx:
+                    result = attach_media_context(result, table_ctx, image_ctx)
+                
                 return {"output_format": "json", "json": result}
             
             elif output_format == "markdown":
@@ -419,10 +449,16 @@ class FlowParser:
         filename: str,
         binary: bytes,
         output_format: Literal["json", "markdown"] = "json",
-        callback=None
+        callback=None,
+        table_context_size: int = 0,
+        image_context_size: int = 0
     ) -> dict:
         """
-        Word 文档解析（参考 core/flow/parser/parser.py._word 第 398-408 行）
+        Word 文档解析（参考 core/flow/parser/parser.py._word 第 426-445 行）
+        
+        Args:
+            table_context_size: 表格上下文 token 数（0 表示不添加）
+            image_context_size: 图片上下文 token 数（0 表示不添加）
         
         Returns:
             {"output_format": "json", "json": [sections with images]}
@@ -470,7 +506,13 @@ class FlowParser:
         if output_format == "json":
             sections, tbls = await _to_thread(docx_parser, filename, binary)
             json_sections = [{"text": section[0], "image": section[1]} for section in sections if section]
-            json_sections.extend([{"text": tb, "image": None} for ((_,tb), _) in tbls])
+            json_sections.extend([{"text": tb, "image": None, "doc_type_kwd": "table"} for ((_, tb), _) in tbls])
+            
+            table_ctx = table_context_size or 0
+            image_ctx = image_context_size or 0
+            if table_ctx or image_ctx:
+                json_sections = attach_media_context(json_sections, table_ctx, image_ctx)
+            
             return {"output_format": "json", "json": json_sections}
         elif output_format == "markdown":
             markdown_text = await _to_thread(docx_parser.to_markdown, filename, binary)
@@ -484,16 +526,20 @@ class FlowParser:
         *,
         output_format: Literal["json"] = "json",
         parse_method: str = "deepdoc",
+        table_context_size: int = 0,
+        image_context_size: int = 0,
         **method_kwargs
     ) -> dict:
         """
-        PPT 解析（参考 core/flow/parser/parser.py._slides 第 409-477 行）
+        PPT 解析（参考 core/flow/parser/parser.py._slides 第 447-519 行）
         
         Args:
             parse_method: 
                 - deepdoc: 默认 RAGFlowPptParser（仅支持 .pptx）
                 - tcadp parser: 腾讯云 ADP 解析（支持 .ppt 和 .pptx）
             output_format: 目前只支持 json
+            table_context_size: 表格上下文 token 数（0 表示不添加）
+            image_context_size: 图片上下文 token 数（0 表示不添加）
             method_kwargs: 解析器特定参数（如 table_result_type、markdown_image_response_type）
         
         Returns:
@@ -547,7 +593,12 @@ class FlowParser:
                     result.append({"text": section})
             for table in tables:
                 if table:
-                    result.append({"text": table})
+                    result.append({"text": table, "doc_type_kwd": "table"})
+            
+            table_ctx = table_context_size or 0
+            image_ctx = image_context_size or 0
+            if table_ctx or image_ctx:
+                result = attach_media_context(result, table_ctx, image_ctx)
             
             return {"output_format": "json", "json": result}
         
@@ -583,6 +634,11 @@ class FlowParser:
             
             sections = [{"text": section} for section in txts if section.strip()]
             
+            table_ctx = table_context_size or 0
+            image_ctx = image_context_size or 0
+            if table_ctx or image_ctx:
+                sections = attach_media_context(sections, table_ctx, image_ctx)
+            
             return {"output_format": "json", "json": sections}
         except KeyError as e:
             error_msg = str(e)
@@ -599,10 +655,16 @@ class FlowParser:
         filename: str,
         binary: bytes,
         output_format: Literal["json", "text"] = "json",
-        callback=None
+        callback=None,
+        table_context_size: int = 0,
+        image_context_size: int = 0
     ) -> dict:
         """
-        Markdown 解析（参考 core/flow/parser/parser.py._markdown 第 476-507 行）
+        Markdown 解析（参考 core/flow/parser/parser.py._markdown 第 521-565 行）
+        
+        Args:
+            table_context_size: 表格上下文 token 数（0 表示不添加）
+            image_context_size: 图片上下文 token 数（0 表示不添加）
         
         Returns:
             {"output_format": "json", "json": [sections with images]}
@@ -626,6 +688,11 @@ class FlowParser:
                 
                 json_results.append(json_result)
             
+            table_ctx = table_context_size or 0
+            image_ctx = image_context_size or 0
+            if table_ctx or image_ctx:
+                json_results = attach_media_context(json_results, table_ctx, image_ctx)
+            
             return {"output_format": "json", "json": json_results}
         else:
             text = "\n".join([section_text for section_text, _ in sections])
@@ -643,7 +710,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        图片解析（参考 core/flow/parser/parser.py._image 第 510-539 行）
+        图片解析（参考 core/flow/parser/parser.py._image 第 567-596 行）
         
         Args:
             parse_method: 
@@ -697,7 +764,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        视频解析（参考 core/flow/parser/parser.py._video 第 560-569 行）
+        视频解析（参考 core/flow/parser/parser.py._video 第 617-626 行）
         
         Returns:
             {"output_format": "text", "text": "视频描述"}
@@ -722,7 +789,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        邮件解析（参考 core/flow/parser/parser.py._email 第 571-699 行）
+        邮件解析（参考 core/flow/parser/parser.py._email 第 628-756 行）
         
         Args:
             output_format: json 或 text
@@ -878,20 +945,20 @@ async def parse_file(
     """
     使用 core/flow 逻辑解析文件，返回结构化结果（保留位置信息）
 
-    参考：core/flow/parser/parser.py._invoke 的逻辑（第 701-743 行）
+    参考：core/flow/parser/parser.py._invoke 的逻辑（第 758-799 行）
     根据文件扩展名自动路由到对应的解析方法
     
     Args:
         filename: 文件名
         binary: 文件二进制内容
         tenant_id: 租户 ID
-        pdf_config: PDF 配置 {"parse_method": "deepdoc", "output_format": "json"}
-        excel_config: Excel 配置 {"output_format": "html"}
-        word_config: Word 配置 {"output_format": "json"}
+        pdf_config: PDF 配置 {"parse_method": "deepdoc", "output_format": "json", "table_context_size": 0, "image_context_size": 0}
+        excel_config: Excel 配置 {"output_format": "html", "table_context_size": 0, "image_context_size": 0}
+        word_config: Word 配置 {"output_format": "json", "table_context_size": 0, "image_context_size": 0}
         image_config: 图片配置 {"parse_method": "ocr", "llm_name": None, "lang": "Chinese"}
         email_config: 邮件配置 {"output_format": "json", "fields": [...]}
-        slides_config: PPT 配置 {"parse_method": "deepdoc", "output_format": "json"}
-        markdown_config: Markdown 配置 {"output_format": "json"}
+        slides_config: PPT 配置 {"parse_method": "deepdoc", "output_format": "json", "table_context_size": 0, "image_context_size": 0}
+        markdown_config: Markdown 配置 {"output_format": "json", "table_context_size": 0, "image_context_size": 0}
         video_config: 视频配置 {"llm_id": "..."}
         callback: 进度回调
     
@@ -934,7 +1001,7 @@ async def parse_file(
     
     # PDF 文件
     elif ext == "pdf":
-        pdf_extra = {k: v for k, v in pdf_config.items() if k not in {"parse_method", "output_format", "lang"}}
+        pdf_extra = {k: v for k, v in pdf_config.items() if k not in {"parse_method", "output_format", "lang", "table_context_size", "image_context_size"}}
         return await FlowParser.parse_pdf(
             filename,
             binary,
@@ -943,18 +1010,22 @@ async def parse_file(
             pdf_config.get("output_format", "json"),
             pdf_config.get("lang", "Chinese"),
             callback=callback,
+            table_context_size=pdf_config.get("table_context_size", 0),
+            image_context_size=pdf_config.get("image_context_size", 0),
             **pdf_extra
         )
     
     # Excel 文件
     elif ext in ["xls", "xlsx", "csv"]:
-        excel_extra = {k: v for k, v in excel_config.items() if k not in {"output_format", "parse_method"}}
+        excel_extra = {k: v for k, v in excel_config.items() if k not in {"output_format", "parse_method", "table_context_size", "image_context_size"}}
         return await FlowParser.parse_excel(
             filename,
             binary,
             excel_config.get("output_format", "html"),
             callback=callback,
             parse_method=excel_config.get("parse_method", "deepdoc"),
+            table_context_size=excel_config.get("table_context_size", 0),
+            image_context_size=excel_config.get("image_context_size", 0),
             **excel_extra
         )
     
@@ -963,18 +1034,22 @@ async def parse_file(
         return await FlowParser.parse_word(
             filename, binary,
             word_config.get("output_format", "json"),
-            callback
+            callback,
+            table_context_size=word_config.get("table_context_size", 0),
+            image_context_size=word_config.get("image_context_size", 0)
         )
     
     # PPT 文件
     elif ext in ["ppt", "pptx"]:
-        slides_extra = {k: v for k, v in slides_config.items() if k not in {"output_format", "parse_method"}}
+        slides_extra = {k: v for k, v in slides_config.items() if k not in {"output_format", "parse_method", "table_context_size", "image_context_size"}}
         return await FlowParser.parse_ppt(
             filename,
             binary,
             callback=callback,
             output_format=slides_config.get("output_format", "json"),
             parse_method=slides_config.get("parse_method", "deepdoc"),
+            table_context_size=slides_config.get("table_context_size", 0),
+            image_context_size=slides_config.get("image_context_size", 0),
             **slides_extra
         )
     
@@ -984,7 +1059,9 @@ async def parse_file(
             filename,
             binary,
             markdown_config.get("output_format", "json"),
-            callback
+            callback,
+            table_context_size=markdown_config.get("table_context_size", 0),
+            image_context_size=markdown_config.get("image_context_size", 0)
         )
     
     # 图片文件
