@@ -1,6 +1,7 @@
 import tempfile
 from pathlib import Path
 
+from common.token_utils import num_tokens_from_string
 from core.llm.cv_model.models.gptv4 import GptV4
 
 
@@ -52,6 +53,8 @@ class QWenCV(GptV4):
                     model=self.model_name,
                     messages=messages,
                 )
+                if response.get("message"):
+                    raise Exception(response["message"])
                 summary = response["output"]["choices"][0]["message"].content[0]["text"]
                 return summary, num_tokens_from_string(summary)
 
