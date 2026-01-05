@@ -1199,6 +1199,12 @@
                     "tags": "TEXT EMBEDDING",
                     "max_tokens": 8196,
                     "mdl_type": "embedding"
+                },
+                {
+                    "llm_name": "jina-embeddings-v4",
+                    "tags": "TEXT EMBEDDING",
+                    "max_tokens": 32768,
+                    "mdl_type": "embedding"
                 }
             ]
         },
