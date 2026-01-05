@@ -730,8 +730,19 @@ class FlowParser:
         if parse_method in ["ocr", "deepdoc", "plain_text"]:
             # 使用 OCR 识别文字
             ocr = OCR()
-            bxs = await _to_thread(ocr, np.array(img))
+            result = await _to_thread(ocr, np.array(img))
+            
+            # OCR.__call__ 可能返回两种情况：
+            # 1. (None, None, time_dict) - 当未检测到文本框时
+            # 2. list(zip([boxes], [rec_res])) - 正常情况
+            if result is None or (isinstance(result, tuple) and len(result) == 3 and result[0] is None):
+                logger.warning(f"OCR detected no text boxes in image: {filename}")
+                bxs = []
+            else:
+                bxs = result
+            
             txt = "\n".join([t[0] for _, t in bxs if t[0]])
+            logger.info(f"OCR result for {filename}: {len(bxs)} text boxes detected, text length={len(txt)}")
         else:
             # 使用 VLM 描述图片
             # 兼容两种方式：
