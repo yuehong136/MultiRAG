@@ -7,6 +7,7 @@
 @desc: 会话管理接口
 """
 import json
+import os
 import re
 import logging
 from copy import deepcopy
@@ -773,6 +774,93 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
         "Content-Disposition": 'attachment; filename="tts_output.mp3"'
     }
     return StreamingResponse(stream_audio(), media_type="audio/mpeg", headers=headers)
+
+
+@router.post('/sequence2txt', summary="语音转文字（流式）", response_description="成功识别语音")
+def sequence2txt(
+    file: UploadFile = File(...),
+    stream: str = "false",
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    语音转文字（支持流式）
+
+    该接口用于上传音频文件并将其转换为文本，支持流式和非流式输出。
+
+    参数:
+    - file: UploadFile 上传的音频文件
+    - stream: str 是否使用流式响应，"true" 或 "false"，默认 "false"
+
+    返回:
+    - 非流式：返回包含识别文本的JSON结果
+    - 流式：返回 SSE 流，逐步返回识别结果
+
+    支持的音频格式:
+    - wav, mp3, m4a, aac, flac, ogg, webm, opus, wma
+    """
+    stream_mode = stream.lower() == "true"
+
+    ALLOWED_EXTS = {
+        ".wav", ".mp3", ".m4a", ".aac",
+        ".flac", ".ogg", ".webm",
+        ".opus", ".wma"
+    }
+
+    filename = file.filename or ""
+    suffix = os.path.splitext(filename)[-1].lower()
+    if suffix not in ALLOWED_EXTS:
+        return get_data_error_result(
+            retmsg=f"Unsupported audio format: {suffix}. Allowed: {', '.join(sorted(ALLOWED_EXTS))}"
+        )
+
+    # 保存上传的音频文件到临时路径
+    import tempfile as tf
+    fd, temp_audio_path = tf.mkstemp(suffix=suffix)
+    os.close(fd)
+    with open(temp_audio_path, "wb") as f:
+        f.write(file.file.read())
+
+    tenants = TenantService.get_info_by(db, user.id)
+    if not tenants:
+        try:
+            os.remove(temp_audio_path)
+        except Exception:
+            pass
+        return get_data_error_result(retmsg="Tenant not found!")
+
+    asr_id = tenants[0].get("asr_id")
+    if not asr_id:
+        try:
+            os.remove(temp_audio_path)
+        except Exception:
+            pass
+        return get_data_error_result(retmsg="No default ASR model is set")
+
+    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_id)
+
+    if not stream_mode:
+        text = asr_mdl.transcription(temp_audio_path)
+        try:
+            os.remove(temp_audio_path)
+        except Exception as e:
+            logging.error(f"Failed to remove temp audio file: {str(e)}")
+        return get_json_result(data={"text": text})
+
+    def event_stream():
+        try:
+            for evt in asr_mdl.stream_transcription(temp_audio_path):
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            err = {"event": "error", "text": str(e)}
+            yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+        finally:
+            try:
+                os.remove(temp_audio_path)
+            except Exception as e:
+                logging.error(f"Failed to remove temp audio file: {str(e)}")
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post('/asr', summary="语音识别", response_description="成功识别语音")

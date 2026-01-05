@@ -206,6 +206,82 @@ class LLMBundle(LLM4Tenant):
 
         return txt
 
+    def stream_transcription(self, audio):
+        """
+        流式语音转文字。
+        如果底层模型支持 stream_transcription，则使用流式模式；否则回退到非流式模式。
+        """
+        mdl = self.mdl
+        supports_stream = hasattr(mdl, "stream_transcription") and callable(getattr(mdl, "stream_transcription"))
+
+        if supports_stream:
+            if self.langfuse:
+                generation = self.langfuse.start_generation(
+                    trace_context=self.trace_context,
+                    name="stream_transcription",
+                    metadata={"model": self.llm_name}
+                )
+            final_text = ""
+            used_tokens = 0
+
+            try:
+                # 避免在外部模型调用期间持有 idle-in-transaction
+                self._release_db_before_long_io()
+                for evt in mdl.stream_transcription(audio):
+                    if evt.get("event") == "final":
+                        final_text = evt.get("text", "")
+                    yield evt
+
+            except Exception as e:
+                err = {"event": "error", "text": str(e)}
+                yield err
+                final_text = final_text or ""
+            finally:
+                if final_text:
+                    used_tokens = num_tokens_from_string(final_text)
+                    if self.db is not None:
+                        TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name)
+
+                if self.langfuse:
+                    generation.update(
+                        output={"output": final_text},
+                        usage_details={"total_tokens": used_tokens}
+                    )
+                    generation.end()
+
+            return
+
+        # 回退到非流式模式
+        if self.langfuse:
+            generation = self.langfuse.start_generation(
+                trace_context=self.trace_context,
+                name="stream_transcription",
+                metadata={"model": self.llm_name}
+            )
+
+        # 避免在外部模型调用期间持有 idle-in-transaction
+        self._release_db_before_long_io()
+        full_text, used_tokens = mdl.transcription(audio)
+        if self.db is not None and not TenantLLMService.increase_usage(
+            self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name
+        ):
+            logging.error(
+                f"LLMBundle.stream_transcription can't update token usage for {self.tenant_id}/SEQUENCE2TXT used_tokens: {used_tokens}"
+            )
+
+        if self.langfuse:
+            generation.update(
+                output={"output": full_text},
+                usage_details={"total_tokens": used_tokens}
+            )
+            generation.end()
+
+        yield {
+            "event": "final",
+            "text": full_text,
+            "streaming": False
+        }
+
     def tts(self, text: str) -> Generator[bytes, None, None]:
         if self.langfuse:
             generation = self.langfuse.start_generation(trace_context=self.trace_context, name="tts", input={"text": text})
