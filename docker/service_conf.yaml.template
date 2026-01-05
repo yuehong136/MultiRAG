@@ -132,13 +132,9 @@ oceanbase:
     port: ${OCEANBASE_PORT:-2881}
 
 redis:
-  # Redis数据库的编号
   db: 1
-  # Redis数据库的用户名
   username: '${REDIS_USERNAME:-}'
-  # Redis数据库的密码
   password: '${REDIS_PASSWORD:-}'
-  # Redis数据库的主机名和端口
   host: '${REDIS_HOST:-redis}:6379'
 
 task_executor:
