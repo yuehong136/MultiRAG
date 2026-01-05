@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import math
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 
 import numpy as np
@@ -1503,3 +1503,80 @@ class Dealer:
             chunks.append(d)
 
         return sorted(chunks, key=lambda x: x["similarity"] * -1)[:topn]
+
+    def retrieval_by_children(self, chunks: list[dict], tenant_ids: list[str]):
+        """
+        处理父子关系的chunk，将子chunk合并到父chunk中
+
+        Args:
+            chunks: 检索到的chunk列表
+            tenant_ids: 租户ID列表
+
+        Returns:
+            处理后的chunks列表
+        """
+        if not chunks:
+            return []
+
+        # 从chunks中提取kb_id，构建索引名称
+        from api.db.services.knowledgebase_service import KnowledgebaseService
+        kb_id_set = set(ck.get("kb_id") for ck in chunks if ck.get("kb_id"))
+        with db_connection() as db:
+            kbs = KnowledgebaseService.get_by_ids(db, list(kb_id_set))
+
+        # 构建 tenant_id -> kb_names 的映射
+        tenant_kb_dict = {}
+        for kb in kbs:
+            tid = kb.tenant_id
+            if tid not in tenant_kb_dict:
+                tenant_kb_dict[tid] = []
+            tenant_kb_dict[tid].append(kb.name)
+
+        # 为每个 tenant_id 生成对应的索引名称
+        idx_nms = []
+        for tid in tenant_ids:
+            if tid in tenant_kb_dict:
+                idx_nms.extend(index_name(tid, tenant_kb_dict[tid]))
+
+        mom_chunks = defaultdict(list)
+        i = 0
+        while i < len(chunks):
+            ck = chunks[i]
+            if not ck.get("mom_id"):
+                i += 1
+                continue
+            mom_chunks[ck["mom_id"]].append(chunks.pop(i))
+
+        if not mom_chunks:
+            return chunks
+
+        if not chunks:
+            chunks = []
+
+        vector_size = 1024
+        for id, cks in mom_chunks.items():
+            chunk = self.dataStore.get(id, idx_nms, [ck["kb_id"] for ck in cks])
+            d = {
+                "chunk_id": id,
+                "content_ltks": " ".join([ck["content_ltks"] for ck in cks]),
+                "content_with_weight": chunk["content_with_weight"],
+                "doc_id": chunk["doc_id"],
+                "docnm_kwd": chunk.get("docnm_kwd", ""),
+                "kb_id": chunk["kb_id"],
+                "important_kwd": [kwd for ck in cks for kwd in ck.get("important_kwd", [])],
+                "image_id": chunk.get("img_id", ""),
+                "similarity": np.mean([ck["similarity"] for ck in cks]),
+                "vector_similarity": np.mean([ck["similarity"] for ck in cks]),
+                "term_similarity": np.mean([ck["similarity"] for ck in cks]),
+                "vector": [0.0] * vector_size,
+                "positions": chunk.get("position_int", []),
+                "doc_type_kwd": chunk.get("doc_type_kwd", "")
+            }
+            for k in cks[0].keys():
+                if k[-4:] == "_vec":
+                    d["vector"] = cks[0][k]
+                    vector_size = len(cks[0][k])
+                    break
+            chunks.append(d)
+
+        return sorted(chunks, key=lambda x: x["similarity"] * -1)
