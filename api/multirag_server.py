@@ -14,7 +14,6 @@ import logging
 import os
 import signal
 import sys
-import time
 import traceback
 import threading
 import uuid
@@ -73,7 +72,7 @@ def signal_handler(sig, frame):
     logging.info("Received interrupt signal, shutting down...")
     shutdown_all_mcp_sessions()
     stop_event.set()
-    time.sleep(1)
+    stop_event.wait(1)  # 最多等待1秒，stop_event已设置则立即返回
     sys.exit(0)
 
 if __name__ == '__main__':
@@ -212,5 +211,5 @@ if __name__ == '__main__':
         logging.exception("Failed to start MultiRAG server")
         traceback.print_exc()
         stop_event.set()
-        time.sleep(1)
+        stop_event.wait(1)  # 最多等待1秒，stop_event已设置则立即返回
         os.kill(os.getpid(), signal.SIGKILL)

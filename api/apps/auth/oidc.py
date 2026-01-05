@@ -15,7 +15,7 @@
 #
 
 import jwt
-import requests
+from common.http_client import sync_request
 from .oauth import OAuthClient, UserInfo
 
 
@@ -50,10 +50,10 @@ class OIDCClient(OAuthClient):
         """
         try:
             metadata_url = f"{issuer}/.well-known/openid-configuration"
-            response = requests.get(metadata_url, timeout=7)
+            response = sync_request("GET", metadata_url, timeout=7)
             response.raise_for_status()
             return response.json()
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             raise ValueError(f"Failed to fetch OIDC metadata: {e}")
 
 
@@ -87,7 +87,7 @@ class OIDCClient(OAuthClient):
 
     def fetch_user_info(self, access_token, id_token=None, **kwargs):
         """
-        Fetch user info.
+        Fetch user info (synchronous).
         """
         user_info = {}
         if id_token:
@@ -95,6 +95,15 @@ class OIDCClient(OAuthClient):
 
         # Get user info from userinfo endpoint
         oauth_user_info = super().fetch_user_info(access_token)
+        user_info.update(oauth_user_info.to_dict())
+        return self.normalize_user_info(user_info)
+
+    async def async_fetch_user_info(self, access_token, id_token=None, **kwargs):
+        """Async variant of fetch_user_info."""
+        user_info = {}
+        if id_token:
+            user_info = self.parse_id_token(id_token)
+        oauth_user_info = await super().async_fetch_user_info(access_token)
         user_info.update(oauth_user_info.to_dict())
         return self.normalize_user_info(user_info)
 

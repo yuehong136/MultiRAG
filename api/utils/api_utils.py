@@ -13,7 +13,7 @@ import time
 from copy import deepcopy
 from datetime import datetime
 from functools import wraps
-from typing import Callable
+from typing import Any, Callable
 import trio
 
 from fastapi import Request, Response, Depends
@@ -30,6 +30,71 @@ from common import settings
 from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from common.connection_utils import timeout
 from common.constants import RetCode
+
+
+async def _coerce_request_data(request: Request) -> dict:
+    """
+    Fetch JSON body with sane defaults; fallback to form data.
+    
+    Note: FastAPI typically uses Pydantic models for request validation,
+    making this function rarely needed. However, it's provided for 
+    edge cases where manual request body parsing is required.
+    
+    Args:
+        request: FastAPI Request object
+        
+    Returns:
+        dict: Parsed request data from JSON body or form data
+        
+    Raises:
+        ValueError: When no JSON body or form data found
+        TypeError: When payload type is unsupported
+    """
+    payload: Any = None
+    last_error: Exception | None = None
+
+    try:
+        payload = await request.json()
+    except Exception as e:
+        last_error = e
+        payload = None
+
+    if payload is None:
+        try:
+            form = await request.form()
+            payload = dict(form)
+        except Exception as e:
+            last_error = e
+            payload = None
+
+    if payload is None:
+        if last_error is not None:
+            raise last_error
+        raise ValueError("No JSON body or form data found in request.")
+
+    if isinstance(payload, dict):
+        return payload or {}
+
+    if isinstance(payload, str):
+        raise AttributeError("'str' object has no attribute 'get'")
+
+    raise TypeError(f"Unsupported request payload type: {type(payload)!r}")
+
+
+async def get_request_json(request: Request) -> dict:
+    """
+    Get request JSON data with fallback to form data.
+    
+    This is a convenience wrapper around _coerce_request_data().
+    For most FastAPI endpoints, prefer using Pydantic models instead.
+    
+    Args:
+        request: FastAPI Request object
+        
+    Returns:
+        dict: Parsed request data
+    """
+    return await _coerce_request_data(request)
 
 
 def serialize_for_json(obj):
@@ -125,7 +190,7 @@ def validate_request(*args, **kwargs):
     def wrapper(func):
         @wraps(func)
         async def decorated_function(request: Request, *_args, **_kwargs):
-            input_arguments = await request.json()
+            input_arguments = await _coerce_request_data(request)
             errs = process_args(input_arguments)
             if errs:
                 return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg=errs)

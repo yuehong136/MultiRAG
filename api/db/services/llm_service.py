@@ -1,6 +1,8 @@
+import asyncio
 import inspect
 import logging
 import re
+import threading
 from functools import partial
 from typing import Generator, Any
 from sqlalchemy.orm import Session
@@ -271,7 +273,7 @@ class LLMBundle(LLM4Tenant):
             txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
 
         # ⚠️ 线程安全：只在有 db session 时记录 usage
-        if self.db is not None and isinstance(used_tokens, int):
+        if self.db is not None and used_tokens:
             if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
                 logging.error("LLMBundle.chat can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, used_tokens))
 
@@ -313,5 +315,144 @@ class LLMBundle(LLM4Tenant):
             yield ans
 
         if total_tokens > 0:
-            if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, txt, self.llm_name):
-                logging.error("LLMBundle.chat_streamly can't update token usage for {}/CHAT llm_name: {}, content: {}".format(self.tenant_id, self.llm_name, txt))
+            if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, total_tokens, self.llm_name):
+                logging.error("LLMBundle.chat_streamly can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, total_tokens))
+
+    def _bridge_sync_stream(self, gen):
+        """Bridge a synchronous generator to an async queue for async iteration."""
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def worker():
+            try:
+                for item in gen:
+                    loop.call_soon_threadsafe(queue.put_nowait, item)
+            except Exception as e:  # pragma: no cover
+                loop.call_soon_threadsafe(queue.put_nowait, e)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, StopAsyncIteration)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return queue
+
+    async def async_chat(self, system: str, history: list, gen_conf: dict[str, Any] | None = None, **kwargs) -> str:
+        """Async variant of chat method."""
+        if gen_conf is None:
+            gen_conf = {}
+        if self.langfuse:
+            generation = self.langfuse.start_generation(
+                trace_context=self.trace_context,
+                name="async_chat",
+                model=self.llm_name,
+                input={"system": system, "history": history}
+            )
+
+        chat_partial = partial(self.mdl.chat, system, history, gen_conf, **kwargs)
+        if self.is_tools and self.mdl.is_tools and hasattr(self.mdl, "chat_with_tools"):
+            chat_partial = partial(self.mdl.chat_with_tools, system, history, gen_conf, **kwargs)
+
+        use_kwargs = self._clean_param(chat_partial, **kwargs)
+
+        # Check for async methods first
+        if hasattr(self.mdl, "async_chat_with_tools") and self.is_tools and self.mdl.is_tools:
+            txt, used_tokens = await self.mdl.async_chat_with_tools(system, history, gen_conf, **use_kwargs)
+        elif hasattr(self.mdl, "async_chat"):
+            txt, used_tokens = await self.mdl.async_chat(system, history, gen_conf, **use_kwargs)
+        else:
+            # Fallback to running sync method in thread
+            txt, used_tokens = await asyncio.to_thread(chat_partial, **use_kwargs)
+
+        txt = self._remove_reasoning_content(txt)
+        if not self.verbose_tool_use:
+            txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
+
+        if used_tokens and not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+            logging.error("LLMBundle.async_chat can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, used_tokens))
+
+        if self.langfuse:
+            generation.update(output={"output": txt}, usage_details={"total_tokens": used_tokens})
+            generation.end()
+
+        return txt
+
+    async def async_chat_streamly(self, system: str, history: list, gen_conf: dict[str, Any] | None = None, **kwargs):
+        """Async variant of chat_streamly method."""
+        if gen_conf is None:
+            gen_conf = {}
+        if self.langfuse:
+            generation = self.langfuse.start_generation(
+                trace_context=self.trace_context,
+                name="async_chat_streamly",
+                model=self.llm_name,
+                input={"system": system, "history": history}
+            )
+
+        total_tokens = 0
+        ans = ""
+
+        # Check for native async streaming methods
+        if self.is_tools and self.mdl.is_tools:
+            stream_fn = getattr(self.mdl, "async_chat_streamly_with_tools", None)
+        else:
+            stream_fn = getattr(self.mdl, "async_chat_streamly", None)
+
+        if stream_fn:
+            # Native async streaming
+            chat_partial = partial(stream_fn, system, history, gen_conf)
+            use_kwargs = self._clean_param(chat_partial, **kwargs)
+            async for txt in chat_partial(**use_kwargs):
+                if isinstance(txt, int):
+                    total_tokens = txt
+                    break
+
+                if txt.endswith("</think>"):
+                    ans = ans[: -len("</think>")]
+
+                if not self.verbose_tool_use:
+                    txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
+
+                ans += txt
+                yield ans
+
+            if total_tokens and not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, total_tokens, self.llm_name):
+                logging.error("LLMBundle.async_chat_streamly can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, total_tokens))
+
+            if self.langfuse:
+                generation.update(output={"output": ans}, usage_details={"total_tokens": total_tokens})
+                generation.end()
+            return
+
+        # Fallback: bridge sync stream to async
+        chat_partial = partial(
+            self.mdl.chat_streamly_with_tools if (self.is_tools and self.mdl.is_tools) else self.mdl.chat_streamly,
+            system, history, gen_conf
+        )
+        use_kwargs = self._clean_param(chat_partial, **kwargs)
+        queue = self._bridge_sync_stream(chat_partial(**use_kwargs))
+
+        while True:
+            item = await queue.get()
+            if item is StopAsyncIteration:
+                break
+            if isinstance(item, Exception):
+                raise item
+            if isinstance(item, int):
+                total_tokens = item
+                break
+
+            txt = item
+            if txt.endswith("</think>"):
+                ans = ans[: -len("</think>")]
+
+            if not self.verbose_tool_use:
+                txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
+
+            ans += txt
+            yield ans
+
+        if total_tokens and not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, total_tokens, self.llm_name):
+            logging.error("LLMBundle.async_chat_streamly can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, total_tokens))
+
+        if self.langfuse:
+            generation.update(output={"output": ans}, usage_details={"total_tokens": total_tokens})
+            generation.end()

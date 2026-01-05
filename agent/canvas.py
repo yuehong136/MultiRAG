@@ -14,6 +14,8 @@
 #  limitations under the License.
 #
 import asyncio
+import base64
+import inspect
 import json
 import logging
 import re
@@ -376,7 +378,7 @@ class Canvas(Graph):
         for k in kwargs.keys():
             if k in ["query", "user_id", "files"] and kwargs[k]:
                 if k == "files":
-                    self.globals[f"sys.{k}"] = FileService.get_files(kwargs[k])
+                    self.globals[f"sys.{k}"] = await self.get_files_async(kwargs[k])
                 else:
                     self.globals[f"sys.{k}"] = kwargs[k]
         if not self.globals["sys.conversation_turns"]:
@@ -417,11 +419,10 @@ class Canvas(Graph):
             i = f
             while i < t:
                 cpn = self.get_component_obj(self.path[i])
+                task_fn = None
+
                 if cpn.component_name.lower() in ["begin", "userfillup"]:
-                    tasks.append(loop.run_in_executor(
-                        self._thread_pool,
-                        partial(cpn.invoke, inputs=kwargs.get("inputs", {}))
-                    ))
+                    task_fn = partial(cpn.invoke, inputs=kwargs.get("inputs", {}))
                     i += 1
                 else:
                     for _, ele in cpn.get_input_elements().items():
@@ -430,11 +431,14 @@ class Canvas(Graph):
                             t -= 1
                             break
                     else:
-                        tasks.append(loop.run_in_executor(
-                            self._thread_pool,
-                            partial(cpn.invoke, **cpn.get_input())
-                        ))
+                        task_fn = partial(cpn.invoke, **cpn.get_input())
                         i += 1
+
+                if task_fn is None:
+                    continue
+
+                tasks.append(loop.run_in_executor(self._thread_pool, task_fn))
+
             if tasks:
                 await asyncio.gather(*tasks)
 
@@ -472,16 +476,29 @@ class Canvas(Graph):
                 if cpn_obj.component_name.lower() == "message":
                     if isinstance(cpn_obj.output("content"), partial):
                         _m = ""
-                        for m in cpn_obj.output("content")():
-                            if not m:
-                                continue
-                            if m == "<think>":
-                                yield decorate("message", {"content": "", "start_to_think": True})
-                            elif m == "</think>":
-                                yield decorate("message", {"content": "", "end_to_think": True})
-                            else:
-                                yield decorate("message", {"content": m})
-                                _m += m
+                        stream = cpn_obj.output("content")()
+                        if inspect.isasyncgen(stream):
+                            async for m in stream:
+                                if not m:
+                                    continue
+                                if m == "<think>":
+                                    yield decorate("message", {"content": "", "start_to_think": True})
+                                elif m == "</think>":
+                                    yield decorate("message", {"content": "", "end_to_think": True})
+                                else:
+                                    yield decorate("message", {"content": m})
+                                    _m += m
+                        else:
+                            for m in stream:
+                                if not m:
+                                    continue
+                                if m == "<think>":
+                                    yield decorate("message", {"content": "", "start_to_think": True})
+                                elif m == "</think>":
+                                    yield decorate("message", {"content": "", "end_to_think": True})
+                                else:
+                                    yield decorate("message", {"content": m})
+                                    _m += m
                         cpn_obj.set_output("content", _m)
                         cite = re.search(r"\[ID:[ 0-9]+\]", _m)
                     else:
@@ -630,6 +647,43 @@ class Canvas(Graph):
 
     def get_component_input_elements(self, cpnnm):
         return self.components[cpnnm]["obj"].get_input_elements()
+
+    async def get_files_async(self, files: Union[None, list[dict]]) -> list[str]:
+        """Asynchronously process files, converting images to base64 and parsing documents."""
+        if not files:
+            return []
+
+        def image_to_base64(file):
+            return "data:{};base64,{}".format(
+                file["mime_type"],
+                base64.b64encode(FileService.get_blob(file["created_by"], file["id"])).decode("utf-8")
+            )
+
+        loop = asyncio.get_running_loop()
+        tasks = []
+        for file in files:
+            if file["mime_type"].find("image") >= 0:
+                tasks.append(loop.run_in_executor(self._thread_pool, image_to_base64, file))
+                continue
+            tasks.append(loop.run_in_executor(
+                self._thread_pool,
+                FileService.parse,
+                file["name"],
+                FileService.get_blob(file["created_by"], file["id"]),
+                True,
+                file["created_by"]
+            ))
+        return await asyncio.gather(*tasks)
+
+    def get_files(self, files: Union[None, list[dict]]) -> list[str]:
+        """
+        Synchronous wrapper for get_files_async, used by sync component invoke paths.
+        """
+        loop = getattr(self, "_loop", None)
+        if loop and loop.is_running():
+            return asyncio.run_coroutine_threadsafe(self.get_files_async(files), loop).result()
+
+        return asyncio.run(self.get_files_async(files))
 
     def tool_use_callback(self, agent_id: str, func_name: str, params: dict, result: Any, elapsed_time=None):
         agent_ids = agent_id.split("-->")
