@@ -1618,6 +1618,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
                                                    LLMBundle(db, kb.tenant_id, LLMType.CHAT))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
+        ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], [kb.tenant_id])
 
         for c in ranks["chunks"]:
             c.pop("vector", None)

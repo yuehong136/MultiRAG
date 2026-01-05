@@ -33,6 +33,15 @@
         }
       },
       {
+        "mom_id_template": {
+          "match": "mom_id",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 512
+          }
+        }
+      },
+      {
         "doc_id_template": {
           "match": "doc_id",
           "mapping": {
@@ -443,6 +452,15 @@
           "mapping": {
             "type": "VARCHAR",
             "max_length": 256
+          }
+        }
+      },
+      {
+        "mom_with_weight_template": {
+          "match": "mom_with_weight",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 16384
           }
         }
       },

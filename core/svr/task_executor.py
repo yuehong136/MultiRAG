@@ -2180,17 +2180,19 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         if not mom:
             continue
         mom_id = xxhash.xxh64(mom.encode("utf-8")).hexdigest()
+        ck["mom_id"] = mom_id
         if mom_id in mother_ids:
             continue
         mother_ids.add(mom_id)
-        ck["mom_id"] = mom_id
         mom_ck = copy.deepcopy(ck)
+        mom_ck["pk"] = mom_id  # 同时设置 pk 字段，确保 Milvus 主键正确
         mom_ck["id"] = mom_id
         mom_ck["content_with_weight"] = mom
         mom_ck["available_int"] = 0
         flds = list(mom_ck.keys())
         for fld in flds:
-            if fld not in ["id", "content_with_weight", "doc_id", "kb_id", "available_int", "position_int"]:
+            # pk 是 Milvus 主键，必须保留
+            if fld not in ["id", "pk", "content_with_weight", "doc_id", "docnm_kwd", "kb_id", "available_int", "position_int"]:
                 del mom_ck[fld]
         mothers.append(mom_ck)
 
@@ -2219,7 +2221,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 ))
         except Exception as e:
             logging.warning(f"Insert mother chunks error: {e}")
-        
+
         task_canceled = has_canceled(task_id)
         if task_canceled:
             progress_callback(-1, msg="Task has been canceled.")
