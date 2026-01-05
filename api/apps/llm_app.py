@@ -47,11 +47,13 @@ from common.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
 class ChatAgentAdapter:
     """对话Agent适配器，直接复用Agent类但适配对话场景"""
 
-    def __init__(self, tenant_id: str, llm_name: str, system_prompt: str = "", mcp_ids: list[str] = None):
+    def __init__(self, tenant_id: str, llm_name: str, system_prompt: str = "", 
+                 mcp_ids: list[str] = None, output_schema: dict = None):
         self.tenant_id = tenant_id
         self.llm_name = llm_name
         self.system_prompt = system_prompt
         self.mcp_ids = mcp_ids or []
+        self.output_schema = output_schema  # 结构化输出 schema
 
         # 创建简化的Canvas mock - 只提供Agent需要的接口
         self.canvas_mock = self._create_canvas_mock()
@@ -67,6 +69,10 @@ class ChatAgentAdapter:
         agent_param.cite = True
         agent_param.temperature = 0.1
         agent_param.max_tokens = 0
+        
+        # 设置结构化输出 schema
+        if output_schema:
+            agent_param.outputs = {"structured": output_schema}
 
         # 创建Agent实例，直接复用完整的Agent功能
         self.agent = Agent(self.canvas_mock, "chat_agent", agent_param)
@@ -247,6 +253,15 @@ class ChatAgentAdapter:
 
         return mcp_config
 
+    def _get_schema_prompt(self) -> str:
+        """获取结构化输出的 prompt"""
+        if not self.output_schema:
+            return ""
+        
+        from core.prompts.generator import structured_output_prompt
+        schema = json.dumps(self.output_schema, ensure_ascii=False, indent=2)
+        return structured_output_prompt(schema)
+
     def chat_with_tools_stream(self, query: str, messages: list[dict] = None,
                                knowledge_context: str = "", files: list[str] = None):
         """使用工具进行流式对话，直接复用Agent的流式能力"""
@@ -299,14 +314,23 @@ class ChatAgentAdapter:
 
                 # 创建用于收集工具使用历史的列表
                 use_tools = []
+                
+                # 获取 schema_prompt 用于结构化输出
+                schema_prompt = self._get_schema_prompt()
 
                 # 添加工具调用开始提示
                 yield "🔧 Starting tool analysis...\n"
 
-                # 直接调用Agent的_react_with_tools_streamly方法，监控工具调用
+                # ============================================================================
+                # 实时工具调用输出
+                # 
+                # 【依赖说明】此处依赖 agent/component/agent_with_tools.py 中 
+                # _react_with_tools_streamly 方法的修改：使用 as_completed 在每个工具完成时
+                # yield 空字符串，使得此处可以实时检测到 use_tools 列表的变化。
+                # ============================================================================
                 previous_tool_count = 0
-                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools):
-                    # 检查是否有新的工具调用
+                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools, schema_prompt=schema_prompt):
+                    # 检查是否有新的工具调用（由 _react_with_tools_streamly 的 yield 触发）
                     if len(use_tools) > previous_tool_count:
                         # 显示新的工具调用
                         new_tools = use_tools[previous_tool_count:]
@@ -406,15 +430,24 @@ class ChatAgentAdapter:
                 
                 use_tools = []
                 
+                # 获取 schema_prompt 用于结构化输出
+                schema_prompt = self._get_schema_prompt()
+                
                 # 发送工具分析开始消息
                 yield {"type": "tool_start", "content": "Starting tool analysis..."}
                 
-                # 调用Agent的_react_with_tools_streamly方法
+                # ============================================================================
+                # 实时工具调用输出
+                # 
+                # 【依赖说明】此处依赖 agent/component/agent_with_tools.py 中 
+                # _react_with_tools_streamly 方法的修改：使用 as_completed 在每个工具完成时
+                # yield 空字符串，使得此处可以实时检测到 use_tools 列表的变化。
+                # ============================================================================
                 previous_tool_count = 0
                 call_id_counter = 0
                 
-                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools):
-                    # 检查是否有新的工具调用
+                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools, schema_prompt=schema_prompt):
+                    # 检查是否有新的工具调用（由 _react_with_tools_streamly 的 yield 触发）
                     if len(use_tools) > previous_tool_count:
                         new_tools = use_tools[previous_tool_count:]
                         for tool_call in new_tools:

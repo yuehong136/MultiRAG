@@ -13,10 +13,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import json
 import logging
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from functools import partial
 from typing import Any
@@ -26,13 +27,12 @@ from timeit import default_timer as timer
 from agent.component.llm import LLMParam, LLM
 from agent.tools.base import LLMToolPluginCallSession, ToolParamBase, ToolBase, ToolMeta
 from api.db.db_models import db_connection
-# from api.db.services.llm_service import LLMBundle, TenantLLMService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.mcp_server_service import MCPServerService
 from common.connection_utils import timeout
 from core.prompts.generator import next_step, COMPLETE_TASK, analyze_task, \
-    citation_prompt, reflect, rank_memories, kb_prompt, citation_plus, full_question, message_fit_in
+    citation_prompt, reflect, rank_memories, kb_prompt, citation_plus, full_question, message_fit_in, structured_output_prompt
 from common.mcp_tool_call_conn import MCPToolCallSession, mcp_tool_metadata_to_openai_tool
 
 
@@ -140,6 +140,29 @@ class Agent(LLM, ToolBase):
             res.update(cpn.get_input_form())
         return res
 
+    def _get_output_schema(self):
+        try:
+            cand = self._param.outputs.get("structured")
+        except Exception:
+            return None
+
+        if isinstance(cand, dict):
+            if isinstance(cand.get("properties"), dict) and len(cand["properties"]) > 0:
+                return cand
+            for k in ("schema", "structured"):
+                if isinstance(cand.get(k), dict) and isinstance(cand[k].get("properties"), dict) and len(cand[k]["properties"]) > 0:
+                    return cand[k]
+
+        return None
+
+    def _force_format_to_schema(self, text: str, schema_prompt: str) -> str:
+        fmt_msgs = [
+            {"role": "system", "content": schema_prompt + "\nIMPORTANT: Output ONLY valid JSON. No markdown, no extra text."},
+            {"role": "user", "content": text},
+        ]
+        _, fmt_msgs = message_fit_in(fmt_msgs, int(self.chat_mdl.max_length * 0.97))
+        return self._generate(fmt_msgs)
+
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 20*60)))
     def _invoke(self, **kwargs):
         if self.check_if_canceled("Agent processing"):
@@ -163,17 +186,22 @@ class Agent(LLM, ToolBase):
             return LLM._invoke(self, **kwargs)
 
         prompt, msg, user_defined_prompt = self._prepare_prompt_variables()
+        output_schema = self._get_output_schema()
+        schema_prompt = ""
+        if output_schema:
+            schema = json.dumps(output_schema, ensure_ascii=False, indent=2)
+            schema_prompt = structured_output_prompt(schema)
 
         downstreams = self._canvas.get_component(self._id)["downstream"] if self._canvas.get_component(self._id) else []
         ex = self.exception_handler()
-        if any([self._canvas.get_component_obj(cid).component_name.lower() == "message" for cid in downstreams]) and not (ex and ex["goto"]):
+        if any([self._canvas.get_component_obj(cid).component_name.lower() == "message" for cid in downstreams]) and not (ex and ex["goto"]) and not output_schema:
             self.set_output("content", partial(self.stream_output_with_tools, prompt, msg, user_defined_prompt))
             return
 
         _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.chat_mdl.max_length * 0.97))
         use_tools = []
         ans = ""
-        for delta_ans, tk in self._react_with_tools_streamly(prompt, msg, use_tools, user_defined_prompt):
+        for delta_ans, tk in self._react_with_tools_streamly(prompt, msg, use_tools, user_defined_prompt, schema_prompt=schema_prompt):
             if self.check_if_canceled("Agent processing"):
                 return
             ans += delta_ans
@@ -184,6 +212,28 @@ class Agent(LLM, ToolBase):
                 self.set_output("content", self.get_exception_default_value())
             else:
                 self.set_output("_ERROR", ans)
+            return
+
+        if output_schema:
+            error = ""
+            for _ in range(self._param.max_retries + 1):
+                try:
+                    def clean_formated_answer(ans: str) -> str:
+                        ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
+                        ans = re.sub(r"^.*```json", "", ans, flags=re.DOTALL)
+                        return re.sub(r"```\n*$", "", ans, flags=re.DOTALL)
+                    obj = json_repair.loads(clean_formated_answer(ans))
+                    self.set_output("structured", obj)
+                    if use_tools:
+                        self.set_output("use_tools", use_tools)
+                    return obj
+                except Exception:
+                    error = "The answer cannot be parsed as JSON"
+                    ans = self._force_format_to_schema(ans, schema_prompt)
+                    if ans.find("**ERROR**") >= 0:
+                        continue
+
+            self.set_output("_ERROR", error)
             return
 
         self.set_output("content", ans)
@@ -222,7 +272,7 @@ class Agent(LLM, ToolBase):
                                                   ]):
             yield delta_ans
 
-    def _react_with_tools_streamly(self, prompt, history: list[dict], use_tools, user_defined_prompt={}):
+    def _react_with_tools_streamly(self, prompt, history: list[dict], use_tools, user_defined_prompt={}, schema_prompt: str = ""):
         token_count = 0
         tool_metas = self.tool_meta
         hist = deepcopy(history)
@@ -260,9 +310,13 @@ class Agent(LLM, ToolBase):
         def complete():
             nonlocal hist
             need2cite = self._param.cite and self._canvas.get_reference()["chunks"] and self._id.find("-->") < 0
+            if schema_prompt:
+                need2cite = False
             cited = False
-            if hist[0]["role"] == "system" and need2cite:
-                if len(hist) < 7:
+            if hist and hist[0]["role"] == "system":
+                if schema_prompt:
+                    hist[0]["content"] += "\n" + schema_prompt
+                if need2cite and len(hist) < 7:
                     hist[0]["content"] += citation_prompt()
                     cited = True
             yield "", token_count
@@ -311,23 +365,75 @@ class Agent(LLM, ToolBase):
                 for f in functions:
                     if not isinstance(f, dict):
                         raise TypeError(f"An object type should be returned, but `{f}`")
+                
+                # 先检查是否有 COMPLETE_TASK
+                has_complete_task = any(func.get("name") == COMPLETE_TASK for func in functions)
+                if has_complete_task:
+                    append_user_content(hist, f"Respond with a formal answer. FORGET(DO NOT mention) about `{COMPLETE_TASK}`. The language for the response MUST be as the same as the first user request.\n")
+                    for txt, tkcnt in complete():
+                        yield txt, tkcnt
+                    return
+                
+                # ============================================================================
+                # 工具调用逻辑 - 支持实时流式输出工具调用结果
+                # 
+                # 【修改说明】此处代码经过重构，用于支持 api/apps/llm_app.py 中 
+                # ChatAgentAdapter.chat_with_tools_stream_structured() 接口的实时工具调用输出。
+                # 
+                # 【原代码】:
+                #   with ThreadPoolExecutor(max_workers=5) as executor:
+                #       thr = []
+                #       for func in functions:
+                #           name = func["name"]
+                #           args = func["arguments"]
+                #           if name == COMPLETE_TASK:
+                #               # ... COMPLETE_TASK 处理 ...
+                #               return
+                #           thr.append(executor.submit(use_tool, name, args))
+                #
+                #       st = timer()
+                #       reflection = reflect(self.chat_mdl, hist, [th.result() for th in thr], user_defined_prompt)
+                #       append_user_content(hist, reflection)
+                #       self.callback("reflection", {}, str(reflection), elapsed_time=timer()-st)
+                #
+                # 【问题】: 原代码使用 [th.result() for th in thr] 等待所有工具完成后才继续，
+                #          在工具执行期间没有 yield，导致外部无法实时获取工具调用结果。
+                #
+                # 【新代码】: 使用 as_completed 迭代器，在每个工具完成时立即 yield 空字符串，
+                #            触发外部检测 use_tools 列表的变化，从而实现实时流式输出。
+                #
+                # 【兼容性】: 此修改不影响 Canvas 的调用逻辑：
+                #   - Canvas._invoke 中: for delta_ans, tk in ...: ans += delta_ans 
+                #     → 空字符串累加不影响结果
+                #   - Canvas.stream_output_with_tools 中: yield delta_ans 
+                #     → 空字符串会被 Canvas 过滤
+                # ============================================================================
+                tool_results = []
                 with ThreadPoolExecutor(max_workers=5) as executor:
-                    thr = []
+                    # 提交所有工具调用（保持并行执行）
+                    futures = {}
                     for func in functions:
                         name = func["name"]
                         args = func["arguments"]
-                        if name == COMPLETE_TASK:
-                            append_user_content(hist, f"Respond with a formal answer. FORGET(DO NOT mention) about `{COMPLETE_TASK}`. The language for the response MUST be as the same as the first user request.\n")
-                            for txt, tkcnt in complete():
-                                yield txt, tkcnt
-                            return
+                        future = executor.submit(use_tool, name, args)
+                        futures[future] = (name, args)
+                    
+                    # 使用 as_completed 在每个工具完成时立即处理并 yield
+                    for future in as_completed(futures):
+                        try:
+                            result = future.result()
+                            tool_results.append(result)
+                            # 每个工具完成后 yield 空字符串，触发外部检测 use_tools 变化
+                            yield "", token_count
+                        except Exception as e:
+                            logging.exception(f"Tool call failed: {e}")
+                            tool_results.append((futures[future][0], f"Error: {e}"))
+                            yield "", token_count
 
-                        thr.append(executor.submit(use_tool, name, args))
-
-                    st = timer()
-                    reflection = reflect(self.chat_mdl, hist, [th.result() for th in thr], user_defined_prompt)
-                    append_user_content(hist, reflection)
-                    self.callback("reflection", {}, str(reflection), elapsed_time=timer()-st)
+                st = timer()
+                reflection = reflect(self.chat_mdl, hist, tool_results, user_defined_prompt)
+                append_user_content(hist, reflection)
+                self.callback("reflection", {}, str(reflection), elapsed_time=timer()-st)
 
             except Exception as e:
                 logging.exception(msg=f"Wrong JSON argument format in LLM ReAct response: {e}")
