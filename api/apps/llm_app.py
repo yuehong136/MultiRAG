@@ -1875,7 +1875,7 @@ def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user
     def get_llm_type(model_name, my_llms):
         for row in my_llms:
             if row[4] == model_name:  # 这里的第5个元素是 model_name
-                return row[-3]  # 倒数第三个元素是 llm_type
+                return row[3]  # 第4个元素是 mdl_type (llm_type)
         return None  # 如果找不到，返回 None
 
     llm_type = get_llm_type(req["llm_name"], my_llms)
@@ -2078,7 +2078,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
         def get_llm_type(model_name, my_llms):
             for row in my_llms:
                 if row[4] == model_name:
-                    return row[-3]
+                    return row[3]  # 第4个元素是 mdl_type (llm_type)
             return None
 
         llm_type = get_llm_type(req["llm_name"], my_llms)
@@ -2114,7 +2114,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
         def get_llm_type(model_name, my_llms):
             for row in my_llms:
                 if row[4] == model_name:
-                    return row[-3]
+                    return row[3]  # 第4个元素是 mdl_type (llm_type)
             return None
 
         llm_type = get_llm_type(req["llm_name"], my_llms)
@@ -2748,7 +2748,7 @@ async def enhanced_chat_service_sse(
         llm_type = None
         for row in my_llms:
             if row[4] == request.llm_name:
-                llm_type = row[-3]
+                llm_type = row[3]  # 第4个元素是 mdl_type (llm_type)
                 break
 
         if not llm_type:
