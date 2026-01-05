@@ -6,10 +6,13 @@
 @date：2024/7/15 15:00
 @desc:
 """
+import asyncio
+import base64
 import logging
 import json
 import re
-import os
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -478,7 +481,7 @@ class FileService(CommonService):
         if img_base64 and file_type == FileType.VISUAL.value:
             return GptV4.image2base64(blob)
         cks = FACTORY.get(FileService.get_parser(file_type, filename, ""), naive).chunk(filename, blob, **kwargs)
-        return "\n".join([ck["content_with_weight"] for ck in cks])
+        return f"\n -----------------\nFile: {filename}\nContent as following: \n" + "\n".join([ck["content_with_weight"] for ck in cks])
 
     @staticmethod
     def get_parser(doc_type, filename, default):
@@ -548,3 +551,107 @@ class FileService(CommonService):
                 errors += str(e)
 
         return errors
+
+    @staticmethod
+    async def upload_info(db: Session, user_id, file, url: str | None = None):
+        """
+        上传文件或从URL下载内容
+        
+        Args:
+            db: 数据库会话（用于健康检查）
+            user_id: 用户ID
+            file: 文件对象（可以是 FastAPI UploadFile 或普通文件对象，也可以是 None）
+            url: URL地址（可选），用于爬取网页内容
+        """
+        def structured(filename, filetype, blob, content_type):
+            nonlocal user_id
+            if filetype == FileType.PDF.value:
+                blob = read_potential_broken_pdf(blob)
+
+            location = get_uuid()
+            FileService.put_blob(user_id, location, blob)
+
+            return {
+                "id": location,
+                "name": filename,
+                "size": sys.getsizeof(blob),
+                "extension": filename.split(".")[-1].lower(),
+                "mime_type": content_type,
+                "created_by": user_id,
+                "created_at": time.time(),
+                "preview_url": None
+            }
+
+        if url:
+            from crawl4ai import (
+                AsyncWebCrawler,
+                BrowserConfig,
+                CrawlerRunConfig,
+                DefaultMarkdownGenerator,
+                PruningContentFilter,
+                CrawlResult
+            )
+            filename = re.sub(r"\?.*", "", url.split("/")[-1])
+
+            browser_config = BrowserConfig(
+                headless=True,
+                verbose=False,
+            )
+            async with AsyncWebCrawler(config=browser_config) as crawler:
+                crawler_config = CrawlerRunConfig(
+                    markdown_generator=DefaultMarkdownGenerator(
+                        content_filter=PruningContentFilter()
+                    ),
+                    pdf=True,
+                    screenshot=False
+                )
+                page: CrawlResult = await crawler.arun(
+                    url=url,
+                    config=crawler_config
+                )
+            
+            if page.pdf:
+                if filename.split(".")[-1].lower() != "pdf":
+                    filename += ".pdf"
+                return structured(filename, "pdf", page.pdf, page.response_headers.get("content-type", "application/pdf"))
+
+            return structured(filename, "html", str(page.markdown).encode("utf-8"), page.response_headers.get("content-type", "text/html"))
+
+        # 处理文件上传
+        if hasattr(file, 'read'):
+            # 支持异步和同步读取
+            if asyncio.iscoroutinefunction(file.read):
+                file_content = await file.read()
+            else:
+                file_content = file.read()
+        else:
+            raise ValueError("Invalid file object")
+            
+        DocumentService.check_doc_health(db, user_id, file.filename)
+        return structured(file.filename, filename_type(file.filename), file_content, file.content_type)
+
+    @staticmethod
+    def get_files(files: list[dict] | None) -> list[str]:
+        if not files:
+            return []
+
+        def image_to_base64(file):
+            return "data:{};base64,{}".format(
+                file["mime_type"],
+                base64.b64encode(FileService.get_blob(file["created_by"], file["id"])).decode("utf-8")
+            )
+
+        exe = ThreadPoolExecutor(max_workers=5)
+        threads = []
+        for file in files:
+            if file["mime_type"].find("image") >= 0:
+                threads.append(exe.submit(image_to_base64, file))
+                continue
+            threads.append(exe.submit(
+                FileService.parse,
+                file["name"],
+                FileService.get_blob(file["created_by"], file["id"]),
+                True,
+                file["created_by"]
+            ))
+        return [th.result() for th in threads]

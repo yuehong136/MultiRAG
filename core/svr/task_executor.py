@@ -1680,13 +1680,14 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
             logging.info(f"Task {task_id}: parsed with flow, format={parsed_result.get('output_format')}")
 
-            # 2. 切分（支持重叠，保留位置）
+            # 2. 切分（支持重叠，保留位置，child-parent chunking）
             callback(prog=0.20, msg="智能切分中...")
 
             splitter_config = config.get("splitter_config") or {}
             chunk_token_size = splitter_config.get("chunk_token_size", 512)
             delimiters = splitter_config.get("delimiters")
             overlapped_percent = splitter_config.get("overlapped_percent", 0.1)  # 默认 10% 重叠
+            children_delimiters = splitter_config.get("children_delimiters")  # child-parent chunking
 
             def _splitter_callback(prog, msg):
                 callback(prog=0.20 + prog * 0.05, msg=msg)
@@ -1696,6 +1697,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 chunk_token_size=chunk_token_size,
                 delimiters=delimiters,
                 overlapped_percent=overlapped_percent,
+                children_delimiters=children_delimiters,
                 callback=_splitter_callback
             )
 
@@ -1714,6 +1716,10 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 # 保留图片（如果有）
                 if "image" in c and c["image"]:
                     chunk_dict["image"] = c["image"]
+
+                # 保留 mother chunk（child-parent chunking）
+                if "mom" in c and c["mom"]:
+                    chunk_dict["mom"] = c["mom"]
 
                 chunks.append(chunk_dict)
 
@@ -2166,6 +2172,59 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     Returns:
         成功返回True，失败返回False
     """
+    # 处理 mother chunks (用于 child-parent chunking)
+    mothers = []
+    mother_ids = set()
+    for ck in chunks:
+        mom = ck.get("mom") or ck.get("mom_with_weight") or ""
+        if not mom:
+            continue
+        mom_id = xxhash.xxh64(mom.encode("utf-8")).hexdigest()
+        if mom_id in mother_ids:
+            continue
+        mother_ids.add(mom_id)
+        ck["mom_id"] = mom_id
+        mom_ck = copy.deepcopy(ck)
+        mom_ck["id"] = mom_id
+        mom_ck["content_with_weight"] = mom
+        mom_ck["available_int"] = 0
+        flds = list(mom_ck.keys())
+        for fld in flds:
+            if fld not in ["id", "content_with_weight", "doc_id", "kb_id", "available_int"]:
+                del mom_ck[fld]
+        mothers.append(mom_ck)
+
+    # 先插入 mother chunks
+    for b in range(0, len(mothers), settings.DOC_BULK_SIZE):
+        mother_batch = mothers[b:b + settings.DOC_BULK_SIZE]
+        converted_batch = [convert_data_types(m, schema) for m in mother_batch]
+        try:
+            db_type = settings.docStoreConn.dbType()
+            if db_type == "milvus":
+                await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
+                    rows=converted_batch,
+                    indexName=collection_name
+                ))
+            else:
+                es_batch = []
+                for doc in converted_batch:
+                    es_doc = doc.copy()
+                    if "id" not in es_doc and "pk" in es_doc:
+                        es_doc["id"] = es_doc["pk"]
+                    es_batch.append(es_doc)
+                await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
+                    documents=es_batch,
+                    indexName=collection_name,
+                    knowledgebaseId=task_dataset_id
+                ))
+        except Exception as e:
+            logging.warning(f"Insert mother chunks error: {e}")
+        
+        task_canceled = has_canceled(task_id)
+        if task_canceled:
+            progress_callback(-1, msg="Task has been canceled.")
+            return False
+
     # 用于记录成功和失败的插入信息
     successful_inserts = []
     failed_inserts = []

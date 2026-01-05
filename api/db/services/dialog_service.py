@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import Dialog
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
+from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
@@ -462,8 +463,11 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
     attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
+    attachments_ = ""
     if "doc_ids" in messages[-1]:
         attachments = messages[-1]["doc_ids"]
+    if "files" in messages[-1]:
+        attachments_ = "\n\n".join(FileService.get_files(messages[-1]["files"]))
 
     prompt_config = dialog.prompt_config
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
@@ -542,7 +546,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                 )
             )
 
-            for think in reasoner.thinking(kbinfos, " ".join(questions)):
+            for think in reasoner.thinking(kbinfos, attachments_ + " ".join(questions)):
                 if isinstance(think, str):
                     thought = think
                     knowledges = [t for t in think.split("\n") if t]
@@ -595,7 +599,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
     gen_conf = dialog.llm_setting
 
-    msg = [{"role": "system", "content": prompt_config["system"].format(**kwargs)}]
+    msg = [{"role": "system", "content": prompt_config["system"].format(**kwargs) + attachments_}]
     prompt4citation = ""
     if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
         prompt4citation = citation_prompt()

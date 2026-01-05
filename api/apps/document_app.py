@@ -96,6 +96,10 @@ class SplitterConfig(BaseModel):
         le=0.5,
         description="重叠比例（0.0-0.5）"
     )
+    children_delimiters: list[str] | None = Field(
+        default=None,
+        description="子块分隔符列表（用于 child-parent chunking，支持 `pattern` 格式）"
+    )
 
 
 class RaptorConfig(BaseModel):
@@ -5468,3 +5472,36 @@ async def get_document_summary(
     except Exception as e:
         logging.exception(f"Get document summary failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload_info", summary="上传文件获取信息", response_description="成功上传文件")
+async def upload_info(
+        url: str | None = Query(None, description="URL地址，用于下载网页内容"),
+        file: UploadFile | None = File(None),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    上传文件或从URL下载内容，获取文件信息
+    
+    概要：支持两种方式：1) 直接上传文件，2) 通过URL抓取网页内容。
+    
+    参数：
+    - **url**: URL地址（可选），用于爬取网页内容
+    - **file**: 上传的文件（可选）
+    
+    返回：
+    - dict: 文件信息
+        - id: 文件唯一标识
+        - name: 文件名
+        - size: 文件大小
+        - extension: 文件扩展名
+        - mime_type: MIME类型
+        - created_by: 创建者ID
+        - created_at: 创建时间
+        - preview_url: 预览URL
+    """
+    try:
+        return get_json_result(data=await FileService.upload_info(db, user.id, file, url))
+    except Exception as e:
+        return server_error_response(e)

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-import sys
 import time
 from functools import partial
 
@@ -23,7 +21,7 @@ from peewee import MySQLDatabase, PostgresqlDatabase
 from agent.component.llm import LLM
 from common import settings
 from api.apps import manager
-from api.db import CanvasCategory, FileType
+from api.db import CanvasCategory
 from api.db.db_models import get_db, APIToken, Task
 from api.db.services.canvas_service import (
     CanvasTemplateService,
@@ -44,7 +42,6 @@ from api.utils.api_utils import (
     get_data_error_result
 )
 from agent.canvas import Canvas
-from api.utils.file_utils import filename_type, read_potential_broken_pdf
 from core.flow.pipeline import Pipeline
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
@@ -780,98 +777,10 @@ async def upload(
         return get_data_error_result(retmsg="canvas not found.")
     
     user_id = canvas["user_id"]
-    
-    def structured(filename, filetype, blob, content_type):
-        """构造文件信息结构"""
-        if filetype == FileType.PDF.value:
-            blob = read_potential_broken_pdf(blob)
-        
-        location = get_uuid()
-        FileService.put_blob(db, user_id, location, blob)
-        
-        return {
-            "id": location,
-            "name": filename,
-            "size": sys.getsizeof(blob),
-            "extension": filename.split(".")[-1].lower(),
-            "mime_type": content_type,
-            "created_by": user_id,
-            "created_at": time.time(),
-            "preview_url": None
-        }
-    
-    # URL模式
-    if url:
-        from crawl4ai import (
-            AsyncWebCrawler,
-            BrowserConfig,
-            CrawlerRunConfig,
-            DefaultMarkdownGenerator,
-            PruningContentFilter,
-            CrawlResult
-        )
-        
-        try:
-            filename = re.sub(r"\?.*", "", url.split("/")[-1])
-            
-            async def adownload():
-                browser_config = BrowserConfig(
-                    headless=True,
-                    verbose=False,
-                )
-                async with AsyncWebCrawler(config=browser_config) as crawler:
-                    crawler_config = CrawlerRunConfig(
-                        markdown_generator=DefaultMarkdownGenerator(
-                            content_filter=PruningContentFilter()
-                        ),
-                        pdf=True,
-                        screenshot=False
-                    )
-                    result: CrawlResult = await crawler.arun(
-                        url=url,
-                        config=crawler_config
-                    )
-                    return result
-            
-            page = await adownload()
-            
-            if page.pdf:
-                if filename.split(".")[-1].lower() != "pdf":
-                    filename += ".pdf"
-                return get_json_result(
-                    data=structured(
-                        filename, "pdf", page.pdf,
-                        page.response_headers.get("content-type", "application/pdf")
-                    )
-                )
-            
-            return get_json_result(
-                data=structured(
-                    filename, "html",
-                    str(page.markdown).encode("utf-8"),
-                    page.response_headers.get("content-type", "text/html")
-                )
-            )
-        except Exception as e:
-            return server_error_response(e)
-    
-    # 文件上传模式
-    if file:
-        try:
-            file_content = await file.read()
-            DocumentService.check_doc_health(db, user_id, file.filename)
-            return get_json_result(
-                data=structured(
-                    file.filename,
-                    filename_type(file.filename),
-                    file_content,
-                    file.content_type
-                )
-            )
-        except Exception as e:
-            return server_error_response(e)
-    
-    return get_data_error_result(retmsg="No file or URL provided")
+    try:
+        return get_json_result(data=await FileService.upload_info(db, user_id, file, url))
+    except Exception as e:
+        return server_error_response(e)
 
 
 @router.get('/input_form', summary="获取组件输入表单", response_description="成功获取输入表单")

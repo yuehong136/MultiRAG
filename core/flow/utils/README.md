@@ -67,11 +67,24 @@ core/flow/utils/
    5. core/app/paper.py                 # 传统解析器同步
    6. core/app/book.py                  # 传统解析器同步
    7. core/app/picture.py               # 图片解析器同步
-   8. api/db/db_models.py               # 数据库默认值
-   9. api/db/services/document_service.py # 服务层默认值
-   10. api/utils/api_utils.py           # API 工具函数
+   8. api/db/db_models.py               # 数据库默认值（可选）
+   9. api/db/services/document_service.py # 服务层默认值（可选）
+   10. api/utils/api_utils.py           # API 工具函数（可选）
    11. api/apps/document_app.py         # API 请求模型
    12. core/svr/task_executor.py        # 任务执行器
+   ```
+   
+   **示例：添加 Splitter 参数（如 children_delimiters）**
+   
+   以 `children_delimiters`（child-parent chunking）为例：
+   
+   ```
+   1. core/flow/splitter/splitter.py    # 原组件添加参数
+   2. core/flow/utils/splitter_utils.py # utils 同步参数
+   3. core/nlp/__init__.py              # tokenize_chunks 添加参数
+   4. core/app/naive.py                 # 传统解析器同步
+   5. api/apps/document_app.py          # SplitterConfig 模型
+   6. core/svr/task_executor.py         # run_analyze_v2_task 函数
    ```
 
 ### 注释规范
@@ -175,6 +188,39 @@ parsed = await parse_file(
 )
 ```
 
+### Child-Parent Chunking（子父块切分）
+
+```python
+from core.flow.utils import parse_file, split_chunks
+
+# 解析文档
+parsed = await parse_file(
+    filename="document.pdf",
+    binary=file_content,
+    tenant_id=tenant_id
+)
+
+# 使用 children_delimiters 实现 child-parent chunking
+# 父块用于提供完整上下文，子块用于精确检索
+chunks = await split_chunks(
+    parsed,
+    chunk_token_size=512,
+    overlapped_percent=0.1,
+    children_delimiters=["\n\n", "。", "！", "？"]  # 子块分隔符
+)
+
+# 返回结果中每个子块包含 "mom" 字段指向其父块
+# [
+#     {"text": "子块1内容", "mom": "父块完整内容..."},
+#     {"text": "子块2内容", "mom": "父块完整内容..."},
+#     ...
+# ]
+```
+
+**子父块切分的优势**：
+- 子块：较小的文本片段，用于精确语义检索
+- 父块：保留完整上下文，提供给 LLM 生成更准确的回答
+
 ### 高级组合
 
 ```python
@@ -221,16 +267,6 @@ python -m pytest tests/test_flow_utils.py
 python -m pytest tests/test_flow_utils.py -k "parser"
 python -m pytest tests/test_flow_utils.py -k "splitter"
 ```
-
-## 📊 代码统计
-
-| 文件 | 行数 | 类 | 函数 |
-|------|------|---|------|
-| parser_utils.py | 1097 | 1 | 10 |
-| splitter_utils.py | 251 | 1 | 3 |
-| hierarchical_merger_utils.py | 208 | 1 | 2 |
-| extractor_utils.py | 122 | 1 | 2 |
-| **总计** | **1678** | **4** | **17** |
 
 ## 🎯 设计原则
 
