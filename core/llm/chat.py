@@ -65,7 +65,7 @@ LENGTH_NOTIFICATION_EN = "...\nThe answer is truncated by your chosen LLM due to
 
 class Base(ABC):
     def __init__(self, key, model_name, base_url, **kwargs):
-        timeout = int(os.environ.get("LM_TIMEOUT_SECONDS", 600))
+        timeout = int(os.environ.get("LLM_TIMEOUT_SECONDS", 600))
         self.client = OpenAI(api_key=key, base_url=base_url, timeout=timeout)
         self.model_name = model_name
         # Configure retry parameters
@@ -1132,7 +1132,7 @@ class GoogleChat(Base):
 
         # Build GenerateContentConfig
         try:
-            from google.genai.types import GenerateContentConfig, ThinkingConfig, Content, Part
+            from google.genai.types import Content, GenerateContentConfig, Part, ThinkingConfig
         except ImportError as e:
             logging.error(
                 f"[GoogleChat] Failed to import google-genai: {e}. Please install: pip install google-genai>=1.41.0")
@@ -1162,14 +1162,14 @@ class GoogleChat(Base):
             role = "model" if item["role"] == "assistant" else item["role"]
             content = Content(
                 role=role,
-                parts=[Part(text=item["content"])]
+                parts=[Part(text=item["content"])],
             )
             contents.append(content)
 
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=contents,
-            config=config
+            config=config,
         )
 
         ans = response.text
@@ -1219,7 +1219,7 @@ class GoogleChat(Base):
 
             # Build GenerateContentConfig
             try:
-                from google.genai.types import GenerateContentConfig, ThinkingConfig, Content, Part
+                from google.genai.types import Content, GenerateContentConfig, Part, ThinkingConfig
             except ImportError as e:
                 logging.error(
                     f"[GoogleChat] Failed to import google-genai: {e}. Please install: pip install google-genai>=1.41.0")
@@ -1247,7 +1247,7 @@ class GoogleChat(Base):
                 role = "model" if item["role"] == "assistant" else item["role"]
                 content = Content(
                     role=role,
-                    parts=[Part(text=item["content"])]
+                    parts=[Part(text=item["content"])],
                 )
                 contents.append(content)
 
@@ -1255,7 +1255,7 @@ class GoogleChat(Base):
                 for chunk in self.client.models.generate_content_stream(
                         model=self.model_name,
                         contents=contents,
-                        config=config
+                        config=config,
                 ):
                     text = chunk.text
                     ans = text
@@ -1337,7 +1337,7 @@ class LiteLLMBase(ABC):
     ]
 
     def __init__(self, key, model_name, base_url=None, **kwargs):
-        self.timeout = int(os.environ.get("LM_TIMEOUT_SECONDS", 600))
+        self.timeout = int(os.environ.get("LLM_TIMEOUT_SECONDS", 600))
         self.provider = kwargs.get("provider", "")
         self.prefix = LITELLM_PROVIDER_PREFIX.get(self.provider, "")
         self.model_name = f"{self.prefix}{model_name}"
@@ -1556,6 +1556,7 @@ class LiteLLMBase(ABC):
 
         if self.provider == SupportedLiteLLMProvider.OpenRouter:
             if self.provider_order:
+
                 def _to_order_list(x):
                     if x is None:
                         return []
@@ -1564,6 +1565,7 @@ class LiteLLMBase(ABC):
                     if isinstance(x, (list, tuple)):
                         return [str(s).strip() for s in x if str(s).strip()]
                     return []
+
                 extra_body = {}
                 provider_cfg = {}
                 provider_order = _to_order_list(self.provider_order)
