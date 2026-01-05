@@ -786,7 +786,11 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
         if kb_ids:
             kb_filter = "(" + " OR ".join([f"kb_id = '{kb_id}'" for kb_id in kb_ids]) + ")"
             if "where" not in sql.lower():
-                sql += f" WHERE {kb_filter}"
+                o = sql.lower().split("order by")
+                if len(o) > 1:
+                    sql = o[0] + f" WHERE {kb_filter}  order by " + o[1]
+                else:
+                    sql += f" WHERE {kb_filter}"
             else:
                 sql += f" AND {kb_filter}"
 
@@ -794,10 +798,9 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
         tried_times += 1
         return settings.retriever.sql_retrieval(sql, format="json"), sql
 
-    tbl, sql = get_table()
-    if tbl is None:
-        return None
-    if tbl.get("error") and tried_times <= 2:
+    try:
+        tbl, sql = get_table()
+    except Exception as e:
         user_prompt = """
         Table name: {};
         Table of database fields are as follows:
@@ -811,22 +814,14 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
         The SQL error you provided last time is as follows:
         {}
 
-        Error issued by database as follows:
-        {}
-
         Please correct the error and write SQL again, only SQL, without any other explanations or text.
-        """.format(
-            index_name(tenant_id, kb_names),
-            "\n".join([f"{k}: {v}" for k, v in field_map.items()]),
-            question, sql, tbl["error"]
-        )
-        tbl, sql = get_table()
-        logging.debug("TRY it again: {}".format(sql))
+        """.format(index_name(tenant_id), "\n".join([f"{k}: {v}" for k, v in field_map.items()]), question, e)
+        try:
+            tbl, sql = get_table()
+        except Exception:
+            return
 
-    logging.debug("GET table: {}".format(tbl))
-    # 检查结果是否有错误或格式不正确
-    if tbl.get("error"):
-        logging.error(f"SQL查询返回错误: {tbl.get('error')}")
+    if len(tbl["rows"]) == 0:
         return None
     
     # 检查是否有rows字段且不为空
