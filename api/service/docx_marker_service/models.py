@@ -67,11 +67,16 @@ class ParsedDocument(BaseModel):
     elements: list[DocumentElement]
 
 
+PlaceholderType = Literal["cell", "summary", "table", "dynamic_table"]
+
+
 class Placeholder(BaseModel):
     """待填项"""
     path: str
     label: str
     field_key: str  # 自动生成的唯一标识，如 $1, $2, $3...
+    type: PlaceholderType = "cell"
+    prompt_for_ai: str = ""
     custom_fields: dict[str, str] = {}  # 用户自定义的 key-value 字段
 
 
@@ -80,6 +85,8 @@ class PlaceholderRequest(BaseModel):
     path: str
     label: str
     field_key: str | None = None  # 可选，如果不提供则自动生成
+    type: PlaceholderType = "cell"
+    prompt_for_ai: str = ""
     custom_fields: dict[str, str] = {}  # 用户自定义的 key-value 字段
 
 
