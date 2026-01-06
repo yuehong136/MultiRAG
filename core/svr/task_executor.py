@@ -38,7 +38,7 @@ from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
 import signal
 import trio
-# import exceptiongroup
+import exceptiongroup
 import faulthandler
 from common.constants import LLMType, ParserType, PipelineTaskType, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
 from api.db.services.document_service import DocumentService
@@ -55,6 +55,7 @@ from common.token_utils import num_tokens_from_string, truncate
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 from common.exceptions import TaskCanceledException
 from common import settings
+from common.misc_utils import install_mineru
 from graphrag.utils import chat_limiter
 
 BATCH_SIZE = 64
@@ -2785,8 +2786,7 @@ async def handle_task():
                 CURRENT_TASKS.pop(task["id"], None)
                 try:
                     err_msg = str(e)
-                    # while isinstance(e, exceptiongroup.ExceptionGroup):
-                    while isinstance(e, ExceptionGroup):
+                    while isinstance(e, exceptiongroup.ExceptionGroup):
                         e = e.exceptions[0]
                         err_msg += ' -- ' + str(e)
                     set_progress(db, task["id"], prog=-1, msg=f"[Exception]: {err_msg}")
@@ -2905,6 +2905,7 @@ async def main():
     show_configs()
     settings.init_settings()
     settings.check_and_install_torch()
+    install_mineru()
     logging.info(f'settings.EMBEDDING_CFG: {settings.EMBEDDING_CFG}')
     settings.print_rag_settings()
     if sys.platform != "win32":
