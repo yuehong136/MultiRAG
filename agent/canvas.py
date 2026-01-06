@@ -16,6 +16,7 @@
 import asyncio
 import base64
 import inspect
+import binascii
 import json
 import logging
 import re
@@ -23,12 +24,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import partial
-from typing import Any, Union, Tuple
+from typing import Any
 
 from agent.component import component_class
 from agent.component.base import ComponentBase
+from api.db.db_models import db_connection
 from api.db.services.file_service import FileService
+from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import has_canceled
+from common.constants import LLMType
 from common.misc_utils import get_uuid, hash_str2int
 from common.exceptions import TaskCanceledException
 from core.prompts.generator import chunks_format
@@ -82,6 +86,7 @@ class Graph:
         self.dsl = json.loads(dsl)
         self._tenant_id = tenant_id
         self.task_id = task_id if task_id else get_uuid()
+        self._thread_pool = ThreadPoolExecutor(max_workers=5)
         self.load()
 
     def load(self):
@@ -143,7 +148,7 @@ class Graph:
     async def run(self, **kwargs):
         raise NotImplementedError()
 
-    def get_component(self, cpn_id) -> Union[None, dict[str, Any]]:
+    def get_component(self, cpn_id) -> dict[str, Any] | None:
         return self.components.get(cpn_id)
 
     def get_component_obj(self, cpn_id) -> ComponentBase:
@@ -285,8 +290,6 @@ class Canvas(Graph):
             "sys.files": []
         }
         self.variables = {}
-        self._thread_pool = ThreadPoolExecutor(max_workers=5)
-        self._loop = None
         super().__init__(dsl, tenant_id, task_id)
 
     def load(self):
@@ -357,8 +360,6 @@ class Canvas(Graph):
                             self.globals[k] = ""
                 else:
                     self.globals[k] = ""
-        print(self.globals)
-
 
     async def run(self, **kwargs):
         st = time.perf_counter()
@@ -457,6 +458,7 @@ class Canvas(Graph):
         self.error = ""
         idx = len(self.path) - 1
         partials = []
+        tts_mdl = None
         while idx < len(self.path):
             to = len(self.path)
             for i in range(idx, to):
@@ -474,31 +476,52 @@ class Canvas(Graph):
                 cpn = self.get_component(self.path[i])
                 cpn_obj = self.get_component_obj(self.path[i])
                 if cpn_obj.component_name.lower() == "message":
+                    if cpn_obj.get_param("auto_play"):
+                        with db_connection() as db:
+                            tts_mdl = LLMBundle(db, self._tenant_id, LLMType.TTS)
                     if isinstance(cpn_obj.output("content"), partial):
                         _m = ""
+                        buff_m = ""
                         stream = cpn_obj.output("content")()
+                        async def _process_stream(m):
+                            nonlocal buff_m, _m, tts_mdl
+                            if not m:
+                                return
+                            if m == "<think>":
+                                return decorate("message", {"content": "", "start_to_think": True})
+
+                            elif m == "</think>":
+                                return decorate("message", {"content": "", "end_to_think": True})
+
+                            buff_m += m
+                            _m += m
+
+                            if len(buff_m) > 16:
+                                ev = decorate(
+                                    "message",
+                                    {
+                                        "content": m,
+                                        "audio_binary": self.tts(tts_mdl, buff_m)
+                                    }
+                                )
+                                buff_m = ""
+                                return ev
+
+                            return decorate("message", {"content": m})
+
                         if inspect.isasyncgen(stream):
                             async for m in stream:
-                                if not m:
-                                    continue
-                                if m == "<think>":
-                                    yield decorate("message", {"content": "", "start_to_think": True})
-                                elif m == "</think>":
-                                    yield decorate("message", {"content": "", "end_to_think": True})
-                                else:
-                                    yield decorate("message", {"content": m})
-                                    _m += m
+                                ev= await _process_stream(m)
+                                if ev:
+                                    yield ev
                         else:
                             for m in stream:
-                                if not m:
-                                    continue
-                                if m == "<think>":
-                                    yield decorate("message", {"content": "", "start_to_think": True})
-                                elif m == "</think>":
-                                    yield decorate("message", {"content": "", "end_to_think": True})
-                                else:
-                                    yield decorate("message", {"content": m})
-                                    _m += m
+                                ev= await _process_stream(m)
+                                if ev:
+                                    yield ev
+                        if buff_m:
+                            yield decorate("message", {"content": "", "audio_binary": self.tts(tts_mdl, buff_m)})
+                            buff_m = ""
                         cpn_obj.set_output("content", _m)
                         cite = re.search(r"\[ID:[ 0-9]+\]", _m)
                     else:
@@ -619,6 +642,50 @@ class Canvas(Graph):
             return False
         return True
 
+
+    def tts(self,tts_mdl, text):
+        def clean_tts_text(text: str) -> str:
+            if not text:
+                return ""
+
+            text = text.encode("utf-8", "ignore").decode("utf-8", "ignore")
+
+            text = re.sub(r"[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]", "", text)
+
+            emoji_pattern = re.compile(
+                "[\U0001F600-\U0001F64F"
+                "\U0001F300-\U0001F5FF"
+                "\U0001F680-\U0001F6FF"
+                "\U0001F1E0-\U0001F1FF"
+                "\U00002700-\U000027BF"
+                "\U0001F900-\U0001F9FF"
+                "\U0001FA70-\U0001FAFF"
+                "\U0001FAD0-\U0001FAFF]+",
+                flags=re.UNICODE
+            )
+            text = emoji_pattern.sub("", text)
+
+            text = re.sub(r"\s+", " ", text).strip()
+
+            MAX_LEN = 500
+            if len(text) > MAX_LEN:
+                text = text[:MAX_LEN]
+
+            return text
+        if not tts_mdl or not text:
+            return None
+        text = clean_tts_text(text)
+        if not text:
+            return None
+        bin = b""
+        try:
+            for chunk in tts_mdl.tts(text):
+                bin += chunk
+        except Exception as e:
+            logging.error(f"TTS failed: {e}, text={text!r}")
+            return None
+        return binascii.hexlify(bin).decode("utf-8")
+
     def get_history(self, window_size):
         convs = []
         if window_size <= 0:
@@ -648,34 +715,21 @@ class Canvas(Graph):
     def get_component_input_elements(self, cpnnm):
         return self.components[cpnnm]["obj"].get_input_elements()
 
-    async def get_files_async(self, files: Union[None, list[dict]]) -> list[str]:
-        """Asynchronously process files, converting images to base64 and parsing documents."""
+    async def get_files_async(self, files: list[dict] | None) -> list[str]:
         if not files:
             return []
-
         def image_to_base64(file):
-            return "data:{};base64,{}".format(
-                file["mime_type"],
-                base64.b64encode(FileService.get_blob(file["created_by"], file["id"])).decode("utf-8")
-            )
-
+            return "data:{};base64,{}".format(file["mime_type"], base64.b64encode(FileService.get_blob(file["created_by"], file["id"])).decode("utf-8"))
         loop = asyncio.get_running_loop()
         tasks = []
         for file in files:
             if file["mime_type"].find("image") >= 0:
                 tasks.append(loop.run_in_executor(self._thread_pool, image_to_base64, file))
                 continue
-            tasks.append(loop.run_in_executor(
-                self._thread_pool,
-                FileService.parse,
-                file["name"],
-                FileService.get_blob(file["created_by"], file["id"]),
-                True,
-                file["created_by"]
-            ))
+            tasks.append(loop.run_in_executor(self._thread_pool, FileService.parse, file["name"], FileService.get_blob(file["created_by"], file["id"]), True, file["created_by"]))
         return await asyncio.gather(*tasks)
 
-    def get_files(self, files: Union[None, list[dict]]) -> list[str]:
+    def get_files(self, files: list[dict] | None) -> list[str]:
         """
         Synchronous wrapper for get_files_async, used by sync component invoke paths.
         """
@@ -732,7 +786,7 @@ class Canvas(Graph):
     def add_memory(self, user: str, assist: str, summ: str):
         self.memory.append((user, assist, summ))
 
-    def get_memory(self) -> list[Tuple]:
+    def get_memory(self) -> list[tuple]:
         return self.memory
 
     def get_component_thoughts(self, cpn_id) -> str:
