@@ -99,7 +99,6 @@ RUN mkdir -p /etc/uv && \
 
 # 使用mount绑定挂载模型文件并根据条件复制到目标位置
 RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co,target=/huggingface.co \
-    cp /huggingface.co/InfiniFlow/huqie/huqie.txt.trie /multirag/core/res/ && \
     tar --exclude='.*' -cf - \
         /huggingface.co/InfiniFlow/text_concat_xgb_v1.0 \
         /huggingface.co/InfiniFlow/deepdoc \
@@ -109,7 +108,6 @@ RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co
         /huggingface.co/BAAI/bge-large-zh-v1.5 \
         /huggingface.co/BAAI/bge-reranker-v2-m3 \
         /huggingface.co/maidalun1020/bce-embedding-base_v1 \
-        /huggingface.co/maidalun1020/bce-reranker-base_v1 \
         | tar -xf - --strip-components=2 -C /root/.ragdatav
 
 # 创建并添加NLTK数据
