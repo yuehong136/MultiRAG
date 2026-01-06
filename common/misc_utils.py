@@ -160,7 +160,7 @@ def install_mineru() -> None:
     """
     # Check if MinerU is enabled
     use_mineru = os.getenv("USE_MINERU", "false").strip().lower()
-    if use_mineru == "false":
+    if use_mineru != "true":
         logging.info("USE_MINERU=%r. Skipping MinerU installation.", use_mineru)
         return
 
