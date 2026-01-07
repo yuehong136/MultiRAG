@@ -206,41 +206,50 @@ def parse_docx(file_path: str, filename: str) -> ParsedDocument:
     body = doc.element.body
     element_index = 0
 
-    # 记录已处理的表格，避免重复
-    processed_tables = set()
-
-    for child in body:
-        tag = child.tag.split('}')[-1]  # 去掉命名空间前缀
-
+    def process_element(child, index):
+        tag = child.tag.split('}')[-1]
+        
         if tag == 'p':  # 段落
-            path = f"body[{element_index}]"
-            # 从 XML 元素找到对应的 Paragraph 对象
+            path = f"body[{index}]"
             para = None
             for p in doc.paragraphs:
-                if p._element is child:
+                if p._element == child:
                     para = p
                     break
-
+            
             if para:
                 elements.append(DocumentElement(
                     type="paragraph",
                     path=path,
                     paragraph=parse_paragraph(para, path),
                 ))
-                element_index += 1
-
+                return True
+        
         elif tag == 'tbl':  # 表格
-            path = f"body[{element_index}]"
-            # 从 XML 元素找到对应的 Table 对象
+            path = f"body[{index}]"
             for tbl in doc.tables:
-                if tbl._element is child and id(child) not in processed_tables:
-                    processed_tables.add(id(child))
+                if tbl._element == child:
                     elements.append(DocumentElement(
                         type="table",
                         path=path,
                         table=parse_table(tbl, path),
                     ))
-                    element_index += 1
-                    break
+                    return True
+        
+        elif tag == 'sdt':  # 内容控制
+            # 递归处理 sdtContent
+            sdt_content = child.find(qn('w:sdtContent'))
+            if sdt_content is not None:
+                nonlocal element_index
+                for sdt_child in sdt_content:
+                    if process_element(sdt_child, element_index):
+                        element_index += 1
+                return False
+        
+        return False
+
+    for child in body:
+        if process_element(child, element_index):
+            element_index += 1
 
     return ParsedDocument(filename=filename, elements=elements)
