@@ -3,6 +3,7 @@ import os
 from collections import defaultdict
 
 from common.constants import LLMType
+from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common import settings
@@ -18,10 +19,11 @@ from tqdm import tqdm
 
 class Benchmark:
     def __init__(self, kb_id):
-        e, kb = KnowledgebaseService.get_by_id(kb_id)
-        self.similarity_threshold = kb.similarity_threshold
-        self.vector_similarity_weight = kb.vector_similarity_weight
-        self.embd_mdl = LLMBundle(kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id, lang=kb.language)
+        with db_connection() as db:
+            e, kb = KnowledgebaseService.get_by_id(db, kb_id)
+            self.similarity_threshold = kb.similarity_threshold
+            self.vector_similarity_weight = kb.vector_similarity_weight
+            self.embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id, lang=kb.language)
 
     def _get_benchmarks(self, query, dataset_idxnm, count=16):
         req = {"question": query, "size": count, "vector": True, "similarity": self.similarity_threshold}

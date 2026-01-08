@@ -89,9 +89,12 @@ def _render_web_oauth_popup(flow_id: str, success: bool, message: str, source: s
     status = "success" if success else "error"
     auto_close = "window.close();" if success else ""
     escaped_message = escape(message)
+    #   Drive: multirag-google-drive-oauth
+    #   Gmail: multirag-gmail-oauth
+    payload_type = f"multirag-{source}-oauth"
     payload_json = json.dumps(
         {
-            "type": f"multirag-google-{source}-oauth",
+            "type": payload_type,
             "status": status,
             "flowId": flow_id or "",
             "message": message,

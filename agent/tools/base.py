@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import asyncio
 import logging
 import re
 import time
@@ -48,12 +49,28 @@ class LLMToolPluginCallSession(ToolCallSession):
         self.callback = callback
 
     def tool_call(self, name: str, arguments: dict[str, Any]) -> Any:
+        """
+        同步工具调用方法 - 内部调用异步版本。
+        """
+        return asyncio.run(self.tool_call_async(name, arguments))
+
+    async def tool_call_async(self, name: str, arguments: dict[str, Any]) -> Any:
+        """
+        异步工具调用方法 - 主要实现。
+
+        用于纯异步上下文（如 FastAPI async 端点），避免在已运行的事件循环中调用 asyncio.run()。
+        """
         assert name in self.tools_map, f"LLM tool {name} does not exist"
         st = timer()
-        if isinstance(self.tools_map[name], MCPToolCallSession):
-            resp = self.tools_map[name].tool_call(name, arguments, 60)
+        tool_obj = self.tools_map[name]
+        if isinstance(tool_obj, MCPToolCallSession):
+            # MCP 调用仍然是同步的，需要放到线程中
+            resp = await asyncio.to_thread(tool_obj.tool_call, name, arguments, 60)
         else:
-            resp = self.tools_map[name].invoke(**arguments)
+            if hasattr(tool_obj, "invoke_async") and asyncio.iscoroutinefunction(tool_obj.invoke_async):
+                resp = await tool_obj.invoke_async(**arguments)
+            else:
+                resp = await asyncio.to_thread(tool_obj.invoke, **arguments)
 
         self.callback(name, arguments, resp, elapsed_time=timer()-st)
         return resp
@@ -130,6 +147,33 @@ class ToolBase(ComponentBase):
         self.set_output("_created_time", time.perf_counter())
         try:
             res = self._invoke(**kwargs)
+        except Exception as e:
+            self._param.outputs["_ERROR"] = {"value": str(e)}
+            logging.exception(e)
+            res = str(e)
+        self._param.debug_inputs = []
+
+        self.set_output("_elapsed_time", time.perf_counter() - self.output("_created_time"))
+        return res
+
+    async def invoke_async(self, **kwargs):
+        """
+        Async wrapper for tool invocation.
+        If `_invoke` is a coroutine, await it directly; otherwise run in a thread to avoid blocking.
+        Mirrors the exception handling of `invoke`.
+        """
+        if self.check_if_canceled("Tool processing"):
+            return
+
+        self.set_output("_created_time", time.perf_counter())
+        try:
+            fn_async = getattr(self, "_invoke_async", None)
+            if fn_async and asyncio.iscoroutinefunction(fn_async):
+                res = await fn_async(**kwargs)
+            elif asyncio.iscoroutinefunction(self._invoke):
+                res = await self._invoke(**kwargs)
+            else:
+                res = await asyncio.to_thread(self._invoke, **kwargs)
         except Exception as e:
             self._param.outputs["_ERROR"] = {"value": str(e)}
             logging.exception(e)

@@ -6,6 +6,7 @@
 @date：2025/7/17 11:30
 @desc:
 """
+import asyncio
 import logging
 import os.path
 import json
@@ -643,12 +644,7 @@ async def upload(
     if not files:
         return construct_json_result(data=False, message='No file part!', code=RetCode.ARGUMENT_ERROR)
 
-    kb = KnowledgebaseService.get_by_id(db, kb_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
-    if not check_kb_team_permission(db, kb, user.id):
-        return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
-
+    # 异步读取所有文件内容
     file_contents = []
     for file in files:
         if file.filename == "":
@@ -658,29 +654,40 @@ async def upload(
                                    retcode=RetCode.ARGUMENT_ERROR)
 
         file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
-    # 确保 labels 是 list 或 None
-    if isinstance(labels, str):
-        try:
-            labels = json.loads(labels)
-            if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
-                raise ValueError('Labels must be a list of strings.')
-        except json.JSONDecodeError:
-            raise ValueError('Invalid JSON format for "labels".')
-    elif labels is not None:
-        raise ValueError('Labels must be a JSON-encoded list of strings or None.')
-    err, files = FileService.upload_document(db, kb, file_contents, user.id, labels)  # 传递labels参数
 
-    # if err:
-    #     return get_json_result(data=files, retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
-    if err:
-        return construct_json_result(data=False, message="\n".join(err), code=RetCode.SERVER_ERROR)
+    # 将同步的数据库和存储操作放到线程池中执行
+    def _upload_sync():
+        kb = KnowledgebaseService.get_by_id(db, kb_id)
+        if not kb:
+            raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
+        if not check_kb_team_permission(db, kb, user.id):
+            return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
-    if not files:
-        return get_json_result(data=files,
-                               retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.",
-                               retcode=RetCode.DATA_ERROR)
+        # 确保 labels 是 list 或 None
+        parsed_labels = labels
+        if isinstance(parsed_labels, str):
+            try:
+                parsed_labels = json.loads(parsed_labels)
+                if not isinstance(parsed_labels, list) or not all(isinstance(label, str) for label in parsed_labels):
+                    raise ValueError('Labels must be a list of strings.')
+            except json.JSONDecodeError:
+                raise ValueError('Invalid JSON format for "labels".')
+        elif parsed_labels is not None:
+            raise ValueError('Labels must be a JSON-encoded list of strings or None.')
+        
+        err, result_files = FileService.upload_document(db, kb, file_contents, user.id, parsed_labels)  # 传递labels参数
 
-    return construct_json_result(data=files, code=RetCode.SUCCESS)
+        if err:
+            return construct_json_result(data=False, message="\n".join(err), code=RetCode.SERVER_ERROR)
+
+        if not result_files:
+            return get_json_result(data=result_files,
+                                   retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.",
+                                   retcode=RetCode.DATA_ERROR)
+
+        return construct_json_result(data=result_files, code=RetCode.SUCCESS)
+
+    return await asyncio.to_thread(_upload_sync)
 
 
 @router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页")

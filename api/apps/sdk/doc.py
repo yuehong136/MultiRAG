@@ -887,7 +887,7 @@ def add_document_chunk(
         chunk_id = xxhash.xxh64(f"{document_id}-{req['content']}").hexdigest()
         
         # 准备chunk数据
-        embd_mdl = LLMBundle(kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
         tks = rag_tokenizer.tokenize(req["content"])
         
         chunk_data = {
@@ -1005,7 +1005,7 @@ def update_document_chunk(
             
             # 重新生成embedding
             e, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-            embd_mdl = LLMBundle(kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+            embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
             v, c = embd_mdl.encode([req["content"]])
             chunk_data["q_%d_vec" % len(v[0])] = v[0]
         
@@ -1167,7 +1167,7 @@ def retrieval_test(
             search_mode=search_mode_dict
         )
         if toc_enhance:
-            chat_mdl = LLMBundle(kb.tenant_id, LLMType.CHAT)
+            chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
             cks = settings.retriever.retrieval_by_toc(question, ranks["chunks"], tenant_ids, chat_mdl, size)
             if cks:
                 ranks["chunks"] = cks

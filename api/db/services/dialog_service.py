@@ -1042,7 +1042,7 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
     embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, llm_name=embedding_list[0])
     chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
     if rerank_id:
-        rerank_mdl = LLMBundle(tenant_id, LLMType.RERANK, rerank_id)
+        rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
 
     if meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)

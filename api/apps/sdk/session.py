@@ -879,7 +879,7 @@ def get_related_questions(
     
     question = req["question"]
     industry = req.get("industry", "")
-    chat_mdl = LLMBundle(tenant_id, LLMType.CHAT)
+    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT)
     prompt = """
 Objective: To generate search terms related to the user's search keywords, helping users find more valuable information.
 Instructions:
@@ -1067,7 +1067,7 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
         meta_data_filter = search_config.get("meta_data_filter", {})
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)
         if meta_data_filter.get("method") == "auto":
-            chat_mdl = LLMBundle(tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
+            chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
             filters: dict = gen_meta_filter(chat_mdl, metas, question)
             doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
             if not doc_ids:
@@ -1094,14 +1094,14 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
         if langs:
             question = cross_languages(kb.tenant_id, None, question, langs)
 
-        embd_mdl = LLMBundle(kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
 
         rerank_mdl = None
         if req.get("rerank_id"):
-            rerank_mdl = LLMBundle(kb.tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
+            rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
 
         if req.get("keyword", False):
-            chat_mdl = LLMBundle(kb.tenant_id, LLMType.CHAT)
+            chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
             question += keyword_extraction(chat_mdl, question)
 
         labels = label_question(db, question, [kb])
@@ -1109,7 +1109,7 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
             question, embd_mdl, tenant_ids, kb_ids, page, size, similarity_threshold, vector_similarity_weight, top, doc_ids, rerank_mdl=rerank_mdl, highlight=req.get("highlight"), rank_feature=labels
         )
         if use_kg:
-            ck = settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, LLMBundle(kb.tenant_id, LLMType.CHAT))
+            ck = settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, LLMBundle(db, kb.tenant_id, LLMType.CHAT))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
 

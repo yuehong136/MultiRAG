@@ -13,11 +13,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import asyncio
 import json
 import logging
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from functools import partial
 from typing import Any
@@ -31,8 +31,8 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.mcp_server_service import MCPServerService
 from common.connection_utils import timeout
-from core.prompts.generator import next_step, COMPLETE_TASK, analyze_task, \
-    citation_prompt, reflect, rank_memories, kb_prompt, citation_plus, full_question, message_fit_in, structured_output_prompt
+from core.prompts.generator import next_step_async, COMPLETE_TASK, analyze_task_async, \
+    citation_prompt, reflect_async, kb_prompt, citation_plus, full_question, message_fit_in, structured_output_prompt
 from common.mcp_tool_call_conn import MCPToolCallSession, mcp_tool_metadata_to_openai_tool
 
 
@@ -97,13 +97,21 @@ class Agent(LLM, ToolBase):
                                       )
         self.tool_meta = [v.get_meta() for _,v in self.tools.items()]
 
+        self._mcp_sessions = []  # 保存 MCP 会话引用以便预热
         for mcp in self._param.mcp:
             with db_connection() as db:
                 mcp_server = MCPServerService.get_by_id(db, mcp["mcp_id"])
             tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables)
+            self._mcp_sessions.append(tool_call_session)
             for tnm, meta in mcp["tools"].items():
                 self.tool_meta.append(mcp_tool_metadata_to_openai_tool(meta))
                 self.tools[tnm] = tool_call_session
+        
+        # 预热 MCP 会话：等待所有会话初始化完成
+        for session in self._mcp_sessions:
+            if not session.wait_ready(timeout=20):
+                logging.warning(f"MCP session failed to initialize, some tools may not work properly")
+        
         self.callback = partial(self._canvas.tool_use_callback, id)
         self.toolcall_session = LLMToolPluginCallSession(self.tools, self.callback)
         #self.chat_mdl.bind_tools(self.toolcall_session, self.tool_metas)
@@ -155,16 +163,21 @@ class Agent(LLM, ToolBase):
 
         return None
 
-    def _force_format_to_schema(self, text: str, schema_prompt: str) -> str:
+    async def _force_format_to_schema_async(self, text: str, schema_prompt: str) -> str:
         fmt_msgs = [
             {"role": "system", "content": schema_prompt + "\nIMPORTANT: Output ONLY valid JSON. No markdown, no extra text."},
             {"role": "user", "content": text},
         ]
         _, fmt_msgs = message_fit_in(fmt_msgs, int(self.chat_mdl.max_length * 0.97))
-        return self._generate(fmt_msgs)
+        return await self._generate_async(fmt_msgs)
+
+    def _invoke(self, **kwargs):
+        """同步版本 - 内部调用异步版本"""
+        return asyncio.run(self._invoke_async(**kwargs))
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 20*60)))
-    def _invoke(self, **kwargs):
+    async def _invoke_async(self, **kwargs):
+        """异步版本 - 主要实现"""
         if self.check_if_canceled("Agent processing"):
             return
 
@@ -183,7 +196,7 @@ class Agent(LLM, ToolBase):
         if not self.tools:
             if self.check_if_canceled("Agent processing"):
                 return
-            return LLM._invoke(self, **kwargs)
+            return await LLM._invoke_async(self, **kwargs)
 
         prompt, msg, user_defined_prompt = self._prepare_prompt_variables()
         output_schema = self._get_output_schema()
@@ -195,13 +208,13 @@ class Agent(LLM, ToolBase):
         downstreams = self._canvas.get_component(self._id)["downstream"] if self._canvas.get_component(self._id) else []
         ex = self.exception_handler()
         if any([self._canvas.get_component_obj(cid).component_name.lower() == "message" for cid in downstreams]) and not (ex and ex["goto"]) and not output_schema:
-            self.set_output("content", partial(self.stream_output_with_tools, prompt, msg, user_defined_prompt))
+            self.set_output("content", partial(self.stream_output_with_tools_async, prompt, deepcopy(msg), user_defined_prompt))
             return
 
         _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.chat_mdl.max_length * 0.97))
         use_tools = []
         ans = ""
-        for delta_ans, tk in self._react_with_tools_streamly(prompt, msg, use_tools, user_defined_prompt, schema_prompt=schema_prompt):
+        async for delta_ans, _tk in self._react_with_tools_streamly_async(prompt, msg, use_tools, user_defined_prompt, schema_prompt=schema_prompt):
             if self.check_if_canceled("Agent processing"):
                 return
             ans += delta_ans
@@ -229,7 +242,7 @@ class Agent(LLM, ToolBase):
                     return obj
                 except Exception:
                     error = "The answer cannot be parsed as JSON"
-                    ans = self._force_format_to_schema(ans, schema_prompt)
+                    ans = await self._force_format_to_schema_async(ans, schema_prompt)
                     if ans.find("**ERROR**") >= 0:
                         continue
 
@@ -241,11 +254,11 @@ class Agent(LLM, ToolBase):
             self.set_output("use_tools", use_tools)
         return ans
 
-    def stream_output_with_tools(self, prompt, msg, user_defined_prompt={}):
+    async def stream_output_with_tools_async(self, prompt, msg, user_defined_prompt={}):
         _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.chat_mdl.max_length * 0.97))
         answer_without_toolcall = ""
         use_tools = []
-        for delta_ans,_ in self._react_with_tools_streamly(prompt, msg, use_tools, user_defined_prompt):
+        async for delta_ans, _ in self._react_with_tools_streamly_async(prompt, msg, use_tools, user_defined_prompt):
             if self.check_if_canceled("Agent streaming"):
                 return
 
@@ -263,40 +276,34 @@ class Agent(LLM, ToolBase):
         if use_tools:
             self.set_output("use_tools", use_tools)
 
-    def _gen_citations(self, text):
-        retrievals = self._canvas.get_reference()
-        retrievals = {"chunks": list(retrievals["chunks"].values()), "doc_aggs": list(retrievals["doc_aggs"].values())}
-        formated_refer = kb_prompt(retrievals, self.chat_mdl.max_length, True)
-        for delta_ans in self._generate_streamly([{"role": "system", "content": citation_plus("\n\n".join(formated_refer))},
-                                                  {"role": "user", "content": text}
-                                                  ]):
-            yield delta_ans
+    async def _react_with_tools_streamly_async(self, prompt, history: list[dict], use_tools, user_defined_prompt={}, schema_prompt: str = ""):
+        """
+        纯异步实现的工具调用流式输出。
 
-    def _react_with_tools_streamly(self, prompt, history: list[dict], use_tools, user_defined_prompt={}, schema_prompt: str = ""):
+        【重要】此方法支持实时流式输出工具调用结果：
+        - 使用 asyncio.create_task + asyncio.gather 并行执行工具
+        - 每个工具完成时立即 yield，触发外部检测 use_tools 变化
+        - 前端可以实时渲染工具调用结果
+        """
         token_count = 0
         tool_metas = self.tool_meta
         hist = deepcopy(history)
         last_calling = ""
         if len(hist) > 3:
             st = timer()
-            with db_connection() as db:
-                user_request = full_question(db, messages=history, chat_mdl=self.chat_mdl)
+            def _full_question_with_db():
+                with db_connection() as db:
+                    return full_question(db=db, messages=history, chat_mdl=self.chat_mdl)
+            user_request = await asyncio.to_thread(_full_question_with_db)
             self.callback("Multi-turn conversation optimization", {}, user_request, elapsed_time=timer()-st)
         else:
             user_request = history[-1]["content"]
 
-        def use_tool(name, args):
-            nonlocal hist, use_tools, token_count,last_calling,user_request
+        async def use_tool_async(name, args):
+            nonlocal hist, use_tools, last_calling
             logging.info(f"{last_calling=} == {name=}")
-            # Summarize of function calling
-            #if all([
-            #    isinstance(self.toolcall_session.get_tool_obj(name), Agent),
-            #    last_calling,
-            #    last_calling != name
-            #]):
-            #    self.toolcall_session.get_tool_obj(name).add2system_prompt(f"The chat history with other agents are as following: \n" + self.get_useful_memory(user_request, str(args["user_prompt"]), user_defined_prompt))
             last_calling = name
-            tool_response = self.toolcall_session.tool_call(name, args)
+            tool_response = await self.toolcall_session.tool_call_async(name, args)
             use_tools.append({
                 "name": name,
                 "arguments": args,
@@ -307,7 +314,7 @@ class Agent(LLM, ToolBase):
 
             return name, tool_response
 
-        def complete():
+        async def complete():
             nonlocal hist
             need2cite = self._param.cite and self._canvas.get_reference()["chunks"] and self._id.find("-->") < 0
             if schema_prompt:
@@ -325,7 +332,7 @@ class Agent(LLM, ToolBase):
             if len(hist) > 12:
                 _hist = [hist[0], hist[1], *hist[-10:]]
             entire_txt = ""
-            for delta_ans in self._generate_streamly(_hist):
+            async for delta_ans in self._generate_streamly_async(_hist):
                 if not need2cite or cited:
                     yield delta_ans, 0
                 entire_txt += delta_ans
@@ -334,7 +341,7 @@ class Agent(LLM, ToolBase):
 
             st = timer()
             txt = ""
-            for delta_ans in self._gen_citations(entire_txt):
+            async for delta_ans in self._gen_citations_async(entire_txt):
                 if self.check_if_canceled("Agent streaming"):
                     return
                 yield delta_ans, 0
@@ -349,14 +356,14 @@ class Agent(LLM, ToolBase):
                 hist.append({"role": "user", "content": content})
 
         st = timer()
-        task_desc = analyze_task(self.chat_mdl, prompt, user_request, tool_metas, user_defined_prompt)
+        task_desc = await analyze_task_async(self.chat_mdl, prompt, user_request, tool_metas, user_defined_prompt)
         self.callback("analyze_task", {}, task_desc, elapsed_time=timer()-st)
         for _ in range(self._param.max_rounds + 1):
             if self.check_if_canceled("Agent streaming"):
                 return
-            response, tk = next_step(self.chat_mdl, hist, tool_metas, task_desc, user_defined_prompt)
+            response, tk = await next_step_async(self.chat_mdl, hist, tool_metas, task_desc, user_defined_prompt)
             # self.callback("next_step", {}, str(response)[:256]+"...")
-            token_count += tk
+            token_count += tk or 0
             hist.append({"role": "assistant", "content": response})
             try:
                 functions = json_repair.loads(re.sub(r"```.*", "", response))
@@ -365,73 +372,29 @@ class Agent(LLM, ToolBase):
                 for f in functions:
                     if not isinstance(f, dict):
                         raise TypeError(f"An object type should be returned, but `{f}`")
-                
-                # 先检查是否有 COMPLETE_TASK
-                has_complete_task = any(func.get("name") == COMPLETE_TASK for func in functions)
-                if has_complete_task:
-                    append_user_content(hist, f"Respond with a formal answer. FORGET(DO NOT mention) about `{COMPLETE_TASK}`. The language for the response MUST be as the same as the first user request.\n")
-                    for txt, tkcnt in complete():
-                        yield txt, tkcnt
-                    return
-                
-                # ============================================================================
-                # 工具调用逻辑 - 支持实时流式输出工具调用结果
-                # 
-                # 【修改说明】此处代码经过重构，用于支持 api/apps/llm_app.py 中 
-                # ChatAgentAdapter.chat_with_tools_stream_structured() 接口的实时工具调用输出。
-                # 
-                # 【原代码】:
-                #   with ThreadPoolExecutor(max_workers=5) as executor:
-                #       thr = []
-                #       for func in functions:
-                #           name = func["name"]
-                #           args = func["arguments"]
-                #           if name == COMPLETE_TASK:
-                #               # ... COMPLETE_TASK 处理 ...
-                #               return
-                #           thr.append(executor.submit(use_tool, name, args))
-                #
-                #       st = timer()
-                #       reflection = reflect(self.chat_mdl, hist, [th.result() for th in thr], user_defined_prompt)
-                #       append_user_content(hist, reflection)
-                #       self.callback("reflection", {}, str(reflection), elapsed_time=timer()-st)
-                #
-                # 【问题】: 原代码使用 [th.result() for th in thr] 等待所有工具完成后才继续，
-                #          在工具执行期间没有 yield，导致外部无法实时获取工具调用结果。
-                #
-                # 【新代码】: 使用 as_completed 迭代器，在每个工具完成时立即 yield 空字符串，
-                #            触发外部检测 use_tools 列表的变化，从而实现实时流式输出。
-                #
-                # 【兼容性】: 此修改不影响 Canvas 的调用逻辑：
-                #   - Canvas._invoke 中: for delta_ans, tk in ...: ans += delta_ans 
-                #     → 空字符串累加不影响结果
-                #   - Canvas.stream_output_with_tools 中: yield delta_ans 
-                #     → 空字符串会被 Canvas 过滤
-                # ============================================================================
-                tool_results = []
-                with ThreadPoolExecutor(max_workers=5) as executor:
-                    # 提交所有工具调用（保持并行执行）
-                    futures = {}
-                    for func in functions:
-                        name = func["name"]
-                        args = func["arguments"]
-                        future = executor.submit(use_tool, name, args)
-                        futures[future] = (name, args)
-                    
-                    # 使用 as_completed 在每个工具完成时立即处理并 yield
-                    for future in as_completed(futures):
-                        try:
-                            result = future.result()
-                            tool_results.append(result)
-                            # 每个工具完成后 yield 空字符串，触发外部检测 use_tools 变化
-                            yield "", token_count
-                        except Exception as e:
-                            logging.exception(f"Tool call failed: {e}")
-                            tool_results.append((futures[future][0], f"Error: {e}"))
-                            yield "", token_count
+
+                # 使用 asyncio.create_task 并行执行工具调用
+                tool_tasks = []
+                for func in functions:
+                    name = func["name"]
+                    args = func["arguments"]
+                    if name == COMPLETE_TASK:
+                        append_user_content(hist, f"Respond with a formal answer. FORGET(DO NOT mention) about `{COMPLETE_TASK}`. The language for the response MUST be as the same as the first user request.\n")
+                        async for txt, tkcnt in complete():
+                            yield txt, tkcnt
+                        return
+
+                    tool_tasks.append(asyncio.create_task(use_tool_async(name, args)))
+
+                # 并行执行所有工具，等待完成
+                results = await asyncio.gather(*tool_tasks) if tool_tasks else []
+
+                # 每个工具完成后 yield 空字符串，触发外部检测 use_tools 变化
+                for _ in results:
+                    yield "", token_count
 
                 st = timer()
-                reflection = reflect(self.chat_mdl, hist, tool_results, user_defined_prompt)
+                reflection = await reflect_async(self.chat_mdl, hist, results, user_defined_prompt)
                 append_user_content(hist, reflection)
                 self.callback("reflection", {}, str(reflection), elapsed_time=timer()-st)
 
@@ -440,7 +403,7 @@ class Agent(LLM, ToolBase):
                 e = f"\nTool call error, please correct the input parameter of response format and call it again.\n *** Exception ***\n{e}"
                 append_user_content(hist, str(e))
 
-        logging.warning( f"Exceed max rounds: {self._param.max_rounds}")
+        logging.warning(f"Exceed max rounds: {self._param.max_rounds}")
         final_instruction = f"""
 {user_request}
 IMPORTANT: You have reached the conversation limit. Based on ALL the information and research you have gathered so far, please provide a DIRECT and COMPREHENSIVE final answer to the original request.
@@ -457,21 +420,18 @@ Respond immediately with your final comprehensive answer.
             return
         append_user_content(hist, final_instruction)
 
-        for txt, tkcnt in complete():
+        async for txt, tkcnt in complete():
             yield txt, tkcnt
 
-    def get_useful_memory(self, goal: str, sub_goal:str, topn=3, user_defined_prompt: dict={}) -> str:
-        # self.callback("get_useful_memory", {"topn": 3}, "...")
-        mems = self._canvas.get_memory()
-        rank = rank_memories(self.chat_mdl, goal, sub_goal, [summ for (user, assist, summ) in mems], user_defined_prompt)
-        try:
-            rank = json_repair.loads(re.sub(r"```.*", "", rank))[:topn]
-            mems = [mems[r] for r in rank]
-            return "\n\n".join([f"User: {u}\nAgent: {a}" for u, a,_ in mems])
-        except Exception as e:
-            logging.exception(e)
-
-        return "Error occurred."
+    async def _gen_citations_async(self, text):
+        """异步版本的引用生成"""
+        retrievals = self._canvas.get_reference()
+        retrievals = {"chunks": list(retrievals["chunks"].values()), "doc_aggs": list(retrievals["doc_aggs"].values())}
+        formated_refer = kb_prompt(retrievals, self.chat_mdl.max_length, True)
+        async for delta_ans in self._generate_streamly_async([{"role": "system", "content": citation_plus("\n\n".join(formated_refer))},
+                                                  {"role": "user", "content": text}
+                                                  ]):
+            yield delta_ans
 
     def reset(self, only_output=False):
         """

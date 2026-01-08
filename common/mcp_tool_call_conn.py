@@ -1,11 +1,15 @@
 import asyncio
 import logging
+import os
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from string import Template
 from typing import Any, Literal, Protocol
+
+# MCP 服务器初始化超时时间（秒），可通过环境变量配置
+MCP_INIT_TIMEOUT = int(os.environ.get("MCP_INIT_TIMEOUT", 15))
 
 from typing_extensions import override
 
@@ -31,8 +35,10 @@ class MCPToolCallSession(ToolCallSession):
 
         self._mcp_server = mcp_server
         self._server_variables = server_variables or {}
-        self._queue = asyncio.Queue()
+        self._queue: asyncio.Queue = asyncio.Queue()
         self._close = False
+        self._initialized = asyncio.Event()
+        self._init_error: str | None = None
 
         self._event_loop = asyncio.new_event_loop()
         self._thread_pool = ThreadPoolExecutor(max_workers=1)
@@ -57,18 +63,25 @@ class MCPToolCallSession(ToolCallSession):
                 async with sse_client(url, headers) as stream:
                     async with ClientSession(*stream) as client_session:
                         try:
-                            await asyncio.wait_for(client_session.initialize(), timeout=5)
-                            logging.info("client_session initialized successfully")
+                            await asyncio.wait_for(client_session.initialize(), timeout=MCP_INIT_TIMEOUT)
+                            logging.info(f"client_session initialized successfully for server {self._mcp_server.id}")
+                            self._initialized.set()
                             await self._process_mcp_tasks(client_session)
                         except asyncio.TimeoutError:
-                            msg = f"Timeout initializing client_session for server {self._mcp_server.id}"
+                            msg = f"Timeout initializing client_session for server {self._mcp_server.id} (timeout={MCP_INIT_TIMEOUT}s)"
                             logging.error(msg)
+                            self._init_error = msg
+                            self._initialized.set()
                             await self._process_mcp_tasks(None, msg)
                         except asyncio.CancelledError:
                             logging.warning(f"SSE transport MCP session cancelled for server {self._mcp_server.id}")
+                            self._initialized.set()
                             return
-            except Exception:
-                msg = "Connection failed (possibly due to auth error). Please check authentication settings first"
+            except Exception as e:
+                msg = f"Connection failed for server {self._mcp_server.id}: {e}"
+                logging.exception(msg)
+                self._init_error = msg
+                self._initialized.set()
                 await self._process_mcp_tasks(None, msg)
 
         elif self._mcp_server.server_type == MCPServerType.STREAMABLE_HTTP:
@@ -77,24 +90,32 @@ class MCPToolCallSession(ToolCallSession):
                 async with streamablehttp_client(url, headers) as (read_stream, write_stream, _):
                     async with ClientSession(read_stream, write_stream) as client_session:
                         try:
-                            await asyncio.wait_for(client_session.initialize(), timeout=5)
-                            logging.info("client_session initialized successfully")
+                            await asyncio.wait_for(client_session.initialize(), timeout=MCP_INIT_TIMEOUT)
+                            logging.info(f"client_session initialized successfully for server {self._mcp_server.id}")
+                            self._initialized.set()
                             await self._process_mcp_tasks(client_session)
                         except asyncio.TimeoutError:
-                            msg = f"Timeout initializing client_session for server {self._mcp_server.id}"
+                            msg = f"Timeout initializing client_session for server {self._mcp_server.id} (timeout={MCP_INIT_TIMEOUT}s)"
                             logging.error(msg)
+                            self._init_error = msg
+                            self._initialized.set()
                             await self._process_mcp_tasks(None, msg)
                         except asyncio.CancelledError:
                             logging.warning(f"STREAMABLE_HTTP MCP session cancelled for server {self._mcp_server.id}")
+                            self._initialized.set()
                             return
             except Exception as e:
-                logging.exception(e)
-                msg = "Connection failed (possibly due to auth error). Please check authentication settings first"
+                msg = f"Connection failed for server {self._mcp_server.id}: {e}"
+                logging.exception(msg)
+                self._init_error = msg
+                self._initialized.set()
                 await self._process_mcp_tasks(None, msg)
 
         else:
-            await self._process_mcp_tasks(None,
-                                          f"Unsupported MCP server type: {self._mcp_server.server_type}, id: {self._mcp_server.id}")
+            msg = f"Unsupported MCP server type: {self._mcp_server.server_type}, id: {self._mcp_server.id}"
+            self._init_error = msg
+            self._initialized.set()
+            await self._process_mcp_tasks(None, msg)
 
     async def _process_mcp_tasks(self, client_session: ClientSession | None, error_message: str | None = None) -> None:
         while not self._close:
@@ -134,7 +155,7 @@ class MCPToolCallSession(ToolCallSession):
             except asyncio.CancelledError:
                 break
 
-    async def _call_mcp_server(self, task_type: MCPTaskType, timeout: float | int = 8, **kwargs) -> Any:
+    async def _call_mcp_server(self, task_type: MCPTaskType, request_timeout: float | int = 8, **kwargs) -> Any:
         if self._close:
             raise ValueError("Session is closed")
 
@@ -142,18 +163,18 @@ class MCPToolCallSession(ToolCallSession):
         await self._queue.put((task_type, kwargs, results))
 
         try:
-            result: CallToolResult | Exception = await asyncio.wait_for(results.get(), timeout=timeout)
+            result: CallToolResult | Exception = await asyncio.wait_for(results.get(), timeout=request_timeout)
             if isinstance(result, Exception):
                 raise result
             return result
         except asyncio.TimeoutError:
-            raise asyncio.TimeoutError(f"MCP task '{task_type}' timeout after {timeout}s")
+            raise asyncio.TimeoutError(f"MCP task '{task_type}' timeout after {request_timeout}s")
         except Exception:
             raise
 
-    async def _call_mcp_tool(self, name: str, arguments: dict[str, Any], timeout: float | int = 10) -> str:
+    async def _call_mcp_tool(self, name: str, arguments: dict[str, Any], request_timeout: float | int = 10) -> str:
         result: CallToolResult = await self._call_mcp_server("tool_call", name=name, arguments=arguments,
-                                                             timeout=timeout)
+                                                             request_timeout=request_timeout)
 
         if result.isError:
             return f"MCP server error: {result.content}"
@@ -164,18 +185,50 @@ class MCPToolCallSession(ToolCallSession):
         else:
             return f"Unsupported content type {type(result.content)}"
 
-    async def _get_tools_from_mcp_server(self, timeout: float | int = 8) -> list[Tool]:
+    async def _get_tools_from_mcp_server(self, request_timeout: float | int = 8) -> list[Tool]:
         try:
-            result: ListToolsResult = await self._call_mcp_server("list_tools", timeout=timeout)
+            result: ListToolsResult = await self._call_mcp_server("list_tools", request_timeout=request_timeout)
             return result.tools
         except Exception:
             raise
+
+    async def _wait_initialized(self, timeout: float | int = MCP_INIT_TIMEOUT + 5) -> bool:
+        """等待 MCP 会话初始化完成"""
+        try:
+            await asyncio.wait_for(self._initialized.wait(), timeout=timeout)
+            return self._init_error is None
+        except asyncio.TimeoutError:
+            return False
+
+    def wait_ready(self, timeout: float | int = MCP_INIT_TIMEOUT + 5) -> bool:
+        """
+        同步等待 MCP 会话初始化完成。
+        
+        Returns:
+            True 如果初始化成功，False 如果失败或超时
+        """
+        if self._close:
+            return False
+
+        future = asyncio.run_coroutine_threadsafe(self._wait_initialized(timeout), self._event_loop)
+        try:
+            return future.result(timeout=timeout)
+        except FuturesTimeoutError:
+            logging.error(f"Timeout waiting for MCP server {self._mcp_server.id} to initialize")
+            return False
+        except Exception as e:
+            logging.exception(f"Error waiting for MCP server {self._mcp_server.id}: {e}")
+            return False
+
+    def is_ready(self) -> bool:
+        """检查 MCP 会话是否已初始化完成且无错误"""
+        return self._initialized.is_set() and self._init_error is None
 
     def get_tools(self, timeout: float | int = 10) -> list[Tool]:
         if self._close:
             raise ValueError("Session is closed")
 
-        future = asyncio.run_coroutine_threadsafe(self._get_tools_from_mcp_server(timeout=timeout), self._event_loop)
+        future = asyncio.run_coroutine_threadsafe(self._get_tools_from_mcp_server(request_timeout=timeout), self._event_loop)
         try:
             return future.result(timeout=timeout)
         except FuturesTimeoutError:

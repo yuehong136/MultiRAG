@@ -6,6 +6,7 @@
 @date：2025/7/17 13:50
 @desc:
 """
+import asyncio
 import logging
 import os
 import pathlib
@@ -79,42 +80,49 @@ async def upload_media_redirect(
     - JSON: 包含临时 URL 和过期时间的响应
     """
     try:
+        # 异步读取文件内容
         content = await file.read()
         if not content:
             return get_json_result(data=False, retmsg='No file content!', retcode=RetCode.ARGUMENT_ERROR)
 
-        # 1. 定义存储桶和文件名
-        # 建议使用一个专门的临时桶，如果未配置则使用默认桶
-        # 注意：MinIO/OSS 的 bucket 名称通常有格式要求
-        bucket = settings.OSS.get("bucket") or settings.MINIO.get("bucket") or "multimodal-temp"
+        filename = file.filename
 
-        ext = file.filename.split('.')[-1].lower() if '.' in file.filename else "bin"
-        unique_filename = f"volc_upload/{get_uuid()}.{ext}"
+        # 将同步的存储操作放到线程池中执行
+        def _upload_sync():
+            # 1. 定义存储桶和文件名
+            # 建议使用一个专门的临时桶，如果未配置则使用默认桶
+            # 注意：MinIO/OSS 的 bucket 名称通常有格式要求
+            bucket = settings.OSS.get("bucket") or settings.MINIO.get("bucket") or "multimodal-temp"
 
-        # Get content type
-        content_type = CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
+            ext = filename.split('.')[-1].lower() if '.' in filename else "bin"
+            unique_filename = f"volc_upload/{get_uuid()}.{ext}"
 
-        # 2. 上传文件
-        # STORAGE_IMPL 会自动处理 MinIO/OSS/S3 的差异
-        try:
-            settings.STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
-        except TypeError:
-            # Fallback for storage backends that don't support content_type
-            settings.STORAGE_IMPL.put(bucket, unique_filename, content)
+            # Get content type
+            content_type = CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
 
-        # 3. 获取预签名 URL (有效期 1小时)
-        # 这是关键：这个 URL 是带签名的，AI 服务可以通过公网访问并下载
-        expires = 3600
-        url = settings.STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=expires)
+            # 2. 上传文件
+            # STORAGE_IMPL 会自动处理 MinIO/OSS/S3 的差异
+            try:
+                settings.STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
+            except TypeError:
+                # Fallback for storage backends that don't support content_type
+                settings.STORAGE_IMPL.put(bucket, unique_filename, content)
 
-        if not url:
-            raise Exception("Failed to generate presigned URL")
+            # 3. 获取预签名 URL (有效期 1小时)
+            # 这是关键：这个 URL 是带签名的，AI 服务可以通过公网访问并下载
+            expires = 3600
+            url = settings.STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=expires)
 
-        return get_json_result(data={
-            "url": url,
-            "expires_in": expires,
-            "filename": unique_filename
-        })
+            if not url:
+                raise Exception("Failed to generate presigned URL")
+
+            return get_json_result(data={
+                "url": url,
+                "expires_in": expires,
+                "filename": unique_filename
+            })
+
+        return await asyncio.to_thread(_upload_sync)
 
     except Exception as e:
         logging.exception("Upload media redirect failed")
@@ -138,13 +146,6 @@ async def upload(
     返回:
     - JSON: 上传文件结果的JSON响应。
     """
-
-    pf_id = parent_id
-
-    if not pf_id:
-        root_folder = FileService.get_root_folder(db, user.id)
-        pf_id = root_folder["id"]
-
     if not files:
         return get_json_result(data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
 
@@ -152,19 +153,34 @@ async def upload(
         if file_obj.filename == '':
             return get_json_result(data=False, retmsg='No file selected!', retcode=RetCode.ARGUMENT_ERROR)
 
-    try:
+    # 异步读取所有文件内容
+    file_contents = []
+    for file_obj in files:
+        blob = await file_obj.read()
+        file_contents.append((blob, file_obj.filename))
+
+    # 将同步的数据库和存储操作放到线程池中执行
+    def _upload_sync():
+        pf_id = parent_id
+
+        if not pf_id:
+            root_folder = FileService.get_root_folder(db, user.id)
+            pf_id = root_folder["id"]
+
         pf_folder = FileService.get_by_id(db, pf_id)
         if not pf_folder:
             return get_data_error_result(retmsg="Can't find this folder!")
-        for file_obj in files:
+        
+        file_dict = None
+        for blob, filename in file_contents:
             MAX_FILE_NUM_PER_USER: int = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
             if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, user.id):
                 return get_data_error_result(retmsg="Exceed the maximum file number of a free user!")
 
-            if not file_obj.filename:
-                file_obj_names = [pf_folder.name, file_obj.filename]
+            if not filename:
+                file_obj_names = [pf_folder.name, filename]
             else:
-                full_path = '/' + file_obj.filename
+                full_path = '/' + filename
                 file_obj_names = full_path.split('/')
             file_len = len(file_obj_names)
 
@@ -188,8 +204,8 @@ async def upload(
             location = file_obj_names[file_len - 1]
             while settings.STORAGE_IMPL.obj_exist(last_folder.id, location):
                 location += "_"
-            blob = await file_obj.read()
-            filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
+            
+            final_filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
                                       parent_id=last_folder.id)
             settings.STORAGE_IMPL.put(last_folder.id, location, blob)
             file_data = {
@@ -198,7 +214,7 @@ async def upload(
                 "tenant_id": user.id,
                 "created_by": user.id,
                 "type": filetype,
-                "name": filename,
+                "name": final_filename,
                 "location": location,
                 "size": len(blob),
             }
@@ -214,6 +230,9 @@ async def upload(
                 "type": file.type
             }
         return get_json_result(data=file_dict)
+
+    try:
+        return await asyncio.to_thread(_upload_sync)
     except Exception as e:
         return construct_error_response(e)
 

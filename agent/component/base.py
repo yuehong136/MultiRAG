@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import asyncio
 import re
 import time
 from abc import ABC
@@ -434,6 +435,34 @@ class ComponentBase(ABC):
         self.set_output("_created_time", time.perf_counter())
         try:
             self._invoke(**kwargs)
+        except Exception as e:
+            if self.get_exception_default_value():
+                self.set_exception_default_value()
+            else:
+                self.set_output("_ERROR", str(e))
+            logging.exception(e)
+        self._param.debug_inputs = {}
+        self.set_output("_elapsed_time", time.perf_counter() - self.output("_created_time"))
+        return self.output()
+
+    async def invoke_async(self, **kwargs) -> dict[str, Any]:
+        """
+        Async wrapper for component invocation.
+        Prefers coroutine `_invoke_async` if present; otherwise falls back to `_invoke`.
+        Handles timing and error recording consistently with `invoke`.
+        """
+        self.set_output("_created_time", time.perf_counter())
+        try:
+            if self.check_if_canceled("Component processing"):
+                return
+
+            fn_async = getattr(self, "_invoke_async", None)
+            if fn_async and asyncio.iscoroutinefunction(fn_async):
+                await fn_async(**kwargs)
+            elif asyncio.iscoroutinefunction(self._invoke):
+                await self._invoke(**kwargs)
+            else:
+                await asyncio.to_thread(self._invoke, **kwargs)
         except Exception as e:
             if self.get_exception_default_value():
                 self.set_exception_default_value()

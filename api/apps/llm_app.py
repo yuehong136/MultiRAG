@@ -140,7 +140,7 @@ class ChatAgentAdapter:
                 logging.debug(f"Tool callback: component_id={component_id}, args={args}")
 
             def get_variable_value(self, var_name):
-                return self.settings.get(var_name, "")
+                return self.globals.get(var_name, "")
 
             def set_variable_value(self, var_name, value):
                 self.globals[var_name] = value
@@ -262,21 +262,17 @@ class ChatAgentAdapter:
         schema = json.dumps(self.output_schema, ensure_ascii=False, indent=2)
         return structured_output_prompt(schema)
 
-    def chat_with_tools_stream(self, query: str, messages: list[dict] = None,
-                               knowledge_context: str = "", files: list[str] = None):
-        """使用工具进行流式对话，直接复用Agent的流式能力"""
-
-        # 准备历史记录 - 保持字典格式，但添加当前查询
+    async def chat_with_tools_stream_async(self, query: str, messages: list[dict] = None, knowledge_context: str = "", files: list[str] = None):
+        """
+        异步版本的工具流式对话，直接复用Agent的异步流式能力
+        """
+        # 准备历史记录
         history = []
-        
         if messages:
-            # 保持字典格式的消息
             history = messages.copy()
-        
-        # 添加当前查询到历史记录末尾（因为_prepare_prompt_variables会用[:-1]移除它）
         if query:
             history.append({"role": "user", "content": query})
-        
+
         self.canvas_mock.history = history
 
         # 准备输入变量
@@ -290,174 +286,123 @@ class ChatAgentAdapter:
             enhanced_prompt = original_prompt + "\n\n" + knowledge_context
             self.agent._param.sys_prompt = enhanced_prompt
         elif not original_prompt:
-            # 确保 sys_prompt 不为 None
             self.agent._param.sys_prompt = "You are a helpful AI assistant."
 
         try:
-            # 准备Agent调用参数
             kwargs = {
                 "user_prompt": query,
                 "reasoning": "Direct chat request",
                 "context": "Chat conversation context"
             }
 
-            # 检查Agent是否有工具
             if self.agent.tools:
-                # 有工具时，使用Agent的完整流式工具调用能力
-                # 直接复用Agent的stream_output_with_tools方法
                 prompt, msg, _ = self.agent._prepare_prompt_variables()
-                
-                # 重要：像 _invoke 方法一样，将 system 消息添加到 msg 中
-                # 这样 _react_with_tools_streamly 中的 hist 才会包含 system 消息
+
                 from core.prompts.generator import message_fit_in
                 _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.agent.chat_mdl.max_length * 0.97))
 
-                # 创建用于收集工具使用历史的列表
                 use_tools = []
-                
-                # 获取 schema_prompt 用于结构化输出
                 schema_prompt = self._get_schema_prompt()
 
-                # 添加工具调用开始提示
                 yield "🔧 Starting tool analysis...\n"
 
-                # ============================================================================
-                # 实时工具调用输出
-                # 
-                # 【依赖说明】此处依赖 agent/component/agent_with_tools.py 中 
-                # _react_with_tools_streamly 方法的修改：使用 as_completed 在每个工具完成时
-                # yield 空字符串，使得此处可以实时检测到 use_tools 列表的变化。
-                # ============================================================================
                 previous_tool_count = 0
-                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools, schema_prompt=schema_prompt):
-                    # 检查是否有新的工具调用（由 _react_with_tools_streamly 的 yield 触发）
+                # 使用异步版本的 _react_with_tools_streamly_async
+                async for delta_ans, _ in self.agent._react_with_tools_streamly_async(prompt, msg, use_tools, schema_prompt=schema_prompt):
                     if len(use_tools) > previous_tool_count:
-                        # 显示新的工具调用
                         new_tools = use_tools[previous_tool_count:]
                         for tool_call in new_tools:
                             tool_name = tool_call.get('name', 'Unknown')
                             tool_args = tool_call.get('arguments', {})
 
-                            # 简化参数显示
                             args_preview = ""
                             if isinstance(tool_args, dict) and tool_args:
                                 key_args = []
-                                # for k, v in list(tool_args.items())[:2]:  # 只显示前2个关键参数
                                 for k, v in list(tool_args.items()):
-                                    # if isinstance(v, str) and len(v) > 30:
-                                    #     v = v[:30] + "..."
                                     key_args.append(f"{k}={v}")
                                 args_preview = f"({', '.join(key_args)})"
 
                             yield f"\n🔧 **工具调用**: {tool_name}{args_preview}\n"
 
-                            # 显示结果（如果已有结果）
                             tool_results = tool_call.get('results', '')
                             if tool_results:
                                 results_preview = str(tool_results)
-                                # if len(results_preview) > 200:
-                                #     results_preview = results_preview[:200] + "..."
                                 yield f"📋 **结果**: {results_preview}\n\n"
 
                         previous_tool_count = len(use_tools)
                     if delta_ans:
                         yield delta_ans
 
-                # 保存工具使用历史，供verbose模式使用
                 self.agent._last_use_tools = use_tools
-                # 同时设置为Agent的标准输出格式
                 if use_tools:
                     self.agent.set_output("use_tools", use_tools)
 
             else:
-                # 没有工具时，直接使用LLM流式输出
-                # 调用Agent的invoke方法获取流式生成器
                 self.agent._param.prompts = [{"role": "user", "content": query}]
                 prompt, msg, _ = self.agent._prepare_prompt_variables()
 
-                # 直接使用Agent的_stream_output方法
-                for delta in self.agent._stream_output(prompt, msg):
+                # 使用异步流式输出
+                async for delta in self.agent._stream_output_async(prompt, msg):
                     yield delta
 
         finally:
-            # 恢复原始系统提示词
             if knowledge_context:
                 self.agent._param.sys_prompt = original_prompt or "You are a helpful AI assistant."
 
-    def chat_with_tools_stream_structured(self, query: str, messages: list[dict] = None,
-                                         knowledge_context: str = "", files: list[str] = None):
+    async def chat_with_tools_stream_structured_async(self, query: str, messages: list[dict] = None,
+                                                      knowledge_context: str = "", files: list[str] = None):
         """
-        带工具的流式对话 - 结构化输出版本
+        异步版本的结构化工具流式对话
         返回结构化的SSE消息，每个文本消息都包含累积内容
         """
-        # 处理历史消息
         messages = messages or []
         history = []
-        
+
         for msg in messages:
             history.append({
                 "role": msg.get("role", "user"),
                 "content": msg.get("content", "")
             })
-        
+
         if query:
             history.append({"role": "user", "content": query})
-        
-        # 合并知识上下文到系统提示词
+
         original_prompt = self.agent._param.sys_prompt or ""
         if knowledge_context:
             self.agent._param.sys_prompt = (self.agent._param.sys_prompt or "") + "\n" + knowledge_context
         elif not original_prompt:
-            # 确保 sys_prompt 不为 None
             self.agent._param.sys_prompt = "You are a helpful AI assistant."
-        
+
         try:
-            # 更新 canvas_mock 的历史记录
             self.canvas_mock.history = history
-            
-            # 准备提示词
             self.agent._param.prompts = history
             prompt, msg, _ = self.agent._prepare_prompt_variables()
-            
-            # 累积文本内容（重要：与原实现保持一致）
+
             accumulated_text = ""
-            
-            # 检查是否有工具可用
+
             if self.agent.tools:
-                # 重要：像 _invoke 方法一样，将 system 消息添加到 msg 中
                 from core.prompts.generator import message_fit_in
                 _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.agent.chat_mdl.max_length * 0.97))
-                
+
                 use_tools = []
-                
-                # 获取 schema_prompt 用于结构化输出
                 schema_prompt = self._get_schema_prompt()
-                
-                # 发送工具分析开始消息
+
                 yield {"type": "tool_start", "content": "Starting tool analysis..."}
-                
-                # ============================================================================
-                # 实时工具调用输出
-                # 
-                # 【依赖说明】此处依赖 agent/component/agent_with_tools.py 中 
-                # _react_with_tools_streamly 方法的修改：使用 as_completed 在每个工具完成时
-                # yield 空字符串，使得此处可以实时检测到 use_tools 列表的变化。
-                # ============================================================================
+
                 previous_tool_count = 0
                 call_id_counter = 0
-                
-                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools, schema_prompt=schema_prompt):
-                    # 检查是否有新的工具调用（由 _react_with_tools_streamly 的 yield 触发）
+
+                # 使用异步版本
+                async for delta_ans, _ in self.agent._react_with_tools_streamly_async(prompt, msg, use_tools, schema_prompt=schema_prompt):
                     if len(use_tools) > previous_tool_count:
                         new_tools = use_tools[previous_tool_count:]
                         for tool_call in new_tools:
                             call_id_counter += 1
                             call_id = f"call_{call_id_counter}"
-                            
+
                             tool_name = tool_call.get('name', 'Unknown')
                             tool_args = tool_call.get('arguments', {})
-                            
-                            # 发送工具调用消息
+
                             yield {
                                 "type": "tool_call",
                                 "content": {
@@ -466,8 +411,7 @@ class ChatAgentAdapter:
                                     "call_id": call_id
                                 }
                             }
-                            
-                            # 如果有结果，发送工具结果消息
+
                             tool_results = tool_call.get('results', '')
                             if tool_results:
                                 yield {
@@ -479,19 +423,16 @@ class ChatAgentAdapter:
                                         "success": True
                                     }
                                 }
-                        
+
                         previous_tool_count = len(use_tools)
-                    
-                    # 处理文本增量并输出累积内容
+
                     if delta_ans:
-                        accumulated_text += delta_ans  # 累积增量
-                        # 输出累积内容（与原实现一致）
+                        accumulated_text += delta_ans
                         yield {
                             "type": "text",
-                            "content": accumulated_text  # 直接输出累积内容
+                            "content": accumulated_text
                         }
-                
-                # 发送工具分析结束消息
+
                 if use_tools:
                     yield {
                         "type": "tool_end",
@@ -500,30 +441,25 @@ class ChatAgentAdapter:
                             "summary": f"Used {len(use_tools)} tool(s)"
                         }
                     }
-                
-                # 保存工具使用历史
+
                 self.agent._last_use_tools = use_tools
                 if use_tools:
                     self.agent.set_output("use_tools", use_tools)
-            
+
             else:
-                # 没有工具时，直接使用LLM流式输出
                 self.agent._param.prompts = [{"role": "user", "content": query}]
                 prompt, msg, _ = self.agent._prepare_prompt_variables()
-                
-                for delta in self.agent._stream_output(prompt, msg):
+
+                # 使用异步流式输出
+                async for delta in self.agent._stream_output_async(prompt, msg):
                     if delta:
-                        accumulated_text += delta  # 累积增量
-                        # 输出累积内容（与原实现一致）
+                        accumulated_text += delta
                         yield {
                             "type": "text",
-                            "content": accumulated_text  # 直接输出累积内容
+                            "content": accumulated_text
                         }
-            
-            # 不再发送完成消息，由外层处理
-        
+
         except Exception as e:
-            # 发送错误消息
             yield {
                 "type": "error",
                 "content": {
@@ -531,12 +467,74 @@ class ChatAgentAdapter:
                     "code": 500
                 }
             }
-        
+
         finally:
-            # 恢复原始系统提示词
             if knowledge_context:
                 self.agent._param.sys_prompt = original_prompt or "You are a helpful AI assistant."
 
+    async def chat_async(self, query: str, messages: list[dict] = None,
+                         knowledge_context: str = "", files: list[str] = None) -> str:
+        """
+        非流式异步对话方法 - 用于不需要流式输出的场景
+        
+        Args:
+            query: 用户查询
+            messages: 历史消息列表
+            knowledge_context: 知识上下文
+            files: 文件列表
+            
+        Returns:
+            str: 完整的回复内容
+        """
+        result_content = ""
+        async for delta in self.chat_with_tools_stream_async(
+            query=query,
+            messages=messages,
+            knowledge_context=knowledge_context,
+            files=files
+        ):
+            if delta:
+                result_content += delta
+        return result_content
+
+    async def chat_structured_async(self, query: str, messages: list[dict] = None,
+                                    knowledge_context: str = "", files: list[str] = None) -> dict:
+        """
+        非流式结构化异步对话方法 - 返回最终的结构化结果
+        
+        Args:
+            query: 用户查询
+            messages: 历史消息列表
+            knowledge_context: 知识上下文
+            files: 文件列表
+            
+        Returns:
+            dict: 包含最终文本和工具使用信息的字典
+        """
+        result = {
+            "text": "",
+            "tool_calls": [],
+            "tool_results": []
+        }
+        async for message in self.chat_with_tools_stream_structured_async(
+            query=query,
+            messages=messages,
+            knowledge_context=knowledge_context,
+            files=files
+        ):
+            msg_type = message.get("type")
+            content = message.get("content")
+            
+            if msg_type == "text":
+                result["text"] = content  # 累积内容，最后一个是完整的
+            elif msg_type == "tool_call":
+                result["tool_calls"].append(content)
+            elif msg_type == "tool_result":
+                result["tool_results"].append(content)
+            elif msg_type == "error":
+                raise Exception(content.get("error", "Unknown error"))
+        
+        return result
 
 
 def prepare_knowledge_context(db: Session, messages: list[dict], tavily_api_key: str, tenant_id: str, llm_name: str) -> str:
@@ -2766,100 +2764,60 @@ async def enhanced_chat_service_sse(
         )
 
         if not request.stream:
-            # 非流式响应
-            result_content = ""
+            # 非流式响应 - 使用纯异步方法，避免阻塞事件循环
             try:
-                for delta in chat_agent.chat_with_tools_stream(
-                        query=request.messages[-1]["content"] if request.messages else "",
-                        messages=request.messages[:-1] if request.messages else [],
-                        knowledge_context=knowledge_context,
-                        files=request.files
-                ):
-                    result_content += delta
-
+                result_content = await chat_agent.chat_async(
+                    query=request.messages[-1]["content"] if request.messages else "",
+                    messages=request.messages[:-1] if request.messages else [],
+                    knowledge_context=knowledge_context,
+                    files=request.files
+                )
                 return {"retcode": 0, "retmsg": "success", "data": {"answer": result_content}}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
-        # 流式响应
+        # 流式响应 - 使用原生异步方法，减少线程开销
         async def sse_stream():
-            loop = asyncio.get_running_loop()
-            queue: asyncio.Queue[str | None] = asyncio.Queue()
-            stop_event = threading.Event()
-
-            def safe_put(value: str | None) -> None:
-                if stop_event.is_set():
-                    return
-                future = asyncio.run_coroutine_threadsafe(queue.put(value), loop)
-                try:
-                    future.result()
-                except Exception as exc:  # noqa: BLE001 - 捕获线程间通信异常
-                    stop_event.set()
-                    logging.debug(f"Failed to enqueue SSE payload: {exc}")
-
-            def stream_structured() -> None:
-                try:
-                    stream_generator = chat_agent.chat_with_tools_stream_structured(
+            try:
+                if request.structured_output:
+                    # 结构化输出模式 - 使用异步方法
+                    async for message in chat_agent.chat_with_tools_stream_structured_async(
                         query=request.messages[-1]["content"] if request.messages else "",
                         messages=request.messages[:-1] if request.messages else [],
                         knowledge_context=knowledge_context,
                         files=request.files
-                    )
-
-                    for message in stream_generator:
-                        if stop_event.is_set():
-                            break
+                    ):
                         wrapped_message = {
                             "retcode": 0,
                             "retmsg": "",
                             "data": message
                         }
-                        safe_put(f"data: {json.dumps(wrapped_message, ensure_ascii=False)}\n\n")
+                        yield f"data: {json.dumps(wrapped_message, ensure_ascii=False)}\n\n"
 
-                    if not stop_event.is_set():
-                        end_data = {
-                            "retcode": 0,
-                            "retmsg": "Stream completed",
-                            "data": True
-                        }
-                        safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
-                except Exception as e:
-                    logging.exception(f"Stream error (structured): {e}")
-                    error_data = {
-                        "retcode": 500,
-                        "retmsg": str(e),
-                        "data": {"answer": f"**ERROR**: {str(e)}"}
-                    }
-                    safe_put(f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n")
+                    # 发送完成消息
                     end_data = {
                         "retcode": 0,
-                        "retmsg": "",
+                        "retmsg": "Stream completed",
                         "data": True
                     }
-                    safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
-                finally:
-                    safe_put(None)
+                    yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
-            def stream_unstructured() -> None:
-                accumulated_content = ""
-                try:
+                else:
+                    # 非结构化输出模式 - 使用异步方法
+                    accumulated_content = ""
                     start_data = {
                         "retcode": 0,
                         "retmsg": "Chat started",
                         "data": ""
                     }
-                    safe_put(f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n")
+                    yield f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n"
 
-                    stream_generator = chat_agent.chat_with_tools_stream(
+                    async for delta in chat_agent.chat_with_tools_stream_async(
                         query=request.messages[-1]["content"] if request.messages else "",
                         messages=request.messages[:-1] if request.messages else [],
                         knowledge_context=knowledge_context,
                         files=request.files
-                    )
-
-                    for delta in stream_generator:
-                        if stop_event.is_set():
-                            break
+                    ):
                         if delta:
                             accumulated_content += delta
                             response_data = {
@@ -2867,13 +2825,10 @@ async def enhanced_chat_service_sse(
                                 "retmsg": "",
                                 "data": accumulated_content
                             }
-                            safe_put(f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n")
+                            yield f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
 
-                    if (
-                        not stop_event.is_set()
-                        and request.verbose_tool_use
-                        and chat_agent.agent.tools
-                    ):
+                    # 添加工具使用摘要（如果启用）
+                    if request.verbose_tool_use and chat_agent.agent.tools:
                         use_tools = getattr(chat_agent.agent, '_last_use_tools', [])
                         if use_tools:
                             tools_summary = f"\n\n📊 **本次对话使用了 {len(use_tools)} 个工具调用**"
@@ -2883,59 +2838,33 @@ async def enhanced_chat_service_sse(
                                 "retmsg": "",
                                 "data": accumulated_content
                             }
-                            safe_put(f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n")
+                            yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
 
-                    if not stop_event.is_set():
-                        end_data = {
-                            "retcode": 0,
-                            "retmsg": "Stream completed",
-                            "data": True
-                        }
-                        safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
-                except Exception as e:
-                    logging.exception(f"Stream error: {e}")
-                    error_data = {
-                        "retcode": 500,
-                        "retmsg": str(e),
-                        "data": {"answer": f"**ERROR**: {str(e)}"}
-                    }
-                    safe_put(f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n")
+                    # 发送完成消息
                     end_data = {
                         "retcode": 0,
-                        "retmsg": "",
+                        "retmsg": "Stream completed",
                         "data": True
                     }
-                    safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
-                finally:
-                    safe_put(None)
+                    yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
-            producer = loop.run_in_executor(
-                executor,
-                stream_structured if request.structured_output else stream_unstructured
-            )
-
-            try:
-                while True:
-                    item = await queue.get()
-                    if item is None:
-                        break
-                    yield item
             except asyncio.CancelledError:
-                stop_event.set()
-                try:
-                    queue.put_nowait(None)
-                except asyncio.QueueFull:
-                    pass
+                logging.info("SSE stream was cancelled by client")
                 raise
-            finally:
-                stop_event.set()
-                if not producer.done():
-                    producer.cancel()
-                while not queue.empty():
-                    try:
-                        queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
+            except Exception as e:
+                logging.exception(f"Stream error: {e}")
+                error_data = {
+                    "retcode": 500,
+                    "retmsg": str(e),
+                    "data": {"answer": f"**ERROR**: {str(e)}"}
+                }
+                yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                end_data = {
+                    "retcode": 0,
+                    "retmsg": "",
+                    "data": True
+                }
+                yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(
             sse_stream(),
