@@ -139,7 +139,7 @@ def parse_mineru_paths() -> dict[str, Path]:
 
 
 @once
-def install_mineru() -> None:
+def check_and_install_mineru() -> None:
     """
     Ensure MinerU is installed.
 
