@@ -13,6 +13,7 @@ from api.db.services.pipeline_operation_log_service import PipelineOperationLogS
 from common.connection_utils import timeout
 from common.file_utils import get_project_base_directory
 from core.utils.base64_image import image2id
+from core.utils.raptor_utils import should_skip_raptor, get_skip_reason
 from common.log_utils import init_root_logger
 from common.config_utils import show_configs
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
@@ -2498,6 +2499,18 @@ async def do_handle_task(db, task):
             if not KnowledgebaseService.update_by_id(kb.id, {"parser_config": kb_parser_config}):
                 progress_callback(prog=-1.0, msg="Internal error: Invalid RAPTOR configuration")
                 return
+
+        # Check if Raptor should be skipped for structured data
+        file_type = task.get("type", "")
+        parser_id = task.get("parser_id", "")
+        raptor_config = kb_parser_config.get("raptor", {})
+
+        if should_skip_raptor(file_type, parser_id, task_parser_config, raptor_config):
+            skip_reason = get_skip_reason(file_type, parser_id, task_parser_config)
+            logging.info(f"Skipping Raptor for document {task_document_name}: {skip_reason}")
+            progress_callback(prog=1.0, msg=f"Raptor skipped: {skip_reason}")
+            return
+
         # bind LLM for raptor
         chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
         # run RAPTOR
