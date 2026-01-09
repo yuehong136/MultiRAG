@@ -1354,7 +1354,8 @@ class Dealer:
                 doc["id"] = id
             if dict_chunks:
                 res.extend(dict_chunks.values())
-            if len(dict_chunks.values()) < bs:
+            # FIX: Solo terminar si no hay chunks, no si hay menos de bs
+            if len(dict_chunks.values()) == 0:
                 break
         return res
 
