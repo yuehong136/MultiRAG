@@ -1,3 +1,4 @@
+import asyncio
 import pathlib
 import re
 
@@ -14,11 +15,12 @@ from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from common.misc_utils import get_uuid
 from api.utils.api_utils import get_error_data_result, get_result, server_error_response, token_required, \
     get_json_result
 from api.utils.file_utils import filename_type
+from api.utils.web_utils import CONTENT_TYPE_MAP
 from common import settings
+from common.misc_utils import get_uuid
 from common.constants import RetCode
 
 router = APIRouter()
@@ -460,6 +462,36 @@ def download_file(
             headers={
                 "Content-Disposition": f"attachment; filename={file.name}"
             }
+        )
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.get("/file/download/{attachment_id}", summary="下载 attachment 文件")
+async def download_attachment(
+    attachment_id: str,
+    ext: str = Query("markdown"),
+    tenant_id: str = Depends(token_required)
+):
+    """
+    下载 message 组件输出的 attachment 文件
+
+    Args:
+        attachment_id: Attachment ID
+        ext: 文件扩展名，默认为 markdown
+        tenant_id: 租户ID
+
+    Returns:
+        文件流
+    """
+    try:
+        data = await asyncio.to_thread(settings.STORAGE_IMPL.get, tenant_id, attachment_id)
+        content_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
+
+        from io import BytesIO
+        return StreamingResponse(
+            BytesIO(data),
+            media_type=content_type
         )
     except Exception as e:
         return server_error_response(e)
