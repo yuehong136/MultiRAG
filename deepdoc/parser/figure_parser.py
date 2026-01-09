@@ -32,6 +32,8 @@ def _is_valid_image_size(img: Image.Image) -> bool:
 
 
 def vision_figure_parser_figure_data_wrapper(figures_data_without_positions):
+    if not figures_data_without_positions:
+        return []
     return [
         (
             (figure_data[1], [figure_data[0]]),
@@ -42,7 +44,9 @@ def vision_figure_parser_figure_data_wrapper(figures_data_without_positions):
     ]
 
 
-def vision_figure_parser_docx_wrapper(sections,tbls,callback=None,**kwargs):
+def vision_figure_parser_docx_wrapper(sections, tbls, callback=None,**kwargs):
+    if not tbls:
+        return []
     try:
         with db_connection() as db:
             vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
@@ -61,6 +65,8 @@ def vision_figure_parser_docx_wrapper(sections,tbls,callback=None,**kwargs):
 
 
 def vision_figure_parser_pdf_wrapper(tbls, callback=None, **kwargs):
+    if not tbls:
+        return []
     try:
         with db_connection() as db:
             vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
