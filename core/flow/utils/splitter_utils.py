@@ -216,7 +216,7 @@ class FlowSplitter:
             {
                 "text": RAGFlowPdfParser.remove_tag(c),
                 "image": img,
-                "positions": [[pos[0][-1]+1, *pos[1:]] for pos in RAGFlowPdfParser.extract_positions(c)]
+                "positions": [[pos[0][-1], *pos[1:]] for pos in RAGFlowPdfParser.extract_positions(c)]
             }
             for c, img in zip(chunks, chunk_images) if c.strip()
         ]
