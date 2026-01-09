@@ -53,8 +53,8 @@ def get_init_tenant_llm(db, user_id):
                     "llm_factory": factory_config["factory"],
                     "llm_name": llm.llm_name,
                     "mdl_type": llm.mdl_type,
-                    "api_key": model_configs.get(llm.model_type, {}).get("api_key", factory_config["api_key"]),
-                    "api_base": model_configs.get(llm.model_type, {}).get("base_url", factory_config["base_url"]),
+                    "api_key": model_configs.get(llm.mdl_type, {}).get("api_key", factory_config["api_key"]),
+                    "api_base": model_configs.get(llm.mdl_type, {}).get("base_url", factory_config["base_url"]),
                     "max_tokens": llm.max_tokens if llm.max_tokens else 8192,
                 }
             )
