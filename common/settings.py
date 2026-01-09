@@ -18,6 +18,7 @@ import core.utils.opensearch_conn
 import core.utils.vastbase_conn
 from core.utils.azure_sas_conn import MultiRAGAzureSasBlob
 from core.utils.azure_spn_conn import MultiRAGAzureSpnBlob
+from core.utils.gcs_conn import MultiRAGGCS
 from core.utils.minio_conn import MultiRAGMinio
 from core.utils.opendal_conn import OpenDALStorage
 from core.utils.s3_conn import MultiRAGS3
@@ -99,6 +100,7 @@ MINIO = {}
 OB = {}
 OSS = {}
 OS = {}
+GCS = {}
 
 # Core settings (from core/settings.py)
 RAG_CONF_PATH = os.path.join(get_project_base_directory(), "configs")
@@ -119,7 +121,8 @@ class StorageFactory:
         Storage.AZURE_SAS: MultiRAGAzureSasBlob,
         Storage.AWS_S3: MultiRAGS3,
         Storage.OSS: MultiRAGOSS,
-        Storage.OPENDAL: OpenDALStorage
+        Storage.OPENDAL: OpenDALStorage,
+        Storage.GCS: RAGFlowGCS,
     }
 
     @classmethod
@@ -286,7 +289,7 @@ def init_settings():
     else:
         raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
 
-    global AZURE, S3, MINIO, OSS
+    global AZURE, S3, MINIO, OSS, GCS
     if STORAGE_IMPL_TYPE in ['AZURE_SPN', 'AZURE_SAS']:
         AZURE = get_base_config("azure", {})
     elif STORAGE_IMPL_TYPE == 'AWS_S3':
@@ -295,6 +298,8 @@ def init_settings():
         MINIO = decrypt_database_config(name="minio")
     elif STORAGE_IMPL_TYPE == 'OSS':
         OSS = get_base_config("oss", {})
+    elif STORAGE_IMPL_TYPE == 'GCS':
+        GCS = get_base_config("gcs", {})
 
     global STORAGE_IMPL
     STORAGE_IMPL = StorageFactory.create(Storage[STORAGE_IMPL_TYPE])

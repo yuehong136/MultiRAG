@@ -67,6 +67,9 @@ s3:
   signature_version: 'v4'
   addressing_style: 'path'
 
+gcs:
+  bucket: '${GCS_BUCKET:bridgtl-edm-d-bucket-multirag'
+
 oss:
   access_key: 'access_key'
   secret_key: 'secret_key'
