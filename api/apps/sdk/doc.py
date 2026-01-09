@@ -357,9 +357,7 @@ def update_document(
             try:
                 if not DocumentService.update_by_id(db, doc.id, {"status": str(status)}):
                     return get_error_data_result(retmsg="Database error (Document update)!")
-                
-                settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id), doc.kb_id)
-                return get_result(data=True)
+                settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id, [kb.name]), doc.kb_id)
             except Exception as e:
                 return server_error_response(e)
     
