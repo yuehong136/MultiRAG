@@ -26,7 +26,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.dialog_service import meta_filter, convert_conditions
 from common.constants import RetCode
 
-from api.db.services.task_service import TaskService, queue_tasks
+from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
 from core.app.qa import beAdoc, rmPrefix
 from core.app.tag import label_question
@@ -752,7 +752,8 @@ def stop_parsing_documents(
             doc = DocumentService.query(db, kb_id=dataset_id, id=doc_id)
             if not doc:
                 continue
-            
+            # Send cancellation signal via Redis to stop background task
+            cancel_all_task_of(doc_id)
             # 更新文档状态为取消
             DocumentService.update_by_id(
                 db,
