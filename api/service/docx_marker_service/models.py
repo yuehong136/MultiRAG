@@ -95,6 +95,7 @@ class Placeholder(BaseModel):
     prompt_for_ai: str = ""
     custom_fields: dict[str, str] = {}  # 用户自定义的 key-value 字段
     table_config: TableConfig | None = None  # 表格配置（仅 type 为 table 或 dynamic_table 时有效）
+    bind: str = ""  # 绑定配置（仅 type 为 summary 时有效）
 
 
 class PlaceholderRequest(BaseModel):
@@ -106,6 +107,7 @@ class PlaceholderRequest(BaseModel):
     prompt_for_ai: str = ""
     custom_fields: dict[str, str] = {}  # 用户自定义的 key-value 字段
     table_config: TableConfig | None = None  # 表格配置
+    bind: str = ""  # 绑定配置（仅 type 为 summary 时有效）
 
 
 class FieldValue(BaseModel):
