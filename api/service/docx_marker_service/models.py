@@ -70,6 +70,22 @@ class ParsedDocument(BaseModel):
 PlaceholderType = Literal["cell", "summary", "table", "dynamic_table"]
 
 
+class TableColumn(BaseModel):
+    """表格列配置"""
+    cell_index: int  # 单元格索引（在行内的位置）
+    name: str  # 列名称（从表头提取或用户输入）
+    prompt_for_ai: str = ""  # 该列的 AI 提示词
+
+
+class TableConfig(BaseModel):
+    """表格类型待填项的配置"""
+    dynamic: bool = False  # 是否为动态表格
+    header_row: int  # 表头所在行（Word 表格内的行索引，0-based）
+    data_start_row: int  # 数据起始行（Word 表格内的行索引，0-based）
+    data_end_row: int  # 数据结束行（Word 表格内的行索引，0-based，仅普通表格需要）
+    columns: list[TableColumn]  # 列配置
+
+
 class Placeholder(BaseModel):
     """待填项"""
     path: str
@@ -78,6 +94,7 @@ class Placeholder(BaseModel):
     type: PlaceholderType = "cell"
     prompt_for_ai: str = ""
     custom_fields: dict[str, str] = {}  # 用户自定义的 key-value 字段
+    table_config: TableConfig | None = None  # 表格配置（仅 type 为 table 或 dynamic_table 时有效）
 
 
 class PlaceholderRequest(BaseModel):
@@ -88,13 +105,15 @@ class PlaceholderRequest(BaseModel):
     type: PlaceholderType = "cell"
     prompt_for_ai: str = ""
     custom_fields: dict[str, str] = {}  # 用户自定义的 key-value 字段
+    table_config: TableConfig | None = None  # 表格配置
 
 
 class FieldValue(BaseModel):
     """单个字段的值"""
     id: str  # 字段 ID，如 $1, $2
-    value: str  # 填充的值
+    value: str = ""  # 填充的值（普通类型使用）
     custom_fields: dict[str, str] = {}  # 用户自定义的 key-value 字段
+    rows: list[dict[str, str]] | None = None  # 表格数据（仅表格类型使用）
 
 
 class FillRequest(BaseModel):
