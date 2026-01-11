@@ -103,9 +103,9 @@ services:
       # - ../core:/multirag/core
       # - ../common:/multirag/common
 
-    # 默认命令：启动所有服务（Redis、API Server、TaskExecutor）
-    # 不启动 Admin Server
-    command: []
+    # 默认命令：启动所有服务（Redis、API Server、TaskExecutor、Admin Server）
+    command:
+      - --enable-adminserver
 
     # 网络配置
     networks:
@@ -167,7 +167,9 @@ services:
       - ../core:/multirag/core
       - ../common:/multirag/common
 
-    command: []
+    # 默认命令：启动所有服务（Redis、API Server、TaskExecutor、Admin Server）
+    command:
+      - --enable-adminserver
 
     networks:
       - multirag
