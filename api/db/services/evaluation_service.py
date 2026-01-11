@@ -12,7 +12,10 @@ Provides functionality for evaluating RAG system performance including:
 - Configuration recommendations
 """
 
+import asyncio
 import logging
+import queue
+import threading
 from datetime import datetime
 from timeit import default_timer as timer
 from typing import Any
@@ -21,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import EvaluationDataset, EvaluationCase, EvaluationRun, EvaluationResult
 from api.db.services.common_service import CommonService
-from api.db.services.dialog_service import DialogService, chat
+from api.db.services.dialog_service import DialogService
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp
@@ -401,7 +404,42 @@ class EvaluationService:
             answer = ""
             retrieved_chunks = []
 
-            for ans in chat(dialog, messages, db, stream=False):
+            # 使用局部桥接函数调用异步 chat
+            def _sync_from_async_gen(async_gen):
+                result_queue: queue.Queue = queue.Queue()
+
+                def runner():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    async def consume():
+                        try:
+                            async for item in async_gen:
+                                result_queue.put(item)
+                        except Exception as e:
+                            result_queue.put(e)
+                        finally:
+                            result_queue.put(StopIteration)
+
+                    loop.run_until_complete(consume())
+                    loop.close()
+
+                threading.Thread(target=runner, daemon=True).start()
+
+                while True:
+                    item = result_queue.get()
+                    if item is StopIteration:
+                        break
+                    if isinstance(item, Exception):
+                        raise item
+                    yield item
+
+            def chat(dialog, messages, stream=True, **kwargs):
+                from api.db.services.dialog_service import async_chat
+
+                return _sync_from_async_gen(async_chat(dialog, messages, db, stream=stream, **kwargs))
+
+            for ans in chat(dialog, messages, stream=False):
                 if isinstance(ans, dict):
                     answer = ans.get("answer", "")
                     retrieved_chunks = ans.get("reference", {}).get("chunks", [])

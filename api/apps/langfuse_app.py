@@ -98,7 +98,7 @@ def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
         except langfuse.api.core.api_error.ApiError as api_err:
             return get_json_result(retmsg=f"Error from Langfuse: {api_err}")
         except Exception as e:
-            server_error_response(e)
+            return server_error_response(e)
 
         langfuse_entry["project_id"] = langfuse.api.projects.get().dict()["data"][0]["id"]
         langfuse_entry["project_name"] = langfuse.api.projects.get().dict()["data"][0]["name"]

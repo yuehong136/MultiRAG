@@ -20,7 +20,7 @@ from typing import Generator, Literal, Annotated, Any
 
 from api.db.db_models import APIToken, get_db
 from api.db.services.conversation_service import ConversationService, structure_answer
-from api.db.services.dialog_service import DialogService, chat, ask, gen_mindmap
+from api.db.services.dialog_service import DialogService, async_chat, async_ask, gen_mindmap
 # from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
@@ -453,7 +453,7 @@ def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depend
 
 
 @router.post('/completion', summary="生成对话", response_description="成功生成对话")
-def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     # 生成对话响应
 
@@ -672,10 +672,10 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
 
         is_embedded = bool(chat_model_id)
 
-        def stream_response():
+        async def stream_response():
             nonlocal dia, msg, db, req, conv
             try:
-                for ans in chat(dia, msg, db, **req):
+                async for ans in async_chat(dia, msg, db, **req):
                     ans = structure_answer(conv, ans, message_id, conv.id)
                     yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
                 ConversationService.update_by_id(db, conv.id, conv.to_dict())
@@ -691,7 +691,7 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
         else:
             answer = None
             conv = deepcopy(conv)  # 深拷贝 conv，否则会导致后续更新数据时，无法更新引用
-            for ans in chat(dia, msg, db, **req):
+            async for ans in async_chat(dia, msg, db, **req):
                 answer = structure_answer(conv, ans, message_id, conv.id)
                 if not is_embedded:
                     ConversationService.update_by_id(db, conv.id, conv.to_dict())
@@ -1099,9 +1099,9 @@ def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depe
     if search_app:
         search_config = search_app.get("search_config", {})
 
-    def stream():
+    async def stream():
         try:
-            for ans in ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
+            async for ans in async_ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
                 yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
@@ -1217,9 +1217,8 @@ def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends
     return get_json_result(data=mind_map)
 
 
-# 定义 related_questions 接口
 @router.post('/related_questions', summary="生成相关问题", response_description="返回相关问题")
-def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     生成相关问题
 
@@ -1249,7 +1248,7 @@ def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(ge
     if "parameter" in gen_conf:
         del gen_conf["parameter"]
     prompt = load_prompt("related_question")
-    ans = chat_mdl.chat(
+    ans = await chat_mdl.async_chat(
         prompt,
         [
             {

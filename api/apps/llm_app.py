@@ -797,7 +797,7 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post('/set_api_key', summary="新增模型厂商api key", response_description="成功保存该模型服务厂商的api key")
-def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     此异步函数用于设置模型制造商的API密钥，并验证其是否能正确访问特定类型的模型。
     摘要: 新增模型厂商api key
@@ -848,9 +848,7 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
             assert factory in ChatModel, f"Chat model from {factory} is not supported yet."
             mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"), **extra)
             try:
-                m, tc = mdl.chat("", [{"role": "user", "content": "Hello! How are you doing!"}],
-                                 {"temperature": 0.9, 'max_tokens': 50})
-                print(m)
+                m, tc = await mdl.async_chat("", [{"role": "user", "content": "Hello! How are you doing!"}], {"temperature": 0.9, 'max_tokens': 50})
                 if m.find("**ERROR**") >= 0:
                     raise Exception(m)
             except Exception as e:
@@ -903,7 +901,7 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
 
 
 @router.post('/add_llm', summary="新增模型", response_description="成功新增该模型")
-def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
 # POST /add_llm
 
@@ -1098,8 +1096,7 @@ POST
             **extra,
         )
         try:
-            m, tc = mdl.chat("", [{"role": "user", "content": "Hello! How are you doing!"}],
-                             {"temperature": 0.9, 'max_tokens': 500})
+            m, tc = await mdl.async_chat("", [{"role": "user", "content": "Hello! How are you doing!"}], {"temperature": 0.9})
             if not tc and m.find("**ERROR**:") >= 0:
                 raise Exception(m)
         except Exception as e:
@@ -1822,7 +1819,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
 
 
 @router.post('/chat_service', summary="模型对话服务", response_description="成功调用对话模型")
-def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     **功能描述**:
     此接口用于调用对话模型，基于用户提供的输入生成对应的响应内容。支持文本生成、图像到文本转换、消息处理等多种模型类型。接口根据请求体中的配置，选择适当的模型及生成方式，提供流式和非流式响应模式。
@@ -1896,9 +1893,11 @@ def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user
 
     # 根据是否流式调用选择合适的方法
     if req["stream"]:
-        data = chat_mdl.chat_streamly(**call_params)
+        data = []
+        async for chunk in chat_mdl.async_chat_streamly(**call_params):
+            data.append(chunk)
     else:
-        data = chat_mdl.chat(**call_params)
+        data = await chat_mdl.async_chat(**call_params)
 
     return get_json_result(data=data)
 
@@ -2064,8 +2063,8 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
     # 使用可能已过滤的数据
     req = req_dict
 
-    # 将同步操作封装在函数中
-    def process_non_streaming_request():
+    # 将操作封装在异步函数中
+    async def process_non_streaming_request():
         # 获取租户信息
         tenants = TenantService.get_info_by(db, user.id)
         if not tenants:
@@ -2098,7 +2097,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
             call_params["images"] = req["image"]
 
         # 非流式调用，直接返回完整响应
-        data = chat_mdl.chat(**call_params)
+        data = await chat_mdl.async_chat(**call_params)
         return data
 
     # 获取初始设置的同步函数
@@ -2157,42 +2156,13 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
     # 处理流式响应
     async def stream_response():
         try:
-            # 在线程池中获取初始设置
-            loop = asyncio.get_running_loop()
-            chat_mdl, call_params = await loop.run_in_executor(executor, get_initial_setup)
+            # 获取初始设置
+            chat_mdl, call_params = get_initial_setup()
 
-            # 在线程池中执行流式生成并迭代结果
-            def generate_stream():
-                try:
-                    # 调用模型的流式生成方法
-                    result_generator = chat_mdl.chat_streamly(**call_params)
-                    # 返回生成器对象
-                    return result_generator
-                except Exception as e:
-                    # 捕获异常并返回
-                    raise e
-
-            # 获取生成器
-            generator = await loop.run_in_executor(executor, generate_stream)
-
-            # 保持与原代码相同的累加逻辑
-            last_ans = ""  # 初始化累加变量
-
-            # 使用线程池处理每次迭代，但保持原始累加逻辑
-            def get_next_chunk(generator):
-                try:
-                    return next(generator), False  # 返回下一个结果和未完成标志
-                except StopIteration:
-                    return None, True  # 返回None和完成标志
-                except Exception as e:
-                    raise e
-
-            is_complete = False
-            while not is_complete:
-                # 在线程池中获取下一个响应
-                chunk, is_complete = await loop.run_in_executor(executor, get_next_chunk, generator)
-
-                if is_complete:
+            # 使用异步流式生成
+            last_ans = ""
+            async for chunk in chat_mdl.async_chat_streamly(**call_params):
+                if isinstance(chunk, int):
                     # 流结束
                     end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
                     yield f"data: {end_message}\n\n"
@@ -2221,14 +2191,13 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
     if req["stream"]:
         return StreamingResponse(stream_response(), media_type="text/event-stream")
     else:
-        # 在线程池中运行同步代码
-        loop = asyncio.get_running_loop()
-        data = await loop.run_in_executor(executor, process_non_streaming_request)
+        # 直接调用异步函数
+        data = await process_non_streaming_request()
         return get_json_result(data=data)
 
 
 @router.post('/fine_prompt', summary="优化提示词", response_description="返回优化后的提示词")
-def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     **功能描述**:
     此接口用于根据用户输入的任务描述或现有提示词，优化生成详细的系统提示词，以便更好地引导语言模型完成任务。该接口结合预定义的优化提示模板 (META_PROMPT)，确保模型输出的提示词更加清晰、具体，并且能合理规划任务的完成步骤。
@@ -2312,14 +2281,14 @@ def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=
     """.strip()
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
 
-    data = chat_mdl.chat(META_PROMPT, [{"role": "user", "content": "Task, Goal, or Current Prompt:\n" + req["prompt"]}],
+    data = await chat_mdl.async_chat(META_PROMPT, [{"role": "user", "content": "Task, Goal, or Current Prompt:\n" + req["prompt"]}],
                          req["gen_conf"])
 
     return get_json_result(data=data)
 
 
 @router.post('/generate_suggestions', summary="生成用户输入建议", response_description="成功调用大模型生成建议")
-def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/v1/suggestions/generate_suggestions` 生成用户输入建议
 
@@ -2468,7 +2437,7 @@ def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_d
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
 
     # 调用大模型
-    response = chat_mdl.chat(
+    response = await chat_mdl.async_chat(
         system=system_prompt,
         history=[{"role": "user", "content": "请按照要求输出"}],
         gen_conf=req["gen_conf"].get("gen_conf", {})
@@ -2518,7 +2487,7 @@ def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_d
     response_description="返回匹配到的表单 ID 及置信度",
     response_model=RecognizeIntentResponse
 )
-def recognize_intent(
+async def recognize_intent(
     request: RecognizeIntentRequest,
     db: Session = Depends(get_db),
     user=Depends(manager)
@@ -2578,7 +2547,7 @@ def recognize_intent(
     )
 
     # 3) 调 LLM
-    answer = chat_mdl.chat(
+    answer = await chat_mdl.async_chat(
         system=prompt,
         history=[{"role": "user", "content": "请根据要求返回规定的格式"}],  # 空 user 消息 → 模型直接输出结果
         gen_conf=req["gen_conf"]
@@ -2603,7 +2572,7 @@ def recognize_intent(
     summary="表单字段填充",
     response_model=FillFieldsResponse
 )
-def fill_fields(
+async def fill_fields(
     req: FillFieldsRequest,
     db: Session = Depends(get_db),
     user=Depends(manager)
@@ -2624,8 +2593,8 @@ def fill_fields(
         raise HTTPException(status_code=400, detail="指定模型不是对话模型，或未找到")
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req.llm_name)
 
-    def call_llm(prompt: str) -> str:
-        return chat_mdl.chat(
+    async def call_llm(prompt: str) -> str:
+        return await chat_mdl.async_chat(
             system=prompt,
             history=[{"role": "user", "content": "请按照要求输出"}],
             gen_conf=req.gen_conf
@@ -2692,7 +2661,7 @@ def fill_fields(
 
     # —— 阶段一
     prompt1 = build_prompt(req.user_text, req.fields)
-    raw1 = call_llm(prompt1)
+    raw1 = await call_llm(prompt1)
     res1 = parse_and_validate(raw1, req.fields)
 
     # —— 阶段二：内部追问（仅一次）
@@ -2702,7 +2671,7 @@ def fill_fields(
         prompt2 = (
             f"请补全字段：{missed}，按之前格式再输出完整 JSON，不要多余文字。"
         )
-        raw2 = call_llm(prompt2)
+        raw2 = await call_llm(prompt2)
         res2 = parse_and_validate(raw2, req.fields)
         final = res2
     else:

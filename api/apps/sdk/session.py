@@ -17,7 +17,7 @@ from api.db.services.canvas_service import UserCanvasService, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
 from api.db.services.conversation_service import ConversationService, iframe_completion
 from api.db.services.conversation_service import completion as rag_completion
-from api.db.services.dialog_service import DialogService, ask, chat, gen_mindmap, meta_filter
+from api.db.services.dialog_service import DialogService, async_chat, async_ask, gen_mindmap, meta_filter
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -219,7 +219,7 @@ def update_session(
 
 
 @router.post("/chats/{chat_id}/completions", summary="聊天补全")
-def chat_completion(
+async def chat_completion(
     chat_id: str, 
     request: ChatCompletionRequest, 
     db: Session = Depends(get_db), 
@@ -246,14 +246,14 @@ def chat_completion(
         return resp
     else:
         answer = None
-        for ans in rag_completion(db, tenant_id, chat_id, **req):
+        async for ans in rag_completion(db, tenant_id, chat_id, **req):
             answer = ans
             break
         return get_result(data=answer)
 
 
 @router.post("/chats_openai/{chat_id}/chat/completions", summary="OpenAI兼容的聊天补全")
-def chat_completion_openai_like(
+async def chat_completion_openai_like(
     chat_id: str, 
     request: ChatCompletionOpenAIRequest, 
     db: Session = Depends(get_db), 
@@ -353,7 +353,7 @@ def chat_completion_openai_like(
         # The value for the usage field on all chunks except for the last one will be null.
         # The usage field on the last chunk contains token usage statistics for the entire request.
         # The choices field on the last chunk will always be an empty array [].
-        def streamed_response_generator(chat_id, dia, msg):
+        async def streamed_response_generator(chat_id, dia, msg):
             token_used = 0
             answer_cache = ""
             reasoning_cache = ""
@@ -382,7 +382,7 @@ def chat_completion_openai_like(
             }
 
             try:
-                for ans in chat(dia, msg, True, toolcall_session=toolcall_session, tools=tools, quote=need_reference):
+                async for ans in async_chat(dia, msg, db, True, toolcall_session=toolcall_session, tools=tools, quote=need_reference):
                     last_ans = ans
                     answer = ans["answer"]
 
@@ -449,7 +449,7 @@ def chat_completion_openai_like(
         return resp
     else:
         answer = None
-        for ans in chat(dia, msg, False, toolcall_session=toolcall_session, tools=tools, quote=need_reference):
+        async for ans in async_chat(dia, msg, db, False, toolcall_session=toolcall_session, tools=tools, quote=need_reference):
             # focus answer content only
             answer = ans
             break
@@ -826,7 +826,7 @@ def delete_agent_sessions(
 
 
 @router.post("/sessions/ask", summary="询问知识库")
-def ask_knowledge_base(
+async def ask_about(
     request: AskRequest, 
     db: Session = Depends(get_db), 
     tenant_id: str = Depends(token_required)
@@ -850,10 +850,10 @@ def ask_knowledge_base(
     
     uid = tenant_id
 
-    def stream():
-        nonlocal req, uid
+    async def stream():
+        nonlocal req, uid, db
         try:
-            for ans in ask(req["question"], req["kb_ids"], uid):
+            async for ans in async_ask(db, req["question"], req["kb_ids"], uid):
                 yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
@@ -868,7 +868,7 @@ def ask_knowledge_base(
 
 
 @router.post("/sessions/related_questions", summary="获取相关问题")
-def get_related_questions(
+async def related_questions(
     request: RelatedQuestionsRequest, 
     db: Session = Depends(get_db), 
     tenant_id: str = Depends(token_required)
@@ -907,7 +907,7 @@ Reason:
  - At the same time, related terms can also help search engines better understand user needs and return more accurate search results.
 
 """
-    ans = chat_mdl.chat(
+    ans = await chat_mdl.async_chat(
         prompt,
         [
             {
@@ -923,10 +923,8 @@ Related search terms:
     return get_result(data=[re.sub(r"^[0-9]\. ", "", a) for a in ans.split("\n") if re.match(r"^[0-9]\. ", a)])
 
 
-# 以下是需要特殊token验证的接口，暂时保持原有逻辑
-
 @router.post("/chatbots/{dialog_id}/completions", summary="聊天机器人补全")
-def chatbot_completions(dialog_id: str, request: ChatbotCompletionRequest, db: Session = Depends(get_db)):
+async def chatbot_completions(dialog_id: str, request: ChatbotCompletionRequest, db: Session = Depends(get_db)):
     req = request.model_dump()
     
     # 这些接口需要特殊的token验证逻辑，暂时保持原有方式
@@ -943,16 +941,16 @@ def chatbot_completions(dialog_id: str, request: ChatbotCompletionRequest, db: S
         resp.headers["Content-Type"] = "text/event-stream; charset=utf-8"
         return resp
 
-    for answer in iframe_completion(dialog_id, **req):
+    async for answer in iframe_completion(dialog_id, **req):
         return get_result(data=answer)
 
 
 @router.get("/chatbots/{dialog_id}/info", summary="获取聊天机器人信息")
-def get_chatbot_info(dialog_id: str, db: Session = Depends(get_db)):
+def chatbots_inputs(dialog_id: str, db: Session = Depends(get_db)):
     # TODO: 需要重构token验证方式以符合FastAPI模式
     
-    e, dialog = DialogService.get_by_id(db, dialog_id)
-    if not e:
+    dialog = DialogService.get_by_id(db, dialog_id)
+    if not dialog:
         return get_error_data_result(retmsg=f"Can't find dialog by ID: {dialog_id}")
 
     return get_result(
@@ -987,7 +985,7 @@ async def agent_bot_completions(agent_id: str, request: AgentCompletionRequest, 
 
 
 @router.get("/agentbots/{agent_id}/inputs", summary="获取代理机器人输入表单")
-def get_agent_inputs(agent_id: str, db: Session = Depends(get_db)):
+def begin_inputs(agent_id: str, db: Session = Depends(get_db)):
     # TODO: 需要重构token验证方式以符合FastAPI模式
     
     e, cvs = UserCanvasService.get_by_id(db, agent_id)
@@ -1005,7 +1003,7 @@ def get_agent_inputs(agent_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/searchbots/ask", summary="搜索机器人询问")
-def ask_searchbot(request: SearchBotAskRequest, db: Session = Depends(get_db)):
+async def ask_about_embedded(request: SearchBotAskRequest, db: Session = Depends(get_db)):
     req = request.model_dump()
     
     # TODO: 需要重构token验证方式以符合FastAPI模式
@@ -1018,10 +1016,10 @@ def ask_searchbot(request: SearchBotAskRequest, db: Session = Depends(get_db)):
         if search_app := SearchService.get_detail(db, search_id):
             search_config = search_app.get("search_config", {})
 
-    def stream():
-        nonlocal req, uid
+    async def stream():
+        nonlocal req, uid, db
         try:
-            for ans in ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
+            async for ans in async_ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
                 yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
@@ -1036,7 +1034,7 @@ def ask_searchbot(request: SearchBotAskRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/searchbots/retrieval_test", summary="搜索机器人检索测试")
-def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session = Depends(get_db)):
+def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Session = Depends(get_db)):
     req = request.model_dump()
     
     # TODO: 需要重构token验证方式以符合FastAPI模式
@@ -1125,7 +1123,7 @@ def retrieval_test_searchbot(request: SearchBotRetrievalTestRequest, db: Session
 
 
 @router.post("/searchbots/related_questions", summary="搜索机器人相关问题")
-def get_searchbot_related_questions(request: SearchBotRelatedQuestionsRequest, db: Session = Depends(get_db)):
+async def related_questions_embedded(request: SearchBotRelatedQuestionsRequest, db: Session = Depends(get_db)):
     req = request.model_dump()
     
     # TODO: 需要重构token验证方式以符合FastAPI模式
@@ -1148,7 +1146,7 @@ def get_searchbot_related_questions(request: SearchBotRelatedQuestionsRequest, d
 
     gen_conf = search_config.get("llm_setting", {"temperature": 0.9})
     prompt = load_prompt("related_question")
-    ans = chat_mdl.chat(
+    ans = await chat_mdl.async_chat(
         prompt,
         [
             {
@@ -1165,7 +1163,7 @@ Related search terms:
 
 
 @router.get("/searchbots/detail", summary="获取搜索机器人详情")
-def get_searchbot_detail(search_id: str = Query(...), db: Session = Depends(get_db)):
+def detail_share_embedded(search_id: str = Query(...), db: Session = Depends(get_db)):
     # TODO: 需要重构token验证方式以符合FastAPI模式
     # TODO: 需要获取正确的tenant_id
     tenant_id = "default"  # 临时解决方案
@@ -1190,7 +1188,7 @@ def get_searchbot_detail(search_id: str = Query(...), db: Session = Depends(get_
 
 
 @router.post("/searchbots/mindmap", summary="生成搜索机器人思维导图")
-def generate_searchbot_mindmap(request: SearchBotMindmapRequest, db: Session = Depends(get_db)):
+def mindmap(request: SearchBotMindmapRequest, db: Session = Depends(get_db)):
     req = request.model_dump()
     token = request.headers.get("Authorization").split()
     if len(token) != 2:

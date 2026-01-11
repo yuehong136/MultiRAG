@@ -292,6 +292,44 @@ def chat_solo(db, dialog, messages, stream=True):
         yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
 
 
+async def async_chat_solo(db, dialog, messages, stream=True):
+    """异步版本的 chat_solo"""
+    attachments = ""
+    if "files" in messages[-1]:
+        attachments = "\n\n".join(FileService.get_files(messages[-1]["files"]))
+    if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
+        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
+    else:
+        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+
+    prompt_config = dialog.prompt_config
+    tts_mdl = None
+    if prompt_config.get("tts"):
+        tts_mdl = LLMBundle(db, dialog.tenant_id, LLMType.TTS)
+    msg = [{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])} for m in messages if m["role"] != "system"]
+    if attachments and msg:
+        msg[-1]["content"] += attachments
+    if stream:
+        last_ans = ""
+        delta_ans = ""
+        answer = ""
+        async for ans in chat_mdl.async_chat_streamly(prompt_config.get("system", ""), msg, dialog.llm_setting):
+            answer = ans
+            delta_ans = ans[len(last_ans):]
+            if num_tokens_from_string(delta_ans) < 16:
+                continue
+            last_ans = answer
+            yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "", "created_at": time.time()}
+            delta_ans = ""
+        if delta_ans:
+            yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "", "created_at": time.time()}
+    else:
+        answer = await chat_mdl.async_chat(prompt_config.get("system", ""), msg, dialog.llm_setting)
+        user_content = msg[-1].get("content", "[content not available]")
+        logging.debug("User: {}|Assistant: {}".format(user_content, answer))
+        yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
+
+
 def get_models(db, dialog):
     embd_mdl, chat_mdl, rerank_mdl, tts_mdl = None, None, None, None
     kbs = KnowledgebaseService.get_by_ids(db, dialog.kb_ids)
@@ -731,10 +769,307 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         res["audio_binary"] = tts(tts_mdl, answer)
         yield res
 
+    return None
+
+
+async def async_chat(dialog, messages, db, stream=True, **kwargs):
+    """异步版本的 chat"""
+    # 确保最后一条消息是用户的消息
+    assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
+    chat_start_ts = timer()
+
+    if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
+        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
+    else:
+        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+
+    max_tokens = llm_model_config.get("max_tokens", 8192)
+
+    check_llm_ts = timer()
+
+    langfuse_tracer = None
+    trace_context = {}
+    langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=dialog.tenant_id)
+    if langfuse_keys:
+        langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
+        if langfuse.auth_check():
+            langfuse_tracer = langfuse
+            trace_id = langfuse_tracer.create_trace_id()
+            trace_context = {"trace_id": trace_id}
+
+    check_langfuse_tracer_ts = timer()
+    kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = get_models(db, dialog)
+    toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
+    if toolcall_session and tools:
+        chat_mdl.bind_tools(toolcall_session, tools)
+    bind_models_ts = timer()
+
+    kb_names = list([kb.name for kb in kbs])
+    print("正在检索的知识库 --> ", kb_names)
+
+    retriever = settings.retriever
+    questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
+    filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
+    attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
+    attachments_ = ""
+    if "doc_ids" in messages[-1]:
+        attachments = messages[-1]["doc_ids"]
+    if "files" in messages[-1]:
+        attachments_ = "\n\n".join(FileService.get_files(messages[-1]["files"]))
+
+    prompt_config = dialog.prompt_config
+    field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
+    # 如果字段映射存在，尝试使用SQL检索答案
+    if field_map:
+        logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
+        ans = use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
+        if ans:
+            yield ans
+            return
+
+    # 处理提示配置中的参数，确保必要的参数存在
+    for p in prompt_config["parameters"]:
+        if p["key"] == "knowledge":
+            continue
+        if p["key"] not in kwargs and not p["optional"]:
+            raise KeyError("Miss parameter: " + p["key"])
+        if p["key"] not in kwargs:
+            prompt_config["system"] = prompt_config["system"].replace("{%s}" % p["key"], " ")
+
+    if len(questions) > 1 and prompt_config.get("refine_multiturn"):
+        questions = [full_question(db, dialog.tenant_id, dialog.llm_id, messages)]
+    else:
+        questions = questions[-1:]
+
+    if prompt_config.get("cross_languages"):
+        questions = [cross_languages(db, dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
+
+    if dialog.meta_data_filter:
+        metas = DocumentService.get_meta_by_kbs(db, dialog.kb_ids)
+        if dialog.meta_data_filter.get("method") == "auto":
+            filters: dict = gen_meta_filter(chat_mdl, metas, questions[-1])
+            attachments.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
+            if not attachments:
+                attachments = None
+        elif dialog.meta_data_filter.get("method") == "manual":
+            conds = dialog.meta_data_filter["manual"]
+            attachments.extend(meta_filter(metas, conds, dialog.meta_data_filter.get("logic", "and")))
+            if conds and not attachments:
+                attachments = ["-999"]
+
+    if prompt_config.get("keyword", False):
+        questions[-1] += keyword_extraction(chat_mdl, questions[-1])
+
+    refine_question_ts = timer()
+
+    thought = ""
+    kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
+    knowledges = []
+
+    # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
+    if attachments is not None and "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
+        tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+        knowledges = []
+        if prompt_config.get("reasoning", False):
+            reasoner = DeepResearcher(
+                chat_mdl,
+                prompt_config,
+                partial(
+                    retriever.retrieval,
+                    filter_exp="",
+                    embd_mdl=embd_mdl,
+                    tenant_id=dialog.tenant_id,
+                    kb_names=kb_names,
+                    page=1,
+                    page_size=dialog.top_n,
+                    similarity_threshold=0.2,
+                    vector_similarity_weight=0.3,
+                    doc_ids=attachments,
+                    search_mode=dialog.search_mode,
+                    kb_ids=dialog.kb_ids
+                )
+            )
+
+            for think in reasoner.thinking(kbinfos, attachments_ + " ".join(questions)):
+                if isinstance(think, str):
+                    thought = think
+                    knowledges = [t for t in think.split("\n") if t]
+                elif stream:
+                    yield think
+        else:
+            if embd_mdl:
+                kbinfos = retriever.retrieval(
+                    " ".join(questions),
+                    filter_exp,
+                    embd_mdl,
+                    dialog.tenant_id,
+                    kb_names,
+                    1,
+                    dialog.top_n,
+                    dialog.similarity_threshold,
+                    dialog.vector_similarity_weight,
+                    doc_ids=attachments,
+                    top=1024,
+                    aggs=False,
+                    rerank_mdl=rerank_mdl,
+                    rank_feature=label_question(db, " ".join(questions), kbs),
+                    search_mode=dialog.search_mode,
+                    kb_ids=dialog.kb_ids
+                )
+                if prompt_config.get("toc_enhance"):
+                    cks = retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n)
+                    if cks:
+                        kbinfos["chunks"] = cks
+                kbinfos["chunks"] = retriever.retrieval_by_children(kbinfos["chunks"], tenant_ids)
+            if prompt_config.get("tavily_api_key"):
+                tav = Tavily(prompt_config["tavily_api_key"])
+                tav_res = tav.retrieve_chunks(" ".join(questions))
+                kbinfos["chunks"].extend(tav_res["chunks"])
+                kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
+            if prompt_config.get("use_kg"):
+                ck = settings.kg_retriever.retrieval(" ".join(questions), dialog.tenant_id, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
+                if ck["content_with_weight"]:
+                    kbinfos["chunks"].insert(0, ck)
+
+            knowledges = kb_prompt(kbinfos, max_tokens)
+
+    logging.debug("{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
+
+    retrieval_ts = timer()
+    if not knowledges and prompt_config.get("empty_response"):
+        empty_res = prompt_config["empty_response"]
+        yield {"answer": empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions), "audio_binary": tts(tts_mdl, empty_res)}
+        yield {"answer": prompt_config["empty_response"], "reference": kbinfos}
+        return
+
+    kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
+    gen_conf = dialog.llm_setting
+
+    msg = [{"role": "system", "content": prompt_config["system"].format(**kwargs) + attachments_}]
+    prompt4citation = ""
+    if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
+        prompt4citation = citation_prompt()
+    msg.extend([{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])} for m in messages if m["role"] != "system"])
+    used_token_count, msg = message_fit_in(msg, int(max_tokens * 0.95))
+
+    assert len(msg) >= 2, f"message_fit_in has bug: {msg}"
+    prompt = msg[0]["content"]
+
+    if "max_tokens" not in gen_conf:
+        gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
+
+    def decorate_answer(answer):
+        nonlocal embd_mdl, prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_tracer
+
+        refs = []
+        ans = answer.split("</think>")
+        think = ""
+        if len(ans) == 2:
+            think = ans[0] + "</think>"
+            answer = ans[1]
+
+        if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
+            idx = set([])
+            if embd_mdl and not re.search(r"\[ID:([0-9]+)\]", answer):
+                answer, idx = retriever.insert_citations(
+                    answer,
+                    [ck["content_ltks"] for ck in kbinfos["chunks"]],
+                    [ck["vector"] for ck in kbinfos["chunks"]],
+                    embd_mdl,
+                    tkweight=1 - dialog.vector_similarity_weight,
+                    vtweight=dialog.vector_similarity_weight,
+                )
+            else:
+                for match in re.finditer(r"\[ID:([0-9]+)\]", answer):
+                    i = int(match.group(1))
+                    if i < len(kbinfos["chunks"]):
+                        idx.add(i)
+
+            answer, idx = repair_bad_citation_formats(answer, kbinfos, idx)
+
+            idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
+            recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
+            if not recall_docs:
+                recall_docs = kbinfos["doc_aggs"]
+            kbinfos["doc_aggs"] = recall_docs
+
+            refs = deepcopy(kbinfos)
+            for c in refs["chunks"]:
+                if c.get("vector"):
+                    del c["vector"]
+
+        if answer.lower().find("invalid key") >= 0 or answer.lower().find("invalid api") >= 0:
+            answer += " Please set LLM API-Key in 'User Setting -> Model providers -> API-Key'"
+        finish_chat_ts = timer()
+
+        total_time_cost = (finish_chat_ts - chat_start_ts) * 1000
+        check_llm_time_cost = (check_llm_ts - chat_start_ts) * 1000
+        check_langfuse_tracer_cost = (check_langfuse_tracer_ts - check_llm_ts) * 1000
+        bind_embedding_time_cost = (bind_models_ts - check_langfuse_tracer_ts) * 1000
+        refine_question_time_cost = (refine_question_ts - bind_models_ts) * 1000
+        retrieval_time_cost = (retrieval_ts - refine_question_ts) * 1000
+        generate_result_time_cost = (finish_chat_ts - retrieval_ts) * 1000
+
+        tk_num = num_tokens_from_string(think + answer)
+        prompt += "\n\n### Query:\n%s" % " ".join(questions)
+        prompt = (
+            f"{prompt}\n\n"
+            "## Time elapsed:\n"
+            f"  - Total: {total_time_cost:.1f}ms\n"
+            f"  - Check LLM: {check_llm_time_cost:.1f}ms\n"
+            f"  - Check Langfuse tracer: {check_langfuse_tracer_cost:.1f}ms\n"
+            f"  - Bind models: {bind_embedding_time_cost:.1f}ms\n"
+            f"  - Query refinement(LLM): {refine_question_time_cost:.1f}ms\n"
+            f"  - Retrieval: {retrieval_time_cost:.1f}ms\n"
+            f"  - Generate answer: {generate_result_time_cost:.1f}ms\n\n"
+            "## Token usage:\n"
+            f"  - Generated tokens(approximately): {tk_num}\n"
+            f"  - Token speed: {int(tk_num / (generate_result_time_cost / 1000.0))}/s"
+        )
+
+        if langfuse_tracer and "langfuse_generation" in locals():
+            langfuse_output = "\n" + re.sub(r"^.*?(### Query:.*)", r"\1", prompt, flags=re.DOTALL)
+            langfuse_output = {"time_elapsed:": re.sub(r"\n", "  \n", langfuse_output), "created_at": time.time()}
+            langfuse_generation.update(output=langfuse_output)
+            langfuse_generation.end()
+
+        return {"answer": think + answer, "reference": refs, "prompt": re.sub(r"\n", "  \n", prompt), "created_at": time.time()}
+
+    if langfuse_tracer:
+        langfuse_generation = langfuse_tracer.start_generation(
+            trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
+        )
+
+    if stream:
+        last_ans = ""
+        answer = ""
+        async for ans in chat_mdl.async_chat_streamly(prompt + prompt4citation, msg[1:], gen_conf):
+            if thought:
+                ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
+            answer = ans
+            delta_ans = ans[len(last_ans):]
+            if num_tokens_from_string(delta_ans) < 16:
+                continue
+            last_ans = answer
+            yield {"answer": thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
+        delta_ans = answer[len(last_ans):]
+        if delta_ans:
+            yield {"answer": thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
+        yield decorate_answer(thought + answer)
+    else:
+        answer = await chat_mdl.async_chat(prompt + prompt4citation, msg[1:], gen_conf)
+        user_content = msg[-1].get("content", "[content not available]")
+        logging.debug("User: {}|Assistant: {}".format(user_content, answer))
+        res = decorate_answer(answer)
+        res["audio_binary"] = tts(tts_mdl, answer)
+        yield res
+
+    return
+
 
 def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_ids=None):
     sys_prompt = """
-    You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question. 
+    You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question.
     Ensure that:
     1. Field names should not start with a digit. If any field name starts with a digit, use double quotes around it.
     2. Write only the SQL, no explanations or additional text.
@@ -1020,6 +1355,92 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
 
     answer = ""
     for ans in chat_mdl.chat_streamly(sys_prompt, msg, {"temperature": 0.1}):
+        answer = ans
+        yield {"answer": answer, "reference": {}}
+    yield decorate_answer(answer)
+
+
+async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
+    """异步版本的 ask"""
+    if search_config is None:
+        search_config = {}
+    doc_ids = search_config.get("doc_ids", [])
+    rerank_mdl = None
+    kb_ids = search_config.get("kb_ids", kb_ids)
+    chat_llm_name = search_config.get("chat_id", chat_llm_name)
+    rerank_id = search_config.get("rerank_id", "")
+    meta_data_filter = search_config.get("meta_data_filter")
+
+    kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
+    embedding_list = list(set([kb.embd_id for kb in kbs]))
+
+    is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
+    retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
+
+    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
+    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_llm_name)
+    if rerank_id:
+        rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
+    max_tokens = chat_mdl.max_length
+    tenant_ids = list([kb.tenant_id for kb in kbs])
+
+    if meta_data_filter:
+        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        if meta_data_filter.get("method") == "auto":
+            filters: dict = gen_meta_filter(chat_mdl, metas, question)
+            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
+            if not doc_ids:
+                doc_ids = None
+        elif meta_data_filter.get("method") == "manual":
+            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
+            if meta_data_filter["manual"] and not doc_ids:
+                doc_ids = ["-999"]
+
+    filter_exp = ""
+    kb_names = list([kb.name for kb in kbs])
+    kbinfos = retriever.retrieval(
+        question=question,
+        filter_exp=filter_exp,
+        embd_mdl=embd_mdl,
+        tenant_id=tenant_ids,
+        kb_names=kb_names,
+        page=1,
+        page_size=12,
+        similarity_threshold=search_config.get("similarity_threshold", 0.1),
+        vector_similarity_weight=search_config.get("vector_similarity_weight", 0.3),
+        top=search_config.get("top_k", 1024),
+        doc_ids=doc_ids,
+        aggs=False,
+        rerank_mdl=rerank_mdl,
+        rank_feature=label_question(db, question, kbs),
+        search_mode=None
+    )
+
+    knowledges = kb_prompt(kbinfos, max_tokens)
+    sys_prompt = PROMPT_JINJA_ENV.from_string(ASK_SUMMARY).render(knowledge="\n".join(knowledges))
+
+    msg = [{"role": "user", "content": question}]
+
+    def decorate_answer(answer):
+        nonlocal knowledges, kbinfos, sys_prompt
+        answer, idx = retriever.insert_citations(answer, [ck["content_ltks"] for ck in kbinfos["chunks"]], [ck["vector"] for ck in kbinfos["chunks"]], embd_mdl, tkweight=0.7, vtweight=0.3)
+        idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
+        recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
+        if not recall_docs:
+            recall_docs = kbinfos["doc_aggs"]
+        kbinfos["doc_aggs"] = recall_docs
+        refs = deepcopy(kbinfos)
+        for c in refs["chunks"]:
+            if c.get("vector"):
+                del c["vector"]
+
+        if answer.lower().find("invalid key") >= 0 or answer.lower().find("invalid api") >= 0:
+            answer += " Please set LLM API-Key in 'User Setting -> Model providers -> API-Key'"
+        refs["chunks"] = chunks_format(refs)
+        return {"answer": answer, "reference": refs}
+
+    answer = ""
+    async for ans in chat_mdl.async_chat_streamly(sys_prompt, msg, {"temperature": 0.1}):
         answer = ans
         yield {"answer": answer, "reference": {}}
     yield decorate_answer(answer)
