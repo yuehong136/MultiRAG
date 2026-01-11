@@ -364,6 +364,13 @@
             "rank": "950",
             "llm": [
                 {
+                    "llm_name": "qwen-turbo-latest",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
                     "llm_name": "Moonshot-Kimi-K2-Instruct",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 131072,
@@ -596,13 +603,6 @@
                 },
                 {
                     "llm_name": "qwen-turbo-2025-04-28",
-                    "tags": "LLM,CHAT,1M",
-                    "max_tokens": 1000000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "qwen-turbo-latest",
                     "tags": "LLM,CHAT,1M",
                     "max_tokens": 1000000,
                     "mdl_type": "chat",
