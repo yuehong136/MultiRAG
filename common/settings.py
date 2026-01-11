@@ -122,7 +122,7 @@ class StorageFactory:
         Storage.AWS_S3: MultiRAGS3,
         Storage.OSS: MultiRAGOSS,
         Storage.OPENDAL: OpenDALStorage,
-        Storage.GCS: RAGFlowGCS,
+        Storage.GCS: MultiRAGGCS,
     }
 
     @classmethod
