@@ -113,9 +113,9 @@ class TenantLLMService(CommonService):
             mdlnm = tenant.img2txt_id if not llm_name else llm_name
         elif llm_type == LLMType.CHAT.value:
             mdlnm = tenant.llm_id if not llm_name else llm_name
-        elif llm_type == LLMType.RERANK:
+        elif llm_type == LLMType.RERANK.value:
             mdlnm = tenant.rerank_id if not llm_name else llm_name
-        elif llm_type == LLMType.TTS:
+        elif llm_type == LLMType.TTS.value:
             mdlnm = tenant.tts_id if not llm_name else llm_name
         else:
             raise ValueError("LLM type error")

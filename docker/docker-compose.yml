@@ -1,14 +1,43 @@
-version: '3.8'
+# docker-compose.yml
+# MultiRAG 主服务配置
+#
+# 使用方式：
+# 1. 复制 .env.example 为 .env 并配置环境变量
+# 2. 选择要启用的服务 profiles（在 .env 中设置 COMPOSE_PROFILES）
+#    - cpu: CPU 版本的 MultiRAG 主服务
+#    - gpu: GPU 版本的 MultiRAG 主服务
+#    - postgresql: PostgreSQL 数据库
+#    - redis: Redis 缓存服务
+#    - minio: MinIO 对象存储
+#    - elasticsearch / opensearch: 搜索引擎（二选一）
+#    - milvus / infinity / oceanbase: 向量数据库（可选）
+#    - tei-cpu / tei-gpu: Embedding 服务
+#    - sandbox: 沙箱执行器
+#
+# 示例启动命令：
+#   # 最小化部署（使用内置 Redis）
+#   docker compose --profile cpu --profile postgresql up -d
+#
+#   # 完整部署（外部 Redis、MinIO、Elasticsearch）
+#   docker compose --profile cpu --profile postgresql --profile redis --profile minio --profile elasticsearch up -d
+#
+#   # GPU 部署 + Milvus 向量数据库
+#   docker compose --profile gpu --profile postgresql --profile milvus up -d
+
+include:
+  - ./docker-compose-base.yml
 
 services:
   # ========== MultiRAG 主服务 (CPU 版本) ==========
   multirag-cpu:
     profiles:
       - cpu
-    image: multirag:latest
+    # 注意：如果启用了 postgresql profile，会自动依赖 postgres 服务
+    # 如果使用外部 PostgreSQL，请确保在启动前数据库已就绪
+    image: ${MULTIRAG_IMAGE:-multirag:latest}
     container_name: multirag
     restart: unless-stopped
-    
+
     # ========== 端口映射 ==========
     ports:
       # ----------------------------------------------------------
@@ -16,39 +45,34 @@ services:
       # ----------------------------------------------------------
       - "${SVR_WEB_HTTP_PORT:-80}:80"       # HTTP 入口
       - "${SVR_WEB_HTTPS_PORT:-443}:443"    # HTTPS 入口（需配置 SSL 证书）
-      
+
       # ----------------------------------------------------------
       # 直连后端端口（兼容模式 / 调试用）
       # 如需关闭直连，注释以下两行即可
       # ----------------------------------------------------------
       - "${SVR_HTTP_PORT:-8123}:8123"       # 主服务 API 直连
       - "${ADMIN_SVR_HTTP_PORT:-8130}:8130" # 管理后台 API 直连
-    
-    # 从 .env 文件加载环境变量（ragflow 风格）
-    env_file: 
+
+    # 从 .env 文件加载环境变量
+    env_file:
       - ./.env
-    
+
     # 环境变量配置（可以覆盖 .env 中的配置）
     environment:
       # 基础配置
       - PYTHONIOENCODING=utf-8
       - LANG=zh_CN.UTF-8
       - LC_ALL=zh_CN.UTF-8
-      
+
       # Admin Server 端口配置（可选）
       - ADMIN_SVR_HTTP_PORT=8130
-      
+
       # 任务执行器数量
       - WS=1
-      
+
       # Web Server 开关（1=启用 Nginx，0=禁用）
       - ENABLE_WEBSERVER=${ENABLE_WEBSERVER:-1}
-      
-      # Redis 配置（如果使用外部 Redis）
-      # - REDIS_HOST=redis
-      # - REDIS_PORT=6379
-      # - REDIS_PASSWORD=
-    
+
     # ========== 数据卷挂载 ==========
     volumes:
       # ----------------------------------------------------------
@@ -62,31 +86,31 @@ services:
       # SSL 证书（启用 HTTPS 时取消注释）
       # - /path/to/ssl/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
       # - /path/to/ssl/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
-      
+
       # ----------------------------------------------------------
       # 应用配置
       # ----------------------------------------------------------
       - ../configs:/multirag/configs
+      # 挂载模板文件，开发时修改 template 无需重新构建镜像
+      - ./service_conf.yaml.template:/multirag/docker/service_conf.yaml.template
       - ./entrypoint.sh:/multirag/entrypoint.sh
       # 日志目录
       - ../logs:/multirag/logs
       # 前端静态文件（预留，等前端开发后启用）
       # - ../web/dist:/multirag/web/dist
       # 源代码挂载（开发模式）
-#      - ../api:/multirag/api
-#      - ../core:/multirag/core
-#      - ../common:/multirag/common
-      # 数据目录（根据实际情况调整）
-      # - ../data:/root/.ragdatav
-    
-    # 默认命令：启动所有服务（Redis、API Server、TaskExecutor）
-    # 不启动 Admin Server
-    command: []
-    
+      # - ../api:/multirag/api
+      # - ../core:/multirag/core
+      # - ../common:/multirag/common
+
+    # 默认命令：启动所有服务（Redis、API Server、TaskExecutor、Admin Server）
+    command:
+      - --enable-adminserver
+
     # 网络配置
     networks:
       - multirag
-    
+
     # 健康检查
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8123/health"]
@@ -95,32 +119,30 @@ services:
       retries: 3
       start_period: 40s
 
+    # 确保主机内部 IP 暴露给容器
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   # ========== MultiRAG 主服务 (GPU 版本) ==========
   multirag-gpu:
     profiles:
       - gpu
-    image: multirag:latest
+    # 注意：如果启用了 postgresql profile，会自动依赖 postgres 服务
+    # 如果使用外部 PostgreSQL，请确保在启动前数据库已就绪
+    image: ${MULTIRAG_IMAGE:-multirag:latest}
     container_name: multirag
     restart: unless-stopped
-    
+
     # ========== 端口映射 ==========
     ports:
-      # ----------------------------------------------------------
-      # Nginx 反向代理端口（推荐生产环境使用）
-      # ----------------------------------------------------------
-      - "${SVR_WEB_HTTP_PORT:-80}:80"       # HTTP 入口
-      - "${SVR_WEB_HTTPS_PORT:-443}:443"    # HTTPS 入口（需配置 SSL 证书）
-      
-      # ----------------------------------------------------------
-      # 直连后端端口（兼容模式 / 调试用）
-      # 如需关闭直连，注释以下两行即可
-      # ----------------------------------------------------------
-      - "${SVR_HTTP_PORT:-8123}:8123"       # 主服务 API 直连
-      - "${ADMIN_SVR_HTTP_PORT:-8130}:8130" # 管理后台 API 直连
-    
-    env_file: 
+      - "${SVR_WEB_HTTP_PORT:-80}:80"
+      - "${SVR_WEB_HTTPS_PORT:-443}:443"
+      - "${SVR_HTTP_PORT:-8123}:8123"
+      - "${ADMIN_SVR_HTTP_PORT:-8130}:8130"
+
+    env_file:
       - ./.env
-    
+
     environment:
       - PYTHONIOENCODING=utf-8
       - LANG=zh_CN.UTF-8
@@ -128,46 +150,40 @@ services:
       - ADMIN_SVR_HTTP_PORT=8130
       - WS=1
       - ENABLE_WEBSERVER=${ENABLE_WEBSERVER:-1}
-    
+
     # ========== 数据卷挂载 ==========
     volumes:
-      # ----------------------------------------------------------
       # Nginx 配置文件
-      # ----------------------------------------------------------
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf
       - ./nginx/proxy.conf:/etc/nginx/proxy.conf
       - ./nginx/multirag.conf:/etc/nginx/conf.d/multirag.conf
-      # HTTPS 配置（启用 HTTPS 时取消注释）
-      # - ./nginx/multirag.https.conf:/etc/nginx/conf.d/multirag.conf
-      # SSL 证书（启用 HTTPS 时取消注释）
-      # - /path/to/ssl/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
-      # - /path/to/ssl/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
-      
-      # ----------------------------------------------------------
       # 应用配置
-      # ----------------------------------------------------------
       - ../configs:/multirag/configs
+      - ./service_conf.yaml.template:/multirag/docker/service_conf.yaml.template
       - ./entrypoint.sh:/multirag/entrypoint.sh
       - ../logs:/multirag/logs
-      # 前端静态文件（预留，等前端开发后启用）
-      # - ../web/dist:/multirag/web/dist
       # 源代码挂载（开发模式）
       - ../api:/multirag/api
       - ../core:/multirag/core
       - ../common:/multirag/common
-    
-    command: []
-    
+
+    # 默认命令：启动所有服务（Redis、API Server、TaskExecutor、Admin Server）
+    command:
+      - --enable-adminserver
+
     networks:
       - multirag
-    
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8123/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     # GPU 资源配置
     deploy:
       resources:
@@ -176,103 +192,3 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-
-  # ========== TEI 服务 (CPU 版本) ==========
-  # Text Embeddings Inference - 用于提供独立的 embedding 服务
-  # 使用方式：在 .env 中设置 COMPOSE_PROFILES=cpu,tei-cpu
-  tei-cpu:
-    profiles:
-      - tei-cpu
-    image: ${TEI_IMAGE_CPU:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.8}
-    hostname: tei
-    container_name: tei-cpu
-    restart: unless-stopped
-    
-    ports:
-      - "${TEI_PORT:-6380}:80"
-    
-    env_file: ./.env
-    
-    environment:
-      # HuggingFace 镜像站点（可选）
-      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
-    
-    volumes:
-      # 模型缓存目录
-      - ${TEI_MODEL_CACHE:-~/.cache/huggingface}:/data
-    
-    # 启动命令：指定模型和自动截断
-    command: ["--model-id", "${TEI_MODEL:-BAAI/bge-small-en-v1.5}", "--auto-truncate"]
-    
-    networks:
-      - multirag
-    
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-
-  # ========== TEI 服务 (GPU 版本) ==========
-  # 使用方式：在 .env 中设置 COMPOSE_PROFILES=gpu,tei-gpu
-  tei-gpu:
-    profiles:
-      - tei-gpu
-    image: ${TEI_IMAGE_GPU:-ghcr.io/huggingface/text-embeddings-inference:1.8}
-    hostname: tei
-    container_name: tei-gpu
-    restart: unless-stopped
-    
-    ports:
-      - "${TEI_PORT:-6380}:80"
-    
-    env_file: ./.env
-    
-    environment:
-      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
-    
-    volumes:
-      - ${TEI_MODEL_CACHE:-~/.cache/huggingface}:/data
-    
-    command: ["--model-id", "${TEI_MODEL:-BAAI/bge-m3}", "--auto-truncate"]
-    
-    networks:
-      - multirag
-    
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-    
-    # GPU 资源配置
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  # ========== 可选：外部 Redis 服务 ==========
-  # 如果不想使用容器内置的 Redis，可以使用独立的 Redis 服务
-  # redis:
-  #   image: redis:7.4.3-alpine
-  #   container_name: multirag-redis
-  #   restart: unless-stopped
-  #   ports:
-  #     - "6379:6379"
-  #   volumes:
-  #     - redis-data:/data
-  #   command: redis-server --appendonly yes
-  #   networks:
-  #     - multirag
-
-networks:
-  multirag:
-    driver: bridge
-
-# volumes:
-#   redis-data:

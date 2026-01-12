@@ -1,3 +1,4 @@
+import asyncio
 import pathlib
 import re
 
@@ -14,11 +15,13 @@ from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from common.misc_utils import get_uuid
 from api.utils.api_utils import get_error_data_result, get_result, server_error_response, token_required, \
     get_json_result
 from api.utils.file_utils import filename_type
+from api.utils.web_utils import CONTENT_TYPE_MAP
 from common import settings
+from common.misc_utils import get_uuid
+from common.constants import RetCode
 
 router = APIRouter()
 
@@ -464,6 +467,36 @@ def download_file(
         return server_error_response(e)
 
 
+@router.get("/file/download/{attachment_id}", summary="下载 attachment 文件")
+async def download_attachment(
+    attachment_id: str,
+    ext: str = Query("markdown"),
+    tenant_id: str = Depends(token_required)
+):
+    """
+    下载 message 组件输出的 attachment 文件
+
+    Args:
+        attachment_id: Attachment ID
+        ext: 文件扩展名，默认为 markdown
+        tenant_id: 租户ID
+
+    Returns:
+        文件流
+    """
+    try:
+        data = await asyncio.to_thread(settings.STORAGE_IMPL.get, tenant_id, attachment_id)
+        content_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
+
+        from io import BytesIO
+        return StreamingResponse(
+            BytesIO(data),
+            media_type=content_type
+        )
+    except Exception as e:
+        return server_error_response(e)
+
+
 @router.put("/files/move", summary="移动文件")
 def move_files(
     request: MoveFilesRequest,
@@ -521,7 +554,7 @@ def convert(
         for file_id in file_ids:
             file = files_set[file_id]
             if not file:
-                return get_json_result(retmsg="File not found!", retcode=404)
+                return get_json_result(retmsg="File not found!", retcode=RetCode.NOT_FOUND)
             file_ids_list = [file_id]
             if file.type == FileType.FOLDER.value:
                 file_ids_list = FileService.get_all_innermost_file_ids(db, file_id, [])
@@ -532,22 +565,22 @@ def convert(
                     doc_id = inform.document_id
                     doc = DocumentService.get_by_id(db, doc_id)
                     if not doc:
-                        return get_json_result(retmsg="Document not found!", retcode=404)
+                        return get_json_result(retmsg="Document not found!", retcode=RetCode.NOT_FOUND)
                     tenant_id = DocumentService.get_tenant_id(db, doc_id)
                     if not tenant_id:
-                        return get_json_result(retmsg="Tenant not found!", retcode=404)
+                        return get_json_result(retmsg="Tenant not found!", retcode=RetCode.NOT_FOUND)
                     if not DocumentService.remove_document(db, doc, tenant_id):
-                        return get_json_result(retmsg="Database error (Document removal)!", retcode=404)
+                        return get_json_result(retmsg="Database error (Document removal)!", retcode=RetCode.SERVER_ERROR)
                 File2DocumentService.delete_by_file_id(db, id)
 
                 # insert
                 for kb_id in kb_ids:
                     kb = KnowledgebaseService.get_by_id(db, kb_id)
                     if not kb:
-                        return get_json_result(retmsg="Can't find this knowledgebase!", retcode=404)
+                        return get_json_result(retmsg="Can't find this knowledgebase!", retcode=RetCode.NOT_FOUND)
                     file = FileService.get_by_id(db, id)
                     if not file:
-                        return get_json_result(retmsg="Can't find this file!", retcode=404)
+                        return get_json_result(retmsg="Can't find this file!", retcode=RetCode.NOT_FOUND)
 
                     doc = DocumentService.insert(
                         db,

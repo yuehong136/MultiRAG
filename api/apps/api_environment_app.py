@@ -43,7 +43,7 @@ def get_user_tenant_id(db, user_id: str) -> str:
             summary="获取环境列表", 
             response_description="返回用户的环境列表",
             response_model=PaginatedEnvironmentResponse)
-async def get_environments(
+def get_environments(
     page: int = Query(1, description="页码", ge=1),
     page_size: int = Query(20, description="每页数量", ge=1, le=100),
     search: str = Query(None, description="搜索关键字"),
@@ -80,7 +80,7 @@ async def get_environments(
             summary="获取环境详情", 
             response_description="返回环境的详细信息",
             response_model=EnvironmentDetailResponse)
-async def get_environment_detail(
+def get_environment_detail(
     environment_id: str,
     user=Depends(manager),
     db=Depends(get_db)
@@ -104,7 +104,7 @@ async def get_environment_detail(
              summary="创建环境", 
              response_description="返回创建的环境详情",
              response_model=EnvironmentDetailResponse)
-async def create_environment(
+def create_environment(
     env_data: EnvironmentCreate = Body(..., description="环境数据"),
     user=Depends(manager),
     db=Depends(get_db)
@@ -132,7 +132,7 @@ async def create_environment(
             summary="更新环境", 
             response_description="返回更新后的环境详情",
             response_model=EnvironmentDetailResponse)
-async def update_environment(
+def update_environment(
     environment_id: str,
     env_data: EnvironmentUpdate = Body(..., description="更新数据"),
     user=Depends(manager),
@@ -157,7 +157,7 @@ async def update_environment(
 @router.delete("/environments/{environment_id}", 
                summary="删除环境", 
                response_description="返回删除结果")
-async def delete_environment(
+def delete_environment(
     environment_id: str,
     user=Depends(manager),
     db=Depends(get_db)
@@ -180,7 +180,7 @@ async def delete_environment(
              summary="复制环境", 
              response_description="返回复制的环境详情",
              response_model=EnvironmentDetailResponse)
-async def duplicate_environment(
+def duplicate_environment(
     environment_id: str,
     duplicate_data: EnvironmentDuplicateRequest = Body(..., description="复制请求数据"),
     user=Depends(manager),
@@ -206,7 +206,7 @@ async def duplicate_environment(
              summary="设置默认环境", 
              response_description="返回设置后的环境详情",
              response_model=EnvironmentDetailResponse)
-async def set_default_environment(
+def set_default_environment(
     environment_id: str,
     user=Depends(manager),
     db=Depends(get_db)
@@ -229,7 +229,7 @@ async def set_default_environment(
              summary="创建环境变量", 
              response_description="返回创建的变量",
              response_model=EnvironmentVariableResponse)
-async def create_variable(
+def create_variable(
     environment_id: str,
     var_data: EnvironmentVariableCreate = Body(..., description="变量数据"),
     user=Depends(manager),
@@ -253,7 +253,7 @@ async def create_variable(
             summary="更新环境变量", 
             response_description="返回更新后的变量",
             response_model=EnvironmentVariableResponse)
-async def update_variable(
+def update_variable(
     environment_id: str,
     variable_id: str,
     var_data: EnvironmentVariableUpdate = Body(..., description="更新数据"),
@@ -277,7 +277,7 @@ async def update_variable(
 @router.delete("/environments/{environment_id}/variables/{variable_id}", 
                summary="删除环境变量", 
                response_description="返回删除结果")
-async def delete_variable(
+def delete_variable(
     environment_id: str,
     variable_id: str,
     user=Depends(manager),
@@ -299,7 +299,7 @@ async def delete_variable(
             summary="批量更新变量", 
             response_description="返回更新后的变量列表",
             response_model=list[EnvironmentVariableResponse])
-async def batch_update_variables(
+def batch_update_variables(
     environment_id: str,
     batch_data: BatchVariablesRequest = Body(..., description="批量数据"),
     user=Depends(manager),
@@ -323,7 +323,7 @@ async def batch_update_variables(
              summary="变量解析预览", 
              response_description="返回变量解析结果",
              response_model=VariableResolveResponse)
-async def resolve_variables(
+def resolve_variables(
     environment_id: str,
     resolve_data: VariableResolveRequest = Body(..., description="解析请求数据"),
     user=Depends(manager),
@@ -351,7 +351,7 @@ async def resolve_variables(
             summary="获取全局预设环境", 
             response_description="返回系统预设的环境模板",
             response_model=list[GlobalEnvironmentResponse])
-async def get_global_environments(
+def get_global_environments(
     user=Depends(manager),
     db=Depends(get_db)
 ):

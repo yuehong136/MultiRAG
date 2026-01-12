@@ -2,6 +2,7 @@
   "id": {"type": "VARCHAR(128)", "primary_key": true},
   "doc_id": {"type": "VARCHAR(128)", "default": ""},
   "kb_id": {"type": "VARCHAR(128)", "default": ""},
+  "mom_id": {"type": "VARCHAR(128)", "default": ""},
   "create_time": {"type": "VARCHAR(50)", "default": ""},
   "create_timestamp_flt": {"type": "REAL", "default": 0.0},
   "img_id": {"type": "VARCHAR(128)", "default": ""},
@@ -37,6 +38,7 @@
   "entity_type_kwd": {"type": "TEXT", "default": "", "fulltext": true},
   "source_id": {"type": "TEXT", "default": "", "fulltext": true},
   "n_hop_with_weight": {"type": "TEXT", "default": ""},
+  "mom_with_weight": {"type": "TEXT", "default": ""},
   "removed_kwd": {"type": "TEXT", "default": "", "fulltext": true},
   "doc_type_kwd": {"type": "TEXT", "default": "", "fulltext": true},
   "toc_kwd": {"type": "TEXT", "default": "", "fulltext": true}

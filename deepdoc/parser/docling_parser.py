@@ -61,6 +61,7 @@ class DoclingParser(RAGFlowPdfParser):
         self.page_images: list[Image.Image] = []
         self.page_from = 0
         self.page_to = 10_000
+        self.outlines = []
 
     def check_installation(self) -> bool:
         if DocumentConverter is None:
@@ -188,7 +189,7 @@ class DoclingParser(RAGFlowPdfParser):
                         bbox = _BBox(int(pn), bb[0], bb[1], bb[2], bb[3])
                 yield (DoclingContentType.EQUATION.value, text, bbox)
 
-    def _transfer_to_sections(self, doc) -> list[tuple[str, str]]:
+    def _transfer_to_sections(self, doc, parse_method: str) -> list[tuple[str, str]]:
         sections: list[tuple[str, str]] = []
         for typ, payload, bbox in self._iter_doc_items(doc):
             if typ == DoclingContentType.TEXT.value:
@@ -201,7 +202,12 @@ class DoclingParser(RAGFlowPdfParser):
                 continue
 
             tag = self._make_line_tag(bbox) if isinstance(bbox, _BBox) else ""
-            sections.append((section, tag))
+            if parse_method == "manual":
+                sections.append((section, typ, tag))
+            elif parse_method == "paper":
+                sections.append((section + tag, typ))
+            else:
+                sections.append((section, tag))
         return sections
 
     def cropout_docling_table(self, page_no: int, bbox: tuple[float, float, float, float], zoomin: int = 1):
@@ -277,15 +283,16 @@ class DoclingParser(RAGFlowPdfParser):
         return tables
 
     def parse_pdf(
-            self,
-            filepath: str | PathLike[str],
-            binary: BytesIO | bytes | None = None,
-            callback: Optional[Callable] = None,
-            *,
-            output_dir: Optional[str] = None,
-            lang: Optional[str] = None,
-            method: str = "auto",
-            delete_output: bool = True,
+        self,
+        filepath: str | PathLike[str],
+        binary: BytesIO | bytes | None = None,
+        callback: Optional[Callable] = None,
+        *,
+        output_dir: Optional[str] = None,
+        lang: Optional[str] = None,
+        method: str = "auto",
+        delete_output: bool = True,
+        parse_method: str = "raw"
     ):
 
         if not self.check_installation():
@@ -321,7 +328,7 @@ class DoclingParser(RAGFlowPdfParser):
         if callback:
             callback(0.7, f"[Docling] Parsed doc: {getattr(doc, 'num_pages', 'n/a')} pages")
 
-        sections = self._transfer_to_sections(doc)
+        sections = self._transfer_to_sections(doc, parse_method=parse_method)
         tables = self._transfer_to_tables(doc)
 
         if callback:

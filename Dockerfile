@@ -48,6 +48,18 @@ RUN apt update && apt -y install ca-certificates && \
     libpython3-dev libjemalloc-dev nginx ghostscript \
     libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus  python3-pip pipx tcl-dev pkg-config \
     fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg && \
+    # 安装 MSSQL ODBC 驱动 (pyodbc 依赖)
+    curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - && \
+    curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list > /etc/apt/sources.list.d/mssql-release.list && \
+    apt update && \
+    arch="$(uname -m)"; \
+    if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then \
+        ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql18; \
+    else \
+        ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql17; \
+    fi && \
+    fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg \
+    pandoc texlive && \
     # 安装uv
     pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
     pip3 config set global.trusted-host pypi.tuna.tsinghua.edu.cn; \
@@ -87,7 +99,6 @@ RUN mkdir -p /etc/uv && \
 
 # 使用mount绑定挂载模型文件并根据条件复制到目标位置
 RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co,target=/huggingface.co \
-    cp /huggingface.co/InfiniFlow/huqie/huqie.txt.trie /multirag/core/res/ && \
     tar --exclude='.*' -cf - \
         /huggingface.co/InfiniFlow/text_concat_xgb_v1.0 \
         /huggingface.co/InfiniFlow/deepdoc \
@@ -97,7 +108,6 @@ RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co
         /huggingface.co/BAAI/bge-large-zh-v1.5 \
         /huggingface.co/BAAI/bge-reranker-v2-m3 \
         /huggingface.co/maidalun1020/bce-embedding-base_v1 \
-        /huggingface.co/maidalun1020/bce-reranker-base_v1 \
         | tar -xf - --strip-components=2 -C /root/.ragdatav
 
 # 创建并添加NLTK数据

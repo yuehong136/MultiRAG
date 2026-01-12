@@ -81,7 +81,7 @@ async def run(
 
 
 @router.post("/run-test")
-async def run_test(user=Depends(manager)):
+def run_test(user=Depends(manager)):
     """
     测试运行的接口，用于检查服务是否正常工作。
 
@@ -99,7 +99,7 @@ async def run_test(user=Depends(manager)):
 
 
 @router.get("/download/{filename}")
-async def download_file(filename: str):
+def download_file(filename: str):
     """
     下载指定文件的接口。
 

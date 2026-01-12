@@ -9,23 +9,15 @@
 from common.log_utils import init_root_logger
 from plugin import GlobalPluginManager
 init_root_logger("multirag_server")
-# init_root_logger("multirag_server")
-# for module in ["pdfminer"]:
-#     module_logger = logging.getLogger(module)
-#     module_logger.setLevel(logging.WARNING)
-# for module in ["sqlalchemy"]:
-#     module_logger = logging.getLogger(module)
-#     module_logger.handlers.clear()
-#     module_logger.propagate = True
 
 import logging
 import os
 import signal
 import sys
-import time
 import traceback
 import threading
 import uuid
+import faulthandler
 
 from api.apps import app
 from api.db.runtime_config import RuntimeConfig
@@ -33,12 +25,12 @@ from api.db.services.document_service import DocumentService
 from common import settings
 from common.file_utils import get_project_base_directory
 
-from api.db.db_models import init_database_tables as init_web_db, upgrade_database_tables as upgrade_database, SessionLocal
-from api.db.init_data import init_web_data
+from api.db.db_models import init_database_tables as init_web_db, upgrade_database_tables as upgrade_database, SessionLocal, db_connection
+from api.db.init_data import init_web_data, init_superuser
 from common.versions import get_multirag_version
 import uvicorn
 # from common.config_utils import show_configs
-from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions
+from common.mcp_tool_call_conn import shutdown_all_mcp_sessions
 from core.utils.redis_conn import RedisDistributedLock
 
 stop_event = threading.Event()
@@ -62,22 +54,29 @@ def update_progress():
         except Exception:
             logging.exception("update_progress exception")
         finally:
+            # ⚠️ 关键修复：先关闭数据库连接，再等待
+            # 这样连接可以立即归还到连接池，避免占用期间阻塞其他请求
+            if db:
+                try:
+                    db.close()
+                except Exception:
+                    pass
             try:
                 redis_lock.release()
             except Exception:
-                logging.exception("update_progress exception")
+                pass
+            # 等待下一次循环（此时连接已归还）
             stop_event.wait(6)
-            if db:
-                db.close()
 
 def signal_handler(sig, frame):
     logging.info("Received interrupt signal, shutting down...")
     shutdown_all_mcp_sessions()
     stop_event.set()
-    time.sleep(1)
+    stop_event.wait(1)  # 最多等待1秒，stop_event已设置则立即返回
     sys.exit(0)
 
 if __name__ == '__main__':
+    faulthandler.enable()
     # ============================================================================
     # 启动脚本 - 负责进程级别的初始化和服务器启动
     # 
@@ -118,6 +117,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--version', default=False, help="MultiRAG version", action='store_true')
     parser.add_argument('--debug', default=False, help="debug mode", action='store_true')
+    parser.add_argument('--init-superuser', default=False, help="init superuser", action='store_true')
     args = parser.parse_args()
     
     if args.version:
@@ -141,6 +141,15 @@ if __name__ == '__main__':
     logging.info("Initializing database schema...")
     init_web_db()        # 创建数据库表结构
     upgrade_database()   # 执行数据库迁移
+    
+    # 初始化超级用户（如果指定了 --init-superuser 参数）
+    # 必须在数据库表创建后、init_web_data 之前执行
+    if args.init_superuser:
+        logging.info("Initializing superuser...")
+        with db_connection() as db:
+            init_superuser(db)
+        logging.info("Superuser initialization completed")
+    
     init_web_data()      # 初始化默认数据
     logging.info("Database initialization completed")
 
@@ -202,5 +211,5 @@ if __name__ == '__main__':
         logging.exception("Failed to start MultiRAG server")
         traceback.print_exc()
         stop_event.set()
-        time.sleep(1)
+        stop_event.wait(1)  # 最多等待1秒，stop_event已设置则立即返回
         os.kill(os.getpid(), signal.SIGKILL)

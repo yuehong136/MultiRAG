@@ -153,7 +153,7 @@ async def lifespan(app: FastAPI):
     stop_event.set()
 
     logging.info("Shutting down MCP sessions...")
-    from core.utils.mcp_tool_call_conn import shutdown_all_mcp_sessions
+    from common.mcp_tool_call_conn import shutdown_all_mcp_sessions
     shutdown_all_mcp_sessions()
 
     logging.info("Shutting down workflow state manager...")
@@ -168,10 +168,10 @@ app = FastAPI(
     title="Multi-RAG",
     description=description,
     summary="大模型底座接口",
-    version="0.0.1",
+    version="0.9.7",
     terms_of_service="https://cake-doom-0c6.notion.site/4b6c4b3a5338497494620b3dd82e4acc?pvs=4",
     contact={
-        "name": "DuXiaolong",
+        "name": "Du Xiaolong",
         "url": "https://github.com/yuehong136?tab=repositories",
         "email": "du13013901711@163.com",
     },
@@ -325,9 +325,9 @@ async def active_required(user=Depends(manager)):
 
 
 # 定义一个函数，用于搜索API和应用页面的路径
-def search_pages_path(pages_dir):
-    app_path_list = [path for path in pages_dir.glob("*_app.py") if not path.name.startswith(".")]
-    api_path_list = [path for path in pages_dir.glob("*sdk/*.py") if not path.name.startswith(".")]
+def search_pages_path(page_path):
+    app_path_list = [path for path in page_path.glob("*_app.py") if not path.name.startswith(".")]
+    api_path_list = [path for path in page_path.glob("*sdk/*.py") if not path.name.startswith(".")]
     app_path_list.extend(api_path_list)
     return app_path_list
 
@@ -360,13 +360,13 @@ pages_dir = [
 ]
 
 # 遍历页面目录，注册每个找到的页面
-for dir in pages_dir:
-    for path in search_pages_path(dir):
+for directory in pages_dir:
+    for path in search_pages_path(directory):
         register_page(path)
 
 
 @app.exception_handler(AITranslateException)
-async def ai_translate_exception_handler(request: Request, exc: AITranslateException):
+def ai_translate_exception_handler(request: Request, exc: AITranslateException):
     return JSONResponse(
         status_code=200,
         content={"status": "error", "message": exc.message},
@@ -374,7 +374,7 @@ async def ai_translate_exception_handler(request: Request, exc: AITranslateExcep
 
 
 @app.exception_handler(NodeExecutionError)
-async def node_execution_error_handler(request: Request, exc: NodeExecutionError):
+def node_execution_error_handler(request: Request, exc: NodeExecutionError):
     return JSONResponse(
         status_code=200,
         content={"status": "error",
@@ -384,7 +384,7 @@ async def node_execution_error_handler(request: Request, exc: NodeExecutionError
 
 
 @app.exception_handler(WorkflowValidationError)
-async def workflow_validation_error_handler(request: Request, exc: WorkflowValidationError):
+def workflow_validation_error_handler(request: Request, exc: WorkflowValidationError):
     return JSONResponse(
         status_code=500,
         content={
@@ -396,7 +396,7 @@ async def workflow_validation_error_handler(request: Request, exc: WorkflowValid
 
 # 定义FastAPI应用的自定义异常处理器
 @app.exception_handler(Exception)
-async def custom_exception_handler(request: Request, exc: Exception):
+def custom_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={"message": str(exc)},
@@ -405,7 +405,7 @@ async def custom_exception_handler(request: Request, exc: Exception):
 
 # 定义一个用于用户登录的路由，生成和返回访问令牌
 @app.post('/auth/token', summary="获取Access_token")
-async def login(data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+def login(data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """
     此函数用于处理用户身份验证并生成访问令牌。[目前有效期：1天]
 
@@ -452,5 +452,5 @@ async def login(data: OAuth2PasswordRequestForm = Depends(), db: Session = Depen
 
 # 定义一个简单的根端点，返回一条消息
 @app.get("/", summary="根目录")
-async def root():
+def root():
     return {"message": "进入docs接口调试文档,请在地址后加/docs,需要标准doc文档,请在地址后加/redoc"}

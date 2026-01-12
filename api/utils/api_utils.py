@@ -6,13 +6,14 @@
 @date：2025/7/17 16:00
 @desc:
 """
+import inspect
 import logging
 import os
 import time
 from copy import deepcopy
 from datetime import datetime
 from functools import wraps
-from typing import Callable
+from typing import Any, Callable
 import trio
 
 from fastapi import Request, Response, Depends
@@ -26,9 +27,74 @@ from api.db.services.api_service import APITokenService
 from api.db.services.tenant_llm_service import LLMFactoriesService
 from common import settings
 
-from core.utils.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
+from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from common.connection_utils import timeout
 from common.constants import RetCode
+
+
+async def _coerce_request_data(request: Request) -> dict:
+    """
+    Fetch JSON body with sane defaults; fallback to form data.
+    
+    Note: FastAPI typically uses Pydantic models for request validation,
+    making this function rarely needed. However, it's provided for 
+    edge cases where manual request body parsing is required.
+    
+    Args:
+        request: FastAPI Request object
+        
+    Returns:
+        dict: Parsed request data from JSON body or form data
+        
+    Raises:
+        ValueError: When no JSON body or form data found
+        TypeError: When payload type is unsupported
+    """
+    payload: Any = None
+    last_error: Exception | None = None
+
+    try:
+        payload = await request.json()
+    except Exception as e:
+        last_error = e
+        payload = None
+
+    if payload is None:
+        try:
+            form = await request.form()
+            payload = dict(form)
+        except Exception as e:
+            last_error = e
+            payload = None
+
+    if payload is None:
+        if last_error is not None:
+            raise last_error
+        raise ValueError("No JSON body or form data found in request.")
+
+    if isinstance(payload, dict):
+        return payload or {}
+
+    if isinstance(payload, str):
+        raise AttributeError("'str' object has no attribute 'get'")
+
+    raise TypeError(f"Unsupported request payload type: {type(payload)!r}")
+
+
+async def get_request_json(request: Request) -> dict:
+    """
+    Get request JSON data with fallback to form data.
+    
+    This is a convenience wrapper around _coerce_request_data().
+    For most FastAPI endpoints, prefer using Pydantic models instead.
+    
+    Args:
+        request: FastAPI Request object
+        
+    Returns:
+        dict: Parsed request data
+    """
+    return await _coerce_request_data(request)
 
 
 def serialize_for_json(obj):
@@ -67,7 +133,8 @@ def get_data_error_result(retcode=RetCode.DATA_ERROR, retmsg='Sorry! Data missin
 
 
 def server_error_response(e):
-    logging.exception(e)
+    # Quart invokes this handler outside the original except block, so we must pass exc_info manually.
+    logging.error("Unhandled exception during request", exc_info=(type(e), e, e.__traceback__))
     try:
         msg = repr(e).lower()
         if getattr(e, "code", None) == 401 or ("unauthorized" in msg) or ("401" in msg):
@@ -88,33 +155,50 @@ def server_error_response(e):
 
 
 def validate_request(*args, **kwargs):
+    """
+    参数验证装饰器（已废弃，FastAPI 推荐使用 Pydantic 模型验证）
+    保留此函数是为了向后兼容和代码完整性
+    
+    注意：此装饰器已不再使用，FastAPI 通过 Pydantic 模型自动处理参数验证
+    """
+    def process_args(input_arguments):
+        """提取验证逻辑，便于复用"""
+        no_arguments = []
+        error_arguments = []
+        for arg in args:
+            if arg not in input_arguments:
+                no_arguments.append(arg)
+        for k, v in kwargs.items():
+            config_value = input_arguments.get(k, None)
+            if config_value is None:
+                no_arguments.append(k)
+            elif isinstance(v, (tuple, list)):
+                if config_value not in v:
+                    error_arguments.append((k, set(v)))
+            elif config_value != v:
+                error_arguments.append((k, v))
+        if no_arguments or error_arguments:
+            error_string = ""
+            if no_arguments:
+                error_string += f"required argument are missing: {', '.join(no_arguments)}; "
+            if error_arguments:
+                error_string += "required argument values: " + ", ".join(
+                    [f"{a[0]}={a[1]}" for a in error_arguments])
+            return error_string
+        return None
+    
     def wrapper(func):
         @wraps(func)
-        async def decorated_function(request: Request, *args, **kwargs):
-            input_arguments = await request.json()
-            no_arguments = []
-            error_arguments = []
-            for arg in args:
-                if arg not in input_arguments:
-                    no_arguments.append(arg)
-            for k, v in kwargs.items():
-                config_value = input_arguments.get(k, None)
-                if config_value is None:
-                    no_arguments.append(k)
-                elif isinstance(v, (tuple, list)):
-                    if config_value not in v:
-                        error_arguments.append((k, set(v)))
-                elif config_value != v:
-                    error_arguments.append((k, v))
-            if no_arguments or error_arguments:
-                error_string = ""
-                if no_arguments:
-                    error_string += f"required argument are missing: {', '.join(no_arguments)}; "
-                if error_arguments:
-                    error_string += "required argument values: " + ", ".join(
-                        [f"{a[0]}={a[1]}" for a in error_arguments])
-                return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg=error_string)
-            return await func(request, *args, **kwargs)
+        async def decorated_function(request: Request, *_args, **_kwargs):
+            input_arguments = await _coerce_request_data(request)
+            errs = process_args(input_arguments)
+            if errs:
+                return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg=errs)
+            
+            # 支持同步和异步函数
+            if inspect.iscoroutinefunction(func):
+                return await func(request, *_args, **_kwargs)
+            return func(request, *_args, **_kwargs)
 
         return decorated_function
 
@@ -129,7 +213,9 @@ def get_json_result(retcode: RetCode = RetCode.SUCCESS, retmsg='success', data=N
 def apikey_required(func: Callable) -> Callable:
     """
     装饰器形式的 API Key 验证（已废弃，建议使用 apikey_dependency）
-    保留此函数是为了向后兼容，但建议使用 FastAPI 依赖注入方式
+    保留此函数是为了向后兼容和代码完整性
+    
+    注意：此装饰器已不再使用，FastAPI 推荐使用依赖注入方式
     """
     @wraps(func)
     async def decorated_function(*args, **kwargs):
@@ -147,12 +233,16 @@ def apikey_required(func: Callable) -> Callable:
             )
 
         kwargs['tenant_id'] = objs[0].tenant_id
-        return await func(*args, **kwargs)
+        
+        # 支持同步和异步函数
+        if inspect.iscoroutinefunction(func):
+            return await func(*args, **kwargs)
+        return func(*args, **kwargs)
 
     return decorated_function
 
 
-async def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> str:
+def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> str:
     """
     FastAPI 依赖注入形式的 API Key 验证
     
@@ -170,7 +260,7 @@ async def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> 
         
     Example:
         @router.post("/endpoint")
-        async def endpoint(tenant_id: str = Depends(apikey_dependency)):
+        def endpoint(tenant_id: str = Depends(apikey_dependency)):
             # 使用 tenant_id
             pass
     """
@@ -237,7 +327,25 @@ def convert_datetime_to_str(data: dict):
             data[key] = value.strftime('%Y-%m-%d %H:%M:%S')
     return data
 
-async def token_required(request: Request, db: Session = Depends(get_db)):
+def token_required(request: Request, db: Session = Depends(get_db)):
+    """
+    FastAPI 依赖注入形式的 Token 验证
+    
+    从请求头中提取并验证 API Token，返回 tenant_id
+    
+    Args:
+        request: FastAPI Request 对象
+        db: 数据库会话
+    
+    Returns:
+        str: 租户ID
+        
+    Example:
+        @router.post("/endpoint")
+        def endpoint(tenant_id: str = Depends(token_required)):
+            # 使用 tenant_id
+            pass
+    """
     if os.environ.get("DISABLE_SDK"):
         return get_json_result(data=False, retmsg="`Authorization` can't be empty")
     authorization_str = request.headers.get("Authorization")
@@ -355,7 +463,11 @@ def get_parser_config(chunk_method, parser_config):
     if not chunk_method:
         chunk_method = "naive"
 
-    # Define default configurations for each chunk method
+    # Define default configurations for each chunking method
+    base_defaults = {
+        "table_context_size": 0,
+        "image_context_size": 0,
+    }
     key_mapping = {
         "naive": {
             "layout_recognize": "DeepDOC",
@@ -409,16 +521,19 @@ def get_parser_config(chunk_method, parser_config):
 
     default_config = key_mapping[chunk_method]
 
-    # If no parser_config provided, return default
+    # If no parser_config provided, return default merged with base defaults
     if not parser_config:
-        return default_config
+        if default_config is None:
+            return deep_merge(base_defaults, {})
+        return deep_merge(base_defaults, default_config)
 
     # If parser_config is provided, merge with defaults to ensure required fields exist
     if default_config is None:
-        return parser_config
+        return deep_merge(base_defaults, parser_config)
 
     # Ensure raptor and graphrag fields have default values if not provided
-    merged_config = deep_merge(default_config, parser_config)
+    merged_config = deep_merge(base_defaults, default_config)
+    merged_config = deep_merge(merged_config, parser_config)
 
     return merged_config
 

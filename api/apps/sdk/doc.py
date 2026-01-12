@@ -26,7 +26,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.dialog_service import meta_filter, convert_conditions
 from common.constants import RetCode
 
-from api.db.services.task_service import TaskService, queue_tasks
+from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
 from core.app.qa import beAdoc, rmPrefix
 from core.app.tag import label_question
@@ -172,7 +172,7 @@ class RetrievalTestRequest(BaseModel):
 
 
 @router.post("/datasets/{dataset_id}/documents", summary="上传文档")
-async def upload_documents(
+def upload_documents(
     dataset_id: str,
     files: list[UploadFile] = File(...),
     parent_path: str | None = Form(None, description="Optional nested path under the parent folder. Uses '/' separators."),
@@ -206,7 +206,7 @@ async def upload_documents(
     
     kb = KnowledgebaseService.get_by_id(db, dataset_id)
     if not kb:
-        raise HTTPException(status_code=404, detail=f"Can't find the dataset with ID {dataset_id}!")
+        raise HTTPException(status_code=RetCode.NOT_FOUND, detail=f"Can't find the dataset with ID {dataset_id}!")
     
     err, uploaded_files = FileService.upload_document(db, kb, files, tenant_id, parent_path=parent_path)
     if err:
@@ -357,9 +357,7 @@ def update_document(
             try:
                 if not DocumentService.update_by_id(db, doc.id, {"status": str(status)}):
                     return get_error_data_result(retmsg="Database error (Document update)!")
-                
-                settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id), doc.kb_id)
-                return get_result(data=True)
+                settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id, [kb.name]), doc.kb_id)
             except Exception as e:
                 return server_error_response(e)
     
@@ -754,7 +752,8 @@ def stop_parsing_documents(
             doc = DocumentService.query(db, kb_id=dataset_id, id=doc_id)
             if not doc:
                 continue
-            
+            # Send cancellation signal via Redis to stop background task
+            cancel_all_task_of(doc_id)
             # 更新文档状态为取消
             DocumentService.update_by_id(
                 db,
@@ -887,7 +886,7 @@ def add_document_chunk(
         chunk_id = xxhash.xxh64(f"{document_id}-{req['content']}").hexdigest()
         
         # 准备chunk数据
-        embd_mdl = LLMBundle(kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
         tks = rag_tokenizer.tokenize(req["content"])
         
         chunk_data = {
@@ -997,7 +996,7 @@ def update_document_chunk(
         chunk_data = res[chunk_id]
         
         # 更新内容
-        if "content" in req:
+        if "content" in req and req["content"] is not None:
             chunk_data["content_with_weight"] = req["content"]
             tks = rag_tokenizer.tokenize(req["content"])
             chunk_data["content_ltks"] = tks
@@ -1005,7 +1004,7 @@ def update_document_chunk(
             
             # 重新生成embedding
             e, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-            embd_mdl = LLMBundle(kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+            embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
             v, c = embd_mdl.encode([req["content"]])
             chunk_data["q_%d_vec" % len(v[0])] = v[0]
         
@@ -1094,6 +1093,7 @@ def retrieval_test(
     question = req["question"]
     doc_ids = req.get("document_ids", [])
     use_kg = req.get("use_kg", False)
+    toc_enhance = req.get("toc_enhance", False)
     langs = req.get("cross_languages", [])
     search_mode_dict = req.get_search_mode_dict()
 
@@ -1108,11 +1108,15 @@ def retrieval_test(
     
     # 处理元数据过滤
     if not doc_ids:
-        metadata_condition = req.get("metadata_condition", {})
+        metadata_condition = req.get("metadata_condition", {}) or {}
         if metadata_condition:
             metas = DocumentService.get_meta_by_kbs(db, kb_ids)
-            doc_ids = meta_filter(metas, convert_conditions(metadata_condition))
-    
+            doc_ids = meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and"))
+            # If metadata_condition has conditions but no docs match, return empty result
+            if not doc_ids and metadata_condition.get("conditions"):
+                return get_result(data={"total": 0, "chunks": [], "doc_aggs": {}})
+            if metadata_condition and not doc_ids:
+                doc_ids = ["-999"]
     similarity_threshold = float(req.get("similarity_threshold", 0.2))
     vector_similarity_weight = float(req.get("vector_similarity_weight", 0.3))
     top = int(req.get("top_k", 1024))
@@ -1161,7 +1165,11 @@ def retrieval_test(
             rank_feature=label_question(db, question, kbs),
             search_mode=search_mode_dict
         )
-        
+        if toc_enhance:
+            chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
+            cks = settings.retriever.retrieval_by_toc(question, ranks["chunks"], tenant_ids, chat_mdl, size)
+            if cks:
+                ranks["chunks"] = cks
         # 知识图谱增强
         if use_kg:
             ck = settings.kg_retriever.retrieval(

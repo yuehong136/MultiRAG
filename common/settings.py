@@ -13,10 +13,12 @@ import core.utils
 import core.utils.milvus_conn
 import core.utils.es_conn
 import core.utils.infinity_conn
+import core.utils.ob_conn
 import core.utils.opensearch_conn
 import core.utils.vastbase_conn
 from core.utils.azure_sas_conn import MultiRAGAzureSasBlob
 from core.utils.azure_spn_conn import MultiRAGAzureSpnBlob
+from core.utils.gcs_conn import MultiRAGGCS
 from core.utils.minio_conn import MultiRAGMinio
 from core.utils.opendal_conn import OpenDALStorage
 from core.utils.s3_conn import MultiRAGS3
@@ -61,6 +63,7 @@ OAUTH_CONFIG = None
 
 # Doc engine settings
 DOC_ENGINE = os.getenv('DOC_ENGINE', 'milvus')
+DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
 docStoreConn = None
 retriever = None
 kg_retriever = None
@@ -94,8 +97,10 @@ INFINITY = {}
 AZURE = {}
 S3 = {}
 MINIO = {}
+OB = {}
 OSS = {}
 OS = {}
+GCS = {}
 
 # Core settings (from core/settings.py)
 RAG_CONF_PATH = os.path.join(get_project_base_directory(), "configs")
@@ -116,7 +121,8 @@ class StorageFactory:
         Storage.AZURE_SAS: MultiRAGAzureSasBlob,
         Storage.AWS_S3: MultiRAGS3,
         Storage.OSS: MultiRAGOSS,
-        Storage.OPENDAL: OpenDALStorage
+        Storage.OPENDAL: OpenDALStorage,
+        Storage.GCS: MultiRAGGCS,
     }
 
     @classmethod
@@ -146,7 +152,8 @@ def _get_or_create_secret_key():
 
     # Generate a new secure key and warn about it
     new_key = secrets.token_hex(32)
-    logging.warning(f"SECURITY WARNING: Using auto-generated SECRET_KEY. Generated key: {new_key}")
+    # logging.warning(f"SECURITY WARNING: Using auto-generated SECRET_KEY. Generated key: {new_key}")
+    logging.warning(f"SECURITY WARNING: Using auto-generated SECRET_KEY.")
     return new_key
 
 
@@ -256,11 +263,11 @@ def init_settings():
     FEISHU_OAUTH = get_base_config("oauth", {}).get("feishu")
     OAUTH_CONFIG = get_base_config("oauth", {})
 
-    global DOC_ENGINE, docStoreConn, ES, OS, INFINITY, MILVUS, VASTBASE
+    global DOC_ENGINE, DOC_ENGINE_INFINITY, docStoreConn, ES, OB, OS, INFINITY, MILVUS, VASTBASE
     DOC_ENGINE = os.environ.get("DOC_ENGINE", "milvus")
-    # DOC_ENGINE = os.environ.get('DOC_ENGINE', "opensearch")
+    DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
     lower_case_doc_engine = DOC_ENGINE.lower()
-    
+
     if lower_case_doc_engine == "elasticsearch":
         ES = get_base_config("es", {})
         docStoreConn = core.utils.es_conn.ESConnection()
@@ -273,13 +280,16 @@ def init_settings():
     elif lower_case_doc_engine == "opensearch":
         OS = get_base_config("os", {})
         docStoreConn = core.utils.opensearch_conn.OSConnection()
+    elif lower_case_doc_engine == "oceanbase":
+        OB = get_base_config("oceanbase", {})
+        docStoreConn = core.utils.ob_conn.OBConnection()
     elif lower_case_doc_engine == "vastbase":
         VASTBASE = get_base_config("vastbase", {})
         docStoreConn = core.utils.vastbase_conn.VastBaseConnection()
     else:
         raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
 
-    global AZURE, S3, MINIO, OSS
+    global AZURE, S3, MINIO, OSS, GCS
     if STORAGE_IMPL_TYPE in ['AZURE_SPN', 'AZURE_SAS']:
         AZURE = get_base_config("azure", {})
     elif STORAGE_IMPL_TYPE == 'AWS_S3':
@@ -288,6 +298,8 @@ def init_settings():
         MINIO = decrypt_database_config(name="minio")
     elif STORAGE_IMPL_TYPE == 'OSS':
         OSS = get_base_config("oss", {})
+    elif STORAGE_IMPL_TYPE == 'GCS':
+        GCS = get_base_config("gcs", {})
 
     global STORAGE_IMPL
     STORAGE_IMPL = StorageFactory.create(Storage[STORAGE_IMPL_TYPE])

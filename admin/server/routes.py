@@ -104,7 +104,7 @@ admin_router = APIRouter(tags=["admin"])
     summary="管理员登录",
     description="管理员登录接口，返回JWT token用于后续请求认证"
 )
-async def admin_login(request: LoginRequest, db: Session = Depends(get_db)):
+def admin_login(request: LoginRequest, db: Session = Depends(get_db)):
     """管理员登录"""
     try:
         return login_admin(db, request.email, request.password)
@@ -120,7 +120,7 @@ async def admin_login(request: LoginRequest, db: Session = Depends(get_db)):
     summary="管理员登出",
     description="管理员登出，使当前 token 失效"
 )
-async def admin_logout(user=Depends(admin_manager), db: Session = Depends(get_db)):
+def admin_logout(user=Depends(admin_manager), db: Session = Depends(get_db)):
     """管理员登出"""
     try:
         logout_admin(db, user)
@@ -136,7 +136,7 @@ async def admin_logout(user=Depends(admin_manager), db: Session = Depends(get_db
     summary="验证管理员身份",
     description="验证当前用户是否具有管理员权限（兼容旧版 HTTP Basic Auth）"
 )
-async def auth_admin(auth: AdminAuth) -> APIResponse[None]:
+def auth_admin(auth: AdminAuth) -> APIResponse[None]:
     """
     验证管理员身份（旧接口，使用 HTTP Basic Auth）
     
@@ -156,7 +156,7 @@ async def auth_admin(auth: AdminAuth) -> APIResponse[None]:
     summary="验证 JWT token 有效性",
     description="验证当前 JWT token 是否有效且用户具有管理员权限"
 )
-async def verify_admin(user=Depends(admin_manager)) -> APIResponse[None]:
+def verify_admin(user=Depends(admin_manager)) -> APIResponse[None]:
     """验证 JWT token 有效性（推荐使用）"""
     try:
         return success_response(None, f"Admin {user.email} is authorized", 0)
@@ -170,7 +170,7 @@ async def verify_admin(user=Depends(admin_manager)) -> APIResponse[None]:
     summary="获取所有用户",
     description="获取系统中所有用户的列表"
 )
-async def list_users(user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[list[UserResponse]]:
+def list_users(user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[list[UserResponse]]:
     """获取所有用户列表"""
     try:
         users = UserMgr.get_all_users(db)
@@ -185,7 +185,7 @@ async def list_users(user=Depends(admin_manager), db: Session = Depends(get_db))
     summary="创建用户",
     description="创建一个新用户"
 )
-async def create_user(user_data: UserCreate, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[dict]:
+def create_user(user_data: UserCreate, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[dict]:
     """创建新用户"""
     try:
         res = UserMgr.create_user(
@@ -218,7 +218,7 @@ async def create_user(user_data: UserCreate, user=Depends(admin_manager), db: Se
     summary="删除用户",
     description="删除指定用户及其所有数据"
 )
-async def delete_user(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[None]:
+def delete_user(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[None]:
     """删除用户"""
     try:
         res = UserMgr.delete_user(db, username)
@@ -239,7 +239,7 @@ async def delete_user(username: str, user=Depends(admin_manager), db: Session = 
     summary="修改用户密码",
     description="修改指定用户的密码"
 )
-async def change_password(
+def change_password(
     username: str,
     password_data: PasswordUpdate,
     user=Depends(admin_manager),
@@ -262,7 +262,7 @@ async def change_password(
     summary="更新用户激活状态",
     description="更新指定用户的激活状态（启用/停用）"
 )
-async def alter_user_activate_status(
+def alter_user_activate_status(
     username: str,
     status_data: ActivateStatusUpdate,
     user=Depends(admin_manager),
@@ -284,7 +284,7 @@ async def alter_user_activate_status(
     summary="获取用户详情",
     description="获取指定用户的详细信息"
 )
-async def get_user_details(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[UserDetail]:
+def get_user_details(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[UserDetail]:
     """获取用户详细信息"""
     try:
         user_details = UserMgr.get_user_details(db, username)
@@ -301,7 +301,7 @@ async def get_user_details(username: str, user=Depends(admin_manager), db: Sessi
     summary="获取用户的知识库列表",
     description="获取指定用户的所有知识库"
 )
-async def get_user_datasets(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[list[dict]]:
+def get_user_datasets(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[list[dict]]:
     """获取用户的知识库列表"""
     try:
         datasets_list = UserServiceMgr.get_user_datasets(db, username)
@@ -318,7 +318,7 @@ async def get_user_datasets(username: str, user=Depends(admin_manager), db: Sess
     summary="获取用户的Agent列表",
     description="获取指定用户的所有Agent"
 )
-async def get_user_agents(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[list[dict]]:
+def get_user_agents(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[list[dict]]:
     """获取用户的Agent列表"""
     try:
         agents_list = UserServiceMgr.get_user_agents(db, username)
@@ -335,7 +335,7 @@ async def get_user_agents(username: str, user=Depends(admin_manager), db: Sessio
     summary="获取所有服务",
     description="获取系统中所有服务的列表"
 )
-async def get_services(user=Depends(admin_manager)) -> APIResponse[list[ServiceResponse]]:
+def get_services(user=Depends(admin_manager)) -> APIResponse[list[ServiceResponse]]:
     """获取所有服务列表"""
     try:
         services = ServiceMgr.get_all_services()
@@ -350,7 +350,7 @@ async def get_services(user=Depends(admin_manager)) -> APIResponse[list[ServiceR
     summary="按类型获取服务",
     description="获取指定类型的所有服务"
 )
-async def get_services_by_type(
+def get_services_by_type(
     service_type: str,
     user=Depends(admin_manager)
 ) -> APIResponse[list[ServiceResponse]]:
@@ -368,7 +368,7 @@ async def get_services_by_type(
     summary="获取服务详情",
     description="获取指定服务的详细信息"
 )
-async def get_service(service_id: int, user=Depends(admin_manager)) -> APIResponse[ServiceResponse]:
+def get_service(service_id: int, user=Depends(admin_manager)) -> APIResponse[ServiceResponse]:
     """获取服务详情"""
     try:
         service = ServiceMgr.get_service_details(service_id)
@@ -383,7 +383,7 @@ async def get_service(service_id: int, user=Depends(admin_manager)) -> APIRespon
     summary="关闭服务",
     description="关闭指定的服务"
 )
-async def shutdown_service(service_id: int, user=Depends(admin_manager)) -> APIResponse[dict]:
+def shutdown_service(service_id: int, user=Depends(admin_manager)) -> APIResponse[dict]:
     """关闭服务"""
     try:
         result = ServiceMgr.shutdown_service(service_id)
@@ -398,7 +398,7 @@ async def shutdown_service(service_id: int, user=Depends(admin_manager)) -> APIR
     summary="重启服务",
     description="重启指定的服务"
 )
-async def restart_service(service_id: int, user=Depends(admin_manager)) -> APIResponse[dict]:
+def restart_service(service_id: int, user=Depends(admin_manager)) -> APIResponse[dict]:
     """重启服务"""
     try:
         result = ServiceMgr.restart_service(service_id)
@@ -419,7 +419,7 @@ class RoleCreate(BaseModel):
     summary="创建角色",
     description="创建一个新角色"
 )
-async def create_role(role_data: RoleCreate, user=Depends(admin_manager)) -> APIResponse[dict]:
+def create_role(role_data: RoleCreate, user=Depends(admin_manager)) -> APIResponse[dict]:
     """创建角色"""
     try:
         res = RoleMgr.create_role(role_data.role_name, role_data.description)
@@ -439,7 +439,7 @@ class RoleUpdate(BaseModel):
     summary="更新角色",
     description="更新角色描述"
 )
-async def update_role(role_name: str, role_data: RoleUpdate, user=Depends(admin_manager)) -> APIResponse[dict]:
+def update_role(role_name: str, role_data: RoleUpdate, user=Depends(admin_manager)) -> APIResponse[dict]:
     """更新角色"""
     try:
         res = RoleMgr.update_role_description(role_name, role_data.description)
@@ -454,7 +454,7 @@ async def update_role(role_name: str, role_data: RoleUpdate, user=Depends(admin_
     summary="删除角色",
     description="删除指定角色"
 )
-async def delete_role(role_name: str, user=Depends(admin_manager)) -> APIResponse[dict]:
+def delete_role(role_name: str, user=Depends(admin_manager)) -> APIResponse[dict]:
     """删除角色"""
     try:
         res = RoleMgr.delete_role(role_name)
@@ -469,7 +469,7 @@ async def delete_role(role_name: str, user=Depends(admin_manager)) -> APIRespons
     summary="获取所有角色",
     description="获取系统中所有角色的列表"
 )
-async def list_roles(user=Depends(admin_manager)) -> APIResponse[list[dict]]:
+def list_roles(user=Depends(admin_manager)) -> APIResponse[list[dict]]:
     """获取所有角色"""
     try:
         res = RoleMgr.list_roles()
@@ -484,7 +484,7 @@ async def list_roles(user=Depends(admin_manager)) -> APIResponse[list[dict]]:
     summary="获取角色权限",
     description="获取指定角色的权限配置"
 )
-async def get_role_permission(role_name: str, user=Depends(admin_manager)) -> APIResponse[dict]:
+def get_role_permission(role_name: str, user=Depends(admin_manager)) -> APIResponse[dict]:
     """获取角色权限"""
     try:
         res = RoleMgr.get_role_permission(role_name)
@@ -505,7 +505,7 @@ class PermissionGrant(BaseModel):
     summary="授予角色权限",
     description="为指定角色授予权限"
 )
-async def grant_role_permission(
+def grant_role_permission(
     role_name: str,
     perm_data: PermissionGrant,
     user=Depends(admin_manager)
@@ -524,7 +524,7 @@ async def grant_role_permission(
     summary="撤销角色权限",
     description="撤销指定角色的权限"
 )
-async def revoke_role_permission(
+def revoke_role_permission(
     role_name: str,
     perm_data: PermissionGrant,
     user=Depends(admin_manager)
@@ -548,7 +548,7 @@ class UserRoleUpdate(BaseModel):
     summary="更新用户角色",
     description="更新指定用户的角色"
 )
-async def update_user_role(
+def update_user_role(
     user_name: str,
     role_data: UserRoleUpdate,
     user=Depends(admin_manager)
@@ -567,7 +567,7 @@ async def update_user_role(
     summary="获取用户权限",
     description="获取指定用户的权限配置"
 )
-async def get_user_permission(user_name: str, user=Depends(admin_manager)) -> APIResponse[dict]:
+def get_user_permission(user_name: str, user=Depends(admin_manager)) -> APIResponse[dict]:
     """获取用户权限"""
     try:
         res = RoleMgr.get_user_permission(user_name)
@@ -582,7 +582,7 @@ async def get_user_permission(user_name: str, user=Depends(admin_manager)) -> AP
     summary="获取版本信息",
     description="获取 MultiRAG 版本信息"
 )
-async def show_version(user=Depends(admin_manager)) -> APIResponse[dict]:
+def show_version(user=Depends(admin_manager)) -> APIResponse[dict]:
     """获取版本信息"""
     try:
         res = {"version": get_multirag_version()}

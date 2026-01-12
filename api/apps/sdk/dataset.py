@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from common import settings
 from common.constants import FileSource, StatusEnum
 from api.db.db_models import File, get_db
-from api.db.services.document_service import DocumentService
+from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
+from api.db.services.task_service import GRAPH_RAPTOR_FAKE_DOC_ID, TaskService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -94,7 +95,7 @@ def create_dataset(
         parser_config = get_parser_config(final_parser_id, req.get("parser_config"))
         
         # 使用封装的方法创建payload（会自动处理embd_id默认值）
-        req = KnowledgebaseService.create_with_name(
+        e, payload = KnowledgebaseService.create_with_name(
             db=db,
             name=req.pop("name"),
             tenant_id=tenant_id,
@@ -106,16 +107,20 @@ def create_dataset(
             permission=req.get("permission")
         )
 
+        # 检查创建是否失败
+        if not e:
+            return payload  # 直接返回错误响应
+
         # 验证embedding model的可用性
         if embd_id:  # 如果用户指定了embd_id，需要验证
-            ok, err = verify_embedding_availability(req["embd_id"], tenant_id)
+            ok, err = verify_embedding_availability(db, payload["embd_id"], tenant_id)
             if not ok:
                 return err
 
-        if not KnowledgebaseService.save(db, **req):
+        if not KnowledgebaseService.save(db, **payload):
             return get_error_data_result(retmsg="Create dataset error.(Database error)")
 
-        ok, k = KnowledgebaseService.get_by_id(db, req["id"])
+        ok, k = KnowledgebaseService.get_by_id(db, payload["id"])
         if not ok:
             return get_error_data_result(retmsg="Dataset created failed")
 
@@ -433,3 +438,229 @@ def delete_knowledge_graph(
     )
 
     return get_result(data=True)
+
+
+@router.post("/datasets/{dataset_id}/run_graphrag", summary="运行GraphRAG任务")
+def run_graphrag(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required)
+):
+    """
+    运行GraphRAG任务生成知识图谱
+
+    Args:
+        dataset_id: 数据集ID
+        db: 数据库会话
+        tenant_id: 租户ID
+
+    Returns:
+        graphrag_task_id: 任务ID
+    """
+    if not dataset_id:
+        return get_error_data_result(retmsg='Lack of "Dataset ID"')
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return get_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=RetCode.AUTHENTICATION_ERROR
+        )
+
+    ok, kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not ok:
+        return get_error_data_result(retmsg="Invalid Dataset ID")
+
+    task_id = kb.graphrag_task_id
+    if task_id:
+        task = TaskService.get_by_id(db, task_id)
+        if not task:
+            logging.warning(f"A valid GraphRAG task id is expected for Dataset {dataset_id}")
+
+        if task and task.progress not in [-1, 1]:
+            return get_error_data_result(retmsg=f"Task {task_id} in progress with status {task.progress}. A Graph Task is already running.")
+
+    documents, _ = DocumentService.get_by_kb_id(
+        db,
+        kb_id=dataset_id,
+        page_number=0,
+        items_per_page=0,
+        orderby="create_time",
+        desc=False,
+        keywords="",
+        run_status=[],
+        types=[],
+        suffix=[],
+    )
+    if not documents:
+        return get_error_data_result(retmsg=f"No documents in Dataset {dataset_id}")
+
+    sample_document = documents[0]
+    document_ids = [document["id"] for document in documents]
+
+    task_id = queue_raptor_o_graphrag_tasks(
+        db,
+        sample_doc_id=sample_document,
+        ty="graphrag",
+        priority=0,
+        fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID,
+        doc_ids=list(document_ids)
+    )
+
+    if not KnowledgebaseService.update_by_id(db, kb.id, {"graphrag_task_id": task_id}):
+        logging.warning(f"Cannot save graphrag_task_id for Dataset {dataset_id}")
+
+    return get_result(data={"graphrag_task_id": task_id})
+
+
+@router.get("/datasets/{dataset_id}/trace_graphrag", summary="追踪GraphRAG任务状态")
+def trace_graphrag(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required)
+):
+    """
+    追踪GraphRAG任务状态
+
+    Args:
+        dataset_id: 数据集ID
+        db: 数据库会话
+        tenant_id: 租户ID
+
+    Returns:
+        任务状态信息
+    """
+    if not dataset_id:
+        return get_error_data_result(retmsg='Lack of "Dataset ID"')
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return get_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=RetCode.AUTHENTICATION_ERROR
+        )
+
+    ok, kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not ok:
+        return get_error_data_result(retmsg="Invalid Dataset ID")
+
+    task_id = kb.graphrag_task_id
+    if not task_id:
+        return get_result(data={})
+
+    task = TaskService.get_by_id(db, task_id)
+    if not task:
+        return get_result(data={})
+
+    return get_result(data=task.to_dict())
+
+
+@router.post("/datasets/{dataset_id}/run_raptor", summary="运行RAPTOR任务")
+def run_raptor(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required)
+):
+    """
+    运行RAPTOR任务
+
+    Args:
+        dataset_id: 数据集ID
+        db: 数据库会话
+        tenant_id: 租户ID
+
+    Returns:
+        raptor_task_id: 任务ID
+    """
+    if not dataset_id:
+        return get_error_data_result(retmsg='Lack of "Dataset ID"')
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return get_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=RetCode.AUTHENTICATION_ERROR
+        )
+
+    ok, kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not ok:
+        return get_error_data_result(retmsg="Invalid Dataset ID")
+
+    task_id = kb.raptor_task_id
+    if task_id:
+        task = TaskService.get_by_id(db, task_id)
+        if not task:
+            logging.warning(f"A valid RAPTOR task id is expected for Dataset {dataset_id}")
+
+        if task and task.progress not in [-1, 1]:
+            return get_error_data_result(retmsg=f"Task {task_id} in progress with status {task.progress}. A RAPTOR Task is already running.")
+
+    documents, _ = DocumentService.get_by_kb_id(
+        db,
+        kb_id=dataset_id,
+        page_number=0,
+        items_per_page=0,
+        orderby="create_time",
+        desc=False,
+        keywords="",
+        run_status=[],
+        suffix=[],
+        types=[],
+    )
+    if not documents:
+        return get_error_data_result(retmsg=f"No documents in Dataset {dataset_id}")
+
+    sample_document = documents[0]
+    document_ids = [document["id"] for document in documents]
+
+    task_id = queue_raptor_o_graphrag_tasks(
+        db,
+        sample_doc_id=sample_document,
+        ty="raptor",
+        priority=0,
+        fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID,
+        doc_ids=list(document_ids)
+    )
+
+    if not KnowledgebaseService.update_by_id(db, kb.id, {"raptor_task_id": task_id}):
+        logging.warning(f"Cannot save raptor_task_id for Dataset {dataset_id}")
+
+    return get_result(data={"raptor_task_id": task_id})
+
+
+@router.get("/datasets/{dataset_id}/trace_raptor", summary="追踪RAPTOR任务状态")
+def trace_raptor(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required)
+):
+    """
+    追踪RAPTOR任务状态
+
+    Args:
+        dataset_id: 数据集ID
+        db: 数据库会话
+        tenant_id: 租户ID
+
+    Returns:
+        任务状态信息
+    """
+    if not dataset_id:
+        return get_error_data_result(retmsg='Lack of "Dataset ID"')
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return get_result(
+            data=False,
+            retmsg='No authorization.',
+            retcode=RetCode.AUTHENTICATION_ERROR
+        )
+
+    ok, kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not ok:
+        return get_error_data_result(retmsg="Invalid Dataset ID")
+
+    task_id = kb.raptor_task_id
+    if not task_id:
+        return get_result(data={})
+
+    task = TaskService.get_by_id(db, task_id)
+    if not task:
+        return get_error_data_result(retmsg="RAPTOR Task Not Found or Error Occurred")
+
+    return get_result(data=task.to_dict())

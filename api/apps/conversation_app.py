@@ -7,6 +7,7 @@
 @desc: 会话管理接口
 """
 import json
+import os
 import re
 import logging
 from copy import deepcopy
@@ -19,7 +20,7 @@ from typing import Generator, Literal, Annotated, Any
 
 from api.db.db_models import APIToken, get_db
 from api.db.services.conversation_service import ConversationService, structure_answer
-from api.db.services.dialog_service import DialogService, chat, ask, gen_mindmap
+from api.db.services.dialog_service import DialogService, async_chat, async_ask, gen_mindmap
 # from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
@@ -238,7 +239,7 @@ router = APIRouter()
 
 
 @router.post('/set', summary="设置会话", response_description="成功设置会话")
-async def set_conversation(request: SetConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def set_conversation(request: SetConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     设置会话
 
@@ -308,7 +309,7 @@ async def set_conversation(request: SetConversationRequest, db: Session = Depend
 
 
 @router.get('/get', summary="获取会话", response_description="成功获取会话")
-async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取会话
 
@@ -327,7 +328,6 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
         if not conv:
             return get_data_error_result(retmsg="Conversation not found!")
         tenants = UserTenantService.query(db, user_id=user.id)
-        avatar = None
         for tenant in tenants:
             dialog = DialogService.query(db, tenant_id=tenant.tenant_id, id=conv.dialog_id)
             if dialog and len(dialog) > 0:
@@ -349,7 +349,7 @@ async def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(
 
 
 @router.get('/getsse/{dialog_id}', summary="获取对话信息（支持SSE）", response_description="成功获取对话信息")
-async def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = None):
+def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = None):
     """
     获取对话信息（支持SSE）
 
@@ -389,7 +389,7 @@ async def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request
         return server_error_response(e)
 
 @router.post('/rm', summary="删除会话", response_description="成功删除会话")
-async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除会话
 
@@ -423,7 +423,7 @@ async def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), 
 
 
 @router.get('/list', summary="列出会话", response_description="成功列出会话")
-async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     列出会话
 
@@ -453,7 +453,7 @@ async def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=
 
 
 @router.post('/completion', summary="生成对话", response_description="成功生成对话")
-def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     # 生成对话响应
 
@@ -672,10 +672,10 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
 
         is_embedded = bool(chat_model_id)
 
-        def stream_response():
+        async def stream_response():
             nonlocal dia, msg, db, req, conv
             try:
-                for ans in chat(dia, msg, db, **req):
+                async for ans in async_chat(dia, msg, db, **req):
                     ans = structure_answer(conv, ans, message_id, conv.id)
                     yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
                 ConversationService.update_by_id(db, conv.id, conv.to_dict())
@@ -691,7 +691,7 @@ def completion(request: CompletionRequest, db: Session = Depends(get_db), user=D
         else:
             answer = None
             conv = deepcopy(conv)  # 深拷贝 conv，否则会导致后续更新数据时，无法更新引用
-            for ans in chat(dia, msg, db, **req):
+            async for ans in async_chat(dia, msg, db, **req):
                 answer = structure_answer(conv, ans, message_id, conv.id)
                 if not is_embedded:
                     ConversationService.update_by_id(db, conv.id, conv.to_dict())
@@ -774,6 +774,93 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
         "Content-Disposition": 'attachment; filename="tts_output.mp3"'
     }
     return StreamingResponse(stream_audio(), media_type="audio/mpeg", headers=headers)
+
+
+@router.post('/sequence2txt', summary="语音转文字（流式）", response_description="成功识别语音")
+def sequence2txt(
+    file: UploadFile = File(...),
+    stream: str = "false",
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    语音转文字（支持流式）
+
+    该接口用于上传音频文件并将其转换为文本，支持流式和非流式输出。
+
+    参数:
+    - file: UploadFile 上传的音频文件
+    - stream: str 是否使用流式响应，"true" 或 "false"，默认 "false"
+
+    返回:
+    - 非流式：返回包含识别文本的JSON结果
+    - 流式：返回 SSE 流，逐步返回识别结果
+
+    支持的音频格式:
+    - wav, mp3, m4a, aac, flac, ogg, webm, opus, wma
+    """
+    stream_mode = stream.lower() == "true"
+
+    ALLOWED_EXTS = {
+        ".wav", ".mp3", ".m4a", ".aac",
+        ".flac", ".ogg", ".webm",
+        ".opus", ".wma"
+    }
+
+    filename = file.filename or ""
+    suffix = os.path.splitext(filename)[-1].lower()
+    if suffix not in ALLOWED_EXTS:
+        return get_data_error_result(
+            retmsg=f"Unsupported audio format: {suffix}. Allowed: {', '.join(sorted(ALLOWED_EXTS))}"
+        )
+
+    # 保存上传的音频文件到临时路径
+    import tempfile as tf
+    fd, temp_audio_path = tf.mkstemp(suffix=suffix)
+    os.close(fd)
+    with open(temp_audio_path, "wb") as f:
+        f.write(file.file.read())
+
+    tenants = TenantService.get_info_by(db, user.id)
+    if not tenants:
+        try:
+            os.remove(temp_audio_path)
+        except Exception:
+            pass
+        return get_data_error_result(retmsg="Tenant not found!")
+
+    asr_id = tenants[0].get("asr_id")
+    if not asr_id:
+        try:
+            os.remove(temp_audio_path)
+        except Exception:
+            pass
+        return get_data_error_result(retmsg="No default ASR model is set")
+
+    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_id)
+
+    if not stream_mode:
+        text = asr_mdl.transcription(temp_audio_path)
+        try:
+            os.remove(temp_audio_path)
+        except Exception as e:
+            logging.error(f"Failed to remove temp audio file: {str(e)}")
+        return get_json_result(data={"text": text})
+
+    def event_stream():
+        try:
+            for evt in asr_mdl.stream_transcription(temp_audio_path):
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            err = {"event": "error", "text": str(e)}
+            yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+        finally:
+            try:
+                os.remove(temp_audio_path)
+            except Exception as e:
+                logging.error(f"Failed to remove temp audio file: {str(e)}")
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post('/asr', summary="语音识别", response_description="成功识别语音")
@@ -885,7 +972,7 @@ def asr_upload(file: UploadFile = File(...), llm_name: str | None = None, db: Se
 
 
 @router.post('/delete_msg', summary="删除信息", response_description="成功删除信息")
-async def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除消息
 
@@ -935,7 +1022,7 @@ async def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), u
 
 
 @router.post('/thumbup', summary="点赞", response_description="成功点赞")
-async def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     点赞接口
 
@@ -985,7 +1072,7 @@ async def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=D
 
 
 @router.post('/ask', summary="问答接口", response_description="返回答案")
-async def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     问答接口
 
@@ -998,6 +1085,8 @@ async def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), use
 
     返回:
     - 实时流式返回答案数据
+    
+    注意: 虽然此函数定义为同步，但返回 StreamingResponse，FastAPI 会正确处理。
     """
     req = request.model_dump()
     uid = user.id
@@ -1010,9 +1099,9 @@ async def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), use
     if search_app:
         search_config = search_app.get("search_config", {})
 
-    def stream():
+    async def stream():
         try:
-            for ans in ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
+            async for ans in async_ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
                 yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
@@ -1128,7 +1217,6 @@ def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends
     return get_json_result(data=mind_map)
 
 
-# 定义 related_questions 接口
 @router.post('/related_questions', summary="生成相关问题", response_description="返回相关问题")
 async def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
@@ -1160,7 +1248,7 @@ async def related_questions(request: RelatedQuestionsRequest, db: Session = Depe
     if "parameter" in gen_conf:
         del gen_conf["parameter"]
     prompt = load_prompt("related_question")
-    ans = chat_mdl.chat(
+    ans = await chat_mdl.async_chat(
         prompt,
         [
             {

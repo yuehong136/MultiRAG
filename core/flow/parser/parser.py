@@ -16,19 +16,17 @@ import io
 import json
 import os
 import random
+import re
 from functools import partial
 
 import trio
 import numpy as np
 from PIL import Image
 
-from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import LLMBundle
-from common.misc_utils import get_uuid
-from core.utils.base64_image import image2id
 from deepdoc.parser import ExcelParser
 from deepdoc.parser.mineru_parser import MinerUParser
 from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
@@ -37,7 +35,11 @@ from core.app.naive import Docx
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.parser.schema import ParserFromUpstream
 from core.llm.cv import Base as VLM
+from core.utils.base64_image import image2id
+from core.nlp import attach_media_context
 from common import settings
+from common.constants import LLMType
+from common.misc_utils import get_uuid
 
 
 class ParserParam(ProcessParamBase):
@@ -82,14 +84,19 @@ class ParserParam(ProcessParamBase):
                     "pdf",
                 ],
                 "output_format": "json",
+                "table_context_size": 0,
+                "image_context_size": 0,
             },
             "spreadsheet": {
+                "parse_method": "deepdoc",  # deepdoc/tcadp_parser
                 "output_format": "html",
                 "suffix": [
                     "xls",
                     "xlsx",
                     "csv",
                 ],
+                "table_context_size": 0,
+                "image_context_size": 0,
             },
             "word": {
                 "suffix": [
@@ -97,16 +104,24 @@ class ParserParam(ProcessParamBase):
                     "docx",
                 ],
                 "output_format": "json",
+                "table_context_size": 0,
+                "image_context_size": 0,
             },
             "text&markdown": {
                 "suffix": ["md", "markdown", "mdx", "txt"],
                 "output_format": "json",
+                "table_context_size": 0,
+                "image_context_size": 0,
             },
             "slides": {
+                "parse_method": "deepdoc",  # deepdoc/tcadp_parser
                 "suffix": [
                     "pptx",
+                    "ppt",
                 ],
                 "output_format": "json",
+                "table_context_size": 0,
+                "image_context_size": 0,
             },
             "image": {
                 "parse_method": "ocr",
@@ -246,7 +261,12 @@ class Parser(ProcessBase):
                 bboxes.append(box)
         elif conf.get("parse_method").lower() == "tcadp parser":
             # ADP is a document parsing tool using Tencent Cloud API
-            tcadp_parser = TCADPParser()
+            table_result_type = conf.get("table_result_type", "1")
+            markdown_image_response_type = conf.get("markdown_image_response_type", "1")
+            tcadp_parser = TCADPParser(
+                table_result_type=table_result_type,
+                markdown_image_response_type=markdown_image_response_type
+            )
             sections, _ = tcadp_parser.parse_pdf(
                 filepath=name,
                 binary=blob,
@@ -286,6 +306,20 @@ class Parser(ProcessBase):
                 for pn, x0, x1, top, bott in RAGFlowPdfParser.extract_positions(poss):
                     bboxes.append({"page_number": int(pn[0]), "x0": float(x0), "x1": float(x1), "top": float(top), "bottom": float(bott), "text": t})
 
+        for b in bboxes:
+            text_val = b.get("text", "")
+            has_text = isinstance(text_val, str) and text_val.strip()
+            layout = b.get("layout_type")
+            if layout == "figure" or (b.get("image") and not has_text):
+                b["doc_type_kwd"] = "image"
+            elif layout == "table":
+                b["doc_type_kwd"] = "table"
+
+        table_ctx = conf.get("table_context_size", 0) or 0
+        image_ctx = conf.get("image_context_size", 0) or 0
+        if table_ctx or image_ctx:
+            bboxes = attach_media_context(bboxes, table_ctx, image_ctx)
+
         if conf.get("output_format") == "json":
             self.set_output("json", bboxes)
         if conf.get("output_format") == "markdown":
@@ -303,14 +337,91 @@ class Parser(ProcessBase):
         self.callback(random.randint(1, 5) / 100.0, "Start to work on a Spreadsheet.")
         conf = self._param.setups["spreadsheet"]
         self.set_output("output_format", conf["output_format"])
-        spreadsheet_parser = ExcelParser()
-        if conf.get("output_format") == "html":
-            htmls = spreadsheet_parser.html(blob, 1000000000)
-            self.set_output("html", htmls[0])
-        elif conf.get("output_format") == "json":
-            self.set_output("json", [{"text": txt} for txt in spreadsheet_parser(blob) if txt])
-        elif conf.get("output_format") == "markdown":
-            self.set_output("markdown", spreadsheet_parser.markdown(blob))
+
+        parse_method = conf.get("parse_method", "deepdoc")
+
+        # Handle TCADP parser
+        if parse_method.lower() == "tcadp parser":
+            table_result_type = conf.get("table_result_type", "1")
+            markdown_image_response_type = conf.get("markdown_image_response_type", "1")
+            tcadp_parser = TCADPParser(
+                table_result_type=table_result_type,
+                markdown_image_response_type=markdown_image_response_type
+            )
+            if not tcadp_parser.check_installation():
+                raise RuntimeError("TCADP parser not available. Please check Tencent Cloud API configuration.")
+
+            # Determine file type based on extension
+            if re.search(r"\.xlsx?$", name, re.IGNORECASE):
+                file_type = "XLSX"
+            else:
+                file_type = "CSV"
+
+            self.callback(0.2, f"Using TCADP parser for {file_type} file.")
+            sections, tables = tcadp_parser.parse_pdf(
+                filepath=name,
+                binary=blob,
+                callback=self.callback,
+                file_type=file_type,
+                file_start_page=1,
+                file_end_page=1000
+            )
+
+            # Process TCADP parser output based on configured output_format
+            output_format = conf.get("output_format", "html")
+
+            if output_format == "html":
+                # For HTML output, combine sections and tables into HTML
+                html_content = ""
+                for section, position_tag in sections:
+                    if section:
+                        html_content += section + "\n"
+                for table in tables:
+                    if table:
+                        html_content += table + "\n"
+
+                self.set_output("html", html_content)
+
+            elif output_format == "json":
+                # For JSON output, create a list of text items
+                result = []
+                # Add sections as text
+                for section, position_tag in sections:
+                    if section:
+                        result.append({"text": section})
+                # Add tables as text
+                for table in tables:
+                    if table:
+                        result.append({"text": table, "doc_type_kwd": "table"})
+
+                table_ctx = conf.get("table_context_size", 0) or 0
+                image_ctx = conf.get("image_context_size", 0) or 0
+                if table_ctx or image_ctx:
+                    result = attach_media_context(result, table_ctx, image_ctx)
+
+                self.set_output("json", result)
+
+            elif output_format == "markdown":
+                # For markdown output, combine into markdown
+                md_content = ""
+                for section, position_tag in sections:
+                    if section:
+                        md_content += section + "\n\n"
+                for table in tables:
+                    if table:
+                        md_content += table + "\n\n"
+
+                self.set_output("markdown", md_content)
+        else:
+            # Default DeepDOC parser
+            spreadsheet_parser = ExcelParser()
+            if conf.get("output_format") == "html":
+                htmls = spreadsheet_parser.html(blob, 1000000000)
+                self.set_output("html", htmls[0])
+            elif conf.get("output_format") == "json":
+                self.set_output("json", [{"text": txt} for txt in spreadsheet_parser(blob) if txt])
+            elif conf.get("output_format") == "markdown":
+                self.set_output("markdown", spreadsheet_parser.markdown(blob))
 
     def _word(self, name, blob):
         self.callback(random.randint(1, 5) / 100.0, "Start to work on a Word Processor Document")
@@ -321,29 +432,91 @@ class Parser(ProcessBase):
         if conf.get("output_format") == "json":
             sections, tbls = docx_parser(name, binary=blob)
             sections = [{"text": section[0], "image": section[1]} for section in sections if section]
-            sections.extend([{"text": tb, "image": None} for ((_,tb), _) in tbls])
+            sections.extend([{"text": tb, "image": None, "doc_type_kwd": "table"} for ((_, tb), _) in tbls])
+
+            table_ctx = conf.get("table_context_size", 0) or 0
+            image_ctx = conf.get("image_context_size", 0) or 0
+            if table_ctx or image_ctx:
+                sections = attach_media_context(sections, table_ctx, image_ctx)
+
             self.set_output("json", sections)
         elif conf.get("output_format") == "markdown":
             markdown_text = docx_parser.to_markdown(name, binary=blob)
             self.set_output("markdown", markdown_text)
 
     def _slides(self, name, blob):
-        from deepdoc.parser.ppt_parser import RAGFlowPptParser as ppt_parser
-
         self.callback(random.randint(1, 5) / 100.0, "Start to work on a PowerPoint Document")
 
         conf = self._param.setups["slides"]
         self.set_output("output_format", conf["output_format"])
 
-        ppt_parser = ppt_parser()
-        txts = ppt_parser(blob, 0, 100000, None)
+        parse_method = conf.get("parse_method", "deepdoc")
 
-        sections = [{"text": section} for section in txts if section.strip()]
+        # Handle TCADP parser
+        if parse_method.lower() == "tcadp parser":
+            table_result_type = conf.get("table_result_type", "1")
+            markdown_image_response_type = conf.get("markdown_image_response_type", "1")
+            tcadp_parser = TCADPParser(
+                table_result_type=table_result_type,
+                markdown_image_response_type=markdown_image_response_type
+            )
+            if not tcadp_parser.check_installation():
+                raise RuntimeError("TCADP parser not available. Please check Tencent Cloud API configuration.")
 
-        # json
-        assert conf.get("output_format") == "json", "have to be json for ppt"
-        if conf.get("output_format") == "json":
-            self.set_output("json", sections)
+            # Determine file type based on extension
+            if re.search(r"\.pptx?$", name, re.IGNORECASE):
+                file_type = "PPTX"
+            else:
+                file_type = "PPT"
+
+            self.callback(0.2, f"Using TCADP parser for {file_type} file.")
+
+            sections, tables = tcadp_parser.parse_pdf(
+                filepath=name,
+                binary=blob,
+                callback=self.callback,
+                file_type=file_type,
+                file_start_page=1,
+                file_end_page=1000
+            )
+
+            # Process TCADP parser output - PPT only supports json format
+            output_format = conf.get("output_format", "json")
+            if output_format == "json":
+                # For JSON output, create a list of text items
+                result = []
+                # Add sections as text
+                for section, position_tag in sections:
+                    if section:
+                        result.append({"text": section})
+                # Add tables as text
+                for table in tables:
+                    if table:
+                        result.append({"text": table, "doc_type_kwd": "table"})
+
+                table_ctx = conf.get("table_context_size", 0) or 0
+                image_ctx = conf.get("image_context_size", 0) or 0
+                if table_ctx or image_ctx:
+                    result = attach_media_context(result, table_ctx, image_ctx)
+
+                self.set_output("json", result)
+        else:
+            # Default DeepDOC parser (supports .pptx format)
+            from deepdoc.parser.ppt_parser import RAGFlowPptParser as ppt_parser
+
+            ppt_parser = ppt_parser()
+            txts = ppt_parser(blob, 0, 100000, None)
+
+            sections = [{"text": section} for section in txts if section.strip()]
+
+            # json
+            assert conf.get("output_format") == "json", "have to be json for ppt"
+            if conf.get("output_format") == "json":
+                table_ctx = conf.get("table_context_size", 0) or 0
+                image_ctx = conf.get("image_context_size", 0) or 0
+                if table_ctx or image_ctx:
+                    sections = attach_media_context(sections, table_ctx, image_ctx)
+                self.set_output("json", sections)
 
     def _markdown(self, name, blob):
         from functools import reduce
@@ -356,17 +529,25 @@ class Parser(ProcessBase):
         self.set_output("output_format", conf["output_format"])
 
         markdown_parser = naive_markdown_parser()
-        sections, tables = markdown_parser(name, blob, separate_tables=False)
+        sections, tables, section_images = markdown_parser(
+            name,
+            blob,
+            separate_tables=False,
+            delimiter=conf.get("delimiter"),
+            return_section_images=True,
+        )
 
         if conf.get("output_format") == "json":
             json_results = []
 
-            for section_text, _ in sections:
+            for idx, (section_text, _) in enumerate(sections):
                 json_result = {
                     "text": section_text,
                 }
 
-                images = markdown_parser.get_pictures(section_text) if section_text else None
+                images = []
+                if section_images and len(section_images) > idx and section_images[idx] is not None:
+                    images.append(section_images[idx])
                 if images:
                     # If multiple images found, combine them using concat_img
                     combined_image = reduce(concat_img, images) if len(images) > 1 else images[0]
@@ -374,10 +555,14 @@ class Parser(ProcessBase):
 
                 json_results.append(json_result)
 
+            table_ctx = conf.get("table_context_size", 0) or 0
+            image_ctx = conf.get("image_context_size", 0) or 0
+            if table_ctx or image_ctx:
+                json_results = attach_media_context(json_results, table_ctx, image_ctx)
+
             self.set_output("json", json_results)
         else:
             self.set_output("text", "\n".join([section_text for section_text, _ in sections]))
-
 
     def _image(self, name, blob):
         from deepdoc.vision import OCR
@@ -582,6 +767,7 @@ class Parser(ProcessBase):
             "video": self._video,
             "email": self._email,
         }
+
         try:
             from_upstream = ParserFromUpstream.model_validate(kwargs)
         except Exception as e:

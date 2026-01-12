@@ -444,7 +444,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
 
 
 @router.get('/get', summary="获取对话", response_description="成功获取对话")
-async def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取对话
 
@@ -468,7 +468,7 @@ async def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manage
         return server_error_response(e)
 
 @router.get('/list', summary="列出对话", response_description="成功列出对话")
-async def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
+def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
     """
     列出对话
 
@@ -479,16 +479,16 @@ async def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
     - 失败时返回错误信息
     """
     try:
-        diags = DialogService.query(
+        conversations = DialogService.query(
             db,
             tenant_id=user.id,
             status=StatusEnum.VALID.value,
             reverse=True,
             order_by="create_time")
-        diags = [d.to_dict() for d in diags]
-        for d in diags:
-            d["kb_ids"], d["kb_names"] = get_kb_names(d["kb_ids"], db)
-        return get_json_result(data=diags)
+        conversations = [d.to_dict() for d in conversations]
+        for conversation in conversations:
+            conversation["kb_ids"], conversation["kb_names"] = get_kb_names(conversation["kb_ids"], db)
+        return get_json_result(data=conversations)
     except Exception as e:
         return server_error_response(e)
 
@@ -558,7 +558,7 @@ def list_dialogs_next(
 
 
 @router.post('/rm', summary="删除对话应用", response_description="成功删除对话应用")
-async def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除对话
 

@@ -13,6 +13,7 @@ from api.db.services.pipeline_operation_log_service import PipelineOperationLogS
 from common.connection_utils import timeout
 from common.file_utils import get_project_base_directory
 from core.utils.base64_image import image2id
+from core.utils.raptor_utils import should_skip_raptor, get_skip_reason
 from common.log_utils import init_root_logger
 from common.config_utils import show_configs
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
@@ -38,7 +39,7 @@ from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
 import signal
 import trio
-# import exceptiongroup
+import exceptiongroup
 import faulthandler
 from common.constants import LLMType, ParserType, PipelineTaskType, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
 from api.db.services.document_service import DocumentService
@@ -55,6 +56,7 @@ from common.token_utils import num_tokens_from_string, truncate
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 from common.exceptions import TaskCanceledException
 from common import settings
+from common.misc_utils import check_and_install_mineru
 from graphrag.utils import chat_limiter
 
 BATCH_SIZE = 64
@@ -797,7 +799,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
     tk_count = 0
     if len(tts) == len(cnts):
         vts, c = await trio.to_thread.run_sync(lambda: mdl.encode(tts[0: 1]))
-        tts = np.concatenate([vts[0] for _ in range(len(tts))], axis=0)
+        tts = np.tile(vts[0], (len(cnts), 1))
         tk_count += c
 
     @timeout(60)
@@ -821,7 +823,10 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
     if not filename_embd_weight:
         filename_embd_weight = 0.1
     title_w = float(filename_embd_weight)
-    vects = (title_w * tts + (1 - title_w) * cnts) if len(tts) == len(cnts) else cnts
+    if tts.ndim == 2 and cnts.ndim == 2 and tts.shape == cnts.shape:
+        vects = title_w * tts + (1 - title_w) * cnts
+    else:
+        vects = cnts
 
     assert len(vects) == len(docs)
 
@@ -954,7 +959,8 @@ async def run_dataflow(db: Session, task: dict):
         ck["docnm_kwd"] = task["name"]
         ck["create_time"] = str(datetime.now()).replace("T", " ")[:19]
         ck["create_timestamp_flt"] = datetime.now().timestamp()
-        ck["id"] = xxhash.xxh64((ck["text"] + str(ck["doc_id"])).encode("utf-8")).hexdigest()
+        if not ck.get("id"):
+            ck["id"] = xxhash.xxh64((ck["text"] + str(ck["doc_id"])).encode("utf-8")).hexdigest()
         if "questions" in ck:
             if "question_tks" not in ck:
                 ck["question_kwd"] = ck["questions"].split("\n")
@@ -1022,6 +1028,8 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
 
     res = []
     tk_count = 0
+    max_errors = int(os.environ.get("RAPTOR_MAX_ERRORS", 3))
+
     async def generate(chunks, did):
         nonlocal tk_count, res
         raptor = Raptor(
@@ -1030,7 +1038,8 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
             embd_mdl,
             raptor_config["prompt"],
             raptor_config["max_token"],
-            raptor_config["threshold"]
+            raptor_config["threshold"],
+            max_errors=max_errors,
         )
         original_length = len(chunks)
         chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback, row["id"])
@@ -1424,7 +1433,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
     ⭐ 完全基于 core/flow 组件实现，支持灵活配置
 
     功能特性：
-    - Parser: 文档解析（支持 PDF/Word/Excel/图片/音视频等，支持 VLM 图片理解）
+    - Parser: 文档解析（支持 PDF/Word/Excel/PPT/图片/音视频等，支持 VLM 图片理解）
     - HierarchicalMerger: 层次化章节合并
     - RAPTOR: 递归摘要聚类
     - Extractor: 元数据字段提取
@@ -1433,10 +1442,24 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
     Args:
         task: 任务信息，task["chunk_ids"] 中包含配置：
             config.processing_strategy: 处理策略 (auto/simple/hierarchical/raptor/hybrid)
-            config.parse_method: 解析方法（用于 VLM）
+            config.parse_method: 解析方法
                 - "deepdoc": 深度解析（默认）
+                - "plain_text": 纯文本解析
+                - "mineru": MinerU 解析
+                - "tcadp parser": 腾讯云 ADP 解析（支持 PDF/Excel/PPT）
                 - "qwen-vl-plus": VLM 视觉理解（对每张原始图片）
                 - "ocr": OCR 识别（对每张原始图片）
+            config.table_result_type: TCADP 表格结果类型（默认 "1"）
+            config.markdown_image_response_type: TCADP 图片响应类型（默认 "1"）
+            config.parser_config: 完整解析器配置（优先级高于 parse_method）
+                - pdf: {"parse_method": "deepdoc", "output_format": "json"}
+                - excel: {"parse_method": "deepdoc", "output_format": "html"}
+                - slides: {"parse_method": "deepdoc", "output_format": "json"}
+                - image: {"parse_method": "ocr", "lang": "Chinese"}
+                - word: {"output_format": "json"}
+                - markdown: {"output_format": "json"}
+                - email: {"output_format": "json", "fields": [...]}
+                - video: {"llm_id": "..."}
             config.hierarchical_config: 层次化配置
                 - levels: 标题正则表达式列表
                 - hierarchy: 层级（0=章节，1=章+节）
@@ -1462,14 +1485,18 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             "structure": {文档结构信息（如有）}
         }
 
-    图片理解功能：
-        应该在 Parser 阶段配置，而不是在 hierarchical_config 中。
-        
-        正确配置：
+    示例配置 - 使用 TCADP 解析 Excel/PPT：
         {
-            "parse_method": "qwen-vl-plus",  // VLM 处理每张原始图片
-            "image_system_prompt": "描述这张图片的关键信息",  // Parser 配置
-            "image_lang": "Chinese"
+            "parse_method": "tcadp parser",
+            "table_result_type": "1",
+            "markdown_image_response_type": "1"
+        }
+
+    示例配置 - 使用 VLM 处理图片：
+        {
+            "parse_method": "qwen-vl-plus",
+            "image_system_prompt": "描述这张图片的关键信息",
+            "lang": "Chinese"
         }
     """
     # 解析任务配置
@@ -1545,26 +1572,45 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             
             parser_config_dict = config.get("parser_config")  # 完整方式（优先）
             
+            # TCADP parser 特有参数（腾讯云 ADP 解析）
+            tcadp_table_result_type = config.get("table_result_type", "1")
+            tcadp_markdown_image_response_type = config.get("markdown_image_response_type", "1")
+            
+            # 媒体上下文配置（为表格/图片添加周围文本）
+            table_context_size = config.get("table_context_size", 0) or 0
+            image_context_size = config.get("image_context_size", 0) or 0
+            
             if parser_config_dict:
                 # 方式 1：使用 parser_config 字典（用户一次性配置所有文件类型）
                 pdf_config = parser_config_dict.get("pdf", {"parse_method": "deepdoc", "output_format": "json"})
                 image_config = parser_config_dict.get("image", {"parse_method": "ocr", "lang": "Chinese"})
-                excel_config = parser_config_dict.get("excel", {"output_format": "html"})
+                excel_config = parser_config_dict.get("excel", {"parse_method": "deepdoc", "output_format": "html"})
                 word_config = parser_config_dict.get("word", {"output_format": "json"})
                 email_config = parser_config_dict.get("email", {"output_format": "json", "fields": None})
                 video_config = parser_config_dict.get("video", {"llm_id": config.get("video_llm_name")})
+                slides_config = parser_config_dict.get("slides", {"parse_method": "deepdoc", "output_format": "json"})
+                markdown_config = parser_config_dict.get("markdown", {"output_format": "json"})
                 logging.info(f"Using parser_config dictionary mode")
             else:
                 # 方式 2：使用简化参数（自动应用到所有文件类型）
                 parse_method = config.get("parse_method", "deepdoc")
                 output_format = config.get("output_format", "json")
 
+                # PDF 支持的 parse_method: deepdoc, plain_text, mineru, tcadp parser, 或 VLM 模型名
+                pdf_parse_method = parse_method
+                if parse_method in ["auto", "ocr", "vlm"]:
+                    pdf_parse_method = "deepdoc"
+                
                 pdf_config = {
-                    "parse_method": parse_method if parse_method in ["deepdoc", "plain_text", "mineru"] else (
-                        parse_method if parse_method not in ["auto", "ocr", "vlm"] else "deepdoc"
-                    ),
+                    "parse_method": pdf_parse_method,
                     "output_format": output_format,
-                    "lang": config.get("lang", "Chinese")
+                    "lang": config.get("lang", "Chinese"),
+                    # TCADP 参数（仅当 parse_method 为 tcadp parser 时生效）
+                    "table_result_type": tcadp_table_result_type,
+                    "markdown_image_response_type": tcadp_markdown_image_response_type,
+                    # 媒体上下文
+                    "table_context_size": table_context_size,
+                    "image_context_size": image_context_size,
                 }
                 image_config = {
                     "parse_method": parse_method,  # ✅ 直接传递，支持任何 VLM 模型名
@@ -1572,15 +1618,49 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     "lang": config.get("lang", "Chinese"),
                     "system_prompt": config.get("image_system_prompt")
                 }
-                excel_config = {"output_format": output_format}
-                word_config = {"output_format": output_format}
+                # Excel 支持的 parse_method: deepdoc, tcadp parser
+                excel_parse_method = "deepdoc"
+                if parse_method.lower() == "tcadp parser":
+                    excel_parse_method = "tcadp parser"
+                excel_config = {
+                    "parse_method": excel_parse_method,
+                    "output_format": output_format if output_format in ["html", "json", "markdown"] else "html",
+                    "table_result_type": tcadp_table_result_type,
+                    "markdown_image_response_type": tcadp_markdown_image_response_type,
+                    # 媒体上下文
+                    "table_context_size": table_context_size,
+                    "image_context_size": image_context_size,
+                }
+                word_config = {
+                    "output_format": output_format,
+                    "table_context_size": table_context_size,
+                    "image_context_size": image_context_size,
+                }
                 email_config = {"output_format": output_format, "fields": config.get("email_fields")}
                 video_llm_name = config.get("video_llm_name")
                 if not video_llm_name:
                     candidate = config.get("parse_method")
-                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm"]:
+                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm", "tcadp parser"]:
                         video_llm_name = candidate
                 video_config = {"llm_id": video_llm_name}
+                # PPT/Slides 支持的 parse_method: deepdoc, tcadp parser
+                slides_parse_method = "deepdoc"
+                if parse_method.lower() == "tcadp parser":
+                    slides_parse_method = "tcadp parser"
+                slides_config = {
+                    "parse_method": slides_parse_method,
+                    "output_format": "json",  # PPT 目前只支持 json
+                    "table_result_type": tcadp_table_result_type,
+                    "markdown_image_response_type": tcadp_markdown_image_response_type,
+                    # 媒体上下文
+                    "table_context_size": table_context_size,
+                    "image_context_size": image_context_size,
+                }
+                markdown_config = {
+                    "output_format": output_format if output_format in ["json", "text"] else "json",
+                    "table_context_size": table_context_size,
+                    "image_context_size": image_context_size,
+                }
                 logging.info(f"Using simplified parse_method mode: {parse_method}")
 
             def _parser_callback(prog, msg=""):
@@ -1595,19 +1675,22 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 word_config=word_config,
                 image_config=image_config,
                 email_config=email_config,
+                slides_config=slides_config,
+                markdown_config=markdown_config,
                 video_config=video_config,
                 callback=_parser_callback
             )
 
             logging.info(f"Task {task_id}: parsed with flow, format={parsed_result.get('output_format')}")
 
-            # 2. 切分（支持重叠，保留位置）
+            # 2. 切分（支持重叠，保留位置，child-parent chunking）
             callback(prog=0.20, msg="智能切分中...")
 
             splitter_config = config.get("splitter_config") or {}
             chunk_token_size = splitter_config.get("chunk_token_size", 512)
             delimiters = splitter_config.get("delimiters")
             overlapped_percent = splitter_config.get("overlapped_percent", 0.1)  # 默认 10% 重叠
+            children_delimiters = splitter_config.get("children_delimiters")  # child-parent chunking
 
             def _splitter_callback(prog, msg):
                 callback(prog=0.20 + prog * 0.05, msg=msg)
@@ -1617,6 +1700,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 chunk_token_size=chunk_token_size,
                 delimiters=delimiters,
                 overlapped_percent=overlapped_percent,
+                children_delimiters=children_delimiters,
                 callback=_splitter_callback
             )
 
@@ -1635,6 +1719,10 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 # 保留图片（如果有）
                 if "image" in c and c["image"]:
                     chunk_dict["image"] = c["image"]
+
+                # 保留 mother chunk（child-parent chunking）
+                if "mom" in c and c["mom"]:
+                    chunk_dict["mom"] = c["mom"]
 
                 chunks.append(chunk_dict)
 
@@ -1794,7 +1882,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                             embd_model=embd_mdl,
                             prompt=raptor_prompt,
                             max_token=raptor_config.get("max_token", 512),
-                            threshold=raptor_config.get("threshold", 0.1)
+                            threshold=raptor_config.get("threshold", 0.1),
+                            max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
                         )
                         chapter_results = await raptor(
                             chapter_raptor_inputs,
@@ -1895,7 +1984,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                         embd_model=embd_mdl,
                         prompt=raptor_prompt,
                         max_token=raptor_config.get("max_token", 512),
-                        threshold=raptor_config.get("threshold", 0.1)
+                        threshold=raptor_config.get("threshold", 0.1),
+                        max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
                     )
 
                     cluster_results = await raptor(
@@ -2085,6 +2175,61 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     Returns:
         成功返回True，失败返回False
     """
+    # 处理 mother chunks (用于 child-parent chunking)
+    mothers = []
+    mother_ids = set()
+    for ck in chunks:
+        mom = ck.get("mom") or ck.get("mom_with_weight") or ""
+        if not mom:
+            continue
+        mom_id = xxhash.xxh64(mom.encode("utf-8")).hexdigest()
+        ck["mom_id"] = mom_id
+        if mom_id in mother_ids:
+            continue
+        mother_ids.add(mom_id)
+        mom_ck = copy.deepcopy(ck)
+        mom_ck["pk"] = mom_id  # 同时设置 pk 字段，确保 Milvus 主键正确
+        mom_ck["id"] = mom_id
+        mom_ck["content_with_weight"] = mom
+        mom_ck["available_int"] = 0
+        flds = list(mom_ck.keys())
+        for fld in flds:
+            # pk 是 Milvus 主键，必须保留
+            if fld not in ["id", "pk", "content_with_weight", "doc_id", "docnm_kwd", "kb_id", "available_int", "position_int"]:
+                del mom_ck[fld]
+        mothers.append(mom_ck)
+
+    # 先插入 mother chunks
+    for b in range(0, len(mothers), settings.DOC_BULK_SIZE):
+        mother_batch = mothers[b:b + settings.DOC_BULK_SIZE]
+        converted_batch = [convert_data_types(m, schema) for m in mother_batch]
+        try:
+            db_type = settings.docStoreConn.dbType()
+            if db_type == "milvus":
+                await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
+                    rows=converted_batch,
+                    indexName=collection_name
+                ))
+            else:
+                es_batch = []
+                for doc in converted_batch:
+                    es_doc = doc.copy()
+                    if "id" not in es_doc and "pk" in es_doc:
+                        es_doc["id"] = es_doc["pk"]
+                    es_batch.append(es_doc)
+                await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
+                    documents=es_batch,
+                    indexName=collection_name,
+                    knowledgebaseId=task_dataset_id
+                ))
+        except Exception as e:
+            logging.warning(f"Insert mother chunks error: {e}")
+
+        task_canceled = has_canceled(task_id)
+        if task_canceled:
+            progress_callback(-1, msg="Task has been canceled.")
+            return False
+
     # 用于记录成功和失败的插入信息
     successful_inserts = []
     failed_inserts = []
@@ -2355,6 +2500,18 @@ async def do_handle_task(db, task):
             if not KnowledgebaseService.update_by_id(kb.id, {"parser_config": kb_parser_config}):
                 progress_callback(prog=-1.0, msg="Internal error: Invalid RAPTOR configuration")
                 return
+
+        # Check if Raptor should be skipped for structured data
+        file_type = task.get("type", "")
+        parser_id = task.get("parser_id", "")
+        raptor_config = kb_parser_config.get("raptor", {})
+
+        if should_skip_raptor(file_type, parser_id, task_parser_config, raptor_config):
+            skip_reason = get_skip_reason(file_type, parser_id, task_parser_config)
+            logging.info(f"Skipping Raptor for document {task_document_name}: {skip_reason}")
+            progress_callback(prog=1.0, msg=f"Raptor skipped: {skip_reason}")
+            return
+
         # bind LLM for raptor
         chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
         # run RAPTOR
@@ -2643,8 +2800,7 @@ async def handle_task():
                 CURRENT_TASKS.pop(task["id"], None)
                 try:
                     err_msg = str(e)
-                    # while isinstance(e, exceptiongroup.ExceptionGroup):
-                    while isinstance(e, ExceptionGroup):
+                    while isinstance(e, exceptiongroup.ExceptionGroup):
                         e = e.exceptions[0]
                         err_msg += ' -- ' + str(e)
                     set_progress(db, task["id"], prog=-1, msg=f"[Exception]: {err_msg}")
@@ -2763,6 +2919,7 @@ async def main():
     show_configs()
     settings.init_settings()
     settings.check_and_install_torch()
+    check_and_install_mineru()
     logging.info(f'settings.EMBEDDING_CFG: {settings.EMBEDDING_CFG}')
     settings.print_rag_settings()
     if sys.platform != "win32":

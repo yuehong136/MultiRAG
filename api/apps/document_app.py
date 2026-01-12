@@ -6,6 +6,7 @@
 @date：2025/7/17 11:30
 @desc:
 """
+import asyncio
 import logging
 import os.path
 import json
@@ -16,7 +17,7 @@ from io import BytesIO
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form, Body, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 from starlette.status import (
@@ -95,6 +96,10 @@ class SplitterConfig(BaseModel):
         ge=0.0,
         le=0.5,
         description="重叠比例（0.0-0.5）"
+    )
+    children_delimiters: list[str] | None = Field(
+        default=None,
+        description="子块分隔符列表（用于 child-parent chunking，支持 `pattern` 格式）"
     )
 
 
@@ -195,11 +200,11 @@ class AnalyzeDocumentRequest(BaseModel):
     # Parser 配置（简化方式）
     parse_method: str | None = Field(
         default="deepdoc",
-        description="解析方法：deepdoc/plain_text/mineru/ocr 或 VLM 模型名（如 qwen-vl-plus）"
+        description="解析方法：deepdoc/plain_text/mineru/tcadp parser/ocr 或 VLM 模型名（如 qwen-vl-plus）。tcadp parser 使用腾讯云 ADP 解析，支持 PDF/Excel/PPT"
     )
     output_format: str | None = Field(
         default="json",
-        description="输出格式：json（保留位置）/text/markdown"
+        description="输出格式：json（保留位置）/text/markdown/html"
     )
     lang: str | None = Field(
         default="Chinese",
@@ -221,7 +226,27 @@ class AnalyzeDocumentRequest(BaseModel):
         default=None,
         description="邮件需要提取的字段（from/to/subject/body等）"
     )
-    
+    # TCADP parser 特有参数（腾讯云 ADP 解析）
+    table_result_type: str | None = Field(
+        default="1",
+        description="TCADP 表格结果类型（默认 '1'）"
+    )
+    markdown_image_response_type: str | None = Field(
+        default="1",
+        description="TCADP 图片响应类型（默认 '1'）"
+    )
+    # 媒体上下文配置（为表格/图片添加周围文本）
+    table_context_size: int = Field(
+        default=0,
+        ge=0,
+        description="表格上下文 token 数（0 表示不添加周围文本上下文）"
+    )
+    image_context_size: int = Field(
+        default=0,
+        ge=0,
+        description="图片上下文 token 数（0 表示不添加周围文本上下文）"
+    )
+
     # Parser 配置（完整方式）- 参考 core/flow/parser/parser.py 的 setups 结构
     parser_config: dict | None = Field(
         default=None,
@@ -230,9 +255,17 @@ class AnalyzeDocumentRequest(BaseModel):
         示例：{
             "pdf": {"parse_method": "deepdoc", "output_format": "json", "lang": "Chinese"},
             "image": {"parse_method": "qwen-vl-plus", "lang": "Chinese", "system_prompt": "..."},
-            "excel": {"output_format": "html"},
+            "excel": {"parse_method": "deepdoc", "output_format": "html"},
+            "slides": {"parse_method": "deepdoc", "output_format": "json"},
             "word": {"output_format": "json"},
-            "email": {"output_format": "json", "fields": ["from", "to", "subject", "body"]}
+            "markdown": {"output_format": "json"},
+            "email": {"output_format": "json", "fields": ["from", "to", "subject", "body"]},
+            "video": {"llm_id": "qwen-vl-plus"}
+        }
+        TCADP parser 配置示例（支持 PDF/Excel/PPT）：{
+            "pdf": {"parse_method": "tcadp parser", "table_result_type": "1", "markdown_image_response_type": "1"},
+            "excel": {"parse_method": "tcadp parser", "output_format": "html"},
+            "slides": {"parse_method": "tcadp parser", "output_format": "json"}
         }
         """
     )
@@ -611,12 +644,7 @@ async def upload(
     if not files:
         return construct_json_result(data=False, message='No file part!', code=RetCode.ARGUMENT_ERROR)
 
-    kb = KnowledgebaseService.get_by_id(db, kb_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
-    if not check_kb_team_permission(db, kb, user.id):
-        return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
-
+    # 异步读取所有文件内容
     file_contents = []
     for file in files:
         if file.filename == "":
@@ -626,29 +654,40 @@ async def upload(
                                    retcode=RetCode.ARGUMENT_ERROR)
 
         file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
-    # 确保 labels 是 list 或 None
-    if isinstance(labels, str):
-        try:
-            labels = json.loads(labels)
-            if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
-                raise ValueError('Labels must be a list of strings.')
-        except json.JSONDecodeError:
-            raise ValueError('Invalid JSON format for "labels".')
-    elif labels is not None:
-        raise ValueError('Labels must be a JSON-encoded list of strings or None.')
-    err, files = FileService.upload_document(db, kb, file_contents, user.id, labels)  # 传递labels参数
 
-    # if err:
-    #     return get_json_result(data=files, retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
-    if err:
-        return construct_json_result(data=False, message="\n".join(err), code=RetCode.SERVER_ERROR)
+    # 将同步的数据库和存储操作放到线程池中执行
+    def _upload_sync():
+        kb = KnowledgebaseService.get_by_id(db, kb_id)
+        if not kb:
+            raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
+        if not check_kb_team_permission(db, kb, user.id):
+            return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
-    if not files:
-        return get_json_result(data=files,
-                               retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.",
-                               retcode=RetCode.DATA_ERROR)
+        # 确保 labels 是 list 或 None
+        parsed_labels = labels
+        if isinstance(parsed_labels, str):
+            try:
+                parsed_labels = json.loads(parsed_labels)
+                if not isinstance(parsed_labels, list) or not all(isinstance(label, str) for label in parsed_labels):
+                    raise ValueError('Labels must be a list of strings.')
+            except json.JSONDecodeError:
+                raise ValueError('Invalid JSON format for "labels".')
+        elif parsed_labels is not None:
+            raise ValueError('Labels must be a JSON-encoded list of strings or None.')
+        
+        err, result_files = FileService.upload_document(db, kb, file_contents, user.id, parsed_labels)  # 传递labels参数
 
-    return construct_json_result(data=files, code=RetCode.SUCCESS)
+        if err:
+            return construct_json_result(data=False, message="\n".join(err), code=RetCode.SERVER_ERROR)
+
+        if not result_files:
+            return get_json_result(data=result_files,
+                                   retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.",
+                                   retcode=RetCode.DATA_ERROR)
+
+        return construct_json_result(data=result_files, code=RetCode.SUCCESS)
+
+    return await asyncio.to_thread(_upload_sync)
 
 
 @router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页")
@@ -1682,7 +1721,7 @@ def web_parse(
 
 
 @router.post('/infos', summary="获取文档信息", response_description="成功获取文档信息")
-def docinfos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)):
+def doc_infos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)):
     for doc_id in doc_ids:
         if not DocumentService.accessible(db, doc_id, user.id):
             return get_json_result(
@@ -2589,6 +2628,31 @@ def get_document(
         encoded_filename = quote(doc.name)
         response = StreamingResponse(file_stream, media_type=media_type)
         response.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{encoded_filename}"
+        return response
+    except Exception as e:
+        return construct_error_response(e)
+
+
+@router.get("/download/{attachment_id}", summary="下载附件", response_description="成功获取附件内容")
+def download_attachment(
+        attachment_id: str,
+        ext: str = "markdown",
+        user=Depends(manager)
+):
+    """
+    下载 Message 组件导出的附件文件
+
+    参数：
+    - **attachment_id**: 附件ID（必填）
+    - **ext**: 文件扩展名（可选，默认为 markdown）
+
+    返回：
+    - 附件文件内容
+    """
+    try:
+        data = settings.STORAGE_IMPL.get(user.id, attachment_id)
+        response = Response(content=data)
+        response.headers["Content-Type"] = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
         return response
     except Exception as e:
         return construct_error_response(e)
@@ -3756,20 +3820,24 @@ async def run_analyze_v2(
     ```json
     {
       // ========== Parser 配置方式 1：简化方式（推荐简单场景） ==========
-      "parse_method": "deepdoc",        // 默认值："deepdoc"，可选：deepdoc/plain_text/mineru/ocr 或 VLM模型名
+      "parse_method": "deepdoc",        // 默认值："deepdoc"，可选：deepdoc/plain_text/mineru/tcadp parser/ocr 或 VLM模型名
       "output_format": "json",          // 默认值："json"，可选：json/text/markdown/html
       "lang": "Chinese",                // 默认值："Chinese"，VLM 模式使用
       "image_llm_name": null,           // 默认值：null，图片文件 VLM 模型名（parse_method="vlm"时）
       "image_system_prompt": null,      // 默认值：null，图片 VLM 自定义提示词
       "video_llm_name": null,           // 默认值：null，视频文件 VLM 模型名
       "email_fields": null,             // 默认值：null，邮件字段列表
-      
+      "table_result_type": "1",         // 默认值："1"，TCADP 表格结果类型（parse_method="tcadp parser"时生效）
+      "markdown_image_response_type": "1", // 默认值："1"，TCADP 图片响应类型（parse_method="tcadp parser"时生效）
+
       // ========== Parser 配置方式 2：完整方式（推荐代码调用） ==========
       "parser_config": {                // 默认值：null，按文件类型单独配置（优先级高于简化方式）
         "pdf": {
-          "parse_method": "deepdoc",    // deepdoc/plain_text/mineru/VLM模型名
+          "parse_method": "deepdoc",    // deepdoc/plain_text/mineru/tcadp parser/VLM模型名
           "output_format": "json",      // json/markdown
-          "lang": "Chinese"             // VLM 模式使用
+          "lang": "Chinese",            // VLM 模式使用
+          "table_result_type": "1",     // TCADP 表格结果类型
+          "markdown_image_response_type": "1"  // TCADP 图片响应类型
         },
         "image": {
           "parse_method": "ocr",        // ocr/VLM模型名
@@ -3777,27 +3845,38 @@ async def run_analyze_v2(
           "system_prompt": "描述图片内容"  // VLM 自定义提示词
         },
         "excel": {
+          "parse_method": "deepdoc",    // deepdoc/tcadp parser
           "output_format": "html"       // html/json/markdown
+        },
+        "slides": {
+          "parse_method": "deepdoc",    // deepdoc/tcadp parser（tcadp 支持 .ppt 和 .pptx）
+          "output_format": "json"       // 目前只支持 json
         },
         "word": {
           "output_format": "json"       // json/markdown
         },
+        "markdown": {
+          "output_format": "json"       // json/text
+        },
         "email": {
           "output_format": "json",      // json/text
           "fields": ["from", "to", "subject", "body"]
+        },
+        "video": {
+          "llm_id": "qwen-vl-plus"      // VLM 模型名
         }
       },
-      
+
       // ========== 处理策略 ==========
       "processing_strategy": "auto",    // 默认值："auto"，可选：auto/hierarchical/raptor/hybrid/simple
-      
+
       // ========== 组件配置 ==========
       "splitter_config": {              // 默认值：null，智能切分配置
         "chunk_token_size": 512,        // 默认值：512，范围：100-4096
         "delimiters": null,             // 默认值：null（自动选择），可选：["\n\n", "。", "！", "？"]
         "overlapped_percent": 0.1       // 默认值：0.1（10%重叠），范围：0-0.5
       },
-      
+
       "hierarchical_config": {          // 默认值：null，层次化合并配置
         "levels": [                     // 默认值：[["^#\\s+", "^第...章"], ["^##\\s+", "^\\d+\\.\\s+"]]
           ["^#\\s+", "^第[一二三四五六七八九十]+章"],
@@ -3805,7 +3884,7 @@ async def run_analyze_v2(
         ],
         "hierarchy": 1                  // 默认值：1，范围：0-5
       },
-      
+
       "raptor_config": {                // 默认值：null，RAPTOR 聚类配置
         "max_cluster": 64,              // 默认值：64，范围：2-256
         "max_token": 512,               // 默认值：512，范围：100-2048
@@ -3813,7 +3892,7 @@ async def run_analyze_v2(
         "random_seed": 42,              // 默认值：42
         "prompt": null                  // 默认值：null（使用内置提示词）
       },
-      
+
       "metadata_fields": [              // 默认值：null（使用默认字段：document_summary + semantic_tags）
         {
           "field_name": "document_summary",
@@ -3832,26 +3911,26 @@ async def run_analyze_v2(
           "post_process": "counter_top10"
         }
       ],
-      
+
       "dedup_strategy": "smart"         // 默认值："smart"，可选：smart/semantic/none
     }
     ```
-    
+
     **参数详解：**
-    
+
     **📌 Parser 配置的两种方式**
-    
+
     **方式 1：简化方式**（适合快速测试、前端用户）
     - 使用 `parse_method`、`image_system_prompt` 等顶层参数
     - 系统自动应用到对应的文件类型
     - 示例：`{"parse_method": "qwen-vl-plus", "image_system_prompt": "..."}`
-    
+
     **方式 2：完整方式**（推荐代码调用、批量处理）⭐
     - 使用 `parser_config` 字典，按文件类型单独配置
     - 一次配置，适用所有文件类型
     - 优先级**高于**简化方式
     - 示例：`{"parser_config": {"pdf": {...}, "image": {...}}}`
-    
+
     **优先级规则**：
     ```
     if parser_config:
@@ -3859,9 +3938,9 @@ async def run_analyze_v2(
     else:
         使用 parse_method 等简化参数（自动应用）
     ```
-    
+
     ---
-    
+
     **1. 解析配置（Parser）**
     - `parse_method`: 解析方法（简化方式，默认："deepdoc"）
       - **PDF 专用：**
@@ -3881,18 +3960,18 @@ async def run_analyze_v2(
     - `image_llm_name`: 图片 VLM 模型名（默认：null）
     - `image_system_prompt`: 图片 VLM 提示词（默认：null）
     - `email_fields`: 邮件字段列表（默认：null）
-    
+
     - `parser_config`: 完整配置方式（默认：null，优先级高于简化方式）
       - 按文件类型单独配置：`pdf`、`image`、`excel`、`word`、`email`
       - 每种类型支持的配置见上述简化方式说明
       - **优势**：一次配置，后续上传任何文件都使用对应配置
-    
+
     **2. 切分配置（Splitter）**（默认值：null）
     - `splitter_config`: 使用 core/flow/splitter 逻辑
       - `chunk_token_size`: chunk 大小（默认：512，范围：100-4096）
       - `delimiters`: 分隔符优先级列表（默认：null，自动选择）
       - `overlapped_percent`: 重叠比例（默认：0.1 即 10%，范围：0-0.5）
-    
+
     **3. 处理策略**（默认值："auto"）
     - `processing_strategy`: 文档处理策略
       - `"auto"`: 自动选择（根据文档结构和长度）✅ 默认
@@ -3900,12 +3979,12 @@ async def run_analyze_v2(
       - `"hierarchical"`: 层次化合并（适合有章节的文档）
       - `"raptor"`: RAPTOR 聚类（适合长文档 > 10 chunks）
       - `"hybrid"`: 混合策略（先层次化，再 RAPTOR）
-    
+
     **4. 层次化配置（HierarchicalMerger）**（默认值：null）
     - `hierarchical_config`: 按标题结构分层合并
       - `levels`: 标题层级正则表达式（默认：[["^#\\s+", "^第...章"], ["^##\\s+", "^\\d+\\.\\s+"]]）
       - `hierarchy`: 合并到第几层（默认：1，范围：0-5）
-    
+
     **5. RAPTOR 配置**（默认值：null）
     - `raptor_config`: 聚类递归摘要
       - `max_cluster`: 最大聚类数（默认：64，范围：2-256）
@@ -3913,7 +3992,7 @@ async def run_analyze_v2(
       - `threshold`: 相似度阈值（默认：0.1，范围：0.0-1.0，越小聚类越多）
       - `random_seed`: 随机种子（默认：42，可重现结果）
       - `prompt`: 自定义摘要提示词（默认：null，使用内置提示词）
-    
+
     **6. 元数据提取**（默认值：null，使用默认字段）
     - `metadata_fields`: 灵活的字段提取配置
       - `field_name`: 字段名称（必填）
@@ -3932,13 +4011,13 @@ async def run_analyze_v2(
         - `"concat"`: 拼接（batch 模式）
       - `temperature`: LLM 温度（默认：0.1，范围：0.0-2.0）
       - `max_tokens`: 最大生成 tokens（默认：512，范围：10-4096）
-    
+
     **7. 去重策略**（默认值："smart"）
     - `dedup_strategy`: 标签去重策略
       - `"smart"`: Jaccard + 同义词词典（快速、可控）✅ 默认
       - `"semantic"`: 基于 Embedding（高质量、成本高）
       - `"none"`: 不去重
-    
+
     **⭐ 核心特性（使用 core/flow 逻辑）：**
     - ✅ 保留位置信息（PDF 页码、坐标）
     - ✅ 保留图片关联
@@ -3972,7 +4051,7 @@ async def run_analyze_v2(
         }
       }'
     ```
-    
+
     **示例 4: PDF VLM 视觉理解（扫描件）**
     ```bash
     curl -X POST "http://api/v1/document/run_analyze_v2" \\
@@ -3981,7 +4060,7 @@ async def run_analyze_v2(
         "parse_method": "qwen-vl-plus"
       }'
     ```
-    
+
     **示例 5: 图片 VLM 理解**
     ```bash
     curl -X POST "http://api/v1/document/run_analyze_v2" \\
@@ -4021,7 +4100,20 @@ async def run_analyze_v2(
       }'
     ```
 
-    **示例 7: 完整配置方式（推荐代码调用）🆕**
+    **示例 7: 为表格和图片添加上下文（提升检索质量）🆕**
+    ```bash
+    curl -X POST "http://api/v1/document/run_analyze_v2" \\
+      -F "file=@technical_report.pdf" \\
+      -F 'request={
+        "parse_method": "deepdoc",
+        "table_context_size": 256,
+        "image_context_size": 128
+      }'
+    ```
+    > 说明：为表格和图片 chunk 添加周围文本上下文，帮助 RAG 检索时更好地理解媒体内容。
+    > `table_context_size=256` 表示在表格前后各添加约 256 tokens 的上下文文本。
+
+    **示例 8: 完整配置方式（推荐代码调用）🆕**
     ```bash
     curl -X POST "http://api/v1/document/run_analyze_v2" \\
       -F "file=@any_document.pdf" \\
@@ -4054,18 +4146,18 @@ async def run_analyze_v2(
         ]
       }'
     ```
-    
+
     **完整方式优势**：
     - ✅ 一次配置，适用所有文件类型（PDF/图片/Excel/Word/邮件）
     - ✅ 每种文件类型单独配置解析方式
     - ✅ 适合代码集成、批量处理场景
     - ✅ 完全对齐 core/flow 的 setups 结构
-    
+
     **Python 代码示例**（批量处理）：
     ```python
     import requests
     import json
-    
+
     # 一次性配置所有文件类型
     config = {
         "parser_config": {
@@ -4080,7 +4172,7 @@ async def run_analyze_v2(
             {"field_name": "summary", "prompt": "Summarize the document"}
         ]
     }
-    
+
     # 使用同一套配置处理多个文件
     files = ["report.pdf", "diagram.png", "data.xlsx", "meeting.docx"]
     for filepath in files:
@@ -4133,12 +4225,14 @@ async def run_analyze_v2(
     ```
 
     **📊 参数默认值速查表**:
-    
+
     | 参数 | 默认值 | 说明 |
     |------|--------|------|
     | `parse_method` | `"deepdoc"` | 解析方法 |
     | `output_format` | `"json"` | 输出格式 |
     | `lang` | `"Chinese"` | 语言 |
+    | `table_context_size` | `0` | 表格上下文 token 数 |
+    | `image_context_size` | `0` | 图片上下文 token 数 |
     | `processing_strategy` | `"auto"` | 处理策略 |
     | `chunk_token_size` | `512` | Chunk 大小 |
     | `overlapped_percent` | `0.1` | 重叠比例（10%） |
@@ -4149,9 +4243,9 @@ async def run_analyze_v2(
     | `dedup_strategy` | `"smart"` | 去重策略 |
     | `temperature` | `0.1` | 元数据提取温度 |
     | `parser_config` | `null` | 完整配置（优先级高） |
-    
+
     ---
-    
+
     **设计理念**:
     参考 `/v1/kb/run_raptor`，采用数据库持久化 + 任务队列架构。
 
@@ -4204,13 +4298,19 @@ async def run_analyze_v2(
             "kb_id": request.kb_id,
             # Parser 配置（支持两种方式）
             "parser_config": request.parser_config,  # 完整方式（优先）
-            "parse_method": request.parse_method,    # 简化方式
+            "parse_method": request.parse_method,  # 简化方式
             "output_format": request.output_format,
             "lang": request.lang,
             "image_llm_name": request.image_llm_name,
             "image_system_prompt": request.image_system_prompt,
             "video_llm_name": request.video_llm_name,
             "email_fields": request.email_fields,
+            # TCADP parser 特有参数
+            "table_result_type": request.table_result_type,
+            "markdown_image_response_type": request.markdown_image_response_type,
+            # 媒体上下文配置
+            "table_context_size": request.table_context_size,
+            "image_context_size": request.image_context_size,
             # 处理策略
             "processing_strategy": request.processing_strategy,
             "hierarchical_config": request.hierarchical_config.model_dump() if request.hierarchical_config else None,
@@ -4848,7 +4948,7 @@ async def analyze_document_v2(
         ]
       }'
     ```
-    
+
     **VLM 功能**：在 Parser 阶段对每张原始图片进行 VLM 理解，图片描述会自动融入文本，适用于包含架构图、流程图的技术文档。
     """
     try:
@@ -5379,3 +5479,36 @@ async def get_document_summary(
     except Exception as e:
         logging.exception(f"Get document summary failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload_info", summary="上传文件获取信息", response_description="成功上传文件")
+async def upload_info(
+        url: str | None = Query(None, description="URL地址，用于下载网页内容"),
+        file: UploadFile | None = File(None),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """
+    上传文件或从URL下载内容，获取文件信息
+    
+    概要：支持两种方式：1) 直接上传文件，2) 通过URL抓取网页内容。
+    
+    参数：
+    - **url**: URL地址（可选），用于爬取网页内容
+    - **file**: 上传的文件（可选）
+    
+    返回：
+    - dict: 文件信息
+        - id: 文件唯一标识
+        - name: 文件名
+        - size: 文件大小
+        - extension: 文件扩展名
+        - mime_type: MIME类型
+        - created_by: 创建者ID
+        - created_at: 创建时间
+        - preview_url: 预览URL
+    """
+    try:
+        return get_json_result(data=await FileService.upload_info(db, user.id, file, url))
+    except Exception as e:
+        return server_error_response(e)

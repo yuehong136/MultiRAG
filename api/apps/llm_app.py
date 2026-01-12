@@ -41,17 +41,19 @@ from api.db.services.mcp_server_service import MCPServerService
 from api.utils.web_utils import CONTENT_TYPE_MAP
 from common import settings
 from common.misc_utils import get_uuid
-from core.utils.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
+from common.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
 
 
 class ChatAgentAdapter:
     """对话Agent适配器，直接复用Agent类但适配对话场景"""
 
-    def __init__(self, tenant_id: str, llm_name: str, system_prompt: str = "", mcp_ids: list[str] = None):
+    def __init__(self, tenant_id: str, llm_name: str, system_prompt: str = "", 
+                 mcp_ids: list[str] = None, output_schema: dict = None):
         self.tenant_id = tenant_id
         self.llm_name = llm_name
         self.system_prompt = system_prompt
         self.mcp_ids = mcp_ids or []
+        self.output_schema = output_schema  # 结构化输出 schema
 
         # 创建简化的Canvas mock - 只提供Agent需要的接口
         self.canvas_mock = self._create_canvas_mock()
@@ -67,6 +69,10 @@ class ChatAgentAdapter:
         agent_param.cite = True
         agent_param.temperature = 0.1
         agent_param.max_tokens = 0
+        
+        # 设置结构化输出 schema
+        if output_schema:
+            agent_param.outputs = {"structured": output_schema}
 
         # 创建Agent实例，直接复用完整的Agent功能
         self.agent = Agent(self.canvas_mock, "chat_agent", agent_param)
@@ -134,7 +140,7 @@ class ChatAgentAdapter:
                 logging.debug(f"Tool callback: component_id={component_id}, args={args}")
 
             def get_variable_value(self, var_name):
-                return self.settings.get(var_name, "")
+                return self.globals.get(var_name, "")
 
             def set_variable_value(self, var_name, value):
                 self.globals[var_name] = value
@@ -247,21 +253,26 @@ class ChatAgentAdapter:
 
         return mcp_config
 
-    def chat_with_tools_stream(self, query: str, messages: list[dict] = None,
-                               knowledge_context: str = "", files: list[str] = None):
-        """使用工具进行流式对话，直接复用Agent的流式能力"""
+    def _get_schema_prompt(self) -> str:
+        """获取结构化输出的 prompt"""
+        if not self.output_schema:
+            return ""
+        
+        from core.prompts.generator import structured_output_prompt
+        schema = json.dumps(self.output_schema, ensure_ascii=False, indent=2)
+        return structured_output_prompt(schema)
 
-        # 准备历史记录 - 保持字典格式，但添加当前查询
+    async def chat_with_tools_stream_async(self, query: str, messages: list[dict] = None, knowledge_context: str = "", files: list[str] = None):
+        """
+        异步版本的工具流式对话，直接复用Agent的异步流式能力
+        """
+        # 准备历史记录
         history = []
-        
         if messages:
-            # 保持字典格式的消息
             history = messages.copy()
-        
-        # 添加当前查询到历史记录末尾（因为_prepare_prompt_variables会用[:-1]移除它）
         if query:
             history.append({"role": "user", "content": query})
-        
+
         self.canvas_mock.history = history
 
         # 准备输入变量
@@ -275,156 +286,123 @@ class ChatAgentAdapter:
             enhanced_prompt = original_prompt + "\n\n" + knowledge_context
             self.agent._param.sys_prompt = enhanced_prompt
         elif not original_prompt:
-            # 确保 sys_prompt 不为 None
             self.agent._param.sys_prompt = "You are a helpful AI assistant."
 
         try:
-            # 准备Agent调用参数
             kwargs = {
                 "user_prompt": query,
                 "reasoning": "Direct chat request",
                 "context": "Chat conversation context"
             }
 
-            # 检查Agent是否有工具
             if self.agent.tools:
-                # 有工具时，使用Agent的完整流式工具调用能力
-                # 直接复用Agent的stream_output_with_tools方法
                 prompt, msg, _ = self.agent._prepare_prompt_variables()
-                
-                # 重要：像 _invoke 方法一样，将 system 消息添加到 msg 中
-                # 这样 _react_with_tools_streamly 中的 hist 才会包含 system 消息
+
                 from core.prompts.generator import message_fit_in
                 _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.agent.chat_mdl.max_length * 0.97))
 
-                # 创建用于收集工具使用历史的列表
                 use_tools = []
+                schema_prompt = self._get_schema_prompt()
 
-                # 添加工具调用开始提示
                 yield "🔧 Starting tool analysis...\n"
 
-                # 直接调用Agent的_react_with_tools_streamly方法，监控工具调用
                 previous_tool_count = 0
-                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools):
-                    # 检查是否有新的工具调用
+                # 使用异步版本的 _react_with_tools_streamly_async
+                async for delta_ans, _ in self.agent._react_with_tools_streamly_async(prompt, msg, use_tools, schema_prompt=schema_prompt):
                     if len(use_tools) > previous_tool_count:
-                        # 显示新的工具调用
                         new_tools = use_tools[previous_tool_count:]
                         for tool_call in new_tools:
                             tool_name = tool_call.get('name', 'Unknown')
                             tool_args = tool_call.get('arguments', {})
 
-                            # 简化参数显示
                             args_preview = ""
                             if isinstance(tool_args, dict) and tool_args:
                                 key_args = []
-                                # for k, v in list(tool_args.items())[:2]:  # 只显示前2个关键参数
                                 for k, v in list(tool_args.items()):
-                                    # if isinstance(v, str) and len(v) > 30:
-                                    #     v = v[:30] + "..."
                                     key_args.append(f"{k}={v}")
                                 args_preview = f"({', '.join(key_args)})"
 
                             yield f"\n🔧 **工具调用**: {tool_name}{args_preview}\n"
 
-                            # 显示结果（如果已有结果）
                             tool_results = tool_call.get('results', '')
                             if tool_results:
                                 results_preview = str(tool_results)
-                                # if len(results_preview) > 200:
-                                #     results_preview = results_preview[:200] + "..."
                                 yield f"📋 **结果**: {results_preview}\n\n"
 
                         previous_tool_count = len(use_tools)
                     if delta_ans:
                         yield delta_ans
 
-                # 保存工具使用历史，供verbose模式使用
                 self.agent._last_use_tools = use_tools
-                # 同时设置为Agent的标准输出格式
                 if use_tools:
                     self.agent.set_output("use_tools", use_tools)
 
             else:
-                # 没有工具时，直接使用LLM流式输出
-                # 调用Agent的invoke方法获取流式生成器
                 self.agent._param.prompts = [{"role": "user", "content": query}]
                 prompt, msg, _ = self.agent._prepare_prompt_variables()
 
-                # 直接使用Agent的_stream_output方法
-                for delta in self.agent._stream_output(prompt, msg):
+                # 使用异步流式输出
+                async for delta in self.agent._stream_output_async(prompt, msg):
                     yield delta
 
         finally:
-            # 恢复原始系统提示词
             if knowledge_context:
                 self.agent._param.sys_prompt = original_prompt or "You are a helpful AI assistant."
 
-    def chat_with_tools_stream_structured(self, query: str, messages: list[dict] = None,
-                                         knowledge_context: str = "", files: list[str] = None):
+    async def chat_with_tools_stream_structured_async(self, query: str, messages: list[dict] = None,
+                                                      knowledge_context: str = "", files: list[str] = None):
         """
-        带工具的流式对话 - 结构化输出版本
+        异步版本的结构化工具流式对话
         返回结构化的SSE消息，每个文本消息都包含累积内容
         """
-        # 处理历史消息
         messages = messages or []
         history = []
-        
+
         for msg in messages:
             history.append({
                 "role": msg.get("role", "user"),
                 "content": msg.get("content", "")
             })
-        
+
         if query:
             history.append({"role": "user", "content": query})
-        
-        # 合并知识上下文到系统提示词
+
         original_prompt = self.agent._param.sys_prompt or ""
         if knowledge_context:
             self.agent._param.sys_prompt = (self.agent._param.sys_prompt or "") + "\n" + knowledge_context
         elif not original_prompt:
-            # 确保 sys_prompt 不为 None
             self.agent._param.sys_prompt = "You are a helpful AI assistant."
-        
+
         try:
-            # 更新 canvas_mock 的历史记录
             self.canvas_mock.history = history
-            
-            # 准备提示词
             self.agent._param.prompts = history
             prompt, msg, _ = self.agent._prepare_prompt_variables()
-            
-            # 累积文本内容（重要：与原实现保持一致）
+
             accumulated_text = ""
-            
-            # 检查是否有工具可用
+
             if self.agent.tools:
-                # 重要：像 _invoke 方法一样，将 system 消息添加到 msg 中
                 from core.prompts.generator import message_fit_in
                 _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.agent.chat_mdl.max_length * 0.97))
-                
+
                 use_tools = []
-                
-                # 发送工具分析开始消息
+                schema_prompt = self._get_schema_prompt()
+
                 yield {"type": "tool_start", "content": "Starting tool analysis..."}
-                
-                # 调用Agent的_react_with_tools_streamly方法
+
                 previous_tool_count = 0
                 call_id_counter = 0
-                
-                for delta_ans, _ in self.agent._react_with_tools_streamly(prompt, msg, use_tools):
-                    # 检查是否有新的工具调用
+
+                # 使用异步版本
+                async for delta_ans, _ in self.agent._react_with_tools_streamly_async(prompt, msg, use_tools, schema_prompt=schema_prompt):
                     if len(use_tools) > previous_tool_count:
                         new_tools = use_tools[previous_tool_count:]
                         for tool_call in new_tools:
                             call_id_counter += 1
                             call_id = f"call_{call_id_counter}"
-                            
+
                             tool_name = tool_call.get('name', 'Unknown')
                             tool_args = tool_call.get('arguments', {})
-                            
-                            # 发送工具调用消息
+
                             yield {
                                 "type": "tool_call",
                                 "content": {
@@ -433,8 +411,7 @@ class ChatAgentAdapter:
                                     "call_id": call_id
                                 }
                             }
-                            
-                            # 如果有结果，发送工具结果消息
+
                             tool_results = tool_call.get('results', '')
                             if tool_results:
                                 yield {
@@ -446,19 +423,16 @@ class ChatAgentAdapter:
                                         "success": True
                                     }
                                 }
-                        
+
                         previous_tool_count = len(use_tools)
-                    
-                    # 处理文本增量并输出累积内容
+
                     if delta_ans:
-                        accumulated_text += delta_ans  # 累积增量
-                        # 输出累积内容（与原实现一致）
+                        accumulated_text += delta_ans
                         yield {
                             "type": "text",
-                            "content": accumulated_text  # 直接输出累积内容
+                            "content": accumulated_text
                         }
-                
-                # 发送工具分析结束消息
+
                 if use_tools:
                     yield {
                         "type": "tool_end",
@@ -467,30 +441,25 @@ class ChatAgentAdapter:
                             "summary": f"Used {len(use_tools)} tool(s)"
                         }
                     }
-                
-                # 保存工具使用历史
+
                 self.agent._last_use_tools = use_tools
                 if use_tools:
                     self.agent.set_output("use_tools", use_tools)
-            
+
             else:
-                # 没有工具时，直接使用LLM流式输出
                 self.agent._param.prompts = [{"role": "user", "content": query}]
                 prompt, msg, _ = self.agent._prepare_prompt_variables()
-                
-                for delta in self.agent._stream_output(prompt, msg):
+
+                # 使用异步流式输出
+                async for delta in self.agent._stream_output_async(prompt, msg):
                     if delta:
-                        accumulated_text += delta  # 累积增量
-                        # 输出累积内容（与原实现一致）
+                        accumulated_text += delta
                         yield {
                             "type": "text",
-                            "content": accumulated_text  # 直接输出累积内容
+                            "content": accumulated_text
                         }
-            
-            # 不再发送完成消息，由外层处理
-        
+
         except Exception as e:
-            # 发送错误消息
             yield {
                 "type": "error",
                 "content": {
@@ -498,12 +467,74 @@ class ChatAgentAdapter:
                     "code": 500
                 }
             }
-        
+
         finally:
-            # 恢复原始系统提示词
             if knowledge_context:
                 self.agent._param.sys_prompt = original_prompt or "You are a helpful AI assistant."
 
+    async def chat_async(self, query: str, messages: list[dict] = None,
+                         knowledge_context: str = "", files: list[str] = None) -> str:
+        """
+        非流式异步对话方法 - 用于不需要流式输出的场景
+        
+        Args:
+            query: 用户查询
+            messages: 历史消息列表
+            knowledge_context: 知识上下文
+            files: 文件列表
+            
+        Returns:
+            str: 完整的回复内容
+        """
+        result_content = ""
+        async for delta in self.chat_with_tools_stream_async(
+            query=query,
+            messages=messages,
+            knowledge_context=knowledge_context,
+            files=files
+        ):
+            if delta:
+                result_content += delta
+        return result_content
+
+    async def chat_structured_async(self, query: str, messages: list[dict] = None,
+                                    knowledge_context: str = "", files: list[str] = None) -> dict:
+        """
+        非流式结构化异步对话方法 - 返回最终的结构化结果
+        
+        Args:
+            query: 用户查询
+            messages: 历史消息列表
+            knowledge_context: 知识上下文
+            files: 文件列表
+            
+        Returns:
+            dict: 包含最终文本和工具使用信息的字典
+        """
+        result = {
+            "text": "",
+            "tool_calls": [],
+            "tool_results": []
+        }
+        async for message in self.chat_with_tools_stream_structured_async(
+            query=query,
+            messages=messages,
+            knowledge_context=knowledge_context,
+            files=files
+        ):
+            msg_type = message.get("type")
+            content = message.get("content")
+            
+            if msg_type == "text":
+                result["text"] = content  # 累积内容，最后一个是完整的
+            elif msg_type == "tool_call":
+                result["tool_calls"].append(content)
+            elif msg_type == "tool_result":
+                result["tool_results"].append(content)
+            elif msg_type == "error":
+                raise Exception(content.get("error", "Unknown error"))
+        
+        return result
 
 
 def prepare_knowledge_context(db: Session, messages: list[dict], tavily_api_key: str, tenant_id: str, llm_name: str) -> str:
@@ -766,7 +797,7 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post('/set_api_key', summary="新增模型厂商api key", response_description="成功保存该模型服务厂商的api key")
-def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     此异步函数用于设置模型制造商的API密钥，并验证其是否能正确访问特定类型的模型。
     摘要: 新增模型厂商api key
@@ -817,9 +848,7 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
             assert factory in ChatModel, f"Chat model from {factory} is not supported yet."
             mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"), **extra)
             try:
-                m, tc = mdl.chat("", [{"role": "user", "content": "Hello! How are you doing!"}],
-                                 {"temperature": 0.9, 'max_tokens': 50})
-                print(m)
+                m, tc = await mdl.async_chat("", [{"role": "user", "content": "Hello! How are you doing!"}], {"temperature": 0.9, 'max_tokens': 50})
                 if m.find("**ERROR**") >= 0:
                     raise Exception(m)
             except Exception as e:
@@ -872,7 +901,7 @@ def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=D
 
 
 @router.post('/add_llm', summary="新增模型", response_description="成功新增该模型")
-def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
 # POST /add_llm
 
@@ -1067,8 +1096,7 @@ POST
             **extra,
         )
         try:
-            m, tc = mdl.chat("", [{"role": "user", "content": "Hello! How are you doing!"}],
-                             {"temperature": 0.9, 'max_tokens': 500})
+            m, tc = await mdl.async_chat("", [{"role": "user", "content": "Hello! How are you doing!"}], {"temperature": 0.9})
             if not tc and m.find("**ERROR**:") >= 0:
                 raise Exception(m)
         except Exception as e:
@@ -1791,7 +1819,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
 
 
 @router.post('/chat_service', summary="模型对话服务", response_description="成功调用对话模型")
-def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     **功能描述**:
     此接口用于调用对话模型，基于用户提供的输入生成对应的响应内容。支持文本生成、图像到文本转换、消息处理等多种模型类型。接口根据请求体中的配置，选择适当的模型及生成方式，提供流式和非流式响应模式。
@@ -1842,7 +1870,7 @@ def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user
     def get_llm_type(model_name, my_llms):
         for row in my_llms:
             if row[4] == model_name:  # 这里的第5个元素是 model_name
-                return row[-3]  # 倒数第三个元素是 llm_type
+                return row[3]  # 第4个元素是 mdl_type (llm_type)
         return None  # 如果找不到，返回 None
 
     llm_type = get_llm_type(req["llm_name"], my_llms)
@@ -1865,9 +1893,11 @@ def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user
 
     # 根据是否流式调用选择合适的方法
     if req["stream"]:
-        data = chat_mdl.chat_streamly(**call_params)
+        data = []
+        async for chunk in chat_mdl.async_chat_streamly(**call_params):
+            data.append(chunk)
     else:
-        data = chat_mdl.chat(**call_params)
+        data = await chat_mdl.async_chat(**call_params)
 
     return get_json_result(data=data)
 
@@ -2033,8 +2063,8 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
     # 使用可能已过滤的数据
     req = req_dict
 
-    # 将同步操作封装在函数中
-    def process_non_streaming_request():
+    # 将操作封装在异步函数中
+    async def process_non_streaming_request():
         # 获取租户信息
         tenants = TenantService.get_info_by(db, user.id)
         if not tenants:
@@ -2045,7 +2075,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
         def get_llm_type(model_name, my_llms):
             for row in my_llms:
                 if row[4] == model_name:
-                    return row[-3]
+                    return row[3]  # 第4个元素是 mdl_type (llm_type)
             return None
 
         llm_type = get_llm_type(req["llm_name"], my_llms)
@@ -2067,7 +2097,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
             call_params["images"] = req["image"]
 
         # 非流式调用，直接返回完整响应
-        data = chat_mdl.chat(**call_params)
+        data = await chat_mdl.async_chat(**call_params)
         return data
 
     # 获取初始设置的同步函数
@@ -2081,7 +2111,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
         def get_llm_type(model_name, my_llms):
             for row in my_llms:
                 if row[4] == model_name:
-                    return row[-3]
+                    return row[3]  # 第4个元素是 mdl_type (llm_type)
             return None
 
         llm_type = get_llm_type(req["llm_name"], my_llms)
@@ -2126,42 +2156,13 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
     # 处理流式响应
     async def stream_response():
         try:
-            # 在线程池中获取初始设置
-            loop = asyncio.get_running_loop()
-            chat_mdl, call_params = await loop.run_in_executor(executor, get_initial_setup)
+            # 获取初始设置
+            chat_mdl, call_params = get_initial_setup()
 
-            # 在线程池中执行流式生成并迭代结果
-            def generate_stream():
-                try:
-                    # 调用模型的流式生成方法
-                    result_generator = chat_mdl.chat_streamly(**call_params)
-                    # 返回生成器对象
-                    return result_generator
-                except Exception as e:
-                    # 捕获异常并返回
-                    raise e
-
-            # 获取生成器
-            generator = await loop.run_in_executor(executor, generate_stream)
-
-            # 保持与原代码相同的累加逻辑
-            last_ans = ""  # 初始化累加变量
-
-            # 使用线程池处理每次迭代，但保持原始累加逻辑
-            def get_next_chunk(generator):
-                try:
-                    return next(generator), False  # 返回下一个结果和未完成标志
-                except StopIteration:
-                    return None, True  # 返回None和完成标志
-                except Exception as e:
-                    raise e
-
-            is_complete = False
-            while not is_complete:
-                # 在线程池中获取下一个响应
-                chunk, is_complete = await loop.run_in_executor(executor, get_next_chunk, generator)
-
-                if is_complete:
+            # 使用异步流式生成
+            last_ans = ""
+            async for chunk in chat_mdl.async_chat_streamly(**call_params):
+                if isinstance(chunk, int):
                     # 流结束
                     end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
                     yield f"data: {end_message}\n\n"
@@ -2190,14 +2191,13 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
     if req["stream"]:
         return StreamingResponse(stream_response(), media_type="text/event-stream")
     else:
-        # 在线程池中运行同步代码
-        loop = asyncio.get_running_loop()
-        data = await loop.run_in_executor(executor, process_non_streaming_request)
+        # 直接调用异步函数
+        data = await process_non_streaming_request()
         return get_json_result(data=data)
 
 
 @router.post('/fine_prompt', summary="优化提示词", response_description="返回优化后的提示词")
-def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     **功能描述**:
     此接口用于根据用户输入的任务描述或现有提示词，优化生成详细的系统提示词，以便更好地引导语言模型完成任务。该接口结合预定义的优化提示模板 (META_PROMPT)，确保模型输出的提示词更加清晰、具体，并且能合理规划任务的完成步骤。
@@ -2281,14 +2281,14 @@ def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=
     """.strip()
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
 
-    data = chat_mdl.chat(META_PROMPT, [{"role": "user", "content": "Task, Goal, or Current Prompt:\n" + req["prompt"]}],
+    data = await chat_mdl.async_chat(META_PROMPT, [{"role": "user", "content": "Task, Goal, or Current Prompt:\n" + req["prompt"]}],
                          req["gen_conf"])
 
     return get_json_result(data=data)
 
 
 @router.post('/generate_suggestions', summary="生成用户输入建议", response_description="成功调用大模型生成建议")
-def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/v1/suggestions/generate_suggestions` 生成用户输入建议
 
@@ -2437,7 +2437,7 @@ def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_d
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
 
     # 调用大模型
-    response = chat_mdl.chat(
+    response = await chat_mdl.async_chat(
         system=system_prompt,
         history=[{"role": "user", "content": "请按照要求输出"}],
         gen_conf=req["gen_conf"].get("gen_conf", {})
@@ -2487,7 +2487,7 @@ def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_d
     response_description="返回匹配到的表单 ID 及置信度",
     response_model=RecognizeIntentResponse
 )
-def recognize_intent(
+async def recognize_intent(
     request: RecognizeIntentRequest,
     db: Session = Depends(get_db),
     user=Depends(manager)
@@ -2547,7 +2547,7 @@ def recognize_intent(
     )
 
     # 3) 调 LLM
-    answer = chat_mdl.chat(
+    answer = await chat_mdl.async_chat(
         system=prompt,
         history=[{"role": "user", "content": "请根据要求返回规定的格式"}],  # 空 user 消息 → 模型直接输出结果
         gen_conf=req["gen_conf"]
@@ -2572,7 +2572,7 @@ def recognize_intent(
     summary="表单字段填充",
     response_model=FillFieldsResponse
 )
-def fill_fields(
+async def fill_fields(
     req: FillFieldsRequest,
     db: Session = Depends(get_db),
     user=Depends(manager)
@@ -2593,8 +2593,8 @@ def fill_fields(
         raise HTTPException(status_code=400, detail="指定模型不是对话模型，或未找到")
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req.llm_name)
 
-    def call_llm(prompt: str) -> str:
-        return chat_mdl.chat(
+    async def call_llm(prompt: str) -> str:
+        return await chat_mdl.async_chat(
             system=prompt,
             history=[{"role": "user", "content": "请按照要求输出"}],
             gen_conf=req.gen_conf
@@ -2661,7 +2661,7 @@ def fill_fields(
 
     # —— 阶段一
     prompt1 = build_prompt(req.user_text, req.fields)
-    raw1 = call_llm(prompt1)
+    raw1 = await call_llm(prompt1)
     res1 = parse_and_validate(raw1, req.fields)
 
     # —— 阶段二：内部追问（仅一次）
@@ -2671,7 +2671,7 @@ def fill_fields(
         prompt2 = (
             f"请补全字段：{missed}，按之前格式再输出完整 JSON，不要多余文字。"
         )
-        raw2 = call_llm(prompt2)
+        raw2 = await call_llm(prompt2)
         res2 = parse_and_validate(raw2, req.fields)
         final = res2
     else:
@@ -2715,7 +2715,7 @@ async def enhanced_chat_service_sse(
         llm_type = None
         for row in my_llms:
             if row[4] == request.llm_name:
-                llm_type = row[-3]
+                llm_type = row[3]  # 第4个元素是 mdl_type (llm_type)
                 break
 
         if not llm_type:
@@ -2733,100 +2733,60 @@ async def enhanced_chat_service_sse(
         )
 
         if not request.stream:
-            # 非流式响应
-            result_content = ""
+            # 非流式响应 - 使用纯异步方法，避免阻塞事件循环
             try:
-                for delta in chat_agent.chat_with_tools_stream(
-                        query=request.messages[-1]["content"] if request.messages else "",
-                        messages=request.messages[:-1] if request.messages else [],
-                        knowledge_context=knowledge_context,
-                        files=request.files
-                ):
-                    result_content += delta
-
+                result_content = await chat_agent.chat_async(
+                    query=request.messages[-1]["content"] if request.messages else "",
+                    messages=request.messages[:-1] if request.messages else [],
+                    knowledge_context=knowledge_context,
+                    files=request.files
+                )
                 return {"retcode": 0, "retmsg": "success", "data": {"answer": result_content}}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
-        # 流式响应
+        # 流式响应 - 使用原生异步方法，减少线程开销
         async def sse_stream():
-            loop = asyncio.get_running_loop()
-            queue: asyncio.Queue[str | None] = asyncio.Queue()
-            stop_event = threading.Event()
-
-            def safe_put(value: str | None) -> None:
-                if stop_event.is_set():
-                    return
-                future = asyncio.run_coroutine_threadsafe(queue.put(value), loop)
-                try:
-                    future.result()
-                except Exception as exc:  # noqa: BLE001 - 捕获线程间通信异常
-                    stop_event.set()
-                    logging.debug(f"Failed to enqueue SSE payload: {exc}")
-
-            def stream_structured() -> None:
-                try:
-                    stream_generator = chat_agent.chat_with_tools_stream_structured(
+            try:
+                if request.structured_output:
+                    # 结构化输出模式 - 使用异步方法
+                    async for message in chat_agent.chat_with_tools_stream_structured_async(
                         query=request.messages[-1]["content"] if request.messages else "",
                         messages=request.messages[:-1] if request.messages else [],
                         knowledge_context=knowledge_context,
                         files=request.files
-                    )
-
-                    for message in stream_generator:
-                        if stop_event.is_set():
-                            break
+                    ):
                         wrapped_message = {
                             "retcode": 0,
                             "retmsg": "",
                             "data": message
                         }
-                        safe_put(f"data: {json.dumps(wrapped_message, ensure_ascii=False)}\n\n")
+                        yield f"data: {json.dumps(wrapped_message, ensure_ascii=False)}\n\n"
 
-                    if not stop_event.is_set():
-                        end_data = {
-                            "retcode": 0,
-                            "retmsg": "Stream completed",
-                            "data": True
-                        }
-                        safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
-                except Exception as e:
-                    logging.exception(f"Stream error (structured): {e}")
-                    error_data = {
-                        "retcode": 500,
-                        "retmsg": str(e),
-                        "data": {"answer": f"**ERROR**: {str(e)}"}
-                    }
-                    safe_put(f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n")
+                    # 发送完成消息
                     end_data = {
                         "retcode": 0,
-                        "retmsg": "",
+                        "retmsg": "Stream completed",
                         "data": True
                     }
-                    safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
-                finally:
-                    safe_put(None)
+                    yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
-            def stream_unstructured() -> None:
-                accumulated_content = ""
-                try:
+                else:
+                    # 非结构化输出模式 - 使用异步方法
+                    accumulated_content = ""
                     start_data = {
                         "retcode": 0,
                         "retmsg": "Chat started",
                         "data": ""
                     }
-                    safe_put(f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n")
+                    yield f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n"
 
-                    stream_generator = chat_agent.chat_with_tools_stream(
+                    async for delta in chat_agent.chat_with_tools_stream_async(
                         query=request.messages[-1]["content"] if request.messages else "",
                         messages=request.messages[:-1] if request.messages else [],
                         knowledge_context=knowledge_context,
                         files=request.files
-                    )
-
-                    for delta in stream_generator:
-                        if stop_event.is_set():
-                            break
+                    ):
                         if delta:
                             accumulated_content += delta
                             response_data = {
@@ -2834,13 +2794,10 @@ async def enhanced_chat_service_sse(
                                 "retmsg": "",
                                 "data": accumulated_content
                             }
-                            safe_put(f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n")
+                            yield f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
 
-                    if (
-                        not stop_event.is_set()
-                        and request.verbose_tool_use
-                        and chat_agent.agent.tools
-                    ):
+                    # 添加工具使用摘要（如果启用）
+                    if request.verbose_tool_use and chat_agent.agent.tools:
                         use_tools = getattr(chat_agent.agent, '_last_use_tools', [])
                         if use_tools:
                             tools_summary = f"\n\n📊 **本次对话使用了 {len(use_tools)} 个工具调用**"
@@ -2850,59 +2807,33 @@ async def enhanced_chat_service_sse(
                                 "retmsg": "",
                                 "data": accumulated_content
                             }
-                            safe_put(f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n")
+                            yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
 
-                    if not stop_event.is_set():
-                        end_data = {
-                            "retcode": 0,
-                            "retmsg": "Stream completed",
-                            "data": True
-                        }
-                        safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
-                except Exception as e:
-                    logging.exception(f"Stream error: {e}")
-                    error_data = {
-                        "retcode": 500,
-                        "retmsg": str(e),
-                        "data": {"answer": f"**ERROR**: {str(e)}"}
-                    }
-                    safe_put(f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n")
+                    # 发送完成消息
                     end_data = {
                         "retcode": 0,
-                        "retmsg": "",
+                        "retmsg": "Stream completed",
                         "data": True
                     }
-                    safe_put(f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n")
-                finally:
-                    safe_put(None)
+                    yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
-            producer = loop.run_in_executor(
-                executor,
-                stream_structured if request.structured_output else stream_unstructured
-            )
-
-            try:
-                while True:
-                    item = await queue.get()
-                    if item is None:
-                        break
-                    yield item
             except asyncio.CancelledError:
-                stop_event.set()
-                try:
-                    queue.put_nowait(None)
-                except asyncio.QueueFull:
-                    pass
+                logging.info("SSE stream was cancelled by client")
                 raise
-            finally:
-                stop_event.set()
-                if not producer.done():
-                    producer.cancel()
-                while not queue.empty():
-                    try:
-                        queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
+            except Exception as e:
+                logging.exception(f"Stream error: {e}")
+                error_data = {
+                    "retcode": 500,
+                    "retmsg": str(e),
+                    "data": {"answer": f"**ERROR**: {str(e)}"}
+                }
+                yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                end_data = {
+                    "retcode": 0,
+                    "retmsg": "",
+                    "data": True
+                }
+                yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(
             sse_stream(),

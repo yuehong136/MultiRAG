@@ -6,6 +6,7 @@
 @date：2025/7/17 13:50
 @desc:
 """
+import asyncio
 import logging
 import os
 import pathlib
@@ -64,9 +65,9 @@ class MoveRequest(BaseModel):
 
 @router.post("/upload_media_redirect", summary="上传媒体并获取临时URL", response_description="成功获取临时公网URL")
 async def upload_media_redirect(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    user=Depends(manager)
+        file: UploadFile = File(...),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
 ):
     """
     上传媒体文件（如视频、图片）到对象存储，并返回临时公网可访问的 URL。
@@ -79,42 +80,49 @@ async def upload_media_redirect(
     - JSON: 包含临时 URL 和过期时间的响应
     """
     try:
+        # 异步读取文件内容
         content = await file.read()
         if not content:
             return get_json_result(data=False, retmsg='No file content!', retcode=RetCode.ARGUMENT_ERROR)
 
-        # 1. 定义存储桶和文件名
-        # 建议使用一个专门的临时桶，如果未配置则使用默认桶
-        # 注意：MinIO/OSS 的 bucket 名称通常有格式要求
-        bucket = settings.OSS.get("bucket") or settings.MINIO.get("bucket") or "multimodal-temp"
-        
-        ext = file.filename.split('.')[-1].lower() if '.' in file.filename else "bin"
-        unique_filename = f"volc_upload/{get_uuid()}.{ext}"
-        
-        # Get content type
-        content_type = CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
+        filename = file.filename
 
-        # 2. 上传文件
-        # STORAGE_IMPL 会自动处理 MinIO/OSS/S3 的差异
-        try:
-            settings.STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
-        except TypeError:
-            # Fallback for storage backends that don't support content_type
-            settings.STORAGE_IMPL.put(bucket, unique_filename, content)
+        # 将同步的存储操作放到线程池中执行
+        def _upload_sync():
+            # 1. 定义存储桶和文件名
+            # 建议使用一个专门的临时桶，如果未配置则使用默认桶
+            # 注意：MinIO/OSS 的 bucket 名称通常有格式要求
+            bucket = settings.OSS.get("bucket") or settings.MINIO.get("bucket") or "multimodal-temp"
 
-        # 3. 获取预签名 URL (有效期 1小时)
-        # 这是关键：这个 URL 是带签名的，AI 服务可以通过公网访问并下载
-        expires = 3600
-        url = settings.STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=expires)
+            ext = filename.split('.')[-1].lower() if '.' in filename else "bin"
+            unique_filename = f"volc_upload/{get_uuid()}.{ext}"
 
-        if not url:
-             raise Exception("Failed to generate presigned URL")
+            # Get content type
+            content_type = CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
 
-        return get_json_result(data={
-            "url": url,
-            "expires_in": expires,
-            "filename": unique_filename
-        })
+            # 2. 上传文件
+            # STORAGE_IMPL 会自动处理 MinIO/OSS/S3 的差异
+            try:
+                settings.STORAGE_IMPL.put(bucket, unique_filename, content, content_type=content_type)
+            except TypeError:
+                # Fallback for storage backends that don't support content_type
+                settings.STORAGE_IMPL.put(bucket, unique_filename, content)
+
+            # 3. 获取预签名 URL (有效期 1小时)
+            # 这是关键：这个 URL 是带签名的，AI 服务可以通过公网访问并下载
+            expires = 3600
+            url = settings.STORAGE_IMPL.get_presigned_url(bucket, unique_filename, expires=expires)
+
+            if not url:
+                raise Exception("Failed to generate presigned URL")
+
+            return get_json_result(data={
+                "url": url,
+                "expires_in": expires,
+                "filename": unique_filename
+            })
+
+        return await asyncio.to_thread(_upload_sync)
 
     except Exception as e:
         logging.exception("Upload media redirect failed")
@@ -138,13 +146,6 @@ async def upload(
     返回:
     - JSON: 上传文件结果的JSON响应。
     """
-
-    pf_id = parent_id
-
-    if not pf_id:
-        root_folder = FileService.get_root_folder(db, user.id)
-        pf_id = root_folder["id"]
-
     if not files:
         return get_json_result(data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
 
@@ -152,19 +153,34 @@ async def upload(
         if file_obj.filename == '':
             return get_json_result(data=False, retmsg='No file selected!', retcode=RetCode.ARGUMENT_ERROR)
 
-    try:
+    # 异步读取所有文件内容
+    file_contents = []
+    for file_obj in files:
+        blob = await file_obj.read()
+        file_contents.append((blob, file_obj.filename))
+
+    # 将同步的数据库和存储操作放到线程池中执行
+    def _upload_sync():
+        pf_id = parent_id
+
+        if not pf_id:
+            root_folder = FileService.get_root_folder(db, user.id)
+            pf_id = root_folder["id"]
+
         pf_folder = FileService.get_by_id(db, pf_id)
         if not pf_folder:
             return get_data_error_result(retmsg="Can't find this folder!")
-        for file_obj in files:
+        
+        file_dict = None
+        for blob, filename in file_contents:
             MAX_FILE_NUM_PER_USER: int = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
             if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, user.id):
                 return get_data_error_result(retmsg="Exceed the maximum file number of a free user!")
 
-            if not file_obj.filename:
-                file_obj_names = [pf_folder.name, file_obj.filename]
+            if not filename:
+                file_obj_names = [pf_folder.name, filename]
             else:
-                full_path = '/' + file_obj.filename
+                full_path = '/' + filename
                 file_obj_names = full_path.split('/')
             file_len = len(file_obj_names)
 
@@ -188,8 +204,8 @@ async def upload(
             location = file_obj_names[file_len - 1]
             while settings.STORAGE_IMPL.obj_exist(last_folder.id, location):
                 location += "_"
-            blob = await file_obj.read()
-            filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
+            
+            final_filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
                                       parent_id=last_folder.id)
             settings.STORAGE_IMPL.put(last_folder.id, location, blob)
             file_data = {
@@ -198,7 +214,7 @@ async def upload(
                 "tenant_id": user.id,
                 "created_by": user.id,
                 "type": filetype,
-                "name": filename,
+                "name": final_filename,
                 "location": location,
                 "size": len(blob),
             }
@@ -214,12 +230,15 @@ async def upload(
                 "type": file.type
             }
         return get_json_result(data=file_dict)
+
+    try:
+        return await asyncio.to_thread(_upload_sync)
     except Exception as e:
         return construct_error_response(e)
 
 
 @router.post("/create", summary="创建文件或文件夹", response_description="成功创建文件或文件夹")
-async def create(
+def create(
         request_body: CreateRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -279,7 +298,7 @@ async def create(
 
 
 @router.get("/list", summary="列出文件或文件夹", response_description="成功列出文件或文件夹")
-async def list_files(
+def list_files(
         parent_id: str | None = None,
         keywords: str = "",
         page: int = 1,
@@ -324,7 +343,7 @@ async def list_files(
 
 
 @router.get("/root_folder", summary="获取根文件夹", response_description="成功获取根文件夹")
-async def get_root_folder(
+def get_root_folder(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -342,7 +361,7 @@ async def get_root_folder(
 
 
 @router.get("/parent_folder", summary="获取父文件夹", response_description="成功获取父文件夹")
-async def get_parent_folder(
+def get_parent_folder(
         file_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -368,7 +387,7 @@ async def get_parent_folder(
 
 
 @router.get("/all_parent_folder", summary="获取所有父文件夹", response_description="成功获取所有父文件夹")
-async def get_all_parent_folders(
+def get_all_parent_folders(
         file_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -395,7 +414,7 @@ async def get_all_parent_folders(
 
 
 @router.post("/rm", summary="删除文件或文件夹", response_description="成功删除文件或文件夹")
-async def rm(
+def rm(
         request_body: RemoveRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -417,9 +436,9 @@ async def rm(
         try:
             if file.location:
                 settings.STORAGE_IMPL.rm(file.parent_id, file.location)
-        except Exception:
-            logging.exception(f"Fail to remove object: {file.parent_id}/{file.location}")
-        
+        except Exception as e:
+            logging.exception(f"Fail to remove object: {file.parent_id}/{file.location}, error: {e}")
+
         # 删除关联的文档
         informs = File2DocumentService.get_by_file_id(db, file.id)
         for inform in informs:
@@ -458,7 +477,7 @@ async def rm(
             if file.type == FileType.FOLDER.value:
                 _delete_folder_recursive(file, user.id)
                 continue
-            
+
             _delete_single_file(file)
 
         return get_json_result(data=True)
@@ -468,7 +487,7 @@ async def rm(
 
 
 @router.post("/rename", summary="重命名文件或文件夹", response_description="成功重命名文件或文件夹")
-async def rename(
+def rename(
         request_body: RenameRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -492,7 +511,7 @@ async def rename(
         if file.type != FileType.FOLDER.value \
                 and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
             return get_json_result(data=False, retmsg="The extension of file can't be changed",
-                                         retcode=RetCode.ARGUMENT_ERROR)
+                                   retcode=RetCode.ARGUMENT_ERROR)
         for f in FileService.query(db, name=req["name"], pf_id=file.parent_id):
             if f.name == req["name"]:
                 return get_data_error_result(retmsg="Duplicated file name in the same folder.")
@@ -511,7 +530,7 @@ async def rename(
 
 
 @router.get("/get/{file_id}", summary="获取文件", response_description="成功获取文件")
-async def get_file(
+def get_file(
         file_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -557,7 +576,7 @@ async def get_file(
 
 
 @router.post("/mv", summary="移动文件或文件夹", response_description="成功移动文件或文件夹")
-async def move(
+def move(
         request_body: MoveRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -572,24 +591,24 @@ async def move(
     - JSON: 移动结果的JSON响应。
     """
     req = request_body.model_dump()
-    
+
     try:
         file_ids = req["src_file_ids"]
         dest_parent_id = req["dest_file_id"]
-        
+
         # 先检查目标文件夹是否存在
         dest_folder = FileService.get_by_id(db, dest_parent_id)
         if not dest_folder:
             return get_data_error_result(retmsg="Parent folder not found!")
-        
+
         # 检查源文件是否存在
         files = FileService.get_by_ids(db, file_ids)
         if not files:
             return get_data_error_result(retmsg="Source files not found!")
-        
+
         # 使用字典推导式简化代码
         files_dict = {f.id: f for f in files}
-        
+
         # 权限检查
         for file_id in file_ids:
             file = files_dict.get(file_id)
@@ -603,7 +622,7 @@ async def move(
                     retmsg="No authorization.",
                     retcode=RetCode.AUTHENTICATION_ERROR
                 )
-        
+
         def _move_entry_recursive(source_file_entry, dest_folder):
             """递归移动文件或文件夹"""
             # 如果是文件夹，递归处理

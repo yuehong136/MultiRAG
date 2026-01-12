@@ -146,7 +146,7 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
         parser_config = get_parser_config(parser_id, None)
         
         # 使用封装的方法创建payload
-        req_data = KnowledgebaseService.create_with_name(
+        e, res = KnowledgebaseService.create_with_name(
             db=db,
             name=dataset_name,
             tenant_id=user.id,
@@ -156,12 +156,13 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
             description=req_data.get("description"),
             permission=req_data.get("permission")
         )
+
+        if not e:
+            return res  # 直接返回错误响应
         
-        if not KnowledgebaseService.save(db, **req_data):
+        if not KnowledgebaseService.save(db, **res):
             return get_data_error_result()
-        return get_json_result(data={"kb_id": req_data["id"]})
-    except ValueError as e:
-        return get_data_error_result(retmsg=str(e))
+        return get_json_result(data={"kb_id": res["id"]})
     except Exception as e:
         return server_error_response(e)
 
@@ -594,7 +595,7 @@ def get_meta(
 
 
 @router.get("/basic_info", summary="获取知识库文档处理统计信息", response_description="返回文档处理状态统计")
-async def get_basic_info(
+def get_basic_info(
     kb_id: str = Query(..., description="知识库ID"),
     db: Session = Depends(get_db),
     user=Depends(manager)
@@ -1526,6 +1527,8 @@ def delete_kb_task(
     def cancel_task(task_id):
         REDIS_CONN.set(f"{task_id}-cancel", "x")
 
+    kb_task_id_field: str = ""
+    kb_task_finish_at: str = ""
     match pipeline_task_type:
         case PipelineTaskType.GRAPH_RAG:
             kb_task_id_field = "graphrag_task_id"
@@ -1611,7 +1614,7 @@ def check_embedding(
             return []
 
         n = min(n, total)
-        offsets = sorted(random.sample(range(total), n))
+        offsets = sorted(random.sample(range(min(total, 1000)), n))
         out = []
 
         for off in offsets:
@@ -1644,9 +1647,13 @@ def check_embedding(
                 "position_int": full_doc.get("position_int"),
                 "top_int": full_doc.get("top_int"),
                 "content_with_weight": full_doc.get("content_with_weight") or "",
+                "question_kwd": full_doc.get("question_kwd") or []
             })
         return out
 
+    def _clean(s: str) -> str:
+        s = re.sub(r"</?(table|td|caption|tr|th)( [^<>]{0,12})?>", " ", s or "")
+        return s if s else "None"
     req = request.model_dump()
     kb_id = req.get("kb_id", "")
     embd_id = req.get("embd_id", "")
@@ -1668,8 +1675,10 @@ def check_embedding(
 
     results, eff_sims = [], []
     for ck in samples:
-        txt = (ck.get("content_with_weight") or "").strip()
-        if not txt:
+        title = ck.get("doc_name") or "Title"
+        txt_in = "\n".join(ck.get("question_kwd") or []) or ck.get("content_with_weight") or ""
+        txt_in = _clean(txt_in)
+        if not txt_in:
             results.append({"chunk_id": ck["chunk_id"], "reason": "no_text"})
             continue
 
@@ -1678,10 +1687,19 @@ def check_embedding(
             continue
 
         try:
-            qv, _ = emb_mdl.encode_queries(txt)
-            sim = _cos_sim(qv, ck["vector"])
-        except Exception:
-            return get_error_data_result(retmsg="embedding failure")
+            v, _ = emb_mdl.encode([title, txt_in])
+            assert len(v[1]) == len(ck["vector"]), f"The dimension ({len(v[1])}) of given embedding model is different from the original ({len(ck['vector'])})"
+            sim_content = _cos_sim(v[1], ck["vector"])
+            title_w = 0.1
+            qv_mix = title_w * v[0] + (1 - title_w) * v[1]
+            sim_mix = _cos_sim(qv_mix, ck["vector"])
+            sim = sim_content
+            mode = "content_only"
+            if sim_mix > sim:
+                sim = sim_mix
+                mode = "title+content"
+        except Exception as e:
+            return get_error_data_result(retmsg=f"Embedding failure. {e}")
 
         eff_sims.append(sim)
         results.append({
@@ -1701,7 +1719,8 @@ def check_embedding(
         "avg_cos_sim": round(float(np.mean(eff_sims)) if eff_sims else 0.0, 6),
         "min_cos_sim": round(float(np.min(eff_sims)) if eff_sims else 0.0, 6),
         "max_cos_sim": round(float(np.max(eff_sims)) if eff_sims else 0.0, 6),
+        "match_mode": mode,
     }
-    if summary["avg_cos_sim"] > 0.99:
+    if summary["avg_cos_sim"] > 0.9:
         return get_json_result(data={"summary": summary, "results": results})
-    return get_json_result(retcode=RetCode.NOT_EFFECTIVE, retmsg="failed", data={"summary": summary, "results": results})
+    return get_json_result(retcode=RetCode.NOT_EFFECTIVE, retmsg="Embedding model switch failed: the average similarity between old and new vectors is below 0.9, indicating incompatible vector spaces.", data={"summary": summary, "results": results})

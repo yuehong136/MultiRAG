@@ -1343,10 +1343,14 @@ class MilvusConnection(DocStoreConnection):
         if isinstance(results, list):
             for item in results:
                 # 优先检查'id'字段(低版本)，如果不存在则尝试'pk'字段(高版本)
+                chunk_id = None
                 if "id" in item:
-                    chunk_ids.append(item.get("id"))
+                    chunk_id = item.get("id")
                 elif "pk" in item:
-                    chunk_ids.append(item.get("pk"))
+                    chunk_id = item.get("pk")
+                # 只添加非空的 id
+                if chunk_id:
+                    chunk_ids.append(chunk_id)
 
         return chunk_ids
 

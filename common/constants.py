@@ -67,6 +67,9 @@ class FileSource(StrEnum):
     SHAREPOINT = "sharepoint"
     SLACK = "slack"
     TEAMS = "teams"
+    WEBDAV = "webdav"
+    MOODLE = "moodle"
+    DROPBOX = "dropbox"
 
 
 class MCPServerType(StrEnum):
@@ -119,6 +122,7 @@ class RetCode(IntEnum, CustomEnum):
     RUNNING = 106
     PERMISSION_ERROR = 108
     AUTHENTICATION_ERROR = 109
+    BAD_REQUEST = 400
     UNAUTHORIZED = 401
     SERVER_ERROR = 500
     FORBIDDEN = 403
@@ -132,6 +136,7 @@ class Storage(Enum):
     AWS_S3 = 4
     OSS = 5
     OPENDAL = 6
+    GCS = 7
 
 # environment
 # ENV_STRONG_TEST_COUNT = "STRONG_TEST_COUNT"

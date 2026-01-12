@@ -1561,14 +1561,14 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)
         if meta_data_filter.get("method") == "auto":
             chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
-            filters = gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters))
+            filters: dict = gen_meta_filter(chat_mdl, metas, question)
+            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
             if not doc_ids:
                 doc_ids = None
         elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"]))
-            if not doc_ids:
-                doc_ids = None
+            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
+            if meta_data_filter["manual"] and not doc_ids:
+                doc_ids = ["-999"]
 
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
@@ -1618,6 +1618,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
                                                    LLMBundle(db, kb.tenant_id, LLMType.CHAT))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
+        ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], [kb.tenant_id])
 
         for c in ranks["chunks"]:
             c.pop("vector", None)

@@ -208,7 +208,7 @@ async def filter_openapi_post(
             response_model=Dict[str, Any])
 async def filter_openapi_get(
         paths: list[str] = Query(..., description="要保留的路径列表"),
-        match: str = Query("exact", description="匹配模式", regex="^(exact|prefix|glob|regex)$"),
+        match: str = Query("exact", description="匹配模式", pattern="^(exact|prefix|glob|regex)$"),
         source: str | None = Query(None, description="外部OpenAPI文档URL"),
         include_tags: list[str] = Query(default=[], description="包含标签"),
         exclude_paths: list[str] = Query(default=[], description="排除路径"),
@@ -312,7 +312,7 @@ async def filter_openapi_get(
 @router.get("/openapi-filter-health",
             summary="OpenAPI过滤服务健康检查",
             response_description="返回服务健康状态")
-async def filter_service_health():
+def filter_service_health():
     """
     OpenAPI过滤服务健康检查
 
@@ -398,7 +398,7 @@ async def filter_service_health():
 @router.post("/openapi-filter-validate",
              summary="验证OpenAPI过滤规则",
              response_description="返回规则验证结果")
-async def validate_filter_rule(
+def validate_filter_rule(
         rule: FilterRule = Body(..., description="要验证的过滤规则"),
         user=Depends(manager)
 ):

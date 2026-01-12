@@ -67,6 +67,9 @@ s3:
   signature_version: 'v4'
   addressing_style: 'path'
 
+gcs:
+  bucket: '${GCS_BUCKET:bridgtl-edm-d-bucket-multirag'
+
 oss:
   access_key: 'access_key'
   secret_key: 'secret_key'
@@ -113,12 +116,19 @@ infinity:
   uri: 'infinity:23817'
   db_name: 'default_db'
 
+oceanbase:
+  scheme: 'oceanbase' # set 'mysql' to create connection using mysql config
+  config:
+    db_name: 'test'
+    user: 'root@multirag'
+    password: 'dxl_multi_rag'
+    host: 'localhost'
+    port: 2881
+
 redis:
-  # Redis数据库的编号
   db: 1
-  # Redis数据库的密码
+  username: ''
   password: ''
-  # Redis数据库的主机名和端口
   host: '127.0.0.1:6379'
 
 task_executor:
@@ -202,8 +212,6 @@ tcadp_config:
   secret_id: 'tencent_secret_id'
   secret_key: 'tencent_secret_key'
   region: 'tencent_region'
-  table_result_type: '1'
-  markdown_image_response_type: '1'
 
 script_scheduler:
   # 如果源码部署，则使用localhost，如果docker部署，则使用宿主机的ip

@@ -72,6 +72,7 @@ class FulltextQueryer:
         return txt
 
     def question(self, txt, tbl="qa", min_match: float = 0.6):
+        original_query = txt
         txt = FulltextQueryer.add_space_between_eng_zh(txt)
         txt = re.sub(
             r"[ :|\r\n\t,，。？?/`!！&^%%()\[\]{}<>]+",
@@ -84,6 +85,7 @@ class FulltextQueryer:
         if not self.is_chinese(txt):
             txt = FulltextQueryer.rmWWW(txt)
             tks = rag_tokenizer.tokenize(txt).split()
+            logging.info(f"[RAG_TOKENIZER] 英文分词: '{txt}' -> {tks}")
             keywords = [t for t in tks if t]
             tks_w = self.tw.weights(tks, preprocess=False)
             tks_w = [(re.sub(r"[ \\\"'^]", "", tk), w) for tk, w in tks_w]
@@ -117,7 +119,7 @@ class FulltextQueryer:
             query = " ".join(q)
             raw_text = " ".join([term.partition("^")[0].strip("()") for term in query.split()])
             return MatchTextExpr(
-                self.query_fields, query, 100, raw_text=raw_text
+                self.query_fields, query, 100, {"original_query": original_query}, raw_text=raw_text
             ), keywords
 
         def need_fine_grained_tokenize(tk):
@@ -130,6 +132,7 @@ class FulltextQueryer:
         txt = FulltextQueryer.rmWWW(txt)
         qs, keywords = [], []
         raw_terms = []
+        logging.info(f"[RAG_TOKENIZER] 中文查询预处理: '{original_query}' -> '{txt}'")
         for tt in self.tw.split(txt)[:256]:  # .split():
             if not tt:
                 continue
@@ -147,6 +150,8 @@ class FulltextQueryer:
                     if need_fine_grained_tokenize(tk)
                     else []
                 )
+                if sm:
+                    logging.info(f"[RAG_TOKENIZER] 细粒度分词: '{tk}' -> {sm}")
                 sm = [
                     re.sub(
                         r"[ ,\./;'\[\]\\`~!@#$%\^&\*\(\)=\+_<>\?:\"\{\}\|，。；‘’【】、！￥……（）——《》？：“”-]+",
@@ -204,8 +209,9 @@ class FulltextQueryer:
             if not query:
                 query = otxt
             raw_text = " ".join(raw_terms) if raw_terms else otxt
+            logging.info(f"[RAG_TOKENIZER] 最终关键词: {keywords[:10]}{'...' if len(keywords) > 10 else ''}")
             return MatchTextExpr(
-                self.query_fields, query, 100, {"minimum_should_match": min_match}, raw_text=raw_text
+                self.query_fields, query, 100, {"minimum_should_match": min_match, "original_query": original_query}, raw_text=raw_text
             ), keywords
         return None, keywords
 
@@ -254,6 +260,7 @@ class FulltextQueryer:
             content_tks = [c.strip() for c in content_tks.strip() if c.strip()]
         tks_w = self.tw.weights(content_tks, preprocess=False)
 
+        origin_keywords = keywords.copy()
         keywords = [f'"{k.strip()}"' for k in keywords]
         for tk, w in sorted(tks_w, key=lambda x: x[1] * -1)[:keywords_topn]:
             tk_syns = self.syn.lookup(tk)
@@ -269,7 +276,7 @@ class FulltextQueryer:
                 keywords.append(f"{tk}^{w}")
 
         return MatchTextExpr(self.query_fields, " ".join(keywords), 100,
-                             {"minimum_should_match": min(3, len(keywords) // 10)})
+                             {"minimum_should_match": min(3, len(keywords) / 10), "original_query": " ".join(origin_keywords)})
 
 
 # 别名，保持向后兼容

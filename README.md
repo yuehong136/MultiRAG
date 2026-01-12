@@ -160,7 +160,7 @@ MultiRAG 是一款专为企业级应用设计的智能RAG（Retrieval-Augmented 
 
 ### 🚀 启动服务
 
-1. 确保 `vm.max_map_count` >= 262144：
+1. 确保 `vm.max_map_count` >= 262144（Linux系统）：
 
    > 检查 `vm.max_map_count` 的值：
    >
@@ -188,21 +188,34 @@ MultiRAG 是一款专为企业级应用设计的智能RAG（Retrieval-Augmented 
    $ cd multrag
    ```
 
-3. 使用预构建的Docker镜像启动服务：
+3. 使用Docker Compose启动服务：
 
    ```bash
    $ cd docker
-   # 使用CPU进行embedding和文档处理任务：
-   $ docker compose -f docker-compose.yml up -d
 
-   # 使用GPU加速embedding和文档处理任务：
-   # docker compose -f docker-compose-gpu.yml up -d
+   # 最小化部署（自动启动 postgres + redis + minio + multirag）
+   $ docker compose --profile cpu up -d
+
+   # 加上 Milvus 向量数据库
+   $ docker compose --profile cpu --profile milvus up -d
+
+   # 加上 Elasticsearch 搜索引擎
+   $ docker compose --profile cpu --profile elasticsearch up -d
+
+   # 加上 TEI Embedding 服务
+   $ docker compose --profile cpu --profile tei-cpu up -d
+
+   # 完整部署（Milvus + TEI）
+   $ docker compose --profile cpu --profile milvus --profile tei-cpu up -d
+
+   # GPU 模式
+   $ docker compose --profile gpu --profile milvus --profile tei-gpu up -d
    ```
 
 4. 服务启动后检查服务器状态：
 
    ```bash
-   $ docker logs -f multirag-server
+   $ docker logs -f multirag
    ```
 
    _以下输出确认系统成功启动：_
@@ -226,44 +239,143 @@ MultiRAG 是一款专为企业级应用设计的智能RAG（Retrieval-Augmented 
 
    _开始使用！_
 
+### 🍎 macOS (Apple Silicon) 部署
+
+由于部分服务（如 TEI）只有 x86_64 版本，Apple Silicon Mac 需要使用专用配置文件：
+
+```bash
+$ cd docker
+
+# 最小化部署（通过 Rosetta 2 模拟 x86_64）
+$ docker compose -f docker-compose-macos.yml --profile cpu up -d
+
+# 加上 Milvus 向量数据库
+$ docker compose -f docker-compose-macos.yml --profile cpu --profile milvus up -d
+
+# 加上 TEI Embedding 服务
+$ docker compose -f docker-compose-macos.yml --profile cpu --profile tei-cpu up -d
+```
+
+**前提条件**：
+- Docker Desktop 设置中启用 **"Use Rosetta for x86_64/amd64 emulation on Apple Silicon"**
+- 或使用 OrbStack 并选择 x86-64 (emulated) 架构
+
+**性能说明**：
+- 通过 Rosetta 2 模拟运行，性能约为原生的 50-70%
+- 适合开发测试，生产环境建议使用 Linux x86_64 服务器
+
+### 📦 服务 Profiles 说明
+
+MultiRAG 使用 Docker Compose profiles 机制按需启动服务：
+
+#### 必需服务（默认启动，无需指定 profile）
+
+| 服务 | 容器名 | 端口 | 说明 |
+|------|--------|------|------|
+| postgres | multirag-postgres | 5432 | PostgreSQL 数据库 |
+| redis | multirag-redis | 6379 | Redis 缓存服务 |
+| minio | multirag-minio | 9000, 9001 | MinIO 对象存储 |
+
+#### 可选服务（需要指定 profile 启动）
+
+| Profile | 服务 | 说明 |
+|---------|------|------|
+| `cpu` | multirag-cpu | MultiRAG 主服务（CPU 版本） |
+| `gpu` | multirag-gpu | MultiRAG 主服务（GPU 版本） |
+| `elasticsearch` | es01 | Elasticsearch 搜索引擎 |
+| `opensearch` | opensearch01 | OpenSearch 搜索引擎 |
+| `milvus` | milvus-standalone, milvus-etcd, milvus-minio | Milvus 向量数据库集群 |
+| `infinity` | infinity | Infinity 向量数据库 |
+| `oceanbase` | oceanbase | OceanBase 向量数据库 |
+| `tei-cpu` | tei-cpu | TEI Embedding 服务（CPU 版本） |
+| `tei-gpu` | tei-gpu | TEI Embedding 服务（GPU 版本） |
+| `sandbox` | sandbox-executor-manager | 沙箱执行器 |
+| `kibana` | kibana | Elasticsearch 可视化工具 |
+
+#### 启动容器数量参考
+
+| 命令 | 启动的容器 |
+|------|-----------|
+| `--profile cpu` | postgres, redis, minio, multirag-cpu (4个) |
+| `--profile cpu --profile milvus` | 上述 + milvus-etcd, milvus-minio, milvus-standalone (7个) |
+| `--profile cpu --profile milvus --profile tei-cpu` | 上述 + tei-cpu (8个) |
+| `--profile cpu --profile elasticsearch` | postgres, redis, minio, multirag-cpu, es01 (5个) |
+
 ## 🔧 配置说明
 
 当涉及系统配置时，您需要管理以下文件：
 
-- [.env](./docker/.env): 保存系统的基本设置，例如 `SVR_HTTP_PORT`、`MYSQL_PASSWORD` 和 `MINIO_PASSWORD`。
-- [service_conf.yaml](./configs/service_conf.yaml): 配置后端服务。此文件中的环境变量将在Docker容器启动时自动填充。
-- [docker-compose.yml](./docker/docker-compose.yml): 系统依赖 [docker-compose.yml](./docker/docker-compose.yml) 启动。
+### 配置文件结构
 
-> [docker/README.md](./docker/README.md) 文件提供了环境设置和服务配置的详细说明，这些配置可以在 [service_conf.yaml](./configs/service_conf.yaml) 文件中用作 `${ENV_VARS}`。
+```
+docker/
+├── .env                        # 环境变量配置（端口、密码等）
+├── docker-compose.yml          # 主配置文件（引用 base 文件）
+├── docker-compose-base.yml     # 基础设施服务配置（PostgreSQL、Redis、MinIO 等）
+├── docker-compose-macos.yml    # macOS 专用配置
+├── service_conf.yaml.template  # 服务配置模板
+└── nginx/                      # Nginx 反向代理配置
+    ├── nginx.conf
+    ├── proxy.conf
+    └── multirag.conf
+```
 
-要更新默认HTTP服务端口（8000），请转到 [docker-compose.yml](./docker/docker-compose.yml) 并将 `8000:8000` 更改为 `<YOUR_SERVING_PORT>:8000`。
+### 主要配置文件
 
-对上述配置的更新需要重新启动所有容器才能生效：
+- **[.env](./docker/.env)**: Docker 环境变量配置，包括端口映射、数据库密码、服务开关等
+- **[service_conf.yaml](./configs/service_conf.yaml)**: 后端服务配置，包括数据库连接、LLM 配置、存储设置等
+- **[docker-compose.yml](./docker/docker-compose.yml)**: 主 Docker Compose 配置，通过 `include` 引用基础设施服务
+- **[docker-compose-base.yml](./docker/docker-compose-base.yml)**: 基础设施服务定义（PostgreSQL、Redis、MinIO、Milvus 等）
 
-> ```bash
-> $ docker compose -f docker-compose.yml up -d
-> ```
+> [!TIP]
+> 详细的 Docker 配置说明请参阅 [docker/README.md](./docker/README.md)
 
-### 从milvus切换到Infinity文档引擎
+### 端口配置
 
-MultiRAG默认使用milvus存储全文和向量。要切换到 [Infinity](https://github.com/infiniflow/infinity/)，请按照以下步骤操作：
+| 服务 | 默认端口 | 环境变量 |
+|------|---------|---------|
+| Nginx HTTP | 80 | `SVR_WEB_HTTP_PORT` |
+| Nginx HTTPS | 443 | `SVR_WEB_HTTPS_PORT` |
+| 主服务 API | 8123 | `SVR_HTTP_PORT` |
+| 管理后台 API | 8130 | `ADMIN_SVR_HTTP_PORT` |
+| PostgreSQL | 5432 | `POSTGRES_PORT` |
+| Redis | 6379 | `REDIS_PORT` |
+| MinIO | 9000, 9001 | `MINIO_PORT`, `MINIO_CONSOLE_PORT` |
+| Milvus | 19530 | `MILVUS_PORT` |
+| Elasticsearch | 9200 | `ES_PORT` |
 
-1. 停止所有运行的容器：
+对配置的更新需要重新启动容器才能生效：
 
-   ```bash
-   $ docker compose -f docker/docker-compose.yml down -v
-   ```
+```bash
+$ cd docker
+$ docker compose --profile cpu down
+$ docker compose --profile cpu up -d
+```
+
+### 切换向量数据库引擎
+
+MultiRAG 支持多种向量数据库，通过 profiles 机制按需启用：
+
+#### 使用 Milvus（推荐）
+
+```bash
+$ docker compose --profile cpu --profile milvus up -d
+```
+
+#### 使用 Elasticsearch
+
+```bash
+$ docker compose --profile cpu --profile elasticsearch up -d
+```
+
+#### 使用 Infinity
+
+```bash
+$ docker compose --profile cpu --profile infinity up -d
+```
 
 > [!WARNING]
-> `-v` 将删除docker容器卷，现有数据将被清除。
-
-2. 在 **docker/.env** 中将 `DOC_ENGINE` 设置为 `infinity`。
-
-3. 启动容器：
-
-   ```bash
-   $ docker compose -f docker-compose.yml up -d
-   ```
+> 切换向量数据库时，如需清除现有数据，请使用 `docker compose down -v`，`-v` 参数会删除数据卷。
 
 ### 主要配置选项
 
@@ -313,9 +425,11 @@ user_default_llm:
     rerank_model: "bge-reranker-v2-m3"
 ```
 
-## 🔧 构建不包含embedding模型的Docker镜像
+## 🔧 Docker镜像构建
 
-此镜像大小约为2 GB，依赖外部LLM和embedding服务。
+### 构建轻量级镜像（不包含embedding模型）
+
+此镜像大小约为2 GB，依赖外部LLM和embedding服务（如 TEI）。
 
 ```bash
 $ git clone http://122.112.170.159:8888/scdf/ai/multrag.git
@@ -323,7 +437,7 @@ $ cd multrag/
 $ docker build --platform linux/amd64 --build-arg LIGHTEN=1 -f Dockerfile -t multirag:slim .
 ```
 
-## 🔧 构建包含embedding模型的Docker镜像
+### 构建完整镜像（包含embedding模型）
 
 此镜像大小约为9 GB。由于它包含embedding模型，因此仅依赖外部LLM服务。
 
@@ -333,80 +447,103 @@ $ cd multrag/
 $ docker build --platform linux/amd64 -f Dockerfile -t multirag:latest .
 ```
 
-## 🔨 从源代码启动服务进行开发
+### 重新构建并更新服务
 
-1. 安装 `uv` 和 `pre-commit`，如果已安装则跳过此步骤：
+```bash
+# 构建镜像
+$ docker build -t multirag:latest .
 
-   ```bash
-   $ pipx install uv pre-commit
-   ```
+# 重启服务
+$ cd docker
+$ docker compose --profile cpu down
+$ docker compose --profile cpu up -d
+```
 
-2. 克隆源代码并安装Python依赖：
+## 🔨 源码部署开发
 
-   ```bash
-   $ git clone http://122.112.170.159:8888/scdf/ai/multrag.git
-   $ cd multrag/
-   $ uv sync --python 3.12 --all-extras  # 安装MultiRAG依赖的Python模块
-   $ uv run download_deps.py
-   $ pre-commit install
-   ```
+### 1. 安装开发工具
 
-3. 使用Docker Compose启动依赖服务（MinIO、Elasticsearch、Redis和MySQL）：
+```bash
+# 安装 uv 和 pre-commit（如已安装则跳过）
+$ pipx install uv pre-commit
+```
 
-   ```bash
-   $ docker compose -f docker/docker-compose-base.yml up -d
-   ```
+### 2. 克隆源代码并安装依赖
 
-   将以下行添加到 `/etc/hosts` 以将 **docker/.env** 中指定的所有主机解析为 `127.0.0.1`：
+```bash
+$ git clone http://122.112.170.159:8888/scdf/ai/multrag.git
+$ cd multrag/
+$ uv sync --python 3.12 --all-extras  # 安装MultiRAG依赖的Python模块
+$ uv run download_deps.py
+$ pre-commit install
+```
 
-   ```
-   127.0.0.1       es01 infinity mysql minio redis
-   ```
+### 3. 启动基础设施服务
 
-4. 如果无法访问HuggingFace，请设置 `HF_ENDPOINT` 环境变量以使用镜像站点：
+使用 Docker Compose 启动依赖服务（PostgreSQL、Redis、MinIO 等）：
 
-   ```bash
-   $ export HF_ENDPOINT=https://hf-mirror.com
-   ```
+```bash
+# 只启动基础设施服务（不启动 multirag 主服务）
+$ cd docker
+$ docker compose up -d postgres redis minio
 
-5. 如果您的操作系统没有jemalloc，请按如下方式安装：
+# 如需 Milvus 向量数据库
+$ docker compose --profile milvus up -d
+```
 
-   ```bash
-   # Ubuntu
-   $ sudo apt-get install libjemalloc-dev
-   # CentOS
-   $ sudo yum install jemalloc
-   # OpenSUSE
-   $ sudo zypper install jemalloc
-   # macOS
-   $ sudo brew install jemalloc
-   ```
+将以下行添加到 `/etc/hosts` 以解析服务主机名：
 
-6. 启动后端服务：
+```
+127.0.0.1       postgres redis minio milvus es01 infinity
+```
 
-   ```bash
-   $ source .venv/bin/activate
-   $ export PYTHONPATH=$(pwd)
-   $ bash docker/launch_backend_service.sh
-   ```
+### 4. 配置环境变量
 
-   _以下输出确认系统成功启动：_
+```bash
+# HuggingFace 镜像站点（国内用户推荐）
+$ export HF_ENDPOINT=https://hf-mirror.com
+```
 
-   ```bash
-                __  ___      ____  _ ____  ___   ______
-               /  |/  /_  __/ / /_(_) __ \/   | / ____/
-              / /|_/ / / / / / __/ / /_/ / /| |/ / __
-             / /  / / /_/ / / /_/ / _, _/ ___ / /_/ /
-            /_/  /_/\__,_/_/\__/_/_/ |_/_/  |_\____/
+### 5. 安装系统依赖（可选）
 
-   * Running on all addresses (0.0.0.0)
-   ```
+如果您的操作系统没有 jemalloc，请按如下方式安装：
 
-7. 开发完成后停止MultiRAG前端和后端服务：
+```bash
+# Ubuntu/Debian
+$ sudo apt-get install libjemalloc-dev
+# CentOS/RHEL
+$ sudo yum install jemalloc
+# OpenSUSE
+$ sudo zypper install jemalloc
+# macOS
+$ brew install jemalloc
+```
 
-   ```bash
-   $ pkill -f "multirag_server.py|task_executor.py"
-   ```
+### 6. 启动后端服务
+
+```bash
+$ source .venv/bin/activate
+$ export PYTHONPATH=$(pwd)
+$ bash docker/launch_backend_service.sh
+```
+
+_以下输出确认系统成功启动：_
+
+```bash
+             __  ___      ____  _ ____  ___   ______
+            /  |/  /_  __/ / /_(_) __ \/   | / ____/
+           / /|_/ / / / / / __/ / /_/ / /| |/ / __
+          / /  / / /_/ / / /_/ / _, _/ ___ / /_/ /
+         /_/  /_/\__,_/_/\__/_/_/ |_/_/  |_\____/
+
+* Running on all addresses (0.0.0.0)
+```
+
+### 7. 停止服务
+
+```bash
+$ pkill -f "multirag_server.py|task_executor.py"
+```
 
 ## 📚 API文档
 
@@ -459,49 +596,162 @@ response = requests.post(
 
 ```
 multirag/
-├── api/                    # API服务层
-│   ├── apps/              # FastAPI应用
-│   ├── db/                # 数据库模型和服务
-│   └── service/           # 业务逻辑服务
-├── core/                   # 核心引擎
-│   ├── app/               # 核心应用逻辑
-│   ├── llm/               # LLM适配器
-│   ├── nlp/               # NLP处理模块
-│   ├── svr/               # 服务器组件
-│   └── utils/             # 工具函数
-├── agent/                  # Agent智能体
-├── deepdoc/               # 深度文档处理
-├── graphrag/              # 图RAG引擎
-├── workflow/              # 工作流引擎
-├── mcp/                   # MCP协议支持
-├── configs/               # 配置文件
-└── docker/                # Docker部署配置
+├── api/                        # API 服务层
+│   ├── admin/                  # 管理后台 API
+│   ├── apps/                   # FastAPI 应用模块
+│   │   ├── sdk/               # SDK 接口（兼容 OpenAI API）
+│   │   ├── auth/              # OAuth/OIDC 认证
+│   │   ├── dataset_app.py     # 知识库管理
+│   │   ├── document_app.py    # 文档管理
+│   │   ├── conversation_app.py # 对话管理
+│   │   ├── workflow_app.py    # 工作流 API
+│   │   └── ...                # 其他业务 API
+│   ├── db/                    # 数据库层
+│   │   ├── models/           # SQLAlchemy 模型
+│   │   └── services/         # 数据库服务
+│   ├── service/               # 业务逻辑服务
+│   ├── middleware/            # 中间件（认证、限流等）
+│   └── utils/                 # API 工具函数
+│
+├── core/                       # 核心引擎
+│   ├── app/                   # 文档解析器（按文档类型）
+│   │   ├── naive.py          # 通用解析器
+│   │   ├── paper.py          # 论文解析器
+│   │   ├── resume.py         # 简历解析器
+│   │   └── ...               # 其他解析器
+│   ├── flow/                  # 文档处理流水线
+│   │   ├── parser/           # 解析器
+│   │   ├── splitter/         # 分块器
+│   │   ├── extractor/        # 信息提取器
+│   │   └── tokenizer/        # 分词器
+│   ├── llm/                   # LLM 适配器
+│   │   ├── chat_model.py     # 对话模型
+│   │   ├── embedding_model.py # 向量模型
+│   │   ├── rerank_model.py   # 重排序模型
+│   │   └── ...               # 各厂商适配器
+│   ├── nlp/                   # NLP 处理模块
+│   ├── prompts/               # Prompt 模板
+│   ├── svr/                   # 服务器组件
+│   │   └── task_executor.py  # 任务执行器
+│   └── utils/                 # 存储连接器
+│       ├── milvus_conn.py    # Milvus 连接
+│       ├── es_conn.py        # Elasticsearch 连接
+│       └── ...               # 其他连接器
+│
+├── agent/                      # Agent 智能体框架
+│   ├── component/             # Agent 组件
+│   │   ├── base.py           # 基础组件
+│   │   ├── llm.py            # LLM 组件
+│   │   ├── iteration.py      # 循环组件
+│   │   └── ...               # 其他组件
+│   ├── tools/                 # 工具集
+│   │   ├── retrieval.py      # 知识库检索
+│   │   ├── code_exec.py      # 代码执行
+│   │   ├── crawler.py        # 网页爬取
+│   │   ├── duckduckgo.py     # DuckDuckGo 搜索
+│   │   └── ...               # 其他工具
+│   └── templates/             # Agent 模板
+│
+├── agentic_reasoning/          # 智能推理模块
+│   └── deep_research.py       # 深度研究
+│
+├── deepdoc/                    # 深度文档处理
+│   ├── parser/                # 文档解析器
+│   │   ├── pdf_parser.py     # PDF 解析
+│   │   ├── docx_parser.py    # Word 解析
+│   │   └── ...               # 其他格式
+│   └── vision/                # 视觉处理
+│
+├── graphrag/                   # GraphRAG 知识图谱
+│   ├── entity_extractor.py    # 实体抽取
+│   ├── graph_builder.py       # 图谱构建
+│   └── graph_search.py        # 图谱检索
+│
+├── workflow/                   # 工作流引擎 v1
+├── workflow_v2/                # 工作流引擎 v2
+│   ├── component/             # 工作流组件
+│   │   ├── llm_component.py  # LLM 组件
+│   │   ├── code_component.py # 代码组件
+│   │   └── ...               # 其他组件
+│   └── workflow.py            # 工作流执行器
+│
+├── mcp/                        # MCP 协议支持
+├── plugin/                     # 插件系统
+├── sandbox/                    # 沙箱执行器
+├── server/                     # 服务器模块
+├── admin/                      # 管理后台服务
+├── intergrations/              # 第三方集成
+│
+├── common/                     # 公共模块
+├── configs/                    # 配置文件
+├── errors/                     # 错误定义
+├── scripts/                    # 脚本工具
+└── docker/                     # Docker 部署配置
 ```
 
 ### 核心组件
 
-1. **TaskExecutor** - 分布式任务执行器
-2. **RAG Engine** - 检索增强生成引擎
-3. **GraphRAG** - 知识图谱增强检索
-4. **Workflow Engine** - 工作流编排引擎
-5. **Agent Framework** - 智能体框架
-6. **DeepDoc Parser** - 深度文档解析器
+| 组件 | 位置 | 说明 |
+|------|------|------|
+| **TaskExecutor** | `core/svr/task_executor.py` | 分布式任务执行器，处理文档解析、向量化等异步任务 |
+| **RAG Engine** | `core/flow/` | 检索增强生成引擎，包含解析、分块、向量化流水线 |
+| **LLM Adapters** | `core/llm/` | LLM 适配器，支持 OpenAI、智谱、通义等多厂商 |
+| **GraphRAG** | `graphrag/` | 知识图谱增强检索，实体抽取和图谱推理 |
+| **Workflow Engine** | `workflow_v2/` | 工作流编排引擎，可视化流程设计 |
+| **Agent Framework** | `agent/` | 智能体框架，工具调用和多 Agent 协作 |
+| **DeepDoc Parser** | `deepdoc/` | 深度文档解析器，支持复杂文档结构识别 |
+| **MCP Server** | `mcp/` | Model Context Protocol 服务器 |
 
 ### 扩展开发
 
-添加自定义组件：
+#### 添加自定义文档解析器
 
 ```python
-# 自定义文档解析器
-from deepdoc.parser import ParserBase
+# core/app/custom.py
+from core.app.naive import Naive
 
-class CustomParser(ParserBase):
+class CustomParser(Naive):
+    """自定义文档解析器"""
+    
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, **kwargs):
         # 实现自定义解析逻辑
-        pass
+        sections = []
+        # ... 解析逻辑
+        return sections
 
-# 注册解析器
+# 在 FACTORY 中注册
 FACTORY["custom"] = CustomParser
+```
+
+#### 添加自定义 Agent 工具
+
+```python
+# agent/tools/custom_tool.py
+from agent.tools.base import BaseTool
+
+class CustomTool(BaseTool):
+    """自定义工具"""
+    name = "custom_tool"
+    description = "工具描述"
+    
+    def run(self, query: str, **kwargs):
+        # 实现工具逻辑
+        return result
+```
+
+#### 添加自定义工作流组件
+
+```python
+# workflow_v2/component/custom_component.py
+from workflow_v2.component.base_component import BaseComponent
+
+class CustomComponent(BaseComponent):
+    """自定义工作流组件"""
+    component_type = "custom"
+    
+    def execute(self, inputs: dict) -> dict:
+        # 实现组件逻辑
+        return outputs
 ```
 
 ## 🏄 贡献指南

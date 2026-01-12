@@ -79,7 +79,7 @@ class ParseDocumentsRequest(BaseModel):
 # ------------------------------ create a dataset ---------------------------------------
 
 @router.post("/", summary="创建数据集", response_description="成功创建数据集")
-async def create_dataset(
+def create_dataset(
         request_body: CreateDatasetRequest,
         db: Session = Depends(get_db),
         user=Depends(manager),
@@ -139,7 +139,7 @@ async def create_dataset(
 # -----------------------------list datasets-------------------------------------------------------
 
 @router.get("/", summary="列出数据集", response_description="成功列出数据集")
-async def list_datasets(
+def list_datasets(
         offset: int = 0,
         count: int = -1,
         orderby: str = "create_time",
@@ -180,7 +180,7 @@ async def list_datasets(
 # ---------------------------------delete a dataset ----------------------------
 
 @router.delete("/{dataset_id}", summary="删除数据集", response_description="成功删除数据集")
-async def remove_dataset(
+def remove_dataset(
         dataset_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -225,7 +225,7 @@ async def remove_dataset(
 # ------------------------------ get details of a dataset ----------------------------------------
 
 @router.get("/{dataset_id}", summary="获取数据集详情", response_description="成功获取数据集详情")
-async def get_dataset(dataset_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def get_dataset(dataset_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取指定数据集的详细信息。
 
@@ -249,7 +249,7 @@ async def get_dataset(dataset_id: str, db: Session = Depends(get_db), user=Depen
 # ------------------------------ update a dataset --------------------------------------------
 
 @router.put("/{dataset_id}", summary="更新数据集", response_description="成功更新数据集")
-async def update_dataset(
+def update_dataset(
         dataset_id: str,
         request_body: UpdateDatasetRequest,
         db: Session = Depends(get_db),
@@ -479,7 +479,7 @@ async def upload_documents(
 # ----------------------------delete a file-----------------------------------------------------
 
 @router.delete("/{dataset_id}/documents/{document_id}", summary="删除文件", response_description="成功删除文件")
-async def delete_document(
+def delete_document(
         dataset_id: str,
         document_id: str,
         db: Session = Depends(get_db),
@@ -537,7 +537,7 @@ async def delete_document(
 # ----------------------------list files-----------------------------------------------------
 
 @router.get('/{dataset_id}/documents/', summary="列出文件", response_description="成功列出文件")
-async def list_documents(
+def list_documents(
         dataset_id: str,
         keywords: str = "",
         offset: int = 0,
@@ -579,7 +579,7 @@ async def list_documents(
 # ----------------------------update: enable rename-----------------------------------------------------
 
 @router.put("/{dataset_id}/documents/{document_id}", summary="更新文件", response_description="成功更新文件")
-async def update_document(
+def update_document(
         dataset_id: str,
         document_id: str,
         request: UpdateDocumentRequest,
@@ -670,7 +670,7 @@ async def update_document(
 # ----------------------------download a file-----------------------------------------------------
 
 @router.get("/{dataset_id}/documents/{document_id}", summary="下载文件", response_description="成功下载文件")
-async def download_document(
+def download_document(
         dataset_id: str,
         document_id: str,
         db: Session = Depends(get_db),
@@ -833,7 +833,7 @@ def image_to_base64(image):
     return img_str
 
 
-async def parsing_document_internal(db: Session, id: str):
+def parsing_document_internal(db: Session, id: str):
     message = ""
     try:
         document = DocumentService.get_by_id(db, id)
@@ -971,7 +971,7 @@ async def stop_parsing_documents(
         return construct_error_response(e)
 
 
-async def stop_parsing_document_internal(document_id: str, db: Session):
+def stop_parsing_document_internal(document_id: str, db: Session):
     try:
         document = DocumentService.get_by_id(db, document_id)
         if not document:
@@ -1004,7 +1004,7 @@ async def stop_parsing_document_internal(document_id: str, db: Session):
 
 @router.get("/{dataset_id}/documents/{document_id}/status", summary="显示文件解析状态",
             response_description="成功显示文件解析状态")
-async def show_parsing_status(
+def show_parsing_status(
         dataset_id: str,
         document_id: str,
         db: Session = Depends(get_db),

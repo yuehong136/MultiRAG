@@ -4,6 +4,7 @@
 <summary><b>📗 目录</b></summary>
 
 - 🐳 [Docker Compose](#-docker-compose)
+- 🏗️ [架构设计](#-架构设计)
 - 🐬 [Docker 环境变量](#-docker-环境变量)
 - 🌐 [Nginx 配置](#-nginx-配置)
 - 🧠 [TEI 服务配置](#-tei-服务配置)
@@ -15,11 +16,13 @@
 ## 🐳 Docker Compose
 
 - **docker-compose.yml**  
-  配置 MultiRAG 服务及其运行环境，支持 CPU/GPU 模式和 TEI 服务。
+  配置 MultiRAG 主服务，通过 `include` 引用 `docker-compose-base.yml` 获取基础设施服务。
+- **docker-compose-base.yml**  
+  基础设施服务配置（PostgreSQL、Redis、MinIO、Elasticsearch、Milvus 等），供 `docker-compose.yml` 引用。
 - **docker-compose-macos.yml**  
   macOS (Apple Silicon) 专用配置，通过 Rosetta 2 模拟 x86_64 架构。
 - **docker-compose-tei.yml**  
-  TEI 服务独立部署配置。
+  TEI 服务独立部署配置（已整合到 base 文件中，此文件保留用于向后兼容）。
 - **.env**  
   包含 Docker 服务的重要环境变量配置。
 - **entrypoint.sh**  
@@ -28,8 +31,115 @@
   Nginx 反向代理配置目录，包含 HTTP/HTTPS 站点配置和代理规则。
 
 > [!NOTE]
-> 本目录结构和配置方式参考了 [ragflow](https://github.com/infiniflow/ragflow) 项目的 73144e27 提交。
-> 使用 Docker Compose profiles 机制支持按需启动不同服务组合。
+> 本目录结构和配置方式参考了 [ragflow](https://github.com/infiniflow/ragflow) 项目。
+> - 基于 ragflow 的 73144e27 提交：使用 Docker Compose profiles 机制支持按需启动不同服务组合
+> - 基于 ragflow 的 3fe71ab7 提交：使用数组语法定义 command，避免参数引用问题
+
+## 🏗️ 架构设计
+
+### 文件分层结构
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  docker-compose.yml (主配置文件)                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │  include:                                                               │ │
+│  │    - ./docker-compose-base.yml   ◀─── 引用基础设施服务                    │ │
+│  │                                                                         │ │
+│  │  services:                                                              │ │
+│  │    multirag-cpu:    # CPU 版本主服务                                     │ │
+│  │    multirag-gpu:    # GPU 版本主服务                                     │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ▲
+                                    │ include
+                                    │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  docker-compose-base.yml (基础设施配置)                                       │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │  services:                                                              │ │
+│  │    postgres:         # PostgreSQL 数据库                                 │ │
+│  │    redis:            # Redis 缓存                                        │ │
+│  │    minio:            # MinIO 对象存储                                    │ │
+│  │    es01:             # Elasticsearch 搜索引擎                            │ │
+│  │    opensearch01:     # OpenSearch 搜索引擎                               │ │
+│  │    milvus-standalone:# Milvus 向量数据库                                 │ │
+│  │    infinity:         # Infinity 向量数据库                               │ │
+│  │    oceanbase:        # OceanBase 向量数据库                              │ │
+│  │    tei-cpu/tei-gpu:  # Text Embeddings Inference                        │ │
+│  │    sandbox-executor: # 沙箱执行器                                        │ │
+│  │    kibana:           # Elasticsearch 可视化                              │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 设计优势
+
+1. **关注点分离**：基础设施服务与应用服务分开管理
+2. **便于维护**：修改基础设施不影响主服务配置
+3. **灵活组合**：通过 profiles 按需启用可选服务
+4. **复用性强**：base 文件可被多个配置文件引用
+
+### 服务分类
+
+服务分为**必需服务**和**可选服务**两类：
+
+#### 必需服务（默认启动，无需指定 profile）
+
+| 服务 | 容器名 | 端口 | 说明 |
+|------|--------|------|------|
+| postgres | multirag-postgres | 5432 | PostgreSQL 数据库 |
+| redis | multirag-redis | 6379 | Redis 缓存服务 |
+| minio | multirag-minio | 9000, 9001 | MinIO 对象存储 |
+
+#### 可选服务（需要指定 profile 启动）
+
+| Profile | 服务 | 说明 |
+|---------|------|------|
+| `cpu` | multirag-cpu | MultiRAG 主服务（CPU 版本） |
+| `gpu` | multirag-gpu | MultiRAG 主服务（GPU 版本） |
+| `elasticsearch` | es01 | Elasticsearch 搜索引擎 |
+| `opensearch` | opensearch01 | OpenSearch 搜索引擎 |
+| `milvus` | milvus-standalone, milvus-etcd, milvus-minio | Milvus 向量数据库集群 (v2.6.7) |
+| `infinity` | infinity | Infinity 向量数据库 |
+| `oceanbase` | oceanbase | OceanBase 向量数据库 |
+| `tei-cpu` | tei-cpu | TEI 服务（CPU 版本） |
+| `tei-gpu` | tei-gpu | TEI 服务（GPU 版本） |
+| `sandbox` | sandbox-executor-manager | 沙箱执行器 |
+| `kibana` | kibana | Elasticsearch 可视化工具 |
+
+### 快速启动示例
+
+```bash
+cd docker
+
+# 最小化部署（自动启动 postgres + redis + minio + multirag）
+docker compose --profile cpu up -d
+
+# 加上 Milvus 向量数据库
+docker compose --profile cpu --profile milvus up -d
+
+# 加上 Elasticsearch 搜索引擎
+docker compose --profile cpu --profile elasticsearch up -d
+
+# 加上 TEI Embedding 服务
+docker compose --profile cpu --profile tei-cpu up -d
+
+# 完整部署（Milvus + TEI）
+docker compose --profile cpu --profile milvus --profile tei-cpu up -d
+
+# GPU 模式
+docker compose --profile gpu --profile milvus --profile tei-gpu up -d
+```
+
+### 启动的容器数量
+
+| 命令 | 启动的容器 |
+|------|-----------|
+| `--profile cpu` | postgres, redis, minio, multirag-cpu (4个) |
+| `--profile cpu --profile milvus` | 上述 + milvus-etcd, milvus-minio, milvus-standalone (7个) |
+| `--profile cpu --profile milvus --profile tei-cpu` | 上述 + tei-cpu (8个) |
+| `--profile cpu --profile elasticsearch` | postgres, redis, minio, multirag-cpu, es01 (5个) |
 
 ## 🐬 Docker 环境变量
 
@@ -345,14 +455,17 @@ TEI (Text Embeddings Inference) 是 HuggingFace 提供的高性能 embedding 推
 
 ### Profiles 组合说明
 
+> [!TIP]
+> **必需服务**（postgres、redis、minio）会**自动启动**，无需在 COMPOSE_PROFILES 中指定。
+
 | COMPOSE_PROFILES | 启动的容器 | 说明 |
 |------------------|-----------|------|
-| `cpu` | multirag-cpu | 仅启动主服务（CPU） |
-| `gpu` | multirag-gpu | 仅启动主服务（GPU） |
-| `cpu,tei-cpu` | multirag-cpu, tei-cpu | 主服务 + TEI（CPU） |
-| `gpu,tei-gpu` | multirag-gpu, tei-gpu | 主服务 + TEI（GPU） |
-| `tei-cpu` | tei-cpu | 仅启动 TEI 服务（CPU） |
-| `tei-gpu` | tei-gpu | 仅启动 TEI 服务（GPU） |
+| `cpu` | postgres, redis, minio, multirag-cpu | 最小化部署（4个容器） |
+| `gpu` | postgres, redis, minio, multirag-gpu | GPU 模式最小化部署 |
+| `cpu,milvus` | 上述 + milvus-etcd, milvus-minio, milvus-standalone | 加上 Milvus（7个容器） |
+| `cpu,milvus,tei-cpu` | 上述 + tei-cpu | 完整部署（8个容器） |
+| `cpu,elasticsearch` | postgres, redis, minio, multirag-cpu, es01 | 使用 Elasticsearch |
+| `gpu,milvus,tei-gpu` | GPU 版本完整部署 | GPU 模式 |
 
 > [!NOTE]
 > TEI 服务首次启动时会自动从 HuggingFace 下载模型，可能需要几分钟时间。
@@ -444,9 +557,9 @@ command:
 cd docker
 
 # 1. 编辑 .env 配置 COMPOSE_PROFILES
-# 例如：COMPOSE_PROFILES=cpu  或  COMPOSE_PROFILES=cpu,tei-cpu
+# 例如：COMPOSE_PROFILES=cpu  或  COMPOSE_PROFILES=cpu,milvus,tei-cpu
 
-# 2. 启动服务
+# 2. 启动服务（自动启动 postgres + redis + minio + 指定的 profile 服务）
 docker compose up -d
 ```
 
@@ -455,14 +568,17 @@ docker compose up -d
 ```bash
 cd docker
 
-# 仅启动主服务（CPU 模式）
+# 最小化部署（自动启动 postgres + redis + minio + multirag）
 docker compose --profile cpu up -d
 
-# 启动主服务 + TEI 服务
-docker compose --profile cpu --profile tei-cpu up -d
+# 加上 Milvus 向量数据库
+docker compose --profile cpu --profile milvus up -d
+
+# 加上 TEI Embedding 服务
+docker compose --profile cpu --profile milvus --profile tei-cpu up -d
 
 # GPU 模式
-docker compose --profile gpu --profile tei-gpu up -d
+docker compose --profile gpu --profile milvus --profile tei-gpu up -d
 ```
 
 #### 方式三：从项目根目录运行
@@ -470,6 +586,10 @@ docker compose --profile gpu --profile tei-gpu up -d
 ```bash
 docker compose -f docker/docker-compose.yml --profile cpu up -d
 ```
+
+> [!NOTE]
+> **必需服务**（postgres、redis、minio）会**自动启动**，无需指定 profile。
+> 只需要指定主服务（cpu/gpu）和可选的向量数据库、搜索引擎等服务的 profile。
 
 ### 📊 查看日志
 

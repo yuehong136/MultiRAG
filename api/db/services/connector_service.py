@@ -7,6 +7,7 @@
 @desc: 数据源连接器相关服务
 """
 import logging
+import os
 from datetime import datetime
 
 from sqlalchemy import select, func, text
@@ -146,6 +147,7 @@ class SyncLogsService(CommonService):
             cls.model.connector_id,
             cls.model.kb_id,
             cls.model.update_date,
+            cls.model.update_time,  # 添加 update_time，用于 ORDER BY（PostgreSQL DISTINCT 要求）
             cls.model.poll_range_start,
             cls.model.poll_range_end,
             cls.model.new_docs_indexed,
@@ -179,13 +181,21 @@ class SyncLogsService(CommonService):
             stmt = stmt.where(cls.model.connector_id == connector_id)
         else:
             # 计算时间间隔，查询需要执行的定时任务
-            # 使用 text() 来处理原生 SQL 表达式
-            interval_expr = text("NOW() - INTERVAL refresh_freq MINUTE")
+            # 根据数据库类型选择正确的 INTERVAL 语法
+            database_type = os.getenv("DB_TYPE", "postgresql")
+            if "postgres" in database_type.lower():
+                # PostgreSQL 使用 make_interval 函数
+                interval_expr = func.now() - func.make_interval(mins=Connector.refresh_freq)
+                time_condition = cls.model.update_date < interval_expr
+            else:
+                # MySQL 使用 TIMESTAMPDIFF 函数
+                # TIMESTAMPDIFF(MINUTE, update_date, NOW()) > refresh_freq
+                time_condition = func.timestampdiff(text("MINUTE"), cls.model.update_date, func.now()) > Connector.refresh_freq
             stmt = stmt.where(
                 Connector.input_type == InputType.POLL,
                 Connector.status == TaskStatus.SCHEDULE,
                 cls.model.status == TaskStatus.SCHEDULE,
-                cls.model.update_date < interval_expr
+                time_condition
             )
 
         stmt = stmt.distinct().order_by(sa_desc(cls.model.update_time))
@@ -376,11 +386,23 @@ class SyncLogsService(CommonService):
             for d in docs
         ]
 
+        # Create a mapping from filename to metadata for later use
+        metadata_map = {}
+        for d in docs:
+            if d.get("metadata"):
+                filename = d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d['extension'][::-1]) < 0 else "")
+                metadata_map[filename] = d["metadata"]
+
         doc_ids = []
         errs, doc_blob_pairs = FileService.upload_document(db, kb, files, tenant_id, None, src)
         kb_table_num_map = {}
         for doc, _ in doc_blob_pairs:
             doc_ids.append(doc["id"])
+
+            # Set metadata if available for this document
+            if doc["name"] in metadata_map:
+                DocumentService.update_by_id(db, doc["id"], {"meta_fields": metadata_map[doc["name"]]})
+
             if not auto_parse or auto_parse == "0":
                 continue
             DocumentService.run(db, tenant_id, doc, kb_table_num_map)

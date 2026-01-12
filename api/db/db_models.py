@@ -820,7 +820,7 @@ class Knowledgebase(BaseModel):
     vector_similarity_weight = Column(Float, index=True, nullable=False, default=0.3)
     parser_id = Column(String(32), index=True, nullable=False, default=ParserType.NAIVE.value, doc="default parser ID")
     pipeline_id = Column(String(32), index=True, nullable=True, doc="Pipeline ID")
-    parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]]})
+    parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]], "table_context_size": 0, "image_context_size": 0})
     pagerank = Column(Integer, index=False, nullable=False, default=0)
 
     graphrag_task_id = Column(String(32), index=True, nullable=True, doc="Graph RAG task ID")
@@ -841,7 +841,7 @@ class Document(BaseModel):
     kb_id = Column(String(256), index=True, nullable=False)
     parser_id = Column(String(32), index=True, nullable=False, doc="default parser ID")
     pipeline_id = Column(String(32), index=True, nullable=True, doc="Pipeline ID")
-    parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]]})
+    parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]], "table_context_size": 0, "image_context_size": 0})
     source_type = Column(String(128), index=True, nullable=False, default="local",
                          doc="where dose this document come from")
     type = Column(String(32), index=True, nullable=False, doc="file extension")
@@ -954,7 +954,7 @@ class Conversation(BaseModel):
 
     id = Column(String(32), primary_key=True, index=False, nullable=False)
     dialog_id = Column(String(32), index=True, nullable=False)
-    name = Column(String(255), index=True, nullable=True, doc="converastion name")
+    name = Column(String(255), index=True, nullable=True, doc="conversation name")
     message = Column(JSONB, index=False, nullable=True)
     reference = Column(JSONB, index=False, nullable=True, default=[])
     user_id = Column(String(32), index=True, nullable=True, doc="user_id")
@@ -1416,6 +1416,119 @@ class Connector2Kb(BaseModel):
             "connector_id": self.connector_id,
             "kb_id": self.kb_id,
             "auto_parse": self.auto_parse
+        }
+
+
+# ==================== RAG Evaluation Tables ====================
+
+class EvaluationDataset(BaseModel):
+    """Ground truth dataset for RAG evaluation"""
+    __tablename__ = "t_ai_evaluation_datasets"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id = Column(String(32), index=True, nullable=False, doc="Tenant ID")
+    name = Column(String(255), index=True, nullable=False, doc="Dataset name")
+    description = Column(Text, index=False, nullable=True, doc="Dataset description")
+    kb_ids = Column(JSONB, index=False, nullable=False, default=list, doc="Knowledge base IDs to evaluate against")
+    created_by = Column(String(32), index=True, nullable=False, doc="Creator user ID")
+    status = Column(String(1), index=True, nullable=False, default="1", doc="1=valid, 0=invalid")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "tenant_id": self.tenant_id,
+            "name": self.name,
+            "description": self.description,
+            "kb_ids": self.kb_ids,
+            "created_by": self.created_by,
+            "status": self.status,
+            "create_time": self.create_time,
+            "update_time": self.update_time
+        }
+
+
+class EvaluationCase(BaseModel):
+    """Individual test case in an evaluation dataset"""
+    __tablename__ = "t_ai_evaluation_cases"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    dataset_id = Column(String(32), index=True, nullable=False, doc="FK to evaluation_datasets")
+    question = Column(Text, index=False, nullable=False, doc="Test question")
+    reference_answer = Column(Text, index=False, nullable=True, doc="Optional ground truth answer")
+    relevant_doc_ids = Column(JSONB, index=False, nullable=True, doc="Expected relevant document IDs")
+    relevant_chunk_ids = Column(JSONB, index=False, nullable=True, doc="Expected relevant chunk IDs")
+    case_metadata = Column(JSONB, index=False, nullable=True, doc="Additional context/tags")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "dataset_id": self.dataset_id,
+            "question": self.question,
+            "reference_answer": self.reference_answer,
+            "relevant_doc_ids": self.relevant_doc_ids,
+            "relevant_chunk_ids": self.relevant_chunk_ids,
+            "case_metadata": self.case_metadata,
+            "create_time": self.create_time
+        }
+
+
+class EvaluationRun(BaseModel):
+    """A single evaluation run"""
+    __tablename__ = "t_ai_evaluation_runs"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    dataset_id = Column(String(32), index=True, nullable=False, doc="FK to evaluation_datasets")
+    dialog_id = Column(String(32), index=True, nullable=False, doc="Dialog configuration being evaluated")
+    name = Column(String(255), index=False, nullable=False, doc="Run name")
+    config_snapshot = Column(JSONB, index=False, nullable=False, doc="Dialog config at time of evaluation")
+    metrics_summary = Column(JSONB, index=False, nullable=True, doc="Aggregated metrics")
+    run_status = Column(String(32), index=True, nullable=False, default="PENDING", doc="PENDING/RUNNING/COMPLETED/FAILED")
+    created_by = Column(String(32), index=True, nullable=False, doc="User who started the run")
+    complete_time = Column(BigInteger, index=True, nullable=True, doc="Completion timestamp")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "dataset_id": self.dataset_id,
+            "dialog_id": self.dialog_id,
+            "name": self.name,
+            "config_snapshot": self.config_snapshot,
+            "metrics_summary": self.metrics_summary,
+            "run_status": self.run_status,
+            "created_by": self.created_by,
+            "create_time": self.create_time,
+            "complete_time": self.complete_time
+        }
+
+
+class EvaluationResult(BaseModel):
+    """Result for a single test case in an evaluation run"""
+    __tablename__ = "t_ai_evaluation_results"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id = Column(String(32), primary_key=True, index=False, nullable=False)
+    run_id = Column(String(32), index=True, nullable=False, doc="FK to evaluation_runs")
+    case_id = Column(String(32), index=True, nullable=False, doc="FK to evaluation_cases")
+    generated_answer = Column(Text, index=False, nullable=False, doc="Generated answer")
+    retrieved_chunks = Column(JSONB, index=False, nullable=False, doc="Chunks that were retrieved")
+    metrics = Column(JSONB, index=False, nullable=False, doc="All computed metrics")
+    execution_time = Column(Float, index=False, nullable=False, doc="Response time in seconds")
+    token_usage = Column(JSONB, index=False, nullable=True, doc="Prompt/completion tokens")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "case_id": self.case_id,
+            "generated_answer": self.generated_answer,
+            "retrieved_chunks": self.retrieved_chunks,
+            "metrics": self.metrics,
+            "execution_time": self.execution_time,
+            "token_usage": self.token_usage,
+            "create_time": self.create_time
         }
 
 

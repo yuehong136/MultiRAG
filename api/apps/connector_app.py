@@ -27,7 +27,7 @@ from api.db.services.connector_service import ConnectorService, Connector2KbServ
 from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
 from common.misc_utils import get_uuid
 from common.constants import RetCode
-from common.data_source.config import GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI, DocumentSource
+from common.data_source.config import GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI, GMAIL_WEB_OAUTH_REDIRECT_URI, DocumentSource
 from common.data_source.google_util.constant import WEB_OAUTH_POPUP_TEMPLATE, GOOGLE_SCOPES
 from core.utils.redis_conn import REDIS_CONN
 
@@ -41,14 +41,29 @@ GOOGLE_WEB_FLOW_RESULT_PREFIX = "google_drive_web_flow_result"
 WEB_FLOW_TTL_SECS = 15 * 60  # 15分钟
 
 
-def _web_state_cache_key(flow_id: str) -> str:
-    """生成 OAuth 状态缓存 key"""
-    return f"{GOOGLE_WEB_FLOW_STATE_PREFIX}:{flow_id}"
+def _web_state_cache_key(flow_id: str, source_type: str | None = None) -> str:
+    """生成 OAuth 状态缓存 key
+
+    默认前缀保持与 Google Drive 的向后兼容性。
+    当 source_type == "gmail" 时，使用不同的前缀以避免 Drive/Gmail 流程在 Redis 中冲突。
+    """
+    if source_type == "gmail":
+        prefix = "gmail_web_flow_state"
+    else:
+        prefix = GOOGLE_WEB_FLOW_STATE_PREFIX
+    return f"{prefix}:{flow_id}"
 
 
-def _web_result_cache_key(flow_id: str) -> str:
-    """生成 OAuth 结果缓存 key"""
-    return f"{GOOGLE_WEB_FLOW_RESULT_PREFIX}:{flow_id}"
+def _web_result_cache_key(flow_id: str, source_type: str | None = None) -> str:
+    """生成 OAuth 结果缓存 key
+
+    与 _web_state_cache_key 使用相同的逻辑。
+    """
+    if source_type == "gmail":
+        prefix = "gmail_web_flow_result"
+    else:
+        prefix = GOOGLE_WEB_FLOW_RESULT_PREFIX
+    return f"{prefix}:{flow_id}"
 
 
 def _load_credentials(payload: str | dict[str, Any]) -> dict[str, Any]:
@@ -69,21 +84,24 @@ def _get_web_client_config(credentials: dict[str, Any]) -> dict[str, Any]:
     return {"web": web_section}
 
 
-def _render_web_oauth_popup(flow_id: str, success: bool, message: str) -> HTMLResponse:
+def _render_web_oauth_popup(flow_id: str, success: bool, message: str, source: str = "drive") -> HTMLResponse:
     """渲染 OAuth 弹窗页面"""
     status = "success" if success else "error"
     auto_close = "window.close();" if success else ""
     escaped_message = escape(message)
+    #   Drive: multirag-google-drive-oauth
+    #   Gmail: multirag-gmail-oauth
+    payload_type = f"multirag-{source}-oauth"
     payload_json = json.dumps(
         {
-            "type": "multirag-google-drive-oauth",
+            "type": payload_type,
             "status": status,
             "flowId": flow_id or "",
             "message": message,
         }
     )
     html = WEB_OAUTH_POPUP_TEMPLATE.format(
-        title="Google Drive Authorization",
+        title=f"Google {source.capitalize()} Authorization",
         heading="Authorization complete" if success else "Authorization failed",
         message=escaped_message,
         payload_json=payload_json,
@@ -120,13 +138,13 @@ class RebuildRequest(BaseModel):
     kb_id: str
 
 
-class GoogleDriveWebOAuthStartRequest(BaseModel):
-    """启动 Google Drive Web OAuth 请求"""
+class GoogleWebOAuthStartRequest(BaseModel):
+    """启动 Google Web OAuth 请求"""
     credentials: str | dict  # Google OAuth 凭证 JSON
 
 
-class GoogleDriveWebOAuthResultRequest(BaseModel):
-    """获取 Google Drive Web OAuth 结果请求"""
+class GoogleWebOAuthResultRequest(BaseModel):
+    """获取 Google Web OAuth 结果请求"""
     flow_id: str
 
 
@@ -572,20 +590,27 @@ def rm_connector(
         return server_error_response(e)
 
 
-# ==================== Google Drive Web OAuth 接口 ====================
+# ==================== Google OAuth 接口 ====================
 
-@router.post("/google-drive/oauth/web/start", summary="启动 Google Drive Web OAuth", response_description="OAuth 授权 URL")
-def start_google_drive_web_oauth(
-    request: GoogleDriveWebOAuthStartRequest,
+@router.post("/google/oauth/web/start", summary="启动 Google OAuth（统一接口）", response_description="OAuth 授权 URL")
+def start_google_web_oauth(
+    request: GoogleWebOAuthStartRequest,
+    source: str = Query("google-drive", description="OAuth 类型: google-drive 或 gmail"),
     user=Depends(manager)
 ):
     """
-    ### POST `/google-drive/oauth/web/start` 启动 Google Drive Web OAuth
+    ### POST `/google/oauth/web/start` 启动 Google OAuth（统一接口）
 
     **功能描述**:
-    启动 Google Drive 的 Web 端 OAuth 授权流程，返回授权 URL 供前端打开弹窗进行授权。
+    启动 Google Drive 或 Gmail 的 Web 端 OAuth 授权流程，返回授权 URL 供前端打开弹窗进行授权。
 
     ---
+
+    ### 查询参数
+
+    | 参数     | 类型   | 必填 | 描述                              |
+    |----------|--------|------|-----------------------------------|
+    | `source` | string | 否   | OAuth 类型: google-drive 或 gmail |
 
     ### 请求体 (Request Body)
 
@@ -610,10 +635,20 @@ def start_google_drive_web_oauth(
     }
     ```
     """
-    if not GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI:
+    if source not in ("google-drive", "gmail"):
+        return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg="Invalid Google OAuth type.")
+
+    if source == "gmail":
+        redirect_uri = GMAIL_WEB_OAUTH_REDIRECT_URI
+        scopes = GOOGLE_SCOPES[DocumentSource.GMAIL]
+    else:
+        redirect_uri = GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI
+        scopes = GOOGLE_SCOPES[DocumentSource.GOOGLE_DRIVE]
+
+    if not redirect_uri:
         return get_json_result(
             retcode=RetCode.SERVER_ERROR,
-            retmsg="Google Drive OAuth redirect URI is not configured on the server.",
+            retmsg="Google OAuth redirect URI is not configured on the server.",
         )
 
     raw_credentials = request.credentials
@@ -635,8 +670,8 @@ def start_google_drive_web_oauth(
 
     flow_id = str(uuid.uuid4())
     try:
-        flow = Flow.from_client_config(client_config, scopes=GOOGLE_SCOPES[DocumentSource.GOOGLE_DRIVE])
-        flow.redirect_uri = GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI
+        flow = Flow.from_client_config(client_config, scopes=scopes)
+        flow.redirect_uri = redirect_uri
         authorization_url, _ = flow.authorization_url(
             access_type="offline",
             include_granted_scopes="true",
@@ -655,7 +690,7 @@ def start_google_drive_web_oauth(
         "client_config": client_config,
         "created_at": int(time.time()),
     }
-    REDIS_CONN.set_obj(_web_state_cache_key(flow_id), cache_payload, WEB_FLOW_TTL_SECS)
+    REDIS_CONN.set_obj(_web_state_cache_key(flow_id, source), cache_payload, WEB_FLOW_TTL_SECS)
 
     return get_json_result(
         data={
@@ -677,7 +712,7 @@ def google_drive_web_oauth_callback(
     ### GET `/google-drive/oauth/web/callback` Google Drive OAuth 回调
 
     **功能描述**:
-    Google OAuth 授权完成后的回调端点，处理授权码并交换令牌。
+    Google Drive OAuth 授权完成后的回调端点，处理授权码并交换令牌。
     此端点由 Google OAuth 重定向调用，不需要用户登录验证。
 
     ---
@@ -698,27 +733,28 @@ def google_drive_web_oauth_callback(
     返回 HTML 页面，通过 postMessage 将结果传递给父窗口。
     """
     state_id = state
+    source = "google-drive"
     err_desc = error_description or error
 
     if not state_id:
-        return _render_web_oauth_popup("", False, "Missing OAuth state parameter.")
+        return _render_web_oauth_popup("", False, "Missing OAuth state parameter.", source)
 
-    state_cache = REDIS_CONN.get(_web_state_cache_key(state_id))
+    state_cache = REDIS_CONN.get(_web_state_cache_key(state_id, source))
     if not state_cache:
-        return _render_web_oauth_popup(state_id, False, "Authorization session expired. Please restart from the main window.")
+        return _render_web_oauth_popup(state_id, False, "Authorization session expired. Please restart from the main window.", source)
 
     state_obj = json.loads(state_cache)
     client_config = state_obj.get("client_config")
     if not client_config:
-        REDIS_CONN.delete(_web_state_cache_key(state_id))
-        return _render_web_oauth_popup(state_id, False, "Authorization session was invalid. Please retry.")
+        REDIS_CONN.delete(_web_state_cache_key(state_id, source))
+        return _render_web_oauth_popup(state_id, False, "Authorization session was invalid. Please retry.", source)
 
     if error:
-        REDIS_CONN.delete(_web_state_cache_key(state_id))
-        return _render_web_oauth_popup(state_id, False, err_desc or "Authorization was cancelled.")
+        REDIS_CONN.delete(_web_state_cache_key(state_id, source))
+        return _render_web_oauth_popup(state_id, False, err_desc or "Authorization was cancelled.", source)
 
     if not code:
-        return _render_web_oauth_popup(state_id, False, "Missing authorization code from Google.")
+        return _render_web_oauth_popup(state_id, False, "Missing authorization code from Google.", source)
 
     try:
         flow = Flow.from_client_config(client_config, scopes=GOOGLE_SCOPES[DocumentSource.GOOGLE_DRIVE])
@@ -726,32 +762,114 @@ def google_drive_web_oauth_callback(
         flow.fetch_token(code=code)
     except Exception as exc:
         logging.exception("Failed to exchange Google OAuth code: %s", exc)
-        REDIS_CONN.delete(_web_state_cache_key(state_id))
-        return _render_web_oauth_popup(state_id, False, "Failed to exchange tokens with Google. Please retry.")
+        REDIS_CONN.delete(_web_state_cache_key(state_id, source))
+        return _render_web_oauth_popup(state_id, False, "Failed to exchange tokens with Google. Please retry.", source)
 
     creds_json = flow.credentials.to_json()
     result_payload = {
         "user_id": state_obj.get("user_id"),
         "credentials": creds_json,
     }
-    REDIS_CONN.set_obj(_web_result_cache_key(state_id), result_payload, WEB_FLOW_TTL_SECS)
-    REDIS_CONN.delete(_web_state_cache_key(state_id))
+    REDIS_CONN.set_obj(_web_result_cache_key(state_id, source), result_payload, WEB_FLOW_TTL_SECS)
+    REDIS_CONN.delete(_web_state_cache_key(state_id, source))
 
-    return _render_web_oauth_popup(state_id, True, "Authorization completed successfully.")
+    return _render_web_oauth_popup(state_id, True, "Authorization completed successfully.", source)
 
 
-@router.post("/google-drive/oauth/web/result", summary="获取 Google Drive OAuth 结果", response_description="OAuth 凭证")
-def poll_google_drive_web_result(
-    request: GoogleDriveWebOAuthResultRequest,
+@router.get("/gmail/oauth/web/callback", summary="Gmail OAuth 回调", response_class=HTMLResponse)
+def gmail_web_oauth_callback(
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    """
+    ### GET `/gmail/oauth/web/callback` Gmail OAuth 回调
+
+    **功能描述**:
+    Gmail OAuth 授权完成后的回调端点，处理授权码并交换令牌。
+    此端点由 Google OAuth 重定向调用，不需要用户登录验证。
+
+    ---
+
+    ### 查询参数
+
+    | 参数               | 类型   | 描述                    |
+    |--------------------|--------|-------------------------|
+    | `state`            | string | OAuth 状态参数 (flow_id) |
+    | `code`             | string | 授权码                  |
+    | `error`            | string | 错误代码（如果有）      |
+    | `error_description`| string | 错误描述（如果有）      |
+
+    ---
+
+    ### 响应 (Response)
+
+    返回 HTML 页面，通过 postMessage 将结果传递给父窗口。
+    """
+    state_id = state
+    source = "gmail"
+    err_desc = error_description or error
+
+    if not state_id:
+        return _render_web_oauth_popup("", False, "Missing OAuth state parameter.", source)
+
+    state_cache = REDIS_CONN.get(_web_state_cache_key(state_id, source))
+    if not state_cache:
+        return _render_web_oauth_popup(state_id, False, "Authorization session expired. Please restart from the main window.", source)
+
+    state_obj = json.loads(state_cache)
+    client_config = state_obj.get("client_config")
+    if not client_config:
+        REDIS_CONN.delete(_web_state_cache_key(state_id, source))
+        return _render_web_oauth_popup(state_id, False, "Authorization session was invalid. Please retry.", source)
+
+    if error:
+        REDIS_CONN.delete(_web_state_cache_key(state_id, source))
+        return _render_web_oauth_popup(state_id, False, err_desc or "Authorization was cancelled.", source)
+
+    if not code:
+        return _render_web_oauth_popup(state_id, False, "Missing authorization code from Google.", source)
+
+    try:
+        flow = Flow.from_client_config(client_config, scopes=GOOGLE_SCOPES[DocumentSource.GMAIL])
+        flow.redirect_uri = GMAIL_WEB_OAUTH_REDIRECT_URI
+        flow.fetch_token(code=code)
+    except Exception as exc:
+        logging.exception("Failed to exchange Google OAuth code: %s", exc)
+        REDIS_CONN.delete(_web_state_cache_key(state_id, source))
+        return _render_web_oauth_popup(state_id, False, "Failed to exchange tokens with Google. Please retry.", source)
+
+    creds_json = flow.credentials.to_json()
+    result_payload = {
+        "user_id": state_obj.get("user_id"),
+        "credentials": creds_json,
+    }
+    REDIS_CONN.set_obj(_web_result_cache_key(state_id, source), result_payload, WEB_FLOW_TTL_SECS)
+    REDIS_CONN.delete(_web_state_cache_key(state_id, source))
+
+    return _render_web_oauth_popup(state_id, True, "Authorization completed successfully.", source)
+
+
+@router.post("/google/oauth/web/result", summary="获取 Google OAuth 结果（统一接口）", response_description="OAuth 凭证")
+def poll_google_web_result(
+    request: GoogleWebOAuthResultRequest,
+    source: str = Query(..., description="OAuth 类型: google-drive 或 gmail"),
     user=Depends(manager)
 ):
     """
-    ### POST `/google-drive/oauth/web/result` 获取 Google Drive OAuth 结果
+    ### POST `/google/oauth/web/result` 获取 Google OAuth 结果（统一接口）
 
     **功能描述**:
-    轮询获取 Google Drive OAuth 授权的结果。前端在用户完成授权后调用此接口获取凭证。
+    轮询获取 Google OAuth 授权的结果。前端在用户完成授权后调用此接口获取凭证。
 
     ---
+
+    ### 查询参数
+
+    | 参数     | 类型   | 必填 | 描述                              |
+    |----------|--------|------|-----------------------------------|
+    | `source` | string | 是   | OAuth 类型: google-drive 或 gmail |
 
     ### 请求体 (Request Body)
 
@@ -790,8 +908,11 @@ def poll_google_drive_web_result(
     }
     ```
     """
+    if source not in ("google-drive", "gmail"):
+        return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg="Invalid Google OAuth type.")
+
     flow_id = request.flow_id
-    cache_raw = REDIS_CONN.get(_web_result_cache_key(flow_id))
+    cache_raw = REDIS_CONN.get(_web_result_cache_key(flow_id, source))
     if not cache_raw:
         return get_json_result(retcode=RetCode.RUNNING, retmsg="Authorization is still pending.")
 
@@ -799,5 +920,5 @@ def poll_google_drive_web_result(
     if result.get("user_id") != user.id:
         return get_json_result(retcode=RetCode.PERMISSION_ERROR, retmsg="You are not allowed to access this authorization result.")
 
-    REDIS_CONN.delete(_web_result_cache_key(flow_id))
+    REDIS_CONN.delete(_web_result_cache_key(flow_id, source))
     return get_json_result(data={"credentials": result.get("credentials")})

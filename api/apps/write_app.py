@@ -72,7 +72,7 @@ class ReferenceRequest(BaseModel):
 # ========== 项目相关路由 ==========#
 
 @router.post("/generate-outline", response_model=OutlineResponse)
-async def generate_outline(
+def generate_outline(
         request: OutlineRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -104,7 +104,7 @@ async def generate_outline(
 
 
 @router.get("/api/projects")
-async def get_projects(
+def get_projects(
         page: int = 1,
         limit: int = 10,
         orderby: str = "create_time",
@@ -137,7 +137,7 @@ async def get_projects(
 
 
 @router.get("/api/projects/{project_id}")
-async def get_project_detail(
+def get_project_detail(
         project_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -157,7 +157,7 @@ async def get_project_detail(
 
 
 @router.put("/api/projects/{project_id}")
-async def update_project(
+def update_project(
         project_id: str,
         project_data: dict,
         db: Session = Depends(get_db),
@@ -179,7 +179,7 @@ async def update_project(
 
 
 @router.api_route("/api/projects/{project_id}/outline", methods=["PUT", "POST"])
-async def update_project_outline(
+def update_project_outline(
         project_id: str,
         outline_data: dict,
         db: Session = Depends(get_db),
@@ -237,7 +237,7 @@ async def update_project_outline(
 
 
 @router.delete("/api/projects/{project_id}")
-async def delete_project(
+def delete_project(
         project_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -262,7 +262,7 @@ async def delete_project(
 # ========== 章节相关路由 ==========#
 
 @router.post("/api/projects/{project_id}/sections")
-async def add_chapter(
+def add_chapter(
         project_id: str,
         chapter_data: ChapterRequest,
         db: Session = Depends(get_db),
@@ -289,7 +289,7 @@ async def add_chapter(
 
 
 @router.get("/api/projects/{project_id}/sections")
-async def get_project_chapters(
+def get_project_chapters(
         project_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -309,7 +309,7 @@ async def get_project_chapters(
 
 
 @router.delete("/api/chapters/{chapter_id}/references")
-async def delete_chapter_references(
+def delete_chapter_references(
         chapter_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -359,7 +359,7 @@ async def delete_chapter_references(
 
 
 @router.put("/api/projects/{project_id}/outline/reorder")
-async def reorder_outline_sections(
+def reorder_outline_sections(
         project_id: str,
         sections_order: list[dict[str, Any]],
         db: Session = Depends(get_db),
@@ -517,7 +517,7 @@ async def parse_reference_material(
 
 
 @router.get("/api/chapters/{chapter_id}/references")
-async def get_chapter_references(
+def get_chapter_references(
         chapter_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -538,7 +538,7 @@ async def get_chapter_references(
 
 
 @router.delete("/api/references/{reference_id}")
-async def delete_reference(
+def delete_reference(
         reference_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -608,7 +608,7 @@ async def delete_reference(
 # ========== 内容生成相关路由 ==========#
 
 @router.post("/write-section")
-async def write_section(
+def write_section(
         chapter_id: str,  # 简化为只需要章节ID参数
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -670,7 +670,7 @@ async def write_section(
 
 
 @router.post("/write-section/stream")
-async def write_section_stream(
+def write_section_stream(
         chapter_id: str,  # 简化为只需要章节ID参数
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -712,7 +712,7 @@ async def write_section_stream(
 
 
 @router.get("/complete-article/{article_id}")
-async def get_complete_article(
+def get_complete_article(
         article_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -738,7 +738,7 @@ async def get_complete_article(
 
 
 @router.get("/article-status/{article_id}")
-async def get_article_status(
+def get_article_status(
         article_id: str,
         db: Session = Depends(get_db),
         user=Depends(manager)

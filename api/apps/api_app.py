@@ -42,7 +42,7 @@ router = APIRouter()
 
 
 @router.post('/new_token', summary="生成新的API令牌", response_description="成功生成新的API令牌")
-async def new_token(request: NewTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def new_token(request: NewTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     生成新的API令牌
 
@@ -83,7 +83,7 @@ async def new_token(request: NewTokenRequest, db: Session = Depends(get_db), use
 
 
 @router.get('/token_list', summary="获取API令牌列表", response_description="成功获取API令牌列表")
-async def token_list(
+def token_list(
     dialog_id: str | None = Query(None, alias="dialog_id"),
     canvas_id: str | None = Query(None, alias="canvas_id"),
     db: Session = Depends(get_db),
@@ -119,7 +119,7 @@ async def token_list(
 
 
 @router.post('/rm', summary="删除API令牌", response_description="成功删除API令牌")
-async def rm(request: RemoveTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rm(request: RemoveTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
    删除API令牌
 
@@ -145,7 +145,7 @@ async def rm(request: RemoveTokenRequest, db: Session = Depends(get_db), user=De
 
 
 @router.get('/stats', summary="获取API使用统计", response_description="成功获取API使用统计")
-async def stats(from_date: str = None, to_date: str = None, canvas_id: str = None, db: Session = Depends(get_db), user=Depends(manager)):
+def stats(from_date: str = None, to_date: str = None, canvas_id: str = None, db: Session = Depends(get_db), user=Depends(manager)):
     """
    获取API使用统计
 
@@ -166,16 +166,19 @@ async def stats(from_date: str = None, to_date: str = None, canvas_id: str = Non
         from_date = from_date or (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d 00:00:00")
         to_date = to_date or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        objs = API4ConversationService.stats(db, tenants[0].tenant_id, from_date, to_date,
-                                             "agent" if canvas_id else None)
-        res = {
-            "pv": [(o["dt"], o["pv"]) for o in objs],
-            "uv": [(o["dt"], o["uv"]) for o in objs],
-            "speed": [(o["dt"], float(o["tokens"]) / (float(o["duration"] + 0.1))) for o in objs],
-            "tokens": [(o["dt"], float(o["tokens"]) / 1000.) for o in objs],
-            "round": [(o["dt"], o["round"]) for o in objs],
-            "thumb_up": [(o["dt"], o["thumb_up"]) for o in objs]
-        }
+        objs = API4ConversationService.stats(db, tenants[0].tenant_id, from_date, to_date, "agent" if canvas_id else None)
+
+        res = {"pv": [], "uv": [], "speed": [], "tokens": [], "round": [], "thumb_up": []}
+
+        for obj in objs:
+            dt = obj["dt"]
+            res["pv"].append((dt, obj["pv"]))
+            res["uv"].append((dt, obj["uv"]))
+            res["speed"].append((dt, float(obj["tokens"]) / (float(obj["duration"]) + 0.1))) # +0.1 to avoid division by zero
+            res["tokens"].append((dt, float(obj["tokens"]) / 1000.0)) # convert to thousands
+            res["round"].append((dt, obj["round"]))
+            res["thumb_up"].append((dt, obj["thumb_up"]))
+
         return get_json_result(data=res)
     except Exception as e:
         return server_error_response(e)

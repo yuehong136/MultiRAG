@@ -24,20 +24,41 @@ from api.db.db_models import GuardDimension
 from scripts.init_ai_guard_system import init_ai_guard_system
 # from api.common.base64 import encode_to_base64
 
+# 超级用户默认配置（支持环境变量覆盖）
+DEFAULT_SUPERUSER_NICKNAME = os.getenv("DEFAULT_SUPERUSER_NICKNAME", "admin")
+DEFAULT_SUPERUSER_EMAIL = os.getenv("DEFAULT_SUPERUSER_EMAIL", "admin@datav.com")
+DEFAULT_SUPERUSER_PASSWORD = os.getenv("DEFAULT_SUPERUSER_PASSWORD", "admin")
 
-def init_superuser(db: Session):
-    # 检查是否已存在 admin 用户
-    existing_admin = UserService.query_user_onlywith_email(db, "admin@datav.com")
+
+def init_superuser(
+    db: Session,
+    nickname: str = DEFAULT_SUPERUSER_NICKNAME,
+    email: str = DEFAULT_SUPERUSER_EMAIL,
+    password: str = DEFAULT_SUPERUSER_PASSWORD,
+    role: UserTenantRole = UserTenantRole.OWNER
+):
+    """
+    初始化超级用户
+    
+    Args:
+        db: 数据库会话
+        nickname: 用户昵称，默认从环境变量 DEFAULT_SUPERUSER_NICKNAME 读取
+        email: 用户邮箱，默认从环境变量 DEFAULT_SUPERUSER_EMAIL 读取
+        password: 用户密码，默认从环境变量 DEFAULT_SUPERUSER_PASSWORD 读取
+        role: 用户角色，默认为 OWNER
+    """
+    # 检查是否已存在该邮箱的用户
+    existing_admin = UserService.query_user_onlywith_email(db, email)
     if existing_admin:
-        logging.info("超级用户已存在（邮箱：admin@datav.com），跳过初始化")
+        logging.info(f"超级用户已存在（邮箱：{email}），跳过初始化")
         return
     
     user_info = {
         "id": uuid.uuid1().hex,
-        "password": 'admin',
-        "nickname": "admin",
+        "password": password,
+        "nickname": nickname,
         "is_superuser": True,
-        "email": "admin@datav.com",
+        "email": email,
         "status": "1",
     }
     tenant = {
@@ -53,7 +74,7 @@ def init_superuser(db: Session):
         "tenant_id": user_info["id"],
         "user_id": user_info["id"],
         "invited_by": user_info["id"],
-        "role": UserTenantRole.OWNER
+        "role": role
     }
 
     # get_init_tenant_llm 已经包含了所有配置的 LLM factory，无需重复添加
@@ -86,7 +107,7 @@ def init_superuser(db: Session):
     
     TenantLLMService.insert_many(db, tenant_llm)
 
-    logging.info("Super user initialized. email: admin@datav.com, password: admin. Changing the password after login is strongly recommended.")
+    logging.info(f"Super user initialized. email: {email}, password: {password}. Changing the password after login is strongly recommended.")
 
     try:
         chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])
@@ -263,7 +284,7 @@ def _init_web_data_with_db(db: Session) -> None:
         # 如果没有用户，创建超级用户
         if len(all_users) == 0:
             # 额外检查：通过邮箱查询是否已经存在超级用户
-            existing_admin = UserService.query_user_onlywith_email(db, "admin@datav.com")
+            existing_admin = UserService.query_user_onlywith_email(db, DEFAULT_SUPERUSER_EMAIL)
             if not existing_admin:
                 init_superuser(db)
                 # 重新获取用户列表

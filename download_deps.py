@@ -5,6 +5,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #   "nltk",
+#   "huggingface-hub"
 # ]
 # ///
 
@@ -42,7 +43,6 @@ def get_urls(use_china_mirrors=False) -> list[str | list[str]]:
 repos = [
     "InfiniFlow/text_concat_xgb_v1.0",
     "InfiniFlow/deepdoc",
-    "InfiniFlow/huqie",
     "BAAI/bge-large-zh-v1.5",
     "BAAI/bge-reranker-v2-m3",
     "maidalun1020/bce-embedding-base_v1",

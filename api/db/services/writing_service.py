@@ -741,6 +741,8 @@ class WritingService(CommonService):
         返回:
             AsyncGenerator: 生成内容的流
         """
+        from api.db.db_models import db_connection
+        
         # 获取章节信息
         chapter = db.query(WritingChapter).filter(
             WritingChapter.id == chapter_id,
@@ -756,6 +758,9 @@ class WritingService(CommonService):
         if not project:
             yield f"data: {json.dumps({'error': f'找不到项目: {chapter.project_id}'})}\n\n"
             return
+
+        # 提前提取需要的数据，避免在LLM调用期间持有数据库连接
+        chapter_title = chapter.title
 
         try:
             # 获取用户所属租户
@@ -779,16 +784,18 @@ class WritingService(CommonService):
             metadata = {
                 "type": "metadata",
                 "section_id": chapter_id,
-                "section_title": chapter.title
+                "section_title": chapter_title
             }
             yield f"data: {json.dumps(metadata, ensure_ascii=False)}\n\n"
 
             # 调用LLM API流式接口
             content_buffer = ""
 
-            # 在开始外部LLM流式调用前提交以释放数据库连接
+            # 关键修复：在LLM调用之前关闭数据库连接，释放回连接池
+            # db.commit() 只是提交事务，不会释放连接！
             try:
                 db.commit()
+                db.close()  # 关闭连接，归还到连接池
             except Exception:
                 pass
 
@@ -806,45 +813,50 @@ class WritingService(CommonService):
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(0.01)  # 小延迟以保证流畅传输
 
-            # 保存生成的内容到数据库
-            content_obj = db.query(WritingChapterContent).filter(
-                WritingChapterContent.chapter_id == chapter_id,
-                WritingChapterContent.status == StatusEnum.VALID.value
-            ).first()
+            # 流式生成完成后，使用 db_connection 上下文管理器保存内容
+            with db_connection() as new_db:
+                # 保存生成的内容到数据库
+                content_obj = new_db.query(WritingChapterContent).filter(
+                    WritingChapterContent.chapter_id == chapter_id,
+                    WritingChapterContent.status == StatusEnum.VALID.value
+                ).first()
 
-            if content_obj:
-                # 更新现有内容
-                content_obj.content = content_buffer
-                content_obj.update_time = WritingService.current_timestamp()  # 使用时间戳而非datetime对象
-                content_obj.update_date = WritingService.current_datetime()  # 这个字段接受datetime对象
-            else:
-                # 创建新内容
-                content_obj = WritingChapterContent(
-                    id=get_uuid(),
-                    chapter_id=chapter_id,
-                    content=content_buffer,
-                    update_time=WritingService.current_timestamp(),  # 使用时间戳
-                    update_date=WritingService.current_datetime()  # 使用datetime
-                )
-                db.add(content_obj)
+                if content_obj:
+                    # 更新现有内容
+                    content_obj.content = content_buffer
+                    content_obj.update_time = WritingService.current_timestamp()
+                    content_obj.update_date = WritingService.current_datetime()
+                else:
+                    # 创建新内容
+                    content_obj = WritingChapterContent(
+                        id=get_uuid(),
+                        chapter_id=chapter_id,
+                        content=content_buffer,
+                        update_time=WritingService.current_timestamp(),
+                        update_date=WritingService.current_datetime()
+                    )
+                    new_db.add(content_obj)
 
-            # 更新章节的更新时间
-            chapter.update_time = WritingService.current_timestamp()  # 使用时间戳
-            chapter.update_date = WritingService.current_datetime()  # 使用datetime
+                # 更新章节的更新时间
+                chapter_to_update = new_db.query(WritingChapter).filter(
+                    WritingChapter.id == chapter_id
+                ).first()
+                if chapter_to_update:
+                    chapter_to_update.update_time = WritingService.current_timestamp()
+                    chapter_to_update.update_date = WritingService.current_datetime()
 
-            db.commit()
+                new_db.commit()
 
             # 发送完成信号
             complete_data = {
                 "type": "complete",
                 "section_id": chapter_id,
-                "section_title": chapter.title,
+                "section_title": chapter_title,
                 "content": content_buffer
             }
             yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
 
         except Exception as e:
-            db.rollback()
             logging.error(f"流式写作章节内容失败: {str(e)}", exc_info=True)
             error_data = {
                 "type": "error",
@@ -1069,6 +1081,8 @@ class WritingService(CommonService):
         返回:
             AsyncGenerator: 生成内容的流
         """
+        from api.db.db_models import db_connection
+        
         # 获取章节信息
         chapter = db.query(WritingChapter).filter(
             WritingChapter.id == chapter_id,
@@ -1085,17 +1099,23 @@ class WritingService(CommonService):
             yield f"data: {json.dumps({'retcode': 404, 'retmsg': f'找不到项目: {chapter.project_id}', 'data': {'type': 'error'}})}\n\n"
             return
 
+        # 提前提取需要的数据，避免在LLM调用期间持有数据库连接
+        chapter_title = chapter.title
+        project_id = chapter.project_id
+        user_id = project.user_id
+        model = project.model
+
         try:
             # 获取用户所属租户
-            tenants = TenantService.get_info_by(db, project.user_id)
+            tenants = TenantService.get_info_by(db, user_id)
             if not tenants:
                 yield f"data: {json.dumps({'retcode': 500, 'retmsg': '找不到用户所属租户信息', 'data': {'type': 'error'}})}\n\n"
                 return
 
             tenant_id = tenants[0]["tenant_id"]
 
-            # 创建LLM实例
-            llm_bundle = LLMBundle(db, tenant_id, LLMType.CHAT, project.model)
+            # 创建LLM实例（注意：LLMBundle可能会缓存db引用，需要后续处理）
+            llm_bundle = LLMBundle(db, tenant_id, LLMType.CHAT, model)
 
             # 准备上下文（复用现有逻辑）
             context = cls._prepare_context_for_section(db, chapter_id)
@@ -1110,7 +1130,7 @@ class WritingService(CommonService):
                 "data": {
                     "type": "metadata",
                     "section_id": chapter_id,
-                    "section_title": chapter.title
+                    "section_title": chapter_title
                 }
             }
             yield f"data: {json.dumps(metadata, ensure_ascii=False)}\n\n"
@@ -1118,13 +1138,16 @@ class WritingService(CommonService):
             # 存储最后得到的完整内容
             final_content = ""
 
-            # 在开始外部LLM流式调用前提交以释放数据库连接
+            # 关键修复：在LLM调用之前关闭数据库连接，释放回连接池
+            # db.commit() 只是提交事务，不会释放连接！
+            # 必须调用 db.close() 才能真正归还连接到连接池
             try:
                 db.commit()
+                db.close()  # 关闭连接，归还到连接池
             except Exception:
                 pass
 
-            # 发送流式内容到前端
+            # 发送流式内容到前端（此时不持有数据库连接）
             for content in llm_bundle.chat_streamly("", [{"role": "user", "content": prompt}], {}):
                 # 检查返回的是否是token数（最后一个返回值）
                 if isinstance(content, int):
@@ -1146,35 +1169,40 @@ class WritingService(CommonService):
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.01)  # 小延迟以保证流畅传输
 
-            # 流式生成完成后，将最后一次的完整内容保存到数据库
+            # 流式生成完成后，使用 db_connection 上下文管理器保存内容
             if final_content:
-                # 保存生成的内容到数据库
-                content_obj = db.query(WritingChapterContent).filter(
-                    WritingChapterContent.chapter_id == chapter_id,
-                    WritingChapterContent.status == StatusEnum.VALID.value
-                ).first()
+                with db_connection() as new_db:
+                    # 保存生成的内容到数据库
+                    content_obj = new_db.query(WritingChapterContent).filter(
+                        WritingChapterContent.chapter_id == chapter_id,
+                        WritingChapterContent.status == StatusEnum.VALID.value
+                    ).first()
 
-                if content_obj:
-                    # 更新现有内容
-                    content_obj.content = final_content
-                    content_obj.update_time = cls.current_timestamp()
-                    content_obj.update_date = cls.current_datetime()
-                else:
-                    # 创建新内容
-                    content_obj = WritingChapterContent(
-                        id=get_uuid(),
-                        chapter_id=chapter_id,
-                        content=final_content,
-                        update_time=cls.current_timestamp(),
-                        update_date=cls.current_datetime()
-                    )
-                    db.add(content_obj)
+                    if content_obj:
+                        # 更新现有内容
+                        content_obj.content = final_content
+                        content_obj.update_time = cls.current_timestamp()
+                        content_obj.update_date = cls.current_datetime()
+                    else:
+                        # 创建新内容
+                        content_obj = WritingChapterContent(
+                            id=get_uuid(),
+                            chapter_id=chapter_id,
+                            content=final_content,
+                            update_time=cls.current_timestamp(),
+                            update_date=cls.current_datetime()
+                        )
+                        new_db.add(content_obj)
 
-                # 更新章节的更新时间
-                chapter.update_time = cls.current_timestamp()
-                chapter.update_date = cls.current_datetime()
+                    # 更新章节的更新时间
+                    chapter_to_update = new_db.query(WritingChapter).filter(
+                        WritingChapter.id == chapter_id
+                    ).first()
+                    if chapter_to_update:
+                        chapter_to_update.update_time = cls.current_timestamp()
+                        chapter_to_update.update_date = cls.current_datetime()
 
-                db.commit()
+                    new_db.commit()
 
             # 发送完成信号
             complete_data = {

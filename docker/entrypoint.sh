@@ -28,6 +28,7 @@ ENABLE_TASKEXECUTOR=1          # 是否启动 TaskExecutor
 ENABLE_DATASYNC=1              # 是否启动数据源同步服务
 ENABLE_ADMINSERVER=1           # 是否启动 admin server（默认启动）
 ENABLE_WEBSERVER="${ENABLE_WEBSERVER:-1}"  # 是否启动 Nginx（默认启动）
+INIT_SUPERUSER_ARGS=""         # 超级用户初始化参数（默认不初始化）
 WORKERS="${WS:-1}"            # TaskExecutor 数量，默认取 WS 环境变量，否则 1
 CONSUMER_NO_BEG=0              # 消费者 ID 起始（含）
 CONSUMER_NO_END=0              # 消费者 ID 结束（不含） - 为 0 表示未指定区间
@@ -54,11 +55,17 @@ Usage: $0 [options]
   --disable-datasync              不启动数据源同步服务
   --disable-webserver             不启动 Nginx（Web Server）
   --enable-adminserver            启动 Admin Server（默认启动）
+  --init-superuser                初始化超级用户
   --workers=<num>                 TaskExecutor 数量（默认读取 WS 或 1）
   --consumer-no-beg=<num>         消费者 ID 起始（含）
   --consumer-no-end=<num>         消费者 ID 结束（不含）
   --host-id=<string>              手动指定 HOST_ID
   -h | --help                     显示此帮助
+
+环境变量配置超级用户:
+  DEFAULT_SUPERUSER_NICKNAME      超级用户昵称（默认: admin）
+  DEFAULT_SUPERUSER_EMAIL         超级用户邮箱（默认: admin@datav.com）
+  DEFAULT_SUPERUSER_PASSWORD      超级用户密码（默认: admin）
 EOF
   exit 0
 }
@@ -72,6 +79,7 @@ for arg in "$@"; do
     --disable-datasync)     ENABLE_DATASYNC=0 ; shift ;;
     --disable-webserver)    ENABLE_WEBSERVER=0 ; shift ;;
     --enable-adminserver)   ENABLE_ADMINSERVER=1 ; shift ;;
+    --init-superuser)       INIT_SUPERUSER_ARGS="--init-superuser" ; shift ;;
     --workers=*)            WORKERS="${arg#*=}" ; shift ;;
     --consumer-no-beg=*)    CONSUMER_NO_BEG="${arg#*=}" ; shift ;;
     --consumer-no-end=*)    CONSUMER_NO_END="${arg#*=}" ; shift ;;
@@ -106,7 +114,7 @@ function task_exe() {
 
 start_server() {
   echo "[entrypoint] 启动 api.multirag_server..."
-  exec "${PY}" -m api.multirag_server
+  exec "${PY}" -m api.multirag_server ${INIT_SUPERUSER_ARGS}
 }
 
 start_admin_server() {
@@ -172,7 +180,44 @@ _term() {
 }
 trap _term SIGTERM SIGINT
 
+# --------------------------- 配置文件生成 -----------------------------------
+# 从模板生成 service_conf.yaml，支持环境变量替换
+# 参考 ragflow 的做法：模板内置在镜像中，每次启动都重新生成
+#
+# 环境变量控制：
+#   SKIP_CONFIG_GENERATE=1  跳过配置生成（运维直接挂载配置文件时使用）
+#
+generate_config() {
+  local CONF_DIR="${MULTIRAG_CONF_DIR:-/multirag/configs}"
+  local TEMPLATE_DIR="${MULTIRAG_TEMPLATE_DIR:-/multirag/docker}"
+  local TEMPLATE_FILE="${TEMPLATE_DIR}/service_conf.yaml.template"
+  local CONF_FILE="${CONF_DIR}/service_conf.yaml"
+
+  # 如果设置了跳过配置生成，直接返回（运维直接挂载配置文件的场景）
+  if [[ "${SKIP_CONFIG_GENERATE:-0}" == "1" ]]; then
+    echo "[entrypoint] SKIP_CONFIG_GENERATE=1，跳过配置生成"
+    return 0
+  fi
+
+  # 检查模板文件是否存在
+  if [[ ! -f "${TEMPLATE_FILE}" ]]; then
+    echo "[entrypoint] 模板文件不存在: ${TEMPLATE_FILE}，跳过配置生成"
+    return 0
+  fi
+
+  # 从模板生成配置文件
+  echo "[entrypoint] 从模板生成配置文件: ${TEMPLATE_FILE} -> ${CONF_FILE}"
+  rm -f "${CONF_FILE}"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    eval "echo \"$line\"" >> "${CONF_FILE}"
+  done < "${TEMPLATE_FILE}"
+  echo "[entrypoint] 配置文件生成完成"
+}
+
 # --------------------------- 启动流程 ---------------------------------------
+# 生成配置文件（从模板）
+generate_config
+
 ensure_docling
 ensure_mineru
 

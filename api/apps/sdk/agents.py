@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -40,7 +41,7 @@ def list_agents(
     title: str | None = Query(None),
     page: int = Query(1),
     page_size: int = Query(30),
-    orderby: str = Query("update_time"),
+    order_by: str = Query("update_time"),
     desc: bool = Query(True),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
@@ -53,7 +54,7 @@ def list_agents(
         title: 代理标题过滤
         page: 页码
         page_size: 每页数量
-        orderby: 排序字段
+        order_by: 排序字段
         desc: 是否降序
         db: 数据库会话
         tenant_id: 租户ID
@@ -66,7 +67,7 @@ def list_agents(
         if not canvas:
             return get_error_data_result(retmsg="The agent doesn't exist.")
     
-    canvas = UserCanvasService.get_list(db, tenant_id, page, page_size, orderby, desc, id, title)
+    canvas = UserCanvasService.get_list(db, tenant_id, page, page_size, order_by, desc, id, title)
     return get_result(data=canvas)
 
 
@@ -200,7 +201,7 @@ class WebhookRequest(BaseModel):
 
 
 @router.post("/webhook/{agent_id}", summary="Webhook触发代理")
-def webhook(
+async def webhook(
     agent_id: str,
     request: WebhookRequest,
     db: Session = Depends(get_db),
@@ -219,10 +220,10 @@ def webhook(
         SSE流式响应
     """
     req = request.model_dump()
-    if not UserCanvasService.accessible(db, req["id"], tenant_id):
+    if not await asyncio.to_thread(UserCanvasService.accessible, db, req["id"], tenant_id):
         return get_error_data_result(retmsg='Only owner of canvas authorized for this operation.')
 
-    cvs = UserCanvasService.get_by_id(db, req["id"])
+    cvs = await asyncio.to_thread(UserCanvasService.get_by_id, db, req["id"])
     if not cvs:
         return get_error_data_result(retmsg="canvas not found.")
 
@@ -237,10 +238,10 @@ def webhook(
     except Exception as e:
         return get_error_data_result(retmsg=str(e))
 
-    def sse():
+    async def sse():
         nonlocal canvas
         try:
-            for ans in canvas.run(
+            async for ans in canvas.run(
                 query=req.get("query", ""),
                 files=req.get("files", []),
                 user_id=req.get("user_id", tenant_id),
@@ -249,7 +250,7 @@ def webhook(
                 yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
 
             cvs.dsl = json.loads(str(canvas))
-            UserCanvasService.update_by_id(db, req["id"], cvs.to_dict())
+            await asyncio.to_thread(UserCanvasService.update_by_id, db, req["id"], cvs.to_dict())
         except Exception as e:
             logging.exception(e)
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": False}, ensure_ascii=False) + "\n\n"

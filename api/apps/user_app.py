@@ -122,7 +122,7 @@ class ForgetPasswordRequest(BaseModel):
 
 
 @router.get("/login/channels", summary="获取登录渠道")
-async def get_login_channels():
+def get_login_channels():
     """
     获取所有支持的认证渠道
 
@@ -151,7 +151,7 @@ async def get_login_channels():
 
 
 @router.post("/login", summary="登录")
-async def login(request: LoginRequest, db: Session = Depends(get_db)):
+def login(request: LoginRequest, db: Session = Depends(get_db)):
     """
     登录
 
@@ -205,7 +205,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/github_callback", summary="GitHub 回调")
-async def github_callback(code: str, db: Session = Depends(get_db)):
+def github_callback(code: str, db: Session = Depends(get_db)):
     """
     **Deprecated**, Use `/oauth/callback/<channel>` instead.
 
@@ -277,7 +277,7 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
 
 
 @router.get("/feishu_callback", summary="飞书回调")
-async def feishu_callback(code: str, db: Session = Depends(get_db)):
+def feishu_callback(code: str, db: Session = Depends(get_db)):
     """
     飞书回调
 
@@ -353,7 +353,7 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
 
 
 @router.get("/logout", summary="退出登录")
-async def log_out(db: Session = Depends(get_db), user=Depends(manager)):
+def log_out(db: Session = Depends(get_db), user=Depends(manager)):
     """
     退出登录
 
@@ -373,7 +373,7 @@ async def log_out(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.get("/login/{channel}", summary="OAuth登录入口")
-async def oauth_login(channel: str, request: Request):
+def oauth_login(channel: str, request: Request):
     """
     OAuth登录入口
 
@@ -405,7 +405,7 @@ async def oauth_login(channel: str, request: Request):
 
 
 @router.get("/oauth/callback/{channel}", summary="OAuth回调处理")
-async def oauth_callback(channel: str, code: str, state: str = None, request: Request = None, db: Session = Depends(get_db)):
+def oauth_callback(channel: str, code: str, state: str = None, request: Request = None, db: Session = Depends(get_db)):
     """
     OAuth回调处理
 
@@ -512,7 +512,7 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
 
 
 @router.post("/setting", summary="设置用户信息")
-async def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     **功能描述**:
     此接口用于更新用户的个人信息，如密码、邮箱、状态等字段。用户可以通过此接口更新自身信息，密码更新时需验证旧密码。
@@ -582,7 +582,7 @@ async def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db)
 
 
 @router.get("/info", summary="获取用户信息")
-async def user_profile(user=Depends(manager)):
+def user_profile(user=Depends(manager)):
     """
     获取用户信息
 
@@ -742,7 +742,7 @@ def user_register(db: Session, user_id: str, user: dict):
 
 
 @router.post("/register", summary="注册用户")
-async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
+def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
     """
     注册用户
 
@@ -811,7 +811,7 @@ async def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/tenant_info", summary="获取租户信息")
-async def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
+def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
     """
     获取租户信息
 
@@ -830,7 +830,7 @@ async def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
 
 
 @router.post("/set_tenant_info", summary="设置租户信息")
-async def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), db: Session = Depends(get_db)):
+def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), db: Session = Depends(get_db)):
     """
     设置租户信息
 
@@ -910,7 +910,7 @@ def user_info_from_feishu(access_token: str):
 
 
 @router.get("/forget/captcha", summary="获取图片验证码")
-async def forget_get_captcha(email: str, db: Session = Depends(get_db)):
+def forget_get_captcha(email: str, db: Session = Depends(get_db)):
     """
     获取图片验证码
     
@@ -1060,7 +1060,7 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
 
 
 @router.post("/forget", summary="忘记密码-重置密码")
-async def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
+def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
     """
     忘记密码-重置密码
     

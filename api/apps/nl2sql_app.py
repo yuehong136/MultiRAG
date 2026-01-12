@@ -3,7 +3,7 @@ from enum import Enum
 from typing import List, Any, Dict
 
 from fastapi import APIRouter, Depends, Body
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db
@@ -84,12 +84,12 @@ async def rewrite_natural_language_query(
             ...,
             title="查询重写请求",
             description="需要重写的自然语言查询信息",
-            example={
+            examples=[{
                 "query_text": "显示上个季度的销售数据",
                 "llm_name": "gpt-4",
                 "max_variations": 3,
                 "preserve_keywords": True
-            }
+            }]
         ),
         db: Session = Depends(get_db),
         user=Depends(manager),
@@ -148,14 +148,15 @@ class NL2SQLRequest(BaseModel):
         description="用于查询的数据集ID列表",
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "query_text": "查询销售额最高的前10个产品",
                 "llm_name": "gpt-4",
                 "dataset_id_list": ["dataset1", "dataset2"]
             }
         }
+    )
 
 
 class NL2SQLResponse(BaseModel):
@@ -183,11 +184,11 @@ async def convert_nl_to_sql(
             ...,
             title="自然语言转SQL请求",
             description="需要转换为SQL的自然语言查询信息",
-            example={
+            examples=[{
                 "query_text": "查询销售额最高的前10个产品",
                 "llm_name": "gpt-4",
                 "dataset_id_list": ["dataset1", "dataset2"]
-            }
+            }]
         ),
         db: Session = Depends(get_db),
         user=Depends(manager),
@@ -539,7 +540,7 @@ from fastapi.responses import StreamingResponse
 
 
 @router.get("/events/{event_id}")
-async def subscribe_to_event(request: Request, event_id: str):
+def subscribe_to_event(request: Request, event_id: str):
     """
     订阅指定事件ID的SSE端点
 
