@@ -94,7 +94,7 @@ core/flow/utils/
 ```python
 async def parse_audio(...):
     """
-    音频解析（参考 core/flow/parser/parser.py._audio 第 598-615 行）
+    音频解析（参考 core/flow/parser/parser.py._audio 第 599-617 行）
                 ↑                              ↑           ↑
              组件文件                        方法名      行号范围
     """

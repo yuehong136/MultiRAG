@@ -775,7 +775,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        视频解析（参考 core/flow/parser/parser.py._video 第 617-626 行）
+        视频解析（参考 core/flow/parser/parser.py._video 第 618-628 行）
         
         Returns:
             {"output_format": "text", "text": "视频描述"}
@@ -786,8 +786,8 @@ class FlowParser:
         with db_connection() as db:
             cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_name=llm_name)
         
-        # 视频分析（传递 video_bytes 和 filename）
-        txt = await _to_thread(cv_mdl.chat, "", [], {}, video_bytes=binary, filename=filename)
+        # 视频分析（使用 async_chat，参考 parser.py 修改）
+        txt = await cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=binary, filename=filename)
         
         return {"output_format": "text", "text": txt}
     
