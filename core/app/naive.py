@@ -36,7 +36,6 @@ from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_image
 from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownElementExtractor, MarkdownParser, PdfParser, TxtParser
 from deepdoc.parser.figure_parser import VisionFigureParser,vision_figure_parser_docx_wrapper,vision_figure_parser_pdf_wrapper
 from deepdoc.parser.pdf_parser import PlainParser, VisionParser
-from deepdoc.parser.mineru_parser import MinerUParser
 from deepdoc.parser.docling_parser import DoclingParser
 from deepdoc.parser.tcadp_parser import TCADPParser
 
@@ -59,26 +58,44 @@ def by_deepdoc(filename, binary=None, from_page=0, to_page=100000, lang="Chinese
 
 
 def by_mineru(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
-    mineru_executable = os.environ.get("MINERU_EXECUTABLE", "mineru")
-    mineru_api = os.environ.get("MINERU_APISERVER", "http://host.docker.internal:9987")
-    pdf_parser = MinerUParser(mineru_path=mineru_executable, mineru_api=mineru_api)
     parse_method = kwargs.get("parse_method", "raw")
+    mineru_llm_name = kwargs.get("mineru_llm_name")
+    tenant_id = kwargs.get("tenant_id")
 
-    if not pdf_parser.check_installation():
+    pdf_parser = None
+    if tenant_id:
+        if not mineru_llm_name:
+            try:
+                from api.db.services.tenant_llm_service import TenantLLMService
+
+                with db_connection() as db:
+                    env_name = TenantLLMService.ensure_mineru_from_env(db, tenant_id)
+                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="MinerU", mdl_type=LLMType.OCR.value)
+                    if candidates:
+                        mineru_llm_name = candidates[0].llm_name
+                    elif env_name:
+                        mineru_llm_name = env_name
+            except Exception as e:  # best-effort fallback
+                logging.warning(f"fallback to env mineru: {e}")
+
+        if mineru_llm_name:
+            try:
+                with db_connection() as db:
+                    ocr_model = LLMBundle(db, tenant_id, LLMType.OCR, llm_name=mineru_llm_name, lang=lang)
+                    pdf_parser = ocr_model.mdl
+                    sections, tables = pdf_parser.parse_pdf(
+                        filepath=filename,
+                        binary=binary,
+                        callback=callback,
+                        parse_method=parse_method,
+                    )
+                    return sections, tables, pdf_parser
+            except Exception as e:
+                logging.error(f"Failed to parse pdf via LLMBundle MinerU ({mineru_llm_name}): {e}")
+
+    if callback:
         callback(-1, "MinerU not found.")
-        return None, None, pdf_parser
-
-    sections, tables = pdf_parser.parse_pdf(
-        filepath=filename,
-        binary=binary,
-        callback=callback,
-        output_dir=os.environ.get("MINERU_OUTPUT_DIR", ""),
-        backend=os.environ.get("MINERU_BACKEND", "pipeline"),
-        server_url=os.environ.get("MINERU_SERVER_URL", ""),
-        delete_output=bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1))),
-        parse_method=parse_method
-    )
-    return sections, tables, pdf_parser
+    return None, None, None
 
 
 def by_docling(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
@@ -702,7 +719,15 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         return res
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
+        layout_recognizer_raw = parser_config.get("layout_recognize", "DeepDOC")
+        parser_model_name = None
+        layout_recognizer = layout_recognizer_raw
+        if isinstance(layout_recognizer_raw, str):
+            lowered = layout_recognizer_raw.lower()
+            if lowered.startswith("mineru@"):
+                parser_model_name = layout_recognizer_raw.split("@", 1)[1]
+                layout_recognizer = "MinerU"
+
         if parser_config.get("analyze_hyperlink", False) and is_root:
             urls = extract_links_from_pdf(binary)
 
@@ -721,6 +746,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             lang=lang,
             callback=callback,
             layout_recognizer=layout_recognizer,  # 传递原始值给 plaintext_parser 以支持 VLM
+            mineru_llm_name=parser_model_name,
             **kwargs
         )
 

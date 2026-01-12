@@ -94,13 +94,16 @@ core/flow/utils/
 ```python
 async def parse_audio(...):
     """
-    音频解析（参考 core/flow/parser/parser.py._audio 第 599-617 行）
+    音频解析（参考 core/flow/parser/parser.py._audio 第 630-648 行）
                 ↑                              ↑           ↑
              组件文件                        方法名      行号范围
     """
 ```
 
 **修改 core/flow 后记得更新行号！**
+
+> ⚠️ 注意：parser.py 最近重构了 MinerU 解析逻辑（第 252-293 行），
+> 现在使用 `LLMBundle` + `LLMType.OCR` 获取模型，支持 `mineru@模型名` 格式。
 
 ## 📚 使用示例
 
@@ -114,6 +117,46 @@ parsed = await parse_file(filename, binary, tenant_id)
 
 # 切分
 chunks = await split_chunks(parsed, overlapped_percent=0.1)
+```
+
+### 使用 MinerU 解析（OCR 模型）
+
+```python
+from core.flow.utils import parse_file
+
+# 方式1：使用默认配置的 MinerU 模型
+parsed = await parse_file(
+    filename="document.pdf",
+    binary=file_content,
+    tenant_id=tenant_id,
+    pdf_config={
+        "parse_method": "mineru",
+        "output_format": "json"
+    }
+)
+
+# 方式2：指定 MinerU 模型名（mineru@模型名 格式）
+parsed = await parse_file(
+    filename="document.pdf",
+    binary=file_content,
+    tenant_id=tenant_id,
+    pdf_config={
+        "parse_method": "mineru@my-mineru-model",
+        "output_format": "json",
+        "mineru_parse_method": "raw"  # 可选：raw/ocr
+    }
+)
+
+# 方式3：模型名@mineru 格式也支持
+parsed = await parse_file(
+    filename="document.pdf",
+    binary=file_content,
+    tenant_id=tenant_id,
+    pdf_config={
+        "parse_method": "my-mineru-model@mineru",
+        "output_format": "json"
+    }
+)
 ```
 
 ### 使用 TCADP parser（腾讯云 ADP）
@@ -182,6 +225,25 @@ parsed = await parse_file(
     tenant_id=tenant_id,
     word_config={
         "output_format": "json",
+        "table_context_size": 256,
+        "image_context_size": 128
+    }
+)
+```
+
+### Markdown 解析（支持 delimiter）
+
+```python
+from core.flow.utils import parse_file
+
+# 使用自定义分隔符解析 Markdown
+parsed = await parse_file(
+    filename="document.md",
+    binary=file_content,
+    tenant_id=tenant_id,
+    markdown_config={
+        "output_format": "json",
+        "delimiter": "\n\n",  # 按双换行分割段落
         "table_context_size": 256,
         "image_context_size": 128
     }

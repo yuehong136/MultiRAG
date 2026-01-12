@@ -5578,6 +5578,14 @@
                     "mdl_type": "reranker"
                 }
             ]
+        },
+        {
+            "name": "MinerU",
+            "logo": "",
+            "tags": "OCR",
+            "status": "1",
+            "rank": "900",
+            "llm": []
         }
     ]
 }

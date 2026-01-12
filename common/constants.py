@@ -21,7 +21,8 @@ class LLMType(StrEnum):
     SPEECH2TEXT = 'speech2text'
     IMAGE2TEXT = 'image2text'
     RERANK = 'rerank'
-    TTS    = 'tts'
+    TTS = 'tts'
+    OCR = 'ocr'
 
 
 class TaskStatus(StrEnum):
@@ -188,3 +189,13 @@ PAGERANK_FLD = "pagerank_fea"
 SVR_QUEUE_NAME = "multi_rag_svr_queue"
 SVR_CONSUMER_GROUP_NAME = "multi_rag_svr_task_broker"
 TAG_FLD = "tag_feas"
+
+
+MINERU_ENV_KEYS = ["MINERU_APISERVER", "MINERU_OUTPUT_DIR", "MINERU_BACKEND", "MINERU_SERVER_URL", "MINERU_DELETE_OUTPUT"]
+MINERU_DEFAULT_CONFIG = {
+    "MINERU_APISERVER": "",
+    "MINERU_OUTPUT_DIR": "",
+    "MINERU_BACKEND": "pipeline",
+    "MINERU_SERVER_URL": "",
+    "MINERU_DELETE_OUTPUT": 1,
+}

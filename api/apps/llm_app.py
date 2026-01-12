@@ -33,7 +33,7 @@ from api.utils.api_utils import get_json_result, server_error_response, get_data
 from common.constants import StatusEnum, LLMType
 from api.db.db_models import TenantLLM, get_db, db_connection
 from core.utils.base64_image import test_image
-from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
+from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel, OcrModel
 
 from core.prompts.generator import kb_prompt
 from core.utils.tavily_conn import Tavily
@@ -789,8 +789,13 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
                 mdl_types[m.fid] = set([])
             mdl_types[m.fid].add(m.mdl_type)
         for f in fac:
-            f["model_types"] = list(mdl_types.get(f["name"], [LLMType.CHAT, LLMType.EMBEDDING, LLMType.RERANK,
-                                                              LLMType.IMAGE2TEXT, LLMType.SPEECH2TEXT, LLMType.TTS]))
+            f["model_types"] = list(
+                mdl_types.get(
+                    f["name"],
+                    [LLMType.CHAT, LLMType.EMBEDDING, LLMType.RERANK, LLMType.IMAGE2TEXT, LLMType.SPEECH2TEXT, LLMType.TTS, LLMType.OCR],
+                )
+            )
+
         return get_json_result(data=fac)
     except Exception as e:
         return server_error_response(e)
@@ -1140,6 +1145,15 @@ POST
                 pass
         except RuntimeError as e:
             msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
+    elif llm["mdl_type"] == LLMType.OCR.value:
+        assert factory in OcrModel, f"OCR model from {factory} is not supported yet."
+        try:
+            mdl = OcrModel[factory](key=llm["api_key"], model_name=mdl_nm, base_url=llm.get("api_base", ""))
+            ok, reason = mdl.check_available()
+            if not ok:
+                raise RuntimeError(reason or "Model not available")
+        except Exception as e:
+            msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
     else:
         # TODO: check other type of models
         pass
@@ -1341,6 +1355,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
 
     """
     try:
+        TenantLLMService.ensure_mineru_from_env(db, user.id)
 
         if include_details:
             res = {}
@@ -1788,6 +1803,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
     self_deployed = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio", "GPUStack"]
     weighted = ["Youdao", "FastEmbed", "BAAI"] if settings.LIGHTEN != 0 else []
     try:
+        TenantLLMService.ensure_mineru_from_env(db, user.id)
         objs = TenantLLMService.query(db, tenant_id=user.id)
         facts = set(o.llm_factory for o in objs if o.api_key and o.status==StatusEnum.VALID.value)
         status = {(o.llm_name + "@" + o.llm_factory) for o in objs if o.status == StatusEnum.VALID.value}
