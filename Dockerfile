@@ -46,7 +46,7 @@ RUN apt update && apt -y install ca-certificates && \
     lsb-release curl gpg libgl1-mesa-glx libdatrie-dev default-jdk vim net-tools less gcc \
     build-essential libglib2.0-0 libglx-mesa0 pkg-config libicu-dev libatk-bridge2.0-0 \
     libpython3-dev libjemalloc-dev nginx ghostscript \
-    libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus  python3-pip pipx tcl-dev pkg-config \
+    libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus tcl-dev pkg-config \
     fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg && \
     # 安装 MSSQL ODBC 驱动 (pyodbc 依赖)
     curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - && \
@@ -60,10 +60,6 @@ RUN apt update && apt -y install ca-certificates && \
     fi && \
     fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg \
     pandoc texlive && \
-    # 安装uv
-    pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
-    pip3 config set global.trusted-host pypi.tuna.tsinghua.edu.cn; \
-    pipx install uv -i https://pypi.tuna.tsinghua.edu.cn/simple && \
     # 安装Redis
     wget https://download.redis.io/releases/redis-7.4.3.tar.gz && \
     tar -zxvf redis-7.4.3.tar.gz && \
@@ -91,11 +87,27 @@ COPY mirror/ /mirror/
 ENV PYTHONDONTWRITEBYTECODE=1 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 ENV PATH=/root/.local/bin:$PATH
 
-#安装python
-RUN mkdir -p /etc/uv && \
+# 安装uv并配置镜像源
+RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/deps \
+    mkdir -p /etc/uv && \
     echo 'python-install-mirror = "file:///mirror"' > /etc/uv/uv.toml && \
+    if [ "$NEED_MIRROR" == "1" ]; then \
+        echo '[[index]]' >> /etc/uv/uv.toml && \
+        echo 'url = "https://pypi.tuna.tsinghua.edu.cn/simple"' >> /etc/uv/uv.toml && \
+        echo 'default = true' >> /etc/uv/uv.toml; \
+    fi; \
+    arch="$(uname -m)"; \
+    if [ "$arch" = "x86_64" ]; then \
+        tar xzf /deps/uv-x86_64-unknown-linux-gnu.tar.gz && \
+        cp uv-x86_64-unknown-linux-gnu/* /usr/local/bin/ && \
+        rm -rf uv-x86_64-unknown-linux-gnu; \
+    elif [ "$arch" = "aarch64" ]; then \
+        tar xzf /deps/uv-aarch64-unknown-linux-gnu.tar.gz && \
+        cp uv-aarch64-unknown-linux-gnu/* /usr/local/bin/ && \
+        rm -rf uv-aarch64-unknown-linux-gnu; \
+    fi && \
     uv python install 3.12.10 && \
-    rm -rf /mirror  # 安装后删除
+    rm -rf /mirror
 
 # 使用mount绑定挂载模型文件并根据条件复制到目标位置
 RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co,target=/huggingface.co \
