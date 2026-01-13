@@ -14,8 +14,10 @@ DOCX 模板标记与填充接口
 import json
 import uuid
 import os
+import shutil
 import logging
 from io import BytesIO
+from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from fastapi.responses import StreamingResponse
@@ -26,6 +28,7 @@ from api.service.docx_marker_service import (
     parse_docx,
     auto_recognize_placeholders,
     fill_document,
+    fill_document_with_tables,
     generate_debug_report,
 )
 
@@ -34,12 +37,93 @@ logger = logging.getLogger(__name__)
 
 # 临时文件存放目录
 TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "temp", "docx_marker")
+# 日志文件存放目录（用于观察）
+LOG_DIR = "/Users/naimehao/PycharmProjects/multrag/temp/docx_marker"
+# 最大保留的请求数量
+LOG_MAX_REQUESTS = 10
 
 
 def ensure_temp_dir():
     """确保临时目录存在"""
     if not os.path.exists(TEMP_DIR):
         os.makedirs(TEMP_DIR)
+
+
+def ensure_log_dir():
+    """确保日志目录存在"""
+    if not os.path.exists(LOG_DIR):
+        os.makedirs(LOG_DIR)
+
+
+def cleanup_old_logs():
+    """
+    清理旧的日志目录，只保留最近 LOG_MAX_REQUESTS 次请求的数据
+    按目录创建时间排序，删除最旧的
+    """
+    if not os.path.exists(LOG_DIR):
+        return
+
+    # 获取所有子目录
+    subdirs = []
+    for name in os.listdir(LOG_DIR):
+        path = os.path.join(LOG_DIR, name)
+        if os.path.isdir(path):
+            # 获取目录创建时间
+            ctime = os.path.getctime(path)
+            subdirs.append((path, ctime))
+
+    # 如果目录数量未超过限制，不需要清理
+    if len(subdirs) <= LOG_MAX_REQUESTS:
+        return
+
+    # 按创建时间排序（最旧的在前）
+    subdirs.sort(key=lambda x: x[1])
+
+    # 删除最旧的目录，保留最近 LOG_MAX_REQUESTS 个
+    dirs_to_delete = subdirs[:-LOG_MAX_REQUESTS]
+    for dir_path, _ in dirs_to_delete:
+        try:
+            shutil.rmtree(dir_path)
+            logger.info(f"[cleanup] 已删除旧日志目录: {os.path.basename(dir_path)}")
+        except Exception as e:
+            logger.warning(f"[cleanup] 删除目录失败 {dir_path}: {e}")
+
+
+def save_fill_log(request_id: str, stage: str, file_content: bytes, json_data: dict = None, filename: str = None):
+    """
+    保存 fill 接口处理日志
+
+    Args:
+        request_id: 请求唯一标识符
+        stage: 阶段标识，如 "input", "output"
+        file_content: 文件内容（bytes）
+        json_data: JSON 数据（可选）
+        filename: 原始文件名（可选）
+    """
+    ensure_log_dir()
+
+    # 在保存新日志前清理旧日志
+    if stage == "input":
+        cleanup_old_logs()
+
+    # 创建请求专属目录
+    request_dir = os.path.join(LOG_DIR, request_id)
+    if not os.path.exists(request_dir):
+        os.makedirs(request_dir)
+
+    # 保存文件
+    file_suffix = f"_{filename}" if filename else ""
+    docx_path = os.path.join(request_dir, f"{stage}{file_suffix}.docx")
+    with open(docx_path, "wb") as f:
+        f.write(file_content)
+
+    # 保存 JSON 数据（如果有）
+    if json_data is not None:
+        json_path = os.path.join(request_dir, f"{stage}_data.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(json_data, f, ensure_ascii=False, indent=2)
+
+    return request_dir
 
 
 @router.post("/parse", summary="解析 DOCX 文件",
@@ -289,6 +373,10 @@ async def stateless_fill(
     if not placeholders_data:
         raise HTTPException(status_code=400, detail="没有标记任何待填项")
 
+    # 生成请求唯一标识符
+    request_id = f"fill_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    logger.info(f"[fill] 请求ID: {request_id}, 文件名: {file.filename}")
+
     ensure_temp_dir()
     temp_id = str(uuid.uuid4())
     source_path = os.path.join(TEMP_DIR, f"temp_{temp_id}.docx")
@@ -296,18 +384,49 @@ async def stateless_fill(
 
     try:
         content = await file.read()
+
+        # 保存输入文件和 JSON 数据到日志目录
+        save_fill_log(request_id, "input", content, {
+            "placeholders": placeholders_data,
+            "fields": fields_data
+        }, file.filename)
+        logger.info(f"[fill] 输入文件已保存到日志目录")
+
         with open(source_path, "wb") as f:
             f.write(content)
 
-        # 将数组格式转换为字典格式
-        data_dict = {field['id']: field['value'] for field in fields_data}
+        # 构建数据字典，支持表格类型
+        data_dict = {}
+        for field in fields_data:
+            field_id = field.get('id')
+            if not field_id:
+                continue
+            if 'rows' in field and field['rows'] is not None:
+                # 表格类型：包含 rows 数据
+                data_dict[field_id] = {"rows": field['rows'], "value": field.get('value', '')}
+            else:
+                # 普通类型：只有 value
+                data_dict[field_id] = field.get('value', '')
+
+        # 检查是否有表格类型的 placeholder
+        has_table_placeholder = any(
+            p.get('type') in ('table', 'dynamic_table') for p in placeholders_data
+        )
 
         # 填充文档
-        fill_document(source_path, placeholders_data, data_dict, output_path)
+        if has_table_placeholder:
+            fill_document_with_tables(source_path, placeholders_data, data_dict, output_path)
+        else:
+            fill_document(source_path, placeholders_data, data_dict, output_path)
 
         # 读取填充后的文件并编码为 Base64
         with open(output_path, "rb") as f:
             output_content = f.read()
+
+        # 保存输出文件到日志目录
+        save_fill_log(request_id, "output", output_content, filename=f"filled_{file.filename}")
+        logger.info(f"[fill] 输出文件已保存到日志目录")
+        logger.info(f"[fill] 请求ID: {request_id} 处理完成")
 
         base64_encoded_file = base64.b64encode(output_content).decode("utf-8")
 
@@ -383,11 +502,29 @@ async def stateless_fill_download(
         with open(source_path, "wb") as f:
             f.write(content)
 
-        # 将数组格式转换为字典格式
-        data_dict = {field['id']: field['value'] for field in fields_data}
+        # 构建数据字典，支持表格类型
+        data_dict = {}
+        for field in fields_data:
+            field_id = field.get('id')
+            if not field_id:
+                continue
+            if 'rows' in field and field['rows'] is not None:
+                # 表格类型：包含 rows 数据
+                data_dict[field_id] = {"rows": field['rows'], "value": field.get('value', '')}
+            else:
+                # 普通类型：只有 value
+                data_dict[field_id] = field.get('value', '')
+
+        # 检查是否有表格类型的 placeholder
+        has_table_placeholder = any(
+            p.get('type') in ('table', 'dynamic_table') for p in placeholders_data
+        )
 
         # 填充文档
-        fill_document(source_path, placeholders_data, data_dict, output_path)
+        if has_table_placeholder:
+            fill_document_with_tables(source_path, placeholders_data, data_dict, output_path)
+        else:
+            fill_document(source_path, placeholders_data, data_dict, output_path)
 
         # 读取填充后的文件
         with open(output_path, "rb") as f:

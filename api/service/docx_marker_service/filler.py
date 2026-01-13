@@ -7,6 +7,7 @@ import re
 import copy
 from pathlib import Path
 from docx import Document
+from docx.document import Document as DocumentType
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -30,7 +31,7 @@ def parse_path(path: str) -> list[tuple[str, int]]:
     return [(name, int(idx)) for name, idx in matches]
 
 
-def get_element_by_path(doc: Document, path: str):
+def get_element_by_path(doc: "DocumentType", path: str):
     """
     根据 path 获取 docx 中对应的元素
     """
@@ -195,7 +196,7 @@ def insert_paragraph_at(cell, ref_para_index: int, position: str, text: str):
             ref_element.addnext(para_element)
 
 
-def get_parent_element_by_path(doc: Document, path: str):
+def get_parent_element_by_path(doc: "DocumentType", path: str):
     parts = parse_path(path)
     if len(parts) < 2:
         return None, None, None
@@ -242,7 +243,7 @@ def fill_document(doc_path: str, placeholders: list[dict], data: dict, output_pa
     return output_path
 
 
-def get_table_by_path(doc: Document, path: str):
+def get_table_by_path(doc: "DocumentType", path: str):
     """
     根据 path 获取表格对象
     path 格式: body[n]/row[m]/cell[k] 或 body[n]
@@ -339,7 +340,7 @@ def fill_table_cell(table, row_idx: int, cell_idx: int, value: str):
     return True
 
 
-def fill_table_placeholder(doc: Document, placeholder: dict, rows_data: list[dict[str, str]], row_offset: int = 0) -> int:
+def fill_table_placeholder(doc: "DocumentType", placeholder: dict, rows_data: list[dict[str, str]], row_offset: int = 0) -> int:
     """
     填充表格类型的待填项
 

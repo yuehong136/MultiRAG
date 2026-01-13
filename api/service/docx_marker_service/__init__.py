@@ -25,7 +25,7 @@ from .models import (
 
 from .parser import parse_docx
 from .auto_recognizer import auto_recognize_placeholders
-from .filler import fill_document
+from .filler import fill_document, fill_document_with_tables
 from .debug_helper import generate_debug_report
 
 __all__ = [
@@ -46,5 +46,6 @@ __all__ = [
     'parse_docx',
     'auto_recognize_placeholders',
     'fill_document',
+    'fill_document_with_tables',
     'generate_debug_report',
 ]
