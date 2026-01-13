@@ -15,40 +15,15 @@ import logging
 import re
 from copy import deepcopy
 
-import trio
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 from core.nlp import naive_merge, naive_merge_with_images
 
 logger = logging.getLogger(__name__)
 
 
-def _get_running_backend():
-    """检测当前运行的异步后端（trio 或 asyncio）"""
-    try:
-        trio.lowlevel.current_task()
-        return "trio"
-    except RuntimeError:
-        pass
-    
-    try:
-        asyncio.get_running_loop()
-        return "asyncio"
-    except RuntimeError:
-        pass
-    
-    return None
-
-
 async def _to_thread(func, *args, **kwargs):
-    """兼容 trio 和 asyncio 的 to_thread"""
-    backend = _get_running_backend()
-    
-    if backend == "trio":
-        return await trio.to_thread.run_sync(lambda: func(*args, **kwargs))
-    elif backend == "asyncio":
-        return await asyncio.to_thread(func, *args, **kwargs)
-    else:
-        return func(*args, **kwargs)
+    """在线程中执行阻塞函数"""
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 
 class FlowSplitter:

@@ -18,7 +18,6 @@ import time
 import asyncio
 from collections import Counter, defaultdict
 
-import trio
 import numpy as np
 from sqlalchemy.orm import Session
 
@@ -564,74 +563,38 @@ class DocumentAnalysisService:
 
 Focus on the main ideas and key points. Keep the summary coherent and readable."""
 
-        # 3. 运行RAPTOR (在trio环境中运行,因为raptor内部使用trio)
+        # 3. 运行RAPTOR（已改造为 asyncio）
         logging.info(f"Running RAPTOR with config: {raptor_config}")
         original_length = len(raptor_chunks)
 
-        # ⭐ 关键设计：在 trio 线程中重新创建 LLMBundle
-        # 
-        # 为什么必须这样做:
-        # 1. SQLAlchemy 限制: Session 不能跨线程共享
-        # 2. Trio 隔离: 需要在独立的 trio 事件循环中运行
-        # 3. 安全性优先: 跨线程共享 session 会导致数据损坏或死锁
-        # 
-        # 架构优势:
-        # - 在 asyncio 中准备 embedding (已完成，见上面的代码)
-        # - 只传递配置信息给 trio 线程 (tenant_id, llm_name 等)
-        # - 在 trio 中创建独立的 db session 和 LLMBundle
-        # - LLM 模型本身是全局缓存，不会重复加载
-        # 
-        # 性能分析:
-        # - 数据库连接: 从连接池获取，用完立即归还
-        # - LLM 模型: 全局单例缓存，只加载一次
-        # - LLMBundle: 轻量级 wrapper (~KB)
-        # - 并发控制: chat_limiter 限制为 10 个
-        def run_raptor_in_trio():
-            """在 trio 环境中运行 RAPTOR"""
-            from api.db.db_models import db_connection
-            
-            # ⚠️ 重要：在 trio 并行环境中禁用 usage tracking
-            # 
-            # 问题：RAPTOR 内部使用 trio nursery 并行执行多个 summarize 任务
-            # 如果它们共享同一个 db session，会导致 SQLAlchemy 状态冲突
-            # 
-            # 解决方案：传递 None 作为 db，LLMBundle.encode() 会跳过 usage tracking
-            # 这样既能执行模型推理，又避免了跨线程 session 问题
-            # 
-            # 副作用：RAPTOR 阶段的 token 使用量不会被记录
-            # 但这是可接受的，因为：
-            # 1. 后续的标签和摘要生成会正常记录
-            # 2. RAPTOR 的使用量相对较小
-            # 3. 系统稳定性优先于完整的使用量统计
-            with db_connection() as db:
-                # 创建 LLMBundle (仅用于初始化模型)
-                llm_model = LLMBundle(db, self.tenant_id, LLMType.CHAT)
-                embd_model = LLMBundle(db, self.tenant_id, LLMType.EMBEDDING)
-                
-                # 禁用 usage tracking（避免 trio 并行任务冲突）
-                llm_model.db = None
-                embd_model.db = None
+        # ⭐ 创建 LLMBundle 用于 RAPTOR
+        # 参考 task_executor.py 的实现
+        from api.db.db_models import db_connection
+        
+        with db_connection() as db:
+            llm_model = LLMBundle(db, self.tenant_id, LLMType.CHAT)
+            embd_model_raptor = LLMBundle(db, self.tenant_id, LLMType.EMBEDDING)
+        
+        # ⚠️ 关键：禁用 usage tracking（避免 asyncio 并行任务冲突）
+        # 参考 task_executor.py 第 2027-2032 行
+        llm_model.db = None
+        embd_model_raptor.db = None
 
-                raptor = Raptor(
-                    max_cluster=raptor_config.get("max_cluster", 64),
-                    llm_model=llm_model,
-                    embd_model=embd_model,
-                    prompt=raptor_config["prompt"],
-                    max_token=raptor_config.get("max_token", 512),
-                    threshold=raptor_config.get("threshold", 0.1)
-                )
+        raptor = Raptor(
+            max_cluster=raptor_config.get("max_cluster", 64),
+            llm_model=llm_model,
+            embd_model=embd_model_raptor,
+            prompt=raptor_config["prompt"],
+            max_token=raptor_config.get("max_token", 512),
+            threshold=raptor_config.get("threshold", 0.1)
+        )
 
-                # 运行 RAPTOR (在 trio 事件循环中)
-                return trio.run(
-                    raptor,
-                    raptor_chunks,
-                    raptor_config.get("random_seed", 42),
-                    lambda msg: logging.info(f"RAPTOR: {msg}")
-                )
-
-        # 使用asyncio.to_thread在独立线程中运行
-        # 并发控制: FastAPI的请求并发由上层控制,这里每个请求串行执行RAPTOR
-        raptor_result = await asyncio.to_thread(run_raptor_in_trio)
+        # 运行 RAPTOR（直接 await，RAPTOR 已改造为 asyncio）
+        raptor_result = await raptor(
+            raptor_chunks,
+            raptor_config.get("random_seed", 42),
+            lambda msg: logging.info(f"RAPTOR: {msg}")
+        )
 
         # 5. 提取聚类摘要
         logging.info(f"RAPTOR result: original_length={original_length}, result_length={len(raptor_result)}")

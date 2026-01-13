@@ -2868,13 +2868,20 @@ class MilvusConnection(DocStoreConnection):
 
     def create_collection_with_mapping(self, collection_name, mapping, auto_dimensions=None):
         """
-        根据mapping配置创建Milvus集合，支持动态向量维度
+        根据mapping配置创建Milvus集合，支持动态向量维度。
+        
+        此方法是幂等的：如果集合已存在，直接返回不会重复创建。
 
         Args:
             collection_name: 集合名称
             mapping: 映射配置，包含字段定义和索引设置
             auto_dimensions: 维度特定值的字典，格式为 {"字段名": 实际维度}
         """
+        # 幂等检查：如果集合已存在，直接返回（与 ES/OpenSearch 行为一致）
+        if self.has_collection(collection_name):
+            logger.info(f"集合 {collection_name} 已存在，跳过创建")
+            return
+
         dynamic_templates = mapping.get("mappings", {}).get("dynamic_templates", [])
         fields = []
 

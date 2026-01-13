@@ -12,20 +12,20 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import asyncio
+import logging
 import random
 import re
 from copy import deepcopy
 from functools import partial
 
-import trio
-
 from common.misc_utils import get_uuid
 from core.utils.base64_image import id2image, image2id
-from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.splitter.schema import SplitterFromUpstream
 from core.nlp import naive_merge, naive_merge_with_images
 from common import settings
+from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 
 
 class SplitterParam(ProcessParamBase):
@@ -131,9 +131,17 @@ class Splitter(ProcessBase):
             }
             for c, img in zip(chunks, images) if c.strip()
         ]
-        async with trio.open_nursery() as nursery:
-            for d in cks:
-                nursery.start_soon(image2id, d, partial(settings.STORAGE_IMPL.put, tenant_id=self._canvas._tenant_id), get_uuid())
+        tasks = []
+        for d in cks:
+            tasks.append(asyncio.create_task(image2id(d, partial(settings.STORAGE_IMPL.put, tenant_id=self._canvas._tenant_id), get_uuid())))
+        try:
+            await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            logging.error(f"error when splitting: {e}")
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
         if custom_pattern:
             docs = []

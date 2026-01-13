@@ -6,6 +6,7 @@
 @date：2024/7/19 14:00
 @desc:
 """
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -18,7 +19,6 @@ from common.decorator import singleton
 from common import settings
 # from valkey.lock import Lock
 from redis.lock import Lock
-import trio
 
 REDIS = {}
 try:
@@ -500,7 +500,7 @@ class RedisDistributedLock:
         while True:
             if self.lock.acquire(token=self.lock_value):
                 break
-            await trio.sleep(10)
+            await asyncio.sleep(10)
 
     def release(self):
         REDIS_CONN.delete_if_equal(self.lock_key, self.lock_value)

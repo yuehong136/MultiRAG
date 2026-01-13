@@ -21,9 +21,8 @@ import builtins
 import json
 import os
 import logging
-from typing import Any, List, Union
+from typing import Any
 import pandas as pd
-import trio
 from agent import settings
 from common.connection_utils import timeout
 
@@ -392,7 +391,7 @@ class ComponentParamBase(ABC):
 
 class ComponentBase(ABC):
     component_name: str
-    thread_limiter = trio.CapacityLimiter(int(os.environ.get('MAX_CONCURRENT_CHATS', 10)))
+    thread_limiter = asyncio.Semaphore(int(os.environ.get("MAX_CONCURRENT_CHATS", 10)))
     variable_ref_patt = r"\{* *\{([a-zA-Z:0-9]+@[A-Za-z0-9_.]+|sys\.[A-Za-z0-9_.]+|env\.[A-Za-z0-9_.]+)\} *\}*"
 
     def __str__(self):
@@ -477,7 +476,7 @@ class ComponentBase(ABC):
     def _invoke(self, **kwargs):
         raise NotImplementedError()
 
-    def output(self, var_nm: str=None) -> Union[dict[str, Any], Any]:
+    def output(self, var_nm: str=None) -> dict[str, Any] | Any:
         if var_nm:
             return self._param.outputs.get(var_nm, {}).get("value", "")
         return {k: o.get("value") for k,o in self._param.outputs.items()}
@@ -502,7 +501,7 @@ class ComponentBase(ABC):
             inputs[k]["value"] = None
         self._param.debug_inputs = {}
 
-    def get_input(self, key: str=None) -> Union[Any, dict[str, Any]]:
+    def get_input(self, key: str=None) -> Any | dict[str, Any]:
         if key:
             return self._param.inputs.get(key, {}).get("value")
 
@@ -518,7 +517,7 @@ class ComponentBase(ABC):
             res[var] = self.get_input_value(var)
         return res
 
-    def get_input_values(self) -> Union[Any, dict[str, Any]]:
+    def get_input_values(self) -> Any | dict[str, Any]:
         if self._param.debug_inputs:
             return self._param.debug_inputs
 
@@ -564,17 +563,17 @@ class ComponentBase(ABC):
     def debug(self, **kwargs):
         return self._invoke(**kwargs)
 
-    def get_parent(self) -> Union[object, None]:
+    def get_parent(self) -> object | None:
         pid = self._canvas.get_component(self._id).get("parent_id")
         if not pid:
             return None
         return self._canvas.get_component(pid)["obj"]
 
-    def get_upstream(self) -> List[str]:
+    def get_upstream(self) -> list[str]:
         cpn_nms = self._canvas.get_component(self._id)['upstream']
         return cpn_nms
 
-    def get_downstream(self) -> List[str]:
+    def get_downstream(self) -> list[str]:
         cpn_nms = self._canvas.get_component(self._id)['downstream']
         return cpn_nms
 

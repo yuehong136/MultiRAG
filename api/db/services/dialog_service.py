@@ -6,6 +6,7 @@
 @date：2025/7/17 15:30
 @desc:
 """
+import asyncio
 import logging
 import binascii
 import time
@@ -14,7 +15,6 @@ from functools import partial
 import re
 from copy import deepcopy
 from timeit import default_timer as timer
-import trio
 from langfuse import Langfuse
 from agentic_reasoning import DeepResearcher
 from datetime import datetime
@@ -1494,5 +1494,5 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
         rank_feature=label_question(db, question, kbs),
     )
     mindmap = MindMapExtractor(chat_mdl)
-    mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
+    mind_map = asyncio.run(mindmap([c["text"] for c in ranks["chunks"]]))
     return mind_map.output

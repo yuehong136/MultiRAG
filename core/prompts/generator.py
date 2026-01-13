@@ -4,10 +4,8 @@ import json
 import logging
 import re
 from copy import deepcopy
-from typing import Tuple
 import jinja2
 import json_repair
-import trio
 from sqlalchemy.orm import Session
 
 from api.db.db_models import db_connection
@@ -443,12 +441,12 @@ async def next_step_async(chat_mdl, history: list, tools_description: list[dict]
     return json_str, tk_cnt
 
 
-def reflect(chat_mdl, history: list[dict], tool_call_res: list[Tuple], user_defined_prompts: dict={}):
+def reflect(chat_mdl, history: list[dict], tool_call_res: list[tuple], user_defined_prompts: dict={}):
     """同步版本 - 内部调用异步版本"""
     return asyncio.run(reflect_async(chat_mdl, history, tool_call_res, user_defined_prompts))
 
 
-async def reflect_async(chat_mdl, history: list[dict], tool_call_res: list[Tuple], user_defined_prompts: dict={}):
+async def reflect_async(chat_mdl, history: list[dict], tool_call_res: list[tuple], user_defined_prompts: dict={}):
     """异步版本 - 主要实现"""
     tool_calls = [{"name": p[0], "result": p[1]} for p in tool_call_res]
     goal = history[1]["content"]
@@ -835,12 +833,20 @@ async def run_toc_from_text(chunks, chat_mdl, callback=None):
     titles = []
 
     chunks_res = []
-    async with trio.open_nursery() as nursery:
-        for i, chunk in enumerate(chunk_sections):
-            if not chunk:
-                continue
-            chunks_res.append({"chunks": chunk})
-            nursery.start_soon(gen_toc_from_text, chunks_res[-1], chat_mdl, callback)
+    tasks = []
+    for i, chunk in enumerate(chunk_sections):
+        if not chunk:
+            continue
+        chunks_res.append({"chunks": chunk})
+        tasks.append(asyncio.create_task(gen_toc_from_text(chunks_res[-1], chat_mdl, callback)))
+    try:
+        await asyncio.gather(*tasks, return_exceptions=False)
+    except Exception as e:
+        logging.error(f"Error generating TOC: {e}")
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
     for chunk in chunks_res:
         titles.extend(chunk.get("toc", []))
