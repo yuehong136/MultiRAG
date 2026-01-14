@@ -1117,7 +1117,7 @@ def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depe
 
 # 定义 mindmap 接口
 @router.post('/mindmap', summary="生成思维导图", response_description="返回思维导图")
-def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     生成思维导图
 
@@ -1141,7 +1141,7 @@ def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends
     kb_ids.extend(req["kb_ids"])
     kb_ids = list(set(kb_ids))
 
-    mind_map = gen_mindmap(db, req["question"], kb_ids, search_app.get("tenant_id", user.id), search_config)
+    mind_map = await gen_mindmap(db, req["question"], kb_ids, search_app.get("tenant_id", user.id), search_config)
 
     # search_app = None
     # search_config = {}

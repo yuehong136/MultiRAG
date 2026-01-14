@@ -1188,7 +1188,7 @@ def detail_share_embedded(search_id: str = Query(...), db: Session = Depends(get
 
 
 @router.post("/searchbots/mindmap", summary="生成搜索机器人思维导图")
-def mindmap(request: SearchBotMindmapRequest, db: Session = Depends(get_db)):
+async def mindmap(request: SearchBotMindmapRequest, db: Session = Depends(get_db)):
     req = request.model_dump()
     token = request.headers.get("Authorization").split()
     if len(token) != 2:
@@ -1203,7 +1203,7 @@ def mindmap(request: SearchBotMindmapRequest, db: Session = Depends(get_db)):
     search_id = req.get("search_id", "")
     search_app = SearchService.get_detail(search_id) if search_id else {}
 
-    mind_map = gen_mindmap(db, req["question"], req["kb_ids"], tenant_id, search_app.get("search_config", {}))
+    mind_map = await gen_mindmap(db, req["question"], req["kb_ids"], tenant_id, search_app.get("search_config", {}))
     if "error" in mind_map:
         return server_error_response(Exception(mind_map["error"]))
     return get_json_result(data=mind_map)

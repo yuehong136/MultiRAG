@@ -1446,7 +1446,7 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     yield decorate_answer(answer)
 
 
-def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
+async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
     if search_config is None:
         search_config = {}
     meta_data_filter = search_config.get("meta_data_filter", {})
@@ -1494,5 +1494,5 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
         rank_feature=label_question(db, question, kbs),
     )
     mindmap = MindMapExtractor(chat_mdl)
-    mind_map = asyncio.run(mindmap([c["text"] for c in ranks["chunks"]]))
+    mind_map = await mindmap([c["content_with_weight"] for c in ranks["chunks"]])
     return mind_map.output
