@@ -11,3 +11,7 @@ DATASET_NAME_LIMIT = 128
 # milvus的集合命名规则：以字母开头，只能包含字母、数字和下划线
 MILVUS_NAME_PATTERN = r"^[a-zA-Z][a-zA-Z0-9_]*$"
 FILE_NAME_LEN_LIMIT = 255
+
+# Memory相关限制
+MEMORY_NAME_LIMIT = 128
+MEMORY_SIZE_LIMIT = 10 * 1024 * 1024  # 10MB in bytes

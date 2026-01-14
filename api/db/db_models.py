@@ -1705,6 +1705,70 @@ class SyncLogs(BaseModel):
             "update_time": self.update_time
         }
 
+
+class Memory(BaseModel):
+    """Memory数据集模型
+
+    用于管理和存储AI记忆数据集，支持多种记忆类型（raw/semantic/episodic/procedural）
+    """
+    __tablename__ = "t_ai_memories"
+    __table_args__ = {"schema": "usr_ai"}
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="Memory name")
+    avatar: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Avatar base64 string")
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Tenant ID")
+    memory_type: Mapped[int] = mapped_column(
+        Integer, index=True, nullable=False, default=1,
+        doc="Bit flags (LSB->MSB): 1=raw, 2=semantic, 4=episodic, 8=procedural. E.g., 5 enables raw + episodic."
+    )
+    storage_type: Mapped[str] = mapped_column(
+        String(32), index=True, nullable=False, default="table",
+        doc="Storage type: table|graph"
+    )
+    embd_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="Embedding model ID")
+    llm_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="Chat model ID")
+    permissions: Mapped[str] = mapped_column(
+        String(16), index=True, nullable=False, default="me",
+        doc="Permission scope: me|team"
+    )
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Memory description")
+    memory_size: Mapped[int] = mapped_column(
+        Integer, index=False, nullable=False, default=5242880,
+        doc="Maximum memory size in bytes (default 5MB)"
+    )
+    forgetting_policy: Mapped[str] = mapped_column(
+        String(32), index=False, nullable=False, default="fifo",
+        doc="Forgetting policy: lru|fifo"
+    )
+    temperature: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0.5, doc="LLM temperature")
+    system_prompt: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="System prompt")
+    user_prompt: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="User prompt")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "avatar": self.avatar,
+            "tenant_id": self.tenant_id,
+            "memory_type": self.memory_type,
+            "storage_type": self.storage_type,
+            "embd_id": self.embd_id,
+            "llm_id": self.llm_id,
+            "permissions": self.permissions,
+            "description": self.description,
+            "memory_size": self.memory_size,
+            "forgetting_policy": self.forgetting_policy,
+            "temperature": self.temperature,
+            "system_prompt": self.system_prompt,
+            "user_prompt": self.user_prompt,
+            "create_time": self.create_time,
+            "create_date": self.create_date,
+            "update_time": self.update_time,
+            "update_date": self.update_date
+        }
+
+
 '''
 拥有权限，采用这种方式
 '''

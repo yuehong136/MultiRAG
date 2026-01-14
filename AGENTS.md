@@ -93,6 +93,11 @@ docker compose up -d --profile gpu
 - Use `.model_validate()` instead of `.parse_obj()`
 - Use `@field_validator` instead of `@validator`
 
+### SQLAlchemy 2.0
+- Use `Mapped[type]` + `mapped_column()` instead of `Column()`
+- Use `session.get(Model, pk)` for primary key queries (leverages identity map)
+- Use `select(M).where(...)` instead of `session.query(M).filter(...)`
+
 ### Linting
 - **Formatting**: Use `ruff` for linting and formatting.
   ```bash
