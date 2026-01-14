@@ -706,4 +706,4 @@ async def main():
 if __name__ == "__main__":
     faulthandler.enable()
     init_root_logger(CONSUMER_NAME)
-    asyncio.run(main)
+    asyncio.run(main())
