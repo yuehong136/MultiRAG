@@ -6,6 +6,7 @@
 @date：2024/8/14 11:00
 @desc:
 """
+import asyncio
 import json
 import logging
 import random
@@ -17,11 +18,10 @@ from datetime import datetime
 from io import BytesIO
 from typing import Any
 
-import trio
 import xxhash
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc
+from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc, update
 
 from api.constants import IMG_BASE64_PREFIX, FILE_NAME_LEN_LIMIT
 from api.db import FileType, UserTenantRole, CanvasCategory
@@ -1857,10 +1857,14 @@ class DocumentService(CommonService):
     @classmethod
     def increment_chunk_num(cls, db: Session, doc_id, kb_id, token_num, chunk_num, duration):
         """
-        更新文档和知识库的片段数量、令牌数量和处理时长。
+        更新文档和知识库的片段数量、令牌数量和处理时长（SQLAlchemy 2.0 Core 风格）。
 
         本方法通过查询指定ID的文档和知识库，在数据库中更新它们的令牌数量、片段数量和处理时长。
         如果文档未找到，则抛出LookupError异常。
+
+        注意：此方法故意不更新 update_time/update_date。
+        这是因为文档解析过程中频繁增加 chunk 数量不应该刷新"最后修改时间"，
+        用户通常认为修改文件名或解析配置才算修改，而后台处理进度不算。
 
         参数:
         - db: 数据库会话对象，用于执行数据库查询和更新操作。
@@ -1874,30 +1878,35 @@ class DocumentService(CommonService):
         - kb_update: 知识库更新的影响行数。
         """
         # 更新文档的令牌数量、片段数量和处理时长
-        doc_update = db.query(cls.model).filter_by(id=doc_id).update({
+        doc_stmt = update(cls.model).where(cls.model.id == doc_id).values({
             cls.model.token_num: cls.model.token_num + token_num,
             cls.model.chunk_num: cls.model.chunk_num + chunk_num,
             cls.model.process_duration: cls.model.process_duration + duration
         })
+        doc_result = db.execute(doc_stmt)
 
         # 如果文档更新影响行数为0，表示未找到文档，抛出异常
-        if doc_update == 0:
+        if doc_result.rowcount == 0:
             logging.warning("Document not found which is supposed to be there")
+
         # 更新知识库的令牌数量和片段数量
-        kb_update = db.query(Knowledgebase).filter_by(id=kb_id).update({
+        kb_stmt = update(Knowledgebase).where(Knowledgebase.id == kb_id).values({
             Knowledgebase.token_num: Knowledgebase.token_num + token_num,
             Knowledgebase.chunk_num: Knowledgebase.chunk_num + chunk_num
         })
+        kb_result = db.execute(kb_stmt)
         db.commit()
-        return kb_update
+        return kb_result.rowcount
 
     @classmethod
     def decrement_chunk_num(cls, db: Session, doc_id: str, kb_id: str, token_num: int, chunk_num: int, duration: int):
         """
-        减少文档和知识库的片段数量、令牌数量和处理时长。
+        减少文档和知识库的片段数量、令牌数量和处理时长（SQLAlchemy 2.0 Core 风格）。
 
         本方法通过查询指定ID的文档和知识库，在数据库中更新它们的令牌数量、片段数量和处理时长。
         如果文档未找到，则抛出LookupError异常。
+
+        注意：此方法故意不更新 update_time/update_date
 
         参数:
         - db: 数据库会话对象，用于执行数据库查询和更新操作。
@@ -1911,45 +1920,51 @@ class DocumentService(CommonService):
         - kb_update: 知识库更新的影响行数。
         """
         # 更新文档的令牌数量、片段数量和处理时长
-        doc_update = db.query(cls.model).filter_by(id=doc_id).update({
+        doc_stmt = update(cls.model).where(cls.model.id == doc_id).values({
             cls.model.token_num: cls.model.token_num - token_num,
             cls.model.chunk_num: cls.model.chunk_num - chunk_num,
             cls.model.process_duration: cls.model.process_duration + duration
         })
+        doc_result = db.execute(doc_stmt)
 
         # 如果文档更新影响行数为0，表示未找到文档，抛出异常
-        if doc_update == 0:
+        if doc_result.rowcount == 0:
             raise LookupError("Document not found which is supposed to be there")
 
         # 更新知识库的令牌数量和片段数量
-        kb_update = db.query(Knowledgebase).filter_by(id=kb_id).update({
+        kb_stmt = update(Knowledgebase).where(Knowledgebase.id == kb_id).values({
             Knowledgebase.token_num: Knowledgebase.token_num - token_num,
             Knowledgebase.chunk_num: Knowledgebase.chunk_num - chunk_num
         })
+        kb_result = db.execute(kb_stmt)
         db.commit()
-        return kb_update
+        return kb_result.rowcount
 
     @classmethod
     def clear_chunk_num(cls, db: Session, doc_id: str, max_retries=3):
+        """
+        清除文档的 chunk 数量并更新知识库统计（SQLAlchemy 2.0 Core 风格）。
+        """
         doc = cls.get_by_id(db, doc_id)
         if not doc:
             raise LookupError("Can't find document in database.")
         retries = 0
         while retries < max_retries:
             try:
-                # 读取数据
-                kb_record = db.query(Knowledgebase).filter_by(id=doc.kb_id).first()
+                # 读取数据（使用 session.get() 主键直取）
+                kb_record = db.get(Knowledgebase, doc.kb_id)
 
                 # 检查数据是否存在，进行更新
                 if kb_record:
-                    kb_update = db.query(Knowledgebase).filter_by(id=doc.kb_id).update({
+                    kb_update_stmt = update(Knowledgebase).where(Knowledgebase.id == doc.kb_id).values({
                         Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
                         Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
                         Knowledgebase.doc_num: Knowledgebase.doc_num - 1
                     })
+                    result = db.execute(kb_update_stmt)
                     db.commit()
 
-                    return kb_update
+                    return result.rowcount
 
             except OperationalError as e:
                 # 如果检测到锁冲突（例如数据库锁定），可以选择重试
@@ -1972,46 +1987,50 @@ class DocumentService(CommonService):
 
     @classmethod
     def clear_chunk_num_when_rerun(cls, db: Session, doc_id):
-        # 获取文档
-        doc = db.query(cls.model).filter(cls.model.id == doc_id).first()
+        """
+        重新运行时清除 chunk 数量（SQLAlchemy 2.0 推荐的 session.get() 方式）。
+        """
+        # 获取文档（使用 session.get() 主键直取）
+        doc = db.get(cls.model, doc_id)
         assert doc, "Can't find document in database."
 
         # 更新知识库统计
-        num = (
-            db.query(Knowledgebase)
-            .filter(Knowledgebase.id == doc.kb_id)
-            .update({
-                Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
-                Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
-            })
-        )
+        kb_stmt = update(Knowledgebase).where(Knowledgebase.id == doc.kb_id).values({
+            Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
+            Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
+        })
+        result = db.execute(kb_stmt)
 
         # 提交事务
         db.commit()
 
-        return num
+        return result.rowcount
 
 
     @classmethod
     def get_tenant_id(cls, db: Session, doc_id: str):
+        """
+        获取文档所属的租户 ID（SQLAlchemy 2.0 Core 风格）。
+        """
         # 使用 aliased 创建表别名
         KnowledgebaseAlias = aliased(Knowledgebase)
         DocumentAlias = aliased(Document)
-        query = db.query(KnowledgebaseAlias.tenant_id) \
-            .select_from(DocumentAlias) \
-            .join(KnowledgebaseAlias, DocumentAlias.kb_id == KnowledgebaseAlias.id) \
-            .filter(DocumentAlias.id == doc_id, KnowledgebaseAlias.status == StatusEnum.VALID.value) \
-            .first()
-        # query = db.query(Knowledgebase.tenant_id).join(Knowledgebase, cls.model.kb_id == Knowledgebase.id
-        #                                                ).filter(
-        #     cls.model.id == doc_id,
-        #     Knowledgebase.status == StatusEnum.VALID.value
-        # ).first()
-        return query.tenant_id if query else None
+        stmt = (
+            select(KnowledgebaseAlias.tenant_id)
+            .select_from(DocumentAlias)
+            .join(KnowledgebaseAlias, DocumentAlias.kb_id == KnowledgebaseAlias.id)
+            .where(DocumentAlias.id == doc_id, KnowledgebaseAlias.status == StatusEnum.VALID.value)
+        )
+        result = db.execute(stmt).first()
+        return result.tenant_id if result else None
 
     @classmethod
-    def get_knowledgebase_id(cls, db, doc_id):
-        result = db.query(cls.model.kb_id).filter(cls.model.id == doc_id).first()
+    def get_knowledgebase_id(cls, db: Session, doc_id: str):
+        """
+        获取文档所属的知识库 ID（SQLAlchemy 2.0 Core 风格）。
+        """
+        stmt = select(cls.model.kb_id).where(cls.model.id == doc_id)
+        result = db.execute(stmt).first()
         return result.kb_id if result else None
 
     @classmethod
@@ -2814,7 +2833,7 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
             from graphrag.general.mind_map_extractor import MindMapExtractor
             mindmap = MindMapExtractor(llm_bdl)
             try:
-                mind_map = trio.run(mindmap, [c["content_with_weight"] for c in docs if c["doc_id"] == doc_id])
+                mind_map = asyncio.run(mindmap([c["content_with_weight"] for c in docs if c["doc_id"] == doc_id]))
                 mind_map = json.dumps(mind_map.output, ensure_ascii=False, indent=2)
                 if len(mind_map) < 32:
                     raise Exception("Few content: " + mind_map)

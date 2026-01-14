@@ -1631,18 +1631,18 @@ name = "fastembed"
 version = "0.3.6"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
-    { name = "huggingface-hub" },
-    { name = "loguru" },
-    { name = "mmh3" },
-    { name = "numpy" },
-    { name = "onnx" },
-    { name = "onnxruntime" },
-    { name = "pillow" },
-    { name = "pystemmer" },
-    { name = "requests" },
-    { name = "snowballstemmer" },
-    { name = "tokenizers" },
-    { name = "tqdm" },
+    { name = "huggingface-hub", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "loguru", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "mmh3", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "numpy", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "onnx", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "pillow", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "pystemmer", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "requests", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "snowballstemmer", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "tokenizers", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "tqdm", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
 ]
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ae/20/68a109c8def842ed47a2951873fb2d7d23ee296ef8c195aedbb735670fff/fastembed-0.3.6.tar.gz", hash = "sha256:c93c8ec99b8c008c2d192d6297866b8d70ec7ac8f5696b34eb5ea91f85efd15f" }
 wheels = [
@@ -1654,17 +1654,17 @@ name = "fastembed-gpu"
 version = "0.3.6"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
-    { name = "huggingface-hub", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "loguru", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "mmh3", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "numpy", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "pillow", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "pystemmer", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "requests", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "snowballstemmer", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "tokenizers", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "tqdm", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
+    { name = "huggingface-hub", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "loguru", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "mmh3", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "pillow", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "pystemmer", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "requests", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "snowballstemmer", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "tokenizers", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "tqdm", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
 ]
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/da/07/7336c7f3d7ee47f33b407eeb50f5eeb152889de538a52a8f1cc637192816/fastembed_gpu-0.3.6.tar.gz", hash = "sha256:ee2de8918b142adbbf48caaffec0c492f864d73c073eea5a3dcd0e8c1041c50d" }
 wheels = [
@@ -3811,6 +3811,7 @@ dependencies = [
     { name = "six" },
     { name = "slack-sdk" },
     { name = "sqladmin" },
+    { name = "sqlalchemy" },
     { name = "sse-starlette" },
     { name = "strenum" },
     { name = "tabulate" },
@@ -3998,6 +3999,7 @@ requires-dist = [
     { name = "six", specifier = "==1.16.0" },
     { name = "slack-sdk", specifier = "==3.37.0" },
     { name = "sqladmin", specifier = ">=0.21.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.40" },
     { name = "sse-starlette", specifier = ">=2.2.1" },
     { name = "strenum", specifier = "==0.4.15" },
     { name = "strenum", specifier = ">=0.4.15" },
@@ -4333,8 +4335,8 @@ name = "onnx"
 version = "1.17.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
-    { name = "numpy" },
-    { name = "protobuf" },
+    { name = "numpy", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "protobuf", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
 ]
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/9a/54/0e385c26bf230d223810a9c7d06628d954008a5e5e4b73ee26ef02327282/onnx-1.17.0.tar.gz", hash = "sha256:48ca1a91ff73c1d5e3ea2eef20ae5d0e709bb8a2355ed798ffc2169753013fd3" }
 wheels = [
@@ -4350,12 +4352,12 @@ name = "onnxruntime"
 version = "1.19.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
-    { name = "coloredlogs" },
-    { name = "flatbuffers" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "protobuf" },
-    { name = "sympy" },
+    { name = "coloredlogs", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "flatbuffers", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "numpy", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "packaging", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "protobuf", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
+    { name = "sympy", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/f2/a5/2a02687a88fc8a2507bef65876c90e96b9f8de5ba1f810acbf67c140fc67/onnxruntime-1.19.2-cp312-cp312-macosx_11_0_universal2.whl", hash = "sha256:68e7051bef9cfefcbb858d2d2646536829894d72a4130c24019219442b1dd2ed" },
@@ -4370,12 +4372,12 @@ name = "onnxruntime-gpu"
 version = "1.19.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
-    { name = "coloredlogs", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "flatbuffers", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "numpy", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "packaging", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "protobuf", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
-    { name = "sympy", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
+    { name = "coloredlogs", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "flatbuffers", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "packaging", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "protobuf", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "sympy", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
 ]
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/68/55/49e5b4b4d6e9a8841dcdec2f102069716b626bf6ce9640b832a9497504eb/onnxruntime_gpu-1.19.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:554a02a3fac0119707eb87327908afd21c4e6f0fa5bf9a034398f098adc316c5" },
@@ -6588,31 +6590,37 @@ wheels = [
 
 [[package]]
 name = "sqlalchemy"
-version = "2.0.39"
+version = "2.0.45"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
-    { name = "greenlet", marker = "(python_full_version < '3.14' and platform_machine == 'AMD64') or (python_full_version < '3.14' and platform_machine == 'WIN32') or (python_full_version < '3.14' and platform_machine == 'aarch64') or (python_full_version < '3.14' and platform_machine == 'amd64') or (python_full_version < '3.14' and platform_machine == 'ppc64le') or (python_full_version < '3.14' and platform_machine == 'win32') or (python_full_version < '3.14' and platform_machine == 'x86_64')" },
+    { name = "greenlet", marker = "platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64'" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/00/8e/e77fcaa67f8b9f504b4764570191e291524575ddbfe78a90fc656d671fdc/sqlalchemy-2.0.39.tar.gz", hash = "sha256:5d2d1fe548def3267b4c70a8568f108d1fed7cbbeccb9cc166e05af2abc25c22" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/be/f9/5e4491e5ccf42f5d9cfc663741d261b3e6e1683ae7812114e7636409fcc6/sqlalchemy-2.0.45.tar.gz", hash = "sha256:1632a4bda8d2d25703fdad6363058d882541bdaaee0e5e3ddfa0cd3229efce88" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/98/86/b2cb432aeb00a1eda7ed33ce86d943c2452dc1642f3ec51bfe9eaae9604b/sqlalchemy-2.0.39-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:c457a38351fb6234781d054260c60e531047e4d07beca1889b558ff73dc2014b" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/bf/b0/b2479edb3419ca763ba1b587161c292d181351a33642985506a530f9162b/sqlalchemy-2.0.39-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:018ee97c558b499b58935c5a152aeabf6d36b3d55d91656abeb6d93d663c0c4c" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/58/5e/c5b792a4abcc71e68d44cb531c4845ac539d558975cc61db1afbc8a73c96/sqlalchemy-2.0.39-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5493a8120d6fc185f60e7254fc056a6742f1db68c0f849cfc9ab46163c21df47" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/e0/a8/055fa8a7c5f85e6123b7e40ec2e9e87d63c566011d599b4a5ab75e033017/sqlalchemy-2.0.39-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b2cf5b5ddb69142511d5559c427ff00ec8c0919a1e6c09486e9c32636ea2b9dd" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/f6/40/aec16681e91a22ddf03dbaeb3c659bce96107c5f47d2a7c665eb7f24a014/sqlalchemy-2.0.39-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:9f03143f8f851dd8de6b0c10784363712058f38209e926723c80654c1b40327a" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/21/9d/cef697b137b9eb0b66ab8e9cf193a7c7c048da3b4bb667e5fcea4d90c7a2/sqlalchemy-2.0.39-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:06205eb98cb3dd52133ca6818bf5542397f1dd1b69f7ea28aa84413897380b06" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/57/05/e109ca7dde837d8f2f1b235357e4e607f8af81ad8bc29c230fed8245687d/sqlalchemy-2.0.39-cp312-cp312-win32.whl", hash = "sha256:7f5243357e6da9a90c56282f64b50d29cba2ee1f745381174caacc50d501b109" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/97/c6/25ca068e38c29ed6be0fde2521888f19da923dbd58f5ff16af1b73ec9b58/sqlalchemy-2.0.39-cp312-cp312-win_amd64.whl", hash = "sha256:2ed107331d188a286611cea9022de0afc437dd2d3c168e368169f27aa0f61338" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/32/47/55778362642344324a900b6b2b1b26f7f02225b374eb93adc4a363a2d8ae/sqlalchemy-2.0.39-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:fe193d3ae297c423e0e567e240b4324d6b6c280a048e64c77a3ea6886cc2aa87" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/1b/e1/f5f26f67d095f408138f0fb2c37f827f3d458f2ae51881546045e7e55566/sqlalchemy-2.0.39-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:79f4f502125a41b1b3b34449e747a6abfd52a709d539ea7769101696bdca6716" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/c5/c2/0db0022fc729a54fc7aef90a3457bf20144a681baef82f7357832b44c566/sqlalchemy-2.0.39-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8a10ca7f8a1ea0fd5630f02feb055b0f5cdfcd07bb3715fc1b6f8cb72bf114e4" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/33/b7/f33743d87d0b4e7a1f12e1631a4b9a29a8d0d7c0ff9b8c896d0bf897fb60/sqlalchemy-2.0.39-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e6b0a1c7ed54a5361aaebb910c1fa864bae34273662bb4ff788a527eafd6e14d" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/c9/74/6814f31719109c973ddccc87bdfc2c2a9bc013bec64a375599dc5269a310/sqlalchemy-2.0.39-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:52607d0ebea43cf214e2ee84a6a76bc774176f97c5a774ce33277514875a718e" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/e8/6b/18f476f4baaa9a0e2fbc6808d8f958a5268b637c8eccff497bf96908d528/sqlalchemy-2.0.39-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:c08a972cbac2a14810463aec3a47ff218bb00c1a607e6689b531a7c589c50723" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/b4/60/76714cecb528da46bc53a0dd36d1ccef2f74ef25448b630a0a760ad07bdb/sqlalchemy-2.0.39-cp313-cp313-win32.whl", hash = "sha256:23c5aa33c01bd898f879db158537d7e7568b503b15aad60ea0c8da8109adf3e7" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/5b/7c/76828886d913700548bac5851eefa5b2c0251ebc37921fe476b93ce81b50/sqlalchemy-2.0.39-cp313-cp313-win_amd64.whl", hash = "sha256:4dabd775fd66cf17f31f8625fc0e4cfc5765f7982f94dc09b9e5868182cb71c0" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/7b/0f/d69904cb7d17e65c65713303a244ec91fd3c96677baf1d6331457fd47e16/sqlalchemy-2.0.39-py3-none-any.whl", hash = "sha256:a1c6b0a5e3e326a466d809b651c63f278b1256146a377a528b6938a279da334f" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/2d/c7/1900b56ce19bff1c26f39a4ce427faec7716c81ac792bfac8b6a9f3dca93/sqlalchemy-2.0.45-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b3ee2aac15169fb0d45822983631466d60b762085bc4535cd39e66bea362df5f" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/0a/93/3be94d96bb442d0d9a60e55a6bb6e0958dd3457751c6f8502e56ef95fed0/sqlalchemy-2.0.45-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ba547ac0b361ab4f1608afbc8432db669bd0819b3e12e29fb5fa9529a8bba81d" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/48/4b/f88ded696e61513595e4a9778f9d3f2bf7332cce4eb0c7cedaabddd6687b/sqlalchemy-2.0.45-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:215f0528b914e5c75ef2559f69dca86878a3beeb0c1be7279d77f18e8d180ed4" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/ed/6a/310ecb5657221f3e1bd5288ed83aa554923fb5da48d760a9f7622afeb065/sqlalchemy-2.0.45-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:107029bf4f43d076d4011f1afb74f7c3e2ea029ec82eb23d8527d5e909e97aa6" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/5c/39/69c0b4051079addd57c84a5bfb34920d87456dd4c90cf7ee0df6efafc8ff/sqlalchemy-2.0.45-cp312-cp312-win32.whl", hash = "sha256:0c9f6ada57b58420a2c0277ff853abe40b9e9449f8d7d231763c6bc30f5c4953" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/f7/4e/510db49dd89fc3a6e994bee51848c94c48c4a00dc905e8d0133c251f41a7/sqlalchemy-2.0.45-cp312-cp312-win_amd64.whl", hash = "sha256:8defe5737c6d2179c7997242d6473587c3beb52e557f5ef0187277009f73e5e1" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/6a/c8/7cc5221b47a54edc72a0140a1efa56e0a2730eefa4058d7ed0b4c4357ff8/sqlalchemy-2.0.45-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:fe187fc31a54d7fd90352f34e8c008cf3ad5d064d08fedd3de2e8df83eb4a1cf" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/0e/50/80a8d080ac7d3d321e5e5d420c9a522b0aa770ec7013ea91f9a8b7d36e4a/sqlalchemy-2.0.45-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:672c45cae53ba88e0dad74b9027dddd09ef6f441e927786b05bec75d949fbb2e" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/da/4c/13dab31266fc9904f7609a5dc308a2432a066141d65b857760c3bef97e69/sqlalchemy-2.0.45-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:470daea2c1ce73910f08caf10575676a37159a6d16c4da33d0033546bddebc9b" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/74/04/891b5c2e9f83589de202e7abaf24cd4e4fa59e1837d64d528829ad6cc107/sqlalchemy-2.0.45-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:9c6378449e0940476577047150fd09e242529b761dc887c9808a9a937fe990c8" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/f1/24/fc59e7f71b0948cdd4cff7a286210e86b0443ef1d18a23b0d83b87e4b1f7/sqlalchemy-2.0.45-cp313-cp313-win32.whl", hash = "sha256:4b6bec67ca45bc166c8729910bd2a87f1c0407ee955df110d78948f5b5827e8a" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/c0/c5/d17113020b2d43073412aeca09b60d2009442420372123b8d49cc253f8b8/sqlalchemy-2.0.45-cp313-cp313-win_amd64.whl", hash = "sha256:afbf47dc4de31fa38fd491f3705cac5307d21d4bb828a4f020ee59af412744ee" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/3d/8d/bb40a5d10e7a5f2195f235c0b2f2c79b0bf6e8f00c0c223130a4fbd2db09/sqlalchemy-2.0.45-cp313-cp313t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:83d7009f40ce619d483d26ac1b757dfe3167b39921379a8bd1b596cf02dab4a6" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/75/a5/346128b0464886f036c039ea287b7332a410aa2d3fb0bb5d404cb8861635/sqlalchemy-2.0.45-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:d8a2ca754e5415cde2b656c27900b19d50ba076aa05ce66e2207623d3fe41f5a" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/cc/64/4e1913772646b060b025d3fc52ce91a58967fe58957df32b455de5a12b4f/sqlalchemy-2.0.45-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7f46ec744e7f51275582e6a24326e10c49fbdd3fc99103e01376841213028774" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/b3/27/caf606ee924282fe4747ee4fd454b335a72a6e018f97eab5ff7f28199e16/sqlalchemy-2.0.45-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:883c600c345123c033c2f6caca18def08f1f7f4c3ebeb591a63b6fceffc95cce" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/85/d0/3d64218c9724e91f3d1574d12eb7ff8f19f937643815d8daf792046d88ab/sqlalchemy-2.0.45-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:2c0b74aa79e2deade948fe8593654c8ef4228c44ba862bb7c9585c8e0db90f33" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/24/10/dd7688a81c5bc7690c2a3764d55a238c524cd1a5a19487928844cb247695/sqlalchemy-2.0.45-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:8a420169cef179d4c9064365f42d779f1e5895ad26ca0c8b4c0233920973db74" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/aa/41/db75756ca49f777e029968d9c9fee338c7907c563267740c6d310a8e3f60/sqlalchemy-2.0.45-cp314-cp314-win32.whl", hash = "sha256:e50dcb81a5dfe4b7b4a4aa8f338116d127cb209559124f3694c70d6cd072b68f" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/89/a2/0e1590e9adb292b1d576dbcf67ff7df8cf55e56e78d2c927686d01080f4b/sqlalchemy-2.0.45-cp314-cp314-win_amd64.whl", hash = "sha256:4748601c8ea959e37e03d13dcda4a44837afcd1b21338e637f7c935b8da06177" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/42/39/f05f0ed54d451156bbed0e23eb0516bcad7cbb9f18b3bf219c786371b3f0/sqlalchemy-2.0.45-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:cd337d3526ec5298f67d6a30bbbe4ed7e5e68862f0bf6dd21d289f8d37b7d60b" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/54/0f/d15398b98b65c2bce288d5ee3f7d0a81f77ab89d9456994d5c7cc8b2a9db/sqlalchemy-2.0.45-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:9a62b446b7d86a3909abbcd1cd3cc550a832f99c2bc37c5b22e1925438b9367b" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/bf/e1/3ccb13c643399d22289c6a9786c1a91e3dcbb68bce4beb44926ac2c557bf/sqlalchemy-2.0.45-py3-none-any.whl", hash = "sha256:5225a288e4c8cc2308dbdd874edad6e7d0fd38eac1e9e5f23503425c8eee20d0" },
 ]
 
 [[package]]

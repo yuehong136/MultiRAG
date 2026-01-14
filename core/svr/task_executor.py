@@ -1053,12 +1053,12 @@ async def run_dataflow(db: Session, task: dict):
             del ck["positions"]
 
     if metadata:
-        e, doc = DocumentService.get_by_id(doc_id)
+        e, doc = DocumentService.get_by_id(db, doc_id)
         if e:
             if isinstance(doc.meta_fields, str):
                 doc.meta_fields = json.loads(doc.meta_fields)
             dict_update(doc.meta_fields)
-            DocumentService.update_by_id(doc_id, {"meta_fields": metadata})
+            DocumentService.update_by_id(db, doc_id, {"meta_fields": metadata})
 
     start_ts = timer()
     set_progress(task_id, prog=0.82, msg="[DOC Engine]:\nStart to index...")
@@ -1070,15 +1070,15 @@ async def run_dataflow(db: Session, task: dict):
     
     e = await insert_milvus(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, task_id, 0, 100000000), collection_name, schema)
     if not e:
-        PipelineOperationLogService.create(document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+        PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
         return
 
     time_cost = timer() - start_ts
     task_time_cost = timer() - task_start_ts
-    set_progress(task_id, prog=1., msg="Indexing done ({:.2f}s). Task done ({:.2f}s)".format(time_cost, task_time_cost))
-    DocumentService.increment_chunk_num(doc_id, task_dataset_id, embedding_token_consumption, len(chunks), task_time_cost)
+    set_progress(db, task_id, prog=1., msg="Indexing done ({:.2f}s). Task done ({:.2f}s)".format(time_cost, task_time_cost))
+    DocumentService.increment_chunk_num(db, doc_id, task_dataset_id, embedding_token_consumption, len(chunks), task_time_cost)
     logging.info("[Done], chunks({}), token({}), elapsed:{:.2f}".format(len(chunks),  embedding_token_consumption, task_time_cost))
-    PipelineOperationLogService.create(document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+    PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
 
 
 @timeout(3600)

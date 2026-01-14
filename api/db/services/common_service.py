@@ -4,10 +4,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Type, Generic, TypeVar
 
-from sqlalchemy import Row, desc, asc, text, exc
+from sqlalchemy import Row, desc, asc, text, exc, update, select, delete, insert
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
-from sqlalchemy.exc import NoResultFound, IntegrityError
+from sqlalchemy.exc import NoResultFound, IntegrityError, MultipleResultsFound
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -84,18 +84,27 @@ class CommonService(Generic[ModelType]):
     def query(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None,
               order_by: str | InstrumentedAttribute | None = None, **kwargs) -> list[ModelType] | list[Row]:
         """
-       根据条件查询数据库中的记录。
+        根据条件查询数据库中的记录（SQLAlchemy 2.0 Core 风格）。
 
-       :param db: 数据库会话对象。
-       :param cols: 需要查询的列，可选。
-       :param reverse: 是否逆序排序，可选。
-       :param order_by: 按哪个字段排序，可选。
-       :param kwargs: 其他过滤条件。
-       :return: 查询结果列表。
-       """
-        # 根据过滤条件构造查询表达式
-        query = db.query(cls.model).filter_by(**kwargs)
+        :param db: 数据库会话对象。
+        :param cols: 需要查询的列，可选。
+        :param reverse: 是否逆序排序，可选。
+        :param order_by: 按哪个字段排序，可选。
+        :param kwargs: 其他过滤条件。
+        :return: 查询结果列表。
+        """
+        # 构建 select 语句
+        if cols:
+            stmt = select(*[getattr(cls.model, col) for col in cols])
+        else:
+            stmt = select(cls.model)
 
+        # 根据过滤条件构造 where 子句
+        if kwargs:
+            conditions = [getattr(cls.model, k) == v for k, v in kwargs.items() if hasattr(cls.model, k)]
+            stmt = stmt.where(*conditions)
+
+        # 处理排序
         if order_by:
             if not isinstance(order_by, str):
                 order_by = str(order_by)  # 确保 order_by 是字符串类型
@@ -103,46 +112,75 @@ class CommonService(Generic[ModelType]):
                 raise ValueError(f"'{order_by}' is not a valid attribute of '{cls.model.__name__}'")
             order_column = getattr(cls.model, order_by)
             if reverse:
-                query = query.order_by(desc(order_column))
+                stmt = stmt.order_by(desc(order_column))
             else:
-                query = query.order_by(asc(order_column))
+                stmt = stmt.order_by(asc(order_column))
         else:
             order_column = getattr(cls.model, "create_time", None)
             if order_column is not None:
                 if reverse:
-                    query = query.order_by(desc(order_column))
+                    stmt = stmt.order_by(desc(order_column))
                 else:
-                    query = query.order_by(asc(order_column))
+                    stmt = stmt.order_by(asc(order_column))
 
+        # 执行查询并返回结果
         if cols:
-            query = query.with_entities(*[getattr(cls.model, col) for col in cols])
-        return query.all()
+            return db.execute(stmt).all()
+        else:
+            return db.scalars(stmt).all()
 
     @classmethod
-    def get_all(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None, order_by: str | None = None) ->  list[ModelType] | list[Row]:
-        query = db.query(cls.model)
+    def get_all(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None, order_by: str | None = None) -> list[ModelType] | list[Row]:
+        """
+        获取所有记录（SQLAlchemy 2.0 Core 风格）。
+        """
+        # 构建 select 语句
         if cols:
-            query = query.with_entities(*[getattr(cls.model, col) for col in cols])
+            stmt = select(*[getattr(cls.model, col) for col in cols])
+        else:
+            stmt = select(cls.model)
+
+        # 处理排序
         if reverse is not None:
             if not order_by or not hasattr(cls.model, order_by):
                 order_by = "create_time"
             order_column = getattr(cls.model, order_by)
             if reverse:
-                query = query.order_by(order_column.desc())
+                stmt = stmt.order_by(order_column.desc())
             else:
-                query = query.order_by(order_column.asc())
-        return query.all()
+                stmt = stmt.order_by(order_column.asc())
+
+        # 执行查询并返回结果
+        if cols:
+            return db.execute(stmt).all()
+        else:
+            return db.scalars(stmt).all()
 
     @classmethod
     def get(cls, db: Session, **kwargs) -> ModelType:
+        """
+        根据条件获取单个记录（SQLAlchemy 2.0 Core 风格）。
+        如果未找到记录，抛出 HTTPException 404。
+        """
         try:
-            return db.query(cls.model).filter_by(**kwargs).one()
+            stmt = select(cls.model)
+            if kwargs:
+                conditions = [getattr(cls.model, k) == v for k, v in kwargs.items() if hasattr(cls.model, k)]
+                stmt = stmt.where(*conditions)
+            return db.scalars(stmt).one()
         except NoResultFound:
             raise HTTPException(status_code=404, detail="Item not found")
 
     @classmethod
     def get_or_none(cls, db: Session, **kwargs) -> ModelType | None:
-        return db.query(cls.model).filter_by(**kwargs).one_or_none()
+        """
+        根据条件获取单个记录，如果未找到则返回 None（SQLAlchemy 2.0 Core 风格）。
+        """
+        stmt = select(cls.model)
+        if kwargs:
+            conditions = [getattr(cls.model, k) == v for k, v in kwargs.items() if hasattr(cls.model, k)]
+            stmt = stmt.where(*conditions)
+        return db.scalars(stmt).one_or_none()
 
     @classmethod
     @retry_db_operation(max_attempts=3)  # 保存操作重试3次
@@ -186,32 +224,55 @@ class CommonService(Generic[ModelType]):
     @classmethod
     @retry_db_operation(max_attempts=5, max_wait=10)  # 批量插入重试5次，关键操作
     def insert_many(cls, db: Session, data_list: list[dict[str, Any]], batch_size: int = 100):
+        """
+        批量插入记录（SQLAlchemy 2.0 Core 风格）。
+
+        Args:
+            db: 数据库会话
+            data_list: 要插入的数据字典列表
+            batch_size: 每批次插入的记录数量
+        """
+        if not data_list:
+            return
+
         now = cls.current_timestamp()
         now_datetime = cls.current_datetime()
         for data in data_list:
             data["create_time"] = now
             data["create_date"] = now_datetime
 
-        # Perform batch insertion in chunks
+        # SQLAlchemy 2.0 Core 风格：使用 insert().values() 批量插入
         for i in range(0, len(data_list), batch_size):
-            db.bulk_insert_mappings(cls.model, data_list[i:i + batch_size])
+            batch = data_list[i:i + batch_size]
+            stmt = insert(cls.model).values(batch)
+            db.execute(stmt)
             db.commit()
 
     @classmethod
     def update_many_by_id(cls, db: Session, data_list: list[dict[str, Any]]):
+        """
+        批量通过 ID 更新记录（SQLAlchemy 2.0 Core 风格）。
+
+        Args:
+            db: 数据库会话
+            data_list: 包含更新数据的字典列表，每个字典必须包含 'id' 字段
+        """
         now = cls.current_timestamp()
         now_datetime = cls.current_datetime()
         for data in data_list:
             data["update_time"] = now
             data["update_date"] = now_datetime
-            db.query(cls.model).filter_by(id=data["id"]).update(data)
+        for data in data_list:
+            record_id = data["id"]
+            stmt = update(cls.model).where(cls.model.id == record_id).values(data)
+            db.execute(stmt)
         db.commit()
 
     @classmethod
     @retry_db_operation(max_attempts=3)  # 更新操作重试3次
     def update_by_id(cls, db: Session, pid: str, data: dict[str, Any]) -> int:
         """
-        通过 ID 更新记录，带自动重试机制
+        通过 ID 更新记录（SQLAlchemy 2.0 Core 风格），带自动重试机制
 
         Args:
             db: 数据库会话
@@ -221,19 +282,22 @@ class CommonService(Generic[ModelType]):
         Returns:
             更新的记录数量
         """
-        now = cls.current_timestamp()
-        now_datetime = cls.current_datetime()
-        data["update_time"] = now
-        data["update_date"] = now_datetime
-        num = db.query(cls.model).filter(cls.model.id == pid).update(data)
+        data["update_time"] = cls.current_timestamp()
+        data["update_date"] = cls.current_datetime()
+        stmt = update(cls.model).where(cls.model.id == pid).values(data)
+        result = db.execute(stmt)
         db.commit()
-        return num
+        return result.rowcount
 
     @classmethod
     @retry_db_operation(max_attempts=3)
     def get_by_id(cls, db: Session, pid: Any) -> ModelType | None:
         """
-        通过主键或 ID 字段查询单个记录（带自动重试）。
+        通过主键查询单个记录（SQLAlchemy 2.0 推荐的 session.get() 方式，带自动重试）。
+
+        使用 session.get() 的优势：
+        - 会先检查 Session 的 identity map，如果对象已加载则直接返回
+        - 代码更简洁，语义更清晰
 
         重试机制：
         - 自动重试 OperationalError、DisconnectionError 等连接类错误
@@ -242,34 +306,39 @@ class CommonService(Generic[ModelType]):
         Returns:
             找到时返回对象，找不到时返回 None
         """
-        return (
-            db.query(cls.model)
-            .filter(cls.model.id == pid)
-            .one_or_none()
-        )
+        return db.get(cls.model, pid)
 
     @classmethod
-    def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] | None = None) -> list[ModelType]:
-        query = db.query(cls.model).filter(cls.model.id.in_(pids))
+    def get_by_ids(cls, db: Session, pids: list[Any], cols: list[str] | None = None) -> list[ModelType] | list[Row]:
+        """
+        通过 ID 列表批量查询记录（SQLAlchemy 2.0 Core 风格）。
+        """
         if cols:
-            query = query.with_entities(*[getattr(cls.model, col) for col in cols])
-        return query.all()
+            stmt = select(*[getattr(cls.model, col) for col in cols]).where(cls.model.id.in_(pids))
+            return db.execute(stmt).all()
+        else:
+            stmt = select(cls.model).where(cls.model.id.in_(pids))
+            return db.scalars(stmt).all()
 
     @classmethod
     def delete_by_id(cls, db: Session, pid: Any) -> int:
+        """
+        通过 ID 删除记录（SQLAlchemy 2.0 Core 风格）。
+        """
         try:
-            deleted_count = db.query(cls.model).filter(cls.model.id == pid).delete(synchronize_session=False)
-            db.commit()  # 确保提交事务
-            return deleted_count
+            stmt = delete(cls.model).where(cls.model.id == pid)
+            result = db.execute(stmt)
+            db.commit()
+            return result.rowcount
         except Exception as e:
-            db.rollback()  # 回滚事务
-            print(f"Error occurred: {e}")
+            db.rollback()
+            logger.error(f"Error occurred in delete_by_id: {e}")
             return 0
 
     @classmethod
     def delete_by_ids(cls, db: Session, pids: list[Any]) -> int:
         """
-        Delete multiple records by their IDs
+        通过 ID 列表批量删除记录（SQLAlchemy 2.0 Core 风格）。
 
         Args:
             db: Database session
@@ -279,30 +348,44 @@ class CommonService(Generic[ModelType]):
             Number of records deleted
         """
         try:
-            deleted_count = db.query(cls.model).filter(cls.model.id.in_(pids)).delete(synchronize_session=False)
-            db.commit()  # 确保提交事务
-            return deleted_count
+            stmt = delete(cls.model).where(cls.model.id.in_(pids))
+            result = db.execute(stmt)
+            db.commit()
+            return result.rowcount
         except Exception as e:
-            db.rollback()  # 回滚事务
-            print(f"Error occurred: {e}")
+            db.rollback()
+            logger.error(f"Error occurred in delete_by_ids: {e}")
             return 0
 
     @classmethod
     def filter_update(cls, db: Session, filters: list[Any], update_data: dict[str, Any]):
-        now = cls.current_timestamp()
-        now_datetime = cls.current_datetime()
-        update_data["update_time"] = now
-        update_data["update_date"] = now_datetime
-        # with db.begin():
-        updated_rows= db.query(cls.model).filter(*filters).update(update_data, synchronize_session=False)
+        """
+        批量更新方法（SQLAlchemy 2.0 Core 风格）。
+
+        Args:
+            db: 数据库会话
+            filters: 过滤条件列表
+            update_data: 更新数据字典
+
+        Returns:
+            bool: 是否有记录被更新
+        """
+        update_data["update_time"] = cls.current_timestamp()
+        update_data["update_date"] = cls.current_datetime()
+        stmt = update(cls.model).where(*filters).values(update_data)
+        result = db.execute(stmt)
         db.commit()
-        return updated_rows > 0  # Return True if any rows were updated
+        return result.rowcount > 0
 
     @classmethod
     def filter_delete(cls, db: Session, filters: list[Any]) -> int:
-        num = db.query(cls.model).filter(*filters).delete(synchronize_session=False)
+        """
+        根据条件批量删除记录（SQLAlchemy 2.0 Core 风格）。
+        """
+        stmt = delete(cls.model).where(*filters)
+        result = db.execute(stmt)
         db.commit()
-        return num
+        return result.rowcount
 
     @classmethod
     def cut_list(cls, tar_list: list[Any], n: int) -> list[tuple]:
@@ -310,15 +393,27 @@ class CommonService(Generic[ModelType]):
 
     @classmethod
     def filter_scope_list(cls, db: Session, in_key: str, in_filters_list: list[Any], filters: list | None = None,
-                          cols: list[str] | None = None) -> list[Row[tuple[Type[db_models.BaseModel]]]]:
+                          cols: list[str] | None = None) -> list[Row] | list[ModelType]:
+        """
+        根据 IN 条件和其他过滤条件批量查询记录（SQLAlchemy 2.0 Core 风格）。
+        """
         in_filters_tuple_list = cls.cut_list(in_filters_list, 20)
         if not filters:
             filters = []
         res_list = []
         for filters_tuple in in_filters_tuple_list:
-            query = db.query(cls.model)
+            # 构建 select 语句
             if cols:
-                query = query.with_entities(*[getattr(cls.model, col) for col in cols])
-            query = query.filter(getattr(cls.model, in_key).in_(filters_tuple), *filters)
-            res_list.extend(query.all())
+                stmt = select(*[getattr(cls.model, col) for col in cols])
+            else:
+                stmt = select(cls.model)
+
+            # 添加 where 条件
+            stmt = stmt.where(getattr(cls.model, in_key).in_(filters_tuple), *filters)
+
+            # 执行查询
+            if cols:
+                res_list.extend(db.execute(stmt).all())
+            else:
+                res_list.extend(db.scalars(stmt).all())
         return res_list

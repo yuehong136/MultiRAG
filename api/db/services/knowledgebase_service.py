@@ -8,7 +8,7 @@
 """
 from datetime import datetime
 
-from sqlalchemy import func, update, or_, and_
+from sqlalchemy import func, update, or_, and_, select
 from sqlalchemy.orm import Session
 from api.db import TenantPermission
 from common.constants import StatusEnum, RetCode
@@ -594,19 +594,18 @@ class KnowledgebaseService(CommonService):
         """
         Only use this function when init system
 
+        注意：此方法使用纯 SQL 更新，不会触发 ORM 事件和时间戳更新。
+        这是故意的设计，因为初始化时的文档计数同步不应该改变记录的 update_time。
+
         Args:
             db: 数据库会话对象
             kb_id: 知识库ID
             doc_num: 要设置的文档数量
         """
-        # 先检查知识库是否存在
-        kb = cls.get_by_id(db, kb_id)
-        if not kb:
-            return None
-
         try:
-            # 使用SQLAlchemy的update语句直接更新doc_num字段
-            # 这样可以避免触发自动更新的时间戳字段
+            # 直接使用 SQLAlchemy Core 的 update 语句
+            # 不使用 get_by_id 加载对象，避免将对象放入 session 导致误触发 before_update 事件
+            # 这样可以完全避免触发 ORM 事件和时间戳自动更新
 
             update_stmt = update(cls.model).where(
                 cls.model.id == kb_id
@@ -619,18 +618,16 @@ class KnowledgebaseService(CommonService):
 
             # 检查是否实际更新了记录
             if result.rowcount == 0:
-                # 相当于Peewee中的"no data to save!"情况
-                pass  # that's OK
+                # 知识库不存在或没有变化，这是正常情况
+                pass
 
         except Exception as e:
             db.rollback()
-            # 如果确实需要处理特定的"no data to save"类似情况
-            # 可以在这里添加相应的逻辑
             raise e
 
     @classmethod
     def decrease_document_num_in_delete(cls, db: Session, kb_id: str, doc_num_info: dict) -> int:
-        """删除文档时减少知识库的统计数量（文档数、分块数、token数）"""
+        """删除文档时减少知识库的统计数量（SQLAlchemy 2.0 Core 风格）"""
         try:
             # 获取知识库记录
             kb_row = cls.get_by_id(db, kb_id)
@@ -647,11 +644,10 @@ class KnowledgebaseService(CommonService):
             }
 
             # 执行更新
-            result = db.query(cls.model).filter(
-                cls.model.id == kb_id
-            ).update(update_dict, synchronize_session=False)
+            stmt = update(cls.model).where(cls.model.id == kb_id).values(update_dict)
+            result = db.execute(stmt)
             db.commit()
-            return result
+            return result.rowcount
         except Exception as e:
             db.rollback()
             raise e

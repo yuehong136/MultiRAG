@@ -219,16 +219,25 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         if not KnowledgebaseService.update_by_id(db, kb.id, filtered_data):
             return get_data_error_result()
 
-        # ===== 插入 Milvus 重命名逻辑 =====
-        if "name" in req_data:
-            # 1 构造 Milvus 原集合名 & 新集合名
+        # ===== 向量数据库集合重命名逻辑 =====
+        # 只有当名称实际发生变化时才执行重命名
+        if "name" in req_data and req_data["name"] != old_name:
+            db_type = settings.docStoreConn.dbType()
             old_coll = search.index_name_one(kb.tenant_id, old_name)
             new_coll = search.index_name_one(kb.tenant_id, req_data["name"])
 
-            # 2 确认原集合存在
-            if settings.docStoreConn.has_collection(old_coll):
-                settings.docStoreConn.rename_collection(old_coll, new_coll)
-                logging.info(f"Milvus collection renamed: {old_coll} → {new_coll}")
+            # 只有 Milvus 支持原生的 rename_collection
+            if db_type == "milvus":
+                if settings.docStoreConn.has_collection(old_coll):
+                    settings.docStoreConn.rename_collection(old_coll, new_coll)
+                    logging.info(f"Milvus collection renamed: {old_coll} → {new_coll}")
+            else:
+                # Elasticsearch/OpenSearch/Infinity 等暂不支持集合重命名
+                # 因为 ES 需要 reindex 操作，其他数据库也没有原生重命名支持
+                logging.warning(
+                    f"Collection rename not supported for {db_type}. "
+                    f"Old collection '{old_coll}' will remain, new data will use '{new_coll}'."
+                )
 
         if kb.pagerank != req_data.get("pagerank", 0):
             # todo 测试 milvus 能否利用 pagerank【20250715】

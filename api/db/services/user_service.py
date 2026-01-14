@@ -71,11 +71,8 @@ class UserService(CommonService):
 
     @classmethod
     def filter_by_id(cls, db: Session, user_id: str):
-        try:
-            user = db.query(cls.model).filter(cls.model.id == user_id).one()
-            return user
-        except NoResultFound:
-            return None
+        """通过主键查询用户（使用 session.get() 主键直取）"""
+        return db.get(cls.model, user_id)
 
     @classmethod
     def query_user(cls, db: Session, email: str, password: str):

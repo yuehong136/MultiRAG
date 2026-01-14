@@ -10,6 +10,7 @@ import logging
 import operator
 from functools import reduce
 
+from sqlalchemy import select, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,6 +24,18 @@ from api.db.db_models import BaseModel as DataBaseModel
 
 
 def bulk_insert_into_db(db: Session, model, data_source, replace_on_conflict=False):
+    """
+    批量插入数据到数据库（SQLAlchemy 2.0 Core 风格）。
+
+    Args:
+        db: 数据库会话
+        model: ORM 模型类
+        data_source: 要插入的数据字典列表
+        replace_on_conflict: 是否在冲突时更新（基于主键 id）
+    """
+    if not data_source:
+        return
+
     for i, data in enumerate(data_source):
         current_time = current_timestamp() + i
         current_date = timestamp_to_date(current_time)
@@ -36,16 +49,15 @@ def bulk_insert_into_db(db: Session, model, data_source, replace_on_conflict=Fal
     for i in range(0, len(data_source), batch_size):
         batch = data_source[i:i + batch_size]
         try:
+            # SQLAlchemy 2.0 Core 风格：统一使用 insert().values()
+            stmt = insert(model).values(batch)
             if replace_on_conflict:
-                stmt = insert(model).values(batch)
                 update_cols = {col: getattr(stmt.excluded, col) for col in batch[0].keys() if col not in {'create_time', 'create_date'}}
                 stmt = stmt.on_conflict_do_update(
                     index_elements=[model.id],
                     set_=update_cols
                 )
-                db.execute(stmt)
-            else:
-                db.bulk_insert_mappings(model, batch)
+            db.execute(stmt)
             db.commit()
         except SQLAlchemyError as e:
             db.rollback()
@@ -102,23 +114,47 @@ def query_dict2expression(model: type[DataBaseModel], query: dict[str, bool | in
 
 def query_db(db: Session, model: type[DataBaseModel], limit: int = 0, offset: int = 0,
              query: dict = None, order_by: str | list | tuple | None = None):
-    data = db.query(model)
-    if query:
-        data = data.filter(query_dict2expression(model, query))
-    count = data.count()
+    """
+    通用数据库查询函数（SQLAlchemy 2.0 Core 风格）。
 
+    Args:
+        db: 数据库会话
+        model: ORM 模型类
+        limit: 返回结果数量限制，0 表示不限制
+        offset: 结果偏移量
+        query: 查询条件字典，格式为 {field: value} 或 {field: (operator, value)}
+        order_by: 排序字段，可以是字符串或 (field, 'asc'/'desc') 元组
+
+    Returns:
+        (data_list, total_count) 元组
+    """
+    # 构建基础 select 语句
+    stmt = select(model)
+
+    # 添加过滤条件
+    if query:
+        stmt = stmt.where(query_dict2expression(model, query))
+
+    # 统计总数（SQLAlchemy 2.0 风格）
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    count = db.execute(count_stmt).scalar_one()
+
+    # 处理排序
     if not order_by:
         order_by = 'create_time'
     if not isinstance(order_by, (list, tuple)):
         order_by = (order_by, 'asc')
-    order_by, order = order_by
-    order_by = getattr(model, order_by)
-    order_by = getattr(order_by, order)()
-    data = data.order_by(order_by)
+    order_field, order_direction = order_by
+    order_column = getattr(model, order_field)
+    order_column = getattr(order_column, order_direction)()
+    stmt = stmt.order_by(order_column)
 
+    # 分页
     if limit > 0:
-        data = data.limit(limit)
+        stmt = stmt.limit(limit)
     if offset > 0:
-        data = data.offset(offset)
+        stmt = stmt.offset(offset)
 
+    # 执行查询（SQLAlchemy 2.0 风格）
+    data = db.scalars(stmt).all()
     return list(data), count

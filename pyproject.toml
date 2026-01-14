@@ -184,6 +184,7 @@ dependencies = [
     "litellm>=1.74.15.post1",
     "fastapi-mail>=1.4.1",
     "sqladmin>=0.21.0",
+    "sqlalchemy>=2.0.40",
     "lark>=1.2.2",
     "mammoth>=1.11.0",
     "markdownify>=1.2.0",

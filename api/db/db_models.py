@@ -10,12 +10,13 @@ import logging
 import os
 import sys
 import inspect
-from sqlalchemy import create_engine, Column, String, DateTime, BigInteger, event, Integer, Float, Boolean, Text, text
-from sqlalchemy.orm import sessionmaker, declarative_base, Session
+from sqlalchemy import create_engine, String, DateTime, BigInteger, event, Integer, Float, Boolean, Text, text, JSON, select
+from sqlalchemy.orm import sessionmaker, Session, object_session, DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.exc import OperationalError, DisconnectionError, SQLAlchemyError
 from sqlalchemy.inspection import inspect as sa_inspect
+from sqlalchemy.orm.attributes import get_history
 from sqlalchemy.dialects.postgresql import JSONB
-import typing
+from typing import Type
 import uuid
 from datetime import datetime, timezone
 import time
@@ -177,9 +178,16 @@ def receive_close(dbapi_conn, connection_record):
     logging.debug(f"[连接池] 数据库连接已关闭 | 进程PID: {os.getpid()}")
 
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,
+    bind=engine
+)
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    """SQLAlchemy 2.0 风格的声明式基类"""
+    pass
 
 from contextlib import contextmanager
 
@@ -343,7 +351,7 @@ AUTO_DATE_TIMESTAMP_FIELD_PREFIX = {
     "write_access"}
 
 
-def is_continuous_field(cls: typing.Type) -> bool:
+def is_continuous_field(cls: Type) -> bool:
     """检查类型是否是连续字段类型（例如数值或日期类型）。"""
     if cls in CONTINUOUS_FIELD_TYPE:
         return True
@@ -357,7 +365,18 @@ def is_continuous_field(cls: typing.Type) -> bool:
 
 
 def auto_date_timestamp_field():
+    """获取所有时间戳字段名称集合，如 {'create_time', 'update_time', ...}"""
     return {f"{f}_time" for f in AUTO_DATE_TIMESTAMP_FIELD_PREFIX}
+
+
+def auto_date_timestamp_date_field():
+    """获取所有日期字段名称集合，如 {'create_date', 'update_date', ...}"""
+    return {f"{f}_date" for f in AUTO_DATE_TIMESTAMP_FIELD_PREFIX}
+
+
+def timestamp_to_datetime(ts: int) -> datetime:
+    """将毫秒时间戳转换为 UTC datetime 对象"""
+    return datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
 
 
 def get_utc_now():
@@ -370,32 +389,98 @@ def get_timestamp_ms():
     return int(get_utc_now().timestamp() * 1000)
 
 
+# ==================== 批量更新数据规范化 ====================
+# 类似 Peewee BaseModel._normalize_data 的功能
+# 提供统一的数据规范化函数，供 CommonService 使用（SQLAlchemy 2.0 风格）
+
+
+def normalize_update_data(model, values: dict) -> dict:
+    """
+    规范化批量更新的数据，自动注入时间戳字段。
+
+    模拟 Peewee BaseModel._normalize_data 的行为：
+    1. 自动设置 update_time 为当前时间戳
+    2. 自动同步 *_time 和 *_date 字段（如果 *_time 被设置，自动设置对应的 *_date）
+
+    参数:
+        model: SQLAlchemy 模型类
+        values: 更新值字典
+
+    返回:
+        规范化后的更新值字典（新字典，不修改原 values）
+
+    使用示例（SQLAlchemy 2.0 风格）:
+        from sqlalchemy import update
+
+        values = normalize_update_data(Knowledgebase, {
+            Knowledgebase.chunk_num: Knowledgebase.chunk_num + 10
+        })
+        stmt = update(Knowledgebase).where(Knowledgebase.id == kb_id).values(values)
+        db.execute(stmt)
+    """
+    if not values:
+        return values
+
+    # 创建新字典，避免修改原 values
+    result = dict(values)
+
+    now = get_utc_now()
+    now_ts = get_timestamp_ms()
+
+    # 1. 自动设置 update_time（如果未显式设置）
+    if hasattr(model, 'update_time'):
+        if 'update_time' not in result and model.update_time not in result:
+            result[model.update_time] = now_ts
+
+    # 2. 自动同步 *_time 和 *_date 字段
+    for prefix in AUTO_DATE_TIMESTAMP_FIELD_PREFIX:
+        time_field = f"{prefix}_time"
+        date_field = f"{prefix}_date"
+
+        # 检查模型是否同时具有 *_time 和 *_date 字段
+        if hasattr(model, time_field) and hasattr(model, date_field):
+            time_attr = getattr(model, time_field)
+            date_attr = getattr(model, date_field)
+
+            # 获取 *_time 的值（可能以字符串或属性对象形式存在于 result 中）
+            time_value = result.get(time_field) or result.get(time_attr)
+
+            if time_value is not None:
+                # 如果 *_date 未设置，自动从 *_time 同步
+                if date_field not in result and date_attr not in result:
+                    if isinstance(time_value, int):
+                        result[date_attr] = timestamp_to_datetime(time_value)
+                    elif isinstance(time_value, datetime):
+                        result[date_attr] = time_value
+
+    return result
+
+
 class BaseModel(Base):
     __abstract__ = True
 
-    id = Column(String, primary_key=False, nullable=False, index=True,
-                default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(String, primary_key=False, nullable=False, index=True, default=lambda: str(uuid.uuid4()))
 
     # 日期时间对象
-    create_date = Column(DateTime, nullable=True, index=True,
-                         default=get_utc_now)
-    update_date = Column(DateTime, nullable=True, index=True,
-                         default=get_utc_now, onupdate=get_utc_now)
+    create_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True, default=get_utc_now)
+    # 注意：不使用 onupdate，时间戳更新由 before_update 事件监听器控制
+    # 这样可以只在有真正变更时才更新时间戳
+    update_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True, default=get_utc_now)
 
     # 毫秒时间戳
-    create_time = Column(BigInteger, nullable=True, index=True,
-                         default=get_timestamp_ms)
-    update_time = Column(BigInteger, nullable=True, index=True,
-                         default=get_timestamp_ms, onupdate=get_timestamp_ms)
+    create_time: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True, default=get_timestamp_ms)
+    # 注意：不使用 onupdate，时间戳更新由 before_update 事件监听器控制
+    update_time: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True, default=get_timestamp_ms)
 
     def to_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
     @classmethod
     def query(cls, reverse=None, order_by=None, **kwargs):
+        """SQLAlchemy 2.0 风格的查询方法"""
         session = SessionLocal()
         try:
-            query = session.query(cls)
+            stmt = select(cls)
             filters = []
             for f_n, f_v in kwargs.items():
                 attr_name = f"{f_n}"
@@ -418,19 +503,19 @@ class BaseModel(Base):
                     filters.append(column_attr == f_v)
 
             if filters:
-                query = query.filter(*filters)
+                stmt = stmt.where(*filters)
 
             if order_by:
                 order_column = getattr(cls, order_by, None)
                 if order_column is not None:
                     if reverse:
-                        query = query.order_by(order_column.desc())
+                        stmt = stmt.order_by(order_column.desc())
                     else:
-                        query = query.order_by(order_column.asc())
+                        stmt = stmt.order_by(order_column.asc())
                 else:
-                    query = query.order_by(cls.create_time.desc() if reverse else cls.create_time.asc())
+                    stmt = stmt.order_by(cls.create_time.desc() if reverse else cls.create_time.asc())
 
-            return query.all()
+            return session.scalars(stmt).all()
         finally:
             session.close()
 
@@ -450,34 +535,82 @@ def before_insert(mapper, connection, target):
 
 @event.listens_for(BaseModel, 'before_update', propagate=True)
 def before_update(mapper, connection, target):
-    """在更新前同步更新时间字段"""
-    now = get_utc_now()
-    timestamp = int(now.timestamp() * 1000)
+    """在更新前同步更新时间字段
 
-    target.update_date = now
-    target.update_time = timestamp
+    关键改进：只有在对象真正有变更（除了时间字段外的其他字段）时才更新时间戳。
+    这避免了以下问题：
+    1. JSONB 字段被访问时可能导致对象被误判为 dirty
+    2. 同一 session 中的批量操作导致所有加载的对象时间戳被同时更新
+
+    注意：JSONB/JSON 字段使用深度比较来判断是否真正变更，因为 SQLAlchemy
+    对可变类型的变更检测不可靠。
+    """
+    session = object_session(target)
+    if session is None:
+        return
+
+    # 检查是否有真正的变更（排除时间戳字段本身）
+    time_fields = {'update_time', 'update_date', 'create_time', 'create_date'}
+    has_real_changes = False
+
+    # 获取 mapper 中定义的所有列属性
+    for attr in mapper.column_attrs:
+        attr_name = attr.key
+        # 跳过时间戳字段
+        if attr_name in time_fields:
+            continue
+
+        # 获取列类型
+        column = attr.columns[0]
+        column_type = type(column.type)
+
+        # 对于 JSONB/JSON 字段，使用深度比较而不是 get_history
+        # 因为 SQLAlchemy 对可变类型的变更检测不可靠
+        if column_type in (JSONB, JSON):
+            history = get_history(target, attr_name)
+            if history.has_changes():
+                # 进行深度比较：比较旧值和新值是否真的不同
+                old_value = history.deleted[0] if history.deleted else None
+                new_value = getattr(target, attr_name)
+                # 只有当值真的不同时才认为是变更
+                if old_value != new_value:
+                    has_real_changes = True
+                    break
+        else:
+            # 非 JSONB 字段，使用标准的 get_history
+            history = get_history(target, attr_name)
+            if history.has_changes():
+                has_real_changes = True
+                break
+
+    # 只有在有真正变更时才更新时间戳
+    if has_real_changes:
+        now = get_utc_now()
+        timestamp = int(now.timestamp() * 1000)
+        target.update_date = now
+        target.update_time = timestamp
 
 
 class User(BaseModel):
     __tablename__ = "t_ai_users"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    access_token = Column(String(255), index=True, nullable=True)
-    nickname = Column(String(100), index=True, nullable=False)
-    password = Column(String(255), index=True, nullable=True)
-    email = Column(String(255), unique=True, index=True, nullable=False)
-    avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
-    language = Column(String(32), index=True, nullable=True, default="English")
-    color_schema = Column(String(32), index=True, nullable=True, default="Bright")
-    timezone = Column(String(64), index=True, nullable=True, default="UTC+8\tAsia/Shanghai")
-    last_login_time = Column(DateTime, index=True, nullable=True)
-    is_authenticated = Column(Boolean, index=True, nullable=False, default=True)
-    is_active = Column(Boolean, index=True, nullable=False, default=True)
-    is_anonymous = Column(Boolean, index=True, nullable=False, default=False)
-    login_channel = Column(String, index=True, nullable=True, default=None)
-    status = Column(String(1), index=True, nullable=True, default="1")
-    is_superuser = Column(Boolean, index=True, nullable=True, default=False)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    access_token: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    nickname: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
+    password: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    avatar: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="avatar base64 string")
+    language: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="English")
+    color_schema: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="Bright")
+    timezone: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True, default="UTC+8\tAsia/Shanghai")
+    last_login_time: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    is_authenticated: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=True)
+    is_anonymous: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=False)
+    login_channel: Mapped[str | None] = mapped_column(String, index=True, nullable=True, default=None)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
+    is_superuser: Mapped[bool | None] = mapped_column(Boolean, index=True, nullable=True, default=False)
 
     def to_dict(self):
         return {
@@ -501,18 +634,18 @@ class Tenant(BaseModel):
     __tablename__ = "t_ai_tenants"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    name = Column(String(100), index=True, nullable=True, doc="Tenant name")
-    public_key = Column(String(255), index=True, nullable=True)
-    llm_id = Column(String(128), index=True, nullable=False, doc="default llm ID")
-    embd_id = Column(String(128), index=True, nullable=False, doc="default embedding model ID")
-    asr_id = Column(String(128), index=True, nullable=False, doc="default ASR model ID")
-    img2txt_id = Column(String(128), index=True, nullable=False, doc="default image to text model ID")
-    rerank_id = Column(String(128), index=True, nullable=True, doc="default rerank model ID")
-    tts_id = Column(String(256), index=True, nullable=True, doc="default tts model ID")
-    parser_ids = Column(String(256), index=True, nullable=False, doc="document processors")
-    credit = Column(Integer, index=True, nullable=False, default=512)
-    status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(100), index=True, nullable=True, doc="Tenant name")
+    public_key: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    llm_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default llm ID")
+    embd_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default embedding model ID")
+    asr_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default ASR model ID")
+    img2txt_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default image to text model ID")
+    rerank_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True, doc="default rerank model ID")
+    tts_id: Mapped[str | None] = mapped_column(String(256), index=True, nullable=True, doc="default tts model ID")
+    parser_ids: Mapped[str] = mapped_column(String(256), index=True, nullable=False, doc="document processors")
+    credit: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=512)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
     def to_dict(self):
         return {
@@ -531,12 +664,12 @@ class UserTenant(BaseModel):
     __tablename__ = "t_ai_user_tenants"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(128), primary_key=True, index=False, nullable=False)
-    user_id = Column(String(128), index=True, nullable=False)
-    tenant_id = Column(String(128), index=True, nullable=False)
-    role = Column(String(128), index=True, nullable=False, doc="UserTenantRole")
-    invited_by = Column(String(128), index=True, nullable=False)
-    status = Column(String(1), index=True, nullable=True, default="1")
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, index=False, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="UserTenantRole")
+    invited_by: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
 
     def to_dict(self):
         return {
@@ -550,49 +683,49 @@ class LLMFactories(BaseModel):
     __tablename__ = "t_ai_llm_factories"
     __table_args__ = {"schema": "usr_ai"}
 
-    name = Column(String(128), primary_key=True, index=False, nullable=False, doc="LLM factory name")
-    logo = Column(Text, index=False, nullable=True)
-    tags = Column(String(255), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, ASR")
-    rank = Column(Integer, index=False, default=0)
-    status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
+    name: Mapped[str] = mapped_column(String(128), primary_key=True, index=False, nullable=False, doc="LLM factory name")
+    logo: Mapped[str | None] = mapped_column(Text, index=False, nullable=True)
+    tags: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, ASR")
+    rank: Mapped[int | None] = mapped_column(Integer, index=False, default=0)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
 class LLM(BaseModel):
     __tablename__ = "t_ai_llms"
     __table_args__ = {"schema": "usr_ai"}
 
-    fid = Column(String(128), primary_key=True, index=True, nullable=False, doc="LLM factory id")
-    llm_name = Column(String(128), primary_key=True, index=True, nullable=False)
-    mdl_type = Column(String(128), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, ASR")
-    max_tokens = Column(BigInteger, index=False, nullable=False, default=0)
-    tags = Column(String(255), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, Chat, 32k...")
-    is_tools = Column(Boolean, index=True, nullable=False, default=False, doc="support tools")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
+    fid: Mapped[str] = mapped_column(String(128), primary_key=True, index=True, nullable=False, doc="LLM factory id")
+    llm_name: Mapped[str] = mapped_column(String(128), primary_key=True, index=True, nullable=False)
+    mdl_type: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, ASR")
+    max_tokens: Mapped[int] = mapped_column(BigInteger, index=False, nullable=False, default=0)
+    tags: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="LLM, Text Embedding, Image2Text, Chat, 32k...")
+    is_tools: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=False, doc="support tools")
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
 class TenantLLM(BaseModel):
     __tablename__ = "t_ai_tenant_llms"
     __table_args__ = {"schema": "usr_ai"}
 
-    tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
-    llm_factory = Column(String(128), primary_key=True, index=True, nullable=False, doc="LLM factory name")
-    mdl_type = Column(String(128), index=True, nullable=True, doc="LLM, Text Embedding, Image2Text, ASR")
-    llm_name = Column(String(128), primary_key=True, index=True, nullable=True)
-    api_key = Column(Text, nullable=True, doc="API KEY")
-    api_base = Column(String(255), index=False, nullable=True)
-    max_tokens = Column(Integer, index=True, nullable=False, default=8192)
-    used_tokens = Column(Integer, index=True, nullable=False, default=0)
-    status = Column(String(1), index=True, nullable=False, default="1", doc="is it validate(0: wasted, 1: validate)")
+    tenant_id: Mapped[str] = mapped_column(String(32), primary_key=True, index=True, nullable=False)
+    llm_factory: Mapped[str] = mapped_column(String(128), primary_key=True, index=True, nullable=False, doc="LLM factory name")
+    mdl_type: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True, doc="LLM, Text Embedding, Image2Text, ASR")
+    llm_name: Mapped[str | None] = mapped_column(String(128), primary_key=True, index=True, nullable=True)
+    api_key: Mapped[str | None] = mapped_column(Text, nullable=True, doc="API KEY")
+    api_base: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True)
+    max_tokens: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=8192)
+    used_tokens: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(1), index=True, nullable=False, default="1", doc="is it validate(0: wasted, 1: validate)")
 
 
 class TenantLangfuse(BaseModel):
     __tablename__ = "t_ai_tenant_langfuse"
     __table_args__ = {"schema": "usr_ai"}
 
-    tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
-    secret_key = Column(String(2048), index=True, nullable=False, doc="SECRET KEY")
-    public_key = Column(String(2048), index=True, nullable=False, doc="PUBLIC KEY")
-    host = Column(String(128), index=True, nullable=False, doc="HOST")
+    tenant_id: Mapped[str] = mapped_column(String(32), primary_key=True, index=True, nullable=False)
+    secret_key: Mapped[str] = mapped_column(String(2048), index=True, nullable=False, doc="SECRET KEY")
+    public_key: Mapped[str] = mapped_column(String(2048), index=True, nullable=False, doc="PUBLIC KEY")
+    host: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="HOST")
 
     def __str__(self):
         # Mimicking the original __str__ method, but f-string is more Pythonic
@@ -616,264 +749,264 @@ class GuardService(BaseModel):
     __tablename__ = "t_guard_services"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    code = Column(String(128), index=True, nullable=False, unique=True)
-    name = Column(String(128), index=True, nullable=False)
-    description = Column(Text, index=False, nullable=True)
-    service_type = Column(String(32), index=True, nullable=False)
-    enabled_dimensions = Column(JSONB, index=False, nullable=False, default=list)
-    enabled_labels = Column(JSONB, index=False, nullable=False, default=list)
-    policy_config = Column(JSONB, index=False, nullable=False, default=dict)
-    cache_enabled = Column(Boolean, index=True, nullable=False, default=True)
-    timeout_ms = Column(Integer, index=True, nullable=False, default=1000)
-    total_requests = Column(Integer, index=True, nullable=False, default=0)
-    blocked_requests = Column(Integer, index=True, nullable=False, default=0)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    created_by = Column(String(32), index=True, nullable=False)
-    status = Column(String(1), index=True, nullable=True, default="1")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    code: Mapped[str] = mapped_column(String(128), index=True, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True)
+    service_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    enabled_dimensions: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=list)
+    enabled_labels: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=list)
+    policy_config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    cache_enabled: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=True)
+    timeout_ms: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=1000)
+    total_requests: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    blocked_requests: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
 
 
 class GuardServiceLibrary(BaseModel):
     __tablename__ = "t_guard_service_libraries"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    service_id = Column(String(32), index=True, nullable=False)
-    library_id = Column(String(32), index=True, nullable=False)
-    enabled = Column(Boolean, index=True, nullable=False, default=True)
-    priority = Column(Integer, index=True, nullable=False, default=0)
-    library_type = Column(String(32), index=True, nullable=True)
-    apply_to_dimensions = Column(JSONB, index=False, nullable=False, default=list)
-    apply_to_labels = Column(JSONB, index=False, nullable=False, default=list)
-    config = Column(JSONB, index=False, nullable=False, default=dict)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    created_by = Column(String(32), index=True, nullable=False)
-    status = Column(String(1), index=True, nullable=True, default="1")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    service_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    library_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=True)
+    priority: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    library_type: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    apply_to_dimensions: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=list)
+    apply_to_labels: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=list)
+    config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
 
 
 class GuardRule(BaseModel):
     __tablename__ = "t_guard_rules"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    label_id = Column(String(32), index=True, nullable=False)
-    rule_type = Column(String(32), index=True, nullable=False)
-    content = Column(Text, index=True, nullable=False)
-    content_hash = Column(String(64), index=True, nullable=False)
-    match_mode = Column(String(16), index=True, nullable=False)
-    case_sensitive = Column(Boolean, index=True, nullable=False, default=False)
-    config = Column(JSONB, index=False, nullable=False, default=dict)
-    weight = Column(Float, index=True, nullable=False, default=0.0)
-    priority = Column(Integer, index=True, nullable=False, default=0)
-    source = Column(String(64), index=True, nullable=True)
-    description = Column(Text, index=False, nullable=True)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    created_by = Column(String(32), index=True, nullable=False)
-    status = Column(String(1), index=True, nullable=True, default="1")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    label_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    rule_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    content: Mapped[str] = mapped_column(Text, index=True, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    match_mode: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
+    case_sensitive: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=False)
+    config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    weight: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0.0)
+    priority: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    source: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
 
 
 class GuardLog(BaseModel):
     __tablename__ = "t_guard_logs"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    service_id = Column(String(32), index=True, nullable=False)
-    service_code = Column(String(128), index=True, nullable=True)
-    request_id = Column(String(64), index=True, nullable=True)
-    chat_id = Column(String(64), index=True, nullable=True)
-    user_id = Column(String(32), index=True, nullable=True)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    content = Column(Text, index=False, nullable=True)
-    content_hash = Column(String(64), index=True, nullable=False)
-    content_length = Column(Integer, index=True, nullable=False, default=0)
-    content_preview = Column(String(500), index=False, nullable=True)
-    is_blocked = Column(Boolean, index=True, nullable=False, default=False)
-    risk_score = Column(Float, index=True, nullable=False, default=0.0)
-    content_risk_level = Column(String(16), index=True, nullable=True)
-    content_results = Column(JSONB, index=False, nullable=False, default=dict)
-    sensitive_level = Column(String(8), index=True, nullable=True)
-    sensitive_results = Column(JSONB, index=False, nullable=False, default=dict)
-    attack_level = Column(String(16), index=True, nullable=True)
-    attack_results = Column(JSONB, index=False, nullable=False, default=dict)
-    customized_hits = Column(JSONB, index=False, nullable=False, default=list)
-    risk_words = Column(JSONB, index=False, nullable=False, default=list)
-    sensitive_data = Column(JSONB, index=False, nullable=False, default=list)
-    action_taken = Column(String(32), index=True, nullable=True)
-    action_detail = Column(JSONB, index=False, nullable=False, default=dict)
-    source_type = Column(String(64), index=True, nullable=True)
-    source_id = Column(String(255), index=True, nullable=True)
-    client_ip = Column(String(64), index=True, nullable=True)
-    user_agent = Column(Text, index=False, nullable=True)
-    process_time_ms = Column(Integer, index=True, nullable=True)
-    cloud_service_used = Column(Boolean, index=True, nullable=False, default=False)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    service_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    service_code: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    chat_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    user_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    content: Mapped[str | None] = mapped_column(Text, index=False, nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    content_length: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    content_preview: Mapped[str | None] = mapped_column(String(500), index=False, nullable=True)
+    is_blocked: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=False)
+    risk_score: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0.0)
+    content_risk_level: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
+    content_results: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    sensitive_level: Mapped[str | None] = mapped_column(String(8), index=True, nullable=True)
+    sensitive_results: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    attack_level: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
+    attack_results: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    customized_hits: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=list)
+    risk_words: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=list)
+    sensitive_data: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=list)
+    action_taken: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    action_detail: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    source_type: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    source_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    client_ip: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, index=False, nullable=True)
+    process_time_ms: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    cloud_service_used: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=False)
 
 
 class GuardLibraryItem(BaseModel):
     __tablename__ = "t_guard_library_items"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    library_id = Column(String(32), index=True, nullable=False)
-    content = Column(Text, index=True, nullable=False)
-    content_hash = Column(String(64), index=True, nullable=False)
-    content_type = Column(String(32), index=True, nullable=False)
-    item_metadata = Column(JSONB, index=False, nullable=False, default=dict)
-    hit_count = Column(Integer, index=True, nullable=False, default=0)
-    last_hit_time = Column(DateTime, index=True, nullable=True)
-    sort_order = Column(Integer, index=True, nullable=False, default=0)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    status = Column(String(1), index=True, nullable=True, default="1")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    library_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    content: Mapped[str] = mapped_column(Text, index=True, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    item_metadata: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    hit_count: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    last_hit_time: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
 
 
 class GuardLibrary(BaseModel):
     __tablename__ = "t_guard_libraries"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    library_type = Column(String(32), index=True, nullable=False)
-    name = Column(String(128), index=True, nullable=False)
-    description = Column(Text, index=False, nullable=True)
-    category = Column(String(64), index=True, nullable=True)
-    tags = Column(JSONB, index=False, nullable=False, default=list)
-    config = Column(JSONB, index=False, nullable=False, default=dict)
-    item_count = Column(Integer, index=True, nullable=False, default=0)
-    hit_count = Column(Integer, index=True, nullable=False, default=0)
-    last_hit_time = Column(DateTime, index=True, nullable=True)
-    version = Column(Integer, index=True, nullable=False, default=1)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    created_by = Column(String(32), index=True, nullable=False)
-    status = Column(String(1), index=True, nullable=True, default="1")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    library_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    tags: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=list)
+    config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    item_count: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    hit_count: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    last_hit_time: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=1)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
 
 
 class GuardLabel(BaseModel):
     __tablename__ = "t_guard_labels"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    dimension_id = Column(String(32), index=True, nullable=False)
-    code = Column(String(64), index=True, nullable=False, unique=True)
-    name = Column(String(128), index=True, nullable=False)
-    description = Column(Text, index=False, nullable=True)
-    cloud_label = Column(String(64), index=True, nullable=True)
-    cloud_label_type = Column(String(16), index=True, nullable=False)
-    detection_ranges = Column(JSONB, index=False, nullable=False, default=list)
-    enabled = Column(Boolean, index=True, nullable=False, default=True)
-    risk_score = Column(Float, index=True, nullable=False, default=0.0)
-    risk_level = Column(Integer, index=True, nullable=False, default=0)
-    sensitive_level = Column(String(8), index=True, nullable=True)
-    action = Column(String(32), index=True, nullable=False)
-    action_config = Column(JSONB, index=False, nullable=False, default=dict)
-    sort_order = Column(Integer, index=True, nullable=False, default=0)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    created_by = Column(String(32), index=True, nullable=False)
-    status = Column(String(1), index=True, nullable=True, default="1")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    dimension_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(64), index=True, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True)
+    cloud_label: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    cloud_label_type: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
+    detection_ranges: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=list)
+    enabled: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=True)
+    risk_score: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0.0)
+    risk_level: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    sensitive_level: Mapped[str | None] = mapped_column(String(8), index=True, nullable=True)
+    action: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    action_config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    sort_order: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
 
 
 class GuardLabelLibrary(BaseModel):
     __tablename__ = "t_guard_label_libraries"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    label_id = Column(String(32), index=True, nullable=False)
-    library_id = Column(String(32), index=True, nullable=False)
-    enabled = Column(Boolean, index=True, nullable=False, default=True)
-    priority = Column(Integer, index=True, nullable=False, default=0)
-    config = Column(JSONB, index=False, nullable=False, default=dict)
-    conditions = Column(JSONB, index=False, nullable=False, default=dict)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    created_by = Column(String(32), index=True, nullable=False)
-    status = Column(String(1), index=True, nullable=True, default="1")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    label_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    library_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=True)
+    priority: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    conditions: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
 
 
 class GuardDimension(BaseModel):
     __tablename__ = "t_guard_dimensions"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    code = Column(String(64), index=True, nullable=False, unique=True)
-    name = Column(String(128), index=True, nullable=False)
-    description = Column(Text, index=False, nullable=True)
-    enabled = Column(Boolean, index=True, nullable=False, default=True)
-    config = Column(JSONB, index=False, nullable=False, default=dict)
-    sort_order = Column(Integer, index=True, nullable=False, default=0)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    created_by = Column(String(32), index=True, nullable=False)
-    status = Column(String(1), index=True, nullable=True, default="1")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    code: Mapped[str] = mapped_column(String(64), index=True, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=True)
+    config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    sort_order: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
 
 
 class Knowledgebase(BaseModel):
     __tablename__ = "t_ai_knowledgebases"
     __table_args__ = {"schema": "usr_ai"}
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
-    tenant_id = Column(String(32), index=True, nullable=False)
-    name = Column(String(128), index=True, nullable=False, doc="KB name")
-    language = Column(String(32), index=True, nullable=True, default="English", doc="English|Chinese")
-    description = Column(Text, index=False, nullable=True, doc="KB description")
-    embd_id = Column(String(128), index=True, nullable=False, doc="default embedding model ID")
-    permission = Column(String(16), index=True, nullable=False, default="me", doc="me|team")
-    created_by = Column(String(32), index=True, nullable=False)
-    doc_num = Column(Integer, index=True, nullable=False, default=0)
-    token_num = Column(Integer, index=True, nullable=False, default=0)
-    chunk_num = Column(Integer, index=True, nullable=False, default=0)
-    similarity_threshold = Column(Float, index=True, nullable=False, default=0.2)
-    vector_similarity_weight = Column(Float, index=True, nullable=False, default=0.3)
-    parser_id = Column(String(32), index=True, nullable=False, default=ParserType.NAIVE.value, doc="default parser ID")
-    pipeline_id = Column(String(32), index=True, nullable=True, doc="Pipeline ID")
-    parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]], "table_context_size": 0, "image_context_size": 0})
-    pagerank = Column(Integer, index=False, nullable=False, default=0)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    avatar: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="avatar base64 string")
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="KB name")
+    language: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="English", doc="English|Chinese")
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="KB description")
+    embd_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default embedding model ID")
+    permission: Mapped[str] = mapped_column(String(16), index=True, nullable=False, default="me", doc="me|team")
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    doc_num: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    token_num: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    chunk_num: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    similarity_threshold: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0.2)
+    vector_similarity_weight: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0.3)
+    parser_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default=ParserType.NAIVE.value, doc="default parser ID")
+    pipeline_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Pipeline ID")
+    parser_config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]], "table_context_size": 0, "image_context_size": 0})
+    pagerank: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
 
-    graphrag_task_id = Column(String(32), index=True, nullable=True, doc="Graph RAG task ID")
-    graphrag_task_finish_at = Column(DateTime, index=True, nullable=True)
-    raptor_task_id = Column(String(32), index=True, nullable=True, doc="RAPTOR task ID")
-    raptor_task_finish_at = Column(DateTime, index=True, nullable=True)
-    mindmap_task_id = Column(String(32), index=True, nullable=True, doc="Mindmap task ID")
-    mindmap_task_finish_at = Column(DateTime, index=True, nullable=True)
+    graphrag_task_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Graph RAG task ID")
+    graphrag_task_finish_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    raptor_task_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="RAPTOR task ID")
+    raptor_task_finish_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    mindmap_task_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Mindmap task ID")
+    mindmap_task_finish_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
 
-    status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
 class Document(BaseModel):
     __tablename__ = "t_ai_documents"
     __table_args__ = {"schema": "usr_ai"}
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    thumbnail = Column(Text, index=False, nullable=True, doc="thumbnail base64 string")
-    kb_id = Column(String(256), index=True, nullable=False)
-    parser_id = Column(String(32), index=True, nullable=False, doc="default parser ID")
-    pipeline_id = Column(String(32), index=True, nullable=True, doc="Pipeline ID")
-    parser_config = Column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]], "table_context_size": 0, "image_context_size": 0})
-    source_type = Column(String(128), index=True, nullable=False, default="local",
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    thumbnail: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="thumbnail base64 string")
+    kb_id: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
+    parser_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="default parser ID")
+    pipeline_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Pipeline ID")
+    parser_config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]], "table_context_size": 0, "image_context_size": 0})
+    source_type: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="local",
                          doc="where dose this document come from")
-    type = Column(String(32), index=True, nullable=False, doc="file extension")
-    created_by = Column(String, index=True, nullable=False, doc="who created it")
-    name = Column(String(255), index=True, nullable=True, doc="file name")
-    location = Column(String(255), index=True, nullable=True, doc="where dose it store")
-    size = Column(Integer, index=True, nullable=False, default=0)
-    auth = Column(Text, index=False, nullable=True, doc="attribution of data rights and responsibilities")
-    token_num = Column(Integer, index=True, nullable=False, default=0)
-    chunk_num = Column(Integer, index=True, nullable=False, default=0)
-    progress = Column(Float, index=True, nullable=False, default=0)
-    progress_msg = Column(Text, index=False, nullable=True, default="", doc="process message")
-    process_begin_at = Column(DateTime, index=True, nullable=True)
-    process_duration = Column(Float, index=False, nullable=False, default=0)
-    meta_fields = Column(JSONB, index=False, nullable=False, default={})
-    suffix = Column(String(32), index=True, nullable=False, default="", doc="The real file extension suffix")
-    run = Column(String(1), index=True, nullable=True, default="0", doc="start to run processing or cancel.(1: run it; 2: cancel)")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
+    type: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="file extension")
+    created_by: Mapped[str] = mapped_column(String, index=True, nullable=False, doc="who created it")
+    name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="file name")
+    location: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="where dose it store")
+    size: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    auth: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="attribution of data rights and responsibilities")
+    token_num: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    chunk_num: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    progress: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0)
+    progress_msg: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, default="", doc="process message")
+    process_begin_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    process_duration: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0)
+    meta_fields: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default={})
+    suffix: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="", doc="The real file extension suffix")
+    run: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="0", doc="start to run processing or cancel.(1: run it; 2: cancel)")
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
 class File(BaseModel):
     __tablename__ = "t_ai_files"
     __table_args__ = {"schema": "usr_ai"}
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    parent_id = Column(String(32), index=True, nullable=False, doc="parent folder id")
-    tenant_id = Column(String(32), index=True, nullable=False, doc="tenant id")
-    created_by = Column(String(32), index=True, nullable=False, doc="who created it")
-    name = Column(String(255), index=True, nullable=False, doc="file name or folder name")
-    location = Column(String(255), index=True, nullable=True, doc="where dose it store")
-    size = Column(Integer, index=True, nullable=False, default=0)
-    type = Column(String(32), index=True, nullable=False)
-    source_type = Column(String(128), index=True, nullable=False, default="", doc="where dose this document come from")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    parent_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="parent folder id")
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="tenant id")
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="who created it")
+    name: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="file name or folder name")
+    location: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="where dose it store")
+    size: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="", doc="where dose this document come from")
 
     def to_dict(self):
         return {
@@ -892,147 +1025,147 @@ class File(BaseModel):
 class File2Document(BaseModel):
     __tablename__ = "t_ai_file2documents"
     __table_args__ = {"schema": "usr_ai"}
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    file_id = Column(String(32), index=True, nullable=True, doc="file id")
-    document_id = Column(String(32), index=True, nullable=True, doc="document id")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    file_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="file id")
+    document_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="document id")
 
 
 class Task(BaseModel):
     __tablename__ = "t_ai_tasks"
     __table_args__ = {"schema": "usr_ai"}
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    doc_id = Column(String(32), index=True, nullable=False)
-    from_page = Column(Integer, index=False, nullable=False, default=0)
-    to_page = Column(Integer, index=False, nullable=False, default=100000000)
-    task_type = Column(String(32), index=False, nullable=False, default="")
-    begin_at = Column(DateTime, index=True, nullable=True)
-    process_duration = Column(Float, index=False, nullable=False, default=0)
-    progress = Column(Float, index=True, nullable=False, default=0)
-    progress_msg = Column(Text, index=False, nullable=True, default="", doc="process message")
-    retry_count = Column(Integer, index=False, nullable=True, default=0)
-    digest = Column(Text, index=False, nullable=True, default="", doc="task digest")
-    chunk_ids = Column(Text, index=False, nullable=True, default="", doc="chunk ids")
-    priority = Column(Integer, index=False, nullable=False, default=0)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    doc_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    from_page: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
+    to_page: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=100000000)
+    task_type: Mapped[str] = mapped_column(String(32), index=False, nullable=False, default="")
+    begin_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    process_duration: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0)
+    progress: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0)
+    progress_msg: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, default="", doc="process message")
+    retry_count: Mapped[int | None] = mapped_column(Integer, index=False, nullable=True, default=0)
+    digest: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, default="", doc="task digest")
+    chunk_ids: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, default="", doc="chunk ids")
+    priority: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
 
 
 class Dialog(BaseModel):
     __tablename__ = "t_ai_dialogs"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    name = Column(String(255), index=True, nullable=True, doc="dialog application name")
-    description = Column(Text, index=False, nullable=True, doc="Dialog description")
-    icon = Column(Text, index=False, nullable=True, doc="icon base64 string")
-    language = Column(String(32), index=True, nullable=True, default="English", doc="English|Chinese")
-    llm_id = Column(String(128), index=False, nullable=False, doc="default llm ID")
-    llm_setting = Column(JSONB, index=False, nullable=False,
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="dialog application name")
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Dialog description")
+    icon: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="icon base64 string")
+    language: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="English", doc="English|Chinese")
+    llm_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="default llm ID")
+    llm_setting: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False,
                          default={"temperature": 0.1, "top_p": 0.3, "frequency_penalty": 0.7, "presence_penalty": 0.4,
                                   "max_tokens": 512})
-    prompt_type = Column(String(16), index=True, nullable=False, default="simple", doc="simple|advanced")
-    prompt_config = Column(JSONB, index=False, nullable=False,
+    prompt_type: Mapped[str] = mapped_column(String(16), index=True, nullable=False, default="simple", doc="simple|advanced")
+    prompt_config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False,
                            default={"system": "", "prologue": "Hi! I'm your assistant. What can I do for you?",
                                     "parameters": [],
                                     "empty_response": "Sorry! No relevant content was found in the knowledge base!"})
-    meta_data_filter = Column(JSONB,index=False, nullable=True, default={})
-    similarity_threshold = Column(Float, index=False, nullable=False, default=0.2)
-    vector_similarity_weight = Column(Float, index=False, nullable=False, default=0.3)
-    top_n = Column(Integer, index=False, nullable=False, default=6)
-    top_k = Column(Integer, index=False, nullable=False, default=1024)
-    do_refer = Column(String(1), index=False, nullable=False, default="1",
+    meta_data_filter: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default={})
+    similarity_threshold: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0.2)
+    vector_similarity_weight: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0.3)
+    top_n: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=6)
+    top_k: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=1024)
+    do_refer: Mapped[str] = mapped_column(String(1), index=False, nullable=False, default="1",
                       doc="it needs to insert reference index into answer or not")
-    rerank_id = Column(String(128), index=False, nullable=True, doc="default rerank model ID")
-    kb_ids = Column(JSONB, index=False, nullable=False, default=[])
-    search_mode = Column(JSONB, index=False, nullable=True,
+    rerank_id: Mapped[str | None] = mapped_column(String(128), index=False, nullable=True, doc="default rerank model ID")
+    kb_ids: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=[])
+    search_mode: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True,
                           doc="search mode configuration: hybrid, sparse, dense, or fusion")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
 class Conversation(BaseModel):
     __tablename__ = "t_ai_conversations"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    dialog_id = Column(String(32), index=True, nullable=False)
-    name = Column(String(255), index=True, nullable=True, doc="conversation name")
-    message = Column(JSONB, index=False, nullable=True)
-    reference = Column(JSONB, index=False, nullable=True, default=[])
-    user_id = Column(String(32), index=True, nullable=True, doc="user_id")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    dialog_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="conversation name")
+    message: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True)
+    reference: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True, default=[])
+    user_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="user_id")
 
 
 class APIToken(BaseModel):
     __tablename__ = "t_ai_api_tokens"
     __table_args__ = {"schema": "usr_ai"}
 
-    tenant_id = Column(String(32), primary_key=True, index=True, nullable=False)
-    name = Column(String(20), nullable=False, doc="Token名称")
-    description = Column(Text, nullable=True, doc="Token描述")  # 使用 Text 类型
-    token = Column(String(255), primary_key=True, index=True, nullable=False)
-    dialog_id = Column(String(32), index=True, nullable=True)
-    source = Column(String(16), index=True, nullable=True, doc="none|agent|dialog")
-    beta = Column(String(255), index=True, nullable=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), primary_key=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(20), nullable=False, doc="Token名称")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True, doc="Token描述")
+    token: Mapped[str] = mapped_column(String(255), primary_key=True, index=True, nullable=False)
+    dialog_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    source: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True, doc="none|agent|dialog")
+    beta: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
 
 
 class API4Conversation(BaseModel):
     __tablename__ = "t_ai_api4conversations"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    dialog_id = Column(String(32), index=True, nullable=False)
-    user_id = Column(String(255), index=True, nullable=False, doc="user_id")
-    message = Column(JSONB, index=False, nullable=True)
-    reference = Column(JSONB, index=False, nullable=True, default=[])
-    tokens = Column(Integer, index=False, nullable=False, default=0)
-    source = Column(String(16), index=True, nullable=True, doc="none|agent|dialog")
-    dsl = Column(JSONB, index=False, nullable=True, default={})
-    duration = Column(Float, index=True, nullable=False, default=0)
-    round = Column(Integer, index=True, nullable=False, default=0)
-    thumb_up = Column(Integer, index=True, nullable=False, default=0)
-    errors = Column(Text, index=False, nullable=True, default=None, doc="errors")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    dialog_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="user_id")
+    message: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True)
+    reference: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True, default=[])
+    tokens: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
+    source: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True, doc="none|agent|dialog")
+    dsl: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default={})
+    duration: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0)
+    round: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    thumb_up: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    errors: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, default=None, doc="errors")
 
 
 class UserCanvas(BaseModel):
     __tablename__ = "t_ai_user_canvases"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
-    user_id = Column(String(255), index=True, nullable=False, doc="user_id")
-    title = Column(String(255), index=False, nullable=True, doc="Canvas title")
-    permission = Column(String(16), index=True, nullable=False, default="me", doc="me|team")
-    description = Column(Text, index=False, nullable=True, doc="Canvas description")
-    canvas_type = Column(String(32), index=True, nullable=True, doc="Canvas type")
-    canvas_category = Column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")
-    dsl = Column(JSONB, index=False, nullable=True, default={})
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    avatar: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="avatar base64 string")
+    user_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="user_id")
+    title: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True, doc="Canvas title")
+    permission: Mapped[str] = mapped_column(String(16), index=True, nullable=False, default="me", doc="me|team")
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Canvas description")
+    canvas_type: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Canvas type")
+    canvas_category: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")
+    dsl: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default={})
 
 
 class CanvasTemplate(BaseModel):
     __tablename__ = "t_ai_canvas_templates"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
-    title = Column(JSONB, index=False, nullable=True, default=dict, doc="Canvas title")
-    description = Column(JSONB, index=False, nullable=True, default=dict, doc="Canvas description")
-    canvas_type = Column(String(32), index=True, nullable=True, doc="Canvas type")
-    canvas_category = Column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")
-    dsl = Column(JSONB, index=False, nullable=True, default={})
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    avatar: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="avatar base64 string")
+    title: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default=dict, doc="Canvas title")
+    description: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default=dict, doc="Canvas description")
+    canvas_type: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Canvas type")
+    canvas_category: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")
+    dsl: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default={})
 
 
 class WritingProject(BaseModel):
     __tablename__ = "t_ai_writing_projects"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    user_input = Column(Text, index=False, nullable=False, doc="用户输入的需求")
-    content_type = Column(String(255), index=True, nullable=False, doc="文案类型")
-    language_style = Column(String(255), index=True, nullable=False, doc="语言风格")
-    word_count = Column(Integer, index=False, nullable=False, doc="文章篇幅/预期字数")
-    reference = Column(Text, index=False, nullable=True, doc="用户提供的参考信息")
-    model = Column(String(128), index=True, nullable=False, default="gpt-4o", doc="使用的模型")
-    title = Column(String(255), index=True, nullable=True, doc="文章标题")
-    user_id = Column(String(32), index=True, nullable=False, doc="所属用户ID")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    user_input: Mapped[str] = mapped_column(Text, index=False, nullable=False, doc="用户输入的需求")
+    content_type: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="文案类型")
+    language_style: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="语言风格")
+    word_count: Mapped[int] = mapped_column(Integer, index=False, nullable=False, doc="文章篇幅/预期字数")
+    reference: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="用户提供的参考信息")
+    model: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="gpt-4o", doc="使用的模型")
+    title: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="文章标题")
+    user_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="所属用户ID")
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
 
     def to_dict(self):
         return {
@@ -1052,14 +1185,14 @@ class WritingChapter(BaseModel):
     __tablename__ = "t_ai_writing_chapters"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    project_id = Column(String(32), index=True, nullable=False, doc="所属项目ID")
-    title = Column(String(255), index=True, nullable=False, doc="章节标题")
-    summary = Column(Text, index=False, nullable=True, doc="章节摘要")
-    level = Column(Integer, index=False, nullable=False, default=1, doc="章节层级(1:主章节,2:子章节)")
-    parent_id = Column(String(32), index=True, nullable=True, doc="父章节ID")
-    order_index = Column(Integer, index=False, nullable=False, default=0, doc="排序索引")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    project_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="所属项目ID")
+    title: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="章节标题")
+    summary: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="章节摘要")
+    level: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=1, doc="章节层级(1:主章节,2:子章节)")
+    parent_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="父章节ID")
+    order_index: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0, doc="排序索引")
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
 
     def to_dict(self):
         return {
@@ -1077,14 +1210,14 @@ class WritingReferenceMaterial(BaseModel):
     __tablename__ = "t_ai_writing_references"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    chapter_id = Column(String(32), index=True, nullable=False, doc="所属章节ID")
-    title = Column(String(255), index=True, nullable=False, doc="参考资料标题")
-    content = Column(Text, index=False, nullable=False, doc="参考资料内容")
-    source = Column(String(255), index=True, nullable=True, doc="来源(URL或文件名)")
-    type = Column(String(32), index=True, nullable=False, default="text", doc="类型(text,url,file)")
-    order_index = Column(Integer, index=False, nullable=False, default=0, doc="排序索引")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    chapter_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="所属章节ID")
+    title: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="参考资料标题")
+    content: Mapped[str] = mapped_column(Text, index=False, nullable=False, doc="参考资料内容")
+    source: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="来源(URL或文件名)")
+    type: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="text", doc="类型(text,url,file)")
+    order_index: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0, doc="排序索引")
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
 
     def to_dict(self):
         return {
@@ -1102,10 +1235,10 @@ class WritingChapterContent(BaseModel):
     __tablename__ = "t_ai_writing_contents"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    chapter_id = Column(String(32), index=True, nullable=False, doc="所属章节ID", unique=True)
-    content = Column(Text, index=False, nullable=True, doc="章节内容")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    chapter_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="所属章节ID", unique=True)
+    content: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="章节内容")
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
 
     def to_dict(self):
         return {
@@ -1119,16 +1252,16 @@ class AskDataHistory(BaseModel):
     __tablename__ = "t_ai_ask_data_history"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    conversation_id = Column(String(32), index=True, nullable=False, doc="conversation_id")
-    ask_id = Column(String(32), index=True, nullable=False, doc="ask_id")
-    user_id = Column(String(32), index=True, nullable=True, doc="user_id")
-    data = Column(Text, index=False, nullable=False, doc="data") # 前端用于展示的数据
-    status = Column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
-    user_question = Column(Text, index=False, nullable=True, doc="用户问题")
-    round_id = Column(String(32), index=True, nullable=False, doc="用于标识对话轮次的ID")
-    processed_semantic_layer = Column(Text, index=False, nullable=True, doc="该问题构建的语义层")
-    sql_info = Column(Text, index=False, nullable=True, doc="生成的SQL及执行SQL的结果还有其他信息")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="conversation_id")
+    ask_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="ask_id")
+    user_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="user_id")
+    data: Mapped[str] = mapped_column(Text, index=False, nullable=False, doc="data")  # 前端用于展示的数据
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
+    user_question: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="用户问题")
+    round_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="用于标识对话轮次的ID")
+    processed_semantic_layer: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="该问题构建的语义层")
+    sql_info: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="生成的SQL及执行SQL的结果还有其他信息")
 
     def to_dict(self):
         """序列化方法"""
@@ -1155,14 +1288,14 @@ class ApiEnvironment(BaseModel):
     __tablename__ = "t_ai_api_environments"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
-    name = Column(String(100), index=True, nullable=False, doc="环境名称")
-    description = Column(Text, index=False, nullable=True, doc="环境描述")
-    base_url = Column(String(500), index=True, nullable=False, doc="前置URL/基础URL")
-    is_default = Column(Boolean, index=True, nullable=False, default=False, doc="是否默认环境")
-    is_global = Column(Boolean, index=True, nullable=False, default=False, doc="是否全局环境")
-    status = Column(String(1), index=True, nullable=False, default="1", doc="状态(0:禁用,1:启用)")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="租户ID")
+    name: Mapped[str] = mapped_column(String(100), index=True, nullable=False, doc="环境名称")
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="环境描述")
+    base_url: Mapped[str] = mapped_column(String(500), index=True, nullable=False, doc="前置URL/基础URL")
+    is_default: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=False, doc="是否默认环境")
+    is_global: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=False, doc="是否全局环境")
+    status: Mapped[str] = mapped_column(String(1), index=True, nullable=False, default="1", doc="状态(0:禁用,1:启用)")
 
     def to_dict(self):
         return {
@@ -1186,14 +1319,14 @@ class ApiEnvironmentVariable(BaseModel):
     __tablename__ = "t_ai_api_environment_variables"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    environment_id = Column(String(32), index=True, nullable=False, doc="环境ID")
-    key_name = Column(String(100), index=True, nullable=False, doc="变量名")
-    key_value = Column(Text, index=False, nullable=False, doc="变量值")
-    description = Column(Text, index=False, nullable=True, doc="变量描述")
-    is_secret = Column(Boolean, index=True, nullable=False, default=False, doc="是否敏感信息")
-    variable_type = Column(String(20), index=True, nullable=False, default="string", doc="变量类型(string,number,boolean)")
-    status = Column(String(1), index=True, nullable=False, default="1", doc="状态(0:禁用,1:启用)")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    environment_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="环境ID")
+    key_name: Mapped[str] = mapped_column(String(100), index=True, nullable=False, doc="变量名")
+    key_value: Mapped[str] = mapped_column(Text, index=False, nullable=False, doc="变量值")
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="变量描述")
+    is_secret: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=False, doc="是否敏感信息")
+    variable_type: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="string", doc="变量类型(string,number,boolean)")
+    status: Mapped[str] = mapped_column(String(1), index=True, nullable=False, default="1", doc="状态(0:禁用,1:启用)")
 
     def to_dict(self):
         return {
@@ -1217,13 +1350,13 @@ class GlobalApiEnvironment(BaseModel):
     __tablename__ = "t_ai_global_api_environments"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    name = Column(String(100), index=True, nullable=False, doc="环境名称")
-    description = Column(Text, index=False, nullable=True, doc="环境描述")
-    server_url = Column(String(500), index=True, nullable=True, doc="服务器URL")
-    variables = Column(JSONB, index=False, nullable=False, default=dict, doc="预设变量")
-    is_active = Column(Boolean, index=True, nullable=False, default=True, doc="是否启用")
-    status = Column(String(1), index=True, nullable=False, default="1", doc="状态(0:禁用,1:启用)")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), index=True, nullable=False, doc="环境名称")
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="环境描述")
+    server_url: Mapped[str | None] = mapped_column(String(500), index=True, nullable=True, doc="服务器URL")
+    variables: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict, doc="预设变量")
+    is_active: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=True, doc="是否启用")
+    status: Mapped[str] = mapped_column(String(1), index=True, nullable=False, default="1", doc="状态(0:禁用,1:启用)")
 
     def to_dict(self):
         return {
@@ -1245,36 +1378,36 @@ class UserCanvasVersion(BaseModel):
     __tablename__ = "t_ai_user_canvas_version"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    user_canvas_id = Column(String(255), index=True, nullable=False, doc="user_canvas_id")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    user_canvas_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="user_canvas_id")
 
-    title = Column(String(255), index=False, nullable=True, doc="Canvas title")
-    description = Column(Text, index=False, nullable=True, doc="Canvas description")
-    dsl = Column(JSONB, index=False, nullable=True, default={})
+    title: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True, doc="Canvas title")
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Canvas description")
+    dsl: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default={})
 
 
 class MCPServer(BaseModel):
     __tablename__ = "t_ai_mcp_server"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    name = Column(String(255), index=True, nullable=False, doc="MCP Server name")
-    tenant_id = Column(String(32), index=True, nullable=False)
-    url = Column(String(2048), index=False, nullable=False, doc="MCP Server URL")
-    server_type = Column(String(32), index=True, nullable=False, doc="MCP Server type")
-    description = Column(Text, index=False, nullable=True, doc="MCP Server description")
-    variables = Column(JSONB, index=False, nullable=True, default=dict, doc="MCP Server variables")
-    headers = Column(JSONB, index=False, nullable=True, default=dict, doc="MCP Server additional request headers")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="MCP Server name")
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), index=False, nullable=False, doc="MCP Server URL")
+    server_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="MCP Server type")
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="MCP Server description")
+    variables: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default=dict, doc="MCP Server variables")
+    headers: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default=dict, doc="MCP Server additional request headers")
 
 
 class ToolsData(BaseModel):
     __tablename__ = "tools_data"
     __table_args__ = {"schema": "usr_ai"}
 
-    flow_id = Column(String(255), primary_key=True, index=True, nullable=False)
-    user_id = Column(String(255), primary_key=True, index=True, nullable=False)
-    meta_data = Column(Text, nullable=True)
-    final_data = Column(Text, nullable=True)
+    flow_id: Mapped[str] = mapped_column(String(255), primary_key=True, index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), primary_key=True, index=True, nullable=False)
+    meta_data: Mapped[str | None] = mapped_column(Text, nullable=True)
+    final_data: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Search(BaseModel):
@@ -1284,13 +1417,13 @@ class Search(BaseModel):
     __tablename__ = "t_ai_search"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
-    tenant_id = Column(String(32), index=True, nullable=False, doc="租户ID")
-    name = Column(String(128), index=True, nullable=False, doc="Search name")
-    description = Column(Text, index=False, nullable=True, doc="Search description")
-    created_by = Column(String(32), index=True, nullable=False, doc="创建人")
-    search_config = Column(JSONB, index=False, nullable=False, default=lambda: {
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    avatar: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="avatar base64 string")
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="租户ID")
+    name: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="Search name")
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Search description")
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="创建人")
+    search_config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=lambda: {
         "kb_ids": [],
         "doc_ids": [],
         "similarity_threshold": 0.2,
@@ -1316,7 +1449,7 @@ class Search(BaseModel):
         "related_search": False,
         "query_mindmap": False,
     }, doc="搜索配置")
-    status = Column(String(1), index=True, nullable=True, default="1",
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1",
                     doc="是否有效(0: 已删除, 1: 有效)")
 
     def to_dict(self):
@@ -1340,26 +1473,26 @@ class Search(BaseModel):
 class PipelineOperationLog(BaseModel):
     __tablename__ = "t_pipeline_operation_log"
     __table_args__ = {"schema": "usr_ai"}
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    document_id = Column(String(32), index=True, nullable=True)
-    tenant_id = Column(String(32), index=True, nullable=False)
-    kb_id = Column(String(32), index=True, nullable=False)
-    pipeline_id = Column(String(32), index=True, nullable=True, doc="Pipeline ID")
-    pipeline_title = Column(String(128), index=True, nullable=True, doc="Pipeline title")
-    parser_id = Column(String(32), index=True, nullable=False, doc="Parser ID")
-    document_name = Column(String(255), index=True, nullable=False, doc="File name")
-    document_suffix = Column(String(32), index=True, nullable=False, doc="File suffix")
-    document_type = Column(String(32), index=True, nullable=False, doc="Document type")
-    source_from = Column(String(128), index=True, nullable=False, doc="Source")
-    progress = Column(Float, index=True, nullable=False, default=0)
-    progress_msg = Column(Text, index=False, nullable=True, default="", doc="process message")
-    process_begin_at = Column(DateTime, index=True, nullable=True)
-    process_duration = Column(Float, index=False, nullable=False, default=0)
-    dsl = Column(JSONB, index=False, nullable=True, default=dict)
-    task_type = Column(String(32), index=True, nullable=False, default="")
-    operation_status = Column(String(32), index=True, nullable=False, doc="Operation status")
-    avatar = Column(Text, index=False, nullable=True, doc="avatar base64 string")
-    status = Column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted, 1: validate)")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    document_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    kb_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    pipeline_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Pipeline ID")
+    pipeline_title: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True, doc="Pipeline title")
+    parser_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Parser ID")
+    document_name: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="File name")
+    document_suffix: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="File suffix")
+    document_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Document type")
+    source_from: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="Source")
+    progress: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0)
+    progress_msg: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, default="", doc="process message")
+    process_begin_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    process_duration: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0)
+    dsl: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default=dict)
+    task_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="")
+    operation_status: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Operation status")
+    avatar: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="avatar base64 string")
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted, 1: validate)")
 
 
 class Connector(BaseModel):
@@ -1367,17 +1500,17 @@ class Connector(BaseModel):
     __tablename__ = "t_ai_connectors"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    tenant_id = Column(String(32), index=True, nullable=False, doc="Tenant ID")
-    name = Column(String(128), index=False, nullable=False, doc="Search name")
-    source = Column(String(128), index=True, nullable=False, doc="Data source")
-    input_type = Column(String(128), index=True, nullable=False, doc="poll/event/..")
-    config = Column(JSONB, index=False, nullable=False, default=dict)
-    refresh_freq = Column(Integer, index=False, nullable=False, default=0)
-    prune_freq = Column(Integer, index=False, nullable=False, default=0)
-    timeout_secs = Column(Integer, index=False, nullable=False, default=3600)
-    indexing_start = Column(DateTime, index=True, nullable=True)
-    status = Column(String(16), index=True, nullable=True, default="schedule", doc="schedule")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Tenant ID")
+    name: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="Search name")
+    source: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="Data source")
+    input_type: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="poll/event/..")
+    config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
+    refresh_freq: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
+    prune_freq: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
+    timeout_secs: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=3600)
+    indexing_start: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True, default="schedule", doc="schedule")
 
     def __str__(self):
         return self.name
@@ -1405,10 +1538,10 @@ class Connector2Kb(BaseModel):
     __tablename__ = "t_ai_connector2kb"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    connector_id = Column(String(32), index=True, nullable=False, doc="Connector ID")
-    kb_id = Column(String(32), index=True, nullable=False, doc="Knowledgebase ID")
-    auto_parse = Column(String(1), nullable=False, default="1", doc="Auto parse (0: disabled, 1: enabled)")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    connector_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Connector ID")
+    kb_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Knowledgebase ID")
+    auto_parse: Mapped[str] = mapped_column(String(1), nullable=False, default="1", doc="Auto parse (0: disabled, 1: enabled)")
 
     def to_dict(self):
         return {
@@ -1426,13 +1559,13 @@ class EvaluationDataset(BaseModel):
     __tablename__ = "t_ai_evaluation_datasets"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    tenant_id = Column(String(32), index=True, nullable=False, doc="Tenant ID")
-    name = Column(String(255), index=True, nullable=False, doc="Dataset name")
-    description = Column(Text, index=False, nullable=True, doc="Dataset description")
-    kb_ids = Column(JSONB, index=False, nullable=False, default=list, doc="Knowledge base IDs to evaluate against")
-    created_by = Column(String(32), index=True, nullable=False, doc="Creator user ID")
-    status = Column(String(1), index=True, nullable=False, default="1", doc="1=valid, 0=invalid")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Tenant ID")
+    name: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="Dataset name")
+    description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Dataset description")
+    kb_ids: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=list, doc="Knowledge base IDs to evaluate against")
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Creator user ID")
+    status: Mapped[str] = mapped_column(String(1), index=True, nullable=False, default="1", doc="1=valid, 0=invalid")
 
     def to_dict(self):
         return {
@@ -1453,13 +1586,13 @@ class EvaluationCase(BaseModel):
     __tablename__ = "t_ai_evaluation_cases"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    dataset_id = Column(String(32), index=True, nullable=False, doc="FK to evaluation_datasets")
-    question = Column(Text, index=False, nullable=False, doc="Test question")
-    reference_answer = Column(Text, index=False, nullable=True, doc="Optional ground truth answer")
-    relevant_doc_ids = Column(JSONB, index=False, nullable=True, doc="Expected relevant document IDs")
-    relevant_chunk_ids = Column(JSONB, index=False, nullable=True, doc="Expected relevant chunk IDs")
-    case_metadata = Column(JSONB, index=False, nullable=True, doc="Additional context/tags")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="FK to evaluation_datasets")
+    question: Mapped[str] = mapped_column(Text, index=False, nullable=False, doc="Test question")
+    reference_answer: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Optional ground truth answer")
+    relevant_doc_ids: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True, doc="Expected relevant document IDs")
+    relevant_chunk_ids: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True, doc="Expected relevant chunk IDs")
+    case_metadata: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, doc="Additional context/tags")
 
     def to_dict(self):
         return {
@@ -1479,15 +1612,15 @@ class EvaluationRun(BaseModel):
     __tablename__ = "t_ai_evaluation_runs"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    dataset_id = Column(String(32), index=True, nullable=False, doc="FK to evaluation_datasets")
-    dialog_id = Column(String(32), index=True, nullable=False, doc="Dialog configuration being evaluated")
-    name = Column(String(255), index=False, nullable=False, doc="Run name")
-    config_snapshot = Column(JSONB, index=False, nullable=False, doc="Dialog config at time of evaluation")
-    metrics_summary = Column(JSONB, index=False, nullable=True, doc="Aggregated metrics")
-    run_status = Column(String(32), index=True, nullable=False, default="PENDING", doc="PENDING/RUNNING/COMPLETED/FAILED")
-    created_by = Column(String(32), index=True, nullable=False, doc="User who started the run")
-    complete_time = Column(BigInteger, index=True, nullable=True, doc="Completion timestamp")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="FK to evaluation_datasets")
+    dialog_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Dialog configuration being evaluated")
+    name: Mapped[str] = mapped_column(String(255), index=False, nullable=False, doc="Run name")
+    config_snapshot: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, doc="Dialog config at time of evaluation")
+    metrics_summary: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, doc="Aggregated metrics")
+    run_status: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="PENDING", doc="PENDING/RUNNING/COMPLETED/FAILED")
+    created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="User who started the run")
+    complete_time: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="Completion timestamp")
 
     def to_dict(self):
         return {
@@ -1509,14 +1642,14 @@ class EvaluationResult(BaseModel):
     __tablename__ = "t_ai_evaluation_results"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    run_id = Column(String(32), index=True, nullable=False, doc="FK to evaluation_runs")
-    case_id = Column(String(32), index=True, nullable=False, doc="FK to evaluation_cases")
-    generated_answer = Column(Text, index=False, nullable=False, doc="Generated answer")
-    retrieved_chunks = Column(JSONB, index=False, nullable=False, doc="Chunks that were retrieved")
-    metrics = Column(JSONB, index=False, nullable=False, doc="All computed metrics")
-    execution_time = Column(Float, index=False, nullable=False, doc="Response time in seconds")
-    token_usage = Column(JSONB, index=False, nullable=True, doc="Prompt/completion tokens")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="FK to evaluation_runs")
+    case_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="FK to evaluation_cases")
+    generated_answer: Mapped[str] = mapped_column(Text, index=False, nullable=False, doc="Generated answer")
+    retrieved_chunks: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, doc="Chunks that were retrieved")
+    metrics: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, doc="All computed metrics")
+    execution_time: Mapped[float] = mapped_column(Float, index=False, nullable=False, doc="Response time in seconds")
+    token_usage: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, doc="Prompt/completion tokens")
 
     def to_dict(self):
         return {
@@ -1537,20 +1670,20 @@ class SyncLogs(BaseModel):
     __tablename__ = "t_ai_sync_logs"
     __table_args__ = {"schema": "usr_ai"}
 
-    id = Column(String(32), primary_key=True, index=False, nullable=False)
-    connector_id = Column(String(32), index=True, nullable=False, doc="Connector ID")
-    status = Column(String(128), index=True, nullable=False, doc="Processing status")
-    from_beginning = Column(String(1), index=False, nullable=True, default="0")
-    new_docs_indexed = Column(Integer, index=False, nullable=False, default=0)
-    total_docs_indexed = Column(Integer, index=False, nullable=False, default=0)
-    docs_removed_from_index = Column(Integer, index=False, nullable=False, default=0)
-    error_msg = Column(Text, index=False, nullable=False, default="", doc="process message")
-    error_count = Column(Integer, index=False, nullable=False, default=0)
-    full_exception_trace = Column(Text, index=False, nullable=True, default="", doc="process message")
-    time_started = Column(DateTime, index=True, nullable=True)
-    poll_range_start = Column(String(255), index=True, nullable=True, doc="ISO datetime with timezone")
-    poll_range_end = Column(String(255), index=True, nullable=True, doc="ISO datetime with timezone")
-    kb_id = Column(String(32), index=True, nullable=False, doc="Knowledgebase ID")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    connector_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Connector ID")
+    status: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="Processing status")
+    from_beginning: Mapped[str | None] = mapped_column(String(1), index=False, nullable=True, default="0")
+    new_docs_indexed: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
+    total_docs_indexed: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
+    docs_removed_from_index: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
+    error_msg: Mapped[str] = mapped_column(Text, index=False, nullable=False, default="", doc="process message")
+    error_count: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
+    full_exception_trace: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, default="", doc="process message")
+    time_started: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    poll_range_start: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="ISO datetime with timezone")
+    poll_range_end: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="ISO datetime with timezone")
+    kb_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Knowledgebase ID")
 
     def to_dict(self):
         return {
