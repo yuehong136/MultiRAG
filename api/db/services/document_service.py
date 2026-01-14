@@ -89,7 +89,8 @@ class DocumentService(CommonService):
             id: int = None,
             name: str = None,
             suffix: list = None,
-            run: list = None
+            run: list = None,
+            doc_ids: list = None
     ):
         # 1) 需要返回的列 —— 等价于 Peewee 的 select(*fields)
         #    确保 get_cls_model_fields() 返回的是 Column/ColumnElement 列对象，而不是字符串
@@ -124,6 +125,8 @@ class DocumentService(CommonService):
             base = base.where(cls.model.suffix.in_(suffix))
         if run:
             base = base.where(cls.model.run.in_(run))
+        if doc_ids:
+            base = base.where(cls.model.id.in_(doc_ids))
 
         # 4) 排序（避免与 sqlalchemy.desc 重名）
         order_col = getattr(cls.model, orderby)
@@ -155,7 +158,8 @@ class DocumentService(CommonService):
     @classmethod
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,
                      orderby: str, desc: bool, keywords: str | None,
-                     run_status: list | None = None, types: list | None = None, suffix: list = None) -> tuple[list[dict], int]:
+                     run_status: list | None = None, types: list | None = None, suffix: list = None,
+                     doc_ids: list | None = None) -> tuple[list[dict], int]:
         if suffix is None:
             suffix = []
         fields = cls.get_cls_model_fields()
@@ -182,6 +186,9 @@ class DocumentService(CommonService):
 
         if suffix:
             base = base.where(cls.model.suffix.in_(suffix))
+
+        if doc_ids:
+            base = base.where(cls.model.id.in_(doc_ids))
 
         # 计算总数
         count = db.execute(select(func.count()).select_from(base.subquery())).scalar_one()
@@ -2242,6 +2249,191 @@ class DocumentService(CommonService):
                 meta.setdefault(key, {}).setdefault(value_str, []).append(doc_id)
 
         return meta
+
+    @classmethod
+    def get_flatted_meta_by_kbs(cls, db: Session, kb_ids: list[str]) -> dict:
+        """
+        获取知识库文档的扁平化元数据。
+
+        - 解析字符串化的 JSON meta_fields，跳过非字典或无法解析的值
+        - 将列表值展开为单独的条目
+          示例: {"tags": ["foo","bar"], "author": "alice"} ->
+            meta["tags"]["foo"] = [doc_id], meta["tags"]["bar"] = [doc_id], meta["author"]["alice"] = [doc_id]
+        适用于 metadata_condition 过滤和需要遵循列表语义的场景。
+        """
+        stmt = select(cls.model.id, cls.model.meta_fields).where(cls.model.kb_id.in_(kb_ids))
+
+        meta: dict = {}
+        for row in db.execute(stmt).mappings():
+            doc_id = row["id"]
+            meta_fields = row.get("meta_fields") or {}
+            if isinstance(meta_fields, str):
+                try:
+                    meta_fields = json.loads(meta_fields)
+                except Exception:
+                    continue
+            if not isinstance(meta_fields, dict):
+                continue
+            for k, v in meta_fields.items():
+                if k not in meta:
+                    meta[k] = {}
+                values = v if isinstance(v, list) else [v]
+                for vv in values:
+                    if vv is None:
+                        continue
+                    sv = str(vv)
+                    if sv not in meta[k]:
+                        meta[k][sv] = []
+                    meta[k][sv].append(doc_id)
+        return meta
+
+    @classmethod
+    def get_metadata_summary(cls, db: Session, kb_id: str) -> dict:
+        """
+        获取知识库中文档元数据的汇总统计。
+
+        返回: {key: [(value, count), ...], ...}，按计数降序排列
+        """
+        stmt = select(cls.model.id, cls.model.meta_fields).where(cls.model.kb_id == kb_id)
+
+        summary: dict = {}
+        for row in db.execute(stmt).mappings():
+            meta_fields = row.get("meta_fields") or {}
+            if isinstance(meta_fields, str):
+                try:
+                    meta_fields = json.loads(meta_fields)
+                except Exception:
+                    continue
+            if not isinstance(meta_fields, dict):
+                continue
+            for k, v in meta_fields.items():
+                values = v if isinstance(v, list) else [v]
+                for vv in values:
+                    if not vv:
+                        continue
+                    sv = str(vv)
+                    if k not in summary:
+                        summary[k] = {}
+                    summary[k][sv] = summary[k].get(sv, 0) + 1
+        return {
+            k: sorted([(val, cnt) for val, cnt in v.items()], key=lambda x: x[1], reverse=True)
+            for k, v in summary.items()
+        }
+
+    @classmethod
+    def batch_update_metadata(cls, db: Session, kb_id: str, doc_ids: list[str],
+                              updates: list[dict] | None = None,
+                              deletes: list[dict] | None = None) -> int:
+        """
+        批量更新文档元数据。
+
+        Args:
+            db: 数据库会话
+            kb_id: 知识库ID
+            doc_ids: 要更新的文档ID列表
+            updates: 更新操作列表，每个元素包含 {"key": str, "value": any, "match": any (optional)}
+            deletes: 删除操作列表，每个元素包含 {"key": str, "value": any (optional)}
+
+        Returns:
+            更新的文档数量
+        """
+        updates = updates or []
+        deletes = deletes or []
+        if not doc_ids:
+            return 0
+
+        def _normalize_meta(meta):
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    return {}
+            if not isinstance(meta, dict):
+                return {}
+            return deepcopy(meta)
+
+        def _str_equal(a, b):
+            return str(a) == str(b)
+
+        def _apply_updates(meta: dict) -> bool:
+            changed = False
+            for upd in updates:
+                key = upd.get("key")
+                if not key or key not in meta:
+                    continue
+                new_value = upd.get("value")
+                match_value = upd.get("match", new_value)
+                if isinstance(meta[key], list):
+                    replaced = False
+                    new_list = []
+                    for item in meta[key]:
+                        if match_value and _str_equal(item, match_value):
+                            new_list.append(new_value)
+                            replaced = True
+                        else:
+                            new_list.append(item)
+                    if replaced:
+                        meta[key] = new_list
+                        changed = True
+                else:
+                    if not match_value:
+                        continue
+                    if _str_equal(meta[key], match_value):
+                        meta[key] = new_value
+                        changed = True
+            return changed
+
+        def _apply_deletes(meta: dict) -> bool:
+            changed = False
+            for d in deletes:
+                key = d.get("key")
+                if not key or key not in meta:
+                    continue
+                value = d.get("value", None)
+                if isinstance(meta[key], list):
+                    if value is None:
+                        del meta[key]
+                        changed = True
+                        continue
+                    new_list = [item for item in meta[key] if not _str_equal(item, value)]
+                    if len(new_list) != len(meta[key]):
+                        if new_list:
+                            meta[key] = new_list
+                        else:
+                            del meta[key]
+                        changed = True
+                else:
+                    if value is None or _str_equal(meta[key], value):
+                        del meta[key]
+                        changed = True
+            return changed
+
+        updated_docs = 0
+        stmt = select(cls.model.id, cls.model.meta_fields).where(
+            cls.model.id.in_(doc_ids),
+            cls.model.kb_id == kb_id
+        )
+        rows = list(db.execute(stmt).mappings())
+
+        for r in rows:
+            meta = _normalize_meta(r.get("meta_fields") or {})
+            original_meta = deepcopy(meta)
+            changed = _apply_updates(meta)
+            changed = _apply_deletes(meta) or changed
+            if changed and meta != original_meta:
+                db.execute(
+                    update(cls.model)
+                    .where(cls.model.id == r["id"])
+                    .values(
+                        meta_fields=meta,
+                        update_time=current_timestamp(),
+                        update_date=get_format_time()
+                    )
+                )
+                updated_docs += 1
+
+        db.commit()
+        return updated_docs
 
     @classmethod
     def update_progress(cls, db: Session):

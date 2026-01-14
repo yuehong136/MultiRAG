@@ -33,6 +33,7 @@ from common.constants import VALID_TASK_STATUS, TaskStatus, ParserType
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task
+from api.db.services.dialog_service import meta_filter, convert_conditions
 from api.db.services.document_analysis_service import DocumentAnalysisService
 from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.file2document_service import File2DocumentService
@@ -322,10 +323,17 @@ class CreateDocumentRequest(BaseModel):
     kb_id: str = Field(..., description="知识库ID")
 
 
+class MetadataCondition(BaseModel):
+    """元数据过滤条件"""
+    logic: str = Field(default="and", description="逻辑运算符: and 或 or")
+    conditions: list[dict] = Field(default=[], description="条件列表，每个条件包含 name, comparison_operator, value")
+
+
 class DocumentFilter(BaseModel):
     run_status: list[str] | None = []
     types: list[str] | None = []
     suffix: list[str] = []
+    metadata_condition: MetadataCondition | dict | None = Field(default=None, description="元数据过滤条件")
 
 
 class ChangeStatusRequest(BaseModel):
@@ -475,6 +483,38 @@ class DocumentAnalysisRequest(BaseModel):
     summary_type: str = Field(default="short", description="摘要类型: short|long")
     raptor_config: RaptorConfig | None = Field(default=None, description="RAPTOR配置")
     use_cache: bool = Field(default=True, description="是否使用缓存")
+
+
+class MetadataUpdateSelector(BaseModel):
+    """元数据批量更新的选择器"""
+    document_ids: list[str] | None = Field(default=None, description="文档ID列表")
+    metadata_condition: MetadataCondition | dict | None = Field(default=None, description="元数据过滤条件")
+
+
+class MetadataUpdateItem(BaseModel):
+    """元数据更新项"""
+    key: str = Field(..., description="元数据键名")
+    value: Any = Field(..., description="新值")
+    match: Any | None = Field(default=None, description="匹配值（可选）")
+
+
+class MetadataDeleteItem(BaseModel):
+    """元数据删除项"""
+    key: str = Field(..., description="元数据键名")
+    value: Any | None = Field(default=None, description="匹配值（可选，不提供则删除整个键）")
+
+
+class MetadataUpdateRequest(BaseModel):
+    """元数据批量更新请求"""
+    kb_id: str = Field(..., description="知识库ID")
+    selector: MetadataUpdateSelector | None = Field(default=None, description="文档选择器")
+    updates: list[MetadataUpdateItem] | list[dict] = Field(default=[], description="更新操作列表")
+    deletes: list[MetadataDeleteItem] | list[dict] = Field(default=[], description="删除操作列表")
+
+
+class MetadataSummaryRequest(BaseModel):
+    """元数据汇总请求"""
+    kb_id: str = Field(..., description="知识库ID")
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
@@ -1402,9 +1442,27 @@ def list_docs(
 
     suffix = filter_params.suffix
 
+    # 处理 metadata_condition
+    metadata_condition = filter_params.metadata_condition
+    if metadata_condition and isinstance(metadata_condition, MetadataCondition):
+        metadata_condition = metadata_condition.model_dump()
+    if metadata_condition and not isinstance(metadata_condition, dict):
+        return construct_json_result(
+            data=False,
+            message="metadata_condition must be an object.",
+            code=RetCode.ARGUMENT_ERROR
+        )
+
+    doc_ids_filter = None
+    if metadata_condition:
+        metas = DocumentService.get_flatted_meta_by_kbs(db, [kb_id])
+        doc_ids_filter = meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and"))
+        if metadata_condition.get("conditions") and not doc_ids_filter:
+            return construct_json_result(data={"total": 0, "docs": []})
+
     try:
         docs, tol = DocumentService.get_by_kb_id(
-            db, kb_id, page, page_size, orderby, desc, keywords, run_status, types, suffix
+            db, kb_id, page, page_size, orderby, desc, keywords, run_status, types, suffix, doc_ids_filter
         )
         docs = [convert_datetime_to_str(d) for d in docs]
 
@@ -3032,6 +3090,133 @@ async def parse(
         )
 
 
+@router.post("/metadata/summary", summary="获取元数据汇总", response_description="成功获取元数据汇总")
+def metadata_summary(
+        request: MetadataSummaryRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """获取知识库中文档元数据的汇总统计。
+
+    返回每个元数据键下各值的出现次数，按次数降序排列。
+
+    - **request.kb_id**: 知识库ID
+    - **返回值**: {"summary": {key: [[value, count], ...], ...}}
+    """
+    kb_id = request.kb_id
+    if not kb_id:
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
+
+    tenants = UserTenantService.query(db, user_id=user.id)
+    for tenant in tenants:
+        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
+            break
+    else:
+        return get_json_result(
+            data=False,
+            retmsg="Only owner of knowledgebase authorized for this operation.",
+            retcode=RetCode.OPERATING_ERROR
+        )
+
+    try:
+        summary = DocumentService.get_metadata_summary(db, kb_id)
+        return get_json_result(data={"summary": summary})
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post("/metadata/update", summary="批量更新元数据", response_description="成功批量更新元数据")
+def metadata_update(
+        request: MetadataUpdateRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """批量更新或删除文档元数据。
+
+    如果 selector 中的 document_ids 和 metadata_condition 都未提供，则选择知识库中的所有文档。
+    如果同时提供，则取交集。
+
+    - **request.kb_id**: 知识库ID
+    - **request.selector**: 文档选择器
+        - document_ids: 文档ID列表
+        - metadata_condition: 元数据过滤条件
+    - **request.updates**: 更新操作列表
+        - key: 元数据键名
+        - value: 新值
+        - match: 匹配值（可选，对于列表会替换匹配的元素）
+    - **request.deletes**: 删除操作列表
+        - key: 元数据键名
+        - value: 匹配值（可选，对于列表会删除匹配的元素；不提供则删除整个键）
+
+    - **返回值**: {"updated": 更新的文档数, "matched_docs": 匹配的文档数}
+    """
+    kb_id = request.kb_id
+    if not kb_id:
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
+
+    tenants = UserTenantService.query(db, user_id=user.id)
+    for tenant in tenants:
+        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
+            break
+    else:
+        return get_json_result(
+            data=False,
+            retmsg="Only owner of knowledgebase authorized for this operation.",
+            retcode=RetCode.OPERATING_ERROR
+        )
+
+    selector = request.selector or MetadataUpdateSelector()
+    if isinstance(selector, dict):
+        selector = MetadataUpdateSelector(**selector)
+
+    updates = request.updates or []
+    deletes = request.deletes or []
+
+    # 转换 Pydantic 模型为字典
+    updates = [u.model_dump() if hasattr(u, 'model_dump') else u for u in updates]
+    deletes = [d.model_dump() if hasattr(d, 'model_dump') else d for d in deletes]
+
+    metadata_condition = selector.metadata_condition
+    if metadata_condition and isinstance(metadata_condition, MetadataCondition):
+        metadata_condition = metadata_condition.model_dump()
+    if metadata_condition and not isinstance(metadata_condition, dict):
+        return get_json_result(data=False, retmsg="metadata_condition must be an object.", retcode=RetCode.ARGUMENT_ERROR)
+
+    document_ids = selector.document_ids or []
+    if document_ids and not isinstance(document_ids, list):
+        return get_json_result(data=False, retmsg="document_ids must be a list.", retcode=RetCode.ARGUMENT_ERROR)
+
+    for upd in updates:
+        if not isinstance(upd, dict) or not upd.get("key") or "value" not in upd:
+            return get_json_result(data=False, retmsg="Each update requires key and value.", retcode=RetCode.ARGUMENT_ERROR)
+    for d in deletes:
+        if not isinstance(d, dict) or not d.get("key"):
+            return get_json_result(data=False, retmsg="Each delete requires key.", retcode=RetCode.ARGUMENT_ERROR)
+
+    kb_doc_ids = KnowledgebaseService.list_documents_by_ids(db, [kb_id])
+    target_doc_ids = set(kb_doc_ids)
+    if document_ids:
+        invalid_ids = set(document_ids) - set(kb_doc_ids)
+        if invalid_ids:
+            return get_json_result(
+                data=False,
+                retmsg=f"These documents do not belong to dataset {kb_id}: {', '.join(invalid_ids)}",
+                retcode=RetCode.ARGUMENT_ERROR
+            )
+        target_doc_ids = set(document_ids)
+
+    if metadata_condition:
+        metas = DocumentService.get_flatted_meta_by_kbs(db, [kb_id])
+        filtered_ids = set(meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and")))
+        target_doc_ids = target_doc_ids & filtered_ids
+        if metadata_condition.get("conditions") and not target_doc_ids:
+            return get_json_result(data={"updated": 0, "matched_docs": 0})
+
+    target_doc_ids = list(target_doc_ids)
+    updated = DocumentService.batch_update_metadata(db, kb_id, target_doc_ids, updates, deletes)
+    return get_json_result(data={"updated": updated, "matched_docs": len(target_doc_ids)})
+
+
 @router.post("/set_meta", summary="设置文档元数据", response_description="成功设置文档元数据")
 def set_meta(
         request: SetMetaRequest,
@@ -3057,8 +3242,15 @@ def set_meta(
             data=False, retmsg='Meta data should be in Json map format, like {"key": "value"}',
             retcode=RetCode.ARGUMENT_ERROR)
 
-    for value in req["meta"].values():
-        if not isinstance(value, (str, int, float)):
+    for key, value in req["meta"].items():
+        if isinstance(value, list):
+            if not all(isinstance(i, (str, int, float)) for i in value):
+                return get_json_result(
+                    data=False,
+                    retmsg=f"The type is not supported in list: {value}",
+                    retcode=RetCode.ARGUMENT_ERROR,
+                )
+        elif not isinstance(value, (str, int, float)):
             return get_json_result(
                 data=False,
                 retmsg=f"The type is not supported: {value}",

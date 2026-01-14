@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 import pathlib
 import re
@@ -466,6 +467,7 @@ def list_documents(
     run: list[str] = Query(None),
     create_time_from: int = Query(0),
     create_time_to: int = Query(0),
+    metadata_condition: str | None = Query(None, description="元数据过滤条件（JSON格式）"),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
@@ -514,20 +516,38 @@ def list_documents(
     run_status_converted = None
     if run:
         run_status_converted = [run_status_text_to_numeric.get(v, v) for v in run]
-    
+
+    # 处理 metadata_condition
+    metadata_cond = {}
+    if metadata_condition:
+        try:
+            metadata_cond = json.loads(metadata_condition)
+        except Exception:
+            return get_error_data_result(retmsg="metadata_condition must be valid JSON.")
+    if metadata_cond and not isinstance(metadata_cond, dict):
+        return get_error_data_result(retmsg="metadata_condition must be an object.")
+
+    doc_ids_filter = None
+    if metadata_cond:
+        metas = DocumentService.get_flatted_meta_by_kbs(db, [dataset_id])
+        doc_ids_filter = meta_filter(metas, convert_conditions(metadata_cond), metadata_cond.get("logic", "and"))
+        if metadata_cond.get("conditions") and not doc_ids_filter:
+            return get_result(data={"total": 0, "docs": []})
+
     try:
         docs, total = DocumentService.get_list(
-            db, 
-            dataset_id, 
-            page, 
-            page_size, 
-            orderby, 
-            desc_bool, 
-            keywords=keywords, 
+            db,
+            dataset_id,
+            page,
+            page_size,
+            orderby,
+            desc_bool,
+            keywords=keywords,
             id=id,
             name=name,
             suffix=suffix,
-            run=run_status_converted
+            run=run_status_converted,
+            doc_ids=doc_ids_filter
         )
         
         # 时间范围过滤（0表示无限制）
@@ -564,6 +584,121 @@ def list_documents(
     except Exception as e:
         logging.exception(e)
         return get_error_data_result(retmsg="Failed to retrieve documents")
+
+
+@router.get("/datasets/{dataset_id}/metadata/summary", summary="获取元数据汇总")
+def metadata_summary(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required)
+):
+    """
+    获取数据集中文档元数据的汇总统计。
+
+    Args:
+        dataset_id: 数据集ID
+        db: 数据库会话
+        tenant_id: 租户ID
+
+    Returns:
+        元数据汇总，格式: {"summary": {key: [[value, count], ...], ...}}
+    """
+    if not KnowledgebaseService.accessible(db, kb_id=dataset_id, user_id=tenant_id):
+        return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
+
+    try:
+        summary = DocumentService.get_metadata_summary(db, dataset_id)
+        return get_result(data={"summary": summary})
+    except Exception as e:
+        return server_error_response(e)
+
+
+class MetadataUpdateSelectorSDK(BaseModel):
+    """元数据批量更新的选择器"""
+    document_ids: list[str] | None = None
+    metadata_condition: dict | None = None
+
+
+class MetadataUpdateRequestSDK(BaseModel):
+    """元数据批量更新请求"""
+    selector: MetadataUpdateSelectorSDK | None = None
+    updates: list[dict] = []
+    deletes: list[dict] = []
+
+
+@router.post("/datasets/{dataset_id}/metadata/update", summary="批量更新元数据")
+async def metadata_batch_update(
+    dataset_id: str,
+    request: MetadataUpdateRequestSDK,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required)
+):
+    """
+    批量更新或删除文档元数据。
+
+    如果 selector 中的 document_ids 和 metadata_condition 都未提供，则选择数据集中的所有文档。
+    如果同时提供，则取交集。
+
+    Args:
+        dataset_id: 数据集ID
+        request: 更新请求参数
+            - selector: 文档选择器
+                - document_ids: 文档ID列表
+                - metadata_condition: 元数据过滤条件
+            - updates: 更新操作列表，每个包含 {"key": str, "value": any, "match": any (optional)}
+            - deletes: 删除操作列表，每个包含 {"key": str, "value": any (optional)}
+        db: 数据库会话
+        tenant_id: 租户ID
+
+    Returns:
+        {"updated": 更新的文档数, "matched_docs": 匹配的文档数}
+    """
+    if not KnowledgebaseService.accessible(db, kb_id=dataset_id, user_id=tenant_id):
+        return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
+
+    req = request.model_dump()
+    selector = req.get("selector") or {}
+    updates = req.get("updates") or []
+    deletes = req.get("deletes") or []
+
+    if not isinstance(selector, dict):
+        return get_error_data_result(retmsg="selector must be an object.")
+    if not isinstance(updates, list) or not isinstance(deletes, list):
+        return get_error_data_result(retmsg="updates and deletes must be lists.")
+
+    metadata_condition = selector.get("metadata_condition") or {}
+    if metadata_condition and not isinstance(metadata_condition, dict):
+        return get_error_data_result(retmsg="metadata_condition must be an object.")
+
+    document_ids = selector.get("document_ids") or []
+    if document_ids and not isinstance(document_ids, list):
+        return get_error_data_result(retmsg="document_ids must be a list.")
+
+    for upd in updates:
+        if not isinstance(upd, dict) or not upd.get("key") or "value" not in upd:
+            return get_error_data_result(retmsg="Each update requires key and value.")
+    for d in deletes:
+        if not isinstance(d, dict) or not d.get("key"):
+            return get_error_data_result(retmsg="Each delete requires key.")
+
+    kb_doc_ids = KnowledgebaseService.list_documents_by_ids(db, [dataset_id])
+    target_doc_ids = set(kb_doc_ids)
+    if document_ids:
+        invalid_ids = set(document_ids) - set(kb_doc_ids)
+        if invalid_ids:
+            return get_error_data_result(retmsg=f"These documents do not belong to dataset {dataset_id}: {', '.join(invalid_ids)}")
+        target_doc_ids = set(document_ids)
+
+    if metadata_condition:
+        metas = DocumentService.get_flatted_meta_by_kbs(db, [dataset_id])
+        filtered_ids = set(meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and")))
+        target_doc_ids = target_doc_ids & filtered_ids
+        if metadata_condition.get("conditions") and not target_doc_ids:
+            return get_result(data={"updated": 0, "matched_docs": 0})
+
+    target_doc_ids = list(target_doc_ids)
+    updated = DocumentService.batch_update_metadata(db, dataset_id, target_doc_ids, updates, deletes)
+    return get_result(data={"updated": updated, "matched_docs": len(target_doc_ids)})
 
 
 @router.delete("/datasets/{dataset_id}/documents", summary="批量删除文档")
