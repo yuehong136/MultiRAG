@@ -230,12 +230,12 @@ async def verify_admin(
             )
     except HTTPException:
         raise  # 重新抛出 HTTPException
-    except Exception as e:
+    except Exception:
         # 捕获其他异常并统一返回
-        logging.error(f"Error during admin verification: {e}")
+        logging.exception("An error occurred during admin login verification.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
+            detail="An internal server error occurred.",
         )
     
     return username, db
