@@ -158,12 +158,9 @@ class FlowParser:
         parser_model_name = None
         if isinstance(raw_method, str):
             lowered = raw_method.lower()
-            if lowered.startswith("mineru@"):
-                parser_model_name = raw_method.split("@", 1)[1]
-                method = "mineru"
-            elif lowered.endswith("@mineru"):
+            if lowered.endswith("@mineru"):
                 parser_model_name = raw_method.rsplit("@", 1)[0]
-                method = "mineru"
+                method = "MinerU"
             else:
                 method = lowered
         
