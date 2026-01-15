@@ -210,7 +210,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         # 提取 connectors 字段，不写入知识库表
         connectors = []
         if "connectors" in req_data:
-            connectors = req_data["connectors"]
+            connectors = req_data.get("connectors") or []
             del req_data["connectors"]
 
         # 过滤掉None值，避免将None写入数据库
@@ -270,9 +270,10 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
                     logging.error(f"移除知识库 {kb.id} 的 PageRank 失败: {str(e)}")
 
         # 处理 connectors 关联
-        errors = Connector2KbService.link_connectors(db, kb.id, [conn for conn in connectors], user.id)
-        if errors:
-            logging.error(f"Link KB errors: {errors}")
+        if connectors:
+            errors = Connector2KbService.link_connectors(db, kb.id, [conn for conn in connectors], user.id)
+            if errors:
+                logging.error(f"Link KB errors: {errors}")
 
         kb = KnowledgebaseService.get_by_id(db, kb.id)
         if not kb:

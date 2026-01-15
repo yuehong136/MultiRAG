@@ -576,7 +576,7 @@ class AddLLMRequest(BaseModel):
     llm_factory: str
     llm_name: str
     mdl_type: str
-    api_key: str = None
+    api_key: str | dict = None  # 支持字符串或字典（MinerU 等厂商传递配置对象）
     api_base: str | None = None
     max_tokens: int | None = 8192
     ark_api_key: str | None = None
