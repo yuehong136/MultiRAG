@@ -9,12 +9,12 @@
 import datetime
 import json
 from typing import Literal, Annotated, Any
-
-import numpy as np
 import xxhash
 import re
+import base64
 
 from fastapi import APIRouter, Depends
+import numpy as np
 from pydantic import BaseModel, Field, Discriminator, model_validator
 from sqlalchemy.orm import Session
 
@@ -57,6 +57,7 @@ class SetChunkRequest(BaseModel):
     available_int: int | None = None
     tag_kwd: str | None = None
     tag_feas: str | None = None
+    image_base64: str | None = None
 
 
 class SwitchChunkRequest(BaseModel):
@@ -690,6 +691,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
 | `important_kwd`       | `list[str]`  | 否   | 重要关键词列表，用于额外的分词和向量计算。                                            |
 | `question_kwd`        | `list[str]`  | 否   | 问题关键词列表，用于问答模式或补充向量计算。                                          |
 | `available_int`       | `int`        | 否   | 可用性标记，用于记录当前文档块的可用状态。                                            |
+| `image_base64`        | `string`     | 否   | Base64编码的图片数据，用于更新文档块关联的图片。                                      |
 
 ---
 
@@ -874,6 +876,12 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         update_condition = {"id": request.chunk_id}  # 主键查询条件
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         settings.docStoreConn.update(update_condition, d, search.index_name_one(tenant_id, kb.name), doc.kb_id)
+
+        # update image
+        if request.image_base64:
+            image_binary = base64.b64decode(request.image_base64)
+            settings.STORAGE_IMPL.put(doc.kb_id, request.chunk_id, image_binary)
+
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
