@@ -54,7 +54,7 @@ RUN apt update && apt -y install ca-certificates && \
         ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql17; \
     fi && \
     fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg \
-    pandoc texlive && \
+    pandoc texlive fonts-freefont-ttf fonts-noto-cjk && \
     # 安装Redis
     wget https://download.redis.io/releases/redis-7.4.3.tar.gz && \
     tar -zxvf redis-7.4.3.tar.gz && \
