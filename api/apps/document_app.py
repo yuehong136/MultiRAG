@@ -2909,28 +2909,14 @@ def change_parser(
 def get_image(
         image_id: str,
         db: Session = Depends(get_db),
-        user=Depends(manager)
 ):
     try:
         arr = image_id.split("-")
         if len(arr) != 2:
             return get_data_error_result(retmsg="Image not found.")
-        # 分离 bucket 和 name
-        bkt, nm = image_id.split("-")
-
-        # 获取文件内容
+        bkt, nm = arr
         file_content = settings.STORAGE_IMPL.get(bkt, nm)
-
-        # 确认 file_content 是字节流对象
-        if not isinstance(file_content, (bytes, bytearray)):
-            raise HTTPException(status_code=500, detail="Failed to retrieve image content")
-
-        # 将文件内容包装成 BytesIO 对象
-        file_stream = BytesIO(file_content)
-
-        # 返回图片流响应
-        response = StreamingResponse(file_stream, media_type="image/jpeg")
-        return response
+        return Response(content=file_content, media_type="image/jpeg")
     except Exception as e:
         return construct_error_response(e)
 
