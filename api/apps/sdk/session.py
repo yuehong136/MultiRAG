@@ -4,13 +4,12 @@ import time
 from typing import Any
 
 import tiktoken
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
-from common.constants import LLMType, StatusEnum
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService, completion_openai
@@ -23,13 +22,14 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import UserTenantService
+from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required
 from common.misc_utils import get_uuid
 from common.constants import RetCode
-from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required, validate_request
+from common import settings
+from common.constants import LLMType, StatusEnum
 from core.app.tag import label_question
 from core.prompts.template import load_prompt
 from core.prompts.generator import cross_languages, gen_meta_filter, keyword_extraction, chunks_format
-from common import settings
 
 router = APIRouter()
 
@@ -1034,7 +1034,7 @@ async def ask_about_embedded(request: SearchBotAskRequest, db: Session = Depends
 
 
 @router.post("/searchbots/retrieval_test", summary="搜索机器人检索测试")
-def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Session = Depends(get_db)):
+async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Session = Depends(get_db)):
     req = request.model_dump()
     
     # TODO: 需要重构token验证方式以符合FastAPI模式
@@ -1066,10 +1066,20 @@ def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Session 
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)
         if meta_data_filter.get("method") == "auto":
             chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
-            filters: dict = gen_meta_filter(chat_mdl, metas, question)
+            filters: dict = await gen_meta_filter(chat_mdl, metas, question)
             doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
             if not doc_ids:
                 doc_ids = None
+        elif meta_data_filter.get("method") == "semi_auto":
+            selected_keys = meta_data_filter.get("semi_auto", [])
+            if selected_keys:
+                filtered_metas = {key: metas[key] for key in selected_keys if key in metas}
+                if filtered_metas:
+                    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
+                    filters: dict = await gen_meta_filter(chat_mdl, filtered_metas, question)
+                    doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
+                    if not doc_ids:
+                        doc_ids = None
         elif meta_data_filter.get("method") == "manual":
             doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
             if meta_data_filter["manual"] and not doc_ids:
@@ -1090,7 +1100,7 @@ def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Session 
             return get_error_data_result(retmsg="Knowledgebase not found!")
 
         if langs:
-            question = cross_languages(kb.tenant_id, None, question, langs)
+            question = await cross_languages(kb.tenant_id, None, question, langs)
 
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
 
@@ -1100,7 +1110,7 @@ def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Session 
 
         if req.get("keyword", False):
             chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
-            question += keyword_extraction(chat_mdl, question)
+            question += await keyword_extraction(chat_mdl, question)
 
         labels = label_question(db, question, [kb])
         ranks = settings.retriever.retrieval(

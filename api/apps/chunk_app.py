@@ -154,6 +154,7 @@ class RetrievalTestRequest(BaseModel):
     search_mode: SearchModeType | None = None
     cross_languages: list[str] | None = None
     search_id: str | None = None
+    meta_data_filter: dict | None = None
 
     def get_search_mode_dict(self) -> dict[str, Any] | None:
         """将搜索模式转换为字典格式供底层函数使用"""
@@ -1345,7 +1346,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
 
 
 @router.post('/retrieval_test', summary="检索测试")
-def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     检索测试接口
 
@@ -1561,14 +1562,49 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)
         if meta_data_filter.get("method") == "auto":
             chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
-            filters: dict = gen_meta_filter(chat_mdl, metas, question)
+            filters: dict = await gen_meta_filter(chat_mdl, metas, question)
             doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
             if not doc_ids:
                 doc_ids = None
+        elif meta_data_filter.get("method") == "semi_auto":
+            chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
+            selected_keys = meta_data_filter.get("semi_auto", [])
+            if selected_keys:
+                filtered_metas = {key: metas[key] for key in selected_keys if key in metas}
+                if filtered_metas:
+                    filters: dict = await gen_meta_filter(chat_mdl, filtered_metas, question)
+                    doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
+                    if not doc_ids:
+                        doc_ids = None
         elif meta_data_filter.get("method") == "manual":
             doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
             if meta_data_filter["manual"] and not doc_ids:
                 doc_ids = ["-999"]
+    else:
+        # 没有 search_id 时，直接从请求中获取 meta_data_filter
+        meta_data_filter = request.meta_data_filter or {}
+        if meta_data_filter:
+            metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+            if meta_data_filter.get("method") == "auto":
+                chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
+                filters: dict = await gen_meta_filter(chat_mdl, metas, question)
+                doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
+                if not doc_ids:
+                    doc_ids = None
+            elif meta_data_filter.get("method") == "semi_auto":
+                chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
+                selected_keys = meta_data_filter.get("semi_auto", [])
+                if selected_keys:
+                    filtered_metas = {key: metas[key] for key in selected_keys if key in metas}
+                    if filtered_metas:
+                        filters: dict = await gen_meta_filter(chat_mdl, filtered_metas, question)
+                        doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
+                        if not doc_ids:
+                            doc_ids = None
+            elif meta_data_filter.get("method") == "manual":
+                doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
+                if meta_data_filter["manual"] and not doc_ids:
+                    doc_ids = ["-999"]
 
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
@@ -1587,7 +1623,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             return get_data_error_result(retmsg="Knowledgebase not found!")
 
         if request.cross_languages:
-            question = cross_languages(db, kb.tenant_id, None, question, request.cross_languages)
+            question = await cross_languages(kb.tenant_id, None, question, request.cross_languages)
 
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
 
@@ -1596,7 +1632,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=request.rerank_id)
         if request.keyword:
             chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
-            question += keyword_extraction(chat_mdl, question)
+            question += await keyword_extraction(chat_mdl, question)
         filter_exp = ""
         labels = label_question(db, question, [kb])
 

@@ -385,13 +385,19 @@ class LLMBundle(LLM4Tenant):
             yield item
 
     def chat(self, system: str, history: list, gen_conf: dict[str, Any] | None = None, **kwargs) -> str:
-        """同步 chat 方法，内部调用异步版本"""
+        """
+        同步 chat 方法，内部调用异步版本
+        2026.01.15 已弃用
+        """
         if gen_conf is None:
             gen_conf = {}
         return self._run_coroutine_sync(self.async_chat(system, history, gen_conf, **kwargs))
 
     def chat_streamly(self, system: str, history: list, gen_conf: dict[str, Any] | None = None, **kwargs):
-        """同步 chat_streamly 方法，内部调用异步版本"""
+        """
+        同步 chat_streamly 方法，内部调用异步版本
+        2026.01.15 已弃用
+        """
         if gen_conf is None:
             gen_conf = {}
         ans = ""

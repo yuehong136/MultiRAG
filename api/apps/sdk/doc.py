@@ -1177,7 +1177,7 @@ def update_document_chunk(
 
 
 @router.post("/retrieval", summary="检索测试")
-def retrieval_test(
+async def retrieval_test(
     request: RetrievalTestRequest,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
@@ -1276,12 +1276,12 @@ def retrieval_test(
         
         # 跨语言翻译
         if langs:
-            question = cross_languages(db, kb.tenant_id, None, question, langs)
+            question = await cross_languages(db, kb.tenant_id, None, question, langs)
         
         # 关键词提取增强
         if req.get("keyword", False):
             chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
-            question += keyword_extraction(chat_mdl, question)
+            question += await keyword_extraction(chat_mdl, question)
         
         # 执行检索
         ranks = settings.retriever.retrieval(

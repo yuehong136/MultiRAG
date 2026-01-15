@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import json
 import os
@@ -7,8 +8,8 @@ from copy import deepcopy
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
+
 from api.db import UserTenantRole
-from common.constants import LLMType
 from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM, db_connection
 from api.db.services import UserService
 from api.db.services.canvas_service import CanvasTemplateService
@@ -17,10 +18,10 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.llm_service import LLMService, LLMBundle, get_init_tenant_llm
 from api.db.services.user_service import TenantService, UserTenantService
-from common import settings
+from api.db.db_models import GuardDimension
 from common import settings
 from common.file_utils import get_project_base_directory
-from api.db.db_models import GuardDimension
+from common.constants import LLMType
 from scripts.init_ai_guard_system import init_ai_guard_system
 # from api.common.base64 import encode_to_base64
 
@@ -109,38 +110,16 @@ def init_superuser(
 
     logging.info(f"Super user initialized. email: {email},A default password has been set; changing the password after login is strongly recommended.")
 
-    try:
-        chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])
-        # print(f"Model instance created for {tenant['llm_id']}")
-        logging.info(f"Model instance created for {tenant['llm_id']}")
-    except LookupError as e:
-        # print(f"Error: {e}")
-        logging.error(f"Error: {e}")
-    msg = chat_mdl.chat(system="", history=[
-        {"role": "user", "content": "Hello!"}], gen_conf={})
+    chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])
+    msg = asyncio.run(chat_mdl.async_chat(system="", history=[{"role": "user", "content": "Hello!"}], gen_conf={}))
     if msg.find("ERROR: ") == 0:
-        # print(
-        #     "\33[91m【ERROR】\33[0m: ",
-        #     "'{}' doesn't work. {}".format(
-        #         tenant["llm_id"],
-        #         msg))
-        logging.error(
-            "'{}' doesn't work. {}".format(
-                tenant["llm_id"],
-                msg))
+        logging.error("'{}' doesn't work. {}".format(tenant["llm_id"], msg))
     else:
-        # print("【success！！！】" + msg)
         logging.info("【success！！！】" + msg)
     embd_mdl = LLMBundle(db, tenant["id"], LLMType.EMBEDDING, tenant["embd_id"])
     v, c = embd_mdl.encode(["Hello!"])
     if c == 0:
-        # print(
-        #     "\33[91m【ERROR】\33[0m:",
-        #     " '{}' doesn't work!".format(
-        #         tenant["embd_id"]))
-        logging.error(
-            "'{}' doesn't work!".format(
-                tenant["embd_id"]))
+        logging.error("'{}' doesn't work!".format(tenant["embd_id"]))
 
 
 def init_llm_factory(db: Session):
