@@ -6,7 +6,6 @@ import socket
 from urllib.parse import urlparse
 import logging
 
-from api.utils.email_templates import EMAIL_TEMPLATES
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
@@ -15,9 +14,34 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.expected_conditions import staleness_of
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
-
-from fastapi_mail import MessageSchema, MessageType
+from fastapi_mail import FastMail, MessageSchema, MessageType, ConnectionConfig
 from jinja2 import Template
+
+from api.utils.email_templates import EMAIL_TEMPLATES
+from common import settings
+
+
+def _get_mail_client() -> FastMail | None:
+    """
+    按需创建 FastMail 实例。
+    如果 SMTP 未配置，返回 None。
+    """
+    if not settings.SMTP_CONF:
+        return None
+
+    config = ConnectionConfig(
+        MAIL_USERNAME=settings.MAIL_USERNAME,
+        MAIL_PASSWORD=settings.MAIL_PASSWORD,
+        MAIL_FROM=settings.MAIL_DEFAULT_SENDER[1] if settings.MAIL_DEFAULT_SENDER else settings.MAIL_USERNAME,
+        MAIL_FROM_NAME=settings.MAIL_DEFAULT_SENDER[0] if settings.MAIL_DEFAULT_SENDER else "MultiRAG",
+        MAIL_PORT=settings.MAIL_PORT,
+        MAIL_SERVER=settings.MAIL_SERVER,
+        MAIL_STARTTLS=settings.MAIL_USE_TLS,
+        MAIL_SSL_TLS=settings.MAIL_USE_SSL,
+        USE_CREDENTIALS=True,
+        VALIDATE_CERTS=True
+    )
+    return FastMail(config)
 
 
 OTP_LENGTH = 8
@@ -206,42 +230,40 @@ async def send_email_html(subject: str, to_email: str, template_key: str, **cont
     """
     Generic HTML email sender using shared templates.
     template_key must exist in EMAIL_TEMPLATES.
-    
+
     Args:
         subject: Email subject
         to_email: Recipient email address
         template_key: Key in EMAIL_TEMPLATES dictionary
         **context: Template variables to render
+
+    Raises:
+        ValueError: If template_key is not found
+        Exception: If email sending fails
     """
-    from api.apps import smtp_mail_server
-    
     tmpl = EMAIL_TEMPLATES.get(template_key)
     if not tmpl:
         raise ValueError(f"Unknown email template: {template_key}")
-    
-    if smtp_mail_server is None:
-        logging.warning("SMTP mail server not initialized, skipping email send")
+
+    mail_client = _get_mail_client()
+    if mail_client is None:
+        logging.warning("SMTP not configured, skipping email send")
         return
-    
-    try:
-        # Render email template
-        template = Template(tmpl)
-        html_body = template.render(**context)
-        
-        # Create and send message
-        message = MessageSchema(
-            subject=subject,
-            recipients=[to_email],
-            body=html_body,
-            subtype=MessageType.html
-        )
-        
-        await smtp_mail_server.send_message(message)
-        logging.info(f"Email '{subject}' sent to {to_email}")
-        
-    except Exception as e:
-        logging.error(f"Failed to send email to {to_email}: {e}")
-        raise
+
+    # Render email template
+    template = Template(tmpl)
+    html_body = template.render(**context)
+
+    # Create and send message
+    message = MessageSchema(
+        subject=subject,
+        recipients=[to_email],
+        body=html_body,
+        subtype=MessageType.html
+    )
+
+    await mail_client.send_message(message)
+    logging.info(f"Email '{subject}' sent to {to_email}")
 
 
 async def send_invite_email(to_email: str, invite_url: str, tenant_id: str, inviter: str):
@@ -305,11 +327,24 @@ def hash_code(code: str, salt: bytes) -> str:
 def captcha_key(email: str) -> str:
     """
     Generate Redis key for captcha storage.
-    
+
     Args:
         email: User email address
-        
+
     Returns:
         Redis key string
     """
     return f"captcha:{email}"
+
+
+def verified_key(email: str) -> str:
+    """
+    Generate Redis key for OTP verified state storage.
+
+    Args:
+        email: User email address
+
+    Returns:
+        Redis key string
+    """
+    return f"otp:verified:{email}"

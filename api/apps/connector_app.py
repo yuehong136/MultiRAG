@@ -27,30 +27,25 @@ from api.db.services.connector_service import ConnectorService, Connector2KbServ
 from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
 from common.misc_utils import get_uuid
 from common.constants import RetCode
-from common.data_source.config import GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI, GMAIL_WEB_OAUTH_REDIRECT_URI, DocumentSource
+from common.data_source.config import GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI, GMAIL_WEB_OAUTH_REDIRECT_URI, BOX_WEB_OAUTH_REDIRECT_URI, DocumentSource
 from common.data_source.google_util.constant import WEB_OAUTH_POPUP_TEMPLATE, GOOGLE_SCOPES
 from core.utils.redis_conn import REDIS_CONN
+from box_sdk_gen import BoxOAuth, OAuthConfig, GetAuthorizeUrlOptions
 
 router = APIRouter()
 
 
-# ==================== Google Drive Web OAuth 常量和辅助函数 ====================
+# ==================== Web OAuth 常量和辅助函数 ====================
 
-GOOGLE_WEB_FLOW_STATE_PREFIX = "google_drive_web_flow_state"
-GOOGLE_WEB_FLOW_RESULT_PREFIX = "google_drive_web_flow_result"
 WEB_FLOW_TTL_SECS = 15 * 60  # 15分钟
 
 
 def _web_state_cache_key(flow_id: str, source_type: str | None = None) -> str:
     """生成 OAuth 状态缓存 key
 
-    默认前缀保持与 Google Drive 的向后兼容性。
-    当 source_type == "gmail" 时，使用不同的前缀以避免 Drive/Gmail 流程在 Redis 中冲突。
+    根据 source_type 生成对应的前缀，支持 google-drive、gmail、box 等。
     """
-    if source_type == "gmail":
-        prefix = "gmail_web_flow_state"
-    else:
-        prefix = GOOGLE_WEB_FLOW_STATE_PREFIX
+    prefix = f"{source_type}_web_flow_state"
     return f"{prefix}:{flow_id}"
 
 
@@ -59,10 +54,7 @@ def _web_result_cache_key(flow_id: str, source_type: str | None = None) -> str:
 
     与 _web_state_cache_key 使用相同的逻辑。
     """
-    if source_type == "gmail":
-        prefix = "gmail_web_flow_result"
-    else:
-        prefix = GOOGLE_WEB_FLOW_RESULT_PREFIX
+    prefix = f"{source_type}_web_flow_result"
     return f"{prefix}:{flow_id}"
 
 
@@ -145,6 +137,18 @@ class GoogleWebOAuthStartRequest(BaseModel):
 
 class GoogleWebOAuthResultRequest(BaseModel):
     """获取 Google Web OAuth 结果请求"""
+    flow_id: str
+
+
+class BoxWebOAuthStartRequest(BaseModel):
+    """启动 Box Web OAuth 请求"""
+    client_id: str
+    client_secret: str
+    redirect_uri: str | None = None
+
+
+class BoxWebOAuthResultRequest(BaseModel):
+    """获取 Box Web OAuth 结果请求"""
     flow_id: str
 
 
@@ -922,3 +926,227 @@ def poll_google_web_result(
 
     REDIS_CONN.delete(_web_result_cache_key(flow_id, source))
     return get_json_result(data={"credentials": result.get("credentials")})
+
+
+# ==================== Box OAuth 接口 ====================
+
+@router.post("/box/oauth/web/start", summary="启动 Box OAuth", response_description="OAuth 授权 URL")
+def start_box_web_oauth(
+    request: BoxWebOAuthStartRequest,
+    user=Depends(manager)
+):
+    """
+    ### POST `/box/oauth/web/start` 启动 Box OAuth
+
+    **功能描述**:
+    启动 Box 的 Web 端 OAuth 授权流程，返回授权 URL 供前端打开弹窗进行授权。
+
+    ---
+
+    ### 请求体 (Request Body)
+
+    | 字段            | 类型   | 必填 | 描述                              |
+    |-----------------|--------|------|-----------------------------------|
+    | `client_id`     | string | 是   | Box 应用的 Client ID              |
+    | `client_secret` | string | 是   | Box 应用的 Client Secret          |
+    | `redirect_uri`  | string | 否   | 自定义重定向 URI                  |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 成功响应 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "flow_id": "uuid",
+            "authorization_url": "https://account.box.com/api/oauth2/authorize...",
+            "expires_in": 900
+        }
+    }
+    ```
+    """
+    client_id = request.client_id
+    client_secret = request.client_secret
+    redirect_uri = request.redirect_uri or BOX_WEB_OAUTH_REDIRECT_URI
+
+    if not client_id or not client_secret:
+        return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg="Box client_id and client_secret are required.")
+
+    flow_id = str(uuid.uuid4())
+
+    box_auth = BoxOAuth(
+        OAuthConfig(
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+    )
+
+    auth_url = box_auth.get_authorize_url(
+        options=GetAuthorizeUrlOptions(
+            redirect_uri=redirect_uri,
+            state=flow_id,
+        )
+    )
+
+    cache_payload = {
+        "user_id": user.id,
+        "auth_url": auth_url,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "created_at": int(time.time()),
+    }
+    REDIS_CONN.set_obj(_web_state_cache_key(flow_id, "box"), cache_payload, WEB_FLOW_TTL_SECS)
+
+    return get_json_result(
+        data={
+            "flow_id": flow_id,
+            "authorization_url": auth_url,
+            "expires_in": WEB_FLOW_TTL_SECS,
+        }
+    )
+
+
+@router.get("/box/oauth/web/callback", summary="Box OAuth 回调", response_class=HTMLResponse)
+def box_web_oauth_callback(
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    """
+    ### GET `/box/oauth/web/callback` Box OAuth 回调
+
+    **功能描述**:
+    Box OAuth 授权完成后的回调端点，处理授权码并交换令牌。
+    此端点由 Box OAuth 重定向调用，不需要用户登录验证。
+
+    ---
+
+    ### 查询参数
+
+    | 参数               | 类型   | 描述                    |
+    |--------------------|--------|-------------------------|
+    | `state`            | string | OAuth 状态参数 (flow_id) |
+    | `code`             | string | 授权码                  |
+    | `error`            | string | 错误代码（如果有）      |
+    | `error_description`| string | 错误描述（如果有）      |
+
+    ---
+
+    ### 响应 (Response)
+
+    返回 HTML 页面，通过 postMessage 将结果传递给父窗口。
+    """
+    flow_id = state
+    if not flow_id:
+        return _render_web_oauth_popup("", False, "Missing OAuth parameters.", "box")
+
+    if not code:
+        return _render_web_oauth_popup(flow_id, False, "Missing authorization code from Box.", "box")
+
+    state_cache = REDIS_CONN.get(_web_state_cache_key(flow_id, "box"))
+    if not state_cache:
+        return _render_web_oauth_popup(flow_id, False, "Box OAuth session expired or invalid.", "box")
+
+    cache_payload = json.loads(state_cache)
+
+    err_desc = error_description or error
+    if error:
+        REDIS_CONN.delete(_web_state_cache_key(flow_id, "box"))
+        return _render_web_oauth_popup(flow_id, False, err_desc or "Authorization failed.", "box")
+
+    try:
+        auth = BoxOAuth(
+            OAuthConfig(
+                client_id=cache_payload.get("client_id"),
+                client_secret=cache_payload.get("client_secret"),
+            )
+        )
+
+        auth.get_tokens_authorization_code_grant(code)
+        token = auth.retrieve_token()
+
+        result_payload = {
+            "user_id": cache_payload.get("user_id"),
+            "client_id": cache_payload.get("client_id"),
+            "client_secret": cache_payload.get("client_secret"),
+            "access_token": token.access_token,
+            "refresh_token": token.refresh_token,
+        }
+
+        REDIS_CONN.set_obj(_web_result_cache_key(flow_id, "box"), result_payload, WEB_FLOW_TTL_SECS)
+        REDIS_CONN.delete(_web_state_cache_key(flow_id, "box"))
+
+        return _render_web_oauth_popup(flow_id, True, "Authorization completed successfully.", "box")
+    except Exception as exc:
+        logging.exception("Failed to exchange Box OAuth code: %s", exc)
+        REDIS_CONN.delete(_web_state_cache_key(flow_id, "box"))
+        return _render_web_oauth_popup(flow_id, False, "Failed to exchange tokens with Box. Please retry.", "box")
+
+
+@router.post("/box/oauth/web/result", summary="获取 Box OAuth 结果", response_description="OAuth 凭证")
+def poll_box_web_result(
+    request: BoxWebOAuthResultRequest,
+    user=Depends(manager)
+):
+    """
+    ### POST `/box/oauth/web/result` 获取 Box OAuth 结果
+
+    **功能描述**:
+    轮询获取 Box OAuth 授权的结果。前端在用户完成授权后调用此接口获取凭证。
+
+    ---
+
+    ### 请求体 (Request Body)
+
+    | 字段      | 类型   | 必填 | 描述        |
+    |-----------|--------|------|-------------|
+    | `flow_id` | string | 是   | OAuth 流程ID |
+
+    ---
+
+    ### 响应 (Response)
+
+    #### 授权完成 (200)
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": {
+            "credentials": {...}
+        }
+    }
+    ```
+
+    #### 授权进行中 (102)
+    ```json
+    {
+        "retcode": 102,
+        "retmsg": "Authorization is still pending."
+    }
+    ```
+
+    #### 无权限 (109)
+    ```json
+    {
+        "retcode": 109,
+        "retmsg": "You are not allowed to access this authorization result."
+    }
+    ```
+    """
+    flow_id = request.flow_id
+
+    cache_blob = REDIS_CONN.get(_web_result_cache_key(flow_id, "box"))
+    if not cache_blob:
+        return get_json_result(retcode=RetCode.RUNNING, retmsg="Authorization is still pending.")
+
+    cache_raw = json.loads(cache_blob)
+    if cache_raw.get("user_id") != user.id:
+        return get_json_result(retcode=RetCode.PERMISSION_ERROR, retmsg="You are not allowed to access this authorization result.")
+
+    REDIS_CONN.delete(_web_result_cache_key(flow_id, "box"))
+
+    return get_json_result(data={"credentials": cache_raw})
