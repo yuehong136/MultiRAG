@@ -16,20 +16,22 @@ from api.db.services.canvas_service import UserCanvasService, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
 from api.db.services.conversation_service import ConversationService, iframe_completion
 from api.db.services.conversation_service import completion as rag_completion
-from api.db.services.dialog_service import DialogService, async_chat, async_ask, gen_mindmap, meta_filter
+from api.db.services.dialog_service import DialogService, async_chat, async_ask, gen_mindmap
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required
+from core.app.tag import label_question
+from core.prompts.template import load_prompt
+from core.prompts.generator import cross_languages, keyword_extraction, chunks_format
 from common.misc_utils import get_uuid
 from common.constants import RetCode
 from common import settings
 from common.constants import LLMType, StatusEnum
-from core.app.tag import label_question
-from core.prompts.template import load_prompt
-from core.prompts.generator import cross_languages, gen_meta_filter, keyword_extraction, chunks_format
+from common.metadata_utils import apply_meta_data_filter
+
 
 router = APIRouter()
 
@@ -1063,27 +1065,12 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
     if req.get("search_id", ""):
         search_config = SearchService.get_detail(db, req.get("search_id", "")).get("search_config", {})
         meta_data_filter = search_config.get("meta_data_filter", {})
-        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
-        if meta_data_filter.get("method") == "auto":
-            chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
-            filters: dict = await gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-            if not doc_ids:
-                doc_ids = None
-        elif meta_data_filter.get("method") == "semi_auto":
-            selected_keys = meta_data_filter.get("semi_auto", [])
-            if selected_keys:
-                filtered_metas = {key: metas[key] for key in selected_keys if key in metas}
-                if filtered_metas:
-                    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
-                    filters: dict = await gen_meta_filter(chat_mdl, filtered_metas, question)
-                    doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-                    if not doc_ids:
-                        doc_ids = None
-        elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
-            if meta_data_filter["manual"] and not doc_ids:
-                doc_ids = ["-999"]
+        if meta_data_filter:
+            metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+            chat_mdl = None
+            if meta_data_filter.get("method") in ["auto", "semi_auto"]:
+                chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
+            doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
     try:
         tenants = UserTenantService.query(db, user_id=tenant_id)

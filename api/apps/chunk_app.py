@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
-from api.db.services.dialog_service import meta_filter
 from api.db.services.search_service import SearchService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -31,10 +30,11 @@ from api.utils.api_utils import get_json_result
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
-from core.prompts.generator import keyword_extraction, cross_languages, gen_meta_filter
-from common import settings
-from common.constants import RetCode, LLMType, ParserType, PAGERANK_FLD
 from core.utils.doc_store_conn import OrderByExpr
+from core.prompts.generator import keyword_extraction, cross_languages
+from common import settings
+from common.metadata_utils import apply_meta_data_filter
+from common.constants import RetCode, LLMType, ParserType, PAGERANK_FLD
 from common.string_utils import remove_redundant_spaces
 
 router = APIRouter()
@@ -1556,55 +1556,21 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     if not kb_ids:
         return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=RetCode.DATA_ERROR)
 
+    meta_data_filter = {}
+    chat_mdl = None
     if request.search_id:
         search_config = SearchService.get_detail(db, request.get("search_id", "")).get("search_config", {})
         meta_data_filter = search_config.get("meta_data_filter", {})
-        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
-        if meta_data_filter.get("method") == "auto":
+        if meta_data_filter.get("method") in ["auto", "semi_auto"]:
             chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
-            filters: dict = await gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-            if not doc_ids:
-                doc_ids = None
-        elif meta_data_filter.get("method") == "semi_auto":
-            chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
-            selected_keys = meta_data_filter.get("semi_auto", [])
-            if selected_keys:
-                filtered_metas = {key: metas[key] for key in selected_keys if key in metas}
-                if filtered_metas:
-                    filters: dict = await gen_meta_filter(chat_mdl, filtered_metas, question)
-                    doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-                    if not doc_ids:
-                        doc_ids = None
-        elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
-            if meta_data_filter["manual"] and not doc_ids:
-                doc_ids = ["-999"]
     else:
-        # 没有 search_id 时，直接从请求中获取 meta_data_filter
         meta_data_filter = request.meta_data_filter or {}
-        if meta_data_filter:
-            metas = DocumentService.get_meta_by_kbs(db, kb_ids)
-            if meta_data_filter.get("method") == "auto":
-                chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
-                filters: dict = await gen_meta_filter(chat_mdl, metas, question)
-                doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-                if not doc_ids:
-                    doc_ids = None
-            elif meta_data_filter.get("method") == "semi_auto":
-                chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
-                selected_keys = meta_data_filter.get("semi_auto", [])
-                if selected_keys:
-                    filtered_metas = {key: metas[key] for key in selected_keys if key in metas}
-                    if filtered_metas:
-                        filters: dict = await gen_meta_filter(chat_mdl, filtered_metas, question)
-                        doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-                        if not doc_ids:
-                            doc_ids = None
-            elif meta_data_filter.get("method") == "manual":
-                doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
-                if meta_data_filter["manual"] and not doc_ids:
-                    doc_ids = ["-999"]
+        if meta_data_filter.get("method") in ["auto", "semi_auto"]:
+            chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
+
+    if meta_data_filter:
+        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
     try:
         tenants = UserTenantService.query(db, user_id=user.id)

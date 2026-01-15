@@ -16,7 +16,6 @@ from urllib.parse import quote
 
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import FileType
-from common.constants import FileSource, LLMType, ParserType, TaskStatus
 from api.db.db_models import File as FileModel, Task, get_db
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -24,9 +23,6 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
-from api.db.services.dialog_service import meta_filter, convert_conditions
-from common.constants import RetCode
-
 from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
 from core.app.qa import beAdoc, rmPrefix
@@ -34,6 +30,8 @@ from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
 from common import settings
+from common.metadata_utils import meta_filter, convert_conditions
+from common.constants import FileSource, LLMType, ParserType, TaskStatus, RetCode
 from common.string_utils import remove_redundant_spaces
 
 MAXIMUM_OF_UPLOADING_FILES = 256

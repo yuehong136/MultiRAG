@@ -19,6 +19,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form, Body, Request
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from urllib.parse import quote
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
@@ -29,11 +30,11 @@ from starlette.status import (
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, FileType
+from api.apps import manager
 from common.constants import VALID_TASK_STATUS, TaskStatus, ParserType
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task
-from api.db.services.dialog_service import meta_filter, convert_conditions
 from api.db.services.document_analysis_service import DocumentAnalysisService
 from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.file2document_service import File2DocumentService
@@ -41,20 +42,19 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
-from deepdoc.parser.html_parser import RAGFlowHtmlParser
 from api.common.check_team_permission import check_kb_team_permission
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result, get_data_error_result, server_error_response
-from common.misc_utils import get_uuid
-from common.constants import RetCode
 from api.utils.file_utils import filename_type, thumbnail
-from common.file_utils import get_project_base_directory
 from api.utils.web_utils import CONTENT_TYPE_MAP, html2pdf, is_valid_url
-from core.nlp import search, rag_tokenizer
+from common.misc_utils import get_uuid
+from common.metadata_utils import meta_filter, convert_conditions
+from common.constants import RetCode
+from common.file_utils import get_project_base_directory
 from common import settings
-from api.apps import manager
+from core.nlp import search, rag_tokenizer
+from deepdoc.parser.html_parser import RAGFlowHtmlParser
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
 
 router = APIRouter()
 
