@@ -193,6 +193,9 @@ dependencies = [
     "pyvector-vastbase==1.0.2",
     "pypandoc>=1.16",
     "pyobvector==0.2.18",
+    "ffmpeg-python>=0.2.0",
+    "imageio-ffmpeg>=0.6.0",
+    "cryptography==46.0.3",
     "reportlab>=4.4.1",
     "boxsdk>=10.1.0",
 ]

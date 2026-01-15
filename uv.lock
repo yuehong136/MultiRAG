@@ -1814,6 +1814,18 @@ wheels = [
 ]
 
 [[package]]
+name = "ffmpeg-python"
+version = "0.2.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "future" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/dd/5e/d5f9105d59c1325759d838af4e973695081fbbc97182baf73afc78dec266/ffmpeg-python-0.2.0.tar.gz", hash = "sha256:65225db34627c578ef0e11c8b1eb528bb35e024752f6f10b78c011f6f64c4127" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/d7/0c/56be52741f75bad4dc6555991fabd2e07b432d333da82c11ad701123888a/ffmpeg_python-0.2.0-py3-none-any.whl", hash = "sha256:ac441a0404e053f8b6a1113a77c0f452f1cfc62f6344a769475ffdc0f56c23c5" },
+]
+
+[[package]]
 name = "filelock"
 version = "3.15.4"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2647,6 +2659,20 @@ wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/2b/b6/8973474eba4a917885e289d9e138267d3d1f052c2d93b8c968755661a42d/ijson-3.3.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:b5c3e285e0735fd8c5a26d177eca8b52512cdd8687ca86ec77a0c66e9c510182" },
     { url = "https://mirrors.aliyun.com/pypi/packages/94/25/00e66af887adbbe70002e0479c3c2340bdfa17a168e25d4ab5a27b53582d/ijson-3.3.0-cp312-cp312-win32.whl", hash = "sha256:907f3a8674e489abdcb0206723e5560a5cb1fa42470dcc637942d7b10f28b695" },
     { url = "https://mirrors.aliyun.com/pypi/packages/25/a2/e187beee237808b2c417109ae0f4f7ee7c81ecbe9706305d6ac2a509cc45/ijson-3.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:8f890d04ad33262d0c77ead53c85f13abfb82f2c8f078dfbf24b78f59534dfdd" },
+]
+
+[[package]]
+name = "imageio-ffmpeg"
+version = "0.6.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/44/bd/c3343c721f2a1b0c9fc71c1aebf1966a3b7f08c2eea8ed5437a2865611d6/imageio_ffmpeg-0.6.0.tar.gz", hash = "sha256:e2556bed8e005564a9f925bb7afa4002d82770d6b08825078b7697ab88ba1755" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/da/58/87ef68ac83f4c7690961bce288fd8e382bc5f1513860fc7f90a9c1c1c6bf/imageio_ffmpeg-0.6.0-py3-none-macosx_10_9_intel.macosx_10_9_x86_64.whl", hash = "sha256:9d2baaf867088508d4a3458e61eeb30e945c4ad8016025545f66c4b5aaef0a61" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/40/5c/f3d8a657d362cc93b81aab8feda487317da5b5d31c0e1fdfd5e986e55d17/imageio_ffmpeg-0.6.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:b1ae3173414b5fc5f538a726c4e48ea97edc0d2cdc11f103afee655c463fa742" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/33/e7/1925bfbc563c39c1d2e82501d8372734a5c725e53ac3b31b4c2d081e895b/imageio_ffmpeg-0.6.0-py3-none-manylinux2014_aarch64.whl", hash = "sha256:1d47bebd83d2c5fc770720d211855f208af8a596c82d17730aa51e815cdee6dc" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/a0/2d/43c8522a2038e9d0e7dbdf3a61195ecc31ca576fb1527a528c877e87d973/imageio_ffmpeg-0.6.0-py3-none-manylinux2014_x86_64.whl", hash = "sha256:c7e46fcec401dd990405049d2e2f475e2b397779df2519b544b8aab515195282" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/a0/13/59da54728351883c3c1d9fca1710ab8eee82c7beba585df8f25ca925f08f/imageio_ffmpeg-0.6.0-py3-none-win32.whl", hash = "sha256:196faa79366b4a82f95c0f4053191d2013f4714a715780f0ad2a68ff37483cc2" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/2c/c6/fa760e12a2483469e2bf5058c5faff664acf66cadb4df2ad6205b016a73d/imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl", hash = "sha256:02fa47c83703c37df6bfe4896aab339013f62bf02c5ebf2dce6da56af04ffc0a" },
 ]
 
 [[package]]
@@ -3855,6 +3881,7 @@ dependencies = [
     { name = "cn2an" },
     { name = "cohere" },
     { name = "crawl4ai" },
+    { name = "cryptography" },
     { name = "dashscope" },
     { name = "datrie" },
     { name = "debugpy" },
@@ -3876,6 +3903,7 @@ dependencies = [
     { name = "fastapi-mail" },
     { name = "fastembed", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "ffmpeg-python" },
     { name = "filelock" },
     { name = "flagembedding" },
     { name = "google-auth-oauthlib" },
@@ -3888,6 +3916,7 @@ dependencies = [
     { name = "html-text" },
     { name = "httpx", extra = ["socks"] },
     { name = "huggingface-hub" },
+    { name = "imageio-ffmpeg" },
     { name = "infinity-emb" },
     { name = "infinity-sdk" },
     { name = "itsdangerous" },
@@ -4030,6 +4059,7 @@ requires-dist = [
     { name = "cn2an", specifier = "==0.5.22" },
     { name = "cohere", specifier = "==5.6.2" },
     { name = "crawl4ai", specifier = ">=0.4.0,<1.0.0" },
+    { name = "cryptography", specifier = "==46.0.3" },
     { name = "dashscope", specifier = "==1.23.3" },
     { name = "datrie", specifier = ">=0.8.3,<0.9.0" },
     { name = "debugpy", specifier = ">=1.8.13" },
@@ -4052,6 +4082,7 @@ requires-dist = [
     { name = "fastapi-mail", specifier = ">=1.6.1" },
     { name = "fastembed", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'", specifier = ">=0.3.6,<0.4.0" },
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = ">=0.3.6,<0.4.0" },
+    { name = "ffmpeg-python", specifier = ">=0.2.0" },
     { name = "filelock", specifier = "==3.15.4" },
     { name = "flagembedding", specifier = "==1.2.10" },
     { name = "google-auth-oauthlib", specifier = ">=1.2.0,<2.0.0" },
@@ -4065,6 +4096,7 @@ requires-dist = [
     { name = "html-text", specifier = "==0.6.2" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1,<0.29.0" },
     { name = "huggingface-hub", specifier = ">=0.25.0,<0.26.0" },
+    { name = "imageio-ffmpeg", specifier = ">=0.6.0" },
     { name = "infinity-emb", specifier = ">=0.0.66,<0.0.67" },
     { name = "infinity-sdk", specifier = "==0.6.11" },
     { name = "itsdangerous", specifier = "==2.1.2" },
