@@ -63,7 +63,7 @@ dependencies = [
     "markdown==3.6",
     "markdown-to-json==2.1.1",
     "markdownify>=1.2.0",
-    "mcp>=1.9.4",
+    "mcp>=1.19.0",
     "mini-racer>=0.12.4,<0.13.0",
     "minio==7.2.4",
     "mistralai==0.4.2",
