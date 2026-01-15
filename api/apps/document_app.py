@@ -598,7 +598,7 @@ async def upload(
         ```json
         {
             "status_code": 404,
-            "detail": "Can't find this knowledgebase!"
+            "detail": "Can't find this dataset!"
         }
         ```
 
@@ -699,7 +699,7 @@ async def upload(
     def _upload_sync():
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         if not kb:
-            raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
+            raise HTTPException(status_code=404, detail="Can't find this dataset!")
         if not check_kb_team_permission(db, kb, user.id):
             return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
@@ -791,7 +791,7 @@ def web_crawl(
         ```json
         {
             "status_code": 404,
-            "detail": "Can't find this knowledgebase!"
+            "detail": "Can't find this dataset!"
         }
         ```
 
@@ -896,7 +896,7 @@ def web_crawl(
                                      code=RetCode.ARGUMENT_ERROR)
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
+        raise HTTPException(status_code=404, detail="Can't find this dataset!")
     if not check_kb_team_permission(db, kb, user.id):
         return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
@@ -969,11 +969,11 @@ def create_document(
     try:
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         if not kb:
-            return construct_json_result(data=False, message="Can't find this knowledgebase!",
+            return construct_json_result(data=False, message="Can't find this dataset!",
                                          code=RetCode.ARGUMENT_ERROR)
 
         if DocumentService.query(db, name=req["name"], kb_id=kb_id):
-            return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
+            return construct_json_result(data=False, message="Duplicated document name in the same dataset.",
                                          code=RetCode.ARGUMENT_ERROR)
 
         kb_root_folder = FileService.get_kb_folder(db, kb.tenant_id)
@@ -1084,7 +1084,7 @@ def list_docs(
         ```json
         {
             "retcode": 403,
-            "retmsg": "Only owner of knowledgebase authorized for this operation.",
+            "retmsg": "Only owner of dataset authorized for this operation.",
             "data": false
         }
         ```
@@ -1177,7 +1177,7 @@ def list_docs(
             break
     else:
         return get_json_result(
-            data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+            data=False, retmsg=f'Only owner of dataset authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR)
 
     try:
@@ -1296,7 +1296,7 @@ def list_docs(
         ```json
         {
             "retcode": 403,
-            "retmsg": "Only owner of knowledgebase authorized for this operation.",
+            "retmsg": "Only owner of dataset authorized for this operation.",
             "data": false
         }
         ```
@@ -1415,7 +1415,7 @@ def list_docs(
             break
     else:
         return get_json_result(
-            data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+            data=False, retmsg=f'Only owner of dataset authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR)
 
     # 验证 run_status 参数
@@ -1518,7 +1518,7 @@ def get_filter(
         if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
             break
     else:
-        return get_json_result(data=False, retmsg="Only owner of knowledgebase authorized for this operation.",
+        return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.",
                                retcode=RetCode.OPERATING_ERROR)
 
     keywords = req.get("keywords", "")
@@ -1911,7 +1911,7 @@ def change_status(
 
     - **知识库不存在**:
         ```json
-        "doc_id": {"error": "Can't find this knowledgebase!"}
+        "doc_id": {"error": "Can't find this dataset!"}
         ```
 
     - **数据库更新失败**:
@@ -2070,7 +2070,7 @@ def change_status(
                 continue
             kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
             if not kb:
-                result[doc_id] = {"error": "Can't find this knowledgebase!"}
+                result[doc_id] = {"error": "Can't find this dataset!"}
                 continue
 
             if not DocumentService.update_by_id(db, doc_id, {"status": str(req["status"])}):
@@ -2109,7 +2109,7 @@ def change_auth(
                                          code=RetCode.ARGUMENT_ERROR)
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         if not kb:
-            return construct_json_result(data=False, message="Can't find this knowledgebase!",
+            return construct_json_result(data=False, message="Can't find this dataset!",
                                          code=RetCode.ARGUMENT_ERROR)
         if isinstance(auths, str):
             try:
@@ -2619,7 +2619,7 @@ def rename(
 
         for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
             if d.name == req["name"]:
-                return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
+                return construct_json_result(data=False, message="Duplicated document name in the same dataset.",
                                              code=RetCode.ARGUMENT_ERROR)
 
         if not DocumentService.update_by_id(db, req["doc_id"], {"name": req["name"]}):
@@ -3100,7 +3100,7 @@ def metadata_summary(
     else:
         return get_json_result(
             data=False,
-            retmsg="Only owner of knowledgebase authorized for this operation.",
+            retmsg="Only owner of dataset authorized for this operation.",
             retcode=RetCode.OPERATING_ERROR
         )
 
@@ -3147,7 +3147,7 @@ def metadata_update(
     else:
         return get_json_result(
             data=False,
-            retmsg="Only owner of knowledgebase authorized for this operation.",
+            retmsg="Only owner of dataset authorized for this operation.",
             retcode=RetCode.OPERATING_ERROR
         )
 

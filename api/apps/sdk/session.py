@@ -1080,7 +1080,7 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
                     tenant_ids.append(tenant.tenant_id)
                     break
             else:
-                return get_json_result(data=False, retmsg="Only owner of knowledgebase authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
+                return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
         e, kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
         if not e:

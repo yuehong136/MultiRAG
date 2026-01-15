@@ -577,7 +577,7 @@ def convert(
                 for kb_id in kb_ids:
                     kb = KnowledgebaseService.get_by_id(db, kb_id)
                     if not kb:
-                        return get_json_result(retmsg="Can't find this knowledgebase!", retcode=RetCode.NOT_FOUND)
+                        return get_json_result(retmsg="Can't find this dataset!", retcode=RetCode.NOT_FOUND)
                     file = FileService.get_by_id(db, id)
                     if not file:
                         return get_json_result(retmsg="Can't find this file!", retcode=RetCode.NOT_FOUND)

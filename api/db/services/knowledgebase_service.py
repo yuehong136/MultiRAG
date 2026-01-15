@@ -30,10 +30,10 @@ class KnowledgebaseService(CommonService):
     @classmethod
     def is_parsed_done(cls, db, kb_id):
         """
-        Check if all documents in the knowledge base have completed parsing
+        Check if all documents in the dataset have completed parsing
 
         Args:
-            kb_id: Knowledge base ID
+            kb_id: dataset ID
 
         Returns:
             If all documents are parsed successfully, returns (True, None)
@@ -42,13 +42,13 @@ class KnowledgebaseService(CommonService):
         from common.constants import TaskStatus
         from api.db.services.document_service import DocumentService
 
-        # Get knowledge base information
+        # Get dataset information
         kbs = cls.query(db, id=kb_id)
         if not kbs:
-            return False, "Knowledge base not found"
+            return False, "dataset not found"
         kb = kbs[0]
 
-        # Get all documents in the knowledge base
+        # Get all documents in the dataset
         # docs, _ = DocumentService.get_by_kb_id(db, kb_id, 1, 1000, "create_time", True, "")
         docs, _ = DocumentService.get_by_kb_id(db, kb_id, 1, 1000, "create_time", True, "", [], [])
 
@@ -263,14 +263,14 @@ class KnowledgebaseService(CommonService):
     @classmethod
     def get_detail(cls, db: Session, kb_id):
         """
-        Get detailed information about a knowledge base
+        Get detailed information about a dataset
 
         Args:
             db: Database session object
-            kb_id: Knowledge base ID
+            kb_id: dataset ID
 
         Returns:
-            Dictionary containing knowledge base details, or None if not found
+            Dictionary containing dataset details, or None if not found
         """
         # 定义查询的字段
         fields = [
@@ -331,7 +331,7 @@ class KnowledgebaseService(CommonService):
         # 根据ID获取知识库实例
         kb = cls.get_by_id(db, id)
         if not kb:
-            raise LookupError(f"knowledgebase({id}) not found.")
+            raise LookupError(f"dataset({id}) not found.")
 
         # 递归更新解析配置
         def dfs_update(old, new):
@@ -363,7 +363,7 @@ class KnowledgebaseService(CommonService):
         # 根据ID获取知识库实例
         kb = cls.get_by_id(db, id)
         if not kb:
-            raise LookupError(f"knowledgebase({id}) not found.")
+            raise LookupError(f"dataset({id}) not found.")
 
         # 从parser_config中删除field_map字段
         kb.parser_config.pop("field_map", None)
@@ -395,7 +395,7 @@ class KnowledgebaseService(CommonService):
         :param db: 数据库会话对象。
         :param kb_name: 知识库名称。
         :param tenant_id: 租户ID。
-        :return: 如果知识库存在，返回(True, Knowledgebase实例)；否则返回(False, None)。
+        :return: 如果知识库存在，返回(True, dataset实例)；否则返回(False, None)。
         """
         # 根据名称、租户ID和状态查询知识库
         kb = db.query(cls.model).filter(
@@ -430,7 +430,7 @@ class KnowledgebaseService(CommonService):
         parser_config: dict | None = None,
         **kwargs
     ):
-        """Create a dataset (knowledgebase) by name with kb_app defaults.
+        """Create a dataset (dataset) by name with kb_app defaults.
 
         This encapsulates the creation logic used in kb_app.create so other callers
         (including RESTFul endpoints) can reuse the same behavior.
@@ -489,7 +489,7 @@ class KnowledgebaseService(CommonService):
     @classmethod
     def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name):
         """
-        # Get list of knowledge bases with filtering and pagination
+        # Get list of datasets with filtering and pagination
         # Args:
         #     joined_tenant_ids: List of tenant IDs
         #     user_id: Current user ID
@@ -500,7 +500,7 @@ class KnowledgebaseService(CommonService):
         #     id: Optional ID filter
         #     name: Optional name filter
         # Returns:
-        #     Tuple of (List of knowledge bases, Total count of knowledge bases)
+        #     Tuple of (List of datasets, Total count of datasets)
         """
         # 构建基础查询条件
         query = db.query(cls.model).filter(

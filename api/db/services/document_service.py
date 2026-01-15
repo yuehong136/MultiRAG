@@ -1754,7 +1754,7 @@ class DocumentService(CommonService):
         if not cls.save(db, **doc):
             raise RuntimeError("Database error (Document)!")
         if not KnowledgebaseService.atomic_increase_doc_num_by_id(db, doc["kb_id"]):
-            raise RuntimeError("Database error (Knowledgebase)!")
+            raise RuntimeError("Database error (dataset)!")
         return Document(**doc)
 
     @classmethod
@@ -2941,12 +2941,12 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
 
     dia = DialogService.get_by_id(db, conv.dialog_id)
     if not dia.kb_ids:
-        raise LookupError("No knowledge base associated with this conversation. "
-                          "Please add a knowledge base before uploading documents")
+        raise LookupError("No dataset associated with this conversation. "
+                          "Please add a dataset before uploading documents")
     kb_id = dia.kb_ids[0]
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        raise LookupError("Can't find this knowledgebase!")
+        raise LookupError("Can't find this dataset!")
 
     embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id, lang=kb.language)
 

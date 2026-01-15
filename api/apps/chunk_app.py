@@ -1589,7 +1589,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
                     break
             else:
                 return get_json_result(
-                    data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+                    data=False, retmsg=f'Only owner of dataset authorized for this operation.',
                     retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, request.kb_ids[0])

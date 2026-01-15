@@ -2513,7 +2513,7 @@ async def do_handle_task(db, task):
     if task_type == "raptor":
         kb = KnowledgebaseService.get_by_id(db, task_dataset_id)
         if not kb:
-            progress_callback(prog=-1.0, msg="Cannot found valid knowledgebase for RAPTOR task")
+            progress_callback(prog=-1.0, msg="Cannot found valid dataset for RAPTOR task")
             return
 
         kb_parser_config = kb.parser_config
@@ -2565,7 +2565,7 @@ async def do_handle_task(db, task):
     elif task_type == "graphrag":
         kb = KnowledgebaseService.get_by_id(db, task_dataset_id)
         if not kb:
-            progress_callback(prog=-1.0, msg="Cannot found valid knowledgebase for GraphRAG task")
+            progress_callback(prog=-1.0, msg="Cannot found valid dataset for GraphRAG task")
             return
 
         kb_parser_config = kb.parser_config

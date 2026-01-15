@@ -259,7 +259,7 @@ def update_document(
     
     e, kb = KnowledgebaseService.get_by_id(db, dataset_id)
     if not e:
-        return get_error_data_result(retmsg="Can't find this knowledgebase!")
+        return get_error_data_result(retmsg="Can't find this dataset!")
     
     doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
     if not doc:
