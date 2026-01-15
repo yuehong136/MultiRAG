@@ -350,39 +350,8 @@ wheels = [
 
 [[package]]
 name = "aspose-slides"
-version = "25.3.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
-    "python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
-    "python_full_version < '3.12.4' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version < '3.12.4' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.13' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'linux')",
-    "(python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'linux')",
-    "(python_full_version < '3.12.4' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (python_full_version < '3.12.4' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'linux')",
-]
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/56/2f/558a77e4f3be8edd588dc037239792d10e830f42b11d4c80360dd65f6471/Aspose.Slides-25.3.0-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:2a1b2ef82f5805d208c933fbc36ede4628a21a02b66043def2a0bc674cb52cf9" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/f7/7c/f825cca15367baf6462d61a16544f14daabc1e3d85920a7fac93d85291df/Aspose.Slides-25.3.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3adff4a32f5cd91785abfdbf9f004fa0d9b7137967871c1b2f147ec6537b298d" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/57/ca/fae7781ffeeca0e720f3e453d7efd0927d3eb68e8d33e031a9be92fe6b93/Aspose.Slides-25.3.0-py3-none-manylinux1_x86_64.whl", hash = "sha256:39b7f2820830ba4abe480cad206223f1581c8cc37e0a00459f06ccff27a23026" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/5f/68/3308c98e73fb5012334284b8c568e7bb4b1d2465ba4a94165478c864f703/Aspose.Slides-25.3.0-py3-none-win32.whl", hash = "sha256:ca9bd8bb102d684ef49b3c696dd536c44b0440feeb9ca4e0c9d1355f308803b1" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/b5/5b/ffee94d0db5565fc27c9f13e3a67491975b0d7a11da6dfa9a1f394a63403/Aspose.Slides-25.3.0-py3-none-win_amd64.whl", hash = "sha256:7a5255f7cc4891b5da0f416059a008205605b9ef7279006cfd12b81cd3dac671" },
-]
-
-[[package]]
-name = "aspose-slides"
 version = "25.12.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-resolution-markers = [
-    "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'darwin')",
-    "(python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'darwin')",
-    "(python_full_version < '3.12.4' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.12.4' and platform_machine == 'x86_64' and sys_platform == 'darwin')",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform != 'darwin'",
-    "python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform != 'darwin'",
-    "python_full_version < '3.12.4' and platform_machine == 'x86_64' and sys_platform != 'darwin'",
-]
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/43/c6/bfdb79408627a075bdd4f66b591a4cce3ce2fcd380584f4382631d105a3d/aspose_slides-25.12.0-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:bd56639b2de124b2e49af8d5072fe025cce3b9abf26087c555db5679f962d2d0" },
     { url = "https://mirrors.aliyun.com/pypi/packages/0f/27/5768271487cd0a2dbafee377126250e4136b15921f119c2e03c6dc033636/aspose_slides-25.12.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:489fedb7c1bfc4dad66b4cb1eda97076fb95c04e6e2e8e6bb62a4cd857e50814" },
@@ -1256,19 +1225,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dataclasses-json"
-version = "0.6.7"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "marshmallow" },
-    { name = "typing-inspect" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/64/a4/f71d9cf3a5ac257c993b5ca3f93df5f7fb395c725e7f1e6479d2514173c3/dataclasses_json-0.6.7.tar.gz", hash = "sha256:b6b3e528266ea45b9535223bc53ca645f5208833c29229e847b3f26a1cc55fc0" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/c3/be/d0d44e092656fe7a06b55e6103cbce807cdbdee17884a5367c68c9860853/dataclasses_json-0.6.7-py3-none-any.whl", hash = "sha256:0dbf33f26c8d5305befd61b39d2b3414e8a407bedc2834dea9b8d642666fb40a" },
-]
-
-[[package]]
 name = "datasets"
 version = "3.4.1"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -1604,22 +1560,20 @@ wheels = [
 
 [[package]]
 name = "extract-msg"
-version = "0.41.5"
+version = "0.55.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "beautifulsoup4" },
-    { name = "chardet" },
     { name = "compressed-rtf" },
     { name = "ebcdic" },
-    { name = "imapclient" },
     { name = "olefile" },
     { name = "red-black-tree-mod" },
     { name = "rtfde" },
     { name = "tzlocal" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ef/fa/67443d9b9f505c32cba96e34745223378b84cd4795c387310788cc8b6d7d/extract_msg-0.41.5.tar.gz", hash = "sha256:99d4fdc0c0912c836370bf9fbb6e77558bb978499c1b5fdd31634684e323885c" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/5e/65/c70afb3b119a44b3ee36b029485dc15326cf3a7c50da19a1ecbbf949c5d1/extract_msg-0.55.0.tar.gz", hash = "sha256:cf08283498c3dfcc7f894dad1579f52e3ced9fb76b865c2355cbe757af8a54e1" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/be/e2/f0ed8df3907ad6e90e762d8e90adb4e25d12fea851a8371611fa14405782/extract_msg-0.41.5-py2.py3-none-any.whl", hash = "sha256:ad70dcdab3701b0fae554168c9642ad4ebef7f2ec283313c55e895a6518911e5" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/53/81/87d5241036046ea17c5c8db228f4c9e04e07e53b627015d4496a99449aaf/extract_msg-0.55.0-py3-none-any.whl", hash = "sha256:baf0cdee9a8d267b70c366bc57ceb03dbfa1e7ab2dca6824169a7fe623f0917c" },
 ]
 
 [[package]]
@@ -2662,38 +2616,12 @@ wheels = [
 ]
 
 [[package]]
-name = "imageio-ffmpeg"
-version = "0.6.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/44/bd/c3343c721f2a1b0c9fc71c1aebf1966a3b7f08c2eea8ed5437a2865611d6/imageio_ffmpeg-0.6.0.tar.gz", hash = "sha256:e2556bed8e005564a9f925bb7afa4002d82770d6b08825078b7697ab88ba1755" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/da/58/87ef68ac83f4c7690961bce288fd8e382bc5f1513860fc7f90a9c1c1c6bf/imageio_ffmpeg-0.6.0-py3-none-macosx_10_9_intel.macosx_10_9_x86_64.whl", hash = "sha256:9d2baaf867088508d4a3458e61eeb30e945c4ad8016025545f66c4b5aaef0a61" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/40/5c/f3d8a657d362cc93b81aab8feda487317da5b5d31c0e1fdfd5e986e55d17/imageio_ffmpeg-0.6.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:b1ae3173414b5fc5f538a726c4e48ea97edc0d2cdc11f103afee655c463fa742" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/33/e7/1925bfbc563c39c1d2e82501d8372734a5c725e53ac3b31b4c2d081e895b/imageio_ffmpeg-0.6.0-py3-none-manylinux2014_aarch64.whl", hash = "sha256:1d47bebd83d2c5fc770720d211855f208af8a596c82d17730aa51e815cdee6dc" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/a0/2d/43c8522a2038e9d0e7dbdf3a61195ecc31ca576fb1527a528c877e87d973/imageio_ffmpeg-0.6.0-py3-none-manylinux2014_x86_64.whl", hash = "sha256:c7e46fcec401dd990405049d2e2f475e2b397779df2519b544b8aab515195282" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/a0/13/59da54728351883c3c1d9fca1710ab8eee82c7beba585df8f25ca925f08f/imageio_ffmpeg-0.6.0-py3-none-win32.whl", hash = "sha256:196faa79366b4a82f95c0f4053191d2013f4714a715780f0ad2a68ff37483cc2" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/2c/c6/fa760e12a2483469e2bf5058c5faff664acf66cadb4df2ad6205b016a73d/imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl", hash = "sha256:02fa47c83703c37df6bfe4896aab339013f62bf02c5ebf2dce6da56af04ffc0a" },
-]
-
-[[package]]
 name = "imagesize"
 version = "1.4.1"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/a7/84/62473fb57d61e31fef6e36d64a179c8781605429fd927b5dd608c997be31/imagesize-1.4.1.tar.gz", hash = "sha256:69150444affb9cb0d5cc5a92b3676f0b2fb7cd9ae39e947a5e11a36b4497cd4a" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/ff/62/85c4c919272577931d407be5ba5d71c20f0b616d31a0befe0ae45bb79abd/imagesize-1.4.1-py2.py3-none-any.whl", hash = "sha256:0d8d18d08f840c19d0ee7ca1fd82490fdc3729b7ac93f49870406ddde8ef8d8b" },
-]
-
-[[package]]
-name = "imapclient"
-version = "2.3.1"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/19/d8/a4a0337d5e39a0569d89793d5053d7535eefd9b8756df4e10dc114caf3c2/IMAPClient-2.3.1.zip", hash = "sha256:26ea995664fae3a88b878ebce2aff7402931697b86658b7882043ddb01b0e6ba" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/13/9c/b2890e73bc9eee53fe63218e3f3cb774a6beefdb7b5c47928a81cc3b3c13/IMAPClient-2.3.1-py2.py3-none-any.whl", hash = "sha256:057f28025d2987c63e065afb0e4370b0b850b539b0e1494cea0427e88130108c" },
 ]
 
 [[package]]
@@ -2979,18 +2907,6 @@ wheels = [
 ]
 
 [[package]]
-name = "jsonpatch"
-version = "1.33"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "jsonpointer" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/42/78/18813351fe5d63acad16aec57f94ec2b70a09e53ca98145589e185423873/jsonpatch-1.33.tar.gz", hash = "sha256:9fcd4009c41e6d12348b4a0ff2563ba56a2923a7dfee731d004e212e1ee5030c" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/73/07/02e16ed01e04a374e644b575638ec7987ae846d25ad97bcc9945a3ee4b0e/jsonpatch-1.33-py2.py3-none-any.whl", hash = "sha256:0ae28c0cd062bbd8b8ecc26d7d164fbbea9652a1a3693f3b956c1eae5145dade" },
-]
-
-[[package]]
 name = "jsonpath"
 version = "0.82.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -3006,15 +2922,6 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/6d/86/08646239a313f895186ff0a4573452038eed8c86f54380b3ebac34d32fb2/jsonpath-ng-1.7.0.tar.gz", hash = "sha256:f6f5f7fd4e5ff79c785f1573b394043b39849fb2bb47bcead935d12b00beab3c" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/35/5a/73ecb3d82f8615f32ccdadeb9356726d6cae3a4bbc840b437ceb95708063/jsonpath_ng-1.7.0-py3-none-any.whl", hash = "sha256:f3d7f9e848cba1b6da28c55b1c26ff915dc9e0b1ba7e752a53d6da8d5cbd00b6" },
-]
-
-[[package]]
-name = "jsonpointer"
-version = "3.0.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/6a/0a/eebeb1fa92507ea94016a2a790b93c2ae41a7e18778f85471dc54475ed25/jsonpointer-3.0.0.tar.gz", hash = "sha256:2b2d729f2091522d61c3b31f82e11870f60b68f43fbc705cb76bf4b832af59ef" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/71/92/5e77f98553e9e75130c78900d000368476aed74276eb8ae8796f65f00918/jsonpointer-3.0.0-py2.py3-none-any.whl", hash = "sha256:13e088adc14fca8b6aa8177c044e12701e6ad4b28ff10e65f2267a90109c9942" },
 ]
 
 [[package]]
@@ -3135,105 +3042,6 @@ wheels = [
 ]
 
 [[package]]
-name = "langchain"
-version = "0.3.21"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "langchain-core" },
-    { name = "langchain-text-splitters" },
-    { name = "langsmith" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "sqlalchemy" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/e7/54/ea3e30df3a7f6f9986cdb5a53d46a219d1e20b5a5e72a480b932a961ff30/langchain-0.3.21.tar.gz", hash = "sha256:a10c81f8c450158af90bf37190298d996208cfd15dd3accc1c585f068473d619" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/c3/89/eeab8c671d791ce872225aa77a05805ba67052764a3faa6331fc4674e855/langchain-0.3.21-py3-none-any.whl", hash = "sha256:c8bd2372440cc5d48cb50b2d532c2e24036124f1c467002ceb15bc7b86c92579" },
-]
-
-[[package]]
-name = "langchain-community"
-version = "0.3.20"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "dataclasses-json" },
-    { name = "httpx-sse" },
-    { name = "langchain" },
-    { name = "langchain-core" },
-    { name = "langsmith" },
-    { name = "numpy" },
-    { name = "pydantic-settings" },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "sqlalchemy" },
-    { name = "tenacity" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/86/bb/a07609679781199738934226bb2764c12541573bc4feeaf21e9f3ad5caf4/langchain_community-0.3.20.tar.gz", hash = "sha256:bd83b4f2f818338423439aff3b5be362e1d686342ffada0478cd34c6f5ef5969" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/ab/4b/2652cfd2baa482cb3cdbec1ccccae1674418b7576f21ba7724d8730de9db/langchain_community-0.3.20-py3-none-any.whl", hash = "sha256:ea3dbf37fbc21020eca8850627546f3c95a8770afc06c4142b40b9ba86b970f7" },
-]
-
-[[package]]
-name = "langchain-core"
-version = "0.3.47"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "jsonpatch" },
-    { name = "langsmith" },
-    { name = "packaging" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "tenacity" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/24/ae/f7764ad1c36aeba561a9cf9eb6774613fdff611f9c91967bb447092baf64/langchain_core-0.3.47.tar.gz", hash = "sha256:975a3daabf8e8d583749b3c553cc412d0527d935dfe820317431b475fa0c585a" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/57/1e/a65339d128f2e957440db21746f66aaf103d34042fcd130c1801da00492d/langchain_core-0.3.47-py3-none-any.whl", hash = "sha256:ef7c78202e6fd9df79fe8128c828d08a95d3878cf4aec282580baf358a3f2ec5" },
-]
-
-[[package]]
-name = "langchain-openai"
-version = "0.2.2"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "langchain-core" },
-    { name = "openai" },
-    { name = "tiktoken" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/55/4c/0a88c51192b0aeef5212019060da7112191750ab7a185195d8b45835578c/langchain_openai-0.2.2.tar.gz", hash = "sha256:9ae8e2ec7d1ca84fd3bfa82186724528d68e1510a1dc9cdf617a7c669b7a7768" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/b0/4e/c62ce98a5412f031f7f03dda5c35b6ed474e0083986261073ca9da5554d5/langchain_openai-0.2.2-py3-none-any.whl", hash = "sha256:3a203228cb38e4711ebd8c0a3bd51854e447f1d017e8475b6467b07ce7dd3e88" },
-]
-
-[[package]]
-name = "langchain-text-splitters"
-version = "0.3.7"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "langchain-core" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/5a/e7/638b44a41e56c3e32cc90cab3622ac2e4c73645252485427d6b2742fcfa8/langchain_text_splitters-0.3.7.tar.gz", hash = "sha256:7dbf0fb98e10bb91792a1d33f540e2287f9cc1dc30ade45b7aedd2d5cd3dc70b" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/d3/85/b7a34b6d34bcc89a2252f5ffea30b94077ba3d7adf72e31b9e04e68c901a/langchain_text_splitters-0.3.7-py3-none-any.whl", hash = "sha256:31ba826013e3f563359d7c7f1e99b1cdb94897f665675ee505718c116e7e20ad" },
-]
-
-[[package]]
-name = "langchainhub"
-version = "0.1.21"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "packaging" },
-    { name = "requests" },
-    { name = "types-requests" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/71/50/76719d356d80b00761d9680e3eb5df0f5ca8587e79b60ae6dcb678828cdd/langchainhub-0.1.21.tar.gz", hash = "sha256:723383b3964a47dbaea6ad5d0ef728accefbc9d2c07480e800bdec43510a8c10" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/35/63/40328157ddee807991f2f1992c2ad88f479b2472dc9e40d08ccf10700735/langchainhub-0.1.21-py3-none-any.whl", hash = "sha256:1cc002dc31e0d132a776afd044361e2b698743df5202618cf2bad399246b895f" },
-]
-
-[[package]]
 name = "langfuse"
 version = "3.2.4"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -3254,39 +3062,12 @@ wheels = [
 ]
 
 [[package]]
-name = "langsmith"
-version = "0.3.18"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "httpx" },
-    { name = "orjson", marker = "platform_python_implementation != 'PyPy'" },
-    { name = "packaging" },
-    { name = "pydantic" },
-    { name = "requests" },
-    { name = "requests-toolbelt" },
-    { name = "zstandard" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/bc/1e/642ad730f8b1960e777a199c371c2f4607b1e411ea61516e90dba56912a6/langsmith-0.3.18.tar.gz", hash = "sha256:18ff2d8f2e77b375485e4fb3d0dbf7b30fabbd438c7347c3534470e9b7d187b8" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/cd/78/a114e3697aa7a161b2b1a4ec4162b1ef15f97e7fe4cbd981781211dfca5a/langsmith-0.3.18-py3-none-any.whl", hash = "sha256:7ad65ec26084312a039885ef625ae72a69ad089818b64bacf7ce6daff672353a" },
-]
-
-[[package]]
 name = "lark"
-version = "1.3.0"
+version = "1.3.1"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/1d/37/a13baf0135f348af608c667633cbe5d13aa2c5c15a56ae9ad3e6cba45ae3/lark-1.3.0.tar.gz", hash = "sha256:9a3839d0ca5e1faf7cfa3460e420e859b66bcbde05b634e73c369c8244c5fa48" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/da/34/28fff3ab31ccff1fd4f6c7c7b0ceb2b6968d8ea4950663eadcb5720591a0/lark-1.3.1.tar.gz", hash = "sha256:b426a7a6d6d53189d318f2b6236ab5d6429eaf09259f1ca33eb716eed10d2905" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/a8/3e/1c6b43277de64fc3c0333b0e72ab7b52ddaaea205210d60d9b9f83c3d0c7/lark-1.3.0-py3-none-any.whl", hash = "sha256:80661f261fb2584a9828a097a2432efd575af27d20be0fd35d17f0fe37253831" },
-]
-
-[[package]]
-name = "lark-parser"
-version = "0.12.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/5a/ee/fd1192d7724419ddfe15b6f17d1c8742800d4de917c0adac3b6aaf22e921/lark-parser-0.12.0.tar.gz", hash = "sha256:15967db1f1214013dca65b1180745047b9be457d73da224fcda3d9dd4e96a138" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/76/00/90f05db333fe1aa6b6ffea83a35425b7d53ea95c8bba0b1597f226cf1d5f/lark_parser-0.12.0-py2.py3-none-any.whl", hash = "sha256:0eaf30cb5ba787fe404d73a7d6e61df97b21d5a63ac26c5008c78a494373c675" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/82/3d/14ce75ef66813643812f3093ab17e46d3a206942ce7376d31ec2d36229e7/lark-1.3.1-py3-none-any.whl", hash = "sha256:c629b661023a014c37da873b4ff58a817398d12635d3bbb2c5a03be7fe5d1e12" },
 ]
 
 [[package]]
@@ -3534,18 +3315,6 @@ wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/0d/80/0985960e4b89922cb5a0bac0ed39c5b96cbc1a536a99f30e8c220a996ed9/MarkupSafe-3.0.2-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:131a3c7689c85f5ad20f9f6fb1b866f402c445b220c19fe4308c0b147ccd2ad9" },
     { url = "https://mirrors.aliyun.com/pypi/packages/82/78/fedb03c7d5380df2427038ec8d973587e90561b2d90cd472ce9254cf348b/MarkupSafe-3.0.2-cp313-cp313t-win32.whl", hash = "sha256:ba8062ed2cf21c07a9e295d5b8a2a5ce678b913b45fdf68c32d95d6c1291e0b6" },
     { url = "https://mirrors.aliyun.com/pypi/packages/4f/65/6079a46068dfceaeabb5dcad6d674f5f5c61a6fa5673746f42a9f4c233b3/MarkupSafe-3.0.2-cp313-cp313t-win_amd64.whl", hash = "sha256:e444a31f8db13eb18ada366ab3cf45fd4b31e4db1236a4448f68778c1d1a5a2f" },
-]
-
-[[package]]
-name = "marshmallow"
-version = "3.26.1"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "packaging" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ab/5e/5e53d26b42ab75491cda89b871dab9e97c840bf12c63ec58a1919710cd06/marshmallow-3.26.1.tar.gz", hash = "sha256:e6d8affb6cb61d39d26402096dc0aee12d5a26d490a121f118d2e81dc0719dc6" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/34/75/51952c7b2d3873b44a0028b1bd26a25078c18f92f256608e8d1dc61b39fd/marshmallow-3.26.1-py3-none-any.whl", hash = "sha256:3350409f20a70a7e4e11a27661187b77cdcaeb20abca41c1454fe33636bea09c" },
 ]
 
 [[package]]
@@ -3861,30 +3630,21 @@ dependencies = [
     { name = "alembic" },
     { name = "anthropic" },
     { name = "arxiv" },
-    { name = "aspose-slides", version = "25.3.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple" }, marker = "(platform_machine != 'arm64' and platform_machine != 'x86_64') or (platform_machine != 'x86_64' and sys_platform != 'darwin')" },
-    { name = "aspose-slides", version = "25.12.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple" }, marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
+    { name = "aspose-slides", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
     { name = "atlassian-python-api" },
     { name = "azure-identity" },
-    { name = "azure-storage-blob" },
     { name = "azure-storage-file-datalake" },
     { name = "bcembedding" },
     { name = "beartype" },
     { name = "bio" },
     { name = "boto3" },
-    { name = "botocore" },
     { name = "boxsdk" },
     { name = "bs4" },
-    { name = "cachetools" },
     { name = "captcha" },
-    { name = "chardet" },
-    { name = "click" },
     { name = "cn2an" },
     { name = "cohere" },
     { name = "crawl4ai" },
-    { name = "cryptography" },
     { name = "dashscope" },
-    { name = "datrie" },
-    { name = "debugpy" },
     { name = "deepl" },
     { name = "demjson3" },
     { name = "discord-py" },
@@ -3892,8 +3652,6 @@ dependencies = [
     { name = "dropbox" },
     { name = "duckduckgo-search" },
     { name = "editdistance" },
-    { name = "elastic-transport" },
-    { name = "elasticsearch" },
     { name = "elasticsearch-dsl" },
     { name = "email-validator" },
     { name = "exceptiongroup" },
@@ -3904,7 +3662,6 @@ dependencies = [
     { name = "fastembed", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
     { name = "ffmpeg-python" },
-    { name = "filelock" },
     { name = "flagembedding" },
     { name = "google-auth-oauthlib" },
     { name = "google-genai" },
@@ -3912,11 +3669,9 @@ dependencies = [
     { name = "google-search-results" },
     { name = "graspologic" },
     { name = "groq" },
-    { name = "hanziconv" },
     { name = "html-text" },
     { name = "httpx", extra = ["socks"] },
     { name = "huggingface-hub" },
-    { name = "imageio-ffmpeg" },
     { name = "infinity-emb" },
     { name = "infinity-sdk" },
     { name = "itsdangerous" },
@@ -3924,13 +3679,7 @@ dependencies = [
     { name = "jira" },
     { name = "json-repair" },
     { name = "jsonpath-ng" },
-    { name = "jupyter-client" },
-    { name = "langchain-community" },
-    { name = "langchain-openai" },
-    { name = "langchainhub" },
     { name = "langfuse" },
-    { name = "lark" },
-    { name = "litellm" },
     { name = "mammoth" },
     { name = "markdown" },
     { name = "markdown-to-json" },
@@ -3942,27 +3691,20 @@ dependencies = [
     { name = "mistune" },
     { name = "moodlepy" },
     { name = "mypy-boto3-s3" },
-    { name = "nltk" },
-    { name = "numpy" },
     { name = "office365-rest-python-client" },
     { name = "ollama" },
     { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
     { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
-    { name = "openai" },
     { name = "opencv-python" },
     { name = "opencv-python-headless" },
     { name = "opendal" },
     { name = "openpyxl" },
     { name = "opensearch-py" },
     { name = "ormsgpack" },
-    { name = "pandas" },
     { name = "passlib", extra = ["bcrypt"] },
     { name = "pdfplumber" },
     { name = "pillow" },
-    { name = "pip" },
     { name = "pluginlib" },
-    { name = "polars-lts-cpu" },
-    { name = "protobuf" },
     { name = "psutil" },
     { name = "psycopg2-binary" },
     { name = "pyclipper" },
@@ -3970,18 +3712,13 @@ dependencies = [
     { name = "pyexcel" },
     { name = "pyexcel-xlsx" },
     { name = "pymilvus" },
-    { name = "pymysql" },
     { name = "pyobvector" },
     { name = "pyodbc" },
     { name = "pypandoc" },
     { name = "pypdf" },
     { name = "pypdf2" },
-    { name = "pytest" },
     { name = "python-calamine" },
-    { name = "python-dateutil" },
     { name = "python-docx" },
-    { name = "python-dotenv" },
-    { name = "python-multipart" },
     { name = "python-pptx" },
     { name = "pyvector-vastbase" },
     { name = "pywencai" },
@@ -3990,31 +3727,22 @@ dependencies = [
     { name = "redis" },
     { name = "replicate" },
     { name = "reportlab" },
-    { name = "requests" },
     { name = "roman-numbers" },
     { name = "ruamel-base" },
     { name = "ruamel-yaml" },
     { name = "scholarly" },
     { name = "scikit-learn" },
-    { name = "selenium" },
     { name = "selenium-wire" },
-    { name = "setuptools" },
-    { name = "shapely" },
-    { name = "six" },
     { name = "slack-sdk" },
     { name = "sqladmin" },
     { name = "sqlalchemy" },
     { name = "sse-starlette" },
     { name = "strenum" },
-    { name = "tabulate" },
     { name = "tavily-python" },
     { name = "tencentcloud-sdk-python" },
     { name = "tika" },
-    { name = "tiktoken" },
     { name = "torch" },
     { name = "transformers" },
-    { name = "trio" },
-    { name = "umap-learn" },
     { name = "uvicorn" },
     { name = "valkey" },
     { name = "vertexai" },
@@ -4023,7 +3751,6 @@ dependencies = [
     { name = "voyageai" },
     { name = "webdav4" },
     { name = "webdriver-manager" },
-    { name = "werkzeug" },
     { name = "wikipedia" },
     { name = "word2number" },
     { name = "xgboost" },
@@ -4033,36 +3760,33 @@ dependencies = [
     { name = "zhipuai" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "debugpy" },
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "akshare", specifier = ">=1.15.78,<2.0.0" },
     { name = "alembic", specifier = ">=1.13.2" },
     { name = "anthropic", specifier = "==0.34.1" },
     { name = "arxiv", specifier = "==2.1.3" },
-    { name = "aspose-slides", specifier = ">=24.9.0" },
     { name = "aspose-slides", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')", specifier = ">=25.10.0,<26.0.0" },
     { name = "atlassian-python-api", specifier = "==4.0.7" },
     { name = "azure-identity", specifier = "==1.17.1" },
-    { name = "azure-storage-blob", specifier = "==12.22.0" },
     { name = "azure-storage-file-datalake", specifier = "==12.16.0" },
     { name = "bcembedding", specifier = "==0.1.5" },
     { name = "beartype", specifier = ">=0.20.0,<1.0.0" },
     { name = "bio", specifier = "==1.7.1" },
     { name = "boto3", specifier = "==1.34.140" },
-    { name = "botocore", specifier = "==1.34.140" },
     { name = "boxsdk", specifier = ">=10.1.0" },
     { name = "bs4", specifier = ">=0.0.2" },
-    { name = "cachetools", specifier = "==5.3.3" },
     { name = "captcha", specifier = ">=0.7.1" },
-    { name = "chardet", specifier = "==5.2.0" },
-    { name = "click", specifier = ">=8.1.8" },
     { name = "cn2an", specifier = "==0.5.22" },
     { name = "cohere", specifier = "==5.6.2" },
     { name = "crawl4ai", specifier = ">=0.4.0,<1.0.0" },
-    { name = "cryptography", specifier = "==46.0.3" },
     { name = "dashscope", specifier = "==1.23.3" },
-    { name = "datrie", specifier = ">=0.8.3,<0.9.0" },
-    { name = "debugpy", specifier = ">=1.8.13" },
     { name = "deepl", specifier = "==1.18.0" },
     { name = "demjson3", specifier = "==3.0.6" },
     { name = "discord-py", specifier = "==2.3.2" },
@@ -4070,33 +3794,26 @@ requires-dist = [
     { name = "dropbox", specifier = "==12.0.2" },
     { name = "duckduckgo-search", specifier = ">=7.2.0,<8.0.0" },
     { name = "editdistance", specifier = "==0.8.1" },
-    { name = "editdistance", specifier = ">=0.8.1" },
-    { name = "elastic-transport", specifier = "==8.12.0" },
-    { name = "elasticsearch", specifier = "==8.12.1" },
     { name = "elasticsearch-dsl", specifier = "==8.12.0" },
     { name = "email-validator", specifier = ">=2.2.0" },
     { name = "exceptiongroup", specifier = ">=1.3.0,<2.0.0" },
-    { name = "extract-msg", specifier = ">=0.39.0" },
-    { name = "fastapi", specifier = ">=0.128.0.0" },
+    { name = "extract-msg", specifier = ">=0.55.0" },
+    { name = "fastapi", specifier = ">=0.128.0" },
     { name = "fastapi-login", specifier = ">=1.10.1" },
     { name = "fastapi-mail", specifier = ">=1.6.1" },
     { name = "fastembed", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'", specifier = ">=0.3.6,<0.4.0" },
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = ">=0.3.6,<0.4.0" },
     { name = "ffmpeg-python", specifier = ">=0.2.0" },
-    { name = "filelock", specifier = "==3.15.4" },
     { name = "flagembedding", specifier = "==1.2.10" },
     { name = "google-auth-oauthlib", specifier = ">=1.2.0,<2.0.0" },
     { name = "google-genai", specifier = ">=1.41.0,<2.0.0" },
-    { name = "google-generativeai", specifier = ">=0.8.1,<0.9.0" },
-    { name = "google-generativeai", specifier = ">=0.8.3" },
+    { name = "google-generativeai", specifier = ">=0.8.3,<0.9.0" },
     { name = "google-search-results", specifier = "==2.4.2" },
     { name = "graspologic", git = "https://github.com/yuzhichang/graspologic.git?rev=38e680cab72bc9fb68a7992c3bcc2d53b24e42fd#38e680cab72bc9fb68a7992c3bcc2d53b24e42fd" },
     { name = "groq", specifier = "==0.9.0" },
-    { name = "hanziconv", specifier = "==0.3.2" },
     { name = "html-text", specifier = "==0.6.2" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1,<0.29.0" },
     { name = "huggingface-hub", specifier = ">=0.25.0,<0.26.0" },
-    { name = "imageio-ffmpeg", specifier = ">=0.6.0" },
     { name = "infinity-emb", specifier = ">=0.0.66,<0.0.67" },
     { name = "infinity-sdk", specifier = "==0.6.11" },
     { name = "itsdangerous", specifier = "==2.1.2" },
@@ -4104,17 +3821,10 @@ requires-dist = [
     { name = "jira", specifier = "==3.10.5" },
     { name = "json-repair", specifier = "==0.35.0" },
     { name = "jsonpath-ng", specifier = ">=1.6.1" },
-    { name = "jupyter-client", specifier = ">=8.6.2" },
-    { name = "langchain-community", specifier = ">=0.2.4" },
-    { name = "langchain-openai", specifier = ">=0.1.8" },
-    { name = "langchainhub", specifier = ">=0.1.20" },
     { name = "langfuse", specifier = ">=3.2.4" },
-    { name = "lark", specifier = ">=1.2.2" },
-    { name = "litellm", specifier = ">=1.74.15.post1" },
     { name = "mammoth", specifier = ">=1.11.0" },
     { name = "markdown", specifier = "==3.6" },
     { name = "markdown-to-json", specifier = "==2.1.1" },
-    { name = "markdown-to-json", specifier = ">=2.1.1" },
     { name = "markdownify", specifier = ">=1.2.0" },
     { name = "mcp", specifier = ">=1.9.4" },
     { name = "mini-racer", specifier = ">=0.12.4,<0.13.0" },
@@ -4123,107 +3833,79 @@ requires-dist = [
     { name = "mistune", specifier = ">=3.0.0,<4.0.0" },
     { name = "moodlepy", specifier = ">=0.23.0" },
     { name = "mypy-boto3-s3", specifier = "==1.40.26" },
-    { name = "nltk", specifier = "==3.9.1" },
-    { name = "numpy", specifier = ">=1.26.0,<2.0.0" },
     { name = "office365-rest-python-client", specifier = "==2.6.2" },
-    { name = "ollama", specifier = ">=0.2.1" },
     { name = "ollama", specifier = ">=0.5.0" },
     { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'", specifier = "==1.23.2" },
     { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = "==1.23.2" },
-    { name = "openai", specifier = ">=1.33.0" },
-    { name = "openai", specifier = ">=1.45.0" },
     { name = "opencv-python", specifier = "==4.10.0.84" },
     { name = "opencv-python-headless", specifier = "==4.10.0.84" },
     { name = "opendal", specifier = ">=0.45.0,<0.46.0" },
     { name = "openpyxl", specifier = ">=3.1.0,<4.0.0" },
     { name = "opensearch-py", specifier = "==2.7.1" },
     { name = "ormsgpack", specifier = "==1.5.0" },
-    { name = "ormsgpack", specifier = ">=1.5.0" },
-    { name = "pandas", specifier = ">=2.2.0,<3.0.0" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
     { name = "pdfplumber", specifier = "==0.10.4" },
     { name = "pillow", specifier = ">=10.4.0,<13.0.0" },
-    { name = "pip", specifier = "==25.3" },
     { name = "pluginlib", specifier = "==0.9.4" },
-    { name = "polars-lts-cpu", specifier = ">=1.33.1" },
-    { name = "protobuf", specifier = "==5.27.2" },
     { name = "psutil", specifier = ">=5.9.8" },
-    { name = "psycopg2-binary", specifier = ">=2.9.9" },
     { name = "psycopg2-binary", specifier = ">=2.9.11,<3.0.0" },
     { name = "pyclipper", specifier = ">=1.4.0,<2.0.0" },
     { name = "pycryptodomex", specifier = "==3.20.0" },
     { name = "pyexcel", specifier = ">=0.7.0" },
     { name = "pyexcel-xlsx", specifier = ">=0.6.0" },
     { name = "pymilvus", specifier = ">=2.5.11" },
-    { name = "pymysql", specifier = ">=1.1.1,<2.0.0" },
     { name = "pyobvector", specifier = "==0.2.18" },
     { name = "pyodbc", specifier = ">=5.2.0,<6.0.0" },
     { name = "pypandoc", specifier = ">=1.16" },
     { name = "pypdf", specifier = "==6.4.0" },
     { name = "pypdf2", specifier = ">=3.0.1,<4.0.0" },
-    { name = "pytest", specifier = ">=8.3.0,<9.0.0" },
-    { name = "pytest", specifier = ">=8.3.4" },
     { name = "python-calamine", specifier = ">=0.4.0" },
-    { name = "python-dateutil", specifier = "==2.8.2" },
-    { name = "python-docx", specifier = ">=1.1.2" },
     { name = "python-docx", specifier = ">=1.1.2,<2.0.0" },
-    { name = "python-dotenv", specifier = "==1.0.1" },
-    { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "python-pptx", specifier = ">=0.6.23" },
     { name = "python-pptx", specifier = ">=1.0.2,<2.0.0" },
     { name = "pyvector-vastbase", specifier = "==1.0.2" },
     { name = "pywencai", specifier = ">=0.13.1,<1.0.0" },
     { name = "ranx", specifier = "==0.3.20" },
-    { name = "ranx", specifier = ">=0.3.20" },
     { name = "readability-lxml", specifier = ">=0.8.4,<1.0.0" },
-    { name = "redis", specifier = ">=5.0.7" },
+    { name = "redis", specifier = ">=6.1.0" },
     { name = "replicate", specifier = "==0.31.0" },
     { name = "reportlab", specifier = ">=4.4.1" },
-    { name = "requests", specifier = ">=2.31.0" },
-    { name = "requests", specifier = ">=2.32.3,<3.0.0" },
     { name = "roman-numbers", specifier = "==1.0.2" },
     { name = "ruamel-base", specifier = "==1.0.0" },
     { name = "ruamel-yaml", specifier = ">=0.18.6,<0.19.0" },
     { name = "scholarly", specifier = "==1.7.11" },
     { name = "scikit-learn", specifier = "==1.5.0" },
-    { name = "selenium", specifier = "==4.22.0" },
     { name = "selenium-wire", specifier = "==5.1.0" },
-    { name = "selenium-wire", specifier = ">=5.1.0" },
-    { name = "setuptools", specifier = ">=78.1.1,<81.0.0" },
-    { name = "shapely", specifier = "==2.0.5" },
-    { name = "six", specifier = "==1.16.0" },
     { name = "slack-sdk", specifier = "==3.37.0" },
     { name = "sqladmin", specifier = ">=0.21.0" },
     { name = "sqlalchemy", specifier = ">=2.0.40" },
     { name = "sse-starlette", specifier = ">=2.2.1" },
     { name = "strenum", specifier = "==0.4.15" },
-    { name = "strenum", specifier = ">=0.4.15" },
-    { name = "tabulate", specifier = "==0.9.0" },
-    { name = "tabulate", specifier = ">=0.9.0" },
     { name = "tavily-python", specifier = "==0.5.4" },
     { name = "tencentcloud-sdk-python", specifier = "==3.0.1478" },
     { name = "tika", specifier = "==2.6.0" },
-    { name = "tiktoken", specifier = "==0.7.0" },
     { name = "torch", specifier = ">=2.5.0,<3.0.0" },
     { name = "transformers", specifier = ">=4.35.0,<5.0.0" },
-    { name = "trio", specifier = ">=0.17.0,<0.29.0" },
-    { name = "umap-learn", specifier = "==0.5.6" },
     { name = "uvicorn", specifier = ">=0.30.1" },
     { name = "valkey", specifier = "==6.0.2" },
     { name = "vertexai", specifier = "==1.70.0" },
     { name = "volcengine", specifier = "==1.0.194" },
-    { name = "volcengine-python-sdk", extras = ["ark"], specifier = ">=1.0.87" },
+    { name = "volcengine-python-sdk", extras = ["ark"], specifier = ">=5.0.5" },
     { name = "voyageai", specifier = "==0.2.3" },
     { name = "webdav4", specifier = ">=0.10.0,<0.11.0" },
     { name = "webdriver-manager", specifier = "==4.0.1" },
-    { name = "werkzeug", specifier = "==3.0.6" },
     { name = "wikipedia", specifier = "==1.4.0" },
     { name = "word2number", specifier = "==1.1" },
     { name = "xgboost", specifier = "==1.6.0" },
     { name = "xpinyin", specifier = "==0.7.6" },
     { name = "xxhash", specifier = ">=3.5.0,<4.0.0" },
     { name = "yfinance", specifier = "==0.2.65" },
-    { name = "zhipuai", specifier = ">2.0.1" },
+    { name = "zhipuai", specifier = ">=2.1.5" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "debugpy", specifier = ">=1.8.13" },
+    { name = "pytest", specifier = ">=8.3.4" },
 ]
 
 [[package]]
@@ -4254,15 +3936,6 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/00/b8/55d21ed9ca479df66d9892212ba7d7977850ef17aa80a83e3f11f31190fd/mypy_boto3_s3-1.40.26.tar.gz", hash = "sha256:8d2bfd1052894d0e84c9fb9358d838ba0eed0265076c7dd7f45622c770275c99" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/85/a5/dba3384423834009bdd41c7021de5c663468a0e7bc4071cb301721e52a99/mypy_boto3_s3-1.40.26-py3-none-any.whl", hash = "sha256:6d055d16ef89a0133ade92f6b4f09603e4acc31a0f5e8f846edf4eb48f17b5a7" },
-]
-
-[[package]]
-name = "mypy-extensions"
-version = "1.0.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/98/a4/1ab47638b92648243faf97a5aeb6ea83059cc3624972ab6b8d2316078d3f/mypy_extensions-1.0.0.tar.gz", hash = "sha256:75dbf8955dc00442a438fc4d0666508a9a97b6bd41aa2f0ffe9d2f2725af0782" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/2a/e2/5d3f6ada4297caebe1a2add3b126fe800c96f56dbe5d1988a2cbe0b267aa/mypy_extensions-1.0.0-py3-none-any.whl", hash = "sha256:4392f6c0eb8a5668a69e23d168ffa70f0be9ccfd32b5cc2d26a34ae5b844552d" },
 ]
 
 [[package]]
@@ -4491,9 +4164,12 @@ wheels = [
 
 [[package]]
 name = "olefile"
-version = "0.46"
+version = "0.47"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/34/81/e1ac43c6b45b4c5f8d9352396a14144bba52c8fec72a80f425f6a4d653ad/olefile-0.46.zip", hash = "sha256:133b031eaf8fd2c9399b78b8bc5b8fcbe4c31e85295749bb17a87cba8f3c3964" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/69/1b/077b508e3e500e1629d366249c3ccb32f95e50258b231705c09e3c7a4366/olefile-0.47.zip", hash = "sha256:599383381a0bf3dfbd932ca0ca6515acd174ed48870cbf7fee123d698c192c1c" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/17/d3/b64c356a907242d719fc668b71befd73324e47ab46c8ebbbede252c154b2/olefile-0.47-py2.py3-none-any.whl", hash = "sha256:543c7da2a7adadf21214938bb79c83ea12b473a4b6ee4ad4bf854e7715e13d1f" },
+]
 
 [[package]]
 name = "oletools"
@@ -5039,15 +4715,6 @@ wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/7b/f9/cfaa5082ca9bc4a6de66ffe1c12c2d90bf09c309a5f52b27759a596900e7/pillow-10.4.0-cp313-cp313-win32.whl", hash = "sha256:551d3fd6e9dc15e4c1eb6fc4ba2b39c0c7933fa113b220057a34f4bb3268a060" },
     { url = "https://mirrors.aliyun.com/pypi/packages/01/6a/30ff0eef6e0c0e71e55ded56a38d4859bf9d3634a94a88743897b5f96936/pillow-10.4.0-cp313-cp313-win_amd64.whl", hash = "sha256:030abdbe43ee02e0de642aee345efa443740aa4d828bfe8e2eb11922ea6a21ea" },
     { url = "https://mirrors.aliyun.com/pypi/packages/48/2c/2e0a52890f269435eee38b21c8218e102c621fe8d8df8b9dd06fabf879ba/pillow-10.4.0-cp313-cp313-win_arm64.whl", hash = "sha256:5b001114dd152cfd6b23befeb28d7aee43553e2402c9f159807bf55f33af8a8d" },
-]
-
-[[package]]
-name = "pip"
-version = "25.3"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/fe/6e/74a3f0179a4a73a53d66ce57fdb4de0080a8baa1de0063de206d6167acc2/pip-25.3.tar.gz", hash = "sha256:8d0538dbbd7babbd207f261ed969c65de439f6bc9e5dbd3b3b9a77f25d95f343" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/44/3c/d717024885424591d5376220b5e836c2d5293ce2011523c9de23ff7bf068/pip-25.3-py3-none-any.whl", hash = "sha256:9655943313a94722b7774661c21049070f6bbb0a1516bf02f7c8d5d9201514cd" },
 ]
 
 [[package]]
@@ -5609,16 +5276,16 @@ wheels = [
 
 [[package]]
 name = "pyexcel"
-version = "0.7.2"
+version = "0.7.4"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "lml" },
     { name = "pyexcel-io" },
     { name = "texttable" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/8d/5b/e15bdef7119e58b20bf5baa6587e32afaa36609ecd301514f38109eb4a93/pyexcel-0.7.2.tar.gz", hash = "sha256:a0d6eb788eb06e81a1b438c0e7c00fee080465f3397fbcffe5cec34aebe6a32a" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/4a/fb/eb9753797b8680a3a1c428df8a55d917bc7ddf9f875abcc5831464b287a4/pyexcel-0.7.4.tar.gz", hash = "sha256:cbbdc60532bbb2a22fe4303e824aaa386ecf6dc514d1f87d1ad03a1385fee4bd" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/d5/4d/8c3363dd6f44df1c1dfd4e32318ad834d3634cf8e940fc67590f89b595a8/pyexcel-0.7.2-py2.py3-none-any.whl", hash = "sha256:a71bf4f8154f9e380645138881f3292ee81eaffa374996adfd8f2edcc0c6cabb" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/c3/0f/3ee16151da584e8c4f9528366cdf2ce9d2dc96f7180283c04d1b58aa8415/pyexcel-0.7.4-py2.py3-none-any.whl", hash = "sha256:4f287fe2cc81c1fb2c0cf7f2be018b98391229c3752fb35e7ea3d9713043f72d" },
 ]
 
 [[package]]
@@ -6196,11 +5863,11 @@ sdist = { url = "https://mirrors.aliyun.com/pypi/packages/34/12/944f61bc67a1e918
 
 [[package]]
 name = "redis"
-version = "5.2.1"
+version = "7.1.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/47/da/d283a37303a995cd36f8b92db85135153dc4f7a8e4441aa827721b442cfb/redis-5.2.1.tar.gz", hash = "sha256:16f2e22dff21d5125e8481515e386711a34cbec50f0e44413dd7d9c060a54e0f" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/43/c8/983d5c6579a411d8a99bc5823cc5712768859b5ce2c8afe1a65b37832c81/redis-7.1.0.tar.gz", hash = "sha256:b1cc3cfa5a2cb9c2ab3ba700864fb0ad75617b41f01352ce5779dabf6d5f9c3c" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/3c/5f/fa26b9b2672cbe30e07d9a5bdf39cf16e3b80b42916757c5f92bca88e4ba/redis-5.2.1-py3-none-any.whl", hash = "sha256:ee7e1056b9aea0f04c6c2ed59452947f34c4940ee025f5dd83e6a6418b6989e4" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/89/f0/8956f8a86b20d7bb9d6ac0187cf4cd54d8065bc9a1a09eb8011d4d326596/redis-7.1.0-py3-none-any.whl", hash = "sha256:23c52b208f92b56103e17c5d06bdc1a6c2c0b3106583985a76a18f83b265de2b" },
 ]
 
 [[package]]
@@ -6473,15 +6140,15 @@ wheels = [
 
 [[package]]
 name = "rtfde"
-version = "0.0.2"
+version = "0.1.2.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
-    { name = "lark-parser" },
+    { name = "lark" },
     { name = "oletools" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/81/ea/28f5ab6b46a072887c8c8fd8c8a1f7b54025fc4bb2e09024668ea6686044/RTFDE-0.0.2.tar.gz", hash = "sha256:b86b5d734950fe8745a5b89133f50554252dbd67c6d1b9265e23ee140e7ea8a2" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/9e/5c/116a016b38af589e8141160bc9b034b73dde2e50c22a921751f4d982a7ca/rtfde-0.1.2.2.tar.gz", hash = "sha256:2f0cd6ecd644071e39452e6fc4f4a1435453af0ec7c90ea86fb4fc96010c7f1b" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/5d/3f/39ba5a72620c43656bc80cb1f7afe0d498df4a48947d75ea0ca0752ffbf4/RTFDE-0.0.2-py3-none-any.whl", hash = "sha256:18386e4f060cee12a2a8035b0acf0cc99689f5dff1bf347bab7e92351860a21d" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/14/24/5a653278259be44c1845ddd56dd30cfa7265281ba149b9342b79f9d4f788/rtfde-0.1.2.2-py3-none-any.whl", hash = "sha256:d43868c74f21ae9ea5acbfd4176d5de1f2cfae0ff7f267698471c606287c04ec" },
 ]
 
 [[package]]
@@ -7445,19 +7112,6 @@ wheels = [
 ]
 
 [[package]]
-name = "typing-inspect"
-version = "0.9.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "mypy-extensions" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/dc/74/1789779d91f1961fa9438e9a8710cdae6bd138c80d7303996933d117264a/typing_inspect-0.9.0.tar.gz", hash = "sha256:b23fc42ff6f6ef6954e4852c1fb512cdd18dbea03134f91f856a95ccc9461f78" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/65/f3/107a22063bf27bdccf2024833d3445f4eea42b2e598abfbd46f6a63b6cb0/typing_inspect-0.9.0-py3-none-any.whl", hash = "sha256:9ee6fc59062311ef8547596ab6b955e1b8aa46242d854bfc78f4f6b0eff35f9f" },
-]
-
-[[package]]
 name = "typing-inspection"
 version = "0.4.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -7753,18 +7407,6 @@ wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/86/eb/20b6cdf273913d0ad05a6a14aed4b9a85591c18a987a3d47f20fa13dcc47/websockets-15.0.1-cp313-cp313-win32.whl", hash = "sha256:ba9e56e8ceeeedb2e080147ba85ffcd5cd0711b89576b83784d8605a7df455fa" },
     { url = "https://mirrors.aliyun.com/pypi/packages/1b/6c/c65773d6cab416a64d191d6ee8a8b1c68a09970ea6909d16965d26bfed1e/websockets-15.0.1-cp313-cp313-win_amd64.whl", hash = "sha256:e09473f095a819042ecb2ab9465aee615bd9c2028e4ef7d933600a8401c79561" },
     { url = "https://mirrors.aliyun.com/pypi/packages/fa/a8/5b41e0da817d64113292ab1f8247140aac61cbf6cfd085d6a0fa77f4984f/websockets-15.0.1-py3-none-any.whl", hash = "sha256:f7a866fbc1e97b5c617ee4116daaa09b722101d4a3c170c787450ba409f9736f" },
-]
-
-[[package]]
-name = "werkzeug"
-version = "3.0.6"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "markupsafe" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/d4/f9/0ba83eaa0df9b9e9d1efeb2ea351d0677c37d41ee5d0f91e98423c7281c9/werkzeug-3.0.6.tar.gz", hash = "sha256:a8dd59d4de28ca70471a34cba79bed5f7ef2e036a76b3ab0835474246eb41f8d" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/6c/69/05837f91dfe42109203ffa3e488214ff86a6d68b2ed6c167da6cdc42349b/werkzeug-3.0.6-py3-none-any.whl", hash = "sha256:1bc0c2310d2fbb07b1dd1105eba2f7af72f322e1e455f2f93c993bee8c8a5f17" },
 ]
 
 [[package]]
