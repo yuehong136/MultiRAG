@@ -16,6 +16,7 @@ from api.db.services.common_service import CommonService
 from api.utils.memory_utils import calculate_memory_type
 from api.constants import MEMORY_NAME_LIMIT
 from common.misc_utils import get_uuid
+from common.time_utils import get_format_time, current_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +217,8 @@ class MemoryService(CommonService):
         if len(memory_name) > MEMORY_NAME_LIMIT:
             return False, f"Memory name '{memory_name}' exceeds limit of {MEMORY_NAME_LIMIT}."
 
+        timestamp = current_timestamp()
+        format_time = get_format_time()
         # 创建Memory记录
         memory_id = get_uuid()
         memory_type_int = calculate_memory_type(memory_type)

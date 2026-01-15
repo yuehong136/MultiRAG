@@ -220,6 +220,7 @@ class FlowParser:
                 binary=binary,
                 callback=callback,
                 parse_method=mineru_parse_method,
+                lang=conf.get("lang", "Chinese"),
             )
             
             bboxes = []

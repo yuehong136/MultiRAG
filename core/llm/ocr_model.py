@@ -46,11 +46,12 @@ class MinerUOcrModel(Base, MinerUParser):
         self.mineru_backend = config.get("mineru_backend", os.environ.get("MINERU_BACKEND", "pipeline"))
         self.mineru_server_url = config.get("mineru_server_url", os.environ.get("MINERU_SERVER_URL", ""))
         self.mineru_delete_output = bool(int(config.get("mineru_delete_output", os.environ.get("MINERU_DELETE_OUTPUT", 1))))
-        self.mineru_executable = os.environ.get("MINERU_EXECUTABLE", "mineru")
 
-        logging.info(f"Parsed MinerU config: {config}")
+        logging.info(
+            f"Parsed MinerU config: backend={self.mineru_backend} api={self.mineru_api} server_url={self.mineru_server_url} output_dir={self.mineru_output_dir} delete_output={self.mineru_delete_output}"
+        )
 
-        MinerUParser.__init__(self, mineru_path=self.mineru_executable, mineru_api=self.mineru_api, mineru_server_url=self.mineru_server_url)
+        MinerUParser.__init__(self, mineru_api=self.mineru_api, mineru_server_url=self.mineru_server_url)
 
     def check_available(self, backend: str | None = None, server_url: str | None = None) -> tuple[bool, str]:
         backend = backend or self.mineru_backend
@@ -60,7 +61,7 @@ class MinerUOcrModel(Base, MinerUParser):
     def parse_pdf(self, filepath: str, binary=None, callback=None, parse_method: str = "raw", **kwargs):
         ok, reason = self.check_available()
         if not ok:
-            raise RuntimeError(f"MinerU not found or server not accessible: {reason}. Please install it via: pip install -U 'mineru[core]'.")
+            raise RuntimeError(f"MinerU server not accessible: {reason}")
 
         sections, tables = MinerUParser.parse_pdf(
             self,

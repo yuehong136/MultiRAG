@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.memory_service import MemoryService
-from api.db.services.user_service import UserService
+from api.db.services.user_service import UserTenantService
 from api.utils.memory_utils import format_ret_data_from_memory, get_memory_type_human
 from api.utils.api_utils import get_json_result
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
@@ -347,7 +347,7 @@ def list_memory(
 
         if not tenant_id:
             # 限制为当前用户可访问的租户
-            user_tenants = UserService.get_user_tenant_relation_by_user_id(db, user.id)
+            user_tenants = UserTenantService.get_user_tenant_relation_by_user_id(db, user.id)
             filter_dict["tenant_id"] = [tenant["tenant_id"] for tenant in user_tenants]
         else:
             filter_dict["tenant_id"] = tenant_id
