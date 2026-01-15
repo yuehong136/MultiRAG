@@ -36,7 +36,7 @@ from zhipuai import ZhipuAI
 from common import settings
 from api.utils.file_utils import get_home_cache_dir
 from common.log_utils import log_exception
-from common.token_utils import num_tokens_from_string, truncate
+from common.token_utils import num_tokens_from_string, truncate, total_token_count_from_response
 
 
 class Base(ABC):
@@ -55,17 +55,6 @@ class Base(ABC):
 
     def encode_queries(self, text: str):
         raise NotImplementedError("Please implement encode method!")
-
-    def total_token_count(self, resp):
-        try:
-            return resp.usage.total_tokens
-        except Exception:
-            pass
-        try:
-            return resp["usage"]["total_tokens"]
-        except Exception:
-            pass
-        return 0
 
 
 class DefaultEmbedding(Base):
@@ -192,7 +181,7 @@ class OpenAIEmbed(Base):
             res = self.client.embeddings.create(input=texts[i : i + batch_size], model=self.model_name, encoding_format="float", extra_body={"drop_params": True})
             try:
                 ress.extend([d.embedding for d in res.data])
-                total_tokens += self.total_token_count(res)
+                total_tokens += total_token_count_from_response(res)
             except Exception as _e:
                 log_exception(_e, res)
                 raise Exception(f"Error: {res}")
@@ -201,7 +190,7 @@ class OpenAIEmbed(Base):
     def encode_queries(self, text):
         res = self.client.embeddings.create(input=[truncate(text, 8191)], model=self.model_name, encoding_format="float",extra_body={"drop_params": True})
         try:
-            return np.array(res.data[0].embedding), self.total_token_count(res)
+            return np.array(res.data[0].embedding), total_token_count_from_response(res)
         except Exception as _e:
             log_exception(_e, res)
             raise Exception(f"Error: {res}")
@@ -290,7 +279,7 @@ class QWenEmbed(Base):
                 for e in resp["output"]["embeddings"]:
                     embds[e["text_index"]] = e["embedding"]
                 res.extend(embds)
-                token_count += self.total_token_count(resp)
+                token_count += total_token_count_from_response(resp)
             except Exception as _e:
                 log_exception(_e, resp)
                 raise
@@ -299,7 +288,7 @@ class QWenEmbed(Base):
     def encode_queries(self, text):
         resp = dashscope.TextEmbedding.call(model=self.model_name, input=text[:2048], api_key=self.key, text_type="query")
         try:
-            return np.array(resp["output"]["embeddings"][0]["embedding"]), self.total_token_count(resp)
+            return np.array(resp["output"]["embeddings"][0]["embedding"]), total_token_count_from_response(resp)
         except Exception as _e:
             log_exception(_e, resp)
             raise Exception(f"Error: {resp}")
@@ -327,7 +316,7 @@ class ZhipuEmbed(Base):
             res = self.client.embeddings.create(input=txt, model=self.model_name)
             try:
                 arr.append(res.data[0].embedding)
-                tks_num += self.total_token_count(res)
+                tks_num += total_token_count_from_response(res)
             except Exception as _e:
                 log_exception(_e, res)
                 raise Exception(f"Error: {res}")
@@ -336,7 +325,7 @@ class ZhipuEmbed(Base):
     def encode_queries(self, text):
         res = self.client.embeddings.create(input=text, model=self.model_name)
         try:
-            return np.array(res.data[0].embedding), self.total_token_count(res)
+            return np.array(res.data[0].embedding), total_token_count_from_response(res)
         except Exception as _e:
             log_exception(_e, res)
             raise Exception(f"Error: {res}")
@@ -442,7 +431,7 @@ class XinferenceEmbed(Base):
             try:
                 res = self.client.embeddings.create(input=texts[i : i + batch_size], model=self.model_name)
                 ress.extend([d.embedding for d in res.data])
-                total_tokens += self.total_token_count(res)
+                total_tokens += total_token_count_from_response(res)
             except Exception as _e:
                 log_exception(_e, res)
                 raise Exception(f"Error: {res}")
@@ -452,7 +441,7 @@ class XinferenceEmbed(Base):
         res = None
         try:
             res = self.client.embeddings.create(input=[text], model=self.model_name)
-            return np.array(res.data[0].embedding), self.total_token_count(res)
+            return np.array(res.data[0].embedding), total_token_count_from_response(res)
         except Exception as _e:
             log_exception(_e, res)
             raise Exception(f"Error: {res}")
@@ -535,7 +524,7 @@ class JinaMultiVecEmbed(Base):
 
                     ress.append(chunk_emb)
 
-                token_count += self.total_token_count(res)
+                token_count += total_token_count_from_response(res)
             except Exception as _e:
                 log_exception(_e, response)
                 raise Exception(f"Error: {response}")
@@ -569,7 +558,7 @@ class MistralEmbed(Base):
                 try:
                     res = self.client.embeddings(input=texts[i : i + batch_size], model=self.model_name)
                     ress.extend([d.embedding for d in res.data])
-                    token_count += self.total_token_count(res)
+                    token_count += total_token_count_from_response(res)
                     break
                 except Exception as _e:
                     if retry_max == 1:
@@ -586,7 +575,7 @@ class MistralEmbed(Base):
         while retry_max > 0:
             try:
                 res = self.client.embeddings(input=[truncate(text, 8196)], model=self.model_name)
-                return np.array(res.data[0].embedding), self.total_token_count(res)
+                return np.array(res.data[0].embedding), total_token_count_from_response(res)
             except Exception as _e:
                 if retry_max == 1:
                     log_exception(_e)
@@ -721,7 +710,7 @@ class NvidiaEmbed(Base):
             try:
                 res = response.json()
                 ress.extend([d["embedding"] for d in res["data"]])
-                token_count += self.total_token_count(res)
+                token_count += total_token_count_from_response(res)
             except Exception as _e:
                 log_exception(_e, response)
                 raise Exception(f"Error: {response}")
@@ -860,7 +849,7 @@ class SILICONFLOWEmbed(Base):
             try:
                 res = response.json()
                 ress.extend([d["embedding"] for d in res["data"]])
-                token_count += self.total_token_count(res)
+                token_count += total_token_count_from_response(res)
             except Exception as _e:
                 log_exception(_e, response)
                 raise Exception(f"Error: {response}")
@@ -876,7 +865,7 @@ class SILICONFLOWEmbed(Base):
         response = requests.post(self.base_url, json=payload, headers=self.headers)
         try:
             res = response.json()
-            return np.array(res["data"][0]["embedding"]), self.total_token_count(res)
+            return np.array(res["data"][0]["embedding"]), total_token_count_from_response(res)
         except Exception as _e:
             log_exception(_e, response)
             raise Exception(f"Error: {response}")
