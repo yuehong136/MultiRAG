@@ -24,11 +24,12 @@ import tempfile
 import threading
 import time
 import zipfile
+from dataclasses import dataclass
 from io import BytesIO
 from os import PathLike
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import numpy as np
 import pdfplumber
@@ -51,6 +52,87 @@ class MinerUContentType(StrEnum):
     CODE = "code"
     LIST = "list"
     DISCARDED = "discarded"
+
+
+# Mapping from language names to MinerU language codes
+LANGUAGE_TO_MINERU_MAP = {
+    'English': 'en',
+    'Chinese': 'ch',
+    'Traditional Chinese': 'chinese_cht',
+    'Russian': 'east_slavic',
+    'Ukrainian': 'east_slavic',
+    'Indonesian': 'latin',
+    'Spanish': 'latin',
+    'Vietnamese': 'latin',
+    'Japanese': 'japan',
+    'Korean': 'korean',
+    'Portuguese BR': 'latin',
+    'German': 'latin',
+    'French': 'latin',
+    'Italian': 'latin',
+    'Tamil': 'ta',
+    'Telugu': 'te',
+    'Kannada': 'ka',
+    'Thai': 'th',
+    'Greek': 'el',
+    'Hindi': 'devanagari',
+}
+
+
+class MinerUBackend(StrEnum):
+    """MinerU processing backend options."""
+
+    PIPELINE = "pipeline"  # Traditional multimodel pipeline (default)
+    VLM_TRANSFORMERS = "vlm-transformers"  # Vision-language model using HuggingFace Transformers
+    VLM_MLX_ENGINE = "vlm-mlx-engine"  # Faster, requires Apple Silicon and macOS 13.5+
+    VLM_VLLM_ENGINE = "vlm-vllm-engine"  # Local vLLM engine, requires local GPU
+    VLM_VLLM_ASYNC_ENGINE = "vlm-vllm-async-engine"  # Asynchronous vLLM engine, new in MinerU API
+    VLM_LMDEPLOY_ENGINE = "vlm-lmdeploy-engine"  # LMDeploy engine
+    VLM_HTTP_CLIENT = "vlm-http-client"  # HTTP client for remote vLLM server (CPU only)
+
+
+class MinerULanguage(StrEnum):
+    """MinerU supported languages for OCR (pipeline backend only)."""
+
+    CH = "ch"  # Chinese
+    CH_SERVER = "ch_server"  # Chinese (server)
+    CH_LITE = "ch_lite"  # Chinese (lite)
+    EN = "en"  # English
+    KOREAN = "korean"  # Korean
+    JAPAN = "japan"  # Japanese
+    CHINESE_CHT = "chinese_cht"  # Chinese Traditional
+    TA = "ta"  # Tamil
+    TE = "te"  # Telugu
+    KA = "ka"  # Kannada
+    TH = "th"  # Thai
+    EL = "el"  # Greek
+    LATIN = "latin"  # Latin
+    ARABIC = "arabic"  # Arabic
+    EAST_SLAVIC = "east_slavic"  # East Slavic
+    CYRILLIC = "cyrillic"  # Cyrillic
+    DEVANAGARI = "devanagari"  # Devanagari
+
+
+class MinerUParseMethod(StrEnum):
+    """MinerU PDF parsing methods (pipeline backend only)."""
+
+    AUTO = "auto"  # Automatically determine the method based on the file type
+    TXT = "txt"  # Use text extraction method
+    OCR = "ocr"  # Use OCR method for image-based PDFs
+
+
+@dataclass
+class MinerUParseOptions:
+    """Options for MinerU PDF parsing."""
+
+    backend: MinerUBackend = MinerUBackend.PIPELINE
+    lang: MinerULanguage | None = None  # language for OCR (pipeline backend only)
+    method: MinerUParseMethod = MinerUParseMethod.AUTO
+    server_url: str | None = None
+    delete_output: bool = True
+    parse_method: str = "raw"
+    formula_enable: bool = True
+    table_enable: bool = True
 
 
 class MinerUParser(RAGFlowPdfParser):
@@ -96,14 +178,15 @@ class MinerUParser(RAGFlowPdfParser):
                     with open(full_path, "wb") as f:
                         f.write(zip_ref.read(filename))
 
-    def _is_http_endpoint_valid(self, url, timeout=5):
+    @staticmethod
+    def _is_http_endpoint_valid(url, timeout=5):
         try:
             response = requests.head(url, timeout=timeout, allow_redirects=True)
             return response.status_code in [200, 301, 302, 307, 308]
         except Exception:
             return False
 
-    def check_installation(self, backend: str = "pipeline", server_url: Optional[str] = None) -> tuple[bool, str]:
+    def check_installation(self, backend: str = "pipeline", server_url: str | None = None) -> tuple[bool, str]:
         reason = ""
 
         valid_backends = ["pipeline", "vlm-http-client", "vlm-transformers", "vlm-vllm-engine", "vlm-mlx-engine"]
@@ -185,14 +268,14 @@ class MinerUParser(RAGFlowPdfParser):
         return False, reason
 
     def _run_mineru(
-        self, input_path: Path, output_dir: Path, method: str = "auto", backend: str = "pipeline", lang: Optional[str] = None, server_url: Optional[str] = None, callback: Optional[Callable] = None
+            self, input_path: Path, output_dir: Path, options: MinerUParseOptions, callback: Callable | None = None
     ):
         if self.using_api:
-            self._run_mineru_api(input_path, output_dir, method, backend, lang, callback)
+            self._run_mineru_api(input_path, output_dir, options, callback)
         else:
-            self._run_mineru_executable(input_path, output_dir, method, backend, lang, server_url, callback)
+            self._run_mineru_executable(input_path, output_dir, options, callback)
 
-    def _run_mineru_api(self, input_path: Path, output_dir: Path, method: str = "auto", backend: str = "pipeline", lang: Optional[str] = None, callback: Optional[Callable] = None):
+    def _run_mineru_api(self, input_path: Path, output_dir: Path, options: MinerUParseOptions, callback: Callable | None = None):
         output_zip_path = os.path.join(str(output_dir), "output.zip")
 
         pdf_file_path = str(input_path)
@@ -201,18 +284,18 @@ class MinerUParser(RAGFlowPdfParser):
             raise RuntimeError(f"[MinerU] PDF file not exists: {pdf_file_path}")
 
         pdf_file_name = Path(pdf_file_path).stem.strip()
-        output_path = os.path.join(str(output_dir), pdf_file_name, method)
+        output_path = os.path.join(str(output_dir), pdf_file_name, options.method)
         os.makedirs(output_path, exist_ok=True)
 
         files = {"files": (pdf_file_name + ".pdf", open(pdf_file_path, "rb"), "application/pdf")}
 
         data = {
             "output_dir": "./output",
-            "lang_list": lang,
-            "backend": backend,
-            "parse_method": method,
-            "formula_enable": True,
-            "table_enable": True,
+            "lang_list": options.lang,
+            "backend": options.backend,
+            "parse_method": options.method,
+            "formula_enable": options.formula_enable,
+            "table_enable": options.table_enable,
             "server_url": None,
             "return_md": True,
             "return_middle_json": True,
@@ -253,15 +336,15 @@ class MinerUParser(RAGFlowPdfParser):
         self.logger.info("[MinerU] Api completed successfully.")
 
     def _run_mineru_executable(
-        self, input_path: Path, output_dir: Path, method: str = "auto", backend: str = "pipeline", lang: Optional[str] = None, server_url: Optional[str] = None, callback: Optional[Callable] = None
+            self, input_path: Path, output_dir: Path, options: MinerUParseOptions, callback: Callable | None = None
     ):
-        cmd = [str(self.mineru_path), "-p", str(input_path), "-o", str(output_dir), "-m", method]
-        if backend:
-            cmd.extend(["-b", backend])
-        if lang:
-            cmd.extend(["-l", lang])
-        if server_url and backend == "vlm-http-client":
-            cmd.extend(["-u", server_url])
+        cmd = [str(self.mineru_path), "-p", str(input_path), "-o", str(output_dir), "-m", options.method]
+        if options.backend:
+            cmd.extend(["-b", options.backend])
+        if options.lang:
+            cmd.extend(["-l", options.lang])
+        if options.server_url and options.backend == "vlm-http-client":
+            cmd.extend(["-u", options.server_url])
 
         self.logger.info(f"[MinerU] Running command: {' '.join(cmd)}")
 
@@ -569,23 +652,29 @@ class MinerUParser(RAGFlowPdfParser):
         return []
 
     def parse_pdf(
-        self,
-        filepath: str | PathLike[str],
-        binary: BytesIO | bytes,
-        callback: Optional[Callable] = None,
-        *,
-        output_dir: Optional[str] = None,
-        backend: str = "pipeline",
-        lang: Optional[str] = None,
-        method: str = "auto",
-        server_url: Optional[str] = None,
-        delete_output: bool = True,
-        parse_method: str = "raw",
+            self,
+            filepath: str | PathLike[str],
+            binary: BytesIO | bytes,
+            callback: Callable | None = None,
+            *,
+            output_dir: str | None = None,
+            backend: str = "pipeline",
+            server_url: str | None = None,
+            delete_output: bool = True,
+            parse_method: str = "raw",
+            **kwargs,
     ) -> tuple:
         import shutil
 
         temp_pdf = None
         created_tmp_dir = False
+
+        # Assuming the dict is defined as shown
+        lang = kwargs.get('lang', 'English')
+        mineru_lang_code = LANGUAGE_TO_MINERU_MAP.get(lang, 'ch')  # Returns 'ch' if lang not found
+        mineru_method_raw_str = kwargs.get('parser_config', {}).get('mineru_parse_method', 'auto')
+        enable_formula = kwargs.get('parser_config', {}).get('mineru_formula_enable', True)
+        enable_table = kwargs.get('parser_config', {}).get('mineru_enable', True)
 
         # remove spaces, or mineru crash, and _read_output fail too
         file_path = Path(filepath)
@@ -625,8 +714,18 @@ class MinerUParser(RAGFlowPdfParser):
         self.__images__(pdf, zoomin=1)
 
         try:
-            self._run_mineru(pdf, out_dir, method=method, backend=backend, lang=lang, server_url=server_url, callback=callback)
-            outputs = self._read_output(out_dir, pdf.stem, method=method, backend=backend)
+            options = MinerUParseOptions(
+                backend=MinerUBackend(backend),
+                lang=MinerULanguage(mineru_lang_code),
+                method=MinerUParseMethod(mineru_method_raw_str),
+                server_url=server_url,
+                delete_output=delete_output,
+                parse_method=parse_method,
+                formula_enable=enable_formula,
+                table_enable=enable_table,
+            )
+            self._run_mineru(pdf, out_dir, options, callback=callback)
+            outputs = self._read_output(out_dir, pdf.stem, method=mineru_method_raw_str, backend=backend)
             self.logger.info(f"[MinerU] Parsed {len(outputs)} blocks from PDF.")
             if callback:
                 callback(0.75, f"[MinerU] Parsed {len(outputs)} blocks from PDF.")

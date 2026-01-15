@@ -72,5 +72,6 @@ class MinerUOcrModel(Base, MinerUParser):
             server_url=self.mineru_server_url,
             delete_output=self.mineru_delete_output,
             parse_method=parse_method,
+            **kwargs
         )
         return sections, tables
