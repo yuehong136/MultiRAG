@@ -80,7 +80,6 @@ dependencies = [
     "python-dateutil==2.8.2",
     "python-pptx>=1.0.2,<2.0.0",
     "pywencai>=0.13.1,<1.0.0",
-    "qianfan==0.4.6",
     "ranx==0.3.20",
     "readability-lxml>=0.8.4,<1.0.0",
     "valkey==6.0.2",
