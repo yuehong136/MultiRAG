@@ -15,7 +15,7 @@ import secrets
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -111,14 +111,6 @@ class SendOtpRequest(BaseModel):
     """发送OTP请求模型"""
     email: str = Field(..., description="用户邮箱地址")
     captcha: str = Field(..., description="图片验证码")
-
-
-class ForgetPasswordRequest(BaseModel):
-    """忘记密码请求模型（已废弃，请使用 verify-otp + reset-password）"""
-    email: str = Field(..., description="用户邮箱地址")
-    otp: str = Field(..., description="邮箱验证码")
-    new_password: str = Field(..., description="新密码")
-    confirm_new_password: str = Field(..., description="确认新密码")
 
 
 class VerifyOtpRequest(BaseModel):
@@ -957,16 +949,11 @@ def forget_get_captcha(email: str, db: Session = Depends(get_db)):
     REDIS_CONN.set(captcha_key(email), captcha_text, 60)  # Valid for 60 seconds
 
     from captcha.image import ImageCaptcha
-    import base64
 
     image = ImageCaptcha(width=300, height=120, font_sizes=[50, 60, 70])
     img_bytes = image.generate(captcha_text).read()
 
-    # Return base64 encoded data URI
-    base64_img = base64.b64encode(img_bytes).decode('utf-8')
-    data_uri = f"data:image/jpeg;base64,{base64_img}"
-
-    return get_json_result(data=data_uri)
+    return Response(content=img_bytes, media_type="image/jpeg")
 
 
 @router.post("/forget/otp", summary="发送邮箱OTP验证码")
@@ -1071,19 +1058,6 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
         data=True,
         retcode=RetCode.SUCCESS,
         retmsg="verification passed, email sent"
-    )
-
-
-@router.post("/forget", summary="忘记密码-重置密码（已废弃）", deprecated=True)
-def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
-    """
-    已废弃的单步重置密码接口。
-    请使用 /forget/verify-otp 验证 OTP，然后使用 /forget/reset-password 重置密码。
-    """
-    return get_json_result(
-        data=False,
-        retcode=RetCode.NOT_EFFECTIVE,
-        retmsg="Deprecated. Use /forget/verify-otp then /forget/reset-password"
     )
 
 
@@ -1199,7 +1173,6 @@ def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(g
     OTP验证成功后重置密码
 
     该接口需要在 /forget/verify-otp 验证成功后调用。
-    成功重置密码后会自动登录。
 
     参数:
     - request: ResetPasswordRequest对象
@@ -1208,12 +1181,20 @@ def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(g
         - confirm_new_password: str 确认新密码
 
     返回:
-    - 成功时返回用户信息和访问令牌
+    - 成功时返回 data=True
     - 失败时返回错误信息
     """
     email = request.email.strip() if request.email else ""
     new_pwd = request.new_password
     new_pwd2 = request.confirm_new_password
+
+    # Check verified flag first
+    if not REDIS_CONN.get(verified_key(email)):
+        return get_json_result(
+            data=False,
+            retcode=RetCode.AUTHENTICATION_ERROR,
+            retmsg="email not verified"
+        )
 
     if not all([email, new_pwd, new_pwd2]):
         return get_json_result(
@@ -1239,14 +1220,6 @@ def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(g
 
     user = users[0]
 
-    # Check verified flag
-    if not REDIS_CONN.get(verified_key(email)):
-        return get_json_result(
-            data=False,
-            retcode=RetCode.AUTHENTICATION_ERROR,
-            retmsg="OTP not verified or expired. Please verify OTP first."
-        )
-
     # Reset password
     try:
         UserService.update_user_password(db, user.id, new_pwd)
@@ -1258,35 +1231,14 @@ def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(g
             retmsg="failed to reset password"
         )
 
-    # Auto login
-    try:
-        user.access_token = get_uuid()
-        login_user(user)
-        user.update_time = current_timestamp()
-        user.update_date = datetime_format(datetime.now())
-
-        db.add(user)
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logging.exception(e)
-        return get_json_result(
-            data=False,
-            retcode=RetCode.EXCEPTION_ERROR,
-            retmsg="failed to login after reset"
-        )
-
     # Clear verified flag
     try:
         REDIS_CONN.delete(verified_key(email))
     except Exception:
         pass
 
-    # Generate JWT token
-    jwt_token = manager.create_access_token(data={"sub": email})
-
-    return construct_response(
-        data=user.to_dict(),
-        auth=jwt_token,
-        retmsg="Password reset successful. Logged in."
+    return get_json_result(
+        data=True,
+        retcode=RetCode.SUCCESS,
+        retmsg="Password reset successful."
     )

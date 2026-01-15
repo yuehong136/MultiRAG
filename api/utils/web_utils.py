@@ -44,7 +44,7 @@ def _get_mail_client() -> FastMail | None:
     return FastMail(config)
 
 
-OTP_LENGTH = 8
+OTP_LENGTH = 4
 OTP_TTL_SECONDS = 5 * 60
 ATTEMPT_LIMIT = 5
 ATTEMPT_LOCK_SECONDS = 30 * 60
