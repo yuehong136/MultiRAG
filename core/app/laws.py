@@ -26,6 +26,7 @@ from core.nlp import bullets_category, remove_contents_table, \
 from core.nlp import rag_tokenizer, Node
 from deepdoc.parser import PdfParser, DocxParser, HtmlParser
 from core.app.naive import by_plaintext, PARSERS
+from common.parser_config_utils import normalize_layout_recognizer
 
 
 class Docx(DocxParser):
@@ -152,7 +153,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         return tokenize_chunks(chunks, doc, eng, None)
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
+        layout_recognizer, parser_model_name = normalize_layout_recognizer(
+            parser_config.get("layout_recognize", "DeepDOC")
+        )
 
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"
@@ -170,6 +173,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             callback=callback,
             pdf_cls=Pdf,
             layout_recognizer=layout_recognizer,
+            mineru_llm_name=parser_model_name,
             **kwargs
         )
 
