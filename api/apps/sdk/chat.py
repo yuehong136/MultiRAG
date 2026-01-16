@@ -20,6 +20,7 @@ router = APIRouter()
 class CreateChatRequest(BaseModel):
     dataset_ids: list[str] | None = []
     llm: dict | None = None
+    model_type: str | None = "chat"
     prompt: dict | None = None
     name: str
     description: str | None = "A helpful Assistant"
@@ -72,8 +73,9 @@ def create(request: CreateChatRequest, db: Session = Depends(get_db), tenant_id:
             req["llm_id"] = llm.pop("model_name")
             if req.get("llm_id") is not None:
                 llm_name, llm_factory = TenantLLMService.split_model_name_and_factory(req["llm_id"])
-                if not TenantLLMService.query(db, tenant_id=tenant_id, llm_name=llm_name, mdl_type="chat"):
-                # if not TenantLLMService.query(db, tenant_id=tenant_id, llm_name=llm_name, llm_factory=llm_factory, mdl_type="chat"):
+                model_type = llm.pop("model_type")
+                model_type = model_type if model_type in ["chat", "image2text"] else "chat"
+                if not TenantLLMService.query(db, tenant_id=tenant_id, llm_name=llm_name, llm_factory=llm_factory, mdl_type=model_type):
                     return get_error_data_result(f"`model_name` {req.get('llm_id')} doesn't exist")
         req["llm_setting"] = req.pop("llm")
     tenant = TenantService.get_by_id(db, tenant_id)
