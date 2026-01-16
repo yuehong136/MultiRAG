@@ -879,7 +879,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     assert len(msg) >= 2, f"message_fit_in has bug: {msg}"
     prompt = msg[0]["content"]
 
-    if "max_tokens" not in gen_conf:
+    if "max_tokens" in gen_conf:
         gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
 
     def decorate_answer(answer):
