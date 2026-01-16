@@ -205,10 +205,10 @@ class Message(ComponentBase):
 
     def _parse_markdown_table_lines(self, table_lines: list):
         """
-        Parse a list of markdown table lines into a pandas DataFrame.
+        Parse a list of Markdown table lines into a pandas DataFrame.
 
         Args:
-            table_lines: List of strings, each representing a row in the markdown table
+            table_lines: List of strings, each representing a row in the Markdown table
                         (excluding separator lines like |---|---|)
 
         Returns:
@@ -280,7 +280,7 @@ class Message(ComponentBase):
                 logging.info(
                     f"XLSX Parser: Content length={len(content) if content else 0}, first 500 chars: {content[:500] if content else 'None'}")
 
-                # Try to parse ALL markdown tables from the content
+                # Try to parse ALL Markdown tables from the content
                 # Each table will be written to a separate sheet
                 tables = []  # List of (sheet_name, dataframe)
 
