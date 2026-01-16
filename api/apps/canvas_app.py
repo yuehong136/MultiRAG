@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -846,7 +847,7 @@ def input_form(
 
 
 @router.post('/debug', summary="调试组件", response_description="成功执行组件调试")
-def debug(
+async def debug(
         request_body: DebugRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -918,8 +919,13 @@ def debug(
         for k in outputs.keys():
             if isinstance(outputs[k], partial):
                 txt = ""
-                for c in outputs[k]():
-                    txt += c
+                iter_obj = outputs[k]()
+                if inspect.isasyncgen(iter_obj):
+                    async for c in iter_obj:
+                        txt += c
+                else:
+                    for c in iter_obj:
+                        txt += c
                 outputs[k] = txt
         
         return get_json_result(data=outputs)
