@@ -6,8 +6,6 @@ import threading
 import time
 import concurrent.futures
 
-import json_repair
-
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
@@ -17,10 +15,11 @@ from core.utils.base64_image import image2id
 from core.utils.raptor_utils import should_skip_raptor, get_skip_reason
 from common.log_utils import init_root_logger
 from common.config_utils import show_configs
+from common.metadata_utils import update_metadata_to, metadata_schema
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from graphrag.general.index import run_graphrag_for_kb
 from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
-from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text
+from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text, gen_metadata
 import logging
 from datetime import datetime
 import json
@@ -499,6 +498,9 @@ async def build_chunks(task, progress_callback, db: Session):
         async def doc_keyword_extraction(chat_mdl, d, topn):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "keywords", {"topn": topn})
             if not cached:
+                if has_canceled(task["id"]):
+                    progress_callback(-1, msg="Task has been canceled.")
+                    return
                 async with chat_limiter:
                     cached = await keyword_extraction(chat_mdl, d["content_with_weight"], topn)
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "keywords", {"topn": topn})
@@ -528,6 +530,9 @@ async def build_chunks(task, progress_callback, db: Session):
         async def doc_question_proposal(chat_mdl, d, topn):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "question", {"topn": topn})
             if not cached:
+                if has_canceled(task["id"]):
+                    progress_callback(-1, msg="Task has been canceled.")
+                    return
                 async with chat_limiter:
                     cached = await question_proposal(chat_mdl, d["content_with_weight"], topn)
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "question", {"topn": topn})
@@ -545,6 +550,51 @@ async def build_chunks(task, progress_callback, db: Session):
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
+        progress_callback(msg="Question generation {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
+
+
+    if task["parser_config"].get("enable_metadata", False) and task["parser_config"].get("metadata"):
+        st = timer()
+        progress_callback(msg="Start to generate meta-data for every chunk ...")
+        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
+
+        async def gen_metadata_task(chat_mdl, d):
+            cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "metadata", task["parser_config"]["metadata"])
+            if not cached:
+                if has_canceled(task["id"]):
+                    progress_callback(-1, msg="Task has been canceled.")
+                    return
+                if has_canceled(task["id"]):
+                    progress_callback(-1, msg="Task has been canceled.")
+                    return
+                async with chat_limiter:
+                    cached = await gen_metadata(chat_mdl, metadata_schema(task["parser_config"]["metadata"]), d["content_with_weight"])
+                set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "metadata", task["parser_config"]["metadata"])
+            if cached:
+                d["metadata_obj"] = cached
+
+        tasks = []
+        for d in docs:
+            tasks.append(asyncio.create_task(gen_metadata_task(chat_mdl, d)))
+        try:
+            await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            logging.error("Error in doc_question_proposal", exc_info=e)
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        metadata = {}
+        for ck in cks:
+            metadata = update_metadata_to(metadata, ck["metadata_obj"])
+            del ck["metadata_obj"]
+        if metadata:
+            doc = DocumentService.get_by_id(task["doc_id"])
+            if doc:
+                if isinstance(doc.meta_fields, str):
+                    doc.meta_fields = json.loads(doc.meta_fields)
+                metadata = update_metadata_to(metadata, doc.meta_fields)
+                DocumentService.update_by_id(task["doc_id"], {"meta_fields": metadata})
         progress_callback(msg="Question generation {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
 
     if task["kb_parser_config"].get("tag_kb_ids", []):
@@ -578,6 +628,9 @@ async def build_chunks(task, progress_callback, db: Session):
         async def doc_content_tagging(chat_mdl, d, topn_tags):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], all_tags, {"topn": topn_tags})
             if not cached:
+                if has_canceled(task["id"]):
+                    progress_callback(-1, msg="Task has been canceled.")
+                    return
                 picked_examples = random.choices(examples, k=2) if len(examples) > 2 else examples
                 if not picked_examples:
                     picked_examples.append({"content": "This is an example", TAG_FLD: {'example': 1}})
@@ -977,36 +1030,6 @@ async def run_dataflow(db: Session, task: dict):
 
 
     metadata = {}
-    def dict_update(meta):
-        nonlocal metadata
-        if not meta:
-            return
-        if isinstance(meta, str):
-            try:
-                meta = json_repair.loads(meta)
-            except Exception:
-                logging.error("Meta data format error.")
-                return
-        if not isinstance(meta, dict):
-            return
-        for k, v in meta.items():
-            if isinstance(v, list):
-                v = [vv for vv in v if isinstance(vv, str)]
-                if not v:
-                    continue
-            if not isinstance(v, list) and not isinstance(v, str):
-                continue
-            if k not in metadata:
-                metadata[k] = v
-                continue
-            if isinstance(metadata[k], list):
-                if isinstance(v, list):
-                    metadata[k].extend(v)
-                else:
-                    metadata[k].append(v)
-            else:
-                metadata[k] = v
-
     for ck in chunks:
         ck["doc_id"] = doc_id
         ck["kb_id"] = [str(task["kb_id"])]
@@ -1031,7 +1054,7 @@ async def run_dataflow(db: Session, task: dict):
                 ck["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(ck["content_ltks"])
             del ck["summary"]
         if "metadata" in ck:
-            dict_update(ck["metadata"])
+            metadata = update_metadata_to(metadata, ck["metadata"])
             del ck["metadata"]
         if "content_with_weight" not in ck:
             ck["content_with_weight"] = ck["text"]
@@ -1045,7 +1068,7 @@ async def run_dataflow(db: Session, task: dict):
         if e:
             if isinstance(doc.meta_fields, str):
                 doc.meta_fields = json.loads(doc.meta_fields)
-            dict_update(doc.meta_fields)
+            metadata = update_metadata_to(metadata, doc.meta_fields)
             DocumentService.update_by_id(db, doc_id, {"meta_fields": metadata})
 
     start_ts = timer()

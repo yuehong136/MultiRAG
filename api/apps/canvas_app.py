@@ -483,6 +483,7 @@ async def run(
             user_id,
             req["id"],
             task_id,
+            CANVAS_DEBUG_DOC_ID,
             files[0] if files else None,
             0
         )
