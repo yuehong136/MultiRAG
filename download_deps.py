@@ -51,10 +51,10 @@ repos = [
     "maidalun1020/bce-reranker-base_v1",
 ]
 
-def download_model(repo_id):
-    local_dir = os.path.abspath(os.path.join("huggingface.co", repo_id))
-    os.makedirs(local_dir, exist_ok=True)
-    snapshot_download(repo_id=repo_id, local_dir=local_dir, local_dir_use_symlinks=False)
+def download_model(repository_id):
+    local_directory = os.path.abspath(os.path.join("huggingface.co", repository_id))
+    os.makedirs(local_directory, exist_ok=True)
+    snapshot_download(repo_id=repository_id, local_dir=local_directory)
 
 
 if __name__ == "__main__":
