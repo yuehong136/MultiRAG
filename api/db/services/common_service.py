@@ -200,11 +200,12 @@ class CommonService(Generic[ModelType]):
     def insert(cls, db: Session, **kwargs) -> ModelType:
         if "id" not in kwargs:
             kwargs["id"] = get_uuid()
-        now = cls.current_timestamp()
-        kwargs["create_time"] = now
-        kwargs["create_date"] = cls.current_datetime()
-        kwargs["update_time"] = now
-        kwargs["update_date"] = cls.current_datetime()
+        timestamp = cls.current_timestamp()
+        cur_datetime = cls.current_datetime()
+        kwargs["create_time"] = timestamp
+        kwargs["create_date"] = cur_datetime
+        kwargs["update_time"] = timestamp
+        kwargs["update_date"] = cur_datetime
         db_item = cls.model(**kwargs)
         db.add(db_item)
         db.commit()
@@ -257,12 +258,11 @@ class CommonService(Generic[ModelType]):
             db: 数据库会话
             data_list: 包含更新数据的字典列表，每个字典必须包含 'id' 字段
         """
-        now = cls.current_timestamp()
-        now_datetime = cls.current_datetime()
+        timestamp = cls.current_timestamp()
+        cur_datetime = cls.current_datetime()
         for data in data_list:
-            data["update_time"] = now
-            data["update_date"] = now_datetime
-        for data in data_list:
+            data["update_time"] = timestamp
+            data["update_date"] = cur_datetime
             record_id = data["id"]
             stmt = update(cls.model).where(cls.model.id == record_id).values(data)
             db.execute(stmt)
