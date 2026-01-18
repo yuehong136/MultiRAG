@@ -504,7 +504,7 @@ class MinerUParser(RAGFlowPdfParser):
         for output in outputs:
             match output["type"]:
                 case MinerUContentType.TEXT:
-                    section = output["text"]
+                    section = output.get("text", "")
                 case MinerUContentType.TABLE:
                     section = output.get("table_body", "") + "\n".join(output.get("table_caption", [])) + "\n".join(output.get("table_footnote", []))
                     if not section.strip():
@@ -512,13 +512,13 @@ class MinerUParser(RAGFlowPdfParser):
                 case MinerUContentType.IMAGE:
                     section = "".join(output.get("image_caption", [])) + "\n" + "".join(output.get("image_footnote", []))
                 case MinerUContentType.EQUATION:
-                    section = output["text"]
+                    section = output.get("text", "")
                 case MinerUContentType.CODE:
-                    section = output["code_body"] + "\n".join(output.get("code_caption", []))
+                    section = output.get("code_body", "") + "\n".join(output.get("code_caption", []))
                 case MinerUContentType.LIST:
                     section = "\n".join(output.get("list_items", []))
                 case MinerUContentType.DISCARDED:
-                    pass
+                    continue  # Skip discarded blocks entirely
 
             if section and parse_method == "manual":
                 sections.append((section, output["type"], self._line_tag(output)))
