@@ -1172,11 +1172,7 @@ class LiteLLMBase(ABC):
         self.toolcall_sessions = {}
 
         # Factory specific fields
-        if self.provider == SupportedLiteLLMProvider.Bedrock:
-            self.bedrock_ak = json.loads(key).get("bedrock_ak", "")
-            self.bedrock_sk = json.loads(key).get("bedrock_sk", "")
-            self.bedrock_region = json.loads(key).get("bedrock_region", "")
-        elif self.provider == SupportedLiteLLMProvider.OpenRouter:
+        if self.provider == SupportedLiteLLMProvider.OpenRouter:
             self.api_key = json.loads(key).get("api_key", "")
             self.provider_order = json.loads(key).get("provider_order", "")
         elif self.provider == SupportedLiteLLMProvider.Azure_OpenAI:

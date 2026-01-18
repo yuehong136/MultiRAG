@@ -581,9 +581,11 @@ class AddLLMRequest(BaseModel):
     max_tokens: int | None = 8192
     ark_api_key: str | None = None
     endpoint_id: str | None = None
+    auth_mode: str | None = None
     bedrock_ak: str | None = None
     bedrock_sk: str | None = None
     bedrock_region: str | None = None
+    aws_role_arn: str | None = None
     fish_audio_ak: str | None = None
     fish_audio_refid: str | None = None
     hunyuan_sid: str | None = None
@@ -1035,7 +1037,7 @@ POST
         return set_api_key(SetAPIKeyRequest(**req), db, user)
 
     elif factory == "Bedrock":
-        api_key = apikey_json(["bedrock_ak", "bedrock_sk", "bedrock_region"])
+        api_key = apikey_json(["auth_mode", "bedrock_ak", "bedrock_sk", "bedrock_region", "aws_role_arn"])
 
     elif factory == "LocalAI":
         llm_name += "___LocalAI"
