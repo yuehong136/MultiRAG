@@ -1,4 +1,5 @@
 import json
+import copy
 import re
 import time
 from typing import Any
@@ -65,6 +66,7 @@ class ChatCompletionOpenAIRequest(BaseModel):
 class AgentCompletionRequest(BaseModel):
     question: str | None = ""
     stream: bool | None = True
+    return_trace: bool | None = False
 
 
 class AskRequest(BaseModel):
@@ -560,10 +562,11 @@ async def agent_completions(
     tenant_id: str = Depends(token_required)
 ):
     req = request.model_dump()
+    return_trace = bool(req.get("return_trace", False))
 
     if req.get("stream", True):
         async def generate():
-            ans = {}
+            trace_items = []
             async for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
                 if isinstance(answer, str):
                     try:
@@ -571,7 +574,21 @@ async def agent_completions(
                     except Exception:
                         continue
 
-                if ans.get("event") not in ["message", "message_end"]:
+                event = ans.get("event")
+                if event == "node_finished":
+                    if return_trace:
+                        data = ans.get("data", {})
+                        trace_items.append(
+                            {
+                                "component_id": data.get("component_id"),
+                                "trace": [copy.deepcopy(data)],
+                            }
+                        )
+                        ans.setdefault("data", {})["trace"] = trace_items
+                        answer = "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
+                    yield answer
+
+                if event not in ["message", "message_end"]:
                     continue
 
                 yield answer
@@ -588,6 +605,7 @@ async def agent_completions(
     full_content = ""
     reference = {}
     final_ans = ""
+    trace_items = []
     async for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
         try:
             ans = json.loads(answer[5:])
@@ -598,11 +616,22 @@ async def agent_completions(
             if ans.get("data", {}).get("reference", None):
                 reference.update(ans["data"]["reference"])
 
+            if return_trace and ans.get("event") == "node_finished":
+                data = ans.get("data", {})
+                trace_items.append(
+                    {
+                        "component_id": data.get("component_id"),
+                        "trace": [copy.deepcopy(data)],
+                    }
+                )
+
             final_ans = ans
         except Exception as e:
             return get_result(data=f"**ERROR**: {str(e)}")
     final_ans["data"]["content"] = full_content
     final_ans["data"]["reference"] = reference
+    if return_trace and final_ans:
+        final_ans["data"]["trace"] = trace_items
     return get_result(data=final_ans)
 
 
