@@ -31,7 +31,7 @@ from common.misc_utils import get_uuid
 from common.constants import RetCode
 from common import settings
 from common.constants import LLMType, StatusEnum
-from common.metadata_utils import apply_meta_data_filter
+from common.metadata_utils import apply_meta_data_filter, convert_conditions, meta_filter
 
 
 router = APIRouter()
@@ -54,6 +54,7 @@ class ChatCompletionRequest(BaseModel):
     question: str | None = ""
     session_id: str | None = None
     stream: bool | None = True
+    metadata_condition: dict[str, Any] | None = None
 
 
 class ChatCompletionOpenAIRequest(BaseModel):
@@ -61,6 +62,7 @@ class ChatCompletionOpenAIRequest(BaseModel):
     messages: list[dict[str, Any]]
     stream: bool | None = True
     reference: bool | None = False
+    extra_body: dict[str, Any] | None = None
 
 
 class AgentCompletionRequest(BaseModel):
@@ -234,12 +236,33 @@ async def chat_completion(
         req = {"question": ""}
     if not req.get("session_id"):
         req["question"] = ""
-    
-    if not DialogService.query(db, tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value):
+
+    dia = DialogService.query(db, tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value)
+    if not dia:
         return get_error_data_result(retmsg=f"You don't own the chat {chat_id}")
+    dia = dia[0]
     if req.get("session_id"):
         if not ConversationService.query(db, id=req["session_id"], dialog_id=chat_id):
             return get_error_data_result(retmsg=f"You don't own the session {req['session_id']}")
+
+    metadata_condition = req.get("metadata_condition") or {}
+    if metadata_condition and not isinstance(metadata_condition, dict):
+        return get_error_data_result(retmsg="metadata_condition must be an object.")
+
+    if metadata_condition and req.get("question"):
+        metas = DocumentService.get_meta_by_kbs(db, dia.kb_ids or [])
+        filtered_doc_ids = meta_filter(
+            metas,
+            convert_conditions(metadata_condition),
+            metadata_condition.get("logic", "and"),
+        )
+        if metadata_condition.get("conditions") and not filtered_doc_ids:
+            filtered_doc_ids = ["-999"]
+
+        if filtered_doc_ids:
+            req["doc_ids"] = ",".join(filtered_doc_ids)
+        else:
+            req.pop("doc_ids", None)
     
     if req.get("stream", True):
         resp = StreamingResponse(rag_completion(db, tenant_id, chat_id, **req), media_type="text/event-stream")
@@ -321,7 +344,11 @@ async def chat_completion_openai_like(
     """
     req = request.model_dump()
 
-    need_reference = bool(req.get("reference", False))
+    extra_body = req.get("extra_body") or {}
+    if extra_body and not isinstance(extra_body, dict):
+        return get_error_data_result(retmsg="extra_body must be an object.")
+
+    need_reference = bool(extra_body.get("reference", False))
 
     messages = req.get("messages", [])
     # To prevent empty [] input
@@ -338,6 +365,22 @@ async def chat_completion_openai_like(
     if not dia:
         return get_error_data_result(retmsg=f"You don't own the chat {chat_id}")
     dia = dia[0]
+
+    metadata_condition = extra_body.get("metadata_condition") or {}
+    if metadata_condition and not isinstance(metadata_condition, dict):
+        return get_error_data_result(retmsg="metadata_condition must be an object.")
+
+    doc_ids_str = None
+    if metadata_condition:
+        metas = DocumentService.get_meta_by_kbs(db, dia.kb_ids or [])
+        filtered_doc_ids = meta_filter(
+            metas,
+            convert_conditions(metadata_condition),
+            metadata_condition.get("logic", "and"),
+        )
+        if metadata_condition.get("conditions") and not filtered_doc_ids:
+            filtered_doc_ids = ["-999"]
+        doc_ids_str = ",".join(filtered_doc_ids) if filtered_doc_ids else None
 
     # Filter system and non-sense assistant messages
     msg = []
@@ -386,7 +429,10 @@ async def chat_completion_openai_like(
             }
 
             try:
-                async for ans in async_chat(dia, msg, db, True, toolcall_session=toolcall_session, tools=tools, quote=need_reference):
+                chat_kwargs = {"toolcall_session": toolcall_session, "tools": tools, "quote": need_reference}
+                if doc_ids_str:
+                    chat_kwargs["doc_ids"] = doc_ids_str
+                async for ans in async_chat(dia, msg, db, True, **chat_kwargs):
                     last_ans = ans
                     answer = ans["answer"]
 
@@ -453,7 +499,10 @@ async def chat_completion_openai_like(
         return resp
     else:
         answer = None
-        async for ans in async_chat(dia, msg, db, False, toolcall_session=toolcall_session, tools=tools, quote=need_reference):
+        chat_kwargs = {"toolcall_session": toolcall_session, "tools": tools, "quote": need_reference}
+        if doc_ids_str:
+            chat_kwargs["doc_ids"] = doc_ids_str
+        async for ans in async_chat(dia, msg, db, False, **chat_kwargs):
             # focus answer content only
             answer = ans
             break
