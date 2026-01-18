@@ -65,30 +65,31 @@ class FlowParser:
         filename: str,
         binary: bytes,
         tenant_id: str,
-        callback=None
+        callback=None,
+        llm_id: str = ""
     ) -> dict:
         """
         音频解析（参考 core/flow/parser/parser.py._audio 第 598-615 行）
-        
+
         Returns:
             {"output_format": "text", "text": "转录文本"}
         """
         if callback:
             callback(0.1, "Start to work on an audio.")
-        
+
         _, ext = os.path.splitext(filename)
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmpf:
             tmpf.write(binary)
             tmpf.flush()
             tmp_path = os.path.abspath(tmpf.name)
-        
+
         try:
             # 检查音频文件信息
             audio_size = os.path.getsize(tmp_path)
             logger.info(f"[AUDIO] Audio file: {filename}, size: {audio_size} bytes, path: {tmp_path}")
-            
+
             with db_connection() as db:
-                seq2txt_mdl = LLMBundle(db, tenant_id, LLMType.SPEECH2TEXT)
+                seq2txt_mdl = LLMBundle(db, tenant_id, LLMType.SPEECH2TEXT, llm_name=llm_id)
             
             logger.info(f"[AUDIO] Calling SPEECH2TEXT model: {seq2txt_mdl.mdl.model_name if hasattr(seq2txt_mdl, 'mdl') else 'unknown'}")
             
@@ -961,6 +962,7 @@ async def parse_file(
     slides_config: dict | None = None,
     markdown_config: dict | None = None,
     video_config: dict | None = None,
+    audio_config: dict | None = None,
     callback=None
 ) -> dict:
     """
@@ -968,7 +970,7 @@ async def parse_file(
 
     参考：core/flow/parser/parser.py._invoke 的逻辑（第 758-799 行）
     根据文件扩展名自动路由到对应的解析方法
-    
+
     Args:
         filename: 文件名
         binary: 文件二进制内容
@@ -981,6 +983,7 @@ async def parse_file(
         slides_config: PPT 配置 {"parse_method": "deepdoc", "output_format": "json", "table_context_size": 0, "image_context_size": 0}
         markdown_config: Markdown 配置 {"output_format": "json", "table_context_size": 0, "image_context_size": 0}
         video_config: 视频配置 {"llm_id": "..."}
+        audio_config: 音频配置 {"llm_id": "..."}
         callback: 进度回调
     
     Returns:
@@ -1014,11 +1017,13 @@ async def parse_file(
         markdown_config = {"output_format": "json"}
     if video_config is None:
         video_config = {}
-    
+    if audio_config is None:
+        audio_config = {"llm_id": ""}
+
     # 根据扩展名路由（参考 core/flow/parser/parser.py 第 701-743 行）
     # 音频文件
     if ext in ["mp3", "wav", "aac", "flac", "ogg", "aiff", "au", "midi", "wma", "da", "wave", "ape"]:
-        return await FlowParser.parse_audio(filename, binary, tenant_id, callback)
+        return await FlowParser.parse_audio(filename, binary, tenant_id, callback, llm_id=audio_config.get("llm_id", ""))
     
     # PDF 文件
     elif ext == "pdf":

@@ -58,6 +58,7 @@ class SetChunkRequest(BaseModel):
     tag_kwd: str | None = None
     tag_feas: str | None = None
     image_base64: str | None = None
+    img_id: str | None = None
 
 
 class SwitchChunkRequest(BaseModel):
@@ -394,7 +395,8 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
                 "question_kwd": sres.field[id].get("question_kwd", []),
                 "img_id": sres.field[id].get("img_id", ""),
                 "available_int": int(sres.field[id].get("available_int", 1)),
-                "positions": sres.field[id].get("position_int", [])
+                "positions": sres.field[id].get("position_int", []),
+                "doc_type_kwd": sres.field[id].get("doc_type_kwd")
             }
             # if len(d["positions"]) % 5 == 0:
             #     poss = []
@@ -879,8 +881,9 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
 
         # update image
         if request.image_base64:
+            bkt, name = (request.img_id or "-").split("-")
             image_binary = base64.b64decode(request.image_base64)
-            settings.STORAGE_IMPL.put(doc.kb_id, request.chunk_id, image_binary)
+            settings.STORAGE_IMPL.put(bkt, name, image_binary)
 
         return get_json_result(data=True)
     except Exception as e:
@@ -1567,7 +1570,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     meta_data_filter = {}
     chat_mdl = None
     if request.search_id:
-        search_config = SearchService.get_detail(db, request.get("search_id", "")).get("search_config", {})
+        search_config = SearchService.get_detail(db, request.search_id or "").get("search_config", {})
         meta_data_filter = search_config.get("meta_data_filter", {})
         if meta_data_filter.get("method") in ["auto", "semi_auto"]:
             chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))

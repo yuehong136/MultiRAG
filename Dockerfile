@@ -121,10 +121,10 @@ RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co
 # 设置Tika服务器
 RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/deps \
     cp -r /deps/nltk_data /root/ && \
-    cp /deps/tika-server-standard-3.0.0.jar /deps/tika-server-standard-3.0.0.jar.md5 /multirag/ && \
+    cp /deps/tika-server-standard-3.2.3.jar /deps/tika-server-standard-3.2.3.jar.md5 /multirag/ && \
     cp /deps/cl100k_base.tiktoken /multirag/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
 
-ENV TIKA_SERVER_JAR="file:///multirag/tika-server-standard-3.0.0.jar"
+ENV TIKA_SERVER_JAR="file:///multirag/tika-server-standard-3.2.3.jar"
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 添加Chrome和ChromeDriver依赖

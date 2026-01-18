@@ -462,6 +462,8 @@ class KnowledgebaseService(CommonService):
         t = TenantService.get_by_id(db, tenant_id)
         if not t:
             return False, get_data_error_result(retmsg="Tenant not found.")
+        if kwargs.get("parser_config") and isinstance(kwargs["parser_config"], dict) and not kwargs["parser_config"].get("llm_id"):
+            kwargs["parser_config"]["llm_id"] = t.llm_id
 
         # Build payload
         kb_id = get_uuid()

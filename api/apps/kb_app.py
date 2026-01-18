@@ -108,6 +108,11 @@ class CheckEmbeddingRequest(BaseModel):
     check_num: int | None = 5
 
 
+class UpdateMetadataSettingRequest(BaseModel):
+    kb_id: str
+    metadata: dict
+
+
 @router.post('/create', summary="创建知识库", response_description="成功创建知识库")
 def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
@@ -286,6 +291,19 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         return get_json_result(data=kb)
     except Exception as e:
         return server_error_response(e)
+
+
+@router.post('/update_metadata_setting', summary="更新知识库元数据配置")
+def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    kb = KnowledgebaseService.get_by_id(db, request.kb_id)
+    if not kb:
+        return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
+    kb_dict = kb.to_dict()
+    if kb_dict.get("parser_config") is None:
+        kb_dict["parser_config"] = {}
+    kb_dict["parser_config"]["metadata"] = request.metadata
+    KnowledgebaseService.update_by_id(db, kb_dict["id"], {"parser_config": kb_dict["parser_config"]})
+    return get_json_result(data=kb_dict)
 
 
 @router.get('/detail', summary="获取知识库详情", response_description="成功获取知识库详情")

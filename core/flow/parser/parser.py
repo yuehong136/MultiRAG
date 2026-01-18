@@ -639,7 +639,7 @@ class Parser(ProcessBase):
             tmpf.flush()
             tmp_path = os.path.abspath(tmpf.name)
             with db_connection() as db:
-                seq2txt_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.SPEECH2TEXT)
+                seq2txt_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.SPEECH2TEXT, llm_name=conf["llm_id"])
             txt = seq2txt_mdl.transcription(tmp_path)
 
             self.set_output("text", txt)

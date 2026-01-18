@@ -1665,6 +1665,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 word_config = parser_config_dict.get("word", {"output_format": "json"})
                 email_config = parser_config_dict.get("email", {"output_format": "json", "fields": None})
                 video_config = parser_config_dict.get("video", {"llm_id": config.get("video_llm_name")})
+                audio_config = parser_config_dict.get("audio", {"llm_id": config.get("audio_llm_name")})
                 slides_config = parser_config_dict.get("slides", {"parse_method": "deepdoc", "output_format": "json"})
                 markdown_config = parser_config_dict.get("markdown", {"output_format": "json"})
                 logging.info(f"Using parser_config dictionary mode")
@@ -1720,6 +1721,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm", "tcadp parser"]:
                         video_llm_name = candidate
                 video_config = {"llm_id": video_llm_name}
+                # Audio 配置
+                audio_llm_name = config.get("audio_llm_name")
+                if not audio_llm_name:
+                    candidate = config.get("parse_method")
+                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm", "tcadp parser"]:
+                        audio_llm_name = candidate
+                audio_config = {"llm_id": audio_llm_name}
                 # PPT/Slides 支持的 parse_method: deepdoc, tcadp parser
                 slides_parse_method = "deepdoc"
                 if parse_method.lower() == "tcadp parser":
@@ -1755,6 +1763,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 slides_config=slides_config,
                 markdown_config=markdown_config,
                 video_config=video_config,
+                audio_config=audio_config,
                 callback=_parser_callback
             )
 
@@ -2438,7 +2447,7 @@ async def do_handle_task(db, task):
         task_tenant_id = task["tenant_id"]
         task_embedding_id = task["embd_id"]
         task_language = task["language"]
-        task_llm_id = task["llm_id"]
+        task_llm_id = task["parser_config"].get("llm_id") or task["llm_id"]
 
         # 解析配置
         task_data = json.loads(task.get("chunk_ids", "{}"))
@@ -2488,7 +2497,7 @@ async def do_handle_task(db, task):
     task_tenant_id = task["tenant_id"]
     task_embedding_id = task["embd_id"]
     task_language = task["language"]
-    task_llm_id = task["llm_id"]
+    task_llm_id = task["parser_config"].get("llm_id") or task["llm_id"]
     task_dataset_id = task.get("kb_id")  # analyze_v2 之外的任务必须有 kb_id
     task_doc_id = task["doc_id"]
     task_document_name = task.get("name", "unknown")
