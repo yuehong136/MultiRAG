@@ -72,6 +72,9 @@ class FileSource(StrEnum):
     MOODLE = "moodle"
     DROPBOX = "dropbox"
     BOX = "box"
+    R2 = "r2"
+    OCI_STORAGE = "oci_storage"
+    GOOGLE_CLOUD_STORAGE = "google_cloud_storage"
 
 
 class MCPServerType(StrEnum):
