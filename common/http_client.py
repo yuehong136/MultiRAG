@@ -16,7 +16,7 @@ import logging
 import os
 import time
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -153,16 +153,12 @@ async def async_request(
                 last_exc = exc
                 if attempt >= retries:
                     if not _is_sensitive_url(url):
-                        log_url = _redact_sensitive_url_params(url)
-                        logger.warning(
-                            f"async_request exhausted retries for {method} {_redact_sensitive_url_params(url)}: {exc}"
-                        )
+                        logger.warning(f"async_request exhausted retries for {method}")
                     raise
                 delay = _get_delay(backoff_factor, attempt)
                 if not _is_sensitive_url(url):
-                    log_url = _redact_sensitive_url_params(url)
                     logger.warning(
-                        f"async_request attempt {attempt + 1}/{retries + 1} failed for {method} {_redact_sensitive_url_params(url)}: {exc}; retrying in {delay:.2f}s"
+                        f"async_request attempt {attempt + 1}/{retries + 1} failed for {method}; retrying in {delay:.2f}s"
                     )
                 await asyncio.sleep(delay)
         raise last_exc  # pragma: no cover
@@ -211,21 +207,19 @@ def sync_request(
                 duration = time.monotonic() - start
                 if not _is_sensitive_url(url):
                     logger.debug(
-                        f"sync_request {method} {url} -> {response.status_code} in {duration:.3f}s"
+                        f"sync_request {method} {_redact_sensitive_url_params(url)} -> {response.status_code} in {duration:.3f}s"
                     )
                 return response
             except httpx.RequestError as exc:
                 last_exc = exc
                 if attempt >= retries:
                     if not _is_sensitive_url(url):
-                        logger.warning(
-                            f"sync_request exhausted retries for {method} {url}: {exc}"
-                        )
+                        logger.warning(f"sync_request exhausted retries for {method}")
                     raise
                 delay = _get_delay(backoff_factor, attempt)
                 if not _is_sensitive_url(url):
                     logger.warning(
-                        f"sync_request attempt {attempt + 1}/{retries + 1} failed for {method} {url}: {exc}; retrying in {delay:.2f}s"
+                        f"sync_request attempt {attempt + 1}/{retries + 1} failed for {method}; retrying in {delay:.2f}s"
                     )
                 time.sleep(delay)
         raise last_exc  # pragma: no cover
