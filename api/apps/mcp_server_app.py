@@ -1442,21 +1442,22 @@ def test_mcp(request: TestMCPRequest, db: Session = Depends(get_db), user=Depend
 
         tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables)
         tool_call_sessions.append(tool_call_session)
-        
+
         try:
             tools = tool_call_session.get_tools(timeout)
         except Exception as e:
             tools = []
             return get_data_error_result(retmsg=f"MCP list tools error: {e}")
-        
+        finally:
+            # PERF: blocking call to close sessions — consider moving to background thread or task queue
+            close_multiple_mcp_toolcall_sessions(tool_call_sessions)
+
         results = []
         for tool in tools:
             tool_dict = tool.model_dump()
             results.append(tool_dict)
-        
-        # PERF: blocking call to close sessions — consider moving to background thread or task queue
-        close_multiple_mcp_toolcall_sessions(tool_call_sessions)
+
         return get_json_result(data=results)
-        
+
     except Exception as e:
         return server_error_response(e)
