@@ -16,7 +16,7 @@ class SQLRetryHandler:
             execute_func: Callable,
             fix_func: Callable,
             sql: str,
-            dataset_id: str,
+            dataset_id: int,
             fix_params: Dict[str, Any]
     ) -> Dict[str, Any]:
         """

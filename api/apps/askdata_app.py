@@ -179,7 +179,7 @@ async def get_sql_and_table_config(
             execute_func=query_data_with_params,
             fix_func=service.fix_sql_query_with_components,
             sql=sql,
-            dataset_id=dataset_id,
+            dataset_id=int(dataset_id),
             fix_params=fix_params
         )
 
