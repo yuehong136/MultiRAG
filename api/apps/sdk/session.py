@@ -549,7 +549,7 @@ async def agents_completion_openai_compatibility(
     tenant_id: str = Depends(token_required)
 ):
     req = request.model_dump()
-    tiktokenenc = tiktoken.get_encoding("cl100k_base")
+    tiktoken_encode = tiktoken.get_encoding("cl100k_base")
     messages = req.get("messages", [])
     if not messages:
         return get_error_data_result(retmsg="You must provide at least one message.")
@@ -557,14 +557,14 @@ async def agents_completion_openai_compatibility(
         return get_error_data_result(retmsg=f"You don't own the agent {agent_id}")
 
     filtered_messages = [m for m in messages if m["role"] in ["user", "assistant"]]
-    prompt_tokens = sum(len(tiktokenenc.encode(m["content"])) for m in filtered_messages)
+    prompt_tokens = sum(len(tiktoken_encode.encode(m["content"])) for m in filtered_messages)
     if not filtered_messages:
         return get_data_openai(
             id=agent_id,
             content="No valid messages found (user or assistant).",
             finish_reason="stop",
             model=req.get("model", ""),
-            completion_tokens=len(tiktokenenc.encode("No valid messages found (user or assistant).")),
+            completion_tokens=len(tiktoken_encode.encode("No valid messages found (user or assistant).")),
             prompt_tokens=prompt_tokens,
         )
 

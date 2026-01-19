@@ -153,21 +153,21 @@ def create_file(
     input_file_type = req.get("type")
     
     if not pf_id:
-        root_folder = FileService.get_root_folder(tenant_id)
+        root_folder = FileService.get_root_folder(db, tenant_id)
         pf_id = root_folder["id"]
 
     try:
-        if not FileService.is_parent_folder_exist(pf_id):
+        if not FileService.is_parent_folder_exist(db, pf_id):
             return get_error_data_result(retmsg="Parent Folder Doesn't Exist!")
-        if FileService.query(name=req["name"], parent_id=pf_id):
-            return get_error_data_result(retmsg="Duplicated folder name in the same folder.")
+        if FileService.query(db, name=req["name"], parent_id=pf_id):
+            return get_error_data_result(retmsg="Duplicated folder name in the same folder.", retcode=RetCode.CONFLICT)
 
         if input_file_type == FileType.FOLDER.value:
             file_type = FileType.FOLDER.value
         else:
             file_type = FileType.VIRTUAL.value
 
-        file = FileService.insert({
+        file = FileService.insert(db, {
             "id": get_uuid(),
             "parent_id": pf_id,
             "tenant_id": tenant_id,
@@ -393,23 +393,23 @@ def rename_file(
     req = request.model_dump()
     
     try:
-        e, file = FileService.get_by_id(req["file_id"])
-        if not e:
+        file = FileService.get_by_id(db, req["file_id"])
+        if not file:
             return get_error_data_result(retmsg="File not found!")
 
         if file.type != FileType.FOLDER.value and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
             return get_error_data_result(retmsg="The extension of file can't be changed")
 
-        for existing_file in FileService.query(name=req["name"], pf_id=file.parent_id):
+        for existing_file in FileService.query(db, name=req["name"], pf_id=file.parent_id):
             if existing_file.name == req["name"]:
-                return get_error_data_result(retmsg="Duplicated file name in the same folder.")
+                return get_error_data_result(retmsg="Duplicated file name in the same folder.", retcode=RetCode.CONFLICT)
 
         if not FileService.update_by_id(req["file_id"], {"name": req["name"]}):
             return get_error_data_result(retmsg="Database error (File rename)!")
 
-        informs = File2DocumentService.get_by_file_id(req["file_id"])
+        informs = File2DocumentService.get_by_file_id(db, req["file_id"])
         if informs:
-            if not DocumentService.update_by_id(informs[0].document_id, {"name": req["name"]}):
+            if not DocumentService.update_by_id(db, informs[0].document_id, {"name": req["name"]}):
                 return get_error_data_result(retmsg="Database error (Document rename)!")
 
         return get_result(data=True)

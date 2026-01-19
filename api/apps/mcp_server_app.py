@@ -1004,7 +1004,6 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
                 try:
                     tools = tool_call_session.get_tools(timeout)
                 except Exception as e:
-                    tools = []
                     return get_data_error_result(retmsg=f"MCP list tools error: {e}")
 
                 results[server_key] = []
@@ -1446,7 +1445,6 @@ def test_mcp(request: TestMCPRequest, db: Session = Depends(get_db), user=Depend
         try:
             tools = tool_call_session.get_tools(timeout)
         except Exception as e:
-            tools = []
             return get_data_error_result(retmsg=f"MCP list tools error: {e}")
         finally:
             # PERF: blocking call to close sessions — consider moving to background thread or task queue

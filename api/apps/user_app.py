@@ -734,7 +734,7 @@ def user_register(db: Session, user_id: str, user: dict):
 
     try:
         if not UserService.save(db, **user):
-            return
+            return None
         TenantService.insert(db, **tenant)
         UserTenantService.insert(db, **usr_tenant)
         TenantLLMService.insert_many(db, tenant_llm)
