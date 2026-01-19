@@ -224,6 +224,16 @@ class DocumentService(CommonService):
             "run_status": {
              "1": 2,
              "2": 2
+            },
+            "metadata": {
+                "key1": {
+                 "key1_value1": 1,
+                 "key1_value2": 2,
+                },
+                "key2": {
+                 "key2_value1": 2,
+                 "key2_value2": 1,
+                },
             }
         }, total
         where "1" => RUNNING, "2" => CANCEL
@@ -248,59 +258,93 @@ class DocumentService(CommonService):
             filters.append(cls.model.suffix.in_(suffix))
 
         # 2) 构造“已 join”的基础 FROM（关键最小改动：select_from + join + 复用 filters）
-        base_from = (
-            db.query(cls.model.id)  # 这里只取 id 作为锚点
+        base_join = (
+            select(cls.model.id)
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
-            .filter(*filters)
+            .where(*filters)
         )
 
         # 3) total：按文档去重计数，避免一文档多文件被重复计算
-        total = (
-            db.query(func.count(func.distinct(cls.model.id)))
+        total_stmt = (
+            select(func.count(func.distinct(cls.model.id)))
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
-            .filter(*filters)
-            .scalar()
+            .where(*filters)
         )
+        total = db.execute(total_stmt).scalar()
 
         # 4) suffix 分布：同理对 Document.id 去重计数
-        suffix_stats = (
-            db.query(
+        suffix_stmt = (
+            select(
                 cls.model.suffix,
                 func.count(func.distinct(cls.model.id)).label("count")
             )
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
-            .filter(*filters)
+            .where(*filters)
             .group_by(cls.model.suffix)
-            .all()
         )
+        suffix_stats = db.execute(suffix_stmt).all()
 
         # 5) run_status 分布：同理
-        run_status_stats = (
-            db.query(
+        run_status_stmt = (
+            select(
                 cls.model.run,
                 func.count(func.distinct(cls.model.id)).label("count")
             )
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
-            .filter(*filters)
+            .where(*filters)
             .group_by(cls.model.run)
-            .all()
         )
+        run_status_stats = db.execute(run_status_stmt).all()
 
-        # 6) 组装返回
+        # 6) metadata 分布：遍历文档的 meta_fields 字段进行统计
+        meta_stmt = (
+            select(cls.model.meta_fields)
+            .select_from(cls.model)
+            .join(File2Document, File2Document.document_id == cls.model.id)
+            .join(File, File.id == File2Document.file_id)
+            .where(*filters)
+            .distinct()
+        )
+        meta_rows = db.scalars(meta_stmt).all()
+
+        metadata_counter = {}
+        for meta_fields in meta_rows:
+            meta_fields = meta_fields or {}
+            if isinstance(meta_fields, str):
+                try:
+                    meta_fields = json.loads(meta_fields)
+                except Exception:
+                    meta_fields = {}
+            if not isinstance(meta_fields, dict):
+                continue
+            for key, value in meta_fields.items():
+                values = value if isinstance(value, list) else [value]
+                for vv in values:
+                    if vv is None:
+                        continue
+                    if isinstance(vv, str) and not vv.strip():
+                        continue
+                    sv = str(vv)
+                    if key not in metadata_counter:
+                        metadata_counter[key] = {}
+                    metadata_counter[key][sv] = metadata_counter[key].get(sv, 0) + 1
+
+        # 7) 组装返回
         suffix_counter = {row.suffix: row.count for row in suffix_stats}
         run_status_counter = {str(row.run): row.count for row in run_status_stats}
 
         return {
             "suffix": suffix_counter,
-            "run_status": run_status_counter
+            "run_status": run_status_counter,
+            "metadata": metadata_counter,
         }, total
 
     @classmethod
