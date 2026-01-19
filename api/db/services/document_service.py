@@ -305,14 +305,17 @@ class DocumentService(CommonService):
         run_status_stats = db.execute(run_status_stmt).all()
 
         # 6) metadata 分布：遍历文档的 meta_fields 字段进行统计
-        meta_stmt = (
-            select(cls.model.meta_fields)
+        # 先获取符合条件的唯一文档 ID（避免对 JSON 字段使用 DISTINCT）
+        doc_ids_subquery = (
+            select(cls.model.id)
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
             .where(*filters)
             .distinct()
         )
+        # 然后获取这些文档的 meta_fields
+        meta_stmt = select(cls.model.meta_fields).where(cls.model.id.in_(doc_ids_subquery))
         meta_rows = db.scalars(meta_stmt).all()
 
         metadata_counter = {}
