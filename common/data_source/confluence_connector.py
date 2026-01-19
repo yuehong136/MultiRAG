@@ -1,5 +1,3 @@
-
-
 """Confluence connector"""
 import copy
 import json
@@ -87,7 +85,7 @@ class OnyxConfluence:
             CONFLUENCE_CONNECTOR_USER_PROFILES_OVERRIDE
         ),
     ) -> None:
-        self.base_url = url  #'/'.join(url.rstrip("/").split("/")[:-1])
+        self.base_url = url  # '/'.join(url.rstrip("/").split("/")[:-1])
         url = scoped_url(url, "confluence") if scoped_token else url
 
         self._is_cloud = is_cloud
@@ -186,7 +184,7 @@ class OnyxConfluence:
         # between the db and redis everywhere the credentials might be updated
         new_credential_str = json.dumps(new_credentials)
         self.redis_client.set(
-            self.credential_key, new_credential_str, nx=True, ex=self.CREDENTIAL_TTL
+            self.credential_key, new_credential_str, exp=self.CREDENTIAL_TTL
         )
         self._credentials_provider.set_credentials(new_credentials)
 
@@ -1229,7 +1227,7 @@ def process_attachment(
 
         # Process document attachments
         try:
-            return AttachmentProcessingResult(text="",file_blob=raw_bytes, file_name=attachment.get("title", "unknown_title"), error=None)
+            return AttachmentProcessingResult(text="", file_blob=raw_bytes, file_name=attachment.get("title", "unknown_title"), error=None)
         except Exception as e:
             logging.exception(e)
             return AttachmentProcessingResult(
@@ -1518,32 +1516,32 @@ class ConfluenceConnector(
 
             # Build hierarchical path for semantic identifier
             space_name = page.get("space", {}).get("name", "")
-            
+
             # Build path from ancestors
             path_parts = []
             if space_name:
                 path_parts.append(space_name)
-            
+
             # Add ancestor pages to path if available
             if "ancestors" in page and page["ancestors"]:
                 for ancestor in page["ancestors"]:
                     ancestor_title = ancestor.get("title", "")
                     if ancestor_title:
                         path_parts.append(ancestor_title)
-            
+
             # Add current page title
             path_parts.append(page_title)
-            
+
             # Track page names for duplicate detection
             full_path = " / ".join(path_parts) if len(path_parts) > 1 else page_title
-            
+
             # Count occurrences of this page title
             if page_title not in self._document_name_counts:
                 self._document_name_counts[page_title] = 0
                 self._document_name_paths[page_title] = []
             self._document_name_counts[page_title] += 1
             self._document_name_paths[page_title].append(full_path)
-            
+
             # Use simple name if no duplicates, otherwise use full path
             if self._document_name_counts[page_title] == 1:
                 semantic_identifier = page_title
@@ -1599,8 +1597,8 @@ class ConfluenceConnector(
                 semantic_identifier=semantic_identifier,
                 extension=".html",  # Confluence pages are HTML
                 blob=page_content.encode("utf-8"),  # Encode page content as bytes
-                size_bytes=len(page_content.encode("utf-8")),  # Calculate size in bytes
                 doc_updated_at=datetime_from_string(page["version"]["when"]),
+                size_bytes=len(page_content.encode("utf-8")),  # Calculate size in bytes
                 primary_owners=primary_owners if primary_owners else None,
                 metadata=metadata if metadata else None,
             )
@@ -1656,7 +1654,6 @@ class ConfluenceConnector(
                 )
                 continue
 
-
             logging.info(
                 f"Processing attachment: {attachment['title']} attached to page {page['title']}"
             )
@@ -1709,7 +1706,7 @@ class ConfluenceConnector(
                 attachment_title = attachment.get("title", object_url)
                 space_name = page.get("space", {}).get("name", "")
                 page_title = page.get("title", "")
-                
+
                 # Create hierarchical name: Space / Page / Attachment
                 attachment_path_parts = []
                 if space_name:
@@ -1717,16 +1714,16 @@ class ConfluenceConnector(
                 if page_title:
                     attachment_path_parts.append(page_title)
                 attachment_path_parts.append(attachment_title)
-                
+
                 full_attachment_path = " / ".join(attachment_path_parts) if len(attachment_path_parts) > 1 else attachment_title
-                
+
                 # Track attachment names for duplicate detection
                 if attachment_title not in self._document_name_counts:
                     self._document_name_counts[attachment_title] = 0
                     self._document_name_paths[attachment_title] = []
                 self._document_name_counts[attachment_title] += 1
                 self._document_name_paths[attachment_title].append(full_attachment_path)
-                
+
                 # Use simple name if no duplicates, otherwise use full path
                 if self._document_name_counts[attachment_title] == 1:
                     attachment_semantic_identifier = attachment_title
@@ -1743,7 +1740,6 @@ class ConfluenceConnector(
                     ]
 
                 extension = Path(attachment.get("title", "")).suffix or ".unknown"
-
 
                 attachment_doc = Document(
                     id=attachment_id,
@@ -1806,7 +1802,7 @@ class ConfluenceConnector(
             start_ts, end, self.batch_size
         )
         logging.debug(f"page_query_url: {page_query_url}")
-        
+
         # store the next page start for confluence server, cursor for confluence cloud
         def store_next_page_url(next_page_url: str) -> None:
             checkpoint.next_page_url = next_page_url
@@ -2055,7 +2051,6 @@ class ConfluenceConnector(
                 "No Confluence spaces found. Either your credentials lack permissions, or "
                 "there truly are no spaces in this Confluence instance."
             )
-
 
 
 if __name__ == "__main__":
