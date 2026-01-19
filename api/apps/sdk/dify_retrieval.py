@@ -11,12 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field, Discriminator, model_validato
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db
-from api.db.services.dialog_service import convert_conditions, meta_filter
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import apikey_dependency, build_error_result
 from common import settings
+from common.metadata_utils import convert_conditions, meta_filter
 from common.constants import LLMType, RetCode
 from core.app.tag import label_question
 

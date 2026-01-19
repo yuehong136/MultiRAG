@@ -6,6 +6,7 @@
 @date：2025/7/17 15:30
 @desc:
 """
+import asyncio
 import logging
 import binascii
 import time
@@ -14,7 +15,6 @@ from functools import partial
 import re
 from copy import deepcopy
 from timeit import default_timer as timer
-import trio
 from langfuse import Langfuse
 from agentic_reasoning import DeepResearcher
 from datetime import datetime
@@ -34,13 +34,27 @@ from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
 from core.nlp.search import index_name
 from core.prompts.generator import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
-    citation_prompt, cross_languages, gen_meta_filter, PROMPT_JINJA_ENV, ASK_SUMMARY
+    citation_prompt, cross_languages, PROMPT_JINJA_ENV, ASK_SUMMARY
+from common.metadata_utils import apply_meta_data_filter
 from common.token_utils import num_tokens_from_string
 from core.utils.tavily_conn import Tavily
 from common.constants import LLMType, StatusEnum, ParserType
 from common.string_utils import remove_redundant_spaces
 from common import settings
 from common.time_utils import current_timestamp, datetime_format
+
+
+def sync_async_generator(async_gen):
+    """将异步生成器转换为同步生成器"""
+    loop = asyncio.new_event_loop()
+    try:
+        while True:
+            try:
+                yield loop.run_until_complete(async_gen.__anext__())
+            except StopAsyncIteration:
+                break
+    finally:
+        loop.close()
 
 
 class DialogService(CommonService):
@@ -391,78 +405,6 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
     return answer, idx
 
 
-def convert_conditions(metadata_condition):
-    if metadata_condition is None:
-        metadata_condition = {}
-    op_mapping = {
-        "is": "=",
-        "not is": "≠"
-    }
-    return [
-    {
-        "op": op_mapping.get(cond["comparison_operator"], cond["comparison_operator"]),
-        "key": cond["name"],
-        "value": cond["value"]
-    }
-    for cond in metadata_condition.get("conditions", [])
-]
-
-
-def meta_filter(metas: dict, filters: list[dict], logic: str = "and"):
-    doc_ids = set([])
-
-    def filter_out(v2docs, operator, value):
-        ids = []
-        for input, docids in v2docs.items():
-            if operator in ["=", "≠", ">", "<", "≥", "≤"]:
-                try:
-                    input = float(input)
-                    value = float(value)
-                except Exception:
-                    input = str(input)
-                    value = str(value)
-
-            for conds in [
-                (operator == "contains", str(value).lower() in str(input).lower()),
-                (operator == "not contains", str(value).lower() not in str(input).lower()),
-                (operator == "in", str(input).lower() in str(value).lower()),
-                (operator == "not in", str(input).lower() not in str(value).lower()),
-                (operator == "start with", str(input).lower().startswith(str(value).lower())),
-                (operator == "end with", str(input).lower().endswith(str(value).lower())),
-                (operator == "empty", not input),
-                (operator == "not empty", input),
-                (operator == "=", input == value),
-                (operator == "≠", input != value),
-                (operator == ">", input > value),
-                (operator == "<", input < value),
-                (operator == "≥", input >= value),
-                (operator == "≤", input <= value),
-            ]:
-                try:
-                    if all(conds):
-                        ids.extend(docids)
-                        break
-                except Exception:
-                    pass
-        return ids
-
-    for k, v2docs in metas.items():
-        for f in filters:
-            if k != f["key"]:
-                continue
-            ids = filter_out(v2docs, f["op"], f["value"])
-            if not doc_ids:
-                doc_ids = set(ids)
-            else:
-                if logic == "and":
-                    doc_ids = doc_ids & set(ids)
-                else:
-                    doc_ids = doc_ids | set(ids)
-            if not doc_ids:
-                return []
-    return list(doc_ids)
-
-
 def chat(dialog, messages, db, stream=True, **kwargs):
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
@@ -536,28 +478,19 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             prompt_config["system"] = prompt_config["system"].replace("{%s}" % p["key"], " ")
 
     if len(questions) > 1 and prompt_config.get("refine_multiturn"):
-        questions = [full_question(db, dialog.tenant_id, dialog.llm_id, messages)]
+        questions = [asyncio.run(full_question(tenant_id=dialog.tenant_id, llm_id=dialog.llm_id, messages=messages))]
     else:
         questions = questions[-1:]
 
     if prompt_config.get("cross_languages"):
-        questions = [cross_languages(db, dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
+        questions = [asyncio.run(cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"]))]
 
     if dialog.meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(db, dialog.kb_ids)
-        if dialog.meta_data_filter.get("method") == "auto":
-            filters: dict = gen_meta_filter(chat_mdl, metas, questions[-1])
-            attachments.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-            if not attachments:
-                attachments = None
-        elif dialog.meta_data_filter.get("method") == "manual":
-            conds = dialog.meta_data_filter["manual"]
-            attachments.extend(meta_filter(metas, conds, dialog.meta_data_filter.get("logic", "and")))
-            if conds and not attachments:
-                attachments = ["-999"]
+        attachments = asyncio.run(apply_meta_data_filter(dialog.meta_data_filter, metas, questions[-1], chat_mdl, attachments))
 
     if prompt_config.get("keyword", False):
-        questions[-1] += keyword_extraction(chat_mdl, questions[-1])
+        questions[-1] += asyncio.run(keyword_extraction(chat_mdl, questions[-1]))
 
     refine_question_ts = timer()
 
@@ -589,7 +522,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                 )
             )
 
-            for think in reasoner.thinking(kbinfos, attachments_ + " ".join(questions)):
+            for think in sync_async_generator(reasoner.thinking(kbinfos, attachments_ + " ".join(questions))):
                 if isinstance(think, str):
                     thought = think
                     knowledges = [t for t in think.split("\n") if t]
@@ -822,7 +755,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
         logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
-        ans = use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
+        ans = await use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
         if ans:
             yield ans
             return
@@ -837,28 +770,19 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
             prompt_config["system"] = prompt_config["system"].replace("{%s}" % p["key"], " ")
 
     if len(questions) > 1 and prompt_config.get("refine_multiturn"):
-        questions = [full_question(db, dialog.tenant_id, dialog.llm_id, messages)]
+        questions = [await full_question(tenant_id=dialog.tenant_id, llm_id=dialog.llm_id, messages=messages)]
     else:
         questions = questions[-1:]
 
     if prompt_config.get("cross_languages"):
-        questions = [cross_languages(db, dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
+        questions = [await cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
 
     if dialog.meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(db, dialog.kb_ids)
-        if dialog.meta_data_filter.get("method") == "auto":
-            filters: dict = gen_meta_filter(chat_mdl, metas, questions[-1])
-            attachments.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-            if not attachments:
-                attachments = None
-        elif dialog.meta_data_filter.get("method") == "manual":
-            conds = dialog.meta_data_filter["manual"]
-            attachments.extend(meta_filter(metas, conds, dialog.meta_data_filter.get("logic", "and")))
-            if conds and not attachments:
-                attachments = ["-999"]
+        attachments = await apply_meta_data_filter(dialog.meta_data_filter, metas, questions[-1], chat_mdl, attachments)
 
     if prompt_config.get("keyword", False):
-        questions[-1] += keyword_extraction(chat_mdl, questions[-1])
+        questions[-1] += await keyword_extraction(chat_mdl, questions[-1])
 
     refine_question_ts = timer()
 
@@ -890,7 +814,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                 )
             )
 
-            for think in reasoner.thinking(kbinfos, attachments_ + " ".join(questions)):
+            async for think in reasoner.thinking(kbinfos, attachments_ + " ".join(questions)):
                 if isinstance(think, str):
                     thought = think
                     knowledges = [t for t in think.split("\n") if t]
@@ -955,7 +879,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     assert len(msg) >= 2, f"message_fit_in has bug: {msg}"
     prompt = msg[0]["content"]
 
-    if "max_tokens" not in gen_conf:
+    if "max_tokens" in gen_conf:
         gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
 
     def decorate_answer(answer):
@@ -1067,7 +991,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     return
 
 
-def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_ids=None):
+async def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_ids=None):
     sys_prompt = """
     You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question.
     Ensure that:
@@ -1097,9 +1021,9 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
     )
     tried_times = 0
 
-    def get_table():
+    async def get_table():
         nonlocal sys_prompt, user_prompt, question, tried_times
-        sql = chat_mdl.chat(sys_prompt, [{"role": "user", "content": user_prompt}], {"temperature": 0.06})
+        sql = await chat_mdl.async_chat(sys_prompt, [{"role": "user", "content": user_prompt}], {"temperature": 0.06})
         sql = re.sub(r"^.*</think>", "", sql, flags=re.DOTALL)
         logging.debug(f"{question} ==> {user_prompt} get SQL: {sql}")
         sql = re.sub(r"[\r\n]+", " ", sql.lower())
@@ -1140,7 +1064,7 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
         return settings.retriever.sql_retrieval(sql, format="json"), sql
 
     try:
-        tbl, sql = get_table()
+        tbl, sql = await get_table()
     except Exception as e:
         user_prompt = """
         Table name: {};
@@ -1156,9 +1080,9 @@ def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_i
         {}
 
         Please correct the error and write SQL again, only SQL, without any other explanations or text.
-        """.format(index_name(tenant_id), "\n".join([f"{k}: {v}" for k, v in field_map.items()]), question, e)
+        """.format(index_name(tenant_id, kb_names), "\n".join([f"{k}: {v}" for k, v in field_map.items()]), question, e)
         try:
-            tbl, sql = get_table()
+            tbl, sql = await get_table()
         except Exception:
             return
 
@@ -1301,15 +1225,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
 
     if meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)
-        if meta_data_filter.get("method") == "auto":
-            filters: dict = gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-            if not doc_ids:
-                doc_ids = None
-        elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
-            if meta_data_filter["manual"] and not doc_ids:
-                doc_ids = ["-999"]
+        doc_ids = asyncio.run(apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids))
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
@@ -1386,15 +1302,7 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
 
     if meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)
-        if meta_data_filter.get("method") == "auto":
-            filters: dict = gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-            if not doc_ids:
-                doc_ids = None
-        elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
-            if meta_data_filter["manual"] and not doc_ids:
-                doc_ids = ["-999"]
+        doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
     filter_exp = ""
     kb_names = list([kb.name for kb in kbs])
@@ -1446,7 +1354,7 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     yield decorate_answer(answer)
 
 
-def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
+async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
     if search_config is None:
         search_config = {}
     meta_data_filter = search_config.get("meta_data_filter", {})
@@ -1467,15 +1375,7 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
 
     if meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)
-        if meta_data_filter.get("method") == "auto":
-            filters: dict = gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-            if not doc_ids:
-                doc_ids = None
-        elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
-            if meta_data_filter["manual"] and not doc_ids:
-                doc_ids = ["-999"]
+        doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
     ranks = settings.retriever.retrieval(
         question=question,
@@ -1494,5 +1394,5 @@ def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
         rank_feature=label_question(db, question, kbs),
     )
     mindmap = MindMapExtractor(chat_mdl)
-    mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
+    mind_map = await mindmap([c["content_with_weight"] for c in ranks["chunks"]])
     return mind_map.output

@@ -13,20 +13,21 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import json
 import os
 import logging
 from langfuse import Langfuse
 from sqlalchemy import update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from common import settings
-from common.constants import LLMType
+from common.constants import LLMType, MINERU_DEFAULT_CONFIG, MINERU_ENV_KEYS
 from api.db.db_models import LLMFactories, TenantLLM, db_connection
 from api.db.services.common_service import CommonService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.user_service import TenantService
-from core.llm import ChatModel, CvModel, EmbeddingModel, RerankModel, Seq2txtModel, TTSModel
+from core.llm import ChatModel, CvModel, EmbeddingModel, RerankModel, Seq2txtModel, TTSModel, OcrModel
 
 
 class LLMFactoriesService(CommonService):
@@ -117,6 +118,10 @@ class TenantLLMService(CommonService):
             mdlnm = tenant.rerank_id if not llm_name else llm_name
         elif llm_type == LLMType.TTS.value:
             mdlnm = tenant.tts_id if not llm_name else llm_name
+        elif llm_type == LLMType.OCR.value:
+            if not llm_name:
+                raise LookupError("OCR model name is required")
+            mdlnm = llm_name
         else:
             raise ValueError("LLM type error")
 
@@ -138,30 +143,6 @@ class TenantLLMService(CommonService):
         if llm:
             model_config["is_tools"] = llm[0].is_tools
         return model_config
-        # if model_config:
-        #     model_config = model_config.to_dict()
-        #     llm = LLMService.query(db, llm_name=mdlnm) if not fid else LLMService.query(db, llm_name=mdlnm, fid=fid)
-        #     if not llm and fid: # for some cases seems fid mismatch
-        #         llm = LLMService.query(db, llm_name=mdlnm)
-        #     if llm:
-        #         model_config["is_tools"] = llm[0].is_tools
-        # else:
-        #     logging.info(f"Debug: No API key found for model {mdlnm}")
-        #
-        # if not model_config:
-        #     logging.info(f"Debug: Model({mdlnm}) not authorized")
-        #     if llm_type in [LLMType.EMBEDDING, LLMType.RERANK]:
-        #         llm = LLMService.query(db, llm_name=mdlnm) if not fid else LLMService.query(db, llm_name=mdlnm, fid=fid)
-        #         if llm and llm[0].fid in ["Youdao", "FastEmbed", "BAAI"]:
-        #             model_config = {"llm_factory": llm[0].fid, "api_key": "", "llm_name": mdlnm, "api_base": ""}
-        #     if not model_config:
-        #         if mdlnm == "flag-embedding":
-        #             model_config = {"llm_factory": "Tongyi-Qianwen", "api_key": "", "llm_name": llm_name, "api_base": ""}
-        #         else:
-        #             if not mdlnm:
-        #                 raise LookupError(f"Type of {llm_type} model is not set.")
-        #             raise LookupError(f"Model({mdlnm}) not authorized")
-        # return model_config
 
     @classmethod
     def model_instance(cls, db: Session, tenant_id, llm_type, llm_name=None, lang="Chinese", **kwargs):
@@ -173,32 +154,43 @@ class TenantLLMService(CommonService):
                 return None
             return EmbeddingModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
 
-        if llm_type == LLMType.RERANK:
+        elif llm_type == LLMType.RERANK:
             if model_config["llm_factory"] not in RerankModel:
                 return None
             return RerankModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
 
-        if llm_type == LLMType.IMAGE2TEXT.value:
+        elif llm_type == LLMType.IMAGE2TEXT.value:
             if model_config["llm_factory"] not in CvModel:
                 logging.info(f"Debug: Image2Text model factory not supported: {model_config['llm_factory']}")
                 return None
             return CvModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], lang, base_url=model_config["api_base"], **kwargs)
 
-        if llm_type == LLMType.CHAT.value:
+        elif llm_type == LLMType.CHAT.value:
             if model_config["llm_factory"] not in ChatModel:
                 logging.info(f"Debug: Chat model factory not supported: {model_config['llm_factory']}")
                 return None
             return ChatModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"], **kwargs)
 
-        if llm_type == LLMType.SPEECH2TEXT:
+        elif llm_type == LLMType.SPEECH2TEXT:
             if model_config["llm_factory"] not in Seq2txtModel:
                 return None
             return Seq2txtModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"])
 
-        if llm_type == LLMType.TTS:
+        elif llm_type == LLMType.TTS:
             if model_config["llm_factory"] not in TTSModel:
                 return None
             return TTSModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
+
+        elif llm_type == LLMType.OCR:
+            if model_config["llm_factory"] not in OcrModel:
+                return None
+            return OcrModel[model_config["llm_factory"]](
+                key=model_config["api_key"],
+                model_name=model_config["llm_name"],
+                base_url=model_config.get("api_base", ""),
+                **kwargs,
+            )
+
         return None
 
     @classmethod
@@ -250,6 +242,7 @@ class TenantLLMService(CommonService):
                 LLMType.CHAT.value: tenant.llm_id,
                 LLMType.RERANK.value: tenant.rerank_id,
                 LLMType.TTS.value: tenant.tts_id,
+                LLMType.OCR.value: llm_name,
             }
             mdlnm = llm_map.get(llm_type)
 
@@ -349,6 +342,69 @@ class TenantLLMService(CommonService):
                 return llm.mdl_type
             for llm in TenantLLMService.query(db, llm_name=llm_id):
                 return llm.mdl_type
+
+    @classmethod
+    def _collect_mineru_env_config(cls) -> dict | None:
+        cfg = MINERU_DEFAULT_CONFIG.copy()
+        found = False
+        for key in MINERU_ENV_KEYS:
+            val = os.environ.get(key)
+            if val:
+                found = True
+                cfg[key] = val
+        return cfg if found else None
+
+    @classmethod
+    def ensure_mineru_from_env(cls, db: Session, tenant_id: str) -> str | None:
+        """
+        Ensure a MinerU OCR model exists for the tenant if env variables are present.
+        Return the existing or newly created llm_name, or None if env not set.
+        """
+        cfg = cls._collect_mineru_env_config()
+        if not cfg:
+            return None
+
+        saved_mineru_models = cls.query(db, tenant_id=tenant_id, llm_factory="MinerU", mdl_type=LLMType.OCR.value)
+
+        def _parse_api_key(raw: str) -> dict:
+            try:
+                return json.loads(raw or "{}")
+            except Exception:
+                return {}
+
+        for item in saved_mineru_models:
+            api_cfg = _parse_api_key(item.api_key)
+            normalized = {k: api_cfg.get(k, MINERU_DEFAULT_CONFIG.get(k)) for k in MINERU_ENV_KEYS}
+            if normalized == cfg:
+                return item.llm_name
+
+        used_names = {item.llm_name for item in saved_mineru_models}
+        idx = 1
+        base_name = "mineru-from-env"
+        while True:
+            candidate = f"{base_name}-{idx}"
+            if candidate in used_names:
+                idx += 1
+                continue
+
+            try:
+                cls.save(
+                    db,
+                    tenant_id=tenant_id,
+                    llm_factory="MinerU",
+                    llm_name=candidate,
+                    mdl_type=LLMType.OCR.value,
+                    api_key=json.dumps(cfg),
+                    api_base="",
+                    max_tokens=0,
+                )
+                return candidate
+            except IntegrityError:
+                logging.warning("MinerU env model %s already exists for tenant %s, retry with next name", candidate, tenant_id)
+                db.rollback()
+                used_names.add(candidate)
+                idx += 1
+                continue
 
 
 class LLM4Tenant:

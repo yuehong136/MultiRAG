@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -482,6 +483,7 @@ async def run(
             user_id,
             req["id"],
             task_id,
+            CANVAS_DEBUG_DOC_ID,
             files[0] if files else None,
             0
         )
@@ -846,7 +848,7 @@ def input_form(
 
 
 @router.post('/debug', summary="调试组件", response_description="成功执行组件调试")
-def debug(
+async def debug(
         request_body: DebugRequest,
         db: Session = Depends(get_db),
         user=Depends(manager)
@@ -918,8 +920,13 @@ def debug(
         for k in outputs.keys():
             if isinstance(outputs[k], partial):
                 txt = ""
-                for c in outputs[k]():
-                    txt += c
+                iter_obj = outputs[k]()
+                if inspect.isasyncgen(iter_obj):
+                    async for c in iter_obj:
+                        txt += c
+                else:
+                    for c in iter_obj:
+                        txt += c
                 outputs[k] = txt
         
         return get_json_result(data=outputs)
@@ -1019,7 +1026,15 @@ def test_db_connect(
                 f"UID={req['username']};"
                 f"PWD={req['password']};"
             )
-            logging.info(conn_str)
+            redacted_conn_str = (
+                f"DATABASE={req['database']};"
+                f"HOSTNAME={req['host']};"
+                f"PORT={req['port']};"
+                f"PROTOCOL=TCPIP;"
+                f"UID={req['username']};"
+                f"PWD=****;"
+            )
+            logging.info(redacted_conn_str)
             conn = ibm_db.connect(conn_str, "", "")
             stmt = ibm_db.exec_immediate(conn, "SELECT 1 FROM sysibm.sysdummy1")
             ibm_db.fetch_assoc(stmt)

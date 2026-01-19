@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -1470,7 +1471,7 @@ class Dealer:
         if not toc:
             return chunks
 
-        ids = relevant_chunks_with_toc(query, toc, chat_mdl, topn * 2)
+        ids = asyncio.run(relevant_chunks_with_toc(query, toc, chat_mdl, topn * 2))
         if not ids:
             return chunks
 

@@ -437,34 +437,6 @@ class SILICONFLOWRerank(Base):
         )
 
 
-class BaiduYiyanRerank(Base):
-    _FACTORY_NAME = "BaiduYiyan"
-
-    def __init__(self, key, model_name, base_url=None):
-        from qianfan.resources import Reranker
-
-        key = json.loads(key)
-        ak = key.get("yiyan_ak", "")
-        sk = key.get("yiyan_sk", "")
-        self.client = Reranker(ak=ak, sk=sk)
-        self.model_name = model_name
-
-    def similarity(self, query: str, texts: list):
-        res = self.client.do(
-            model=self.model_name,
-            query=query,
-            documents=texts,
-            top_n=len(texts),
-        ).body
-        rank = np.zeros(len(texts), dtype=float)
-        try:
-            for d in res["results"]:
-                rank[d["index"]] = d["relevance_score"]
-        except Exception as _e:
-            log_exception(_e, res)
-        return rank, total_token_count_from_response(res)
-
-
 class VoyageRerank(Base):
     _FACTORY_NAME = "Voyage AI"
 

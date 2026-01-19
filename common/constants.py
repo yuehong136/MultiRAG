@@ -21,7 +21,8 @@ class LLMType(StrEnum):
     SPEECH2TEXT = 'speech2text'
     IMAGE2TEXT = 'image2text'
     RERANK = 'rerank'
-    TTS    = 'tts'
+    TTS = 'tts'
+    OCR = 'ocr'
 
 
 class TaskStatus(StrEnum):
@@ -70,6 +71,10 @@ class FileSource(StrEnum):
     WEBDAV = "webdav"
     MOODLE = "moodle"
     DROPBOX = "dropbox"
+    BOX = "box"
+    R2 = "r2"
+    OCI_STORAGE = "oci_storage"
+    GOOGLE_CLOUD_STORAGE = "google_cloud_storage"
 
 
 class MCPServerType(StrEnum):
@@ -138,6 +143,35 @@ class Storage(Enum):
     OPENDAL = 6
     GCS = 7
 
+
+class MemoryType(Enum):
+    """Memory类型枚举，使用位标志表示
+
+    支持组合多种类型，如：5 = RAW(1) + EPISODIC(4) 表示同时启用raw和episodic
+    """
+    RAW = 0b0001          # 1 << 0 = 1 (0b00000001) - 原始记忆
+    SEMANTIC = 0b0010     # 1 << 1 = 2 (0b00000010) - 语义记忆
+    EPISODIC = 0b0100     # 1 << 2 = 4 (0b00000100) - 情景记忆
+    PROCEDURAL = 0b1000   # 1 << 3 = 8 (0b00001000) - 程序性记忆
+
+
+class MemoryStorageType(StrEnum):
+    """Memory存储类型枚举"""
+    TABLE = "table"
+    GRAPH = "graph"
+
+
+class ForgettingPolicy(StrEnum):
+    """遗忘策略枚举"""
+    FIFO = "fifo"  # 先进先出
+    LRU = "lru"    # 最近最少使用
+
+
+class TenantPermission(StrEnum):
+    """租户权限枚举"""
+    ME = "me"
+    TEAM = "team"
+
 # environment
 # ENV_STRONG_TEST_COUNT = "STRONG_TEST_COUNT"
 # ENV_RAGFLOW_SECRET_KEY = "RAGFLOW_SECRET_KEY"
@@ -188,3 +222,13 @@ PAGERANK_FLD = "pagerank_fea"
 SVR_QUEUE_NAME = "multi_rag_svr_queue"
 SVR_CONSUMER_GROUP_NAME = "multi_rag_svr_task_broker"
 TAG_FLD = "tag_feas"
+
+
+MINERU_ENV_KEYS = ["MINERU_APISERVER", "MINERU_OUTPUT_DIR", "MINERU_BACKEND", "MINERU_SERVER_URL", "MINERU_DELETE_OUTPUT"]
+MINERU_DEFAULT_CONFIG = {
+    "MINERU_APISERVER": "",
+    "MINERU_OUTPUT_DIR": "",
+    "MINERU_BACKEND": "pipeline",
+    "MINERU_SERVER_URL": "",
+    "MINERU_DELETE_OUTPUT": 1,
+}

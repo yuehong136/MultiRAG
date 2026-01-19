@@ -36,6 +36,9 @@ class SupportedLiteLLMProvider(StrEnum):
     MiniMax = "MiniMax"
     DeerAPI = "DeerAPI"
     GPUStack = "GPUStack"
+    OpenAI = "OpenAI"
+    Azure_OpenAI = "Azure-OpenAI"
+    BaiduYiyan = "BaiduYiyan"
 
 
 FACTORY_DEFAULT_BASE_URL = {
@@ -60,6 +63,8 @@ FACTORY_DEFAULT_BASE_URL = {
     SupportedLiteLLMProvider.ZHIPU_AI: "https://open.bigmodel.cn/api/paas/v4",
     SupportedLiteLLMProvider.MiniMax: "https://api.minimaxi.com/v1",
     SupportedLiteLLMProvider.DeerAPI: "https://api.deerapi.com/v1",
+    SupportedLiteLLMProvider.OpenAI: "https://api.openai.com/v1",
+    SupportedLiteLLMProvider.BaiduYiyan: "https://qianfan.baidubce.com/v2",
 }
 
 
@@ -95,6 +100,9 @@ LITELLM_PROVIDER_PREFIX = {
     SupportedLiteLLMProvider.MiniMax: "openai/",
     SupportedLiteLLMProvider.DeerAPI: "openai/",
     SupportedLiteLLMProvider.GPUStack: "openai/",
+    SupportedLiteLLMProvider.OpenAI: "openai/",
+    SupportedLiteLLMProvider.Azure_OpenAI: "azure/",
+    SupportedLiteLLMProvider.BaiduYiyan: "openai/",
 }
 
 ChatModel = globals().get("ChatModel", {})
@@ -103,6 +111,7 @@ EmbeddingModel = globals().get("EmbeddingModel", {})
 RerankModel = globals().get("RerankModel", {})
 Seq2txtModel = globals().get("Seq2txtModel", {})
 TTSModel = globals().get("TTSModel", {})
+OcrModel = globals().get("OcrModel", {})
 
 
 MODULE_MAPPING = {
@@ -112,6 +121,7 @@ MODULE_MAPPING = {
     "rerank": RerankModel,
     "sequence2txt": Seq2txtModel,
     "tts": TTSModel,
+    "ocr_model": OcrModel,
 }
 
 package_name = __name__
@@ -153,4 +163,5 @@ __all__ = [
     "RerankModel",
     "Seq2txtModel",
     "TTSModel",
+    "OcrModel",
 ]

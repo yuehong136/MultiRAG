@@ -12,6 +12,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import asyncio
 import io
 import json
 import os
@@ -19,7 +20,7 @@ import random
 import re
 from functools import partial
 
-import trio
+from litellm import logging
 import numpy as np
 from PIL import Image
 
@@ -28,7 +29,6 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import LLMBundle
 from deepdoc.parser import ExcelParser
-from deepdoc.parser.mineru_parser import MinerUParser
 from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
 from deepdoc.parser.tcadp_parser import TCADPParser
 from core.app.naive import Docx
@@ -231,25 +231,55 @@ class Parser(ProcessBase):
         conf = self._param.setups["pdf"]
         self.set_output("output_format", conf["output_format"])
 
-        if conf.get("parse_method").lower() == "deepdoc":
+        raw_parse_method = conf.get("parse_method", "")
+        parser_model_name = None
+        parse_method = raw_parse_method
+        parse_method = parse_method or ""
+        if isinstance(raw_parse_method, str):
+            lowered = raw_parse_method.lower()
+            if lowered.endswith("@mineru"):
+                parser_model_name = raw_parse_method.rsplit("@", 1)[0]
+                parse_method = "MinerU"
+
+        if parse_method.lower() == "deepdoc":
             bboxes = RAGFlowPdfParser().parse_into_bboxes(blob, callback=self.callback)
-        elif conf.get("parse_method").lower() == "plain_text":
+        elif parse_method.lower() == "plain_text":
             lines, _ = PlainParser()(blob)
             bboxes = [{"text": t} for t, _ in lines]
-        elif conf.get("parse_method").lower() == "mineru":
-            mineru_executable = os.environ.get("MINERU_EXECUTABLE", "mineru")
-            mineru_api = os.environ.get("MINERU_APISERVER", "http://host.docker.internal:9987")
-            pdf_parser = MinerUParser(mineru_path=mineru_executable, mineru_api=mineru_api)
-            ok, reason = pdf_parser.check_installation()
-            if not ok:
-                raise RuntimeError(f"MinerU not found or server not accessible: {reason}. Please install it via: pip install -U 'mineru[core]'.")
+        elif parse_method.lower() == "mineru":
+            def resolve_mineru_llm_name():
+                configured = parser_model_name or conf.get("mineru_llm_name")
+                if configured:
+                    return configured
+
+                tenant_id = self._canvas._tenant_id
+                if not tenant_id:
+                    return None
+
+                from api.db.services.tenant_llm_service import TenantLLMService
+
+                with db_connection() as db:
+                    env_name = TenantLLMService.ensure_mineru_from_env(db, tenant_id)
+                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="MinerU", mdl_type=LLMType.OCR.value)
+                    if candidates:
+                        return candidates[0].llm_name
+                    return env_name
+
+            parser_model_name = resolve_mineru_llm_name()
+            if not parser_model_name:
+                raise RuntimeError("MinerU model not configured. Please add MinerU in Model Providers or set MINERU_* env.")
+
+            tenant_id = self._canvas._tenant_id
+            with db_connection() as db:
+                ocr_model = LLMBundle(db, tenant_id, LLMType.OCR, llm_name=parser_model_name, lang=conf.get("lang", "Chinese"))
+                pdf_parser = ocr_model.mdl
 
             lines, _ = pdf_parser.parse_pdf(
                 filepath=name,
                 binary=blob,
                 callback=self.callback,
-                output_dir=os.environ.get("MINERU_OUTPUT_DIR", ""),
-                delete_output=bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1))),
+                parse_method=conf.get("mineru_parse_method", "raw"),
+                lang=conf.get("lang", "Chinese"),
             )
             bboxes = []
             for t, poss in lines:
@@ -259,7 +289,7 @@ class Parser(ProcessBase):
                     "text": t,
                 }
                 bboxes.append(box)
-        elif conf.get("parse_method").lower() == "tcadp parser":
+        elif parse_method.lower() == "tcadp parser":
             # ADP is a document parsing tool using Tencent Cloud API
             table_result_type = conf.get("table_result_type", "1")
             markdown_image_response_type = conf.get("markdown_image_response_type", "1")
@@ -609,7 +639,7 @@ class Parser(ProcessBase):
             tmpf.flush()
             tmp_path = os.path.abspath(tmpf.name)
             with db_connection() as db:
-                seq2txt_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.SPEECH2TEXT)
+                seq2txt_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.SPEECH2TEXT, llm_name=conf["llm_id"])
             txt = seq2txt_mdl.transcription(tmp_path)
 
             self.set_output("text", txt)
@@ -621,7 +651,7 @@ class Parser(ProcessBase):
         self.set_output("output_format", conf["output_format"])
         with db_connection() as db:
             cv_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT, llm_name=conf["llm_id"])
-        txt = cv_mdl.chat(system="", history=[], gen_conf={}, video_bytes=blob, filename=name)
+        txt = asyncio.run(cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=blob, filename=name))
 
         self.set_output("text", txt)
 
@@ -786,7 +816,7 @@ class Parser(ProcessBase):
         for p_type, conf in self._param.setups.items():
             if from_upstream.name.split(".")[-1].lower() not in conf.get("suffix", []):
                 continue
-            await trio.to_thread.run_sync(function_map[p_type], name, blob)
+            await asyncio.to_thread(function_map[p_type], name, blob)
             done = True
             break
 
@@ -794,6 +824,15 @@ class Parser(ProcessBase):
             raise Exception("No suitable for file extension: `.%s`" % from_upstream.name.split(".")[-1].lower())
 
         outs = self.output()
-        async with trio.open_nursery() as nursery:
-            for d in outs.get("json", []):
-                nursery.start_soon(image2id, d, partial(settings.STORAGE_IMPL.put, tenant_id=self._canvas._tenant_id), get_uuid())
+        tasks = []
+        for d in outs.get("json", []):
+            tasks.append(asyncio.create_task(image2id(d,partial(settings.STORAGE_IMPL.put, tenant_id=self._canvas._tenant_id),get_uuid())))
+
+        try:
+            await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            logging.error("Error while parsing: %s" % e)
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise

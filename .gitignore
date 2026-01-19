@@ -208,3 +208,5 @@ tests
 
 docs
 temp/
+
+.hypothesis

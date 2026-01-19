@@ -15,8 +15,8 @@ import secrets
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -34,7 +34,6 @@ from common.connection_utils import construct_response
 from common.constants import RetCode
 from api.apps.auth import get_auth_client
 # from api.utils.crypt import decrypt
-from api.apps import smtp_mail_server
 from api.utils.web_utils import (
     send_email_html,
     OTP_LENGTH,
@@ -45,6 +44,7 @@ from api.utils.web_utils import (
     otp_keys,
     hash_code,
     captcha_key,
+    verified_key,
 )
 from core.utils.redis_conn import REDIS_CONN
 from common.time_utils import current_timestamp, datetime_format, get_format_time
@@ -113,10 +113,15 @@ class SendOtpRequest(BaseModel):
     captcha: str = Field(..., description="图片验证码")
 
 
-class ForgetPasswordRequest(BaseModel):
-    """忘记密码请求模型"""
+class VerifyOtpRequest(BaseModel):
+    """验证OTP请求模型"""
     email: str = Field(..., description="用户邮箱地址")
     otp: str = Field(..., description="邮箱验证码")
+
+
+class ResetPasswordRequest(BaseModel):
+    """重置密码请求模型"""
+    email: str = Field(..., description="用户邮箱地址")
     new_password: str = Field(..., description="新密码")
     confirm_new_password: str = Field(..., description="确认新密码")
 
@@ -913,41 +918,41 @@ def user_info_from_feishu(access_token: str):
 def forget_get_captcha(email: str, db: Session = Depends(get_db)):
     """
     获取图片验证码
-    
+
     该接口用于生成图片验证码并缓存到 Redis 中。
-    
+
     参数:
     - email: str 用户的邮箱地址（查询参数）
-    
+
     返回:
-    - 成功时返回PNG格式的验证码图片
+    - 成功时返回 base64 编码的验证码图片 data URI
     - 失败时返回错误信息
     """
     if not email:
         return get_json_result(
-            data=False, 
-            retcode=RetCode.ARGUMENT_ERROR, 
+            data=False,
+            retcode=RetCode.ARGUMENT_ERROR,
             retmsg="email is required"
         )
-    
+
     users = UserService.query(db, email=email)
     if not users:
         return get_json_result(
-            data=False, 
-            retcode=RetCode.DATA_ERROR, 
+            data=False,
+            retcode=RetCode.DATA_ERROR,
             retmsg="invalid email"
         )
-    
+
     # Generate captcha text
     allowed = string.ascii_uppercase + string.digits
     captcha_text = "".join(secrets.choice(allowed) for _ in range(OTP_LENGTH))
     REDIS_CONN.set(captcha_key(email), captcha_text, 60)  # Valid for 60 seconds
-    
+
     from captcha.image import ImageCaptcha
-    
+
     image = ImageCaptcha(width=300, height=120, font_sizes=[50, 60, 70])
     img_bytes = image.generate(captcha_text).read()
-    
+
     return Response(content=img_bytes, media_type="image/jpeg")
 
 
@@ -1030,111 +1035,95 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
     REDIS_CONN.set(k_attempts, 0, OTP_TTL_SECONDS)
     REDIS_CONN.set(k_last, now, OTP_TTL_SECONDS)
     REDIS_CONN.delete(k_lock)
-    
+
     ttl_min = OTP_TTL_SECONDS // 60
-    
-    if not smtp_mail_server:
-        logging.warning("SMTP mail server not initialized; skip sending email.")
-    else:
-        try:
-            await send_email_html(
-                subject="Your Password Reset Code",
-                to_email=email,
-                template_key="reset_code",
-                code=otp,
-                ttl_min=ttl_min,
-            )
-        except Exception as e:
-            logging.exception(e)
-            return get_json_result(
-                data=False, 
-                retcode=RetCode.SERVER_ERROR, 
-                retmsg="failed to send email"
-            )
-    
+
+    try:
+        await send_email_html(
+            subject="Your Password Reset Code",
+            to_email=email,
+            template_key="reset_code",
+            code=otp,
+            ttl_min=ttl_min,
+        )
+    except Exception as e:
+        logging.exception(e)
+        return get_json_result(
+            data=False,
+            retcode=RetCode.SERVER_ERROR,
+            retmsg="failed to send email"
+        )
+
     return get_json_result(
-        data=True, 
-        retcode=RetCode.SUCCESS, 
+        data=True,
+        retcode=RetCode.SUCCESS,
         retmsg="verification passed, email sent"
     )
 
 
-@router.post("/forget", summary="忘记密码-重置密码")
-def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
+@router.post("/forget/verify-otp", summary="验证OTP")
+def forget_verify_otp(request: VerifyOtpRequest, db: Session = Depends(get_db)):
     """
-    忘记密码-重置密码
-    
-    该接口用于验证邮箱OTP验证码并重置密码，成功后自动登录。
-    
+    验证邮箱OTP验证码
+
+    该接口仅验证OTP，成功后会设置一个短期验证标记。
+    然后使用 /forget/reset-password 接口完成密码重置。
+
     参数:
-    - request: ForgetPasswordRequest对象，包含重置密码所需信息
+    - request: VerifyOtpRequest对象
         - email: str 用户的邮箱地址
         - otp: str 邮箱验证码
-        - new_password: str 新密码
-        - confirm_new_password: str 确认新密码
-    
+
     返回:
-    - 成功时返回用户信息和访问令牌
+    - 成功时返回 data=True
     - 失败时返回错误信息
     """
     email = request.email.strip() if request.email else ""
     otp = request.otp.strip() if request.otp else ""
-    new_pwd = request.new_password
-    new_pwd2 = request.confirm_new_password
-    
-    if not all([email, otp, new_pwd, new_pwd2]):
+
+    if not all([email, otp]):
         return get_json_result(
-            data=False, 
+            data=False,
             retcode=RetCode.ARGUMENT_ERROR,
-            retmsg="email, otp and passwords are required"
+            retmsg="email and otp are required"
         )
-    
-    # Validate password match
-    if new_pwd != new_pwd2:
-        return get_json_result(
-            data=False, 
-            retcode=RetCode.ARGUMENT_ERROR, 
-            retmsg="passwords do not match"
-        )
-    
+
     users = UserService.query(db, email=email)
     if not users:
         return get_json_result(
-            data=False, 
-            retcode=RetCode.DATA_ERROR, 
+            data=False,
+            retcode=RetCode.DATA_ERROR,
             retmsg="invalid email"
         )
-    
-    user = users[0]
-    
+
     # Verify OTP from Redis
     k_code, k_attempts, k_last, k_lock = otp_keys(email)
-    
+
     if REDIS_CONN.get(k_lock):
         return get_json_result(
-            data=False, 
-            retcode=RetCode.NOT_EFFECTIVE, 
+            data=False,
+            retcode=RetCode.NOT_EFFECTIVE,
             retmsg="too many attempts, try later"
         )
-    
+
     stored = REDIS_CONN.get(k_code)
     if not stored:
         return get_json_result(
-            data=False, 
-            retcode=RetCode.NOT_EFFECTIVE, 
+            data=False,
+            retcode=RetCode.NOT_EFFECTIVE,
             retmsg="expired otp"
         )
-    
+
     try:
         stored_hash, salt_hex = str(stored).split(":", 1)
         salt = bytes.fromhex(salt_hex)
     except Exception:
         return get_json_result(
-            data=False, 
-            retcode=RetCode.EXCEPTION_ERROR, 
+            data=False,
+            retcode=RetCode.EXCEPTION_ERROR,
             retmsg="otp storage corrupted"
         )
-    
+
     # Case-insensitive verification: OTP generated uppercase
     calc = hash_code(otp.upper(), salt)
     if calc != stored_hash:
@@ -1143,58 +1132,113 @@ def forget(request: ForgetPasswordRequest, db: Session = Depends(get_db)):
             attempts = int(REDIS_CONN.get(k_attempts) or 0) + 1
         except Exception:
             attempts = 1
-        
+
         REDIS_CONN.set(k_attempts, attempts, OTP_TTL_SECONDS)
-        
+
         if attempts >= ATTEMPT_LIMIT:
             REDIS_CONN.set(k_lock, int(time.time()), ATTEMPT_LOCK_SECONDS)
-        
+
         return get_json_result(
-            data=False, 
-            retcode=RetCode.AUTHENTICATION_ERROR, 
+            data=False,
+            retcode=RetCode.AUTHENTICATION_ERROR,
             retmsg="invalid otp"
         )
-    
-    # Success: consume OTP and reset password
+
+    # Success: consume OTP and set verified flag
     REDIS_CONN.delete(k_code)
     REDIS_CONN.delete(k_attempts)
     REDIS_CONN.delete(k_last)
     REDIS_CONN.delete(k_lock)
-    
+
+    # Set verified flag with limited TTL
+    try:
+        REDIS_CONN.set(verified_key(email), "1", OTP_TTL_SECONDS)
+    except Exception:
+        return get_json_result(
+            data=False,
+            retcode=RetCode.SERVER_ERROR,
+            retmsg="failed to set verification state"
+        )
+
+    return get_json_result(
+        data=True,
+        retcode=RetCode.SUCCESS,
+        retmsg="otp verified"
+    )
+
+
+@router.post("/forget/reset-password", summary="重置密码")
+def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """
+    OTP验证成功后重置密码
+
+    该接口需要在 /forget/verify-otp 验证成功后调用。
+
+    参数:
+    - request: ResetPasswordRequest对象
+        - email: str 用户的邮箱地址
+        - new_password: str 新密码
+        - confirm_new_password: str 确认新密码
+
+    返回:
+    - 成功时返回 data=True
+    - 失败时返回错误信息
+    """
+    email = request.email.strip() if request.email else ""
+    new_pwd = request.new_password
+    new_pwd2 = request.confirm_new_password
+
+    # Check verified flag first
+    if not REDIS_CONN.get(verified_key(email)):
+        return get_json_result(
+            data=False,
+            retcode=RetCode.AUTHENTICATION_ERROR,
+            retmsg="email not verified"
+        )
+
+    if not all([email, new_pwd, new_pwd2]):
+        return get_json_result(
+            data=False,
+            retcode=RetCode.ARGUMENT_ERROR,
+            retmsg="email and passwords are required"
+        )
+
+    if new_pwd != new_pwd2:
+        return get_json_result(
+            data=False,
+            retcode=RetCode.ARGUMENT_ERROR,
+            retmsg="passwords do not match"
+        )
+
+    users = UserService.query(db, email=email)
+    if not users:
+        return get_json_result(
+            data=False,
+            retcode=RetCode.DATA_ERROR,
+            retmsg="invalid email"
+        )
+
+    user = users[0]
+
+    # Reset password
     try:
         UserService.update_user_password(db, user.id, new_pwd)
     except Exception as e:
         logging.exception(e)
         return get_json_result(
-            data=False, 
-            retcode=RetCode.EXCEPTION_ERROR, 
-            retmsg="failed to reset password"
-        )
-    
-    # Auto login (reuse login flow)
-    user.access_token = get_uuid()
-    login_user(user)
-    user.update_time = current_timestamp()
-    user.update_date = datetime_format(datetime.now())
-    
-    db.add(user)
-    try:
-        db.commit()
-        msg = "Password reset successful. Logged in."
-        
-        # Generate JWT token
-        jwt_token = manager.create_access_token(data={"sub": email})
-        
-        return construct_response(
-            data=user.to_dict(), 
-            auth=jwt_token, 
-            retmsg=msg
-        )
-    except Exception as e:
-        db.rollback()
-        logging.exception(e)
-        return get_json_result(
             data=False,
             retcode=RetCode.EXCEPTION_ERROR,
-            retmsg="failed to save user session"
+            retmsg="failed to reset password"
         )
+
+    # Clear verified flag
+    try:
+        REDIS_CONN.delete(verified_key(email))
+    except Exception:
+        pass
+
+    return get_json_result(
+        data=True,
+        retcode=RetCode.SUCCESS,
+        retmsg="Password reset successful."
+    )

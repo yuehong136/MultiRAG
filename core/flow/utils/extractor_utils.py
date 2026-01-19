@@ -70,13 +70,7 @@ class FlowExtractor:
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": text}
             ]
-            
-            extracted = await asyncio.to_thread(
-                llm_model.chat,
-                msg[0]["content"],
-                msg[1:],
-                {"temperature": temperature, "max_tokens": max_tokens}
-            )
+            extracted = asyncio.run(llm_model.async_chat(system=msg[0]["content"], history=msg[1:], gen_conf={"temperature": temperature, "max_tokens": max_tokens}))
             
             # 添加字段
             new_chunk = chunk.copy()

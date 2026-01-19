@@ -8,6 +8,20 @@
             "rank": "999",
             "llm": [
                 {
+                    "llm_name": "gpt-5.2-pro",
+                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
+                    "max_tokens": 400000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "gpt-5.2",
+                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
+                    "max_tokens": 400000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
                     "llm_name": "gpt-5.1",
                     "tags": "LLM,CHAT,400k,IMAGE2TEXT",
                     "max_tokens": 400000,
@@ -374,6 +388,13 @@
                     "llm_name": "Moonshot-Kimi-K2-Instruct",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 131072,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "deepseek-v3.2",
+                    "tags": "LLM,CHAT,128K",
+                    "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
                 },
@@ -3228,43 +3249,43 @@
         {
             "name": "BaiduYiyan",
             "logo": "",
-            "tags": "LLM",
+            "tags": "LLM,IMAGE2TEXT",
             "status": "1",
             "rank": "880",
             "llm": [
                 {
-                    "llm_name": "ernie-4.5-8k-preview",
-                    "tags": "LLM,CHAT,8k",
-                    "max_tokens": 2048,
+                    "llm_name": "ernie-4.5-turbo-128k",
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
                 },
                 {
-                    "llm_name": "ernie-4.5-turbo-vl-32k",
+                    "llm_name": "ernie-5.0-thinking-preview",
+                    "tags": "LLM,CHAT,119k",
+                    "max_tokens": 119000,
+                    "mdl_type": "image2text",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "ernie-x1.1-preview",
+                    "tags": "LLM,CHAT,64k",
+                    "max_tokens": 64000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "ernie-4.5-turbo-vl",
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
+                    "mdl_type": "image2text",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "ernie-4.5-vl-28b-a3b",
                     "tags": "LLM,IMAGE2TEXT,32k",
                     "max_tokens": 32768,
                     "mdl_type": "image2text"
-                },
-                {
-                    "llm_name": "ernie-4.0-8k-latest",
-                    "tags": "LLM,CHAT,8k",
-                    "max_tokens": 2048,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "ernie-4.0-turbo-8k-latest",
-                    "tags": "LLM,CHAT,8k",
-                    "max_tokens": 2048,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "ernie-4.0-turbo-128k",
-                    "tags": "LLM,CHAT,128k",
-                    "max_tokens": 4096,
-                    "mdl_type": "chat",
-                    "is_tools": true
                 }
             ]
         },
@@ -5578,6 +5599,14 @@
                     "mdl_type": "reranker"
                 }
             ]
+        },
+        {
+            "name": "MinerU",
+            "logo": "",
+            "tags": "OCR",
+            "status": "1",
+            "rank": "900",
+            "llm": []
         }
     ]
 }

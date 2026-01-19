@@ -19,6 +19,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form, Body, Request
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from urllib.parse import quote
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
@@ -29,6 +30,7 @@ from starlette.status import (
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, FileType
+from api.apps import manager
 from common.constants import VALID_TASK_STATUS, TaskStatus, ParserType
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
@@ -40,20 +42,19 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
-from deepdoc.parser.html_parser import RAGFlowHtmlParser
 from api.common.check_team_permission import check_kb_team_permission
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result, get_data_error_result, server_error_response
-from common.misc_utils import get_uuid
-from common.constants import RetCode
 from api.utils.file_utils import filename_type, thumbnail
-from common.file_utils import get_project_base_directory
 from api.utils.web_utils import CONTENT_TYPE_MAP, html2pdf, is_valid_url
-from core.nlp import search, rag_tokenizer
+from common.misc_utils import get_uuid
+from common.metadata_utils import meta_filter, convert_conditions
+from common.constants import RetCode
+from common.file_utils import get_project_base_directory
 from common import settings
-from api.apps import manager
+from core.nlp import search, rag_tokenizer
+from deepdoc.parser.html_parser import RAGFlowHtmlParser
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
 
 router = APIRouter()
 
@@ -322,10 +323,18 @@ class CreateDocumentRequest(BaseModel):
     kb_id: str = Field(..., description="知识库ID")
 
 
+class MetadataCondition(BaseModel):
+    """元数据过滤条件"""
+    logic: str = Field(default="and", description="逻辑运算符: and 或 or")
+    conditions: list[dict] = Field(default=[], description="条件列表，每个条件包含 name, comparison_operator, value")
+
+
 class DocumentFilter(BaseModel):
     run_status: list[str] | None = []
     types: list[str] | None = []
     suffix: list[str] = []
+    metadata_condition: MetadataCondition | dict | None = Field(default=None, description="元数据过滤条件")
+    metadata: dict | None = Field(default=None, description="元数据过滤，同字段内OR，不同字段间AND")
 
 
 class ChangeStatusRequest(BaseModel):
@@ -477,6 +486,38 @@ class DocumentAnalysisRequest(BaseModel):
     use_cache: bool = Field(default=True, description="是否使用缓存")
 
 
+class MetadataUpdateSelector(BaseModel):
+    """元数据批量更新的选择器"""
+    document_ids: list[str] | None = Field(default=None, description="文档ID列表")
+    metadata_condition: MetadataCondition | dict | None = Field(default=None, description="元数据过滤条件")
+
+
+class MetadataUpdateItem(BaseModel):
+    """元数据更新项"""
+    key: str = Field(..., description="元数据键名")
+    value: Any = Field(..., description="新值")
+    match: Any | None = Field(default=None, description="匹配值（可选）")
+
+
+class MetadataDeleteItem(BaseModel):
+    """元数据删除项"""
+    key: str = Field(..., description="元数据键名")
+    value: Any | None = Field(default=None, description="匹配值（可选，不提供则删除整个键）")
+
+
+class MetadataUpdateRequest(BaseModel):
+    """元数据批量更新请求"""
+    kb_id: str = Field(..., description="知识库ID")
+    selector: MetadataUpdateSelector | None = Field(default=None, description="文档选择器")
+    updates: list[MetadataUpdateItem] | list[dict] = Field(default=[], description="更新操作列表")
+    deletes: list[MetadataDeleteItem] | list[dict] = Field(default=[], description="删除操作列表")
+
+
+class MetadataSummaryRequest(BaseModel):
+    """元数据汇总请求"""
+    kb_id: str = Field(..., description="知识库ID")
+
+
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
 async def upload(
         kb_id: str,
@@ -558,7 +599,7 @@ async def upload(
         ```json
         {
             "status_code": 404,
-            "detail": "Can't find this knowledgebase!"
+            "detail": "Can't find this dataset!"
         }
         ```
 
@@ -659,7 +700,7 @@ async def upload(
     def _upload_sync():
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         if not kb:
-            raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
+            raise HTTPException(status_code=404, detail="Can't find this dataset!")
         if not check_kb_team_permission(db, kb, user.id):
             return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
@@ -751,7 +792,7 @@ def web_crawl(
         ```json
         {
             "status_code": 404,
-            "detail": "Can't find this knowledgebase!"
+            "detail": "Can't find this dataset!"
         }
         ```
 
@@ -856,7 +897,7 @@ def web_crawl(
                                      code=RetCode.ARGUMENT_ERROR)
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        raise HTTPException(status_code=404, detail="Can't find this knowledgebase!")
+        raise HTTPException(status_code=404, detail="Can't find this dataset!")
     if not check_kb_team_permission(db, kb, user.id):
         return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
 
@@ -929,11 +970,11 @@ def create_document(
     try:
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         if not kb:
-            return construct_json_result(data=False, message="Can't find this knowledgebase!",
+            return construct_json_result(data=False, message="Can't find this dataset!",
                                          code=RetCode.ARGUMENT_ERROR)
 
         if DocumentService.query(db, name=req["name"], kb_id=kb_id):
-            return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
+            return construct_json_result(data=False, message="Duplicated document name in the same dataset.",
                                          code=RetCode.ARGUMENT_ERROR)
 
         kb_root_folder = FileService.get_kb_folder(db, kb.tenant_id)
@@ -1044,7 +1085,7 @@ def list_docs(
         ```json
         {
             "retcode": 403,
-            "retmsg": "Only owner of knowledgebase authorized for this operation.",
+            "retmsg": "Only owner of dataset authorized for this operation.",
             "data": false
         }
         ```
@@ -1137,7 +1178,7 @@ def list_docs(
             break
     else:
         return get_json_result(
-            data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+            data=False, retmsg=f'Only owner of dataset authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR)
 
     try:
@@ -1256,7 +1297,7 @@ def list_docs(
         ```json
         {
             "retcode": 403,
-            "retmsg": "Only owner of knowledgebase authorized for this operation.",
+            "retmsg": "Only owner of dataset authorized for this operation.",
             "data": false
         }
         ```
@@ -1375,7 +1416,7 @@ def list_docs(
             break
     else:
         return get_json_result(
-            data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+            data=False, retmsg=f'Only owner of dataset authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR)
 
     # 验证 run_status 参数
@@ -1402,9 +1443,70 @@ def list_docs(
 
     suffix = filter_params.suffix
 
+    # 处理 metadata_condition
+    metadata_condition = filter_params.metadata_condition
+    if metadata_condition and isinstance(metadata_condition, MetadataCondition):
+        metadata_condition = metadata_condition.model_dump()
+    if metadata_condition and not isinstance(metadata_condition, dict):
+        return construct_json_result(
+            data=False,
+            message="metadata_condition must be an object.",
+            code=RetCode.ARGUMENT_ERROR
+        )
+
+    # 处理 metadata 参数
+    metadata = filter_params.metadata
+    if metadata and not isinstance(metadata, dict):
+        return construct_json_result(
+            data=False,
+            message="metadata must be an object.",
+            code=RetCode.ARGUMENT_ERROR
+        )
+
+    doc_ids_filter = None
+    metas = None
+    if metadata_condition or metadata:
+        metas = DocumentService.get_flatted_meta_by_kbs(db, [kb_id])
+
+    if metadata_condition:
+        doc_ids_filter = set(meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and")))
+        if metadata_condition.get("conditions") and not doc_ids_filter:
+            return construct_json_result(data={"total": 0, "docs": []})
+
+    # 处理 metadata 过滤逻辑：同字段内 OR，不同字段间 AND
+    if metadata:
+        metadata_doc_ids = None
+        for key, values in metadata.items():
+            if not values:
+                continue
+            if not isinstance(values, list):
+                values = [values]
+            values = [str(v) for v in values if v is not None and str(v).strip()]
+            if not values:
+                continue
+            key_doc_ids = set()
+            for value in values:
+                key_doc_ids.update(metas.get(key, {}).get(value, []))
+            if metadata_doc_ids is None:
+                metadata_doc_ids = key_doc_ids
+            else:
+                metadata_doc_ids &= key_doc_ids
+            if not metadata_doc_ids:
+                return construct_json_result(data={"total": 0, "docs": []})
+        if metadata_doc_ids is not None:
+            if doc_ids_filter is None:
+                doc_ids_filter = metadata_doc_ids
+            else:
+                doc_ids_filter &= metadata_doc_ids
+            if not doc_ids_filter:
+                return construct_json_result(data={"total": 0, "docs": []})
+
+    if doc_ids_filter is not None:
+        doc_ids_filter = list(doc_ids_filter)
+
     try:
         docs, tol = DocumentService.get_by_kb_id(
-            db, kb_id, page, page_size, orderby, desc, keywords, run_status, types, suffix
+            db, kb_id, page, page_size, orderby, desc, keywords, run_status, types, suffix, doc_ids_filter
         )
         docs = [convert_datetime_to_str(d) for d in docs]
 
@@ -1460,7 +1562,7 @@ def get_filter(
         if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
             break
     else:
-        return get_json_result(data=False, retmsg="Only owner of knowledgebase authorized for this operation.",
+        return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.",
                                retcode=RetCode.OPERATING_ERROR)
 
     keywords = req.get("keywords", "")
@@ -1853,7 +1955,7 @@ def change_status(
 
     - **知识库不存在**:
         ```json
-        "doc_id": {"error": "Can't find this knowledgebase!"}
+        "doc_id": {"error": "Can't find this dataset!"}
         ```
 
     - **数据库更新失败**:
@@ -2012,7 +2114,7 @@ def change_status(
                 continue
             kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
             if not kb:
-                result[doc_id] = {"error": "Can't find this knowledgebase!"}
+                result[doc_id] = {"error": "Can't find this dataset!"}
                 continue
 
             if not DocumentService.update_by_id(db, doc_id, {"status": str(req["status"])}):
@@ -2051,7 +2153,7 @@ def change_auth(
                                          code=RetCode.ARGUMENT_ERROR)
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         if not kb:
-            return construct_json_result(data=False, message="Can't find this knowledgebase!",
+            return construct_json_result(data=False, message="Can't find this dataset!",
                                          code=RetCode.ARGUMENT_ERROR)
         if isinstance(auths, str):
             try:
@@ -2561,7 +2663,7 @@ def rename(
 
         for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
             if d.name == req["name"]:
-                return construct_json_result(data=False, message="Duplicated document name in the same knowledgebase.",
+                return construct_json_result(data=False, message="Duplicated document name in the same dataset.",
                                              code=RetCode.ARGUMENT_ERROR)
 
         if not DocumentService.update_by_id(db, req["doc_id"], {"name": req["name"]}):
@@ -2851,28 +2953,14 @@ def change_parser(
 def get_image(
         image_id: str,
         db: Session = Depends(get_db),
-        user=Depends(manager)
 ):
     try:
         arr = image_id.split("-")
         if len(arr) != 2:
             return get_data_error_result(retmsg="Image not found.")
-        # 分离 bucket 和 name
-        bkt, nm = image_id.split("-")
-
-        # 获取文件内容
+        bkt, nm = arr
         file_content = settings.STORAGE_IMPL.get(bkt, nm)
-
-        # 确认 file_content 是字节流对象
-        if not isinstance(file_content, (bytes, bytearray)):
-            raise HTTPException(status_code=500, detail="Failed to retrieve image content")
-
-        # 将文件内容包装成 BytesIO 对象
-        file_stream = BytesIO(file_content)
-
-        # 返回图片流响应
-        response = StreamingResponse(file_stream, media_type="image/jpeg")
-        return response
+        return Response(content=file_content, media_type="image/jpeg")
     except Exception as e:
         return construct_error_response(e)
 
@@ -3032,6 +3120,133 @@ async def parse(
         )
 
 
+@router.post("/metadata/summary", summary="获取元数据汇总", response_description="成功获取元数据汇总")
+def metadata_summary(
+        request: MetadataSummaryRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """获取知识库中文档元数据的汇总统计。
+
+    返回每个元数据键下各值的出现次数，按次数降序排列。
+
+    - **request.kb_id**: 知识库ID
+    - **返回值**: {"summary": {key: [[value, count], ...], ...}}
+    """
+    kb_id = request.kb_id
+    if not kb_id:
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
+
+    tenants = UserTenantService.query(db, user_id=user.id)
+    for tenant in tenants:
+        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
+            break
+    else:
+        return get_json_result(
+            data=False,
+            retmsg="Only owner of dataset authorized for this operation.",
+            retcode=RetCode.OPERATING_ERROR
+        )
+
+    try:
+        summary = DocumentService.get_metadata_summary(db, kb_id)
+        return get_json_result(data={"summary": summary})
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.post("/metadata/update", summary="批量更新元数据", response_description="成功批量更新元数据")
+def metadata_update(
+        request: MetadataUpdateRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """批量更新或删除文档元数据。
+
+    如果 selector 中的 document_ids 和 metadata_condition 都未提供，则选择知识库中的所有文档。
+    如果同时提供，则取交集。
+
+    - **request.kb_id**: 知识库ID
+    - **request.selector**: 文档选择器
+        - document_ids: 文档ID列表
+        - metadata_condition: 元数据过滤条件
+    - **request.updates**: 更新操作列表
+        - key: 元数据键名
+        - value: 新值
+        - match: 匹配值（可选，对于列表会替换匹配的元素）
+    - **request.deletes**: 删除操作列表
+        - key: 元数据键名
+        - value: 匹配值（可选，对于列表会删除匹配的元素；不提供则删除整个键）
+
+    - **返回值**: {"updated": 更新的文档数, "matched_docs": 匹配的文档数}
+    """
+    kb_id = request.kb_id
+    if not kb_id:
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
+
+    tenants = UserTenantService.query(db, user_id=user.id)
+    for tenant in tenants:
+        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
+            break
+    else:
+        return get_json_result(
+            data=False,
+            retmsg="Only owner of dataset authorized for this operation.",
+            retcode=RetCode.OPERATING_ERROR
+        )
+
+    selector = request.selector or MetadataUpdateSelector()
+    if isinstance(selector, dict):
+        selector = MetadataUpdateSelector(**selector)
+
+    updates = request.updates or []
+    deletes = request.deletes or []
+
+    # 转换 Pydantic 模型为字典
+    updates = [u.model_dump() if hasattr(u, 'model_dump') else u for u in updates]
+    deletes = [d.model_dump() if hasattr(d, 'model_dump') else d for d in deletes]
+
+    metadata_condition = selector.metadata_condition
+    if metadata_condition and isinstance(metadata_condition, MetadataCondition):
+        metadata_condition = metadata_condition.model_dump()
+    if metadata_condition and not isinstance(metadata_condition, dict):
+        return get_json_result(data=False, retmsg="metadata_condition must be an object.", retcode=RetCode.ARGUMENT_ERROR)
+
+    document_ids = selector.document_ids or []
+    if document_ids and not isinstance(document_ids, list):
+        return get_json_result(data=False, retmsg="document_ids must be a list.", retcode=RetCode.ARGUMENT_ERROR)
+
+    for upd in updates:
+        if not isinstance(upd, dict) or not upd.get("key") or "value" not in upd:
+            return get_json_result(data=False, retmsg="Each update requires key and value.", retcode=RetCode.ARGUMENT_ERROR)
+    for d in deletes:
+        if not isinstance(d, dict) or not d.get("key"):
+            return get_json_result(data=False, retmsg="Each delete requires key.", retcode=RetCode.ARGUMENT_ERROR)
+
+    kb_doc_ids = KnowledgebaseService.list_documents_by_ids(db, [kb_id])
+    target_doc_ids = set(kb_doc_ids)
+    if document_ids:
+        invalid_ids = set(document_ids) - set(kb_doc_ids)
+        if invalid_ids:
+            return get_json_result(
+                data=False,
+                retmsg=f"These documents do not belong to dataset {kb_id}: {', '.join(invalid_ids)}",
+                retcode=RetCode.ARGUMENT_ERROR
+            )
+        target_doc_ids = set(document_ids)
+
+    if metadata_condition:
+        metas = DocumentService.get_flatted_meta_by_kbs(db, [kb_id])
+        filtered_ids = set(meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and")))
+        target_doc_ids = target_doc_ids & filtered_ids
+        if metadata_condition.get("conditions") and not target_doc_ids:
+            return get_json_result(data={"updated": 0, "matched_docs": 0})
+
+    target_doc_ids = list(target_doc_ids)
+    updated = DocumentService.batch_update_metadata(db, kb_id, target_doc_ids, updates, deletes)
+    return get_json_result(data={"updated": updated, "matched_docs": len(target_doc_ids)})
+
+
 @router.post("/set_meta", summary="设置文档元数据", response_description="成功设置文档元数据")
 def set_meta(
         request: SetMetaRequest,
@@ -3057,8 +3272,15 @@ def set_meta(
             data=False, retmsg='Meta data should be in Json map format, like {"key": "value"}',
             retcode=RetCode.ARGUMENT_ERROR)
 
-    for value in req["meta"].values():
-        if not isinstance(value, (str, int, float)):
+    for key, value in req["meta"].items():
+        if isinstance(value, list):
+            if not all(isinstance(i, (str, int, float)) for i in value):
+                return get_json_result(
+                    data=False,
+                    retmsg=f"The type is not supported in list: {value}",
+                    retcode=RetCode.ARGUMENT_ERROR,
+                )
+        elif not isinstance(value, (str, int, float)):
             return get_json_result(
                 data=False,
                 retmsg=f"The type is not supported: {value}",

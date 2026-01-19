@@ -9,12 +9,6 @@ multirag:
   # 管理后台是否需要超级管理员权限 (true: 仅超级管理员, false: 所有激活用户)
   admin_require_superuser: false
 
-multimodal_upload_storage:
-  # 指定用于多模态文件上传的存储类型: minio, oss, s3, azure_spn, azure_sas
-  type: "minio"
-  # 指定存储桶名称，如果不填则使用对应存储类型的默认桶
-  bucket: "multimodal-temp"
-
 admin:
   host: ${MULTIRAG_HOST:-0.0.0.0}
   http_port: ${ADMIN_SVR_HTTP_PORT:-8130}
@@ -38,17 +32,13 @@ postgresql:
   stale_timeout: 30
 
 minio:
-  # MinIO服务的用户名
   user: '${MINIO_USER:-minioadmin}'
-  # MinIO服务的密码
   password: '${MINIO_PASSWORD:-12345678}'
-  # MinIO服务的主机名和端口
   host: '${MINIO_HOST:-minio}:9000'
   region: '${MINIO_REGION:-}'
-  # 工作流过程中使用的桶名称
-  workflow_bucket: '${MINIO_WORKFLOW_BUCKET:-multirag-workflow}'
   bucket: '${MINIO_BUCKET:-}'
   prefix_path: '${MINIO_PREFIX_PATH:-}'
+  workflow_bucket: '${MINIO_WORKFLOW_BUCKET:-multirag-workflow}'
 
 azure:
   auth_type: '${AZURE_AUTH_TYPE:-spn}'

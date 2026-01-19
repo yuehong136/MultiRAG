@@ -28,7 +28,6 @@ import json_repair
 import litellm
 import openai
 from openai import AsyncOpenAI, OpenAI
-from openai.lib.azure import AzureOpenAI
 from strenum import StrEnum
 
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
@@ -187,14 +186,15 @@ class Base(ABC):
                     ans = delta_ans
                     total_tokens += tol
                     yield ans
+
+                yield total_tokens
+                return
             except Exception as e:
                 e = await self._exceptions_async(e, attempt)
                 if e:
                     yield e
                     yield total_tokens
                     return
-
-        yield total_tokens
 
     def _length_stop(self, ans):
         if is_chinese([ans]):
@@ -488,15 +488,6 @@ class Base(ABC):
         assert False, "Shouldn't be here."
 
 
-class GptTurbo(Base):
-    _FACTORY_NAME = "OpenAI"
-
-    def __init__(self, key, model_name="gpt-3.5-turbo", base_url="https://api.openai.com/v1", **kwargs):
-        if not base_url:
-            base_url = "https://api.openai.com/v1"
-        super().__init__(key, model_name, base_url, **kwargs)
-
-
 class XinferenceChat(Base):
     _FACTORY_NAME = "Xinference"
 
@@ -525,25 +516,6 @@ class ModelScopeChat(Base):
             raise ValueError("Local llm url cannot be None")
         base_url = urljoin(base_url, "v1")
         super().__init__(key, model_name.split("___")[0], base_url, **kwargs)
-
-
-class AzureChat(Base):
-    _FACTORY_NAME = "Azure-OpenAI"
-
-    def __init__(self, key, model_name, base_url, **kwargs):
-        api_key = json.loads(key).get("api_key", "")
-        api_version = json.loads(key).get("api_version", "2024-02-01")
-        super().__init__(key, model_name, base_url, **kwargs)
-        self.client = AzureOpenAI(api_key=api_key, azure_endpoint=base_url, api_version=api_version)
-        self.model_name = model_name
-
-    @property
-    def _retryable_errors(self) -> set[str]:
-        return {
-            LLMErrorCode.ERROR_RATE_LIMIT,
-            LLMErrorCode.ERROR_SERVER,
-            LLMErrorCode.ERROR_QUOTA,
-        }
 
 
 class BaiChuanChat(Base):
@@ -922,54 +894,6 @@ class SparkChat(Base):
         super().__init__(key, model_version, base_url, **kwargs)
 
 
-class BaiduYiyanChat(Base):
-    _FACTORY_NAME = "BaiduYiyan"
-
-    def __init__(self, key, model_name, base_url=None, **kwargs):
-        super().__init__(key, model_name, base_url=base_url, **kwargs)
-
-        import qianfan
-
-        key = json.loads(key)
-        ak = key.get("yiyan_ak", "")
-        sk = key.get("yiyan_sk", "")
-        self.client = qianfan.ChatCompletion(ak=ak, sk=sk)
-        self.model_name = model_name.lower()
-
-    def _clean_conf(self, gen_conf):
-        gen_conf["penalty_score"] = ((gen_conf.get("presence_penalty", 0) + gen_conf.get("frequency_penalty", 0)) / 2) + 1
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
-        return gen_conf
-
-    def _chat(self, history, gen_conf):
-        system = history[0]["content"] if history and history[0]["role"] == "system" else ""
-        response = self.client.do(model=self.model_name, messages=[h for h in history if h["role"] != "system"], system=system, **gen_conf).body
-        ans = response["result"]
-        return ans, total_token_count_from_response(response)
-
-    def chat_streamly(self, system, history, gen_conf={}, **kwargs):
-        gen_conf["penalty_score"] = ((gen_conf.get("presence_penalty", 0) + gen_conf.get("frequency_penalty", 0)) / 2) + 1
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
-        ans = ""
-        total_tokens = 0
-
-        try:
-            response = self.client.do(model=self.model_name, messages=history, system=system, stream=True, **gen_conf)
-            for resp in response:
-                resp = resp.body
-                ans = resp["result"]
-                total_tokens = total_token_count_from_response(resp)
-
-                yield ans
-
-        except Exception as e:
-            return ans + "\n**ERROR**: " + str(e), 0
-
-        yield total_tokens
-
-
 class GoogleChat(Base):
     _FACTORY_NAME = "Google Cloud"
 
@@ -1227,6 +1151,9 @@ class LiteLLMBase(ABC):
         "MiniMax",
         "DeerAPI",
         "GPUStack",
+        "OpenAI",
+        "Azure-OpenAI",
+        "BaiduYiyan",
     ]
 
     def __init__(self, key, model_name, base_url=None, **kwargs):
@@ -1245,13 +1172,12 @@ class LiteLLMBase(ABC):
         self.toolcall_sessions = {}
 
         # Factory specific fields
-        if self.provider == SupportedLiteLLMProvider.Bedrock:
-            self.bedrock_ak = json.loads(key).get("bedrock_ak", "")
-            self.bedrock_sk = json.loads(key).get("bedrock_sk", "")
-            self.bedrock_region = json.loads(key).get("bedrock_region", "")
-        elif self.provider == SupportedLiteLLMProvider.OpenRouter:
+        if self.provider == SupportedLiteLLMProvider.OpenRouter:
             self.api_key = json.loads(key).get("api_key", "")
             self.provider_order = json.loads(key).get("provider_order", "")
+        elif self.provider == SupportedLiteLLMProvider.Azure_OpenAI:
+            self.api_key = json.loads(key).get("api_key", "")
+            self.api_version = json.loads(key).get("api_version", "2024-02-01")
 
     def _get_delay(self):
         return self.base_delay * random.uniform(10, 150)
@@ -1651,11 +1577,13 @@ class LiteLLMBase(ABC):
         elif self.provider == SupportedLiteLLMProvider.Bedrock:
             completion_args.pop("api_key", None)
             completion_args.pop("api_base", None)
+            bedrock_credentials = { "aws_region_name": self.bedrock_region }
+            if self.bedrock_ak and self.bedrock_sk:
+                bedrock_credentials["aws_access_key_id"] = self.bedrock_ak
+                bedrock_credentials["aws_secret_access_key"] = self.bedrock_sk
             completion_args.update(
                 {
-                    "aws_access_key_id": self.bedrock_ak,
-                    "aws_secret_access_key": self.bedrock_sk,
-                    "aws_region_name": self.bedrock_region,
+                    "bedrock_credentials": bedrock_credentials,
                 }
             )
         elif self.provider == SupportedLiteLLMProvider.OpenRouter:
@@ -1681,6 +1609,16 @@ class LiteLLMBase(ABC):
             completion_args.update(
                 {
                     "api_base": self.base_url,
+                }
+            )
+        elif self.provider == SupportedLiteLLMProvider.Azure_OpenAI:
+            completion_args.pop("api_key", None)
+            completion_args.pop("api_base", None)
+            completion_args.update(
+                {
+                    "api_key": self.api_key,
+                    "api_base": self.base_url,
+                    "api_version": self.api_version,
                 }
             )
 

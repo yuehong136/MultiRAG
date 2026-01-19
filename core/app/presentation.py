@@ -28,6 +28,7 @@ from PyPDF2 import PdfReader as pdf2_read
 from core.app.naive import by_plaintext, PARSERS
 from core.nlp import rag_tokenizer
 from core.nlp import tokenize, is_english
+from common.parser_config_utils import normalize_layout_recognizer
 from deepdoc.parser import PdfParser, PptParser, PlainParser
 
 
@@ -287,7 +288,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             res.append(d)
         return res
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
+        layout_recognizer, parser_model_name = normalize_layout_recognizer(
+            parser_config.get("layout_recognize", "DeepDOC")
+        )
 
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"
@@ -305,6 +308,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             callback=callback,
             pdf_cls=Pdf,
             layout_recognizer=layout_recognizer,
+            mineru_llm_name=parser_model_name,
             **kwargs
         )
 
@@ -319,8 +323,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         for pn, (txt, img) in enumerate(sections):
             d = copy.deepcopy(doc)
             pn += from_page
-            if img:
-                d["image"] = img
+            if not isinstance(img, Image.Image):
+                img = None
+            d["image"] = img
             d["page_num_int"] = [pn + 1]
             d["top_int"] = [0]
             d["position_int"] = [(pn + 1, 0, img.size[0] if img else 0, 0, img.size[1] if img else 0)]

@@ -19,7 +19,6 @@ from io import BytesIO
 from typing import Literal
 from functools import reduce
 
-import trio
 import numpy as np
 from PIL import Image
 
@@ -28,7 +27,6 @@ from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from deepdoc.parser import ExcelParser
 from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
-from deepdoc.parser.mineru_parser import MinerUParser
 from deepdoc.parser.ppt_parser import RAGFlowPptParser
 from deepdoc.parser.tcadp_parser import TCADPParser
 from tika import parser as tika_parser
@@ -40,36 +38,9 @@ from core.llm.cv import Base as VLM
 logger = logging.getLogger(__name__)
 
 
-def _get_running_backend():
-    """检测当前运行的异步后端（trio 或 asyncio）"""
-    try:
-        # 检查是否在 trio 环境
-        trio.lowlevel.current_task()
-        return "trio"
-    except RuntimeError:
-        pass
-    
-    try:
-        # 检查是否在 asyncio 环境
-        asyncio.get_running_loop()
-        return "asyncio"
-    except RuntimeError:
-        pass
-    
-    return None
-
-
 async def _to_thread(func, *args, **kwargs):
-    """兼容 trio 和 asyncio 的 to_thread"""
-    backend = _get_running_backend()
-    
-    if backend == "trio":
-        return await trio.to_thread.run_sync(lambda: func(*args, **kwargs))
-    elif backend == "asyncio":
-        return await asyncio.to_thread(func, *args, **kwargs)
-    else:
-        # 没有事件循环，同步调用
-        return func(*args, **kwargs)
+    """在线程中执行阻塞函数"""
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 
 class FlowParser:
@@ -94,32 +65,33 @@ class FlowParser:
         filename: str,
         binary: bytes,
         tenant_id: str,
-        callback=None
+        callback=None,
+        llm_id: str = ""
     ) -> dict:
         """
         音频解析（参考 core/flow/parser/parser.py._audio 第 598-615 行）
-        
+
         Returns:
             {"output_format": "text", "text": "转录文本"}
         """
         if callback:
             callback(0.1, "Start to work on an audio.")
-        
+
         _, ext = os.path.splitext(filename)
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmpf:
             tmpf.write(binary)
             tmpf.flush()
             tmp_path = os.path.abspath(tmpf.name)
-        
+
         try:
             # 检查音频文件信息
             audio_size = os.path.getsize(tmp_path)
             logger.info(f"[AUDIO] Audio file: {filename}, size: {audio_size} bytes, path: {tmp_path}")
-            
+
             with db_connection() as db:
-                seq2txt_mdl = LLMBundle(db, tenant_id, LLMType.SPEECH2TEXT)
+                seq2txt_mdl = LLMBundle(db, tenant_id, LLMType.SPEECH2TEXT, llm_name=llm_id)
             
-            logger.info(f"[AUDIO] Calling SPEECH2TEXT model: {seq2txt_mdl.model_name if hasattr(seq2txt_mdl, 'model_name') else 'unknown'}")
+            logger.info(f"[AUDIO] Calling SPEECH2TEXT model: {seq2txt_mdl.mdl.model_name if hasattr(seq2txt_mdl, 'mdl') else 'unknown'}")
             
             try:
                 txt = await _to_thread(seq2txt_mdl.transcription, tmp_path)
@@ -181,7 +153,21 @@ class FlowParser:
         if callback:
             callback(0.1, "Start to work on a PDF.")
         
-        method = (parse_method or "deepdoc").lower()
+        # 解析 mineru@模型名 或 模型名@mineru 格式（参考 parser.py 第 234-246 行）
+        raw_method = parse_method or "deepdoc"
+        method = raw_method
+        parser_model_name = None
+        if isinstance(raw_method, str):
+            lowered = raw_method.lower()
+            if lowered.endswith("@mineru"):
+                parser_model_name = raw_method.rsplit("@", 1)[0]
+                method = "MinerU"
+            else:
+                method = lowered
+        
+        # 将 parser_model_name 传入 method_kwargs 以便 mineru 分支使用
+        if parser_model_name and "mineru_llm_name" not in method_kwargs:
+            method_kwargs["mineru_llm_name"] = parser_model_name
         
         if method == "deepdoc":
             parser = RAGFlowPdfParser()
@@ -193,37 +179,49 @@ class FlowParser:
             bboxes = [{"text": t} for t, _ in lines]
         
         elif method == "mineru":
-            # MinerU 解析（参考第 223-243 行）
-            mineru_executable = (
-                method_kwargs.get("mineru_executable")
-                or os.environ.get("MINERU_EXECUTABLE", "mineru")
-            )
-            mineru_api = (
-                method_kwargs.get("mineru_api")
-                or os.environ.get("MINERU_APISERVER", "http://host.docker.internal:9987")
-            )
-            mineru_output_dir = method_kwargs.get("mineru_output_dir") or os.environ.get("MINERU_OUTPUT_DIR", "")
-            mineru_delete_output = method_kwargs.get("mineru_delete_output")
-            if mineru_delete_output is None:
-                mineru_delete_output = bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1)))
-            else:
-                if isinstance(mineru_delete_output, str):
-                    mineru_delete_output = mineru_delete_output.lower() not in {"0", "false", "no"}
-                else:
-                    mineru_delete_output = bool(mineru_delete_output)
-            pdf_parser = MinerUParser(mineru_path=mineru_executable, mineru_api=mineru_api)
+            # MinerU 解析（参考 core/flow/parser/parser.py 第 252-293 行）
+            # 新方式：通过 LLMBundle 获取 OCR 模型，支持 mineru@模型名 格式
+            from api.db.services.tenant_llm_service import TenantLLMService
             
-            ok, reason = pdf_parser.check_installation()
-            if not ok:
-                raise RuntimeError(f"MinerU not found or server not accessible: {reason}. Please install it via: pip install -U 'mineru[core]'.")
+            # 解析 mineru@模型名 或 模型名@mineru 格式
+            parser_model_name = method_kwargs.get("mineru_llm_name")
             
+            def resolve_mineru_llm_name():
+                # 优先使用显式配置的模型名
+                if parser_model_name:
+                    return parser_model_name
+                
+                if not tenant_id:
+                    return None
+                
+                # 从数据库获取配置的 MinerU 模型
+                with db_connection() as db:
+                    env_name = TenantLLMService.ensure_mineru_from_env(db, tenant_id)
+                    candidates = TenantLLMService.query(
+                        db, tenant_id=tenant_id, 
+                        llm_factory="MinerU", 
+                        mdl_type=LLMType.OCR.value
+                    )
+                    if candidates:
+                        return candidates[0].llm_name
+                    return env_name
+            
+            resolved_model_name = resolve_mineru_llm_name()
+            if not resolved_model_name:
+                raise RuntimeError("MinerU model not configured. Please add MinerU in Model Providers or set MINERU_* env.")
+            
+            with db_connection() as db:
+                ocr_model = LLMBundle(db, tenant_id, LLMType.OCR, llm_name=resolved_model_name, lang=lang)
+                pdf_parser = ocr_model.mdl
+            
+            mineru_parse_method = method_kwargs.get("mineru_parse_method", "raw")
             lines, _ = await _to_thread(
                 pdf_parser.parse_pdf,
                 filepath=filename,
                 binary=binary,
                 callback=callback,
-                output_dir=mineru_output_dir,
-                delete_output=mineru_delete_output
+                parse_method=mineru_parse_method,
+                lang=conf.get("lang", "Chinese"),
             )
             
             bboxes = []
@@ -657,14 +655,16 @@ class FlowParser:
         output_format: Literal["json", "text"] = "json",
         callback=None,
         table_context_size: int = 0,
-        image_context_size: int = 0
+        image_context_size: int = 0,
+        delimiter: str | None = None
     ) -> dict:
         """
-        Markdown 解析（参考 core/flow/parser/parser.py._markdown 第 521-565 行）
+        Markdown 解析（参考 core/flow/parser/parser.py._markdown 第 553-597 行）
         
         Args:
             table_context_size: 表格上下文 token 数（0 表示不添加）
             image_context_size: 图片上下文 token 数（0 表示不添加）
+            delimiter: 分隔符（用于切分段落）
         
         Returns:
             {"output_format": "json", "json": [sections with images]}
@@ -673,15 +673,26 @@ class FlowParser:
             callback(0.1, "Start to work on a markdown.")
         
         markdown_parser = MarkdownParser()
-        sections, tables = await _to_thread(markdown_parser, filename, binary, separate_tables=False)
+        # 使用 return_section_images=True 获取图片（参考 parser.py 第 564-569 行）
+        sections, tables, section_images = await _to_thread(
+            markdown_parser, 
+            filename, 
+            binary, 
+            separate_tables=False,
+            delimiter=delimiter,
+            return_section_images=True
+        )
         
         if output_format == "json":
             json_results = []
             
-            for section_text, _ in sections:
+            for idx, (section_text, _) in enumerate(sections):
                 json_result = {"text": section_text}
                 
-                images = markdown_parser.get_pictures(section_text) if section_text else None
+                # 从 section_images 获取图片（参考 parser.py 第 580-587 行）
+                images = []
+                if section_images and len(section_images) > idx and section_images[idx] is not None:
+                    images.append(section_images[idx])
                 if images:
                     combined_image = reduce(concat_img, images) if len(images) > 1 else images[0]
                     json_result["image"] = combined_image
@@ -775,7 +786,7 @@ class FlowParser:
         callback=None
     ) -> dict:
         """
-        视频解析（参考 core/flow/parser/parser.py._video 第 617-626 行）
+        视频解析（参考 core/flow/parser/parser.py._video 第 618-628 行）
         
         Returns:
             {"output_format": "text", "text": "视频描述"}
@@ -786,8 +797,8 @@ class FlowParser:
         with db_connection() as db:
             cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_name=llm_name)
         
-        # 视频分析（传递 video_bytes 和 filename）
-        txt = await _to_thread(cv_mdl.chat, "", [], {}, video_bytes=binary, filename=filename)
+        # 视频分析（使用 async_chat，参考 parser.py 修改）
+        txt = await cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=binary, filename=filename)
         
         return {"output_format": "text", "text": txt}
     
@@ -951,6 +962,7 @@ async def parse_file(
     slides_config: dict | None = None,
     markdown_config: dict | None = None,
     video_config: dict | None = None,
+    audio_config: dict | None = None,
     callback=None
 ) -> dict:
     """
@@ -958,7 +970,7 @@ async def parse_file(
 
     参考：core/flow/parser/parser.py._invoke 的逻辑（第 758-799 行）
     根据文件扩展名自动路由到对应的解析方法
-    
+
     Args:
         filename: 文件名
         binary: 文件二进制内容
@@ -971,6 +983,7 @@ async def parse_file(
         slides_config: PPT 配置 {"parse_method": "deepdoc", "output_format": "json", "table_context_size": 0, "image_context_size": 0}
         markdown_config: Markdown 配置 {"output_format": "json", "table_context_size": 0, "image_context_size": 0}
         video_config: 视频配置 {"llm_id": "..."}
+        audio_config: 音频配置 {"llm_id": "..."}
         callback: 进度回调
     
     Returns:
@@ -1004,11 +1017,13 @@ async def parse_file(
         markdown_config = {"output_format": "json"}
     if video_config is None:
         video_config = {}
-    
+    if audio_config is None:
+        audio_config = {"llm_id": ""}
+
     # 根据扩展名路由（参考 core/flow/parser/parser.py 第 701-743 行）
     # 音频文件
     if ext in ["mp3", "wav", "aac", "flac", "ogg", "aiff", "au", "midi", "wma", "da", "wave", "ape"]:
-        return await FlowParser.parse_audio(filename, binary, tenant_id, callback)
+        return await FlowParser.parse_audio(filename, binary, tenant_id, callback, llm_id=audio_config.get("llm_id", ""))
     
     # PDF 文件
     elif ext == "pdf":
@@ -1072,7 +1087,8 @@ async def parse_file(
             markdown_config.get("output_format", "json"),
             callback,
             table_context_size=markdown_config.get("table_context_size", 0),
-            image_context_size=markdown_config.get("image_context_size", 0)
+            image_context_size=markdown_config.get("image_context_size", 0),
+            delimiter=markdown_config.get("delimiter")
         )
     
     # 图片文件

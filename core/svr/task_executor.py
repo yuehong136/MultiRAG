@@ -1,11 +1,10 @@
+import asyncio
 import random
 import socket
 import sys
 import threading
 import time
 import concurrent.futures
-
-import json_repair
 
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -16,10 +15,11 @@ from core.utils.base64_image import image2id
 from core.utils.raptor_utils import should_skip_raptor, get_skip_reason
 from common.log_utils import init_root_logger
 from common.config_utils import show_configs
+from common.metadata_utils import update_metadata_to, metadata_schema
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from graphrag.general.index import run_graphrag_for_kb
 from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
-from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text
+from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text, gen_metadata
 import logging
 from datetime import datetime
 import json
@@ -38,7 +38,6 @@ from sqlalchemy.orm import Session
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
 import signal
-import trio
 import exceptiongroup
 import faulthandler
 from common.constants import LLMType, ParserType, PipelineTaskType, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
@@ -56,7 +55,6 @@ from common.token_utils import num_tokens_from_string, truncate
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 from common.exceptions import TaskCanceledException
 from common import settings
-from common.misc_utils import check_and_install_mineru
 from graphrag.utils import chat_limiter
 
 BATCH_SIZE = 64
@@ -133,13 +131,13 @@ FAILED_TASKS = 0
 CURRENT_TASKS = {}
 
 MAX_CONCURRENT_TASKS = int(os.environ.get('MAX_CONCURRENT_TASKS', "5"))
-MAX_CONCURRENT_CHUNK_BUILDERS = int(os.environ.get('MAX_CONCURRENT_CHUNK_BUILDERS', "1"))
+MAX_CONCURRENT_CHUNK_BUILDERS = int(os.environ.get('MAX_CONCURRENT_CHUNK_BUILDERS', "3"))
 MAX_CONCURRENT_MINIO = int(os.environ.get('MAX_CONCURRENT_MINIO', '10'))
-task_limiter = trio.Semaphore(MAX_CONCURRENT_TASKS)
-chunk_limiter = trio.CapacityLimiter(MAX_CONCURRENT_CHUNK_BUILDERS)
-embed_limiter = trio.CapacityLimiter(MAX_CONCURRENT_CHUNK_BUILDERS)
-minio_limiter = trio.CapacityLimiter(MAX_CONCURRENT_MINIO)
-kg_limiter = trio.CapacityLimiter(2)
+task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+chunk_limiter = asyncio.Semaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
+embed_limiter = asyncio.Semaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
+minio_limiter = asyncio.Semaphore(MAX_CONCURRENT_MINIO)
+kg_limiter = asyncio.Semaphore(2)
 WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get('WORKER_HEARTBEAT_TIMEOUT', '120'))
 stop_event = threading.Event()
 
@@ -391,7 +389,7 @@ async def collect(db: Session):
 
 
 async def get_storage_binary(bucket, name):
-    return await trio.to_thread.run_sync(lambda: settings.STORAGE_IMPL.get(bucket, name))
+    return await asyncio.to_thread(settings.STORAGE_IMPL.get, bucket, name)
 
 
 @timeout(60 * 80, 1)
@@ -422,11 +420,19 @@ async def build_chunks(task, progress_callback, db: Session):
 
     try:
         async with chunk_limiter:
-            cks = await trio.to_thread.run_sync(lambda: chunker.chunk(task["name"], binary=binary, from_page=task["from_page"],
-                                to_page=task["to_page"], lang=task["language"], callback=progress_callback,
-                                kb_id=task["kb_id"], parser_config=task["parser_config"], tenant_id=task["tenant_id"]))
-        logging.info(
-            "Chunking({}) {}/{}".format(timer() - st, task["location"], task["name"]))
+            cks = await asyncio.to_thread(
+                chunker.chunk,
+                task["name"],
+                binary=binary,
+                from_page=task["from_page"],
+                to_page=task["to_page"],
+                lang=task["language"],
+                callback=progress_callback,
+                kb_id=task["kb_id"],
+                parser_config=task["parser_config"],
+                tenant_id=task["tenant_id"],
+            )
+        logging.info("Chunking({}) {}/{}".format(timer() - st, task["location"], task["name"]))
     except TaskCanceledException:
         raise
     except Exception as e:
@@ -439,7 +445,7 @@ async def build_chunks(task, progress_callback, db: Session):
         "doc_id": task["doc_id"],
         "kb_id": [str(task["kb_id"])]
     }
-    # 如果 row["auth"] 有值，则将其添加到 doc 字典中
+
     if "auth" in task and task["auth"]:
         doc["auth"] = task["auth"]
     if task.get("pagerank"):
@@ -469,9 +475,17 @@ async def build_chunks(task, progress_callback, db: Session):
             logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
             raise
 
-    async with trio.open_nursery() as nursery:
-        for ck in cks:
-            nursery.start_soon(upload_to_minio, doc, ck)
+    tasks = []
+    for ck in cks:
+        tasks.append(asyncio.create_task(upload_to_minio(doc, ck)))
+    try:
+        await asyncio.gather(*tasks, return_exceptions=False)
+    except Exception as e:
+        logging.error(f"MINIO PUT({task['name']}) got exception: {e}")
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
     el = timer() - st
     logging.info("MINIO PUT({}) cost {:.3f} s".format(task["name"], el))
@@ -484,17 +498,28 @@ async def build_chunks(task, progress_callback, db: Session):
         async def doc_keyword_extraction(chat_mdl, d, topn):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "keywords", {"topn": topn})
             if not cached:
+                if has_canceled(task["id"]):
+                    progress_callback(-1, msg="Task has been canceled.")
+                    return
                 async with chat_limiter:
-                    cached = await trio.to_thread.run_sync(lambda: keyword_extraction(chat_mdl, d["content_with_weight"], topn))
+                    cached = await keyword_extraction(chat_mdl, d["content_with_weight"], topn)
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "keywords", {"topn": topn})
             if cached:
                 d["important_kwd"] = cached.split(",")
                 d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
             return
 
-        async with trio.open_nursery() as nursery:
-            for d in docs:
-                nursery.start_soon(doc_keyword_extraction, chat_mdl, d, task["parser_config"]["auto_keywords"])
+        tasks = []
+        for d in docs:
+            tasks.append(asyncio.create_task(doc_keyword_extraction(chat_mdl, d, task["parser_config"]["auto_keywords"])))
+        try:
+            await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            logging.error("Error in doc_keyword_extraction: {}".format(e))
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         progress_callback(msg="Keywords generation {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
 
     if task["parser_config"].get("auto_questions", 0):
@@ -505,16 +530,71 @@ async def build_chunks(task, progress_callback, db: Session):
         async def doc_question_proposal(chat_mdl, d, topn):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "question", {"topn": topn})
             if not cached:
+                if has_canceled(task["id"]):
+                    progress_callback(-1, msg="Task has been canceled.")
+                    return
                 async with chat_limiter:
-                    cached = await trio.to_thread.run_sync(lambda: question_proposal(chat_mdl, d["content_with_weight"], topn))
+                    cached = await question_proposal(chat_mdl, d["content_with_weight"], topn)
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "question", {"topn": topn})
             if cached:
                 d["question_kwd"] = cached.split("\n")
                 d["question_tks"] = rag_tokenizer.tokenize("\n".join(d["question_kwd"]))
+        tasks = []
+        for d in docs:
+            tasks.append(asyncio.create_task(doc_question_proposal(chat_mdl, d, task["parser_config"]["auto_questions"])))
+        try:
+            await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            logging.error("Error in doc_question_proposal", exc_info=e)
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        progress_callback(msg="Question generation {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
 
-        async with trio.open_nursery() as nursery:
-            for d in docs:
-                nursery.start_soon(doc_question_proposal, chat_mdl, d, task["parser_config"]["auto_questions"])
+
+    if task["parser_config"].get("enable_metadata", False) and task["parser_config"].get("metadata"):
+        st = timer()
+        progress_callback(msg="Start to generate meta-data for every chunk ...")
+        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
+
+        async def gen_metadata_task(chat_mdl, d):
+            cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "metadata", task["parser_config"]["metadata"])
+            if not cached:
+                if has_canceled(task["id"]):
+                    progress_callback(-1, msg="Task has been canceled.")
+                    return
+                if has_canceled(task["id"]):
+                    progress_callback(-1, msg="Task has been canceled.")
+                    return
+                async with chat_limiter:
+                    cached = await gen_metadata(chat_mdl, metadata_schema(task["parser_config"]["metadata"]), d["content_with_weight"])
+                set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "metadata", task["parser_config"]["metadata"])
+            if cached:
+                d["metadata_obj"] = cached
+
+        tasks = []
+        for d in docs:
+            tasks.append(asyncio.create_task(gen_metadata_task(chat_mdl, d)))
+        try:
+            await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            logging.error("Error in doc_question_proposal", exc_info=e)
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        metadata = {}
+        for ck in cks:
+            metadata = update_metadata_to(metadata, ck["metadata_obj"])
+            del ck["metadata_obj"]
+        if metadata:
+            doc = DocumentService.get_by_id(task["doc_id"])
+            if doc:
+                if isinstance(doc.meta_fields, str):
+                    doc.meta_fields = json.loads(doc.meta_fields)
+                metadata = update_metadata_to(metadata, doc.meta_fields)
+                DocumentService.update_by_id(task["doc_id"], {"meta_fields": metadata})
         progress_callback(msg="Question generation {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
 
     if task["kb_parser_config"].get("tag_kb_ids", []):
@@ -548,20 +628,36 @@ async def build_chunks(task, progress_callback, db: Session):
         async def doc_content_tagging(chat_mdl, d, topn_tags):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], all_tags, {"topn": topn_tags})
             if not cached:
+                if has_canceled(task["id"]):
+                    progress_callback(-1, msg="Task has been canceled.")
+                    return
                 picked_examples = random.choices(examples, k=2) if len(examples) > 2 else examples
                 if not picked_examples:
                     picked_examples.append({"content": "This is an example", TAG_FLD: {'example': 1}})
                 async with chat_limiter:
-                    cached = await trio.to_thread.run_sync(lambda: content_tagging(chat_mdl, d["content_with_weight"], all_tags, picked_examples, topn=topn_tags))
+                    cached = await content_tagging(
+                        chat_mdl,
+                        d["content_with_weight"],
+                        all_tags,
+                        picked_examples,
+                        topn_tags,
+                    )
                 if cached:
                     cached = json.dumps(cached)
             if cached:
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, all_tags, {"topn": topn_tags})
                 d[TAG_FLD] = json.loads(cached)
-
-        async with trio.open_nursery() as nursery:
-            for d in docs_to_tag:
-                nursery.start_soon(doc_content_tagging, chat_mdl, d, topn_tags)
+        tasks = []
+        for d in docs_to_tag:
+            tasks.append(asyncio.create_task(doc_content_tagging(chat_mdl, d, topn_tags)))
+        try:
+            await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            logging.error("Error tagging docs: {}".format(e))
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         progress_callback(msg="Tagging {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
 
     return docs
@@ -575,7 +671,7 @@ def build_TOC(task, docs, progress_callback):
         d.get("page_num_int", 0)[0] if isinstance(d.get("page_num_int", 0), list) else d.get("page_num_int", 0),
         d.get("top_int", 0)[0] if isinstance(d.get("top_int", 0), list) else d.get("top_int", 0)
     ))
-    toc: list[dict] = trio.run(run_toc_from_text, [d["content_with_weight"] for d in docs], chat_mdl, progress_callback)
+    toc: list[dict] = asyncio.run(run_toc_from_text([d["content_with_weight"] for d in docs], chat_mdl, progress_callback))
     logging.info("------------ T O C -------------\n" + json.dumps(toc, ensure_ascii=False, indent='  '))
     ii = 0
     while ii < len(toc):
@@ -602,9 +698,39 @@ def build_TOC(task, docs, progress_callback):
     return None
 
 
+async def _get_embedding_dimension(row: dict) -> int:
+    """获取 embedding 模型的向量维度"""
+    default_dim = 768
+    if not row.get("embd_id") or not row.get("tenant_id"):
+        return default_dim
+
+    try:
+        with db_connection() as db:
+            embedding_model = LLMBundle(
+                db, row["tenant_id"], LLMType.EMBEDDING,
+                llm_name=row["embd_id"], lang=row.get("language", "en")
+            )
+            sample_vec, _ = embedding_model.encode(["测试文本"])
+            # 注意：sample_vec 是 numpy 数组，不能直接用 if sample_vec 判断
+            if len(sample_vec) > 0:
+                dim = len(sample_vec[0])
+                logging.info(f"当前embedding模型维度: {dim}")
+                return dim
+    except Exception as e:
+        logging.warning(f"获取嵌入模型维度失败，使用默认维度 {default_dim}: {e}")
+
+    return default_dim
+
+
 async def init_kb(row, kb_name):
     """
-    初始化知识库，创建集合/索引
+    初始化知识库，创建集合/索引。
+
+    所有数据库的 createIdx / create_collection_with_mapping 内部都已实现幂等检查：
+    - ES/OpenSearch: if self.indexExist(): return True
+    - Infinity: ConflictType.Ignore
+    - OceanBase: _try_with_lock()
+    - Milvus: if self.has_collection(): return
 
     Args:
         row: 任务数据行
@@ -614,69 +740,50 @@ async def init_kb(row, kb_name):
     kb_id = row.get("kb_id", "")
     db_type = settings.docStoreConn.dbType()
 
-    # 对于 ES/OpenSearch/Infinity，使用通用的 indexExist/createIdx 接口
-    if db_type != "milvus":
-        if await trio.to_thread.run_sync(lambda: settings.docStoreConn.indexExist(idxnm, kb_id)):
+    # 快速检查：集合/索引已存在则直接返回（避免不必要的 embedding 调用）
+    if db_type == "milvus":
+        if await asyncio.to_thread(settings.docStoreConn.has_collection, idxnm):
             return
-        # 获取向量维度（用于 createIdx）
-        vector_dim = 768  # 默认维度
-        try:
-            if "embd_id" in row and row["tenant_id"]:
-                with db_connection() as db:
-                    embedding_model = LLMBundle(db, row["tenant_id"], LLMType.EMBEDDING,
-                                                llm_name=row["embd_id"], lang=row.get("language", "en"))
-                    sample_vec, _ = embedding_model.encode(["测试文本"])
-                    if len(sample_vec) > 0:
-                        vector_dim = len(sample_vec[0])
-                        logging.info(f"当前embedding模型维度: {vector_dim}")
-        except Exception as e:
-            logging.warning(f"获取嵌入模型维度失败，使用默认维度 {vector_dim}: {str(e)}")
-        # 创建索引
-        await trio.to_thread.run_sync(lambda: settings.docStoreConn.createIdx(idxnm, kb_id, vector_dim))
-        return
+    else:
+        if await asyncio.to_thread(settings.docStoreConn.indexExist, idxnm, kb_id):
+            return
 
-    # 对于 Milvus，使用特有的 has_collection/create_collection_with_mapping 接口
-    if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(idxnm)):
-        return
+    # 获取向量维度
+    vector_dim = await _get_embedding_dimension(row)
 
-    # 加载基础mapping配置
+    # 创建集合/索引（底层已有幂等保护）
+    if db_type == "milvus":
+        await _create_milvus_collection(idxnm, vector_dim)
+    else:
+        await asyncio.to_thread(settings.docStoreConn.createIdx, idxnm, kb_id, vector_dim)
+
+
+async def _create_milvus_collection(collection_name: str, vector_dim: int):
+    """创建 Milvus 集合（内部已有幂等检查）"""
     mapping_path = os.path.join(get_project_base_directory(), "configs", "mapping.json")
-    mapping = await trio.to_thread.run_sync(lambda: json.load(open(mapping_path, 'r')))
 
-    # 获取当前嵌入模型的向量维度
-    vector_dim = None
-    try:
-        if "embd_id" in row and row["tenant_id"]:
-            with db_connection() as db:
-                embedding_model = LLMBundle(db, row["tenant_id"], LLMType.EMBEDDING,
-                                            llm_name=row["embd_id"], lang=row.get("language", "en"))
-                # 生成一个示例向量以获取维度
-                sample_vec, _ = embedding_model.encode(["测试文本"])
-                if len(sample_vec) > 0:
-                    vector_dim = len(sample_vec[0])
-                    logging.info(f"当前embedding模型维度: {vector_dim}")
-                else:
-                    logging.warning("无法确定嵌入模型维度，将使用默认维度")
-    except Exception as e:
-        logging.warning(f"获取嵌入模型维度失败: {str(e)}")
+    def load_mapping():
+        with open(mapping_path, 'r') as f:
+            return json.load(f)
 
-    # todo 后续可以按照ragflow一样，直接内置多个向量字段，避免先执行向量化获取维度动态创建
-    # 自动维度字典
-    auto_dimensions = {}
+    mapping = await asyncio.to_thread(load_mapping)
 
-    # 更新mapping中的向量维度
-    if vector_dim:
-        # 更新标准vector字段的维度
-        for template in mapping["mappings"]["dynamic_templates"]:
-            if "standard_vector_template" in template:
-                template["standard_vector_template"]["mapping"]["dims"] = vector_dim
+    # 更新 mapping 中的向量维度
+    for template in mapping["mappings"]["dynamic_templates"]:
+        if "standard_vector_template" in template:
+            template["standard_vector_template"]["mapping"]["dims"] = vector_dim
 
-        # 添加维度特定字段
-        auto_dimensions["vector"] = vector_dim
-        auto_dimensions[f"q_{vector_dim}_vec"] = vector_dim
+    # 构建自动维度字典
+    auto_dimensions = {
+        "vector": vector_dim,
+        f"q_{vector_dim}_vec": vector_dim
+    }
 
-    # 创建集合
-    await trio.to_thread.run_sync(lambda: settings.docStoreConn.create_collection_with_mapping(idxnm, mapping, auto_dimensions))
+    # 创建集合（内部会检查集合是否已存在）
+    await asyncio.to_thread(
+        settings.docStoreConn.create_collection_with_mapping,
+        collection_name, mapping, auto_dimensions
+    )
 
 
 def convert_data_types(data, schema):
@@ -766,7 +873,7 @@ def convert_data_types(data, schema):
 
 
 async def get_schema(collection_name):
-    schema = await trio.to_thread.run_sync(lambda: settings.docStoreConn.describe_collection(collection_name))
+    schema = await asyncio.to_thread(settings.docStoreConn.describe_collection, collection_name)
     return schema
 
 
@@ -798,7 +905,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
 
     tk_count = 0
     if len(tts) == len(cnts):
-        vts, c = await trio.to_thread.run_sync(lambda: mdl.encode(tts[0: 1]))
+        vts, c = await asyncio.to_thread(mdl.encode, tts[0:1])
         tts = np.tile(vts[0], (len(cnts), 1))
         tk_count += c
 
@@ -810,7 +917,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
     cnts_ = np.array([])
     for i in range(0, len(cnts), settings.EMBEDDING_BATCH_SIZE):
         async with embed_limiter:
-            vts, c = await trio.to_thread.run_sync(lambda: batch_encode(cnts[i: i + settings.EMBEDDING_BATCH_SIZE]))
+            vts, c = await asyncio.to_thread(batch_encode, cnts[i : i + settings.EMBEDDING_BATCH_SIZE])
         if len(cnts_) == 0:
             cnts_ = vts
         else:
@@ -902,7 +1009,7 @@ async def run_dataflow(db: Session, task: dict):
             prog = 0.8
             for i in range(0, len(texts), settings.EMBEDDING_BATCH_SIZE):
                 async with embed_limiter:
-                    vts, c = await trio.to_thread.run_sync(lambda: batch_encode(texts[i: i + settings.EMBEDDING_BATCH_SIZE]))
+                    vts, c = await asyncio.to_thread(batch_encode, texts[i : i + settings.EMBEDDING_BATCH_SIZE])
                 if len(vects) == 0:
                     vects = vts
                 else:
@@ -923,36 +1030,6 @@ async def run_dataflow(db: Session, task: dict):
 
 
     metadata = {}
-    def dict_update(meta):
-        nonlocal metadata
-        if not meta:
-            return
-        if isinstance(meta, str):
-            try:
-                meta = json_repair.loads(meta)
-            except Exception:
-                logging.error("Meta data format error.")
-                return
-        if not isinstance(meta, dict):
-            return
-        for k, v in meta.items():
-            if isinstance(v, list):
-                v = [vv for vv in v if isinstance(vv, str)]
-                if not v:
-                    continue
-            if not isinstance(v, list) and not isinstance(v, str):
-                continue
-            if k not in metadata:
-                metadata[k] = v
-                continue
-            if isinstance(metadata[k], list):
-                if isinstance(v, list):
-                    metadata[k].extend(v)
-                else:
-                    metadata[k].append(v)
-            else:
-                metadata[k] = v
-
     for ck in chunks:
         ck["doc_id"] = doc_id
         ck["kb_id"] = [str(task["kb_id"])]
@@ -977,7 +1054,7 @@ async def run_dataflow(db: Session, task: dict):
                 ck["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(ck["content_ltks"])
             del ck["summary"]
         if "metadata" in ck:
-            dict_update(ck["metadata"])
+            metadata = update_metadata_to(metadata, ck["metadata"])
             del ck["metadata"]
         if "content_with_weight" not in ck:
             ck["content_with_weight"] = ck["text"]
@@ -987,12 +1064,12 @@ async def run_dataflow(db: Session, task: dict):
             del ck["positions"]
 
     if metadata:
-        e, doc = DocumentService.get_by_id(doc_id)
+        e, doc = DocumentService.get_by_id(db, doc_id)
         if e:
             if isinstance(doc.meta_fields, str):
                 doc.meta_fields = json.loads(doc.meta_fields)
-            dict_update(doc.meta_fields)
-            DocumentService.update_by_id(doc_id, {"meta_fields": metadata})
+            metadata = update_metadata_to(metadata, doc.meta_fields)
+            DocumentService.update_by_id(db, doc_id, {"meta_fields": metadata})
 
     start_ts = timer()
     set_progress(task_id, prog=0.82, msg="[DOC Engine]:\nStart to index...")
@@ -1004,15 +1081,15 @@ async def run_dataflow(db: Session, task: dict):
     
     e = await insert_milvus(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, task_id, 0, 100000000), collection_name, schema)
     if not e:
-        PipelineOperationLogService.create(document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+        PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
         return
 
     time_cost = timer() - start_ts
     task_time_cost = timer() - task_start_ts
-    set_progress(task_id, prog=1., msg="Indexing done ({:.2f}s). Task done ({:.2f}s)".format(time_cost, task_time_cost))
-    DocumentService.increment_chunk_num(doc_id, task_dataset_id, embedding_token_consumption, len(chunks), task_time_cost)
+    set_progress(db, task_id, prog=1., msg="Indexing done ({:.2f}s). Task done ({:.2f}s)".format(time_cost, task_time_cost))
+    DocumentService.increment_chunk_num(db, doc_id, task_dataset_id, embedding_token_consumption, len(chunks), task_time_cost)
     logging.info("[Done], chunks({}), token({}), elapsed:{:.2f}".format(len(chunks),  embedding_token_consumption, task_time_cost))
-    PipelineOperationLogService.create(document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+    PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
 
 
 @timeout(3600)
@@ -1521,7 +1598,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
         callback = lambda prog, msg: None
 
     try:
-        # ⭐ 参考 PipelineAnalysisService 的算法，在 trio 环境中实现
+        # ⭐ 参考 PipelineAnalysisService 的算法，在 asyncio 环境中实现
 
         # 1. 获取文档 chunks
         callback(prog=0.05, msg="读取文档内容...")
@@ -1588,6 +1665,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 word_config = parser_config_dict.get("word", {"output_format": "json"})
                 email_config = parser_config_dict.get("email", {"output_format": "json", "fields": None})
                 video_config = parser_config_dict.get("video", {"llm_id": config.get("video_llm_name")})
+                audio_config = parser_config_dict.get("audio", {"llm_id": config.get("audio_llm_name")})
                 slides_config = parser_config_dict.get("slides", {"parse_method": "deepdoc", "output_format": "json"})
                 markdown_config = parser_config_dict.get("markdown", {"output_format": "json"})
                 logging.info(f"Using parser_config dictionary mode")
@@ -1643,6 +1721,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm", "tcadp parser"]:
                         video_llm_name = candidate
                 video_config = {"llm_id": video_llm_name}
+                # Audio 配置
+                audio_llm_name = config.get("audio_llm_name")
+                if not audio_llm_name:
+                    candidate = config.get("parse_method")
+                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm", "tcadp parser"]:
+                        audio_llm_name = candidate
+                audio_config = {"llm_id": audio_llm_name}
                 # PPT/Slides 支持的 parse_method: deepdoc, tcadp parser
                 slides_parse_method = "deepdoc"
                 if parse_method.lower() == "tcadp parser":
@@ -1678,6 +1763,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 slides_config=slides_config,
                 markdown_config=markdown_config,
                 video_config=video_config,
+                audio_config=audio_config,
                 callback=_parser_callback
             )
 
@@ -1853,9 +1939,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
                     for chunk in chapter_chunks:
                         text = chunk.get("content_with_weight", "")
-                        embd_result, _ = await trio.to_thread.run_sync(
-                            lambda t=text: embd_mdl.encode([t])
-                        )
+                        embd_result, _ = await asyncio.to_thread(embd_mdl.encode, [text])
                         embd = embd_result[0] if len(embd_result) > 0 else np.array([])
                         if len(embd) > 0:
                             chapter_raptor_inputs.append((text, embd))
@@ -1960,15 +2044,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     embd = chunk.get("embeddings")
 
                     if embd is None or (isinstance(embd, np.ndarray) and embd.size == 0):
-                        embd_result, _ = await trio.to_thread.run_sync(
-                            lambda t=text: embd_mdl.encode([t])
-                        )
+                        embd_result, _ = await asyncio.to_thread(embd_mdl.encode, [text])
                         embd = embd_result[0] if len(embd_result) > 0 else np.array([])
 
                     if len(embd) > 0:
                         raptor_inputs.append((text, embd))
 
-                # ⚠️ 关键：禁用 usage tracking（避免 trio 并行任务冲突）
+                # ⚠️ 关键：禁用 usage tracking（避免 asyncio 并行任务冲突）
                 # 参考 DocumentAnalysisService._analyze_with_raptor 第 611-613 行
                 original_db_chat = chat_mdl.db
                 original_db_embd = embd_mdl.db
@@ -2058,12 +2140,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     ]
                     _, msg = message_fit_in(msg, chat_mdl.max_length)
 
-                    raw_output = await trio.to_thread.run_sync(
-                        lambda: chat_mdl.chat(msg[0]["content"], msg[1:], {
+                    def do_chat_single():
+                        return chat_mdl.chat(msg[0]["content"], msg[1:], {
                             "temperature": field_config.get("temperature", 0.1),
                             "max_tokens": field_config.get("max_tokens", 512)
                         })
-                    )
+
+                    raw_output = await asyncio.to_thread(do_chat_single)
 
                     # 清理输出（参考 keyword_extraction）
                     raw_output = re.sub(r"^.*</think>", "", raw_output, flags=re.DOTALL).strip()
@@ -2080,12 +2163,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                         ]
                         _, msg = message_fit_in(msg, chat_mdl.max_length)
 
-                        result = await trio.to_thread.run_sync(
-                            lambda m=msg: chat_mdl.chat(m[0]["content"], m[1:], {
+                        def do_chat_batch(m):
+                            return chat_mdl.chat(m[0]["content"], m[1:], {
                                 "temperature": field_config.get("temperature", 0.1),
                                 "max_tokens": field_config.get("max_tokens", 512)
                             })
-                        )
+
+                        result = await asyncio.to_thread(do_chat_batch, msg)
 
                         result = re.sub(r"^.*</think>", "", result, flags=re.DOTALL).strip()
                         if result.find("**ERROR**") < 0:
@@ -2206,10 +2290,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         try:
             db_type = settings.docStoreConn.dbType()
             if db_type == "milvus":
-                await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
-                    rows=converted_batch,
-                    indexName=collection_name
-                ))
+                await asyncio.to_thread(settings.docStoreConn.insert, rows=converted_batch, indexName=collection_name)
             else:
                 es_batch = []
                 for doc in converted_batch:
@@ -2217,11 +2298,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                     if "id" not in es_doc and "pk" in es_doc:
                         es_doc["id"] = es_doc["pk"]
                     es_batch.append(es_doc)
-                await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
-                    documents=es_batch,
-                    indexName=collection_name,
-                    knowledgebaseId=task_dataset_id
-                ))
+                await asyncio.to_thread(settings.docStoreConn.insert, documents=es_batch, indexName=collection_name, knowledgebaseId=task_dataset_id,)
         except Exception as e:
             logging.warning(f"Insert mother chunks error: {e}")
 
@@ -2251,10 +2328,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             if db_type == "milvus":
                 # Milvus 使用 collection_name 和 data 参数
                 # insert 返回 list[str]：空列表表示成功，非空列表包含错误信息
-                doc_store_errors = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
-                    rows=converted_batch,
-                    indexName=collection_name
-                ))
+                doc_store_errors = await asyncio.to_thread(settings.docStoreConn.insert, rows=converted_batch, indexName=collection_name)
                 # 检查是否有错误（非空列表表示有错误）
                 if doc_store_errors:
                     error_message = f"Insert failed: {doc_store_errors}"
@@ -2272,12 +2346,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                     if "id" not in es_doc and "pk" in es_doc:
                         es_doc["id"] = es_doc["pk"]
                     es_batch.append(es_doc)
-
-                errors = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
-                    documents=es_batch,
-                    indexName=collection_name,
-                    knowledgebaseId=task_dataset_id
-                ))
+                errors = await asyncio.to_thread(settings.docStoreConn.insert, documents=es_batch, indexName=collection_name, knowledgebaseId=task_dataset_id,)
                 if errors:
                     logging.warning(f"Insert errors: {errors}")
                 # 记录成功插入
@@ -2291,14 +2360,12 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 "Insert chunk error, detail info please check log file. Please check doc store status!"
             )
             try:
-                if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
+                if await asyncio.to_thread(settings.docStoreConn.has_collection, collection_name):
                     # 删除本批次已经尝试插入的记录
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
                             doc_id = chunk['doc_id']
-                            await trio.to_thread.run_sync(
-                                lambda d=doc_id: delete_chunks_by_doc_id(collection_name, d, task_dataset_id)
-                            )
+                            await asyncio.to_thread(delete_chunks_by_doc_id, collection_name, doc_id, task_dataset_id)
             except Exception as e:
                 logging.exception(f"Failed to rollback inserted chunks: {e}")
             logging.exception("Insert error:")
@@ -2325,18 +2392,16 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             logging.warning(f"insert_milvus update_chunk_ids failed since task {task_id} is unknown.")
             # 如果TaskService中没有这个task，则删除已插入数据并退出
             try:
-                if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
+                if await asyncio.to_thread(settings.docStoreConn.has_collection, collection_name):
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
                             doc_id = chunk['doc_id']
-                            await trio.to_thread.run_sync(
-                                lambda d=doc_id: delete_chunks_by_doc_id(collection_name, d, task_dataset_id)
-                            )
+                            await asyncio.to_thread(delete_chunks_by_doc_id, collection_name, doc_id, task_dataset_id)
             except Exception as e:
                 logging.exception(f"Failed to rollback after task not found: {e}")
-            async with trio.open_nursery() as nursery:
+            async with asyncio.TaskGroup() as tg:
                 for chunk_id in chunk_ids:
-                    nursery.start_soon(delete_image, task_dataset_id, chunk_id)
+                    tg.create_task(delete_image(task_dataset_id, chunk_id))
             progress_callback(-1, msg=f"Chunk updates failed since task {task_id} is unknown.")
             return False
 
@@ -2382,7 +2447,7 @@ async def do_handle_task(db, task):
         task_tenant_id = task["tenant_id"]
         task_embedding_id = task["embd_id"]
         task_language = task["language"]
-        task_llm_id = task["llm_id"]
+        task_llm_id = task["parser_config"].get("llm_id") or task["llm_id"]
 
         # 解析配置
         task_data = json.loads(task.get("chunk_ids", "{}"))
@@ -2432,7 +2497,7 @@ async def do_handle_task(db, task):
     task_tenant_id = task["tenant_id"]
     task_embedding_id = task["embd_id"]
     task_language = task["language"]
-    task_llm_id = task["llm_id"]
+    task_llm_id = task["parser_config"].get("llm_id") or task["llm_id"]
     task_dataset_id = task.get("kb_id")  # analyze_v2 之外的任务必须有 kb_id
     task_doc_id = task["doc_id"]
     task_document_name = task.get("name", "unknown")
@@ -2479,7 +2544,7 @@ async def do_handle_task(db, task):
     if task_type == "raptor":
         kb = KnowledgebaseService.get_by_id(db, task_dataset_id)
         if not kb:
-            progress_callback(prog=-1.0, msg="Cannot found valid knowledgebase for RAPTOR task")
+            progress_callback(prog=-1.0, msg="Cannot found valid dataset for RAPTOR task")
             return
 
         kb_parser_config = kb.parser_config
@@ -2531,7 +2596,7 @@ async def do_handle_task(db, task):
     elif task_type == "graphrag":
         kb = KnowledgebaseService.get_by_id(db, task_dataset_id)
         if not kb:
-            progress_callback(prog=-1.0, msg="Cannot found valid knowledgebase for GraphRAG task")
+            progress_callback(prog=-1.0, msg="Cannot found valid dataset for GraphRAG task")
             return
 
         kb_parser_config = kb.parser_config
@@ -2706,10 +2771,8 @@ async def do_handle_task(db, task):
     # 如果任务被取消，则清理已插入的数据并返回
     if TaskService.do_cancel(db, task_id):
         try:
-            if await trio.to_thread.run_sync(lambda: settings.docStoreConn.has_collection(collection_name)):
-                await trio.to_thread.run_sync(
-                    lambda: delete_chunks_by_doc_id(collection_name, task_doc_id, task_dataset_id)
-                )
+            if await asyncio.to_thread(settings.docStoreConn.has_collection, collection_name):
+                await asyncio.to_thread(delete_chunks_by_doc_id, collection_name, task_doc_id, task_dataset_id)
         except Exception as e:
             return e
         return
@@ -2745,7 +2808,7 @@ async def handle_task():
         try:
             redis_msg, task = await collect(db)
             if not task:
-                await trio.sleep(5)
+                await asyncio.sleep(5)
                 return
 
             task_type = task["task_type"]
@@ -2894,7 +2957,7 @@ async def report_status():
             logging.exception("report_status got exception")
         finally:
             redis_lock.release()
-        await trio.sleep(30)
+        await asyncio.sleep(30)
 
 
 async def task_manager():
@@ -2905,6 +2968,19 @@ async def task_manager():
 
 
 async def main():
+    # Stagger executor startup to prevent connection storm to Infinity
+    # Extract worker number from CONSUMER_NAME (e.g., "task_executor_abc123_5" -> 5)
+    try:
+        worker_num = int(CONSUMER_NAME.rsplit("_", 1)[-1])
+        # Add random delay: base delay + worker_num * 2.0s + random jitter
+        # This spreads out connection attempts over several seconds
+        startup_delay = worker_num * 2.0 + random.uniform(0, 0.5)
+        if startup_delay > 0:
+            logging.info(f"Staggering startup by {startup_delay:.2f}s to prevent connection storm")
+            await asyncio.sleep(startup_delay)
+    except (ValueError, IndexError):
+        pass  # Non-standard consumer name, skip delay
+
     logging.info(r"""
 ======================================================================
     ____                      __  _
@@ -2919,7 +2995,6 @@ async def main():
     show_configs()
     settings.init_settings()
     settings.check_and_install_torch()
-    check_and_install_mineru()
     logging.info(f'settings.EMBEDDING_CFG: {settings.EMBEDDING_CFG}')
     settings.print_rag_settings()
     if sys.platform != "win32":
@@ -2932,15 +3007,23 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    async with trio.open_nursery() as nursery:
-        nursery.start_soon(report_status)
+    report_task = asyncio.create_task(report_status())
+    tasks = []
+    try:
         while not stop_event.is_set():
             await task_limiter.acquire()
-            nursery.start_soon(task_manager)
+            t = asyncio.create_task(task_manager())
+            tasks.append(t)
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        report_task.cancel()
+        await asyncio.gather(report_task, return_exceptions=True)
     logging.error("BUG!!! You should not reach here!!!")
 
 
 if __name__ == "__main__":
     faulthandler.enable()
     init_root_logger(CONSUMER_NAME)
-    trio.run(main)
+    asyncio.run(main())

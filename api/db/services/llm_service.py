@@ -116,7 +116,7 @@ class LLMBundle(LLM4Tenant):
         if self.db is not None:
             llm_name = getattr(self, "llm_name", None)
             if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, llm_name):
-                logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
+                logging.error("LLMBundle.encode can't update token usage for <tenant redacted>/EMBEDDING used_tokens: {}".format(used_tokens))
 
         if self.langfuse:
             generation.update(usage_details={"total_tokens": used_tokens})
@@ -133,7 +133,7 @@ class LLMBundle(LLM4Tenant):
         emd, used_tokens = self.mdl.encode_queries(query)
         llm_name = getattr(self, "llm_name", None)
         if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, llm_name):
-            logging.error(f"Can't update token usage for {self.tenant_id}/EMBEDDING used_tokens: {used_tokens}")
+            logging.error("LLMBundle.encode_queries can't update token usage for <tenant redacted>/EMBEDDING used_tokens: {}".format(used_tokens))
 
         if self.langfuse:
             generation.update(usage_details={"total_tokens": used_tokens})
@@ -385,13 +385,19 @@ class LLMBundle(LLM4Tenant):
             yield item
 
     def chat(self, system: str, history: list, gen_conf: dict[str, Any] | None = None, **kwargs) -> str:
-        """同步 chat 方法，内部调用异步版本"""
+        """
+        同步 chat 方法，内部调用异步版本
+        2026.01.15 已弃用
+        """
         if gen_conf is None:
             gen_conf = {}
         return self._run_coroutine_sync(self.async_chat(system, history, gen_conf, **kwargs))
 
     def chat_streamly(self, system: str, history: list, gen_conf: dict[str, Any] | None = None, **kwargs):
-        """同步 chat_streamly 方法，内部调用异步版本"""
+        """
+        同步 chat_streamly 方法，内部调用异步版本
+        2026.01.15 已弃用
+        """
         if gen_conf is None:
             gen_conf = {}
         ans = ""

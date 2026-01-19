@@ -12,7 +12,7 @@ import random
 from datetime import datetime
 
 import xxhash
-from sqlalchemy import asc, desc, select, update, or_
+from sqlalchemy import asc, delete, desc, select, update, or_
 from sqlalchemy.orm import Session
 
 from api.utils.db_utils import bulk_insert_into_db
@@ -58,83 +58,70 @@ class TaskService(CommonService):
     model = Task
 
     @classmethod
-    def get_task(cls, db: Session, task_id, doc_ids=[]):
+    def get_task(cls, db: Session, task_id: str, doc_ids: list[str] | None = None):
         # 先获取任务的doc_id，判断是否需要使用doc_ids[0]
-        task_record = db.query(cls.model.doc_id).filter(cls.model.id == task_id).first()
+        stmt = select(cls.model.doc_id).where(cls.model.id == task_id)
+        task_record = db.execute(stmt).scalar_one_or_none()
         if not task_record:
             return None
-        
+
         # 根据任务的doc_id决定用哪个ID去JOIN Document表
-        task_doc_id = task_record[0]
+        task_doc_id = task_record
         use_first_doc = task_doc_id in [CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID] and doc_ids
-        
+
+        # 定义查询字段
+        fields = [
+            cls.model.id,
+            cls.model.doc_id,
+            cls.model.from_page,
+            cls.model.to_page,
+            cls.model.retry_count,
+            Document.kb_id,
+            Document.parser_id,
+            Document.parser_config,
+            Document.name,
+            Document.type,
+            Document.location,
+            Document.size,
+            Document.auth,
+            Knowledgebase.tenant_id,
+            Knowledgebase.language,
+            Knowledgebase.embd_id,
+            Knowledgebase.pagerank,
+            Knowledgebase.parser_config.label("kb_parser_config"),
+            Tenant.img2txt_id,
+            Tenant.asr_id,
+            Tenant.llm_id,
+            cls.model.update_time,
+        ]
+
+        # 根据条件选择不同的 JOIN 方式
         if use_first_doc:
             # 对于fake_doc_id任务，使用doc_ids[0]去获取Document配置
-            query = db.query(
-                cls.model.id,
-                cls.model.doc_id,
-                cls.model.from_page,
-                cls.model.to_page,
-                cls.model.retry_count,
-                Document.kb_id,
-                Document.parser_id,
-                Document.parser_config,
-                Document.name,
-                Document.type,
-                Document.location,
-                Document.size,
-                Document.auth,
-                Knowledgebase.tenant_id,
-                Knowledgebase.language,
-                Knowledgebase.embd_id,
-                Knowledgebase.pagerank,
-                Knowledgebase.parser_config.label("kb_parser_config"),
-                Tenant.img2txt_id,
-                Tenant.asr_id,
-                Tenant.llm_id,
-                cls.model.update_time,
-            ).select_from(cls.model
-                         ).join(Document, Document.id == doc_ids[0]
-                                ).join(Knowledgebase, Document.kb_id == Knowledgebase.id
-                                       ).join(Tenant, Knowledgebase.tenant_id == Tenant.id
-                                              ).filter(cls.model.id == task_id)
+            stmt = (
+                select(*fields)
+                .select_from(cls.model)
+                .join(Document, Document.id == doc_ids[0])
+                .join(Knowledgebase, Document.kb_id == Knowledgebase.id)
+                .join(Tenant, Knowledgebase.tenant_id == Tenant.id)
+                .where(cls.model.id == task_id)
+            )
         else:
             # 普通任务，使用Task.doc_id去JOIN
-            query = db.query(
-                cls.model.id,
-                cls.model.doc_id,
-                cls.model.from_page,
-                cls.model.to_page,
-                cls.model.retry_count,
-                Document.kb_id,
-                Document.parser_id,
-                Document.parser_config,
-                Document.name,
-                Document.type,
-                Document.location,
-                Document.size,
-                Document.auth,
-                Knowledgebase.tenant_id,
-                Knowledgebase.language,
-                Knowledgebase.embd_id,
-                Knowledgebase.pagerank,
-                Knowledgebase.parser_config.label("kb_parser_config"),
-                Tenant.img2txt_id,
-                Tenant.asr_id,
-                Tenant.llm_id,
-                cls.model.update_time,
-            ).select_from(cls.model
-                         ).join(Document, cls.model.doc_id == Document.id
-                                ).join(Knowledgebase, Document.kb_id == Knowledgebase.id
-                                       ).join(Tenant, Knowledgebase.tenant_id == Tenant.id
-                                              ).filter(cls.model.id == task_id)
+            stmt = (
+                select(*fields)
+                .select_from(cls.model)
+                .join(Document, cls.model.doc_id == Document.id)
+                .join(Knowledgebase, Document.kb_id == Knowledgebase.id)
+                .join(Tenant, Knowledgebase.tenant_id == Tenant.id)
+                .where(cls.model.id == task_id)
+            )
 
-        docs = query.all()
-        if not docs:
+        result = db.execute(stmt).mappings().first()
+        if not result:
             return None
 
-        # 将结果转换为字典
-        task = {col["name"]: value for col, value in zip(query.column_descriptions, docs[0])}
+        task = dict(result)
 
         msg = f"\n{datetime.now().strftime('%H:%M:%S')} Task has been received."
         prog = random.random() / 10.0
@@ -147,10 +134,12 @@ class TaskService(CommonService):
         # task["progress"] = prog
 
         # 将更新写入数据库
-        db.query(cls.model).filter(cls.model.id == task["id"]).update({
-            "progress_msg": cls.model.progress_msg + msg,
-            "progress": prog
-        })
+        stmt = (
+            update(cls.model)
+            .where(cls.model.id == task["id"])
+            .values(progress_msg=cls.model.progress_msg + msg, progress=prog)
+        )
+        db.execute(stmt)
 
         db.commit()
 
@@ -191,34 +180,39 @@ class TaskService(CommonService):
     @classmethod
     def get_ongoing_doc_name(cls, db: Session):
         with db.begin():
-            docs = db.query(
-                Document.id,
-                Document.kb_id,
-                Document.location,
-                File.parent_id
-            ).join(File2Document, File2Document.document_id == Document.id, isouter=True
-                   ).join(File, File2Document.file_id == File.id, isouter=True
-                          ).filter(
-                Document.status == StatusEnum.VALID.value,
-                Document.run == TaskStatus.RUNNING.value,
-                Document.type != FileType.VIRTUAL.value,
-                cls.model.progress < 1,
-                cls.model.create_time >= current_timestamp() - 1000 * 600,
-            ).all()
-
+            stmt = (
+                select(
+                    Document.id,
+                    Document.kb_id,
+                    Document.location,
+                    File.parent_id
+                )
+                .join(File2Document, File2Document.document_id == Document.id, isouter=True)
+                .join(File, File2Document.file_id == File.id, isouter=True)
+                .where(
+                    Document.status == StatusEnum.VALID.value,
+                    Document.run == TaskStatus.RUNNING.value,
+                    Document.type != FileType.VIRTUAL.value,
+                    cls.model.progress < 1,
+                    cls.model.create_time >= current_timestamp() - 1000 * 600,
+                )
+            )
+            docs = db.execute(stmt).all()
+            # Assuming docs = list(docs.dicts())
+            if docs:
+                kb_config = docs[0]['kb_parser_config']  # Dict from Knowledgebase.parser_config
+                mineru_method = kb_config.get('mineru_parse_method', 'auto')
+                mineru_formula = kb_config.get('mineru_formula_enable', True)
+                mineru_table = kb_config.get('mineru_table_enable', True)
+                print(mineru_method, mineru_formula, mineru_table)
             if not docs:
                 return []
 
             return list(
-                set(
-                    [
-                        (
-                            d.parent_id if d.parent_id else d.kb_id,
-                            d.location,
-                        )
-                        for d in docs
-                    ]
-                )
+                {
+                    (d.parent_id if d.parent_id else d.kb_id, d.location)
+                    for d in docs
+                }
             )
 
     @classmethod
@@ -306,8 +300,7 @@ class TaskService(CommonService):
             logging.warning("Update_progress error: task not found")
             return
 
-        if os.environ.get("MACOS"):
-            # 直接更新逻辑
+        def do_update():
             if info.get("progress_msg"):
                 progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], 3000)
                 db.execute(
@@ -327,27 +320,12 @@ class TaskService(CommonService):
                     )
                     .values(progress=prog)
                 )
+
+        if os.environ.get("MACOS"):
+            do_update()
         else:
             with DatabaseLock.create(db, f"update_progress_{id}"):
-                if info.get("progress_msg"):
-                    progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], 3000)
-                    db.execute(
-                        update(cls.model)
-                        .where(cls.model.id == id)
-                        .values(progress_msg=progress_msg)
-                    )
-
-                if "progress" in info:
-                    prog = info["progress"]
-                    db.execute(
-                        update(cls.model)
-                        .where(
-                            (cls.model.id == id) &
-                            (cls.model.progress != -1) &
-                            or_(prog == -1, prog > cls.model.progress)
-                        )
-                        .values(progress=prog)
-                    )
+                do_update()
 
         # Update process_duration after progress updates
         if task.begin_at:
@@ -364,11 +342,10 @@ class TaskService(CommonService):
     def delete_by_doc_ids(cls, db: Session, doc_ids: list[str]) -> int:
         """根据文档ID列表删除相关的任务记录"""
         try:
-            result = db.query(cls.model).filter(
-                cls.model.doc_id.in_(doc_ids)
-            ).delete(synchronize_session=False)
+            stmt = delete(cls.model).where(cls.model.doc_id.in_(doc_ids))
+            result = db.execute(stmt)
             db.commit()
-            return result
+            return result.rowcount
         except Exception as e:
             db.rollback()
             logging.exception(f"Failed to delete tasks for doc_ids={doc_ids}")
@@ -508,15 +485,15 @@ def reuse_prev_task_chunks(task: dict, prev_tasks: list[dict], chunking_config: 
     return len(task["chunk_ids"].split())
 
 
-def cancel_all_task_of(db, doc_id):
-        for t in TaskService.query(db, doc_id=doc_id):
-            try:
-                REDIS_CONN.set(f"{t.id}-cancel", "x")
-            except Exception as e:
-                logging.exception(e)
+def cancel_all_task_of(db: Session, doc_id: str):
+    for t in TaskService.query(db, doc_id=doc_id):
+        try:
+            REDIS_CONN.set(f"{t.id}-cancel", "x")
+        except Exception as e:
+            logging.exception(e)
 
 
-def has_canceled(task_id):
+def has_canceled(task_id: str) -> bool:
     try:
         if REDIS_CONN.get(f"{task_id}-cancel"):
             return True
@@ -525,7 +502,7 @@ def has_canceled(task_id):
     return False
 
 
-def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_id: str = CANVAS_DEBUG_DOC_ID, file: dict = None, priority: int = 0, rerun: bool = False) -> tuple[bool, str]:
+def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_id: str = CANVAS_DEBUG_DOC_ID, file: dict | None = None, priority: int = 0, rerun: bool = False) -> tuple[bool, str]:
     """
     Returns a tuple (success: bool, error_message: str).
     """

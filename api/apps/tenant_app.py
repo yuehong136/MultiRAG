@@ -7,10 +7,12 @@
 @desc: 用于处理租户用户操作的路由，包括添加、获取、删除和更新租户成员。
 """
 
+import asyncio
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import inspect
 
-from api.apps import smtp_mail_server
 from api.db import UserTenantRole
 from common.constants import StatusEnum
 from api.db.db_models import UserTenant, TenantLLM, Tenant, File, User, get_db
@@ -122,24 +124,24 @@ def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager
         invited_by=user.id,  # 默认当前操作的用户是邀请人
         status=StatusEnum.VALID.value)
 
-    # Send invitation email if SMTP is configured
-    import asyncio
-
-    if smtp_mail_server and settings.SMTP_CONF:
+    # Send invitation email asynchronously in background
+    try:
         user_name = ""
         _, inviter_user = UserService.get_by_id(db, user.id)
         if inviter_user:
             user_name = inviter_user.nickname
 
-        # Send email asynchronously in background
         asyncio.create_task(
             send_invite_email(
-                invite_user_email,
-                settings.MAIL_FRONTEND_URL,
-                tenant_id,
-                user_name or user.email
+                to_email=invite_user_email,
+                invite_url=settings.MAIL_FRONTEND_URL,
+                tenant_id=tenant_id,
+                inviter=user_name or user.email
             )
         )
+    except Exception as e:
+        logging.exception(f"Failed to send invite email to {invite_user_email}: {e}")
+        return get_json_result(data=False, retmsg="Failed to send invite email.", retcode=RetCode.SERVER_ERROR)
 
     # usr = list(usrs.dicts())[0]
     # usr = {k: v for k, v in usr.items() if k in ["id", "avatar", "email", "nickname"]}

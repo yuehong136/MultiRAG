@@ -193,3 +193,11 @@ MultiRAG supports multiple vector database backends:
 | `.dict()` | `.model_dump()` |
 | `.parse_obj()` | `.model_validate()` |
 | `@validator` | `@field_validator` |
+
+### SQLAlchemy 2.0
+
+| ❌ 弃用 | ✅ 推荐 |
+|--------|--------|
+| `Column(String)` | `name: Mapped[str] = mapped_column(String)` |
+| `session.query(M).filter(...)` | `select(M).where(...)` |
+| `select(M).where(M.id == pk)` | `session.get(Model, pk)` — 主键查询，利用identity map |

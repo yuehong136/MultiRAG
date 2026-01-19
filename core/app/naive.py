@@ -26,17 +26,17 @@ from docx.opc.pkgreader import _SerializedRelationships, _SerializedRelationship
 from docx.opc.oxml import parse_xml
 from markdown import markdown
 from PIL import Image
-from common.token_utils import num_tokens_from_string
 
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from common.constants import LLMType
+from common.token_utils import num_tokens_from_string
+from common.parser_config_utils import normalize_layout_recognizer
 from core.utils.file_utils import extract_embed_file, extract_links_from_pdf, extract_links_from_docx, extract_html
 from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, tokenize_chunks, tokenize_chunks_with_images, tokenize_table, attach_media_context
 from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownElementExtractor, MarkdownParser, PdfParser, TxtParser
 from deepdoc.parser.figure_parser import VisionFigureParser,vision_figure_parser_docx_wrapper,vision_figure_parser_pdf_wrapper
 from deepdoc.parser.pdf_parser import PlainParser, VisionParser
-from deepdoc.parser.mineru_parser import MinerUParser
 from deepdoc.parser.docling_parser import DoclingParser
 from deepdoc.parser.tcadp_parser import TCADPParser
 
@@ -58,27 +58,55 @@ def by_deepdoc(filename, binary=None, from_page=0, to_page=100000, lang="Chinese
     return sections, tables, pdf_parser
 
 
-def by_mineru(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
-    mineru_executable = os.environ.get("MINERU_EXECUTABLE", "mineru")
-    mineru_api = os.environ.get("MINERU_APISERVER", "http://host.docker.internal:9987")
-    pdf_parser = MinerUParser(mineru_path=mineru_executable, mineru_api=mineru_api)
-    parse_method = kwargs.get("parse_method", "raw")
+def by_mineru(
+    filename,
+    binary=None,
+    from_page=0,
+    to_page=100000,
+    lang="Chinese",
+    callback=None,
+    pdf_cls=None,
+    parse_method: str = "raw",
+    mineru_llm_name: str | None = None,
+    tenant_id: str | None = None,
+    **kwargs,
+):
+    pdf_parser = None
+    if tenant_id:
+        if not mineru_llm_name:
+            try:
+                from api.db.services.tenant_llm_service import TenantLLMService
 
-    if not pdf_parser.check_installation():
+                with db_connection() as db:
+                    env_name = TenantLLMService.ensure_mineru_from_env(db, tenant_id)
+                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="MinerU", mdl_type=LLMType.OCR)
+                    if candidates:
+                        mineru_llm_name = candidates[0].llm_name
+                    elif env_name:
+                        mineru_llm_name = env_name
+            except Exception as e:  # best-effort fallback
+                logging.warning(f"fallback to env mineru: {e}")
+
+        if mineru_llm_name:
+            try:
+                with db_connection() as db:
+                    ocr_model = LLMBundle(db, tenant_id=tenant_id, llm_type=LLMType.OCR, llm_name=mineru_llm_name, lang=lang)
+                    pdf_parser = ocr_model.mdl
+                    sections, tables = pdf_parser.parse_pdf(
+                        filepath=filename,
+                        binary=binary,
+                        callback=callback,
+                        parse_method=parse_method,
+                        lang=lang,
+                        **kwargs,
+                    )
+                    return sections, tables, pdf_parser
+            except Exception as e:
+                logging.error(f"Failed to parse pdf via LLMBundle MinerU ({mineru_llm_name}): {e}")
+
+    if callback:
         callback(-1, "MinerU not found.")
-        return None, None, pdf_parser
-
-    sections, tables = pdf_parser.parse_pdf(
-        filepath=filename,
-        binary=binary,
-        callback=callback,
-        output_dir=os.environ.get("MINERU_OUTPUT_DIR", ""),
-        backend=os.environ.get("MINERU_BACKEND", "pipeline"),
-        server_url=os.environ.get("MINERU_SERVER_URL", ""),
-        delete_output=bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1))),
-        parse_method=parse_method
-    )
-    return sections, tables, pdf_parser
+    return None, None, None
 
 
 def by_docling(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
@@ -118,11 +146,21 @@ def by_tcadp(filename, binary=None, from_page=0, to_page=100000, lang="Chinese",
 
 
 def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
-    if kwargs.get("layout_recognizer", "") == "Plain Text":
+    layout_recognizer = (kwargs.get("layout_recognizer") or "").strip()
+    if (not layout_recognizer) or (layout_recognizer == "Plain Text"):
         pdf_parser = PlainParser()
     else:
+        tenant_id = kwargs.get("tenant_id")
+        if not tenant_id:
+            raise ValueError("tenant_id is required when using vision layout recognizer")
         with db_connection() as db:
-            vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT, llm_name=kwargs.get("layout_recognizer", ""), lang=kwargs.get("lang", "Chinese"))
+            vision_model = LLMBundle(
+                db,
+                tenant_id,
+                LLMType.IMAGE2TEXT,
+                llm_name=layout_recognizer,
+                lang=kwargs.get("lang", "Chinese"),
+            )
         pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
 
     sections, tables = pdf_parser(
@@ -621,7 +659,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         "parser_config", {
             "chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC", "analyze_hyperlink": True})
 
-    child_deli = parser_config.get("children_delimiter", "").encode('utf-8').decode('unicode_escape').encode('latin1').decode('utf-8')
+    child_deli = (parser_config.get("children_delimiter") or "").encode('utf-8').decode('unicode_escape').encode('latin1').decode('utf-8')
     cust_child_deli = re.findall(r"`([^`]+)`", child_deli)
     child_deli = "|".join(re.sub(r"`([^`]+)`", "", child_deli))
     if cust_child_deli:
@@ -702,7 +740,10 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         return res
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
+        layout_recognizer, parser_model_name = normalize_layout_recognizer(
+            parser_config.get("layout_recognize", "DeepDOC")
+        )
+
         if parser_config.get("analyze_hyperlink", False) and is_root:
             urls = extract_links_from_pdf(binary)
 
@@ -721,6 +762,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             lang=lang,
             callback=callback,
             layout_recognizer=layout_recognizer,  # 传递原始值给 plaintext_parser 以支持 VLM
+            mineru_llm_name=parser_model_name,
             **kwargs
         )
 

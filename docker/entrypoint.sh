@@ -135,43 +135,6 @@ ensure_docling() {
     || "${PY}" -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://pypi.org/simple --no-cache-dir "docling${DOCLING_PIN}"
 }
 
-ensure_mineru() {
-  [[ "${USE_MINERU}" == "true" ]] || { echo "[entrypoint] mineru 功能未启用（USE_MINERU!=true）"; return 0; }
-
-  export HUGGINGFACE_HUB_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
-
-  local default_prefix="${MINERU_HOME:-/multirag/uv_tools}"
-  local venv_dir="${default_prefix}/.venv"
-  local exe="${MINERU_EXECUTABLE:-${venv_dir}/bin/mineru}"
-
-  if [[ -x "${exe}" ]]; then
-    echo "[entrypoint] mineru 已检测到: ${exe}"
-    export MINERU_EXECUTABLE="${exe}"
-    return 0
-  fi
-
-  echo "[entrypoint] mineru 未安装，正使用 uv 初始化..."
-
-  (
-    set -e
-    mkdir -p "${default_prefix}"
-    cd "${default_prefix}"
-    [[ -d "${venv_dir}" ]] || uv venv "${venv_dir}"
-
-    # shellcheck source=/dev/null
-    source "${venv_dir}/bin/activate"
-    uv pip install -U "mineru[core]" -i https://mirrors.aliyun.com/pypi/simple --extra-index-url https://pypi.org/simple
-    deactivate
-  )
-
-  export MINERU_EXECUTABLE="${exe}"
-  if ! "${MINERU_EXECUTABLE}" --help >/dev/null 2>&1; then
-    echo "[entrypoint] mineru 安装失败：${MINERU_EXECUTABLE} 无法运行" >&2
-    return 1
-  fi
-  echo "[entrypoint] mineru 安装完成: ${MINERU_EXECUTABLE}"
-}
-
 _term() {
   echo "[entrypoint] 收到终止信号，清理子进程..."
   pkill -TERM -P $$ || true
@@ -219,7 +182,6 @@ generate_config() {
 generate_config
 
 ensure_docling
-ensure_mineru
 
 # 启动 Nginx（优先启动，作为统一入口）
 if [[ "${ENABLE_WEBSERVER}" -eq 1 ]]; then

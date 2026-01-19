@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 
+import asyncio
 import logging
 import math
 import os
@@ -28,7 +29,6 @@ from timeit import default_timer as timer
 
 import numpy as np
 import pdfplumber
-import trio
 import xgboost as xgb
 from huggingface_hub import snapshot_download
 from PIL import Image
@@ -39,7 +39,6 @@ from sklearn.metrics import silhouette_score
 from common.file_utils import get_project_base_directory
 from common.misc_utils import pip_install_torch
 from deepdoc.vision import OCR, AscendLayoutRecognizer, LayoutRecognizer, Recognizer, TableStructureRecognizer
-from core.app.picture import vision_llm_chunk as picture_vision_llm_chunk
 from core.nlp import rag_tokenizer
 from core.prompts.generator import vision_llm_describe_prompt
 from common import settings
@@ -66,7 +65,7 @@ class RAGFlowPdfParser:
         self.ocr = OCR()
         self.parallel_limiter = None
         if settings.PARALLEL_DEVICES > 1:
-            self.parallel_limiter = [trio.CapacityLimiter(1) for _ in range(settings.PARALLEL_DEVICES)]
+            self.parallel_limiter = [asyncio.Semaphore(1) for _ in range(settings.PARALLEL_DEVICES)]
 
         layout_recognizer_type = os.getenv("LAYOUT_RECOGNIZER_TYPE", "onnx").lower()
         if layout_recognizer_type not in ["onnx", "ascend"]:
@@ -1110,7 +1109,7 @@ class RAGFlowPdfParser:
 
             if limiter:
                 async with limiter:
-                    await trio.to_thread.run_sync(lambda: self.__ocr(i + 1, img, chars, zoomin, id))
+                    await asyncio.to_thread(self.__ocr, i + 1, img, chars, zoomin, id)
             else:
                 self.__ocr(i + 1, img, chars, zoomin, id)
 
@@ -1126,12 +1125,34 @@ class RAGFlowPdfParser:
                 return chars
 
             if self.parallel_limiter:
-                async with trio.open_nursery() as nursery:
-                    for i, img in enumerate(self.page_images):
-                        chars = __ocr_preprocess()
+                tasks = []
 
-                        nursery.start_soon(__img_ocr, i, i % settings.PARALLEL_DEVICES, img, chars, self.parallel_limiter[i % settings.PARALLEL_DEVICES])
-                        await trio.sleep(0.1)
+                for i, img in enumerate(self.page_images):
+                    chars = __ocr_preprocess()
+
+                    semaphore = self.parallel_limiter[i % settings.PARALLEL_DEVICES]
+
+                    async def wrapper(i=i, img=img, chars=chars, semaphore=semaphore):
+                        await __img_ocr(
+                            i,
+                            i % settings.PARALLEL_DEVICES,
+                            img,
+                            chars,
+                            semaphore,
+                        )
+
+                    tasks.append(asyncio.create_task(wrapper()))
+                    await asyncio.sleep(0)
+
+                try:
+                    await asyncio.gather(*tasks, return_exceptions=False)
+                except Exception as e:
+                    logging.error(f"Error in OCR: {e}")
+                    for t in tasks:
+                        t.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
+
             else:
                 for i, img in enumerate(self.page_images):
                     chars = __ocr_preprocess()
@@ -1139,7 +1160,7 @@ class RAGFlowPdfParser:
 
         start = timer()
 
-        trio.run(__img_ocr_launcher)
+        asyncio.run(__img_ocr_launcher())
 
         logging.info(f"__images__ {len(self.page_images)} pages cost {timer() - start}s")
 
@@ -1452,6 +1473,8 @@ class VisionParser(RAGFlowPdfParser):
             pdf_page_num = idx  # 0-based
             if pdf_page_num < start_page or pdf_page_num >= end_page:
                 continue
+
+            from core.app.picture import vision_llm_chunk as picture_vision_llm_chunk
 
             text = picture_vision_llm_chunk(
                 binary=img_binary,

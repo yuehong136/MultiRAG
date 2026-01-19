@@ -33,7 +33,7 @@ from api.utils.api_utils import get_json_result, server_error_response, get_data
 from common.constants import StatusEnum, LLMType
 from api.db.db_models import TenantLLM, get_db, db_connection
 from core.utils.base64_image import test_image
-from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel
+from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel, OcrModel
 
 from core.prompts.generator import kb_prompt
 from core.utils.tavily_conn import Tavily
@@ -576,14 +576,16 @@ class AddLLMRequest(BaseModel):
     llm_factory: str
     llm_name: str
     mdl_type: str
-    api_key: str = None
+    api_key: str | dict = None  # 支持字符串或字典（MinerU 等厂商传递配置对象）
     api_base: str | None = None
     max_tokens: int | None = 8192
     ark_api_key: str | None = None
     endpoint_id: str | None = None
+    auth_mode: str | None = None
     bedrock_ak: str | None = None
     bedrock_sk: str | None = None
     bedrock_region: str | None = None
+    aws_role_arn: str | None = None
     fish_audio_ak: str | None = None
     fish_audio_refid: str | None = None
     hunyuan_sid: str | None = None
@@ -789,8 +791,13 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
                 mdl_types[m.fid] = set([])
             mdl_types[m.fid].add(m.mdl_type)
         for f in fac:
-            f["model_types"] = list(mdl_types.get(f["name"], [LLMType.CHAT, LLMType.EMBEDDING, LLMType.RERANK,
-                                                              LLMType.IMAGE2TEXT, LLMType.SPEECH2TEXT, LLMType.TTS]))
+            f["model_types"] = list(
+                mdl_types.get(
+                    f["name"],
+                    [LLMType.CHAT, LLMType.EMBEDDING, LLMType.RERANK, LLMType.IMAGE2TEXT, LLMType.SPEECH2TEXT, LLMType.TTS, LLMType.OCR],
+                )
+            )
+
         return get_json_result(data=fac)
     except Exception as e:
         return server_error_response(e)
@@ -1030,7 +1037,7 @@ POST
         return set_api_key(SetAPIKeyRequest(**req), db, user)
 
     elif factory == "Bedrock":
-        api_key = apikey_json(["bedrock_ak", "bedrock_sk", "bedrock_region"])
+        api_key = apikey_json(["auth_mode", "bedrock_ak", "bedrock_sk", "bedrock_region", "aws_role_arn"])
 
     elif factory == "LocalAI":
         llm_name += "___LocalAI"
@@ -1060,6 +1067,9 @@ POST
         api_key = apikey_json(["api_key", "api_version"])
 
     elif factory == "OpenRouter":
+        api_key = apikey_json(["api_key", "provider_order"])
+
+    elif factory == "MinerU":
         api_key = apikey_json(["api_key", "provider_order"])
 
     llm = {
@@ -1139,6 +1149,15 @@ POST
             for resp in mdl.tts("Hello~ MultiRAGer!"):
                 pass
         except RuntimeError as e:
+            msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
+    elif llm["mdl_type"] == LLMType.OCR.value:
+        assert factory in OcrModel, f"OCR model from {factory} is not supported yet."
+        try:
+            mdl = OcrModel[factory](key=llm["api_key"], model_name=mdl_nm, base_url=llm.get("api_base", ""))
+            ok, reason = mdl.check_available()
+            if not ok:
+                raise RuntimeError(reason or "Model not available")
+        except Exception as e:
             msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
     else:
         # TODO: check other type of models
@@ -1341,6 +1360,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
 
     """
     try:
+        TenantLLMService.ensure_mineru_from_env(db, user.id)
 
         if include_details:
             res = {}
@@ -1788,6 +1808,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
     self_deployed = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio", "GPUStack"]
     weighted = ["Youdao", "FastEmbed", "BAAI"] if settings.LIGHTEN != 0 else []
     try:
+        TenantLLMService.ensure_mineru_from_env(db, user.id)
         objs = TenantLLMService.query(db, tenant_id=user.id)
         facts = set(o.llm_factory for o in objs if o.api_key and o.status==StatusEnum.VALID.value)
         status = {(o.llm_name + "@" + o.llm_factory) for o in objs if o.status == StatusEnum.VALID.value}
@@ -2163,9 +2184,6 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
             last_ans = ""
             async for chunk in chat_mdl.async_chat_streamly(**call_params):
                 if isinstance(chunk, int):
-                    # 流结束
-                    end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
-                    yield f"data: {end_message}\n\n"
                     break
 
                 # 计算增量，与原代码保持一致
@@ -2176,6 +2194,10 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
                 last_ans = chunk  # 更新累加内容
                 sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": last_ans}, ensure_ascii=False)
                 yield f"data: {sse_data}\n\n"  # 注意这里返回的是累加的内容，与原代码一致
+
+            # 流结束
+            end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
+            yield f"data: {end_message}\n\n"
 
         except Exception as e:
             error_message = json.dumps(

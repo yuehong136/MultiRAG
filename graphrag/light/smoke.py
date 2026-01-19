@@ -15,11 +15,10 @@
 #
 
 import argparse
+import asyncio
 import json
-
 import networkx as nx
 import logging
-import trio
 
 from common.constants import LLMType
 # from api.db.database import db_connection
@@ -97,4 +96,4 @@ async def main():
     print(json.dumps(nx.node_link_data(graph), ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":
-    trio.run(main)
+    asyncio.run(main)

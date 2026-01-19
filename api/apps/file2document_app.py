@@ -74,7 +74,7 @@ def convert(
                     kb = KnowledgebaseService.get_by_id(db, kb_id)
                     if not kb:
                         return get_data_error_result(
-                            retmsg="Can't find this knowledgebase!")
+                            retmsg="Can't find this dataset!")
                     file = FileService.get_by_id(db, id)
                     if not file:
                         return get_data_error_result(

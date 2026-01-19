@@ -9,18 +9,17 @@
 import datetime
 import json
 from typing import Literal, Annotated, Any
-
-import numpy as np
 import xxhash
 import re
+import base64
 
 from fastapi import APIRouter, Depends
+import numpy as np
 from pydantic import BaseModel, Field, Discriminator, model_validator
 from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
-from api.db.services.dialog_service import meta_filter
 from api.db.services.search_service import SearchService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -31,10 +30,11 @@ from api.utils.api_utils import get_json_result
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
-from core.prompts.generator import keyword_extraction, cross_languages, gen_meta_filter
-from common import settings
-from common.constants import RetCode, LLMType, ParserType, PAGERANK_FLD
 from core.utils.doc_store_conn import OrderByExpr
+from core.prompts.generator import keyword_extraction, cross_languages
+from common import settings
+from common.metadata_utils import apply_meta_data_filter
+from common.constants import RetCode, LLMType, ParserType, PAGERANK_FLD
 from common.string_utils import remove_redundant_spaces
 
 router = APIRouter()
@@ -57,6 +57,8 @@ class SetChunkRequest(BaseModel):
     available_int: int | None = None
     tag_kwd: str | None = None
     tag_feas: str | None = None
+    image_base64: str | None = None
+    img_id: str | None = None
 
 
 class SwitchChunkRequest(BaseModel):
@@ -154,6 +156,7 @@ class RetrievalTestRequest(BaseModel):
     search_mode: SearchModeType | None = None
     cross_languages: list[str] | None = None
     search_id: str | None = None
+    meta_data_filter: dict | None = None
 
     def get_search_mode_dict(self) -> dict[str, Any] | None:
         """将搜索模式转换为字典格式供底层函数使用"""
@@ -392,7 +395,8 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
                 "question_kwd": sres.field[id].get("question_kwd", []),
                 "img_id": sres.field[id].get("img_id", ""),
                 "available_int": int(sres.field[id].get("available_int", 1)),
-                "positions": sres.field[id].get("position_int", [])
+                "positions": sres.field[id].get("position_int", []),
+                "doc_type_kwd": sres.field[id].get("doc_type_kwd")
             }
             # if len(d["positions"]) % 5 == 0:
             #     poss = []
@@ -689,6 +693,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
 | `important_kwd`       | `list[str]`  | 否   | 重要关键词列表，用于额外的分词和向量计算。                                            |
 | `question_kwd`        | `list[str]`  | 否   | 问题关键词列表，用于问答模式或补充向量计算。                                          |
 | `available_int`       | `int`        | 否   | 可用性标记，用于记录当前文档块的可用状态。                                            |
+| `image_base64`        | `string`     | 否   | Base64编码的图片数据，用于更新文档块关联的图片。                                      |
 
 ---
 
@@ -873,6 +878,13 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         update_condition = {"id": request.chunk_id}  # 主键查询条件
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         settings.docStoreConn.update(update_condition, d, search.index_name_one(tenant_id, kb.name), doc.kb_id)
+
+        # update image
+        if request.image_base64:
+            bkt, name = (request.img_id or "-").split("-")
+            image_binary = base64.b64decode(request.image_base64)
+            settings.STORAGE_IMPL.put(bkt, name, image_binary)
+
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
@@ -1345,7 +1357,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
 
 
 @router.post('/retrieval_test', summary="检索测试")
-def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     检索测试接口
 
@@ -1555,20 +1567,21 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
     if not kb_ids:
         return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=RetCode.DATA_ERROR)
 
+    meta_data_filter = {}
+    chat_mdl = None
     if request.search_id:
-        search_config = SearchService.get_detail(db, request.get("search_id", "")).get("search_config", {})
+        search_config = SearchService.get_detail(db, request.search_id or "").get("search_config", {})
         meta_data_filter = search_config.get("meta_data_filter", {})
-        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
-        if meta_data_filter.get("method") == "auto":
+        if meta_data_filter.get("method") in ["auto", "semi_auto"]:
             chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
-            filters: dict = gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-            if not doc_ids:
-                doc_ids = None
-        elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
-            if meta_data_filter["manual"] and not doc_ids:
-                doc_ids = ["-999"]
+    else:
+        meta_data_filter = request.meta_data_filter or {}
+        if meta_data_filter.get("method") in ["auto", "semi_auto"]:
+            chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
+
+    if meta_data_filter:
+        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
@@ -1579,7 +1592,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
                     break
             else:
                 return get_json_result(
-                    data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+                    data=False, retmsg=f'Only owner of dataset authorized for this operation.',
                     retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, request.kb_ids[0])
@@ -1587,7 +1600,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             return get_data_error_result(retmsg="Knowledgebase not found!")
 
         if request.cross_languages:
-            question = cross_languages(db, kb.tenant_id, None, question, request.cross_languages)
+            question = await cross_languages(kb.tenant_id, None, question, request.cross_languages)
 
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
 
@@ -1596,7 +1609,7 @@ def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db),
             rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=request.rerank_id)
         if request.keyword:
             chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
-            question += keyword_extraction(chat_mdl, question)
+            question += await keyword_extraction(chat_mdl, question)
         filter_exp = ""
         labels = label_question(db, question, [kb])
 

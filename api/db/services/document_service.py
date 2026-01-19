@@ -6,6 +6,7 @@
 @date：2024/8/14 11:00
 @desc:
 """
+import asyncio
 import json
 import logging
 import random
@@ -17,11 +18,10 @@ from datetime import datetime
 from io import BytesIO
 from typing import Any
 
-import trio
 import xxhash
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc
+from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc, update
 
 from api.constants import IMG_BASE64_PREFIX, FILE_NAME_LEN_LIMIT
 from api.db import FileType, UserTenantRole, CanvasCategory
@@ -89,7 +89,8 @@ class DocumentService(CommonService):
             id: int = None,
             name: str = None,
             suffix: list = None,
-            run: list = None
+            run: list = None,
+            doc_ids: list = None
     ):
         # 1) 需要返回的列 —— 等价于 Peewee 的 select(*fields)
         #    确保 get_cls_model_fields() 返回的是 Column/ColumnElement 列对象，而不是字符串
@@ -124,6 +125,8 @@ class DocumentService(CommonService):
             base = base.where(cls.model.suffix.in_(suffix))
         if run:
             base = base.where(cls.model.run.in_(run))
+        if doc_ids:
+            base = base.where(cls.model.id.in_(doc_ids))
 
         # 4) 排序（避免与 sqlalchemy.desc 重名）
         order_col = getattr(cls.model, orderby)
@@ -155,7 +158,8 @@ class DocumentService(CommonService):
     @classmethod
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,
                      orderby: str, desc: bool, keywords: str | None,
-                     run_status: list | None = None, types: list | None = None, suffix: list = None) -> tuple[list[dict], int]:
+                     run_status: list | None = None, types: list | None = None, suffix: list = None,
+                     doc_ids: list | None = None) -> tuple[list[dict], int]:
         if suffix is None:
             suffix = []
         fields = cls.get_cls_model_fields()
@@ -182,6 +186,9 @@ class DocumentService(CommonService):
 
         if suffix:
             base = base.where(cls.model.suffix.in_(suffix))
+
+        if doc_ids:
+            base = base.where(cls.model.id.in_(doc_ids))
 
         # 计算总数
         count = db.execute(select(func.count()).select_from(base.subquery())).scalar_one()
@@ -217,6 +224,16 @@ class DocumentService(CommonService):
             "run_status": {
              "1": 2,
              "2": 2
+            },
+            "metadata": {
+                "key1": {
+                 "key1_value1": 1,
+                 "key1_value2": 2,
+                },
+                "key2": {
+                 "key2_value1": 2,
+                 "key2_value2": 1,
+                },
             }
         }, total
         where "1" => RUNNING, "2" => CANCEL
@@ -241,59 +258,93 @@ class DocumentService(CommonService):
             filters.append(cls.model.suffix.in_(suffix))
 
         # 2) 构造“已 join”的基础 FROM（关键最小改动：select_from + join + 复用 filters）
-        base_from = (
-            db.query(cls.model.id)  # 这里只取 id 作为锚点
+        base_join = (
+            select(cls.model.id)
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
-            .filter(*filters)
+            .where(*filters)
         )
 
         # 3) total：按文档去重计数，避免一文档多文件被重复计算
-        total = (
-            db.query(func.count(func.distinct(cls.model.id)))
+        total_stmt = (
+            select(func.count(func.distinct(cls.model.id)))
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
-            .filter(*filters)
-            .scalar()
+            .where(*filters)
         )
+        total = db.execute(total_stmt).scalar()
 
         # 4) suffix 分布：同理对 Document.id 去重计数
-        suffix_stats = (
-            db.query(
+        suffix_stmt = (
+            select(
                 cls.model.suffix,
                 func.count(func.distinct(cls.model.id)).label("count")
             )
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
-            .filter(*filters)
+            .where(*filters)
             .group_by(cls.model.suffix)
-            .all()
         )
+        suffix_stats = db.execute(suffix_stmt).all()
 
         # 5) run_status 分布：同理
-        run_status_stats = (
-            db.query(
+        run_status_stmt = (
+            select(
                 cls.model.run,
                 func.count(func.distinct(cls.model.id)).label("count")
             )
             .select_from(cls.model)
             .join(File2Document, File2Document.document_id == cls.model.id)
             .join(File, File.id == File2Document.file_id)
-            .filter(*filters)
+            .where(*filters)
             .group_by(cls.model.run)
-            .all()
         )
+        run_status_stats = db.execute(run_status_stmt).all()
 
-        # 6) 组装返回
+        # 6) metadata 分布：遍历文档的 meta_fields 字段进行统计
+        meta_stmt = (
+            select(cls.model.meta_fields)
+            .select_from(cls.model)
+            .join(File2Document, File2Document.document_id == cls.model.id)
+            .join(File, File.id == File2Document.file_id)
+            .where(*filters)
+            .distinct()
+        )
+        meta_rows = db.scalars(meta_stmt).all()
+
+        metadata_counter = {}
+        for meta_fields in meta_rows:
+            meta_fields = meta_fields or {}
+            if isinstance(meta_fields, str):
+                try:
+                    meta_fields = json.loads(meta_fields)
+                except Exception:
+                    meta_fields = {}
+            if not isinstance(meta_fields, dict):
+                continue
+            for key, value in meta_fields.items():
+                values = value if isinstance(value, list) else [value]
+                for vv in values:
+                    if vv is None:
+                        continue
+                    if isinstance(vv, str) and not vv.strip():
+                        continue
+                    sv = str(vv)
+                    if key not in metadata_counter:
+                        metadata_counter[key] = {}
+                    metadata_counter[key][sv] = metadata_counter[key].get(sv, 0) + 1
+
+        # 7) 组装返回
         suffix_counter = {row.suffix: row.count for row in suffix_stats}
         run_status_counter = {str(row.run): row.count for row in run_status_stats}
 
         return {
             "suffix": suffix_counter,
-            "run_status": run_status_counter
+            "run_status": run_status_counter,
+            "metadata": metadata_counter,
         }, total
 
     @classmethod
@@ -1747,7 +1798,7 @@ class DocumentService(CommonService):
         if not cls.save(db, **doc):
             raise RuntimeError("Database error (Document)!")
         if not KnowledgebaseService.atomic_increase_doc_num_by_id(db, doc["kb_id"]):
-            raise RuntimeError("Database error (Knowledgebase)!")
+            raise RuntimeError("Database error (dataset)!")
         return Document(**doc)
 
     @classmethod
@@ -1857,10 +1908,14 @@ class DocumentService(CommonService):
     @classmethod
     def increment_chunk_num(cls, db: Session, doc_id, kb_id, token_num, chunk_num, duration):
         """
-        更新文档和知识库的片段数量、令牌数量和处理时长。
+        更新文档和知识库的片段数量、令牌数量和处理时长（SQLAlchemy 2.0 Core 风格）。
 
         本方法通过查询指定ID的文档和知识库，在数据库中更新它们的令牌数量、片段数量和处理时长。
         如果文档未找到，则抛出LookupError异常。
+
+        注意：此方法故意不更新 update_time/update_date。
+        这是因为文档解析过程中频繁增加 chunk 数量不应该刷新"最后修改时间"，
+        用户通常认为修改文件名或解析配置才算修改，而后台处理进度不算。
 
         参数:
         - db: 数据库会话对象，用于执行数据库查询和更新操作。
@@ -1874,30 +1929,35 @@ class DocumentService(CommonService):
         - kb_update: 知识库更新的影响行数。
         """
         # 更新文档的令牌数量、片段数量和处理时长
-        doc_update = db.query(cls.model).filter_by(id=doc_id).update({
+        doc_stmt = update(cls.model).where(cls.model.id == doc_id).values({
             cls.model.token_num: cls.model.token_num + token_num,
             cls.model.chunk_num: cls.model.chunk_num + chunk_num,
             cls.model.process_duration: cls.model.process_duration + duration
         })
+        doc_result = db.execute(doc_stmt)
 
         # 如果文档更新影响行数为0，表示未找到文档，抛出异常
-        if doc_update == 0:
+        if doc_result.rowcount == 0:
             logging.warning("Document not found which is supposed to be there")
+
         # 更新知识库的令牌数量和片段数量
-        kb_update = db.query(Knowledgebase).filter_by(id=kb_id).update({
+        kb_stmt = update(Knowledgebase).where(Knowledgebase.id == kb_id).values({
             Knowledgebase.token_num: Knowledgebase.token_num + token_num,
             Knowledgebase.chunk_num: Knowledgebase.chunk_num + chunk_num
         })
+        kb_result = db.execute(kb_stmt)
         db.commit()
-        return kb_update
+        return kb_result.rowcount
 
     @classmethod
     def decrement_chunk_num(cls, db: Session, doc_id: str, kb_id: str, token_num: int, chunk_num: int, duration: int):
         """
-        减少文档和知识库的片段数量、令牌数量和处理时长。
+        减少文档和知识库的片段数量、令牌数量和处理时长（SQLAlchemy 2.0 Core 风格）。
 
         本方法通过查询指定ID的文档和知识库，在数据库中更新它们的令牌数量、片段数量和处理时长。
         如果文档未找到，则抛出LookupError异常。
+
+        注意：此方法故意不更新 update_time/update_date
 
         参数:
         - db: 数据库会话对象，用于执行数据库查询和更新操作。
@@ -1911,45 +1971,51 @@ class DocumentService(CommonService):
         - kb_update: 知识库更新的影响行数。
         """
         # 更新文档的令牌数量、片段数量和处理时长
-        doc_update = db.query(cls.model).filter_by(id=doc_id).update({
+        doc_stmt = update(cls.model).where(cls.model.id == doc_id).values({
             cls.model.token_num: cls.model.token_num - token_num,
             cls.model.chunk_num: cls.model.chunk_num - chunk_num,
             cls.model.process_duration: cls.model.process_duration + duration
         })
+        doc_result = db.execute(doc_stmt)
 
         # 如果文档更新影响行数为0，表示未找到文档，抛出异常
-        if doc_update == 0:
+        if doc_result.rowcount == 0:
             raise LookupError("Document not found which is supposed to be there")
 
         # 更新知识库的令牌数量和片段数量
-        kb_update = db.query(Knowledgebase).filter_by(id=kb_id).update({
+        kb_stmt = update(Knowledgebase).where(Knowledgebase.id == kb_id).values({
             Knowledgebase.token_num: Knowledgebase.token_num - token_num,
             Knowledgebase.chunk_num: Knowledgebase.chunk_num - chunk_num
         })
+        kb_result = db.execute(kb_stmt)
         db.commit()
-        return kb_update
+        return kb_result.rowcount
 
     @classmethod
     def clear_chunk_num(cls, db: Session, doc_id: str, max_retries=3):
+        """
+        清除文档的 chunk 数量并更新知识库统计（SQLAlchemy 2.0 Core 风格）。
+        """
         doc = cls.get_by_id(db, doc_id)
         if not doc:
             raise LookupError("Can't find document in database.")
         retries = 0
         while retries < max_retries:
             try:
-                # 读取数据
-                kb_record = db.query(Knowledgebase).filter_by(id=doc.kb_id).first()
+                # 读取数据（使用 session.get() 主键直取）
+                kb_record = db.get(Knowledgebase, doc.kb_id)
 
                 # 检查数据是否存在，进行更新
                 if kb_record:
-                    kb_update = db.query(Knowledgebase).filter_by(id=doc.kb_id).update({
+                    kb_update_stmt = update(Knowledgebase).where(Knowledgebase.id == doc.kb_id).values({
                         Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
                         Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
                         Knowledgebase.doc_num: Knowledgebase.doc_num - 1
                     })
+                    result = db.execute(kb_update_stmt)
                     db.commit()
 
-                    return kb_update
+                    return result.rowcount
 
             except OperationalError as e:
                 # 如果检测到锁冲突（例如数据库锁定），可以选择重试
@@ -1972,46 +2038,50 @@ class DocumentService(CommonService):
 
     @classmethod
     def clear_chunk_num_when_rerun(cls, db: Session, doc_id):
-        # 获取文档
-        doc = db.query(cls.model).filter(cls.model.id == doc_id).first()
+        """
+        重新运行时清除 chunk 数量（SQLAlchemy 2.0 推荐的 session.get() 方式）。
+        """
+        # 获取文档（使用 session.get() 主键直取）
+        doc = db.get(cls.model, doc_id)
         assert doc, "Can't find document in database."
 
         # 更新知识库统计
-        num = (
-            db.query(Knowledgebase)
-            .filter(Knowledgebase.id == doc.kb_id)
-            .update({
-                Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
-                Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
-            })
-        )
+        kb_stmt = update(Knowledgebase).where(Knowledgebase.id == doc.kb_id).values({
+            Knowledgebase.token_num: Knowledgebase.token_num - doc.token_num,
+            Knowledgebase.chunk_num: Knowledgebase.chunk_num - doc.chunk_num,
+        })
+        result = db.execute(kb_stmt)
 
         # 提交事务
         db.commit()
 
-        return num
+        return result.rowcount
 
 
     @classmethod
     def get_tenant_id(cls, db: Session, doc_id: str):
+        """
+        获取文档所属的租户 ID（SQLAlchemy 2.0 Core 风格）。
+        """
         # 使用 aliased 创建表别名
         KnowledgebaseAlias = aliased(Knowledgebase)
         DocumentAlias = aliased(Document)
-        query = db.query(KnowledgebaseAlias.tenant_id) \
-            .select_from(DocumentAlias) \
-            .join(KnowledgebaseAlias, DocumentAlias.kb_id == KnowledgebaseAlias.id) \
-            .filter(DocumentAlias.id == doc_id, KnowledgebaseAlias.status == StatusEnum.VALID.value) \
-            .first()
-        # query = db.query(Knowledgebase.tenant_id).join(Knowledgebase, cls.model.kb_id == Knowledgebase.id
-        #                                                ).filter(
-        #     cls.model.id == doc_id,
-        #     Knowledgebase.status == StatusEnum.VALID.value
-        # ).first()
-        return query.tenant_id if query else None
+        stmt = (
+            select(KnowledgebaseAlias.tenant_id)
+            .select_from(DocumentAlias)
+            .join(KnowledgebaseAlias, DocumentAlias.kb_id == KnowledgebaseAlias.id)
+            .where(DocumentAlias.id == doc_id, KnowledgebaseAlias.status == StatusEnum.VALID.value)
+        )
+        result = db.execute(stmt).first()
+        return result.tenant_id if result else None
 
     @classmethod
-    def get_knowledgebase_id(cls, db, doc_id):
-        result = db.query(cls.model.kb_id).filter(cls.model.id == doc_id).first()
+    def get_knowledgebase_id(cls, db: Session, doc_id: str):
+        """
+        获取文档所属的知识库 ID（SQLAlchemy 2.0 Core 风格）。
+        """
+        stmt = select(cls.model.kb_id).where(cls.model.id == doc_id)
+        result = db.execute(stmt).first()
         return result.kb_id if result else None
 
     @classmethod
@@ -2223,6 +2293,200 @@ class DocumentService(CommonService):
                 meta.setdefault(key, {}).setdefault(value_str, []).append(doc_id)
 
         return meta
+
+    @classmethod
+    def get_flatted_meta_by_kbs(cls, db: Session, kb_ids: list[str]) -> dict:
+        """
+        获取知识库文档的扁平化元数据。
+
+        - 解析字符串化的 JSON meta_fields，跳过非字典或无法解析的值
+        - 将列表值展开为单独的条目
+          示例: {"tags": ["foo","bar"], "author": "alice"} ->
+            meta["tags"]["foo"] = [doc_id], meta["tags"]["bar"] = [doc_id], meta["author"]["alice"] = [doc_id]
+        适用于 metadata_condition 过滤和需要遵循列表语义的场景。
+        """
+        stmt = select(cls.model.id, cls.model.meta_fields).where(cls.model.kb_id.in_(kb_ids))
+
+        meta: dict = {}
+        for row in db.execute(stmt).mappings():
+            doc_id = row["id"]
+            meta_fields = row.get("meta_fields") or {}
+            if isinstance(meta_fields, str):
+                try:
+                    meta_fields = json.loads(meta_fields)
+                except Exception:
+                    continue
+            if not isinstance(meta_fields, dict):
+                continue
+            for k, v in meta_fields.items():
+                if k not in meta:
+                    meta[k] = {}
+                values = v if isinstance(v, list) else [v]
+                for vv in values:
+                    if vv is None:
+                        continue
+                    sv = str(vv)
+                    if sv not in meta[k]:
+                        meta[k][sv] = []
+                    meta[k][sv].append(doc_id)
+        return meta
+
+    @classmethod
+    def get_metadata_summary(cls, db: Session, kb_id: str) -> dict:
+        """
+        获取知识库中文档元数据的汇总统计。
+
+        返回: {key: [(value, count), ...], ...}，按计数降序排列
+        """
+        stmt = select(cls.model.id, cls.model.meta_fields).where(cls.model.kb_id == kb_id)
+
+        summary: dict = {}
+        for row in db.execute(stmt).mappings():
+            meta_fields = row.get("meta_fields") or {}
+            if isinstance(meta_fields, str):
+                try:
+                    meta_fields = json.loads(meta_fields)
+                except Exception:
+                    continue
+            if not isinstance(meta_fields, dict):
+                continue
+            for k, v in meta_fields.items():
+                values = v if isinstance(v, list) else [v]
+                for vv in values:
+                    if not vv:
+                        continue
+                    sv = str(vv)
+                    if k not in summary:
+                        summary[k] = {}
+                    summary[k][sv] = summary[k].get(sv, 0) + 1
+        return {
+            k: sorted([(val, cnt) for val, cnt in v.items()], key=lambda x: x[1], reverse=True)
+            for k, v in summary.items()
+        }
+
+    @classmethod
+    def batch_update_metadata(cls, db: Session, kb_id: str, doc_ids: list[str],
+                              updates: list[dict] | None = None,
+                              deletes: list[dict] | None = None) -> int:
+        """
+        批量更新文档元数据。
+
+        Args:
+            db: 数据库会话
+            kb_id: 知识库ID
+            doc_ids: 要更新的文档ID列表
+            updates: 更新操作列表，每个元素包含 {"key": str, "value": any, "match": any (optional)}
+            deletes: 删除操作列表，每个元素包含 {"key": str, "value": any (optional)}
+
+        Returns:
+            更新的文档数量
+        """
+        updates = updates or []
+        deletes = deletes or []
+        if not doc_ids:
+            return 0
+
+        def _normalize_meta(meta):
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    return {}
+            if not isinstance(meta, dict):
+                return {}
+            return deepcopy(meta)
+
+        def _str_equal(a, b):
+            return str(a) == str(b)
+
+        def _apply_updates(meta: dict) -> bool:
+            changed = False
+            for upd in updates:
+                key = upd.get("key")
+                if not key or key not in meta:
+                    continue
+
+                new_value = upd.get("value")
+                match_provided = "match" in upd
+                if isinstance(meta[key], list):
+                    if not match_provided:
+                        meta[key] = new_value
+                        changed = True
+                    else:
+                        match_value = upd.get("match")
+                        replaced = False
+                        new_list = []
+                        for item in meta[key]:
+                            if _str_equal(item, match_value):
+                                new_list.append(new_value)
+                                replaced = True
+                            else:
+                                new_list.append(item)
+                        if replaced:
+                            meta[key] = new_list
+                            changed = True
+                else:
+                    if not match_provided:
+                        meta[key] = new_value
+                        changed = True
+                    else:
+                        match_value = upd.get("match")
+                        if _str_equal(meta[key], match_value):
+                            meta[key] = new_value
+                            changed = True
+            return changed
+
+        def _apply_deletes(meta: dict) -> bool:
+            changed = False
+            for d in deletes:
+                key = d.get("key")
+                if not key or key not in meta:
+                    continue
+                value = d.get("value", None)
+                if isinstance(meta[key], list):
+                    if value is None:
+                        del meta[key]
+                        changed = True
+                        continue
+                    new_list = [item for item in meta[key] if not _str_equal(item, value)]
+                    if len(new_list) != len(meta[key]):
+                        if new_list:
+                            meta[key] = new_list
+                        else:
+                            del meta[key]
+                        changed = True
+                else:
+                    if value is None or _str_equal(meta[key], value):
+                        del meta[key]
+                        changed = True
+            return changed
+
+        updated_docs = 0
+        stmt = select(cls.model.id, cls.model.meta_fields).where(
+            cls.model.id.in_(doc_ids),
+            cls.model.kb_id == kb_id
+        )
+        rows = list(db.execute(stmt).mappings())
+
+        for r in rows:
+            meta = _normalize_meta(r.get("meta_fields") or {})
+            original_meta = deepcopy(meta)
+            changed = _apply_updates(meta)
+            changed = _apply_deletes(meta) or changed
+            if changed and meta != original_meta:
+                db.execute(
+                    update(cls.model)
+                    .where(cls.model.id == r["id"])
+                    .values(
+                        meta_fields=meta,
+                        update_time=current_timestamp(),
+                        update_date=get_format_time()
+                    )
+                )
+                updated_docs += 1
+
+        db.commit()
+        return updated_docs
 
     @classmethod
     def update_progress(cls, db: Session):
@@ -2721,12 +2985,12 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
 
     dia = DialogService.get_by_id(db, conv.dialog_id)
     if not dia.kb_ids:
-        raise LookupError("No knowledge base associated with this conversation. "
-                          "Please add a knowledge base before uploading documents")
+        raise LookupError("No dataset associated with this conversation. "
+                          "Please add a dataset before uploading documents")
     kb_id = dia.kb_ids[0]
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        raise LookupError("Can't find this knowledgebase!")
+        raise LookupError("Can't find this dataset!")
 
     embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id, lang=kb.language)
 
@@ -2814,7 +3078,7 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
             from graphrag.general.mind_map_extractor import MindMapExtractor
             mindmap = MindMapExtractor(llm_bdl)
             try:
-                mind_map = trio.run(mindmap, [c["content_with_weight"] for c in docs if c["doc_id"] == doc_id])
+                mind_map = asyncio.run(mindmap([c["content_with_weight"] for c in docs if c["doc_id"] == doc_id]))
                 mind_map = json.dumps(mind_map.output, ensure_ascii=False, indent=2)
                 if len(mind_map) < 32:
                     raise Exception("Few content: " + mind_map)

@@ -15,40 +15,15 @@ import logging
 import re
 from copy import deepcopy
 
-import trio
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 from core.nlp import naive_merge, naive_merge_with_images
 
 logger = logging.getLogger(__name__)
 
 
-def _get_running_backend():
-    """检测当前运行的异步后端（trio 或 asyncio）"""
-    try:
-        trio.lowlevel.current_task()
-        return "trio"
-    except RuntimeError:
-        pass
-    
-    try:
-        asyncio.get_running_loop()
-        return "asyncio"
-    except RuntimeError:
-        pass
-    
-    return None
-
-
 async def _to_thread(func, *args, **kwargs):
-    """兼容 trio 和 asyncio 的 to_thread"""
-    backend = _get_running_backend()
-    
-    if backend == "trio":
-        return await trio.to_thread.run_sync(lambda: func(*args, **kwargs))
-    elif backend == "asyncio":
-        return await asyncio.to_thread(func, *args, **kwargs)
-    else:
-        return func(*args, **kwargs)
+    """在线程中执行阻塞函数"""
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 
 class FlowSplitter:
@@ -104,16 +79,8 @@ class FlowSplitter:
             else:
                 deli += d
         
-        # 处理 children_delimiters
-        child_deli = ""
-        if children_delimiters:
-            for d in children_delimiters:
-                if len(d) > 1:
-                    child_deli += f"`{d}`"
-                else:
-                    child_deli += d
-        child_deli = [m.group(1) for m in re.finditer(r"`([^`]+)`", child_deli)]
-        custom_pattern = "|".join(re.escape(t) for t in sorted(set(child_deli), key=len, reverse=True))
+        # 处理 children_delimiters（参考 core/flow/splitter/splitter.py 第 64 行简化后的逻辑）
+        custom_pattern = "|".join(re.escape(t) for t in sorted(set(children_delimiters), key=len, reverse=True)) if children_delimiters else ""
         
         # 调用底层切分函数
         chunks = await _to_thread(naive_merge, text, chunk_token_size, deli, overlapped_percent)
@@ -190,16 +157,8 @@ class FlowSplitter:
             else:
                 deli += d
         
-        # 处理 children_delimiters
-        child_deli = ""
-        if children_delimiters:
-            for d in children_delimiters:
-                if len(d) > 1:
-                    child_deli += f"`{d}`"
-                else:
-                    child_deli += d
-        child_deli = [m.group(1) for m in re.finditer(r"`([^`]+)`", child_deli)]
-        custom_pattern = "|".join(re.escape(t) for t in sorted(set(child_deli), key=len, reverse=True))
+        # 处理 children_delimiters（参考 core/flow/splitter/splitter.py 第 64 行简化后的逻辑）
+        custom_pattern = "|".join(re.escape(t) for t in sorted(set(children_delimiters), key=len, reverse=True)) if children_delimiters else ""
         
         # 调用底层切分函数（带图片）
         chunks, chunk_images = await _to_thread(

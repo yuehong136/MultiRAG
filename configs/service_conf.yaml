@@ -32,15 +32,12 @@ postgresql:
   stale_timeout: 30
 
 minio:
-  # MinIO服务的用户名
   user: ''
-  # MinIO服务的密码
   password:
-  # MinIO服务的主机名和端口
   host: ''
-  # MinIO服务的主机名和端口
   region: ''
-  # 工作流过程中使用的桶名称
+  bucket: ''
+  prefix_path: ''
   workflow_bucket: 'multirag-workflow'
 
 azure:

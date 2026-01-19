@@ -13,13 +13,13 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import asyncio
 import json
 import logging
 from collections import defaultdict
 from copy import deepcopy
 import json_repair
 import pandas as pd
-import trio
 
 from common.misc_utils import get_uuid
 from graphrag.query_analyze_prompt import PROMPTS
@@ -28,7 +28,7 @@ from common.token_utils import num_tokens_from_string
 from core.utils.doc_store_conn import OrderByExpr
 
 from core.nlp.search import Dealer, index_name
-from api.db.db_models import SessionLocal
+from api.db.db_models import db_connection
 from common.float_utils import get_float
 from common import settings
 
@@ -45,7 +45,7 @@ class KGSearch(Dealer):
         return response
 
     def query_rewrite(self, llm, question, idxnms, kb_ids):
-        ty2ents = trio.run(lambda: get_entity_type2samples(idxnms, kb_ids))
+        ty2ents = asyncio.run(get_entity_type2samples(idxnms, kb_ids))
         hint_prompt = PROMPTS["minirag_query2kwd"].format(query=question,
                                                           TYPE_POOL=json.dumps(ty2ents, ensure_ascii=False, indent=2))
         result = self._chat(llm, hint_prompt, [{"role": "user", "content": "Output:"}], {})
@@ -158,8 +158,8 @@ class KGSearch(Dealer):
         filters = self.get_filters({"kb_ids": kb_ids})
         if isinstance(tenant_ids, str):
             tenant_ids = tenant_ids.split(",")
-        db = SessionLocal()
-        kb_names = [kb.name for kb in KnowledgebaseService.get_by_ids(db, kb_ids, cols=["name"])]
+        with db_connection() as db:
+            kb_names = [kb.name for kb in KnowledgebaseService.get_by_ids(db, kb_ids, cols=["name"])]
 
         idxnms = [index_name(tid, kb_names) for tid in tenant_ids]
         ty_kwds = []
@@ -325,7 +325,6 @@ if __name__ == "__main__":
     from api.db.services.llm_service import LLMBundle
     from api.db.services.user_service import TenantService
     from core.nlp import search
-    from api.db.db_models import db_connection
 
     settings.init_settings()
     parser = argparse.ArgumentParser()

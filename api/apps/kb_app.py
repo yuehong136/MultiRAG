@@ -108,6 +108,11 @@ class CheckEmbeddingRequest(BaseModel):
     check_num: int | None = 5
 
 
+class UpdateMetadataSettingRequest(BaseModel):
+    kb_id: str
+    metadata: dict
+
+
 @router.post('/create', summary="创建知识库", response_description="成功创建知识库")
 def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
@@ -188,12 +193,12 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
     try:
         if not KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"]):
             return get_json_result(
-                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+                data=False, retmsg=f'Only owner of dataset authorized for this operation.',
                 retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
         if not kb:
-            return get_data_error_result(retmsg="Can't find this knowledgebase!")
+            return get_data_error_result(retmsg="Can't find this dataset!")
 
         if req_data["parser_id"] == "tag" and os.environ.get('DOC_ENGINE', "milvus") == "milvus":
             return get_json_result(
@@ -205,12 +210,12 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         if req_data["name"].lower() != kb.name.lower() \
                 and len(KnowledgebaseService.query(db, name=req_data["name"], tenant_id=user.id,
                                                    status=StatusEnum.VALID.value)) > 1:
-            return get_data_error_result(retmsg="Duplicated knowledgebase name.")
+            return get_data_error_result(retmsg="Duplicated dataset name.")
 
         # 提取 connectors 字段，不写入知识库表
         connectors = []
         if "connectors" in req_data:
-            connectors = req_data["connectors"]
+            connectors = req_data.get("connectors") or []
             del req_data["connectors"]
 
         # 过滤掉None值，避免将None写入数据库
@@ -219,16 +224,25 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         if not KnowledgebaseService.update_by_id(db, kb.id, filtered_data):
             return get_data_error_result()
 
-        # ===== 插入 Milvus 重命名逻辑 =====
-        if "name" in req_data:
-            # 1 构造 Milvus 原集合名 & 新集合名
+        # ===== 向量数据库集合重命名逻辑 =====
+        # 只有当名称实际发生变化时才执行重命名
+        if "name" in req_data and req_data["name"] != old_name:
+            db_type = settings.docStoreConn.dbType()
             old_coll = search.index_name_one(kb.tenant_id, old_name)
             new_coll = search.index_name_one(kb.tenant_id, req_data["name"])
 
-            # 2 确认原集合存在
-            if settings.docStoreConn.has_collection(old_coll):
-                settings.docStoreConn.rename_collection(old_coll, new_coll)
-                logging.info(f"Milvus collection renamed: {old_coll} → {new_coll}")
+            # 只有 Milvus 支持原生的 rename_collection
+            if db_type == "milvus":
+                if settings.docStoreConn.has_collection(old_coll):
+                    settings.docStoreConn.rename_collection(old_coll, new_coll)
+                    logging.info(f"Milvus collection renamed: {old_coll} → {new_coll}")
+            else:
+                # Elasticsearch/OpenSearch/Infinity 等暂不支持集合重命名
+                # 因为 ES 需要 reindex 操作，其他数据库也没有原生重命名支持
+                logging.warning(
+                    f"Collection rename not supported for {db_type}. "
+                    f"Old collection '{old_coll}' will remain, new data will use '{new_coll}'."
+                )
 
         if kb.pagerank != req_data.get("pagerank", 0):
             # todo 测试 milvus 能否利用 pagerank【20250715】
@@ -261,13 +275,14 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
                     logging.error(f"移除知识库 {kb.id} 的 PageRank 失败: {str(e)}")
 
         # 处理 connectors 关联
-        errors = Connector2KbService.link_connectors(db, kb.id, [conn for conn in connectors], user.id)
-        if errors:
-            logging.error(f"Link KB errors: {errors}")
+        if connectors:
+            errors = Connector2KbService.link_connectors(db, kb.id, [conn for conn in connectors], user.id)
+            if errors:
+                logging.error(f"Link KB errors: {errors}")
 
         kb = KnowledgebaseService.get_by_id(db, kb.id)
         if not kb:
-            return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
+            return get_data_error_result(retmsg="Database error (dataset rename)!")
         kb = kb.to_dict()
         # 使用filtered_data而不是req_data，避免包含None值
         kb.update(filtered_data)
@@ -276,6 +291,19 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         return get_json_result(data=kb)
     except Exception as e:
         return server_error_response(e)
+
+
+@router.post('/update_metadata_setting', summary="更新知识库元数据配置")
+def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    kb = KnowledgebaseService.get_by_id(db, request.kb_id)
+    if not kb:
+        return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
+    kb_dict = kb.to_dict()
+    if kb_dict.get("parser_config") is None:
+        kb_dict["parser_config"] = {}
+    kb_dict["parser_config"]["metadata"] = request.metadata
+    KnowledgebaseService.update_by_id(db, kb_dict["id"], {"parser_config": kb_dict["parser_config"]})
+    return get_json_result(data=kb_dict)
 
 
 @router.get('/detail', summary="获取知识库详情", response_description="成功获取知识库详情")
@@ -288,11 +316,11 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
                 break
         else:
             return get_json_result(
-                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+                data=False, retmsg=f'Only owner of dataset authorized for this operation.',
                 retcode=RetCode.OPERATING_ERROR)
         kb = KnowledgebaseService.get_detail(db, kb_id)
         if not kb:
-            return get_data_error_result(retmsg="Can't find this knowledgebase!")
+            return get_data_error_result(retmsg="Can't find this dataset!")
         kb["size"] = DocumentService.get_total_size_by_kb_id(db, kb_id=kb["id"],keywords="", run_status=[], types=[])
         kb["connectors"] = Connector2KbService.list_connectors(db, kb_id)
         
@@ -393,7 +421,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
         if not kbs:
             # 如果知识库不存在或用户无权限删除，返回错误信息
             return get_json_result(
-                data=False, retmsg=f'Only owner of knowledgebase authorized for this operation.',
+                data=False, retmsg=f'Only owner of dataset authorized for this operation.',
                 retcode=RetCode.OPERATING_ERROR)
 
         # 提前保存知识库名称，避免访问被删除对象
@@ -425,7 +453,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
 
         # 删除知识库本身，如果失败则返回错误信息
         if not KnowledgebaseService.delete_by_id(db, req_data["kb_id"]):
-            return get_data_error_result(retmsg="Database error (Knowledgebase removal)!")
+            return get_data_error_result(retmsg="Database error (dataset removal)!")
         tenants = UserTenantService.query(db, user_id=user.id)
         for tenant in tenants:
             settings.docStoreConn.deleteIdx(search.index_name_one(tenant.tenant_id, kb_name), req_data["kb_id"])
@@ -1006,9 +1034,9 @@ def run_graphrag(
     
     异常处理：
     - 如果缺少知识库ID，返回 "Lack of KB ID"
-    - 如果知识库不存在，返回 "Invalid Knowledgebase ID"
+    - 如果知识库不存在，返回 "Invalid dataset ID"
     - 如果已有任务在运行，返回 "A Graph Task is already running"
-    - 如果知识库中没有文档，返回 "No documents in Knowledgebase"
+    - 如果知识库中没有文档，返回 "No documents in dataset"
     - 其他异常返回服务器错误
     
     注意：
@@ -1024,7 +1052,7 @@ def run_graphrag(
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        return get_error_data_result(retmsg="Invalid Knowledgebase ID")
+        return get_error_data_result(retmsg="Invalid dataset ID")
 
     task_id = kb.graphrag_task_id
     if task_id:
@@ -1048,7 +1076,7 @@ def run_graphrag(
         suffix=[],
     )
     if not documents:
-        return get_error_data_result(retmsg=f"No documents in Knowledgebase {kb_id}")
+        return get_error_data_result(retmsg=f"No documents in dataset {kb_id}")
 
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
@@ -1123,7 +1151,7 @@ def trace_graphrag(
     
     异常处理：
     - 如果缺少知识库ID，返回 "Lack of KB ID"
-    - 如果知识库不存在，返回 "Invalid Knowledgebase ID"
+    - 如果知识库不存在，返回 "Invalid dataset ID"
     - 如果任务不存在，返回 "GraphRAG Task Not Found or Error Occurred"
     - 其他异常返回服务器错误
     
@@ -1138,7 +1166,7 @@ def trace_graphrag(
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        return get_error_data_result(retmsg="Invalid Knowledgebase ID")
+        return get_error_data_result(retmsg="Invalid dataset ID")
 
     task_id = kb.graphrag_task_id
     if not task_id:
@@ -1209,9 +1237,9 @@ def run_raptor(
     
     异常处理：
     - 如果缺少知识库ID，返回 "Lack of KB ID"
-    - 如果知识库不存在，返回 "Invalid Knowledgebase ID"
+    - 如果知识库不存在，返回 "Invalid dataset ID"
     - 如果已有任务在运行，返回 "A RAPTOR Task is already running"
-    - 如果知识库中没有文档，返回 "No documents in Knowledgebase"
+    - 如果知识库中没有文档，返回 "No documents in dataset"
     
     注意：
     - RAPTOR任务会消耗大量LLM tokens，建议评估成本
@@ -1225,7 +1253,7 @@ def run_raptor(
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        return get_error_data_result(retmsg="Invalid Knowledgebase ID")
+        return get_error_data_result(retmsg="Invalid dataset ID")
 
     task_id = kb.raptor_task_id
     if task_id:
@@ -1249,7 +1277,7 @@ def run_raptor(
         suffix=[],
     )
     if not documents:
-        return get_error_data_result(retmsg=f"No documents in Knowledgebase {kb_id}")
+        return get_error_data_result(retmsg=f"No documents in dataset {kb_id}")
 
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
@@ -1288,7 +1316,7 @@ def trace_raptor(
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        return get_error_data_result(retmsg="Invalid Knowledgebase ID")
+        return get_error_data_result(retmsg="Invalid dataset ID")
 
     task_id = kb.raptor_task_id
     if not task_id:
@@ -1351,9 +1379,9 @@ def run_mindmap(
     
     异常处理：
     - 如果缺少知识库ID，返回 "Lack of KB ID"
-    - 如果知识库不存在，返回 "Invalid Knowledgebase ID"
+    - 如果知识库不存在，返回 "Invalid dataset ID"
     - 如果已有任务在运行，返回 "A Mindmap Task is already running"
-    - 如果知识库中没有文档，返回 "No documents in Knowledgebase"
+    - 如果知识库中没有文档，返回 "No documents in dataset"
     
     注意：
     - 适用于结构化程度较高的文档（如学术论文、技术文档等）
@@ -1367,7 +1395,7 @@ def run_mindmap(
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        return get_error_data_result(retmsg="Invalid Knowledgebase ID")
+        return get_error_data_result(retmsg="Invalid dataset ID")
 
     task_id = kb.mindmap_task_id
     if task_id:
@@ -1391,7 +1419,7 @@ def run_mindmap(
         suffix=[],
     )
     if not documents:
-        return get_error_data_result(retmsg=f"No documents in Knowledgebase {kb_id}")
+        return get_error_data_result(retmsg=f"No documents in dataset {kb_id}")
 
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
@@ -1430,7 +1458,7 @@ def trace_mindmap(
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        return get_error_data_result(retmsg="Invalid Knowledgebase ID")
+        return get_error_data_result(retmsg="Invalid dataset ID")
 
     task_id = kb.mindmap_task_id
     if not task_id:
@@ -1668,7 +1696,7 @@ def check_embedding(
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
-        return get_error_data_result(retmsg="Invalid Knowledgebase ID")
+        return get_error_data_result(retmsg="Invalid dataset ID")
 
     emb_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, embd_id)
     samples = sample_random_chunks_with_vectors(settings.docStoreConn, tenant_id=kb.tenant_id, kb_id=kb_id, kb_name=kb.name, n=n)
