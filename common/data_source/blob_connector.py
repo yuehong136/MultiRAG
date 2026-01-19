@@ -64,15 +64,23 @@ class BlobStorageConnector(LoadConnector, PollConnector):
 
         elif self.bucket_type == BlobType.S3:
             authentication_method = credentials.get("authentication_method", "access_key")
+
             if authentication_method == "access_key":
                 if not all(
                     credentials.get(key)
                     for key in ["aws_access_key_id", "aws_secret_access_key"]
                 ):
                     raise ConnectorMissingCredentialError("Amazon S3")
+
             elif authentication_method == "iam_role":
                 if not credentials.get("aws_role_arn"):
                     raise ConnectorMissingCredentialError("Amazon S3 IAM role ARN is required")
+
+            elif authentication_method == "assume_role":
+                pass
+
+            else:
+                raise ConnectorMissingCredentialError("Unsupported S3 authentication method")
 
         elif self.bucket_type == BlobType.GOOGLE_CLOUD_STORAGE:
             if not all(
@@ -131,7 +139,7 @@ class BlobStorageConnector(LoadConnector, PollConnector):
                 last_modified = obj["LastModified"].replace(tzinfo=timezone.utc)
                 if start < last_modified <= end:
                     all_objects.append(obj)
-        
+
         # Count filename occurrences to determine which need full paths
         filename_counts: dict[str, int] = {}
         for obj in all_objects:
@@ -154,7 +162,7 @@ class BlobStorageConnector(LoadConnector, PollConnector):
                     f"{file_name} exceeds size threshold of {self.size_threshold}. Skipping."
                 )
                 continue
-            
+
             try:
                 blob = download_object(self.s3_client, self.bucket_name, key, self.size_threshold)
                 if blob is None:
@@ -186,7 +194,7 @@ class BlobStorageConnector(LoadConnector, PollConnector):
 
             except Exception:
                 logging.exception(f"Error decoding object {key}")
-        
+
         if batch:
             yield batch
 
