@@ -84,6 +84,9 @@ class TableConfig(BaseModel):
     data_start_row: int  # 数据起始行（Word 表格内的行索引，0-based）
     data_end_row: int  # 数据结束行（Word 表格内的行索引，0-based，仅普通表格需要）
     columns: list[TableColumn]  # 列配置
+    # 分类列索引列表（用于处理纵向合并的分类单元格）
+    # 这些列在扩行时需要扩展合并区域，而不是作为数据列
+    category_columns: list[int] = []
 
 
 class Placeholder(BaseModel):

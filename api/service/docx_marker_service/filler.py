@@ -296,19 +296,139 @@ def get_table_by_path(doc: "DocumentType", path: str):
     return None, None
 
 
-def copy_row(table, source_row_idx: int) -> None:
+def copy_row(table, source_row_idx: int, category_columns: list[int] | None = None) -> None:
     """
     复制表格中的一行并插入到源行之后
+
+    参数:
+    - table: 表格对象
+    - source_row_idx: 源行索引
+    - category_columns: 分类列索引列表，这些列在新行中需要设置为纵向合并的延续
     """
-    rows = list(table.rows)
-    if source_row_idx >= len(rows):
+    # 获取所有 tr 元素（直接操作 XML，避免 python-docx 的合并单元格解析问题）
+    tr_elements = table._tbl.findall(qn('w:tr'))
+    if source_row_idx >= len(tr_elements):
         return
 
-    source_row = rows[source_row_idx]
+    source_tr = tr_elements[source_row_idx]
     # 深拷贝行的 XML 元素
-    new_tr = copy.deepcopy(source_row._tr)
+    new_tr = copy.deepcopy(source_tr)
     # 在源行后插入新行
-    source_row._tr.addnext(new_tr)
+    source_tr.addnext(new_tr)
+
+    # 如果有分类列，需要处理纵向合并
+    if category_columns:
+        # 获取源行和新行中的所有单元格
+        source_tc_elements = source_tr.findall(qn('w:tc'))
+        new_tc_elements = new_tr.findall(qn('w:tc'))
+
+        for col_idx in category_columns:
+            if col_idx < len(source_tc_elements) and col_idx < len(new_tc_elements):
+                source_tc = source_tc_elements[col_idx]
+                new_tc = new_tc_elements[col_idx]
+
+                # 检查源单元格是否已经有 vMerge 属性
+                source_tcPr = source_tc.find(qn('w:tcPr'))
+                has_vmerge = False
+                if source_tcPr is not None:
+                    vMerge = source_tcPr.find(qn('w:vMerge'))
+                    if vMerge is not None:
+                        has_vmerge = True
+
+                # 只有当源单元格是 vMerge 合并区域的一部分时，才设置新行的 vMerge
+                if has_vmerge:
+                    set_cell_vmerge_continue(new_tc)
+                    clear_cell_content(new_tc)
+
+
+def set_cell_vmerge_continue(tc) -> None:
+    """
+    设置单元格为纵向合并的延续（vMerge without val="restart"）
+
+    在 Word 中，纵向合并使用 vMerge 属性：
+    - 合并区域的第一个单元格: <w:vMerge w:val="restart"/>
+    - 合并区域的后续单元格: <w:vMerge/> (没有 val 属性，表示继续合并)
+    """
+    # 获取或创建 tcPr (table cell properties)
+    tcPr = tc.find(qn('w:tcPr'))
+    if tcPr is None:
+        tcPr = OxmlElement('w:tcPr')
+        # tcPr 应该是第一个子元素
+        tc.insert(0, tcPr)
+
+    # 查找现有的 vMerge 元素
+    vMerge = tcPr.find(qn('w:vMerge'))
+    if vMerge is not None:
+        # 如果已存在，移除 val 属性使其成为合并延续
+        if vMerge.get(qn('w:val')):
+            del vMerge.attrib[qn('w:val')]
+    else:
+        # 创建新的 vMerge 元素（不带 val 属性，表示合并延续）
+        vMerge = OxmlElement('w:vMerge')
+        tcPr.append(vMerge)
+
+
+def set_cell_vmerge_restart(tc) -> None:
+    """
+    设置单元格为纵向合并的起始（vMerge with val="restart"）
+    """
+    tcPr = tc.find(qn('w:tcPr'))
+    if tcPr is None:
+        tcPr = OxmlElement('w:tcPr')
+        tc.insert(0, tcPr)
+
+    vMerge = tcPr.find(qn('w:vMerge'))
+    if vMerge is not None:
+        vMerge.set(qn('w:val'), 'restart')
+    else:
+        vMerge = OxmlElement('w:vMerge')
+        vMerge.set(qn('w:val'), 'restart')
+        tcPr.append(vMerge)
+
+
+def clear_cell_content(tc) -> None:
+    """
+    清空单元格内容，但保留一个空段落
+    """
+    # 移除所有段落
+    for p in tc.findall(qn('w:p')):
+        tc.remove(p)
+
+    # 添加一个空段落（Word 要求单元格至少有一个段落）
+    empty_p = OxmlElement('w:p')
+    tc.append(empty_p)
+
+
+def extend_vmerge_region(table, start_row: int, end_row: int, category_columns: list[int]) -> None:
+    """
+    扩展纵向合并区域
+
+    确保从 start_row 到 end_row 的所有分类列都正确设置为纵向合并：
+    - start_row 的分类列单元格设置为 vMerge restart
+    - 后续行的分类列单元格设置为 vMerge continue
+
+    注意：这里直接操作 XML 元素，避免使用 python-docx 的 row.cells 属性，
+    因为在修改 vMerge 属性后，python-docx 的单元格遍历可能会出错。
+    """
+    # 获取表格中的所有 tr 元素
+    tr_elements = table._tbl.findall(qn('w:tr'))
+
+    for col_idx in category_columns:
+        # 处理起始行 - 设置为合并区域的开始
+        if start_row < len(tr_elements):
+            start_tr = tr_elements[start_row]
+            tc_elements = start_tr.findall(qn('w:tc'))
+            if col_idx < len(tc_elements):
+                set_cell_vmerge_restart(tc_elements[col_idx])
+
+        # 后续行设置为合并延续
+        for row_idx in range(start_row + 1, min(end_row + 1, len(tr_elements))):
+            tr = tr_elements[row_idx]
+            tc_elements = tr.findall(qn('w:tc'))
+            if col_idx < len(tc_elements):
+                set_cell_vmerge_continue(tc_elements[col_idx])
+                # 清空内容
+                clear_cell_content(tc_elements[col_idx])
 
 
 def fill_table_cell(table, row_idx: int, cell_idx: int, value: str):
@@ -363,9 +483,12 @@ def fill_table_placeholder(doc: "DocumentType", placeholder: dict, rows_data: li
         return 0
 
     columns = table_config.get('columns', [])
+    # 注意：所有行索引都需要加上偏移量
+    header_row = table_config.get('header_row', 0) + row_offset
     data_start_row = table_config.get('data_start_row', 0) + row_offset
     data_end_row = table_config.get('data_end_row', data_start_row) + row_offset
     is_dynamic = table_config.get('dynamic', False)
+    category_columns = table_config.get('category_columns', [])
 
     if not columns or not rows_data:
         return 0
@@ -384,9 +507,15 @@ def fill_table_placeholder(doc: "DocumentType", placeholder: dict, rows_data: li
         # 需要添加的行数
         rows_to_add = len(rows_data) - existing_data_rows
         rows_added = rows_to_add
-        # 从模板行（数据起始行）复制
+        # 从最后一个数据行复制（在当前数据区域的末尾插入新行）
+        insert_after_row = data_end_row
         for _ in range(rows_to_add):
-            copy_row(table, data_start_row)
+            copy_row(table, insert_after_row, category_columns)
+            insert_after_row += 1  # 每次插入后，下一次从新行之后插入
+
+        # 注意：不再调用 extend_vmerge_region
+        # copy_row 已经会为新行的分类列设置 vMerge continue
+        # 调用 extend_vmerge_region 反而会错误地影响其他子表格的分类区域
 
     # 填充数据
     for row_idx, row_data in enumerate(rows_data):
