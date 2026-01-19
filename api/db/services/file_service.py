@@ -16,7 +16,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session
 from sqlalchemy import func, select
 
 from api.db import KNOWLEDGEBASE_FOLDER_NAME, FileType
@@ -42,7 +42,7 @@ class FileService(CommonService):
 
     @classmethod
     def get_by_pf_id(cls, db: Session, tenant_id: str, pf_id: str, page_number: int, items_per_page: int,
-                     orderby: str, desc: bool, keywords: str | None = None) -> (list[dict], int):
+                     orderby: str, desc: bool, keywords: str | None = None) -> tuple[list[dict], int]:
         query = db.query(cls.model).filter(
             cls.model.tenant_id == tenant_id,
             cls.model.parent_id == pf_id,
@@ -81,19 +81,28 @@ class FileService(CommonService):
 
     @classmethod
     def get_kb_id_by_file_id(cls, db: Session, file_id: str) -> list[dict]:
-        # 使用 aliased 创建表别名
-        KnowledgebaseAlias = aliased(Knowledgebase)
-        DocumentAlias = aliased(Document)
-        FileAlias = aliased(cls.model)
-        kbs = (db.query(Knowledgebase.id, Knowledgebase.name)
-            .select_from(FileAlias)
-            .join(File2Document, File2Document.file_id == FileAlias.id)
-            .join(DocumentAlias, File2Document.document_id == DocumentAlias.id)
-            .join(KnowledgebaseAlias, KnowledgebaseAlias.id == DocumentAlias.kb_id)
-            .filter(FileAlias.id == file_id)).all()
-        if not kbs:
+        """
+        根据文件ID获取关联的知识库信息
+
+        Args:
+            db: 数据库会话
+            file_id: 文件ID
+
+        Returns:
+            知识库信息列表，包含 kb_id, kb_name, document_id
+        """
+        stmt = (
+            select(Knowledgebase.id, Knowledgebase.name, File2Document.document_id)
+            .select_from(cls.model)
+            .join(File2Document, File2Document.file_id == cls.model.id)
+            .join(Document, File2Document.document_id == Document.id)
+            .join(Knowledgebase, Knowledgebase.id == Document.kb_id)
+            .where(cls.model.id == file_id)
+        )
+        result = db.execute(stmt).all()
+        if not result:
             return []
-        return [{"kb_id": kb.id, "kb_name": kb.name} for kb in kbs]
+        return [{"kb_id": row.id, "kb_name": row.name, "document_id": row.document_id} for row in result]
 
     @classmethod
     def get_by_pf_id_name(cls, db: Session, id: str, name: str) -> File | None:

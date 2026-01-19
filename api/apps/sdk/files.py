@@ -213,18 +213,18 @@ def list_files(
     pf_id = parent_id
 
     if not pf_id:
-        root_folder = FileService.get_root_folder(tenant_id)
+        root_folder = FileService.get_root_folder(db, tenant_id)
         pf_id = root_folder["id"]
-        FileService.init_knowledgebase_docs(pf_id, tenant_id)
+        FileService.init_knowledgebase_docs(db, pf_id, tenant_id)
 
     try:
-        e, file = FileService.get_by_id(pf_id)
-        if not e:
+        file = FileService.get_by_id(pf_id)
+        if not file:
             return get_error_data_result(retmsg="Folder not found!")
 
-        files, total = FileService.get_by_pf_id(tenant_id, pf_id, page, page_size, orderby, desc, keywords)
+        files, total = FileService.get_by_pf_id(db, tenant_id, pf_id, page, page_size, orderby, desc, keywords)
 
-        parent_folder = FileService.get_parent_folder(pf_id)
+        parent_folder = FileService.get_parent_folder(db, pf_id)
         if not parent_folder:
             return get_error_data_result(retmsg="File not found!")
 
