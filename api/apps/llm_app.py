@@ -2184,9 +2184,6 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
             last_ans = ""
             async for chunk in chat_mdl.async_chat_streamly(**call_params):
                 if isinstance(chunk, int):
-                    # 流结束
-                    end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
-                    yield f"data: {end_message}\n\n"
                     break
 
                 # 计算增量，与原代码保持一致
@@ -2197,6 +2194,10 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
                 last_ans = chunk  # 更新累加内容
                 sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": last_ans}, ensure_ascii=False)
                 yield f"data: {sse_data}\n\n"  # 注意这里返回的是累加的内容，与原代码一致
+
+            # 流结束
+            end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
+            yield f"data: {end_message}\n\n"
 
         except Exception as e:
             error_message = json.dumps(
