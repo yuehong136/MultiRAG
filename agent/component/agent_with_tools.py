@@ -85,9 +85,10 @@ class Agent(LLM, ToolBase):
     def __init__(self, canvas, id, param: LLMParam):
         LLM.__init__(self, canvas, id, param)
         self.tools = {}
-        for cpn in self._param.tools:
+        for idx, cpn in enumerate(self._param.tools):
             cpn = self._load_tool_obj(cpn)
-            self.tools[cpn.get_meta()["function"]["name"]] = cpn
+            name = cpn.get_meta()["function"]["name"]
+            self.tools[f"{name}_{idx}"] = cpn
         with db_connection() as db:
             self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), TenantLLMService.llm_id2llm_type(self._param.llm_id), self._param.llm_id,
                                       max_retries=self._param.max_retries,
