@@ -366,6 +366,22 @@ def workflow_validation_error_handler(request: Request, exc: WorkflowValidationE
     )
 
 
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    """
+    处理 404 错误，记录无效的 URL 请求
+    """
+    error_msg = f"The requested URL {request.url.path} was not found"
+    logging.error(error_msg)
+    return JSONResponse(
+        status_code=404,
+        content={
+            "error": "Not Found",
+            "message": error_msg,
+        }
+    )
+
+
 # 定义FastAPI应用的自定义异常处理器
 @app.exception_handler(Exception)
 def custom_exception_handler(request: Request, exc: Exception):
