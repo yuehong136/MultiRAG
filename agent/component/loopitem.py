@@ -117,6 +117,10 @@ class LoopItem(ComponentBase, ABC):
             if operator == "empty":
                 return True
             return False
+        elif var is None:
+            if operator == "empty":
+                return True
+            return False
 
         raise Exception(f"Invalid operator: {operator}")
 

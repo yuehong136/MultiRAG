@@ -2297,6 +2297,8 @@ class DocumentService(CommonService):
                     value = [value]
                 for vv in value:
                     if vv not in meta.setdefault(key, {}):
+                        if isinstance(vv, list) or isinstance(vv, dict):
+                            continue
                         meta[key][vv] = []
                     meta[key][vv].append(doc_id)
 
