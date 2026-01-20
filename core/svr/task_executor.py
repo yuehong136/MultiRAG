@@ -585,9 +585,9 @@ async def build_chunks(task, progress_callback, db: Session):
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
         metadata = {}
-        for ck in cks:
-            metadata = update_metadata_to(metadata, ck["metadata_obj"])
-            del ck["metadata_obj"]
+        for doc in docs:
+            metadata = update_metadata_to(metadata, doc["metadata_obj"])
+            del doc["metadata_obj"]
         if metadata:
             doc = DocumentService.get_by_id(task["doc_id"])
             if doc:
