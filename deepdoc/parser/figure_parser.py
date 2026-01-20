@@ -45,8 +45,8 @@ def vision_figure_parser_figure_data_wrapper(figures_data_without_positions):
 
 
 def vision_figure_parser_docx_wrapper(sections, tbls, callback=None,**kwargs):
-    if not tbls:
-        return []
+    if not sections:
+        return tbls
     try:
         with db_connection() as db:
             vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
