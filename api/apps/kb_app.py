@@ -197,6 +197,20 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
                 retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
+
+        # Rename folder in FileService
+        if kb and req_data["name"].lower() != kb.name.lower():
+            FileService.filter_update(
+                db,
+                [
+                    File.tenant_id == kb.tenant_id,
+                    File.source_type == FileSource.KNOWLEDGEBASE,
+                    File.type == "folder",
+                    File.name == kb.name,
+                ],
+                {"name": req_data["name"]},
+            )
+
         if not kb:
             return get_data_error_result(retmsg="Can't find this dataset!")
 
@@ -427,6 +441,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
         # 提前保存知识库名称，避免访问被删除对象
         kb_name = kbs[0].name
         kb_id = kbs[0].id
+        kb_tenant_id = kbs[0].tenant_id
 
         # 遍历知识库中的所有文档，进行删除
         for doc in DocumentService.query(db, kb_id=req_data["kb_id"]):
@@ -446,8 +461,14 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
             File2DocumentService.delete_by_document_id(db, doc_id)
             settings.STORAGE_IMPL.rm(b, n)
         FileService.filter_delete(
-            db, [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kb_name])
-
+            db,
+            [
+                File.tenant_id == kb_tenant_id,
+                File.source_type == FileSource.KNOWLEDGEBASE,
+                File.type == "folder",
+                File.name == kb_name,
+            ]
+        )
         # 删除 MinIO 存储桶
         settings.STORAGE_IMPL.remove_bucket(kb_id)
 
