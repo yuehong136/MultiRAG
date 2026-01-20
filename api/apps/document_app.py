@@ -376,6 +376,11 @@ class SetMetaRequest(BaseModel):
     meta: dict[str, Any] = Field(..., description="元数据对象")
 
 
+class UpdateMetadataSettingRequest(BaseModel):
+    doc_id: str = Field(..., description="文档ID")
+    metadata: dict[str, Any] = Field(..., description="元数据设置")
+
+
 class FilterRequest(BaseModel):
     kb_id: str = Field(..., description="知识库ID")
     keywords: str = Field(default="", description="关键词")
@@ -3245,6 +3250,37 @@ def metadata_update(
     target_doc_ids = list(target_doc_ids)
     updated = DocumentService.batch_update_metadata(db, kb_id, target_doc_ids, updates, deletes)
     return get_json_result(data={"updated": updated, "matched_docs": len(target_doc_ids)})
+
+
+@router.post("/update_metadata_setting", summary="更新文档元数据设置", response_description="成功更新文档元数据设置")
+def update_metadata_setting(
+        request: UpdateMetadataSettingRequest,
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """更新文档的元数据设置（存储在 parser_config 中）。
+
+    - **request.doc_id**: 文档ID
+    - **request.metadata**: 元数据设置对象
+    - **返回值**: 更新后的文档信息
+    """
+    if not DocumentService.accessible(db, request.doc_id, user.id):
+        return get_json_result(
+            data=False,
+            retmsg="No authorization.",
+            retcode=RetCode.AUTHENTICATION_ERROR
+        )
+
+    doc = DocumentService.get_by_id(db, request.doc_id)
+    if not doc:
+        return get_data_error_result(retmsg="Document not found!")
+
+    DocumentService.update_parser_config(db, doc.id, {"metadata": request.metadata})
+    doc = DocumentService.get_by_id(db, doc.id)
+    if not doc:
+        return get_data_error_result(retmsg="Document not found!")
+
+    return get_json_result(data=doc.to_dict())
 
 
 @router.post("/set_meta", summary="设置文档元数据", response_description="成功设置文档元数据")
