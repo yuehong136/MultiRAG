@@ -2660,144 +2660,65 @@ async def do_handle_task(db, task):
     # 获取集合 schema，用于做数据类型转换
     schema = await get_schema(search.index_name_one(task_tenant_id, kb_name))
     collection_name = search.index_name_one(task_tenant_id, kb_name)
-    e = await insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, progress_callback, collection_name,
-                            schema)
-    if not e:
-        return
-    # async def delete_image(kb_id, chunk_id):
-    #     try:
-    #         async with minio_limiter:
-    #             settings.STORAGE_IMPL.delete(kb_id, chunk_id)
-    #     except Exception:
-    #         logging.exception("Deleting image of chunk {}/{}/{} got exception".format(task["location"], task["name"], chunk_id))
-    #         raise
-    #
-    # # 循环分批插入
-    # for b in range(0, chunk_count, settings.DOC_BULK_SIZE):
-    #     # 取出本批次要插入的 chunks
-    #     chunk_batch = chunks[b: b + settings.DOC_BULK_SIZE]
-    #
-    #     # 将本批次内的数据先做类型转换
-    #     converted_batch = []
-    #     for chunk in chunk_batch:
-    #         # 选项1：对小数据保持同步
-    #         converted_chunk = convert_data_types(chunk, schema)
-    #         # 选项2：对大数据使用异步
-    #         # converted_chunk = await convert_data_types_async(chunk, schema)
-    #         converted_batch.append(converted_chunk)
-    #
-    #     doc_store_result = {}
-    #     try:
-    #         # 调用自定义的 settings.docStoreConn.insert 方法
-    #         doc_store_result = await trio.to_thread.run_sync(lambda: settings.docStoreConn.insert(
-    #             collection_name=collection_name,
-    #             data=converted_batch
-    #         ))
-    #
-    #         # 可选：检查 insert_count 是否与本批次长度一致
-    #         # 如果你的需求是一定要完全插入成功才算成功，可以加如下校验：
-    #         if doc_store_result.get("insert_count", 0) != len(converted_batch):
-    #             error_message = (
-    #                 f"Insert count mismatch: expected {len(converted_batch)}, "
-    #                 f"got {doc_store_result.get('insert_count', 0)}."
-    #             )
-    #             progress_callback(-1, msg=error_message)
-    #             raise Exception(error_message)
-    #
-    #     except Exception:
-    #         # 如果出现异常，记录失败并进行删除回滚
-    #         failed_inserts.extend(chunk_batch)
-    #         progress_callback(
-    #             -1,
-    #             "Insert chunk error, detail info please check log file. Please also check Milvus status!"
-    #         )
-    #         try:
-    #             if settings.docStoreConn.has_collection(collection_name):
-    #                 # 删除本批次已经尝试插入的记录（这里按 doc_id 删除，可根据业务实际情况调整 filter 条件）
-    #                 for chunk in chunk_batch:
-    #                     if "doc_id" in chunk:
-    #                         settings.docStoreConn.delete(
-    #                             collection_name=collection_name,
-    #                             filter=f"doc_id == '{chunk['doc_id']}'"
-    #                         )
-    #         except MilvusException as e:
-    #             return e  # 可根据需要改成 raise 或其它处理
-    #         logging.exception("Insert error:")
-    #         logging.error("Data being inserted: %s", converted_batch)
-    #         return  # 出错后直接退出
-    #
-    #     # 若执行到此，说明插入成功，记录插入结果
-    #     successful_inserts.append(doc_store_result)
-    #
-    #     task_canceled = has_canceled(task_id)
-    #     if task_canceled:
-    #         progress_callback(-1, msg="Task has been canceled.")
-    #         return
-    #
-    #     # 每插入 128 批，做一次进度回调（可自定义触发频率）
-    #     if b % 128 == 0:
-    #         progress = 0.8 + 0.1 * (b + 1) / chunk_count
-    #         progress_callback(prog=progress, msg="")
-    #
-    #     # 拼接本批次 chunk_ids 并更新到 TaskService
-    #     # （需要你确保 chunk 内有 "id" 这个字段）
-    #     chunk_ids = [chunk["pk"] for chunk in chunk_batch]
-    #     chunk_ids_str = " ".join(chunk_ids)
-    #     try:
-    #         TaskService.update_chunk_ids(db, task["id"], chunk_ids_str)
-    #     except NoResultFound:
-    #         logging.warning(f"do_handle_task update_chunk_ids failed since task {task['id']} is unknown.")
-    #         # 如果 TaskService 中没有这个 task，则删除已插入数据并退出
-    #         try:
-    #             if settings.docStoreConn.has_collection(collection_name):
-    #                 for chunk in chunk_batch:
-    #                     if "doc_id" in chunk:
-    #                         await trio.to_thread.run_sync(lambda: settings.docStoreConn.delete(
-    #                             collection_name=collection_name,
-    #                             filter=f"doc_id == '{chunk['doc_id']}'"
-    #                         ))
-    #         except MilvusException as e:
-    #             return e
-    #         async with trio.open_nursery() as nursery:
-    #             for chunk_id in chunk_ids:
-    #                 nursery.start_soon(delete_image, task_dataset_id, chunk_id)
-    #         progress_callback(-1, msg=f"Chunk updates failed since task {task['id']} is unknown.")
-    #         return
 
-    logging.info("Indexing doc({}), page({}-{}), chunks({}), elapsed: {:.2f}".format(task_document_name, task_from_page,
-                                                                                     task_to_page, len(chunks),
-                                                                                     timer() - start_ts))
+    async def _maybe_insert_milvus(_chunks):
+        if has_canceled(task_id):
+            return True
+        e = await insert_milvus(db, task_id, task_tenant_id, task_dataset_id, _chunks, progress_callback,
+                                collection_name, schema)
+        return bool(e)
 
-    # 如果任务被取消，则清理已插入的数据并返回
-    if TaskService.do_cancel(db, task_id):
-        try:
-            if await asyncio.to_thread(settings.docStoreConn.has_collection, collection_name):
-                await asyncio.to_thread(delete_chunks_by_doc_id, collection_name, task_doc_id, task_dataset_id)
-        except Exception as e:
-            return e
-        return
+    try:
+        if not await _maybe_insert_milvus(chunks):
+            return
 
-    # 最后更新统计信息
-    DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
+        logging.info(
+            "Indexing doc({}), page({}-{}), chunks({}), elapsed: {:.2f}".format(
+                task_document_name, task_from_page, task_to_page, len(chunks), timer() - start_ts
+            )
+        )
 
-    # 做一次进度回调
-    time_cost = timer() - start_ts
-    progress_callback(msg="Indexing done ({:.2f}s).".format(time_cost))
-    if toc_thread:
-        d = toc_thread.result()
-        if d:
-            e = await insert_milvus(db, task_id, task_tenant_id, task_dataset_id, [d], progress_callback,
-                                    collection_name, schema)
-            if not e:
-                return
-            DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, 0, 1, 0)
+        DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
 
-    task_time_cost = timer() - task_start_ts
-    progress_callback(prog=1.0, msg="Indexing done ({:.2f}s). Task done ({:.2f}s)".format(time_cost, task_time_cost))
-    logging.info(
-        "Chunk doc({}), page({}-{}), chunks({}), token({}), elapsed:{:.2f}".format(task_document_name, task_from_page,
-                                                                                   task_to_page, len(chunks),
-                                                                                   token_count, task_time_cost))
+        progress_callback(msg="Indexing done ({:.2f}s).".format(timer() - start_ts))
+
+        if toc_thread:
+            d = toc_thread.result()
+            if d:
+                if not await _maybe_insert_milvus([d]):
+                    return
+                DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, 0, 1, 0)
+
+        if has_canceled(task_id):
+            progress_callback(-1, msg="Task has been canceled.")
+            return
+
+        task_time_cost = timer() - task_start_ts
+        progress_callback(prog=1.0, msg="Task done ({:.2f}s)".format(task_time_cost))
+        logging.info(
+            "Chunk doc({}), page({}-{}), chunks({}), token({}), elapsed:{:.2f}".format(
+                task_document_name, task_from_page, task_to_page, len(chunks), token_count, task_time_cost
+            )
+        )
+
+    finally:
+        if has_canceled(task_id):
+            try:
+                exists = await asyncio.to_thread(
+                    settings.docStoreConn.has_collection,
+                    collection_name,
+                )
+                if exists:
+                    await asyncio.to_thread(
+                        delete_chunks_by_doc_id,
+                        collection_name,
+                        task_doc_id,
+                        task_dataset_id,
+                    )
+            except Exception:
+                logging.exception(
+                    f"Remove doc({task_doc_id}) from docStore failed when task({task_id}) canceled."
+                )
 
 
 async def handle_task():
