@@ -160,7 +160,7 @@ class DocumentService(CommonService):
     def get_by_kb_id(cls, db: Session, kb_id: str, page_number: int, items_per_page: int,
                      orderby: str, desc: bool, keywords: str | None,
                      run_status: list | None = None, types: list | None = None, suffix: list = None,
-                     doc_ids: list | None = None) -> tuple[list[dict], int]:
+                     doc_ids: list | None = None, return_empty_metadata: bool = False) -> tuple[list[dict], int]:
         if suffix is None:
             suffix = []
         fields = cls.get_cls_model_fields()
@@ -190,6 +190,9 @@ class DocumentService(CommonService):
 
         if doc_ids:
             base = base.where(cls.model.id.in_(doc_ids))
+
+        if return_empty_metadata:
+            base = base.where(func.coalesce(func.json_length(cls.model.meta_fields), 0) == 0)
 
         # 计算总数
         count = db.execute(select(func.count()).select_from(base.subquery())).scalar_one()
@@ -320,15 +323,13 @@ class DocumentService(CommonService):
         meta_rows = db.scalars(meta_stmt).all()
 
         metadata_counter = {}
+        empty_metadata_count = 0
         for meta_fields in meta_rows:
             meta_fields = meta_fields or {}
-            if isinstance(meta_fields, str):
-                try:
-                    meta_fields = json.loads(meta_fields)
-                except Exception:
-                    meta_fields = {}
-            if not isinstance(meta_fields, dict):
+            if not meta_fields:
+                empty_metadata_count += 1
                 continue
+            has_valid_meta = False
             for key, value in meta_fields.items():
                 values = value if isinstance(value, list) else [value]
                 for vv in values:
@@ -340,6 +341,11 @@ class DocumentService(CommonService):
                     if key not in metadata_counter:
                         metadata_counter[key] = {}
                     metadata_counter[key][sv] = metadata_counter[key].get(sv, 0) + 1
+                    has_valid_meta = True
+            if not has_valid_meta:
+                empty_metadata_count += 1
+
+        metadata_counter["empty_metadata"] = {"true": empty_metadata_count}
 
         # 7) 组装返回
         suffix_counter = {row.suffix: row.count for row in suffix_stats}

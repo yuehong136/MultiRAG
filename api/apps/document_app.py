@@ -335,6 +335,7 @@ class DocumentFilter(BaseModel):
     suffix: list[str] = []
     metadata_condition: MetadataCondition | dict | None = Field(default=None, description="元数据过滤条件")
     metadata: dict | None = Field(default=None, description="元数据过滤，同字段内OR，不同字段间AND")
+    return_empty_metadata: bool = Field(default=False, description="是否仅返回空元数据的文档")
 
 
 class ChangeStatusRequest(BaseModel):
@@ -1448,25 +1449,37 @@ def list_docs(
 
     suffix = filter_params.suffix
 
+    # 处理 return_empty_metadata 参数
+    return_empty_metadata = filter_params.return_empty_metadata
+
     # 处理 metadata_condition
     metadata_condition = filter_params.metadata_condition
     if metadata_condition and isinstance(metadata_condition, MetadataCondition):
         metadata_condition = metadata_condition.model_dump()
-    if metadata_condition and not isinstance(metadata_condition, dict):
-        return construct_json_result(
-            data=False,
-            message="metadata_condition must be an object.",
-            code=RetCode.ARGUMENT_ERROR
-        )
 
     # 处理 metadata 参数
     metadata = filter_params.metadata
-    if metadata and not isinstance(metadata, dict):
-        return construct_json_result(
-            data=False,
-            message="metadata must be an object.",
-            code=RetCode.ARGUMENT_ERROR
-        )
+    if isinstance(metadata, dict) and metadata.get("empty_metadata"):
+        return_empty_metadata = True
+        metadata = {k: v for k, v in metadata.items() if k != "empty_metadata"}
+
+    # 如果过滤空元数据，则忽略其他元数据条件
+    if return_empty_metadata:
+        metadata_condition = {}
+        metadata = {}
+    else:
+        if metadata_condition and not isinstance(metadata_condition, dict):
+            return construct_json_result(
+                data=False,
+                message="metadata_condition must be an object.",
+                code=RetCode.ARGUMENT_ERROR
+            )
+        if metadata and not isinstance(metadata, dict):
+            return construct_json_result(
+                data=False,
+                message="metadata must be an object.",
+                code=RetCode.ARGUMENT_ERROR
+            )
 
     doc_ids_filter = None
     metas = None
@@ -1511,7 +1524,8 @@ def list_docs(
 
     try:
         docs, tol = DocumentService.get_by_kb_id(
-            db, kb_id, page, page_size, orderby, desc, keywords, run_status, types, suffix, doc_ids_filter
+            db, kb_id, page, page_size, orderby, desc, keywords, run_status, types, suffix, doc_ids_filter,
+            return_empty_metadata=return_empty_metadata
         )
         docs = [convert_datetime_to_str(d) for d in docs]
 
