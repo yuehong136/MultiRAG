@@ -31,7 +31,7 @@ from deepdoc.parser.ppt_parser import RAGFlowPptParser
 from deepdoc.parser.tcadp_parser import TCADPParser
 from tika import parser as tika_parser
 from core.app.naive import Docx, Markdown as MarkdownParser
-from core.nlp import concat_img, attach_media_context
+from core.nlp import concat_img
 from deepdoc.vision import OCR
 from core.llm.cv import Base as VLM
 
@@ -221,7 +221,7 @@ class FlowParser:
                 binary=binary,
                 callback=callback,
                 parse_method=mineru_parse_method,
-                lang=conf.get("lang", "Chinese"),
+                lang=lang,
             )
             
             bboxes = []
@@ -302,12 +302,9 @@ class FlowParser:
             elif layout == "table":
                 b["doc_type_kwd"] = "table"
         
-        # 添加上下文
-        table_ctx = table_context_size or 0
-        image_ctx = image_context_size or 0
-        if table_ctx or image_ctx:
-            bboxes = attach_media_context(bboxes, table_ctx, image_ctx)
-        
+        # 注意：attach_media_context 在 splitter 阶段调用（参考 splitter.py 第 112-119 行）
+        # parser 阶段只负责标记 doc_type_kwd，不添加上下文
+
         if output_format == "json":
             return {"output_format": "json", "json": bboxes}
         elif output_format == "markdown":
@@ -411,13 +408,9 @@ class FlowParser:
                     if table:
                         result.append({"text": table, "doc_type_kwd": "table"})
                 
-                table_ctx = table_context_size or 0
-                image_ctx = image_context_size or 0
-                if table_ctx or image_ctx:
-                    result = attach_media_context(result, table_ctx, image_ctx)
-                
+                # 注意：attach_media_context 在 splitter 阶段调用
                 return {"output_format": "json", "json": result}
-            
+
             elif output_format == "markdown":
                 # For markdown output, combine into markdown
                 md_content = ""
@@ -505,12 +498,8 @@ class FlowParser:
             sections, tbls = await _to_thread(docx_parser, filename, binary)
             json_sections = [{"text": section[0], "image": section[1]} for section in sections if section]
             json_sections.extend([{"text": tb, "image": None, "doc_type_kwd": "table"} for ((_, tb), _) in tbls])
-            
-            table_ctx = table_context_size or 0
-            image_ctx = image_context_size or 0
-            if table_ctx or image_ctx:
-                json_sections = attach_media_context(json_sections, table_ctx, image_ctx)
-            
+
+            # 注意：attach_media_context 在 splitter 阶段调用
             return {"output_format": "json", "json": json_sections}
         elif output_format == "markdown":
             markdown_text = await _to_thread(docx_parser.to_markdown, filename, binary)
@@ -592,14 +581,10 @@ class FlowParser:
             for table in tables:
                 if table:
                     result.append({"text": table, "doc_type_kwd": "table"})
-            
-            table_ctx = table_context_size or 0
-            image_ctx = image_context_size or 0
-            if table_ctx or image_ctx:
-                result = attach_media_context(result, table_ctx, image_ctx)
-            
+
+            # 注意：attach_media_context 在 splitter 阶段调用
             return {"output_format": "json", "json": result}
-        
+
         ext = filename.lower().split(".")[-1] if "." in filename else ""
         
         # 1. 尝试使用 Tika 解析 .ppt (老格式)
@@ -631,12 +616,8 @@ class FlowParser:
             txts = await _to_thread(ppt_parser, binary, 0, 100000, None)
             
             sections = [{"text": section} for section in txts if section.strip()]
-            
-            table_ctx = table_context_size or 0
-            image_ctx = image_context_size or 0
-            if table_ctx or image_ctx:
-                sections = attach_media_context(sections, table_ctx, image_ctx)
-            
+
+            # 注意：attach_media_context 在 splitter 阶段调用
             return {"output_format": "json", "json": sections}
         except KeyError as e:
             error_msg = str(e)
@@ -698,12 +679,8 @@ class FlowParser:
                     json_result["image"] = combined_image
                 
                 json_results.append(json_result)
-            
-            table_ctx = table_context_size or 0
-            image_ctx = image_context_size or 0
-            if table_ctx or image_ctx:
-                json_results = attach_media_context(json_results, table_ctx, image_ctx)
-            
+
+            # 注意：attach_media_context 在 splitter 阶段调用
             return {"output_format": "json", "json": json_results}
         else:
             text = "\n".join([section_text for section_text, _ in sections])

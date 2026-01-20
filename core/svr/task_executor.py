@@ -1787,6 +1787,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 delimiters=delimiters,
                 overlapped_percent=overlapped_percent,
                 children_delimiters=children_delimiters,
+                table_context_size=table_context_size,
+                image_context_size=image_context_size,
                 callback=_splitter_callback
             )
 

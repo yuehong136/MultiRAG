@@ -16,7 +16,7 @@ import re
 from copy import deepcopy
 
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser
-from core.nlp import naive_merge, naive_merge_with_images
+from core.nlp import naive_merge, naive_merge_with_images, attach_media_context
 
 logger = logging.getLogger(__name__)
 
@@ -209,21 +209,25 @@ async def split_chunks(
     delimiters: list[str] | None = None,
     overlapped_percent: float = 0,
     children_delimiters: list[str] | None = None,
+    table_context_size: int = 0,
+    image_context_size: int = 0,
     callback=None
 ) -> list[dict]:
     """
     使用 core/flow 逻辑切分（支持重叠、保留位置、child-parent chunking）
-    
-    参考：core/flow/splitter/splitter.py 的完整逻辑
-    
+
+    参考：core/flow/splitter/splitter.py 的完整逻辑（第 55-168 行）
+
     Args:
         parsed_result: parse_file 的返回结果
         chunk_token_size: chunk 大小
         delimiters: 分隔符列表
         overlapped_percent: 重叠比例
         children_delimiters: 子块分隔符列表（用于 child-parent chunking）
+        table_context_size: 表格上下文 token 数（0 表示不添加）
+        image_context_size: 图片上下文 token 数（0 表示不添加）
         callback: 进度回调
-    
+
     Returns:
         [{"text": "...", "image": <Image>, "positions": [...]}, ...]
         如果设置了 children_delimiters，则每个 chunk 还包含:
@@ -248,10 +252,23 @@ async def split_chunks(
     
     elif output_format == "json":
         # 结构化切分（保留位置）
+        # 参考 core/flow/splitter/splitter.py 第 111-124 行
         json_result = parsed_result.get("json", [])
+
+        # 为表格和图片添加上下文（参考 splitter.py 第 112-119 行）
+        if table_context_size or image_context_size:
+            for ck in json_result:
+                # 标记没有文字但有 img_id 的块为 image
+                if "image" not in ck and ck.get("img_id") and not (isinstance(ck.get("text"), str) and ck.get("text").strip()):
+                    ck["image"] = True
+            attach_media_context(json_result, table_context_size, image_context_size)
+            for ck in json_result:
+                if ck.get("image") is True:
+                    del ck["image"]
+
         sections = [(o.get("text", ""), o.get("position_tag", "")) for o in json_result]
         images = [o.get("image") for o in json_result]
-        
+
         return await FlowSplitter.split_sections_with_images(
             sections, images, chunk_token_size, delimiters, overlapped_percent, children_delimiters, callback
         )
