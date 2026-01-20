@@ -141,6 +141,16 @@ def completion(db, tenant_id, chat_id, question, name="New session", session_id=
                                        ensure_ascii=False) + "\n\n"
             yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
             return
+        else:
+            answer = {
+                "answer": conv["message"][0]["content"],
+                "reference": {},
+                "audio_binary": None,
+                "id": None,
+                "session_id": session_id
+            }
+            yield answer
+            return
 
     conv = ConversationService.query(db, id=session_id, dialog_id=chat_id)
     if not conv:
@@ -218,6 +228,16 @@ async def async_completion(db, tenant_id, chat_id, question, name="New session",
                                         }},
                                        ensure_ascii=False) + "\n\n"
             yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
+            return
+        else:
+            answer = {
+                "answer": conv["message"][0]["content"],
+                "reference": {},
+                "audio_binary": None,
+                "id": None,
+                "session_id": session_id
+            }
+            yield answer
             return
 
     conv = ConversationService.query(db, id=session_id, dialog_id=chat_id)
