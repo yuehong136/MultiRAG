@@ -854,7 +854,7 @@ async def webhook(
         async def sse():
             nonlocal canvas
             contents: list[str] = []
-
+            status = 200
             try:
                 async for ans in canvas.run(
                     query="",
@@ -869,6 +869,8 @@ async def webhook(
                             content = "</think>"
                         if content:
                             contents.append(content)
+                    if ans["event"] == "message_end":
+                        status = int(ans["data"].get("status", status))
                     if is_test:
                         append_webhook_trace(agent_id, start_ts, ans)
 
@@ -884,7 +886,11 @@ async def webhook(
                     )
 
                 final_content = "".join(contents)
-                yield json.dumps(final_content, ensure_ascii=False)
+                return {
+                    "message": final_content,
+                    "success": True,
+                    "code": status,
+                }
 
             except Exception as e:
                 if is_test:
@@ -906,11 +912,13 @@ async def webhook(
                             "success": False,
                         }
                     )
-                yield json.dumps({"code": 500, "message": str(e)}, ensure_ascii=False)
+                return {"code": 400, "message": str(e), "success": False}
 
-        return StreamingResponse(
-            sse(),
-            media_type="application/json"
+        result = await sse()
+        return Response(
+            json.dumps(result),
+            status_code=result["code"],
+            media_type="application/json",
         )
 
 

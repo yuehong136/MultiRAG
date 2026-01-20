@@ -307,8 +307,8 @@ class ChatAgentAdapter:
                 yield "🔧 Starting tool analysis...\n"
 
                 previous_tool_count = 0
-                # 使用异步版本的 _react_with_tools_streamly_async
-                async for delta_ans, _ in self.agent._react_with_tools_streamly_async(prompt, msg, use_tools, schema_prompt=schema_prompt):
+                # 使用异步版本的 _react_with_tools_streamly_async_simple
+                async for delta_ans, _ in self.agent._react_with_tools_streamly_async_simple(prompt, msg, use_tools, schema_prompt=schema_prompt):
                     if len(use_tools) > previous_tool_count:
                         new_tools = use_tools[previous_tool_count:]
                         for tool_call in new_tools:
@@ -393,7 +393,7 @@ class ChatAgentAdapter:
                 call_id_counter = 0
 
                 # 使用异步版本
-                async for delta_ans, _ in self.agent._react_with_tools_streamly_async(prompt, msg, use_tools, schema_prompt=schema_prompt):
+                async for delta_ans, _ in self.agent._react_with_tools_streamly_async_simple(prompt, msg, use_tools, schema_prompt=schema_prompt):
                     if len(use_tools) > previous_tool_count:
                         new_tools = use_tools[previous_tool_count:]
                         for tool_call in new_tools:
