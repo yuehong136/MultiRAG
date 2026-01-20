@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc, update
 
 from api.constants import IMG_BASE64_PREFIX, FILE_NAME_LEN_LIMIT
+from api.utils.db_utils import bulk_insert_into_db
 from api.db import FileType, UserTenantRole, CanvasCategory
 from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, File2Document, File, UserCanvas, \
     User
@@ -31,7 +32,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
-from api.utils.db_utils import bulk_insert_into_db
+from common.metadata_utils import dedupe_list
 from common import settings
 from common.constants import LLMType, ParserType, TaskStatus, StatusEnum, SVR_CONSUMER_GROUP_NAME, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
 from core.nlp import search, rag_tokenizer
@@ -2417,7 +2418,10 @@ class DocumentService(CommonService):
                 match_provided = "match" in upd
                 if isinstance(meta[key], list):
                     if not match_provided:
-                        meta[key] = new_value
+                        if isinstance(new_value, list):
+                            meta[key] = dedupe_list(new_value)
+                        else:
+                            meta[key] = new_value
                         changed = True
                     else:
                         match_value = upd.get("match")
@@ -2430,7 +2434,7 @@ class DocumentService(CommonService):
                             else:
                                 new_list.append(item)
                         if replaced:
-                            meta[key] = new_list
+                            meta[key] = dedupe_list(new_list)
                             changed = True
                 else:
                     if not match_provided:
