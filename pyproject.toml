@@ -101,6 +101,7 @@ dependencies = [
     "pyexcel-xlsx>=0.6.0",
     "pyvector-vastbase==1.0.2",
     "pywencai>=0.13.1,<1.0.0",
+    "pyairtable>=3.3.0",
     "ranx==0.3.20",
     "readability-lxml>=0.8.4,<1.0.0",
     "redis>=6.1.0",
