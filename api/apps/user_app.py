@@ -105,6 +105,9 @@ class UserUpdateRequest(BaseModel):
     status: str = Field(None, description="User status")
     is_superuser: bool = Field(None, description="Superuser flag")
     login_channel: str = Field(None, description="Login channel")
+    avatar: str = Field(None, description="User's avatar (base64 encoded)")
+    nickname: str = Field(None, description="User's nickname")
+    timezone: str = Field(None, description="User's timezone")
 
 
 class SendOtpRequest(BaseModel):
@@ -559,9 +562,10 @@ def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user
         - 如果更新操作失败，会记录异常信息并返回通用的失败响应，防止敏感信息泄露。
     """
     update_dict = {}
-    request_data = request.model_dump()
-    if request_data["password"]:
-        new_password = request_data["new_password"]
+    # 使用 exclude_none=True 排除 None 值，避免将未传入的字段设为 NULL
+    request_data = request.model_dump(exclude_none=True)
+    if request_data.get("password"):
+        new_password = request_data.get("new_password")
         # if not pwd_context.verify(request_data["password"], user.password):
         if not UserService.verify_password(request_data["password"], user.password):
             return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg='Password error!')
