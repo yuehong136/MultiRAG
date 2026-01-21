@@ -358,6 +358,7 @@ class RunRequest(BaseModel):
     doc_ids: list[str] = Field(..., description="文档ID列表")
     run: int = Field(..., description="运行状态")
     delete: bool = Field(default=False, description="是否删除历史doc记录")
+    apply_kb: bool = Field(default=False, description="是否从知识库同步元数据配置到文档")
 
 
 class RenameRequest(BaseModel):
@@ -2646,6 +2647,10 @@ def run(
                     return construct_json_result(data=False, message=str(e), code=RetCode.ARGUMENT_ERROR)
 
             if str(req["run"]) == TaskStatus.RUNNING.value:
+                if req.get("apply_kb"):
+                    d["parser_config"]["enable_metadata"] = kb.parser_config.get("enable_metadata", False)
+                    d["parser_config"]["metadata"] = kb.parser_config.get("metadata", {})
+                    DocumentService.update_parser_config(db, id, d["parser_config"])
                 doc = d
                 DocumentService.run(db, tenant_id, doc, kb_table_num_map)
         return construct_json_result(data=True)
