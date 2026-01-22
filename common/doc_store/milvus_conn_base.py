@@ -134,7 +134,7 @@ class MilvusConnectionBase(DocStoreConnection):
                 self.logger.info(f"Collection {collection_name} already exists")
                 return True
 
-            mapping_path = os.path.join(get_project_base_directory(), "configs", "milvus_mapping.json")
+            mapping_path = os.path.join(get_project_base_directory(), "configs", "mapping.json")
             if not os.path.exists(mapping_path):
                 self.logger.warning(f"Milvus mapping file not found, using default fields: {mapping_path}")
                 return self._create_default_collection(index_name, dataset_id, vector_size)

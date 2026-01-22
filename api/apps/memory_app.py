@@ -19,11 +19,13 @@ from api.db.db_models import get_db
 from api.db.services.memory_service import MemoryService
 from api.db.services.user_service import UserTenantService
 from api.db.services.canvas_service import UserCanvasService
+from api.db.joint_services.memory_message_service import get_memory_size_cache, judge_system_prompt_is_default
 from api.utils.memory_utils import format_ret_data_from_memory, get_memory_type_human
 from api.utils.api_utils import get_json_result
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from common.constants import MemoryType, TenantPermission, ForgettingPolicy, RetCode
 from memory.services.messages import MessageService
+from memory.utils.prompt_util import PromptAssembler
 
 
 router = APIRouter()
@@ -49,6 +51,8 @@ class UpdateMemoryRequest(BaseModel):
     name: str | None = Field(None, max_length=MEMORY_NAME_LIMIT, description="Memory名称")
     avatar: str | None = Field(None, description="头像base64字符串")
     description: str | None = Field(None, description="描述")
+    embd_id: str | None = Field(None, description="嵌入模型ID")
+    memory_type: list[str] | None = Field(None, min_length=1, description="Memory类型列表")
     llm_id: str | None = Field(None, description="LLM模型ID")
     permissions: str | None = Field(None, description="权限范围：me|team")
     memory_size: int | None = Field(None, gt=0, le=MEMORY_SIZE_LIMIT, description="最大Memory大小（字节）")
@@ -164,14 +168,15 @@ def update_memory(
 
     参数：
     - **memory_id**: Memory ID
-    - 可更新字段：name, avatar, description, llm_id, permissions, memory_size,
-      forgetting_policy, temperature, system_prompt, user_prompt
+    - 可更新字段：name, avatar, description, embd_id, memory_type, llm_id, permissions,
+      memory_size, forgetting_policy, temperature, system_prompt, user_prompt
 
     返回：
     - dict: 更新后的Memory详情
 
     注意：
-    - 不允许修改：id, tenant_id, memory_type, storage_type, embd_id
+    - 不允许修改：id, tenant_id, storage_type
+    - embd_id 和 memory_type 只有在 memory 为空时才能修改
     """
     # 检查Memory是否存在
     current_memory = MemoryService.get_by_memory_id(db, memory_id)
@@ -209,6 +214,21 @@ def update_memory(
                 retcode=RetCode.ARGUMENT_ERROR
             )
         update_dict["permissions"] = request_body.permissions
+
+    if request_body.embd_id is not None:
+        update_dict["embd_id"] = request_body.embd_id
+
+    if request_body.memory_type is not None:
+        memory_type_set = set(request_body.memory_type)
+        valid_types = {e.name.lower() for e in MemoryType}
+        invalid_types = memory_type_set - valid_types
+        if invalid_types:
+            return get_json_result(
+                data=False,
+                retmsg=f"Memory type '{invalid_types}' is not supported.",
+                retcode=RetCode.ARGUMENT_ERROR
+            )
+        update_dict["memory_type"] = list(memory_type_set)
 
     if request_body.llm_id is not None:
         update_dict["llm_id"] = request_body.llm_id
@@ -259,6 +279,25 @@ def update_memory(
 
     if not to_update:
         return get_json_result(data=memory_dict)
+
+    # 检查 memory 非空时不能更新 embd_id 和 memory_type
+    memory_size = get_memory_size_cache(current_memory.tenant_id, memory_id)
+    not_allowed_update = [f for f in ["embd_id", "memory_type"] if f in to_update and memory_size > 0]
+    if not_allowed_update:
+        return get_json_result(
+            data=False,
+            retmsg=f"Can't update {not_allowed_update} when memory isn't empty.",
+            retcode=RetCode.ARGUMENT_ERROR
+        )
+
+    # 更新 memory_type 时自动更新默认的 system_prompt
+    if "memory_type" in to_update:
+        if "system_prompt" not in to_update and judge_system_prompt_is_default(
+            current_memory.system_prompt, current_memory.memory_type
+        ):
+            to_update["system_prompt"] = PromptAssembler.assemble_system_prompt(
+                {"memory_type": to_update["memory_type"]}
+            )
 
     try:
         MemoryService.update_memory(db, current_memory.tenant_id, memory_id, to_update)

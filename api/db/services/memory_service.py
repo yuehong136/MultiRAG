@@ -289,6 +289,10 @@ class MemoryService(CommonService):
         if "temperature" in update_dict and isinstance(update_dict["temperature"], str):
             update_dict["temperature"] = float(update_dict["temperature"])
 
+        # 处理memory_type字段类型转换
+        if "memory_type" in update_dict and isinstance(update_dict["memory_type"], list):
+            update_dict["memory_type"] = calculate_memory_type(update_dict["memory_type"])
+
         # 处理名称重复
         if "name" in update_dict:
             def name_exists(name: str, tenant_id: str) -> bool:
