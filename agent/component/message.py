@@ -436,7 +436,7 @@ class Message(ComponentBase):
 
     async def _save_to_memory(self, content):
         """Save conversation to memory if memory_ids are configured."""
-        if hasattr(self._param, "memory_ids") and not self._param.memory_ids:
+        if not hasattr(self._param, "memory_ids") and not self._param.memory_ids:
             return True, "No memory selected."
 
         message_dict = {
