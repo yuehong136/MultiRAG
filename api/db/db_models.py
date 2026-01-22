@@ -1738,8 +1738,8 @@ class Memory(BaseModel):
         doc="Maximum memory size in bytes (default 5MB)"
     )
     forgetting_policy: Mapped[str] = mapped_column(
-        String(32), index=False, nullable=False, default="fifo",
-        doc="Forgetting policy: lru|fifo"
+        String(32), index=False, nullable=False, default="FIFO",
+        doc="Forgetting policy: LRU|FIFO"
     )
     temperature: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0.5, doc="LLM temperature")
     system_prompt: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="System prompt")

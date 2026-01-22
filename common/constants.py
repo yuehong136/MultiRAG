@@ -165,8 +165,8 @@ class MemoryStorageType(StrEnum):
 
 class ForgettingPolicy(StrEnum):
     """遗忘策略枚举"""
-    FIFO = "fifo"  # 先进先出
-    LRU = "lru"    # 最近最少使用
+    FIFO = "FIFO"  # 先进先出
+    LRU = "LRU"    # 最近最少使用
 
 
 class TenantPermission(StrEnum):

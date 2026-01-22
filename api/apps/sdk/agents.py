@@ -491,7 +491,7 @@ async def webhook(
         dsl_str = cvs.dsl
 
     try:
-        canvas = Canvas(dsl_str, cvs.user_id, agent_id)
+        canvas = Canvas(dsl_str, cvs.user_id, agent_id, canvas_id=agent_id)
     except Exception as e:
         return get_error_data_result(retcode=RetCode.BAD_REQUEST, retmsg=str(e))
 

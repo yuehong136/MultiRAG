@@ -40,8 +40,8 @@ def format_ret_data_from_memory(memory: Any) -> dict:
         "user_prompt": memory.user_prompt,
         "create_time": memory.create_time,
         "create_date": str(memory.create_date) if memory.create_date else None,
-        "update_time": memory.update_time,
-        "update_date": str(memory.update_date) if memory.update_date else None
+        # "update_time": memory.update_time,
+        # "update_date": str(memory.update_date) if memory.update_date else None
     }
 
 

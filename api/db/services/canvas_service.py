@@ -180,6 +180,30 @@ class UserCanvasService(CommonService):
             return False, None
 
     @classmethod
+    def get_basic_info_by_canvas_ids(cls, db: Session, canvas_ids: list[str]):
+        """
+        Get basic info for multiple canvases by their IDs.
+        
+        Args:
+            db: Database session
+            canvas_ids: List of canvas IDs
+            
+        Returns:
+            List of canvas info dicts with id, avatar, user_id, title, permission, canvas_category
+        """
+        fields = [
+            cls.model.id,
+            cls.model.avatar,
+            cls.model.user_id,
+            cls.model.title,
+            cls.model.permission,
+            cls.model.canvas_category
+        ]
+        stmt = select(*fields).where(cls.model.id.in_(canvas_ids))
+        rows = db.execute(stmt).mappings().all()
+        return [dict(r) for r in rows]
+
+    @classmethod
     def get_by_tenant_ids(
         cls,
         db: Session,
@@ -290,14 +314,14 @@ async def completion(
             conv.message = []
         if not isinstance(conv.dsl, str):
             conv.dsl = json.dumps(conv.dsl, ensure_ascii=False)
-        canvas = Canvas(conv.dsl, tenant_id, agent_id)
+        canvas = Canvas(conv.dsl, tenant_id, agent_id, canvas_id=agent_id)
     else:
         ok, cvs = UserCanvasService.get_by_id(db, agent_id)
         assert ok, "Agent not found."
         assert cvs.user_id == tenant_id, "You do not own the agent."
         dsl_str = cvs.dsl if isinstance(cvs.dsl, str) else json.dumps(cvs.dsl, ensure_ascii=False)
         session_id = get_uuid()
-        canvas = Canvas(cvs.dsl, tenant_id, agent_id)
+        canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id)
         canvas.reset()
         conv_dict = {
             "id": session_id,

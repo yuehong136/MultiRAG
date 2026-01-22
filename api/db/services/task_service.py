@@ -410,11 +410,15 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
     elif doc["parser_id"] == "table":
         file_bin = settings.STORAGE_IMPL.get(bucket, name)
         rn = RAGFlowExcelParser.row_number(doc["name"], file_bin)
-        for i in range(0, rn, 3000):
-            task = new_task()
-            task["from_page"] = i
-            task["to_page"] = min(i + 3000, rn)
-            parse_task_array.append(task)
+        if rn:
+            for i in range(0, rn, 3000):
+                task = new_task()
+                task["from_page"] = i
+                task["to_page"] = min(i + 3000, rn)
+                parse_task_array.append(task)
+        else:
+            # 如果无法获取行数（不支持的文件类型或空文件），创建默认任务
+            parse_task_array.append(new_task())
     else:
         parse_task_array.append(new_task())
 

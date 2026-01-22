@@ -21,16 +21,15 @@ from copy import deepcopy
 import json_repair
 import pandas as pd
 
-from common.misc_utils import get_uuid
-from graphrag.query_analyze_prompt import PROMPTS
-from graphrag.utils import get_entity_type2samples, get_llm_cache, set_llm_cache, get_relation
-from common.token_utils import num_tokens_from_string
-from core.utils.doc_store_conn import OrderByExpr
-
-from core.nlp.search import Dealer, index_name
 from api.db.db_models import db_connection
+from common.token_utils import num_tokens_from_string
+from common.doc_store.doc_store_base import OrderByExpr
 from common.float_utils import get_float
 from common import settings
+from common.misc_utils import get_uuid
+from core.nlp.search import Dealer, index_name
+from graphrag.query_analyze_prompt import PROMPTS
+from graphrag.utils import get_entity_type2samples, get_llm_cache, set_llm_cache, get_relation
 
 
 class KGSearch(Dealer):

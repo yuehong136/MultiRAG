@@ -27,17 +27,17 @@ from api.db.services.task_service import TaskService, GRAPH_RAPTOR_FAKE_DOC_ID
 from api.db.services.user_service import TenantService, UserTenantService
 from api.utils.api_utils import server_error_response, get_data_error_result, get_error_data_result, get_parser_config
 from api.db import VALID_FILE_TYPES
-from common.constants import RetCode, PipelineTaskType, StatusEnum, VALID_TASK_STATUS, FileSource, LLMType, PAGERANK_FLD
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import get_json_result
 from api.apps import manager
 from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
-from common.constants import RetCode
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
+from common.constants import RetCode, PipelineTaskType, StatusEnum, VALID_TASK_STATUS, FileSource, LLMType, PAGERANK_FLD
+from common.doc_store.doc_store_base import OrderByExpr
 from common import settings
-from core.utils.doc_store_conn import OrderByExpr
+
 
 router = APIRouter()
 
@@ -241,7 +241,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         # ===== 向量数据库集合重命名逻辑 =====
         # 只有当名称实际发生变化时才执行重命名
         if "name" in req_data and req_data["name"] != old_name:
-            db_type = settings.docStoreConn.dbType()
+            db_type = settings.docStoreConn.db_type()
             old_coll = search.index_name_one(kb.tenant_id, old_name)
             new_coll = search.index_name_one(kb.tenant_id, req_data["name"])
 
@@ -477,7 +477,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
             return get_data_error_result(retmsg="Database error (dataset removal)!")
         tenants = UserTenantService.query(db, user_id=user.id)
         for tenant in tenants:
-            settings.docStoreConn.deleteIdx(search.index_name_one(tenant.tenant_id, kb_name), req_data["kb_id"])
+            settings.docStoreConn.delete_idx(search.index_name_one(tenant.tenant_id, kb_name), req_data["kb_id"])
         # 知识库删除成功，返回成功标志
         return get_json_result(data=True)
     except Exception as e:
@@ -573,7 +573,7 @@ def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(mana
         "knowledge_graph_kwd": ["graph"]
     }
     obj = {"graph": {}, "mind_map": {}}
-    if not settings.docStoreConn.indexExist(search.index_name(kb.tenant_id, [kb.name]), kb_id):
+    if not settings.docStoreConn.index_exist(search.index_name(kb.tenant_id, [kb.name]), kb_id):
         return get_json_result(data=obj)
     sres = settings.retriever.search(req, search.index_name(kb.tenant_id, [kb.name]), [kb_id])
     if not len(sres.ids):
@@ -1652,11 +1652,11 @@ def check_embedding(
         idx_names = search.index_name(tenant_id, [kb_name])
 
         res0 = doc_store_conn.search(
-            selectFields=[], highlightFields=[],
+            select_fields=[], highlight_fields=[],
             condition={"kb_id": kb_id, "available_int": 1},
-            matchExprs=[], orderBy=OrderByExpr(),
+            match_expressions=[], order_by=OrderByExpr(),
             offset=0, limit=1,
-            indexNames=idx_names, knowledgebaseIds=[kb_id]
+            index_names=idx_names, knowledgebase_ids=[kb_id]
         )
         total = doc_store_conn.get_total(res0)
         if total <= 0:
@@ -1668,14 +1668,14 @@ def check_embedding(
 
         for off in offsets:
             res1 = doc_store_conn.search(
-                selectFields=list(base_fields),
-                highlightFields=[],
+                select_fields=list(base_fields),
+                highlight_fields=[],
                 condition={"kb_id": kb_id, "available_int": 1},
-                matchExprs=[], orderBy=OrderByExpr(),
+                match_expressions=[], order_by=OrderByExpr(),
                 offset=off, limit=1,
-                indexNames=idx_names, knowledgebaseIds=[kb_id]
+                index_names=idx_names, knowledgebase_ids=[kb_id]
             )
-            ids = doc_store_conn.get_chunk_ids(res1)
+            ids = doc_store_conn.get_doc_ids(res1)
             if not ids:
                 continue
 

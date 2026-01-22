@@ -99,6 +99,16 @@ class ServiceResponse(BaseModel):
 admin_router = APIRouter(tags=["admin"])
 
 
+@admin_router.get(
+    "/ping",
+    summary="健康检查",
+    description="简单的健康检查端点，返回 PONG"
+)
+def ping():
+    """健康检查端点"""
+    return success_response("PONG")
+
+
 @admin_router.post(
     "/login",
     summary="管理员登录",

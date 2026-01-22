@@ -4,10 +4,11 @@ import re
 from collections import defaultdict
 
 from core.nlp import rag_tokenizer, term_weight, synonym
-from core.utils.doc_store_conn import MatchTextExpr
+from common.query_base import QueryBase
+from common.doc_store.doc_store_base import MatchTextExpr
 
 
-class FulltextQueryer:
+class FulltextQueryer(QueryBase):
     """通用全文查询器，与具体向量数据库无关"""
     def __init__(self, dataStore=None):
         self.tw = term_weight.Dealer()
@@ -26,64 +27,19 @@ class FulltextQueryer:
         # Milvus 额外支持的搜索字段（content_with_weight 在 ES 中不可搜索）
         self.milvus_extra_fields = ["content_with_weight"]
 
-    @staticmethod
-    def sub_special_char(line):
-        return re.sub(r"([:\{\}/\[\]\-\*\"\(\)\|\+~\^])", r"\\\1", line).strip()
-
-    @staticmethod
-    def is_chinese(line):
-        arr = re.split(r"[ \t]+", line)
-        if len(arr) <= 3:
-            return True
-        e = 0
-        for t in arr:
-            if not re.match(r"[a-zA-Z]+$", t):
-                e += 1
-        return e * 1.0 / len(arr) >= 0.7
-
-    @staticmethod
-    def rmWWW(txt):
-        patts = [
-            (
-                r"是*(怎么办|什么样的|哪家|一下|那家|请问|啥样|咋样了|什么时候|何时|何地|何人|是否|是不是|多少|哪里|怎么|哪儿|怎么样|如何|哪些|是啥|啥是|啊|吗|呢|吧|咋|什么|有没有|呀|谁|哪位|哪个)是*",
-                "",
-            ),
-            (r"(^| )(what|who|how|which|where|why)('re|'s)? ", " "),
-            (
-                r"(^| )('s|'re|is|are|were|was|do|does|did|don't|doesn't|didn't|has|have|be|there|you|me|your|my|mine|just|please|may|i|should|would|wouldn't|will|won't|done|go|for|with|so|the|a|an|by|i'm|it's|he's|she's|they|they're|you're|as|by|on|in|at|up|out|down|of|to|or|and|if) ",
-                " ")
-        ]
-        otxt = txt
-        for r, p in patts:
-            txt = re.sub(r, p, txt, flags=re.IGNORECASE)
-        if not txt:
-            txt = otxt
-        return txt
-
-    @staticmethod
-    def add_space_between_eng_zh(txt):
-        # (ENG/ENG+NUM) + ZH
-        txt = re.sub(r'([A-Za-z]+[0-9]+)([\u4e00-\u9fa5]+)', r'\1 \2', txt)
-        # ENG + ZH
-        txt = re.sub(r'([A-Za-z])([\u4e00-\u9fa5]+)', r'\1 \2', txt)
-        # ZH + (ENG/ENG+NUM)
-        txt = re.sub(r'([\u4e00-\u9fa5]+)([A-Za-z]+[0-9]+)', r'\1 \2', txt)
-        txt = re.sub(r'([\u4e00-\u9fa5]+)([A-Za-z])', r'\1 \2', txt)
-        return txt
-
     def question(self, txt, tbl="qa", min_match: float = 0.6):
         original_query = txt
-        txt = FulltextQueryer.add_space_between_eng_zh(txt)
+        txt = self.add_space_between_eng_zh(txt)
         txt = re.sub(
             r"[ :|\r\n\t,，。？?/`!！&^%%()\[\]{}<>]+",
             " ",
             rag_tokenizer.tradi2simp(rag_tokenizer.strQ2B(txt.lower())),
         ).strip()
         otxt = txt
-        txt = FulltextQueryer.rmWWW(txt)
+        txt = self.rmWWW(txt)
 
         if not self.is_chinese(txt):
-            txt = FulltextQueryer.rmWWW(txt)
+            txt = self.rmWWW(txt)
             tks = rag_tokenizer.tokenize(txt).split()
             logging.info(f"[RAG_TOKENIZER] 英文分词: '{txt}' -> {tks}")
             keywords = [t for t in tks if t]
@@ -129,7 +85,7 @@ class FulltextQueryer:
                 return False
             return True
 
-        txt = FulltextQueryer.rmWWW(txt)
+        txt = self.rmWWW(txt)
         qs, keywords = [], []
         raw_terms = []
         logging.info(f"[RAG_TOKENIZER] 中文查询预处理: '{original_query}' -> '{txt}'")
@@ -160,7 +116,7 @@ class FulltextQueryer:
                     )
                     for m in sm
                 ]
-                sm = [FulltextQueryer.sub_special_char(m) for m in sm if len(m) > 1]
+                sm = [self.sub_special_char(m) for m in sm if len(m) > 1]
                 sm = [m for m in sm if len(m) > 1]
 
                 if len(keywords) < 32:
@@ -168,7 +124,7 @@ class FulltextQueryer:
                     keywords.extend(sm)
 
                 tk_syns = self.syn.lookup(tk)
-                tk_syns = [FulltextQueryer.sub_special_char(s) for s in tk_syns]
+                tk_syns = [self.sub_special_char(s) for s in tk_syns]
                 if len(keywords) < 32:
                     keywords.extend([s for s in tk_syns if s])
                 tk_syns = [rag_tokenizer.fine_grained_tokenize(s) for s in tk_syns if s]
@@ -177,7 +133,7 @@ class FulltextQueryer:
                 if len(keywords) >= 32:
                     break
 
-                tk = FulltextQueryer.sub_special_char(tk)
+                tk = self.sub_special_char(tk)
                 if tk.find(" ") > 0:
                     tk = '"%s"' % tk
                 if tk_syns:
@@ -195,7 +151,7 @@ class FulltextQueryer:
             syns = " OR ".join(
                 [
                     '"%s"'
-                    % rag_tokenizer.tokenize(FulltextQueryer.sub_special_char(s))
+                    % rag_tokenizer.tokenize(self.sub_special_char(s))
                     for s in syns
                 ]
             )
@@ -264,10 +220,10 @@ class FulltextQueryer:
         keywords = [f'"{k.strip()}"' for k in keywords]
         for tk, w in sorted(tks_w, key=lambda x: x[1] * -1)[:keywords_topn]:
             tk_syns = self.syn.lookup(tk)
-            tk_syns = [FulltextQueryer.sub_special_char(s) for s in tk_syns]
+            tk_syns = [self.sub_special_char(s) for s in tk_syns]
             tk_syns = [rag_tokenizer.fine_grained_tokenize(s) for s in tk_syns if s]
             tk_syns = [f"\"{s}\"" if s.find(" ") > 0 else s for s in tk_syns]
-            tk = FulltextQueryer.sub_special_char(tk)
+            tk = self.sub_special_char(tk)
             if tk.find(" ") > 0:
                 tk = '"%s"' % tk
             if tk_syns:

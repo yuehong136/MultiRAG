@@ -23,6 +23,7 @@ from common import settings
 from common.file_utils import get_project_base_directory
 from common.constants import LLMType
 from scripts.init_ai_guard_system import init_ai_guard_system
+from api.db.joint_services.memory_message_service import init_message_id_sequence, init_memory_size_cache
 # from api.common.base64 import encode_to_base64
 
 # 超级用户默认配置（支持环境变量覆盖）
@@ -288,6 +289,10 @@ def _init_web_data_with_db(db: Session) -> None:
                 logging.warning("未找到超级用户，跳过AI安全护栏系统初始化")
         else:
             logging.info("AI安全护栏系统已存在数据，跳过初始化")
+
+        # Initialize message ID sequence and memory size cache
+        init_message_id_sequence(db)
+        init_memory_size_cache(db)
 
         logging.info("init web data success:{}".format(time.time() - start_time))
     except Exception:

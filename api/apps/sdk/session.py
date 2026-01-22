@@ -177,7 +177,7 @@ def create_agent_session(
         cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
 
     session_id = get_uuid()
-    canvas = Canvas(cvs.dsl, tenant_id, agent_id)
+    canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id)
     canvas.reset()
 
     cvs.dsl = json.loads(str(canvas))
@@ -1074,7 +1074,7 @@ def begin_inputs(agent_id: str, db: Session = Depends(get_db)):
 
     # TODO: 需要获取正确的tenant_id
     tenant_id = "default"  # 临时解决方案
-    canvas = Canvas(json.dumps(cvs.dsl), tenant_id)
+    canvas = Canvas(json.dumps(cvs.dsl), tenant_id, canvas_id=cvs.id)
     return get_result(data={
         "title": cvs.title,
         "avatar": cvs.avatar,
@@ -1160,8 +1160,8 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
             else:
                 return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
-        e, kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
-        if not e:
+        kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
+        if not kb:
             return get_error_data_result(retmsg="Knowledgebase not found!")
 
         if langs:

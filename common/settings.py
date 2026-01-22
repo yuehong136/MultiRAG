@@ -8,7 +8,6 @@ from common.constants import MULTI_RAG_SERVICE_NAME, SVR_QUEUE_NAME, Storage
 from common.file_utils import get_project_base_directory
 from common.config_utils import get_base_config, decrypt_database_config
 from common.misc_utils import pip_install_torch
-
 import core.utils
 import core.utils.milvus_conn
 import core.utils.es_conn
@@ -23,8 +22,11 @@ from core.utils.minio_conn import MultiRAGMinio
 from core.utils.opendal_conn import OpenDALStorage
 from core.utils.s3_conn import MultiRAGS3
 from core.utils.oss_conn import MultiRAGOSS
-
 from core.nlp import search
+import memory.utils.es_conn as memory_es_conn
+import memory.utils.infinity_conn as memory_infinity_conn
+import memory.utils.milvus_conn as memory_milvus_conn
+# import memory.utils.vastbase_conn as memory_vastbase_conn
 
 # Lighten mode
 LIGHTEN = int(os.environ.get("LIGHTEN", "0"))
@@ -65,6 +67,7 @@ OAUTH_CONFIG = None
 DOC_ENGINE = os.getenv('DOC_ENGINE', 'milvus')
 DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
 docStoreConn = None
+msgStoreConn = None
 retriever = None
 kg_retriever = None
 
@@ -288,6 +291,18 @@ def init_settings():
         docStoreConn = core.utils.vastbase_conn.VastBaseConnection()
     else:
         raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
+
+    global msgStoreConn
+    # use the same engine for message store
+    if lower_case_doc_engine == "elasticsearch":
+        msgStoreConn = memory_es_conn.ESConnection()
+    elif lower_case_doc_engine == "milvus":
+        msgStoreConn = memory_milvus_conn.MilvusConnection()
+    elif lower_case_doc_engine == "infinity":
+        msgStoreConn = memory_infinity_conn.InfinityConnection()
+    # elif lower_case_doc_engine == "vastbase":
+    #     VASTBASE = get_base_config("vastbase", {})
+    #     docStoreConn = memory_vastbase_conn.VastBaseConnection()
 
     global AZURE, S3, MINIO, OSS, GCS
     if STORAGE_IMPL_TYPE in ['AZURE_SPN', 'AZURE_SAS']:

@@ -72,20 +72,21 @@ def delete_chunks_by_doc_id(collection_name: str, doc_id: str, kb_id: str = "") 
     Returns:
         删除的记录数
     """
-    db_type = settings.docStoreConn.dbType()
+    db_type = settings.docStoreConn.db_type()
     try:
         if db_type == "milvus":
             # Milvus 使用 filter 参数
             return settings.docStoreConn.delete(
-                collection_name=collection_name,
-                filter=f"doc_id == '{doc_id}'"
+                condition={"doc_id": doc_id},
+                index_name=collection_name,
+                dataset_id=kb_id
             )
         else:
-            # ES/OpenSearch/Infinity 使用 condition 参数
+            # ES/OpenSearch/Infinity 使用 condition, index_name, knowledgebase_id 参数
             return settings.docStoreConn.delete(
-                condition={"doc_id": doc_id},
-                indexName=collection_name,
-                knowledgebaseId=kb_id
+                {"doc_id": doc_id},
+                collection_name,
+                kb_id
             )
     except Exception as e:
         logging.warning(f"delete_chunks_by_doc_id failed for {db_type}: {e}")
@@ -738,14 +739,14 @@ async def init_kb(row, kb_name):
     """
     idxnm = search.index_name_one(row["tenant_id"], kb_name)
     kb_id = row.get("kb_id", "")
-    db_type = settings.docStoreConn.dbType()
+    db_type = settings.docStoreConn.db_type()
 
     # 快速检查：集合/索引已存在则直接返回（避免不必要的 embedding 调用）
     if db_type == "milvus":
         if await asyncio.to_thread(settings.docStoreConn.has_collection, idxnm):
             return
     else:
-        if await asyncio.to_thread(settings.docStoreConn.indexExist, idxnm, kb_id):
+        if await asyncio.to_thread(settings.docStoreConn.index_exist, idxnm, kb_id):
             return
 
     # 获取向量维度
@@ -755,7 +756,7 @@ async def init_kb(row, kb_name):
     if db_type == "milvus":
         await _create_milvus_collection(idxnm, vector_dim)
     else:
-        await asyncio.to_thread(settings.docStoreConn.createIdx, idxnm, kb_id, vector_dim)
+        await asyncio.to_thread(settings.docStoreConn.create_idx, idxnm, kb_id, vector_dim)
 
 
 async def _create_milvus_collection(collection_name: str, vector_dim: int):
@@ -2290,9 +2291,9 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         mother_batch = mothers[b:b + settings.DOC_BULK_SIZE]
         converted_batch = [convert_data_types(m, schema) for m in mother_batch]
         try:
-            db_type = settings.docStoreConn.dbType()
+            db_type = settings.docStoreConn.db_type()
             if db_type == "milvus":
-                await asyncio.to_thread(settings.docStoreConn.insert, rows=converted_batch, indexName=collection_name)
+                await asyncio.to_thread(settings.docStoreConn.insert, documents=converted_batch, index_name=collection_name)
             else:
                 es_batch = []
                 for doc in converted_batch:
@@ -2300,7 +2301,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                     if "id" not in es_doc and "pk" in es_doc:
                         es_doc["id"] = es_doc["pk"]
                     es_batch.append(es_doc)
-                await asyncio.to_thread(settings.docStoreConn.insert, documents=es_batch, indexName=collection_name, knowledgebaseId=task_dataset_id,)
+                await asyncio.to_thread(settings.docStoreConn.insert, es_batch, collection_name, task_dataset_id)
         except Exception as e:
             logging.warning(f"Insert mother chunks error: {e}")
 
@@ -2326,11 +2327,11 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
 
         try:
             # 根据数据库类型调用不同的insert方法
-            db_type = settings.docStoreConn.dbType()
+            db_type = settings.docStoreConn.db_type()
             if db_type == "milvus":
                 # Milvus 使用 collection_name 和 data 参数
                 # insert 返回 list[str]：空列表表示成功，非空列表包含错误信息
-                doc_store_errors = await asyncio.to_thread(settings.docStoreConn.insert, rows=converted_batch, indexName=collection_name)
+                doc_store_errors = await asyncio.to_thread(settings.docStoreConn.insert, documents=converted_batch, index_name=collection_name)
                 # 检查是否有错误（非空列表表示有错误）
                 if doc_store_errors:
                     error_message = f"Insert failed: {doc_store_errors}"
@@ -2339,7 +2340,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 # 记录成功插入
                 successful_inserts.append({"insert_count": len(converted_batch)})
             else:
-                # ES/OpenSearch/Infinity 使用 documents, indexName, knowledgebaseId 参数
+                # ES/OpenSearch/Infinity 使用位置参数: documents, index_name, knowledgebase_id
                 # ES 要求文档有 "id" 字段，Milvus 使用 "pk"，需要做映射
                 es_batch = []
                 for doc in converted_batch:
@@ -2348,7 +2349,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                     if "id" not in es_doc and "pk" in es_doc:
                         es_doc["id"] = es_doc["pk"]
                     es_batch.append(es_doc)
-                errors = await asyncio.to_thread(settings.docStoreConn.insert, documents=es_batch, indexName=collection_name, knowledgebaseId=task_dataset_id,)
+                errors = await asyncio.to_thread(settings.docStoreConn.insert, es_batch, collection_name, task_dataset_id)
                 if errors:
                     logging.warning(f"Insert errors: {errors}")
                 # 记录成功插入
@@ -2410,7 +2411,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     # 统计并记录插入结果
     if successful_inserts:
         total_insert_count = sum(item.get("insert_count", 0) for item in successful_inserts)
-        db_type = settings.docStoreConn.dbType()
+        db_type = settings.docStoreConn.db_type()
         logging.info(
             f"Successfully inserted {total_insert_count} chunks into {db_type} index '{collection_name}'"
         )

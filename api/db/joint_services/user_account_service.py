@@ -36,6 +36,8 @@ from api.db.services.task_service import TaskService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService, UserService, UserTenantService
+from api.db.services.memory_service import MemoryService
+from memory.services.messages import MessageService
 from common import settings
 from core.nlp import search
 
@@ -218,20 +220,22 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                     done_msg += f"- Deleted {file2doc_delete_res} document-file relation records.\n"
                 # step1.1.3 delete chunk in es
                 chunk_delete_count = 0
-                db_type = settings.docStoreConn.dbType()
+                db_type = settings.docStoreConn.db_type()
                 for kb_id, kb_name in zip(kb_ids, kb_names):
                     collection_name = search.index_name_one(tenant_id, kb_name)
                     if settings.docStoreConn.has_collection(collection_name):
                         if db_type == "milvus":
                             result = settings.docStoreConn.delete(
-                                collection_name=collection_name,
-                                filter=f"kb_id == '{kb_id}'"
+                                condition={"kb_id": kb_id},
+                                index_name=collection_name,
+                                dataset_id=kb_id
                             )
                         else:
+                            # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
                             result = settings.docStoreConn.delete(
-                                condition={"kb_id": kb_id},
-                                indexName=collection_name,
-                                knowledgebaseId=kb_id
+                                {"kb_id": kb_id},
+                                collection_name,
+                                kb_id
                             )
                         chunk_delete_count += result.get('delete_count', 0) if isinstance(result, dict) else 0
                 done_msg += f"- Deleted {chunk_delete_count} chunk records.\n"
@@ -254,7 +258,16 @@ def delete_user_data(db: Session, user_id: str) -> dict:
             done_msg += f"- Deleted {llm_delete_res} tenant-LLM records.\n"
             langfuse_delete_res = TenantLangfuseService.delete_by_tenant_id(db, tenant_id)
             done_msg += f"- Deleted {langfuse_delete_res} langfuse records.\n"
-            # step1.3 delete own tenant
+            # step1.3 delete memory and messages
+            user_memory = MemoryService.get_by_tenant_id(db, tenant_id)
+            if user_memory:
+                for memory in user_memory:
+                    if MessageService.has_index(tenant_id, memory.id):
+                        MessageService.delete_index(tenant_id, memory.id)
+                done_msg += "- Deleted memory index.\n"
+                memory_delete_res = MemoryService.delete_by_ids(db, [m.id for m in user_memory])
+                done_msg += f"- Deleted {memory_delete_res} memory datasets.\n"
+            # step1.4 delete own tenant
             tenant_delete_res = TenantService.delete_by_id(db, tenant_id)
             done_msg += f"- Deleted {tenant_delete_res} tenant.\n"
         # step2 delete user-tenant relation
@@ -289,7 +302,7 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                     # chunks in {'tenant_id': {'kb_id': [{'id': doc_id}]}} structure
                     chunk_delete_res = 0
                     kb_doc_info = {}
-                    db_type = settings.docStoreConn.dbType()
+                    db_type = settings.docStoreConn.db_type()
                     for _tenant_id, kb_doc in kb_grouped_doc.items():
                         for _kb_id, docs in kb_doc.items():
                             # 获取 kb_name (所有 docs 都来自同一个 kb，所以取第一个即可)
@@ -298,18 +311,18 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                             if settings.docStoreConn.has_collection(collection_name):
                                 doc_ids = [d["id"] for d in docs]
                                 if db_type == "milvus":
-                                    # 构建 filter 表达式
-                                    doc_id_list = "', '".join(doc_ids)
-                                    result = settings.docStoreConn.delete(
-                                        collection_name=collection_name,
-                                        filter=f"doc_id in ['{doc_id_list}']"
-                                    )
-                                else:
-                                    # ES/OpenSearch 使用 condition 参数
+                                    # doc_id_list = "', '".join(doc_ids)
                                     result = settings.docStoreConn.delete(
                                         condition={"doc_id": doc_ids},
-                                        indexName=collection_name,
-                                        knowledgebaseId=_kb_id
+                                        index_name=collection_name,
+                                        dataset_id=_kb_id
+                                    )
+                                else:
+                                    # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
+                                    result = settings.docStoreConn.delete(
+                                        {"doc_id": doc_ids},
+                                        collection_name,
+                                        _kb_id
                                     )
                                 chunk_delete_res += result.get('delete_count', 0) if isinstance(result, dict) else 0
                             # record doc info

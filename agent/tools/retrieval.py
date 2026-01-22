@@ -26,10 +26,12 @@ from common.metadata_utils import apply_meta_data_filter
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
+from api.db.services.memory_service import MemoryService
+from api.db.joint_services import memory_message_service
 from common import settings
 from common.connection_utils import timeout
 from core.app.tag import label_question
-from core.prompts.generator import cross_languages, kb_prompt
+from core.prompts.generator import cross_languages, kb_prompt, memory_prompt
 
 
 class RetrievalParam(ToolParamBase):
@@ -58,6 +60,7 @@ class RetrievalParam(ToolParamBase):
         self.top_n = 8
         self.top_k = 1024
         self.kb_ids = []
+        self.memory_ids = []
         self.kb_vars = []
         self.rerank_id = ""
         self.empty_response = ""
@@ -83,6 +86,42 @@ class RetrievalParam(ToolParamBase):
 class Retrieval(ToolBase, ABC):
     component_name = "Retrieval"
 
+    async def _retrieve_memory(self, query_text: str):
+        """Retrieve from memory storage."""
+        with db_connection() as db:
+            memory_ids: list[str] = [memory_id for memory_id in self._param.memory_ids]
+            memory_list = MemoryService.get_by_ids(db, memory_ids)
+            if not memory_list:
+                raise Exception("No memory is selected.")
+
+            embd_names = list({memory.embd_id for memory in memory_list})
+            assert len(embd_names) == 1, "Memory use different embedding models."
+
+            vars = self.get_input_elements_from_text(query_text)
+            vars = {k: o["value"] for k, o in vars.items()}
+            query = self.string_format(query_text, vars)
+
+            # Query message
+            message_list = memory_message_service.query_message(
+                db,
+                {"memory_id": memory_ids},
+                {
+                    "query": query,
+                    "similarity_threshold": self._param.similarity_threshold,
+                    "keywords_similarity_weight": self._param.keywords_similarity_weight,
+                    "top_n": self._param.top_n,
+                },
+            )
+            if not message_list:
+                self.set_output("formalized_content", self._param.empty_response)
+                return ""
+
+            formated_content = "\n".join(memory_prompt(message_list, 200000))
+            # Set formalized_content output
+            self.set_output("formalized_content", formated_content)
+
+            return formated_content
+
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 12)))
     async def _invoke_async(self, **kwargs):
         if self.check_if_canceled("Retrieval processing"):
@@ -92,6 +131,17 @@ class Retrieval(ToolBase, ABC):
             self.set_output("formalized_content", self._param.empty_response)
             return
 
+        # Route to appropriate retrieval method
+        if self._param.kb_ids:
+            return await self._retrieve_kb(kwargs["query"])
+        elif hasattr(self._param, "memory_ids") and self._param.memory_ids:
+            return await self._retrieve_memory(kwargs["query"])
+        else:
+            self.set_output("formalized_content", self._param.empty_response)
+            return
+
+    async def _retrieve_kb(self, query_text: str):
+        """Retrieve from knowledge base."""
         with db_connection() as db:
             kb_ids: list[str] = []
             for id in self._param.kb_ids:
@@ -123,12 +173,12 @@ class Retrieval(ToolBase, ABC):
             if self._param.rerank_id:
                 rerank_mdl = LLMBundle(db, kbs[0].tenant_id, LLMType.RERANK, self._param.rerank_id)
 
-            vars = self.get_input_elements_from_text(kwargs["query"])
+            vars = self.get_input_elements_from_text(query_text)
             vars = {k: o["value"] for k, o in vars.items()}
-            query = self.string_format(kwargs["query"], vars)
+            query = self.string_format(query_text, vars)
 
-            doc_ids=[]
-            if self._param.meta_data_filter!={}:
+            doc_ids = []
+            if self._param.meta_data_filter != {}:
                 metas = DocumentService.get_meta_by_kbs(db, kb_ids)
 
                 def _resolve_manual_filter(flt: dict) -> dict:
@@ -182,6 +232,7 @@ class Retrieval(ToolBase, ABC):
                 query = re.sub(r"^user[:：\s]*", "", query, flags=re.IGNORECASE)
                 kbinfos = settings.retriever.retrieval(
                     query,
+                    "",
                     embd_mdl,
                     tenant_ids,
                     filtered_kb_ids,

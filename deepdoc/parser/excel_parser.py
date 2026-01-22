@@ -264,6 +264,10 @@ class RAGFlowExcelParser:
             txt = binary.decode(encoding, errors="ignore")
             return len(txt.split("\n"))
 
+        # 对于不支持的文件类型，返回 0
+        logging.warning(f"Unsupported file type for row_number: {fnm}")
+        return 0
+
 
 if __name__ == "__main__":
     psr = RAGFlowExcelParser()

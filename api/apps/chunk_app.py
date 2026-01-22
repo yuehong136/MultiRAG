@@ -30,7 +30,7 @@ from api.utils.api_utils import get_json_result
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
-from core.utils.doc_store_conn import OrderByExpr
+from common.doc_store.doc_store_base import OrderByExpr
 from core.prompts.generator import keyword_extraction, cross_languages
 from common import settings
 from common.metadata_utils import apply_meta_data_filter
@@ -1128,14 +1128,19 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
             return get_data_error_result(retmsg="KnowledgeBase not found!")
 
         collection_name = search.index_name_one(kb.tenant_id, kb.name)
-        db_type = settings.docStoreConn.dbType()
+        db_type = settings.docStoreConn.db_type()
         if db_type == "milvus":
-            delete_result = settings.docStoreConn.delete(collection_name=collection_name, ids=req["chunk_ids"])
-        else:
             delete_result = settings.docStoreConn.delete(
                 condition={"id": req["chunk_ids"]},
-                indexName=collection_name,
-                knowledgebaseId=kb.id
+                index_name=collection_name,
+                dataset_id=kb.id
+            )
+        else:
+            # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
+            delete_result = settings.docStoreConn.delete(
+                {"id": req["chunk_ids"]},
+                collection_name,
+                kb.id
             )
         if delete_result is None:
             return get_data_error_result(retmsg="Chunk deleting failure")

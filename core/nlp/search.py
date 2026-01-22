@@ -12,10 +12,8 @@ from pymilvus import AnnSearchRequest, WeightedRanker
 from api.db.db_models import db_connection
 from core.prompts.generator import relevant_chunks_with_toc
 from core.nlp import rag_tokenizer, query, is_english
-from core.utils.doc_store_conn import (
+from common.doc_store.doc_store_base import (
     DocStoreConnection,
-    MatchExpr,
-    MatchTextExpr,
     MatchDenseExpr,
     FusionExpr,
     OrderByExpr,
@@ -60,7 +58,7 @@ class Dealer:
             "content_sm_ltks"]
         
         # Milvus 额外支持 content_with_weight 搜索（ES 中该字段不可索引）
-        if dataStore.dbType() == "milvus":
+        if dataStore.db_type() == "milvus":
             base_fields.append("content_with_weight")
         
         self.qryr.flds = base_fields
@@ -228,7 +226,7 @@ class Dealer:
         def _build_result(results, kwds: list[str] | None = None):
             total = self.dataStore.get_total(results)
             keywords = _process_keywords(kwds)
-            ids = self.dataStore.get_chunk_ids(results)
+            ids = self.dataStore.get_doc_ids(results)
             highlight_rst = self.dataStore.get_highlight(results, keywords, "content_with_weight")
             aggs = self.dataStore.get_aggregation(results, "docnm_kwd")
             fields = self.dataStore.get_fields(results, src + ["_score"])
@@ -1159,7 +1157,7 @@ class Dealer:
             )
         else:
             # 使用实际的数据库类型判断
-            db_type = self.dataStore.dbType()
+            db_type = self.dataStore.db_type()
             logging.info(f"db_type: {db_type}, sres.total: {sres.total}, query_vector len: {len(sres.query_vector) if sres.query_vector else 0}")
             if settings.DOC_ENGINE_INFINITY:
                 # Don't need rerank here since Infinity normalizes each way score before fusion.
@@ -1364,7 +1362,7 @@ class Dealer:
         from api.db.services.knowledgebase_service import KnowledgebaseService
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
-        if not self.dataStore.indexExist(index_name_one(tenant_id, kb.kb_name), kb_ids[0]):
+        if not self.dataStore.index_exist(index_name_one(tenant_id, kb.kb_name), kb_ids[0]):
             return []
         res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids, ["tag_kwd"])
         return self.dataStore.get_aggregation(res, "tag_kwd")

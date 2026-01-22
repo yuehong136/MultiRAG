@@ -18,10 +18,13 @@ from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.memory_service import MemoryService
 from api.db.services.user_service import UserTenantService
+from api.db.services.canvas_service import UserCanvasService
 from api.utils.memory_utils import format_ret_data_from_memory, get_memory_type_human
 from api.utils.api_utils import get_json_result
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from common.constants import MemoryType, TenantPermission, ForgettingPolicy, RetCode
+from memory.services.messages import MessageService
+
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -258,7 +261,7 @@ def update_memory(
         return get_json_result(data=memory_dict)
 
     try:
-        MemoryService.update_memory(db, memory_id, to_update)
+        MemoryService.update_memory(db, current_memory.tenant_id, memory_id, to_update)
         updated_memory = MemoryService.get_by_memory_id(db, memory_id)
         return get_json_result(data=format_ret_data_from_memory(updated_memory))
 
@@ -300,8 +303,8 @@ def delete_memory(
 
     try:
         MemoryService.delete_memory(db, memory_id)
+        MessageService.delete_message({"memory_id": memory_id}, memory.tenant_id, memory_id)
         return get_json_result(data=True)
-
     except Exception as e:
         logger.error(f"删除Memory失败: {e}")
         return get_json_result(
@@ -401,3 +404,61 @@ def get_memory_config(
         )
 
     return get_json_result(data=format_ret_data_from_memory(memory))
+
+
+@router.get('/{memory_id}', summary="获取Memory详情", response_description="成功获取Memory详情及消息列表")
+def get_memory_detail(
+    memory_id: str,
+    agent_id: list[str] | None = Query(None, description="Agent ID列表"),
+    keywords: str | None = Query(None, description="搜索关键词"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(50, ge=1, le=200, description="每页数量"),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
+    """
+    获取Memory详情及消息列表
+
+    概要：获取指定Memory的详情及其包含的消息列表。
+
+    参数：
+    - **memory_id**: Memory ID
+    - **agent_id**: Agent ID列表过滤
+    - **keywords**: 搜索关键词
+    - **page**: 页码
+    - **page_size**: 每页数量
+
+    返回：
+    - dict: 包含messages和storage_type
+    """
+    memory = MemoryService.get_by_memory_id(db, memory_id)
+    if not memory:
+        return get_json_result(
+            data=False,
+            retmsg=f"Memory '{memory_id}' not found.",
+            retcode=RetCode.NOT_FOUND
+        )
+
+    messages = MessageService.list_message(
+        memory.tenant_id,
+        memory_id,
+        agent_id,
+        keywords.strip() if keywords else "",
+        page,
+        page_size
+    )
+
+    # 获取 agent 名称映射
+    agent_name_mapping = {}
+    if messages.get("message_list"):
+        agent_ids = [msg.get("agent_id") for msg in messages["message_list"] if msg.get("agent_id")]
+        agent_list = UserCanvasService.get_basic_info_by_canvas_ids(db, agent_ids)
+        agent_name_mapping = {agent["id"]: agent.get("title", "Unknown") for agent in agent_list}
+
+    for message in messages.get("message_list", []):
+        message["agent_name"] = agent_name_mapping.get(message.get("agent_id"), "Unknown")
+
+    return get_json_result(data={
+        "messages": messages,
+        "storage_type": memory.storage_type
+    })

@@ -37,7 +37,7 @@ from common import settings
 from common.constants import LLMType, ParserType, TaskStatus, StatusEnum, SVR_CONSUMER_GROUP_NAME, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
 from core.nlp import search, rag_tokenizer
 from core.utils.redis_conn import REDIS_CONN
-from core.utils.doc_store_conn import OrderByExpr
+from common.doc_store.doc_store_base import OrderByExpr
 
 
 class DocumentService(CommonService):
@@ -1831,7 +1831,7 @@ class DocumentService(CommonService):
             chunks = settings.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
                                                   page * page_size, page_size, collection_name,
                                                   [doc.kb_id])
-            chunk_ids = settings.docStoreConn.get_chunk_ids(chunks)
+            chunk_ids = settings.docStoreConn.get_doc_ids(chunks)
             if not chunk_ids:
                 break
             all_chunk_ids.extend(chunk_ids)
@@ -1846,17 +1846,19 @@ class DocumentService(CommonService):
         try:
             # 检查集合是否存在并删除向量数据库中的数据
             if settings.docStoreConn.has_collection(collection_name):
-                db_type = settings.docStoreConn.dbType()
+                db_type = settings.docStoreConn.db_type()
                 if db_type == "milvus":
                     settings.docStoreConn.delete(
-                        collection_name=collection_name,
-                        filter=f"doc_id == '{doc_id}'"
+                        condition={"doc_id": doc_id},
+                        index_name=collection_name,
+                        dataset_id=doc.kb_id
                     )
                 else:
+                    # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
                     settings.docStoreConn.delete(
-                        condition={"doc_id": doc_id},
-                        indexName=collection_name,
-                        knowledgebaseId=doc.kb_id
+                        {"doc_id": doc_id},
+                        collection_name,
+                        doc.kb_id
                     )
             # todo 待测试【settings.docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
             # kb_id = document["kb_id"]  # 使用从数据库重新获取的kb_id
@@ -3121,8 +3123,8 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
             d["q_%d_vec" % len(v)] = v
         for b in range(0, len(cks), es_bulk_size):
             if try_create_idx:
-                if not settings.docStoreConn.indexExist(idxnm, kb_id):
-                    settings.docStoreConn.createIdx(idxnm, kb_id, len(vectors[0]))
+                if not settings.docStoreConn.index_exist(idxnm, kb_id):
+                    settings.docStoreConn.create_idx(idxnm, kb_id, len(vectors[0]))
                 try_create_idx = False
             settings.docStoreConn.insert(cks[b:b + es_bulk_size], idxnm, kb_id)
 

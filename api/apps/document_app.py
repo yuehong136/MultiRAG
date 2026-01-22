@@ -2626,23 +2626,24 @@ def run(
             if req.get("delete", False):
                 TaskService.filter_delete(db, [Task.doc_id == id])
                 try:
-                    if settings.docStoreConn.has_collection(collection_name):
-                        db_type = settings.docStoreConn.dbType()
-                        if db_type == "milvus":
-                            delete_result = settings.docStoreConn.delete(
-                                collection_name=collection_name,
-                                filter=f"doc_id == '{{doc_id}}'".format(doc_id=d["id"])
-                            )
-                        else:
-                            # ES/OpenSearch/Infinity
+                    db_type = settings.docStoreConn.db_type()
+                    if db_type == "milvus":
+                        if settings.docStoreConn.has_collection(collection_name):
                             delete_result = settings.docStoreConn.delete(
                                 condition={"doc_id": d["id"]},
-                                indexName=collection_name,
-                                knowledgebaseId=kb.id
+                                index_name=collection_name,
+                                dataset_id=kb.id
                             )
-                        if delete_result is None:
-                            return construct_json_result(data=False, message="Doc store delete failed!",
-                                                         code=RetCode.ARGUMENT_ERROR)
+                    else:
+                        if settings.docStoreConn.index_exist(search.index_name(tenant_id, [kb.name]), kb_id):
+                            # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
+                            delete_result = settings.docStoreConn.delete(
+                                {"doc_id": d["id"]},
+                                collection_name,
+                                kb.id
+                            )
+                    if delete_result is None:
+                        return construct_json_result(data=False, message="Doc store delete failed!", code=RetCode.ARGUMENT_ERROR)
                 except Exception as e:
                     return construct_json_result(data=False, message=str(e), code=RetCode.ARGUMENT_ERROR)
 
@@ -2707,7 +2708,7 @@ def rename(
             "title_tks": title_tks,
             "title_sm_tks": rag_tokenizer.fine_grained_tokenize(title_tks),
         }
-        if settings.docStoreConn.indexExist(search.index_name_one(tenant_id, kb.name), doc.kb_id):
+        if settings.docStoreConn.index_exist(search.index_name_one(tenant_id, kb.name), doc.kb_id):
             settings.docStoreConn.update(
                 {"doc_id": req["doc_id"]},
                 milvus_body,
@@ -2915,17 +2916,19 @@ def change_parser(
             # 删除向量数据库中的数据
             try:
                 collection_name = search.index_name_one(tenant_id, kb.name)
-                db_type = settings.docStoreConn.dbType()
+                db_type = settings.docStoreConn.db_type()
                 if db_type == "milvus":
                     delete_result = settings.docStoreConn.delete(
-                        collection_name=collection_name,
-                        filter=f"doc_id == '{doc.id}'"
+                        condition={"doc_id": doc.id},
+                        index_name=collection_name,
+                        dataset_id=kb.id
                     )
                 else:
+                    # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
                     delete_result = settings.docStoreConn.delete(
-                        condition={"doc_id": doc.id},
-                        indexName=collection_name,
-                        knowledgebaseId=kb.id
+                        {"doc_id": doc.id},
+                        collection_name,
+                        kb.id
                     )
                 if delete_result is None:
                     return get_data_error_result(retmsg="Doc store delete failed!")

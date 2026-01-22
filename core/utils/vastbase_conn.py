@@ -216,7 +216,7 @@ class VastBaseConnection(DocStoreConnection):
     Database operations
     """
 
-    def dbType(self) -> str:
+    def db_type(self) -> str:
         return "vastbase"
 
     def health(self) -> dict:
@@ -247,7 +247,7 @@ class VastBaseConnection(DocStoreConnection):
     Table operations
     """
 
-    def createIdx(self, indexName: str | list[str], knowledgebaseId: str, vectorSize: int):
+    def create_idx(self, indexName: str | list[str], knowledgebaseId: str, vectorSize: int):
         """
         Create an index with given name
         """
@@ -303,7 +303,7 @@ class VastBaseConnection(DocStoreConnection):
             if conn:
                 self._release_connection(conn)
 
-    def deleteIdx(self, indexName: str | list[str], knowledgebaseId: str):
+    def delete_idx(self, indexName: str | list[str], knowledgebaseId: str):
         """
         Delete an index with given name
         """
@@ -347,7 +347,7 @@ class VastBaseConnection(DocStoreConnection):
             if conn:
                 self._release_connection(conn)
 
-    def indexExist(self, indexName: str | list[str], knowledgebaseId: str = None) -> bool:
+    def index_exist(self, indexName: str | list[str], knowledgebaseId: str = None) -> bool:
         """
         Check if an index with given name exists
         """
@@ -1207,9 +1207,9 @@ class VastBaseConnection(DocStoreConnection):
                     raise ValueError(f"无法从数据中确定向量维度，无法创建表 {table_name}")
 
                 logger.info(f"表 {table_name} 不存在，自动创建（向量维度: {vector_size}）")
-                # 释放当前连接，因为createIdx会获取新连接
+                # 释放当前连接，因为create_idx会获取新连接
                 self._release_connection(conn)
-                self.createIdx(indexName, knowledgebaseId, vector_size)
+                self.create_idx(indexName, knowledgebaseId, vector_size)
                 # 重新获取连接
                 conn = self._get_connection()
                 self._register_vector_extension(conn)
@@ -1850,7 +1850,7 @@ class VastBaseConnection(DocStoreConnection):
             return res[1]
         return len(res)
 
-    def get_chunk_ids(self, res: tuple[list[dict], int] | list[dict]) -> list[str]:
+    def get_doc_ids(self, res: tuple[list[dict], int] | list[dict]) -> list[str]:
         """
         从搜索结果中提取所有文档块 ID
 

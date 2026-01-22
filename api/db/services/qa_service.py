@@ -464,7 +464,7 @@ class QATemplateStorageService:
             failed_qa_ids = []
             success_qa_ids = []
 
-            db_type = settings.docStoreConn.dbType()
+            db_type = settings.docStoreConn.db_type()
             for qa_id in qa_ids:
                 try:
                     if db_type == "milvus":
@@ -485,16 +485,18 @@ class QATemplateStorageService:
 
                         # 执行删除操作
                         delete_result = settings.docStoreConn.delete(
-                            collection_name=collection_name,
-                            filter=delete_expr
+                            # condition=delete_expr,
+                            condition={"tenant_id": tenant_id, "qa_id": qa_id},
+                            index_name=collection_name,
+                            dataset_id= ""
                         )
                         total_deleted += len(query_results)
                     else:
-                        # ES/OpenSearch 使用 condition 参数
+                        # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
                         delete_result = settings.docStoreConn.delete(
-                            condition={"tenant_id": tenant_id, "qa_id": qa_id},
-                            indexName=collection_name,
-                            knowledgebaseId=""
+                            {"tenant_id": tenant_id, "qa_id": qa_id},
+                            collection_name,
+                            ""
                         )
                         # ES delete 返回删除的数量
                         deleted_count = delete_result if isinstance(delete_result, int) else 0

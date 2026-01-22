@@ -913,70 +913,132 @@ def stop_parsing_documents(
 
 
 @router.get("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="获取文档分块列表")
-def list_document_chunks(
+def list_chunks(
     dataset_id: str,
     document_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
     keywords: str | None = Query(None),
+    id: str | None = Query(None, description="Chunk ID to retrieve a specific chunk"),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     """
     获取文档的分块列表
-    
+
     Args:
         dataset_id: 数据集ID
         document_id: 文档ID
         page: 页码
         page_size: 每页数量
         keywords: 关键词搜索
+        id: 可选的Chunk ID，用于获取单个chunk
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
-        文档分块列表
+        文档分块列表，包含total、chunks和doc信息
     """
-    if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
-        return get_error_data_result(retmsg="You don't own the dataset.")
-    
+    kb = KnowledgebaseService.get_by_id(db, id=dataset_id)
+    if not kb:
+        return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
+
     doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
     if not doc:
-        return get_error_data_result(retmsg="Document not found.")
-    
-    try:
-        # 从搜索引擎获取chunks
-        query_conditions = {"doc_id": document_id}
-        if keywords:
-            query_conditions["content"] = keywords
-        
-        res = settings.docStoreConn.search(
-            query_conditions,
-            search.index_name(tenant_id),
-            dataset_id,
-            page=page,
-            size=page_size
-        )
-        
-        chunks = []
-        for chunk_id in res.ids:
-            chunk_data = res.field[chunk_id]
-            chunk = {
+        return get_error_data_result(retmsg=f"You don't own the document {document_id}.")
+
+    doc = doc[0]
+
+    # Build query parameters
+    query = {
+        "doc_ids": [document_id],
+        "page": page,
+        "size": page_size,
+        "question": keywords or "",
+        "sort": True,
+    }
+
+    # Key mapping for document fields
+    key_mapping = {
+        "chunk_num": "chunk_count",
+        "kb_id": "dataset_id",
+        "token_num": "token_count",
+        "parser_id": "chunk_method",
+    }
+    run_mapping = {
+        "0": "UNSTART",
+        "1": "RUNNING",
+        "2": "CANCEL",
+        "3": "DONE",
+        "4": "FAIL",
+    }
+
+    # Convert doc to dict with renamed keys
+    doc_dict = doc.to_dict()
+    renamed_doc = {}
+    for key, value in doc_dict.items():
+        new_key = key_mapping.get(key, key)
+        renamed_doc[new_key] = value
+        if key == "run":
+            renamed_doc["run"] = run_mapping.get(str(value))
+
+    res = {"total": 0, "chunks": [], "doc": renamed_doc}
+
+    # If specific chunk id is requested
+    if id:
+        chunk = settings.docStoreConn.get(id, search.index_name(tenant_id, [kb.name]), [dataset_id])
+        if not chunk:
+            return get_result(retmsg=f"Chunk not found: {dataset_id}/{id}", retcode=RetCode.NOT_FOUND)
+        # Remove internal fields
+        keys_to_remove = []
+        for n in chunk.keys():
+            if re.search(r"(_vec$|_sm_|_tks|_ltks)", n):
+                keys_to_remove.append(n)
+        for n in keys_to_remove:
+            del chunk[n]
+        if not chunk:
+            return get_error_data_result(retmsg=f"Chunk `{id}` not found.")
+        res["total"] = 1
+        final_chunk = {
+            "id": chunk.get("id", chunk.get("chunk_id")),
+            "content": chunk.get("content_with_weight", ""),
+            "document_id": chunk.get("doc_id", chunk.get("document_id")),
+            "docnm_kwd": chunk.get("docnm_kwd", ""),
+            "important_keywords": chunk.get("important_kwd", []),
+            "questions": chunk.get("question_kwd", []),
+            "dataset_id": chunk.get("kb_id", chunk.get("dataset_id")),
+            "image_id": chunk.get("img_id", ""),
+            "available": bool(chunk.get("available_int", 1)),
+            "positions": chunk.get("position_int", []),
+        }
+        res["chunks"].append(final_chunk)
+        _ = ChunkModel(**final_chunk)  # validate the chunk
+
+    elif settings.docStoreConn.index_exist(search.index_name(tenant_id, [kb.name]), dataset_id):
+        sres = settings.retriever.search(query, search.index_name(tenant_id, [kb.name]), [dataset_id], emb_mdl=None, highlight=True)
+        res["total"] = sres.total
+        for chunk_id in sres.ids:
+            chunk_data = sres.field[chunk_id]
+            d = {
                 "id": chunk_id,
-                "content": chunk_data.get("content_with_weight", ""),
+                "content": (
+                    remove_redundant_spaces(sres.highlight[chunk_id])
+                    if keywords and chunk_id in sres.highlight
+                    else chunk_data.get("content_with_weight", "")
+                ),
                 "document_id": chunk_data.get("doc_id", ""),
                 "docnm_kwd": chunk_data.get("docnm_kwd", ""),
-                "important_keywords": chunk_data.get("important_keywords", []),
+                "important_keywords": chunk_data.get("important_kwd", []),
+                "questions": chunk_data.get("question_kwd", []),
+                "dataset_id": chunk_data.get("kb_id", chunk_data.get("dataset_id")),
                 "image_id": chunk_data.get("img_id", ""),
-                "available": chunk_data.get("available_int", 1) == 1,
+                "available": bool(int(chunk_data.get("available_int", "1"))),
                 "positions": chunk_data.get("position_int", []),
             }
-            chunks.append(chunk)
-        
-        return get_result(data=chunks)
-    except Exception as e:
-        logging.exception(e)
-        return get_error_data_result(retmsg=f"Failed to retrieve chunks: {str(e)}")
+            res["chunks"].append(d)
+            _ = ChunkModel(**d)  # validate the chunk
+
+    return get_result(data=res)
 
 
 @router.post("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="添加文档分块")
@@ -1011,8 +1073,8 @@ def add_document_chunk(
     
     try:
         doc = doc[0]
-        e, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-        if not e:
+        kb = KnowledgebaseService.get_by_id(db, dataset_id)
+        if not kb:
             return get_error_data_result(retmsg="Dataset not found.")
         
         # 生成chunk ID

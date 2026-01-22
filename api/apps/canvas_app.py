@@ -493,7 +493,7 @@ async def run(
     
     # Agent模式 - SSE流式响应
     try:
-        canvas = Canvas(cvs.dsl, user.id)
+        canvas = Canvas(cvs.dsl, user.id, canvas_id=cvs.id)
     except Exception as e:
         return server_error_response(e)
     
@@ -577,7 +577,7 @@ def rerun(
         return get_data_error_result(retmsg=f"`{doc['name']}` is processing...")
     
     # 删除向量数据库中的数据
-    if settings.docStoreConn.indexExist(search.index_name(user.id, [doc["kb_name"]]), doc["kb_id"]):
+    if settings.docStoreConn.index_exist(search.index_name(user.id, [doc["kb_name"]]), doc["kb_id"]):
         settings.docStoreConn.delete(
             {"doc_id": doc["id"]},
             search.index_name(user.id, [doc["kb_name"]]),
@@ -703,7 +703,7 @@ def reset(
         if not user_canvas:
             return get_data_error_result(retmsg="canvas not found.")
         
-        canvas = Canvas(json.dumps(user_canvas.dsl), user.id, req["id"])
+        canvas = Canvas(json.dumps(user_canvas.dsl), user.id, canvas_id=user_canvas.id)
         canvas.reset()
         req["dsl"] = json.loads(str(canvas))
         UserCanvasService.update_by_id(db, req["id"], {"dsl": req["dsl"]})
@@ -841,7 +841,7 @@ def input_form(
                 retcode=RetCode.OPERATING_ERROR
             )
         
-        canvas = Canvas(json.dumps(user_canvas.dsl), user.id, id)
+        canvas = Canvas(json.dumps(user_canvas.dsl), user.id, canvas_id=user_canvas.id)
         return get_json_result(data=canvas.get_component_input_form(component_id))
     except Exception as e:
         return server_error_response(e)
@@ -903,7 +903,7 @@ async def debug(
     
     try:
         user_canvas = UserCanvasService.get_by_id(db, req["id"])
-        canvas = Canvas(json.dumps(user_canvas.dsl), user.id, req["id"])
+        canvas = Canvas(json.dumps(user_canvas.dsl), user.id, canvas_id=user_canvas.id)
         canvas.reset()
         canvas.message_id = get_uuid()
         
