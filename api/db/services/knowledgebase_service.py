@@ -573,9 +573,11 @@ class KnowledgebaseService(CommonService):
 
     @classmethod
     def atomic_increase_doc_num_by_id(cls, db: Session, kb_id):
+        current_ts = current_timestamp()
+        current_date = datetime_format(datetime.now())
         data = {
-            "update_time": current_timestamp(),
-            "update_date": datetime_format(datetime.now())
+            "update_time": current_ts,
+            "update_date": current_date
         }
         # 在SQLAlchemy中，直接使用表达式来原子递增
         from sqlalchemy import update
@@ -636,12 +638,14 @@ class KnowledgebaseService(CommonService):
                 raise RuntimeError(f"kb_id {kb_id} does not exist")
 
             # 构造更新字典
+            current_ts = current_timestamp()
+            current_date = datetime_format(datetime.now())
             update_dict = {
                 'doc_num': kb_row.doc_num - doc_num_info['doc_num'],
                 'chunk_num': kb_row.chunk_num - doc_num_info['chunk_num'],
                 'token_num': kb_row.token_num - doc_num_info['token_num'],
-                'update_time': current_timestamp(),
-                'update_date': datetime_format(datetime.now())
+                'update_time': current_ts,
+                'update_date': current_date
             }
 
             # 执行更新

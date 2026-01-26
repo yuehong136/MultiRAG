@@ -108,8 +108,10 @@ class DialogService(CommonService):
                     raise ValueError("Each data item must include an 'id' field")
 
                 # 自动添加更新时间字段
-                data["update_time"] = current_timestamp()
-                data["update_date"] = datetime_format(datetime.now())
+                current_ts = current_timestamp()
+                current_date = datetime_format(datetime.now())
+                data["update_time"] = current_ts
+                data["update_date"] = current_date
 
                 # 获取要更新的记录ID
                 record_id = data.pop('id')

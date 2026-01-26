@@ -35,12 +35,14 @@ class APITokenService(CommonService):
         等价：将 token 的 update_time / update_date 更新为当前时间。
         返回受影响行数。
         """
+        current_ts = current_timestamp()
+        current_date = datetime_format(datetime.now())
         stmt = (
             update(cls.model)
             .where(cls.model.token == token)
             .values(
-                update_time=current_timestamp(),
-                update_date=datetime_format(datetime.now()),
+                update_time=current_ts,
+                update_date=current_date,
             )
         )
         res = db.execute(stmt)

@@ -110,10 +110,13 @@ class UserService(CommonService):
         if "password" in kwargs:
             # kwargs["password"] = pwd_context.hash(str(kwargs["password"]))
             kwargs["password"] = cls.hash_password(str(kwargs["password"]))
-        kwargs["create_time"] = current_timestamp()
-        kwargs["create_date"] = datetime_format(datetime.now())
-        kwargs["update_time"] = current_timestamp()
-        kwargs["update_date"] = datetime_format(datetime.now())
+        current_ts = current_timestamp()
+        current_date = datetime_format(datetime.now())
+
+        kwargs["create_time"] = current_ts
+        kwargs["create_date"] = current_date
+        kwargs["update_time"] = current_ts
+        kwargs["update_date"] = current_date
 
         user = cls.model(**kwargs)
         db.add(user)
@@ -144,8 +147,10 @@ class UserService(CommonService):
     def update_user(cls, db: Session, user_id: str, user_dict: dict):
         try:
             if user_dict:
-                user_dict["update_time"] = current_timestamp()
-                user_dict["update_date"] = datetime_format(datetime.now())
+                current_ts = current_timestamp()
+                current_date = datetime_format(datetime.now())
+                user_dict["update_time"] = current_ts
+                user_dict["update_date"] = current_date
                 db.query(cls.model).filter(cls.model.id == user_id).update(
                     user_dict,
                     synchronize_session=False
@@ -159,10 +164,12 @@ class UserService(CommonService):
     def update_user_password(cls, db: Session, user_id: str, new_password: str):
         """更新用户密码"""
         try:
+            current_ts = current_timestamp()
+            current_date = datetime_format(datetime.now())
             update_dict = {
                 "password": cls.hash_password(str(new_password)),
-                "update_time": current_timestamp(),
-                "update_date": datetime_format(datetime.now())
+                "update_time": current_ts,
+                "update_date": current_date
             }
             db.query(cls.model).filter(cls.model.id == user_id).update(
                 update_dict,

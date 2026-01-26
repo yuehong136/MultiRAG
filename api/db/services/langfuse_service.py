@@ -78,8 +78,10 @@ class TenantLangfuseService(CommonService):
         Returns:
             更新操作的结果。
         """
-        langfuse_keys["update_time"] = current_timestamp()
-        langfuse_keys["update_date"] = datetime_format(datetime.now())
+        current_ts = current_timestamp()
+        current_date = datetime_format(datetime.now())
+        langfuse_keys["update_time"] = current_ts
+        langfuse_keys["update_date"] = current_date
 
         result = db.query(cls.model).filter(cls.model.tenant_id == tenant_id).update(
             langfuse_keys,
@@ -100,10 +102,13 @@ class TenantLangfuseService(CommonService):
         Returns:
             创建的配置对象。
         """
-        kwargs["create_time"] = current_timestamp()
-        kwargs["create_date"] = datetime_format(datetime.now())
-        kwargs["update_time"] = current_timestamp()
-        kwargs["update_date"] = datetime_format(datetime.now())
+        current_ts = current_timestamp()
+        current_date = datetime_format(datetime.now())
+
+        kwargs["create_time"] = current_ts
+        kwargs["create_date"] = current_date
+        kwargs["update_time"] = current_ts
+        kwargs["update_date"] = current_date
 
         obj = cls.model(**kwargs)
         db.add(obj)

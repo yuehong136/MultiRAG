@@ -194,8 +194,10 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
         response_data = user.to_dict()
         # 更新数据库会话标识（用于load_user验证）
         user.access_token = get_uuid()
-        user.update_time = current_timestamp()
-        user.update_date = datetime_format(datetime.now())
+        current_ts = current_timestamp()
+        current_date = datetime_format(datetime.now())
+        user.update_time = current_ts
+        user.update_date = current_date
         db.add(user)
         try:
             db.commit()
@@ -615,8 +617,10 @@ def login_user(user):
     # 在FastAPI中，我们使用JWT token来管理用户会话
     # 这里主要是更新用户的最后登录时间等信息
     user.last_login_time = get_format_time()
-    user.update_time = current_timestamp()
-    user.update_date = datetime_format(datetime.now())
+    current_ts = current_timestamp()
+    current_date = datetime_format(datetime.now())
+    user.update_time = current_ts
+    user.update_date = current_date
 
 
 def rollback_user_registration(db: Session, user_id: str):

@@ -122,8 +122,10 @@ class File2DocumentService(CommonService):
 
     @classmethod
     def update_by_file_id(cls, db: Session, file_id: str, obj: dict):
-        obj["update_time"] = current_timestamp()
-        obj["update_date"] = datetime_format(datetime.now())
+        current_ts = current_timestamp()
+        current_date = datetime_format(datetime.now())
+        obj["update_time"] = current_ts
+        obj["update_date"] = current_date
         db.query(cls.model).filter_by(id=file_id).update(obj)
         db.commit()
         updated_obj = db.query(cls.model).filter_by(id=file_id).one()
