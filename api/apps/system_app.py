@@ -280,14 +280,16 @@ def new_token(request: TokenCreateRequest, db: Session = Depends(get_db), user=D
             return get_data_error_result(retmsg="Tenant not found!")
 
         tenant_id = [tenant for tenant in tenants if tenant.role == 'owner'][0].tenant_id
+        current_ts = current_timestamp()
+        current_date = datetime_format(datetime.now())
         obj = {
             "tenant_id": tenant_id,
             "token": generate_confirmation_token(),
             "beta": generate_confirmation_token().replace("multirag-", "")[:32],
             "name": request.name,
             "description": request.description,
-            "create_time": current_timestamp(),
-            "create_date": datetime_format(datetime.now()),
+            "create_time": current_ts,
+            "create_date": current_date,
             "update_time": None,
             "update_date": None,
         }

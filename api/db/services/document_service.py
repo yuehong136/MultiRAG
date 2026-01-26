@@ -1812,6 +1812,23 @@ class DocumentService(CommonService):
         return Document(**doc)
 
     @classmethod
+    def delete_chunk_images(cls, doc: Document, collection_name: str):
+        """删除文档关联的 chunk 图片"""
+        page = 0
+        page_size = 1000
+        while True:
+            chunks = settings.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
+                                                  page * page_size, page_size, collection_name,
+                                                  [doc.kb_id])
+            chunk_ids = settings.docStoreConn.get_doc_ids(chunks)
+            if not chunk_ids:
+                break
+            for cid in chunk_ids:
+                if settings.STORAGE_IMPL.obj_exist(doc.kb_id, cid):
+                    settings.STORAGE_IMPL.rm(doc.kb_id, cid)
+            page += 1
+
+    @classmethod
     def remove_document(cls, db: Session, doc: Document, tenant_id: str):
         from api.db.services.task_service import TaskService
         # 在删除文档前先保存需要的属性
@@ -1824,21 +1841,7 @@ class DocumentService(CommonService):
         collection_name = search.index_name_one(tenant_id, kb.name)
 
         TaskService.filter_delete(db, [Task.doc_id == doc.id])
-        page = 0
-        page_size = 1000
-        all_chunk_ids = []
-        while True:
-            chunks = settings.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
-                                                  page * page_size, page_size, collection_name,
-                                                  [doc.kb_id])
-            chunk_ids = settings.docStoreConn.get_doc_ids(chunks)
-            if not chunk_ids:
-                break
-            all_chunk_ids.extend(chunk_ids)
-            page += 1
-        for cid in all_chunk_ids:
-            if settings.STORAGE_IMPL.obj_exist(doc.kb_id, cid):
-                settings.STORAGE_IMPL.rm(doc.kb_id, cid)
+        cls.delete_chunk_images(doc, collection_name)
         if doc.thumbnail and not doc.thumbnail.startswith(IMG_BASE64_PREFIX):
             if settings.STORAGE_IMPL.obj_exist(doc.kb_id, doc.thumbnail):
                 settings.STORAGE_IMPL.rm(doc.kb_id, doc.thumbnail)

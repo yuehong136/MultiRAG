@@ -62,10 +62,12 @@ def new_token(request: NewTokenRequest, db: Session = Depends(get_db), user=Depe
             return get_data_error_result(retmsg="Tenant not found!")
 
         tenant_id = tenants[0].tenant_id
+        current_ts = current_timestamp()
+        current_date = datetime_format(datetime.now())
         obj = {"tenant_id": tenant_id, "token": generate_confirmation_token(),
                "dialog_id": request.tenant_id,
-               "create_time": current_timestamp(),
-               "create_date": datetime_format(datetime.now()),
+               "create_time": current_ts,
+               "create_date": current_date,
                "update_time": None,
                "update_date": None
                }

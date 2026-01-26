@@ -2912,10 +2912,13 @@ def change_parser(
 
             document = DocumentService.get_by_doc_id(db, doc.id)
             kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
+            collection_name = search.index_name_one(tenant_id, kb.name)
+
+            # 删除关联的 chunk 图片
+            DocumentService.delete_chunk_images(doc, collection_name)
 
             # 删除向量数据库中的数据
             try:
-                collection_name = search.index_name_one(tenant_id, kb.name)
                 db_type = settings.docStoreConn.db_type()
                 if db_type == "milvus":
                     delete_result = settings.docStoreConn.delete(
