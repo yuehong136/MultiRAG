@@ -33,9 +33,9 @@ from common.constants import LLMType
 from common.token_utils import num_tokens_from_string
 from common.parser_config_utils import normalize_layout_recognizer
 from core.utils.file_utils import extract_embed_file, extract_links_from_pdf, extract_links_from_docx, extract_html
-from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, tokenize_chunks, tokenize_chunks_with_images, tokenize_table, attach_media_context
+from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, tokenize_chunks, tokenize_chunks_with_images, tokenize_table, attach_media_context, append_context2table_image4pdf
 from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownElementExtractor, MarkdownParser, PdfParser, TxtParser
-from deepdoc.parser.figure_parser import VisionFigureParser,vision_figure_parser_docx_wrapper,vision_figure_parser_pdf_wrapper
+from deepdoc.parser.figure_parser import VisionFigureParser, vision_figure_parser_docx_wrapper, vision_figure_parser_pdf_wrapper
 from deepdoc.parser.pdf_parser import PlainParser, VisionParser
 from deepdoc.parser.docling_parser import DoclingParser
 from deepdoc.parser.tcadp_parser import TCADPParser
@@ -773,6 +773,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         if not sections and not tables:
             return []
 
+        if table_context_size or image_context_size:
+            tables = append_context2table_image4pdf(sections, tables, image_context_size)
+
         if name in ["tcadp", "docling", "mineru"]:
             parser_config["chunk_token_num"] = 0
 
@@ -1001,8 +1004,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         res.extend(embed_res)
     if url_res:
         res.extend(url_res)
-    if table_context_size or image_context_size:
-        attach_media_context(res, table_context_size, image_context_size)
+    # if table_context_size or image_context_size:
+    #     attach_media_context(res, table_context_size, image_context_size)
     return res
 
 
