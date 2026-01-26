@@ -342,7 +342,8 @@ def delete_memory(
 
     try:
         MemoryService.delete_memory(db, memory_id)
-        MessageService.delete_message({"memory_id": memory_id}, memory.tenant_id, memory_id)
+        if MessageService.has_index(memory.tenant_id, memory_id):
+            MessageService.delete_message({"memory_id": memory_id}, memory.tenant_id, memory_id)
         return get_json_result(data=True)
     except Exception as e:
         logger.error(f"删除Memory失败: {e}")
