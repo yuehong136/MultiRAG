@@ -1,7 +1,7 @@
 """Data model definitions for all connectors"""
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional, List, Sequence, NamedTuple
+from typing import Any, Sequence, NamedTuple
 from typing_extensions import TypedDict, NotRequired
 from pydantic import BaseModel
 
@@ -94,16 +94,18 @@ class Document(BaseModel):
     blob: bytes
     doc_updated_at: datetime
     size_bytes: int
+    externale_access: ExternalAccess | None = None
     primary_owners: list | None = None
-    metadata: Optional[dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
+    doc_metadata: dict[str, Any] | None = None
 
 
 class BasicExpertInfo(BaseModel):
     """Expert information model"""
-    display_name: Optional[str] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    email: Optional[str] = None
+    display_name: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
 
     def get_semantic_name(self) -> str:
         """Get semantic name for display"""
@@ -122,7 +124,7 @@ class BasicExpertInfo(BaseModel):
 class SlimDocument(BaseModel):
     """Simplified document model (contains only ID and permission info)"""
     id: str
-    external_access: Optional[Any] = None
+    external_access: Any | None = None
 
 
 class ConnectorCheckpoint(BaseModel):
@@ -144,10 +146,10 @@ class EntityFailure(BaseModel):
 
 class ConnectorFailure(BaseModel):
     """Connector failure information"""
-    failed_document: Optional[DocumentFailure] = None
-    failed_entity: Optional[EntityFailure] = None
+    failed_document: DocumentFailure | None = None
+    failed_entity: EntityFailure | None = None
     failure_message: str
-    exception: Optional[Exception] = None
+    exception: Exception | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -169,7 +171,7 @@ class GmailMessage(BaseModel):
     """Gmail message data model"""
     id: str
     payload: dict[str, Any]
-    label_ids: Optional[list[str]] = None
+    label_ids: list[str] | None = None
 
 
 # Notion Models
@@ -181,8 +183,8 @@ class NotionPage(BaseModel):
     archived: bool
     properties: dict[str, Any]
     url: str
-    parent: Optional[dict[str, Any]] = None  # Parent reference for path reconstruction
-    database_name: Optional[str] = None  # Only applicable to database type pages
+    parent: dict[str, Any] | None = None  # Parent reference for path reconstruction
+    database_name: str | None = None  # Only applicable to database type pages
 
 
 class NotionBlock(BaseModel):
@@ -195,7 +197,7 @@ class NotionBlock(BaseModel):
 class NotionSearchResponse(BaseModel):
     """Represents the response from the Notion Search API"""
     results: list[dict[str, Any]]
-    next_cursor: Optional[str]
+    next_cursor: str | None
     has_more: bool = False
 
 
@@ -228,7 +230,7 @@ class ChannelType(TypedDict):
     is_shared: bool
     is_ext_shared: bool
     is_org_shared: bool
-    pending_shared: List[str]
+    pending_shared: list[str]
     is_pending_ext_shared: bool
     is_member: bool
     is_private: bool
@@ -236,7 +238,7 @@ class ChannelType(TypedDict):
     updated: int
     topic: ChannelTopicPurposeType
     purpose: ChannelTopicPurposeType
-    previous_names: List[str]
+    previous_names: list[str]
     num_members: int
 
 
@@ -267,7 +269,7 @@ class MessageType(TypedDict):
     user: str
     text: str
     ts: str
-    attachments: NotRequired[List[AttachmentType]]
+    attachments: NotRequired[list[AttachmentType]]
     bot_id: NotRequired[str]
     app_id: NotRequired[str]
     bot_profile: NotRequired[BotProfileType]
@@ -276,16 +278,16 @@ class MessageType(TypedDict):
 
 
 # Thread message list
-ThreadType = List[MessageType]
+ThreadType = list[MessageType]
 
 
 class SlackCheckpoint(TypedDict):
     """Slack checkpoint"""
-    channel_ids: List[str] | None
+    channel_ids: list[str] | None
     channel_completion_map: dict[str, str]
     current_channel: ChannelType | None
     current_channel_access: Any | None
-    seen_thread_ts: List[str]
+    seen_thread_ts: list[str]
     has_more: bool
 
 

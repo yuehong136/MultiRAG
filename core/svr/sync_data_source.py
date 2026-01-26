@@ -687,20 +687,17 @@ class Moodle(SyncBase):
         self.connector.load_credentials(self.conf["credentials"])
 
         # Determine the time range for synchronization based on reindex or poll_range_start
-        if task["reindex"] == "1" or not task.get("poll_range_start"):
+        poll_start = task.get("poll_range_start")
+
+        if task["reindex"] == "1" or poll_start is None:
             document_generator = self.connector.load_from_state()
             begin_info = "totally"
         else:
-            poll_start = task["poll_range_start"]
-            if poll_start is None:
-                document_generator = self.connector.load_from_state()
-                begin_info = "totally"
-            else:
-                document_generator = self.connector.poll_source(
-                    poll_start.timestamp(),
-                    datetime.now(timezone.utc).timestamp()
-                )
-                begin_info = "from {}".format(poll_start)
+            document_generator = self.connector.poll_source(
+                poll_start.timestamp(),
+                datetime.now(timezone.utc).timestamp(),
+            )
+            begin_info = f"from {poll_start}"
 
         logging.info("Connect to Moodle: {} {}".format(self.conf["moodle_url"], begin_info))
         return document_generator
@@ -730,20 +727,17 @@ class BOX(SyncBase):
         auth.token_storage.store(token)
 
         self.connector.load_credentials(auth)
-        if task["reindex"] == "1" or not task["poll_range_start"]:
+        poll_start = task["poll_range_start"]
+
+        if task["reindex"] == "1" or poll_start is None:
             document_generator = self.connector.load_from_state()
             begin_info = "totally"
         else:
-            poll_start = task["poll_range_start"]
-            if poll_start is None:
-                document_generator = self.connector.load_from_state()
-                begin_info = "totally"
-            else:
-                document_generator = self.connector.poll_source(
-                    poll_start.timestamp(),
-                    datetime.now(timezone.utc).timestamp()
-                )
-                begin_info = "from {}".format(poll_start)
+            document_generator = self.connector.poll_source(
+                poll_start.timestamp(),
+                datetime.now(timezone.utc).timestamp(),
+            )
+            begin_info = f"from {poll_start}"
         logging.info("Connect to Box: folder_id({}) {}".format(self.conf["folder_id"], begin_info))
         return document_generator
 
@@ -769,20 +763,17 @@ class Airtable(SyncBase):
             {"airtable_access_token": credentials["airtable_access_token"]}
         )
 
-        if task.get("reindex") == "1" or not task.get("poll_range_start"):
+        poll_start = task.get("poll_range_start")
+
+        if task.get("reindex") == "1" or poll_start is None:
             document_generator = self.connector.load_from_state()
             begin_info = "totally"
         else:
-            poll_start = task.get("poll_range_start")
-            if poll_start is None:
-                document_generator = self.connector.load_from_state()
-                begin_info = "totally"
-            else:
-                document_generator = self.connector.poll_source(
-                    poll_start.timestamp(),
-                    datetime.now(timezone.utc).timestamp(),
-                )
-                begin_info = f"from {poll_start}"
+            document_generator = self.connector.poll_source(
+                poll_start.timestamp(),
+                datetime.now(timezone.utc).timestamp(),
+            )
+            begin_info = f"from {poll_start}"
 
         logging.info(
             "Connect to Airtable: base_id(%s), table(%s) %s",
