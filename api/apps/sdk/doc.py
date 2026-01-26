@@ -1122,7 +1122,7 @@ def add_document_chunk(
 
 
 @router.delete("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="批量删除文档分块")
-def delete_document_chunks(
+def rm_chunk(
     dataset_id: str,
     document_id: str,
     request: DeleteChunksRequest,
@@ -1142,29 +1142,25 @@ def delete_document_chunks(
     chunk_ids = req["chunk_ids"]
     if not chunk_ids:
         return get_error_data_result(retmsg="chunk_ids is required")
-    
-    try:
-        # 从搜索引擎删除chunks
-        settings.docStoreConn.delete({"id": chunk_ids}, search.index_name(tenant_id), dataset_id)
-        
-        # 更新文档统计
-        DocumentService.increment_chunk_num(
-            db,
-            document_id,
-            dataset_id,
-            0,  # token count (需要重新计算)
-            -len(chunk_ids),  # chunk count
-            0   # process duration
-        )
-        
-        return get_result(retmsg=f"Successfully deleted {len(chunk_ids)} chunks")
-    except Exception as e:
-        logging.exception(e)
-        return get_error_data_result(retmsg=f"Failed to delete chunks: {str(e)}")
+    else:
+        unique_chunk_ids = []
+        duplicate_messages = []
+    settings.docStoreConn.delete({"id": chunk_ids}, search.index_name(tenant_id), dataset_id)
+
+    DocumentService.increment_chunk_num(
+        db,
+        document_id,
+        dataset_id,
+        0,  # token count (需要重新计算)
+        -len(chunk_ids),  # chunk count
+        0   # process duration
+    )
+
+    return get_result(retmsg=f"Successfully deleted {len(chunk_ids)} chunks")
 
 
 @router.put("/datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}", summary="更新文档分块")
-def update_document_chunk(
+def update_chunk(
     dataset_id: str,
     document_id: str,
     chunk_id: str,
@@ -1182,58 +1178,54 @@ def update_document_chunk(
     if not doc:
         return get_error_data_result(retmsg="Document not found.")
     
-    try:
-        # 获取现有chunk数据
-        res = settings.docStoreConn.get(chunk_id, search.index_name(tenant_id), dataset_id)
-        if not res:
-            return get_error_data_result(retmsg="Chunk not found.")
-        
-        chunk_data = res[chunk_id]
-        
-        # 更新内容
-        if "content" in req and req["content"] is not None:
-            chunk_data["content_with_weight"] = req["content"]
-            tks = rag_tokenizer.tokenize(req["content"])
-            chunk_data["content_ltks"] = tks
-            chunk_data["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(tks)
-            
-            # 重新生成embedding
-            e, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-            embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
-            v, c = embd_mdl.encode([req["content"]])
-            chunk_data["q_%d_vec" % len(v[0])] = v[0]
-        
-        # 更新重要关键词
-        if "important_keywords" in req:
-            chunk_data["important_keywords"] = req["important_keywords"]
 
-        if "questions" in req:
-            if not isinstance(req["questions"], list):
-                return get_error_data_result("`questions` should be a list")
-            chunk_data["question_kwd"] = [str(q).strip() for q in req.get("questions", []) if str(q).strip()]
-            chunk_data["question_tks"] = rag_tokenizer.tokenize("\n".join(req["questions"]))
+    res = settings.docStoreConn.get(chunk_id, search.index_name(tenant_id), dataset_id)
+    if not res:
+        return get_error_data_result(retmsg="Chunk not found.")
 
-        # 更新可用状态
-        if "available" in req:
-            chunk_data["available_int"] = 1 if req["available"] else 0
+    chunk_data = res[chunk_id]
 
-        # 更新位置
-        if "positions" in req:
-            if not isinstance(req["positions"], list):
-                return get_error_data_result("`positions` should be a list")
-            chunk_data["position_int"] = req["positions"]
+    # 更新内容
+    if "content" in req and req["content"] is not None:
+        chunk_data["content_with_weight"] = req["content"]
+        tks = rag_tokenizer.tokenize(req["content"])
+        chunk_data["content_ltks"] = tks
+        chunk_data["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(tks)
 
-        # 更新修改时间
-        chunk_data["update_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        chunk_data["update_timestamp_flt"] = datetime.datetime.now().timestamp()
-        
-        # 保存到搜索引擎
-        settings.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(tenant_id), dataset_id)
-        
-        return get_result(data={"chunk_id": chunk_id, **req})
-    except Exception as e:
-        logging.exception(e)
-        return get_error_data_result(retmsg=f"Failed to update chunk: {str(e)}")
+        # 重新生成embedding
+        e, kb = KnowledgebaseService.get_by_id(db, dataset_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+        v, c = embd_mdl.encode([req["content"]])
+        chunk_data["q_%d_vec" % len(v[0])] = v[0]
+
+    # 更新重要关键词
+    if "important_keywords" in req:
+        chunk_data["important_keywords"] = req["important_keywords"]
+
+    if "questions" in req:
+        if not isinstance(req["questions"], list):
+            return get_error_data_result("`questions` should be a list")
+        chunk_data["question_kwd"] = [str(q).strip() for q in req.get("questions", []) if str(q).strip()]
+        chunk_data["question_tks"] = rag_tokenizer.tokenize("\n".join(req["questions"]))
+
+    # 更新可用状态
+    if "available" in req:
+        chunk_data["available_int"] = 1 if req["available"] else 0
+
+    # 更新位置
+    if "positions" in req:
+        if not isinstance(req["positions"], list):
+            return get_error_data_result("`positions` should be a list")
+        chunk_data["position_int"] = req["positions"]
+
+    # 更新修改时间
+    chunk_data["update_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    chunk_data["update_timestamp_flt"] = datetime.datetime.now().timestamp()
+
+    # 保存到搜索引擎
+    settings.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(tenant_id), dataset_id)
+
+    return get_result(data={"chunk_id": chunk_id, **req})
 
 
 @router.post("/retrieval", summary="检索测试")
