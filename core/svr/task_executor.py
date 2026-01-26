@@ -236,8 +236,8 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
         logging.info(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, enable_sse: {enable_sse}")
     except NoResultFound:
         logging.warning("set_progress(%s): 记录不存在，无法更新进度", task_id)
-    except Exception:
-        logging.exception(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, got exception")
+    except Exception as e:
+        logging.exception(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, got exception: {e}")
 
 
 async def collect(db: Session):
@@ -245,6 +245,7 @@ async def collect(db: Session):
     global UNACKED_ITERATOR
 
     svr_queue_names = settings.get_svr_queue_names()
+    redis_msg = None
     try:
         if not UNACKED_ITERATOR:
             UNACKED_ITERATOR = REDIS_CONN.get_unacked_iterator(svr_queue_names, SVR_CONSUMER_GROUP_NAME, CONSUMER_NAME)
@@ -255,8 +256,8 @@ async def collect(db: Session):
                 redis_msg = REDIS_CONN.queue_consumer(svr_queue_name, SVR_CONSUMER_GROUP_NAME, CONSUMER_NAME)
                 if redis_msg:
                     break
-    except Exception:
-        logging.exception("collect got exception")
+    except Exception as e:
+        logging.exception(f"collect got exception: {e}")
         return None, None
 
     if not redis_msg:
@@ -2667,9 +2668,9 @@ async def do_handle_task(db, task):
     async def _maybe_insert_milvus(_chunks):
         if has_canceled(task_id):
             return True
-        e = await insert_milvus(db, task_id, task_tenant_id, task_dataset_id, _chunks, progress_callback,
+        insert_result = await insert_milvus(db, task_id, task_tenant_id, task_dataset_id, _chunks, progress_callback,
                                 collection_name, schema)
-        return bool(e)
+        return bool(insert_result)
 
     try:
         if not await _maybe_insert_milvus(chunks):
@@ -2718,9 +2719,9 @@ async def do_handle_task(db, task):
                         task_doc_id,
                         task_dataset_id,
                     )
-            except Exception:
+            except Exception as e:
                 logging.exception(
-                    f"Remove doc({task_doc_id}) from docStore failed when task({task_id}) canceled."
+                    f"Remove doc({task_doc_id}) from docStore failed when task({task_id}) canceled, exception: {e}"
                 )
 
 
@@ -2736,9 +2737,9 @@ async def handle_task():
                 return
 
             task_type = task["task_type"]
-            pipeline_task_type = TASK_TYPE_TO_PIPELINE_TASK_TYPE.get(task_type,
-                                                                     PipelineTaskType.PARSE) or PipelineTaskType.PARSE
+            pipeline_task_type = TASK_TYPE_TO_PIPELINE_TASK_TYPE.get(task_type, PipelineTaskType.PARSE) or PipelineTaskType.PARSE
 
+            task_id = task["id"]
             try:
                 # 转换为可序列化的字典
                 if hasattr(task, "_asdict"):  # 检查是否为 RowProxy
@@ -2777,21 +2778,22 @@ async def handle_task():
                 CURRENT_TASKS[task["id"]] = task_for_tracking
                 await do_handle_task(db, task)
                 DONE_TASKS += 1
-                CURRENT_TASKS.pop(task["id"], None)
+                CURRENT_TASKS.pop(task_id, None)
 
                 # "handle_task done" 日志也清理 base64
                 task_done_dict = copy.deepcopy(task_dict)  # 复用之前清理过的 task_dict
                 logging.info(f"handle_task done for task {json.dumps(task_done_dict)}")
             except Exception as e:
                 FAILED_TASKS += 1
-                CURRENT_TASKS.pop(task["id"], None)
+                CURRENT_TASKS.pop(task_id, None)
                 try:
                     err_msg = str(e)
                     while isinstance(e, exceptiongroup.ExceptionGroup):
                         e = e.exceptions[0]
                         err_msg += ' -- ' + str(e)
-                    set_progress(db, task["id"], prog=-1, msg=f"[Exception]: {err_msg}")
-                except Exception:
+                    set_progress(db, task_id, prog=-1, msg=f"[Exception]: {err_msg}")
+                except Exception as e:
+                    logging.exception(f"[Exception]: {str(e)}")
                     pass
 
                 # 异常日志也清理 base64
@@ -2877,8 +2879,8 @@ async def report_status():
                         logging.info(f"{consumer_name} expired, removed")
                         REDIS_CONN.srem("TASKEXE", consumer_name)
                         REDIS_CONN.delete(consumer_name)
-        except Exception:
-            logging.exception("report_status got exception")
+        except Exception as e:
+            logging.exception(f"report_status got exception: {e}")
         finally:
             redis_lock.release()
         await asyncio.sleep(30)

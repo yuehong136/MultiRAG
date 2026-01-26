@@ -6,6 +6,7 @@
 @date：2024/7/26 11:00
 @desc:
 """
+import logging
 import os
 import re
 import tempfile
@@ -21,7 +22,7 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
     doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])
 
     # is it English
-    eng = lang.lower() == "english"  # is_english(sections)
+    is_english = lang.lower() == "english"  # is_english(sections)
     try:
         _, ext = os.path.splitext(filename)
         if not ext:
@@ -58,7 +59,7 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
         ans = seq2txt_mdl.transcription(audio_path)
         callback(0.8, "Sequence2Txt LLM respond: %s ..." % ans[:32])
 
-        tokenize(doc, ans, eng)
+        tokenize(doc, ans, is_english)
         return [doc]
     except Exception as e:
         callback(prog=-1, msg=str(e))
@@ -71,6 +72,7 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
         if converted_path and os.path.exists(converted_path):
             try:
                 os.unlink(converted_path)
-            except Exception:
+            except Exception as e:
+                logging.exception(f"Failed to remove temporary file: {tmp_path}, exception: {e}")
                 pass
     return []
