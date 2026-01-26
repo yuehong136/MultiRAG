@@ -279,7 +279,7 @@ def new_token(request: TokenCreateRequest, db: Session = Depends(get_db), user=D
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
 
-        tenant_id = [tenant for tenant in tenants if tenant.role == 'owner'][0].tenant_id
+        tenant_id = [tenant for tenant in tenants if tenant.role == "owner"][0].tenant_id
         current_ts = current_timestamp()
         current_date = datetime_format(datetime.now())
         obj = {
@@ -335,7 +335,7 @@ def token_list(db: Session = Depends(get_db), user=Depends(manager)):
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
 
-        tenant_id = [tenant for tenant in tenants if tenant.role == 'owner'][0].tenant_id
+        tenant_id = [tenant for tenant in tenants if tenant.role == "owner"][0].tenant_id
         objs = APITokenService.query(db, tenant_id=tenant_id)
         objs = [o.to_dict() for o in objs]
         for o in objs:
@@ -365,10 +365,16 @@ def rm(
     返回:
         JSON 响应，指示删除操作是否成功。
     """
-    APITokenService.filter_delete(
-        db, [APIToken.tenant_id == user.id, APIToken.token == token]
-    )
-    return get_json_result(data=True)
+    try:
+        tenants = UserTenantService.query(db, user_id=user.id)
+        if not tenants:
+            return get_data_error_result(retmsg="Tenant not found!")
+
+        tenant_id = tenants[0].tenant_id
+        APITokenService.filter_delete(db, [APIToken.tenant_id == tenant_id, APIToken.token == token])
+        return get_json_result(data=True)
+    except Exception as e:
+        return server_error_response(e)
 
 
 @router.get('/config', summary="获取系统配置")  # noqa: F821
@@ -388,6 +394,4 @@ def get_config():
                         type: integer 0 means disabled, 1 means enabled
                         description: Whether user registration is enabled
     """
-    return get_json_result(data={
-        "registerEnabled": settings.REGISTER_ENABLED
-    })
+    return get_json_result(data={"registerEnabled": settings.REGISTER_ENABLED})
