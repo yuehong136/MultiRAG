@@ -9,6 +9,7 @@ import concurrent.futures
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
+from api.db.joint_services.memory_message_service import handle_save_to_memory_task
 from common.connection_utils import timeout
 from common.file_utils import get_project_base_directory
 from core.utils.base64_image import image2id
@@ -116,6 +117,7 @@ TASK_TYPE_TO_PIPELINE_TASK_TYPE = {
     "raptor": PipelineTaskType.RAPTOR,
     "graphrag": PipelineTaskType.GRAPH_RAG,
     "mindmap": PipelineTaskType.MINDMAP,
+    "memory": PipelineTaskType.MEMORY,
     # analyze_v2 不需要记录 pipeline 操作日志（直传文件，无 Document 记录）
 }
 
@@ -368,6 +370,10 @@ async def collect(db: Session):
                 task = None
         else:
             task = None
+    elif task_type == PipelineTaskType.MEMORY.lower():
+        # memory 任务特殊处理：直接从 Task 表获取
+        task_obj = TaskService.get_by_id(db, msg["id"])
+        task = task_obj.to_dict() if task_obj else None
     else:
         # 普通任务，从数据库获取
         task = TaskService.get_task(db, msg["id"])
@@ -381,12 +387,15 @@ async def collect(db: Session):
         redis_msg.ack()
         return None, None
 
-    # task_type 已在前面定义
     task["task_type"] = task_type
     if task_type[:8] == "dataflow":
         task["tenant_id"] = msg["tenant_id"]
         task["dataflow_id"] = msg["dataflow_id"]
         task["kb_id"] = msg.get("kb_id", "")
+    if task_type[:6] == "memory":
+        task["memory_id"] = msg["memory_id"]
+        task["source_id"] = msg["source_id"]
+        task["message_dict"] = msg["message_dict"]
     return redis_msg, task
 
 
@@ -2440,6 +2449,10 @@ async def do_handle_task(db, task):
             return []  # 解析失败时，返回空列表
 
     task_type = task.get("task_type", "")
+
+    if task_type == "memory":
+        await handle_save_to_memory_task(db, task)
+        return
 
     if task_type == "dataflow" and task.get("doc_id", "") == CANVAS_DEBUG_DOC_ID:
         await run_dataflow(db, task)
