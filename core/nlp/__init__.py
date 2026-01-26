@@ -263,7 +263,7 @@ def split_with_pattern(d, pattern: str, content: str, eng) -> list:
         if not txt:
             continue
         if j + 1 < len(txts):
-            txt += txts[j+1]
+            txt += txts[j + 1]
         dd = copy.deepcopy(d)
         tokenize(dd, txt, eng)
         docs.append(dd)
@@ -307,7 +307,7 @@ def tokenize_chunks_with_images(chunks, doc, eng, images, child_delimiters_patte
         logging.debug("-- {}".format(ck))
         d = copy.deepcopy(doc)
         d["image"] = image
-        add_positions(d, [[ii]*5])
+        add_positions(d, [[ii] * 5])
         if child_delimiters_pattern:
             d["mom_with_weight"] = ck
             res.extend(split_with_pattern(d, child_delimiters_pattern, ck, eng))
@@ -744,8 +744,8 @@ def not_title(txt):
         return True
     return re.search(r"[,;，。；！!]", txt)
 
-def tree_merge(bull, sections, depth):
 
+def tree_merge(bull, sections, depth):
     if not sections or bull < 0:
         return sections
     if isinstance(sections[0], type("")):
@@ -792,8 +792,8 @@ def tree_merge(bull, sections, depth):
 
     return [element for element in root.get_tree() if element]
 
-def hierarchical_merge(bull, sections, depth):
 
+def hierarchical_merge(bull, sections, depth):
     if not sections or bull < 0:
         return []
     if isinstance(sections[0], type("")):
@@ -937,7 +937,7 @@ def naive_merge(sections: str | list, chunk_token_num=128, delimiter="\n。；�
         return cks
 
     for sec, pos in sections:
-        add_chunk("\n"+sec, pos)
+        add_chunk("\n" + sec, pos)
 
     return cks
 
@@ -958,10 +958,10 @@ def naive_merge_with_images(texts, images, chunk_token_num=128, delimiter="\n。
         if tnum < 8:
             pos = ""
         # Ensure that the length of the merged chunk does not exceed chunk_token_num
-        if cks[-1] == "" or tk_nums[-1] > chunk_token_num * (100 - overlapped_percent)/100.:
+        if cks[-1] == "" or tk_nums[-1] > chunk_token_num * (100 - overlapped_percent) / 100.:
             if cks:
                 overlapped = RAGFlowPdfParser.remove_tag(cks[-1])
-                t = overlapped[int(len(overlapped)*(100-overlapped_percent)/100.):] + t
+                t = overlapped[int(len(overlapped) * (100 - overlapped_percent) / 100.):] + t
             if t.find(pos) < 0:
                 t += pos
             cks.append(t)
@@ -1005,9 +1005,9 @@ def naive_merge_with_images(texts, images, chunk_token_num=128, delimiter="\n。
         if isinstance(text, tuple):
             text_str = text[0]
             text_pos = text[1] if len(text) > 1 else ""
-            add_chunk("\n"+text_str, image, text_pos)
+            add_chunk("\n" + text_str, image, text_pos)
         else:
-            add_chunk("\n"+text, image)
+            add_chunk("\n" + text, image)
 
     return cks, result_images
 

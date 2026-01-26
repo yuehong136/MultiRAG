@@ -113,9 +113,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
         if name in ["tcadp", "docling", "mineru"]:
             parser_config["chunk_token_num"] = 0
-        
+
         callback(0.8, "Finish parsing.")
-        
+
         for (img, rows), poss in tbls:
             if not rows:
                 continue
@@ -173,7 +173,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 if __name__ == "__main__":
     import sys
 
+
     def dummy(prog=None, msg=""):
         pass
+
 
     chunk(sys.argv[1], from_page=0, to_page=10, callback=dummy)

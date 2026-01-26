@@ -141,11 +141,11 @@ def label_question(db, question, kbs):
         if not tag_kbs:
             return tags
         tags = settings.retriever.tag_query(question,
-                                              list(set([kb.tenant_id for kb in tag_kbs])),
-                                              tag_kb_ids,
-                                              all_tags,
-                                              kb.parser_config.get("topn_tags", 3)
-                                              )
+                                            list(set([kb.tenant_id for kb in tag_kbs])),
+                                            tag_kb_ids,
+                                            all_tags,
+                                            kb.parser_config.get("topn_tags", 3)
+                                            )
     return tags
 
 
@@ -153,6 +153,9 @@ def label_question(db, question, kbs):
 if __name__ == "__main__":
     import sys
 
+
     def dummy(prog=None, msg=""):
         pass
+
+
     chunk(sys.argv[1], from_page=0, to_page=10, callback=dummy)

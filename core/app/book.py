@@ -91,9 +91,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             filename, binary=binary, from_page=from_page, to_page=to_page)
         remove_contents_table(sections, eng=is_english(
             random_choices([t for t, _ in sections], k=200)))
-        tbls = vision_figure_parser_docx_wrapper(sections=sections,tbls=tbls,callback=callback,**kwargs)
+        tbls = vision_figure_parser_docx_wrapper(sections=sections, tbls=tbls, callback=callback, **kwargs)
         # tbls = [((None, lns), None) for lns in tbls]
-        sections=[(item[0],item[1] if item[1] is not None else "") for item in sections if not isinstance(item[1], Image.Image)]
+        sections = [(item[0], item[1] if item[1] is not None else "") for item in sections if not isinstance(item[1], Image.Image)]
         callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
@@ -126,7 +126,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
         if name in ["tcadp", "docling", "mineru"]:
             parser_config["chunk_token_num"] = 0
-        
+
         callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.txt$", filename, re.IGNORECASE):
@@ -176,7 +176,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
                   for ck in hierarchical_merge(bull, sections, 5)]
     else:
         sections = [s.split("@") for s, _ in sections]
-        sections = [(pr[0], "@" + pr[1]) if len(pr) == 2 else (pr[0], '') for pr in sections ]
+        sections = [(pr[0], "@" + pr[1]) if len(pr) == 2 else (pr[0], '') for pr in sections]
         chunks = naive_merge(
             sections,
             parser_config.get("chunk_token_num", 256),
@@ -200,6 +200,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 if __name__ == "__main__":
     import sys
 
+
     def dummy(prog=None, msg=""):
         pass
+
+
     chunk(sys.argv[1], from_page=1, to_page=10, callback=dummy)

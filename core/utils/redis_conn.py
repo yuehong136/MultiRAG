@@ -29,6 +29,7 @@ except Exception:
     except Exception:
         REDIS = {}
 
+
 class RedisMsg:
     def __init__(self, consumer, queue_name, group_name, msg_id, message):
         self.__consumer = consumer

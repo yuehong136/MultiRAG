@@ -81,7 +81,7 @@ class SparkTTS:
                 raise Exception(error)
 
             def on_close(self, ws, close_status_code, close_msg):
-                self.audio_queue.put(None)  # 放入 None 作为结束标志
+                self.audio_queue.put(None)  # None is terminator
 
             def on_open(self, ws):
                 def run(*args):

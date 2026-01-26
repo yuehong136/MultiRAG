@@ -29,6 +29,7 @@ class MultiRAGS3:
             # If there is a default bucket, use the default bucket
             actual_bucket = self.bucket if self.bucket else bucket
             return method(self, actual_bucket, *args, **kwargs)
+
         return wrapper
 
     @staticmethod
@@ -40,6 +41,7 @@ class MultiRAGS3:
             if self.prefix_path:
                 fnm = f"{self.prefix_path}/{bucket}/{fnm}"
             return method(self, bucket, fnm, *args, **kwargs)
+
         return wrapper
 
     def __open__(self):

@@ -79,5 +79,5 @@ class Tavily:
                 "count": 1,
                 "url": r["url"]
             })
-            logging.info("[Tavily]R: "+r["content"][:128]+"...")
+            logging.info("[Tavily]R: " + r["content"][:128]+"...")
         return {"chunks": chunks, "doc_aggs": aggs}

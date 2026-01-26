@@ -35,9 +35,11 @@ def main(db: Session):
                     REDIS_CONN.transaction(key, file_bin, 12 * 60)
                     logging.info("CACHE: {}".format(loc))
                 except Exception as e:
-                    traceback.print_stack(e)
+                    logging.error(f"Error to get data from REDIS: {e}")
+                    traceback.print_stack()
         except Exception as e:
-            traceback.print_stack(e)
+            logging.error(f"Error to check REDIS connection: {e}")
+            traceback.print_stack()
 
 
 

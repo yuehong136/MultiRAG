@@ -416,7 +416,7 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese
         fails = []
         rows = []
 
-        for i, row in enumerate(all_rows[1 + from_page : 1 + to_page]):
+        for i, row in enumerate(all_rows[1 + from_page: 1 + to_page]):
             if len(row) != len(headers):
                 fails.append(str(i + from_page))
                 continue
@@ -488,7 +488,9 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese
 if __name__ == "__main__":
     import sys
 
+
     def dummy(prog=None, msg=""):
         pass
+
 
     chunk(sys.argv[1], callback=dummy)

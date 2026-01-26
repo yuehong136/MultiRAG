@@ -208,7 +208,7 @@ def global_summary_prompt(section_summaries: str) -> str:
     return template.render(section_summaries=section_summaries)
 
 
-def citation_prompt(user_defined_prompts: dict={}) -> str:
+def citation_prompt(user_defined_prompts: dict = {}) -> str:
     template = PROMPT_JINJA_ENV.from_string(user_defined_prompts.get("citation_guidelines", CITATION_PROMPT_TEMPLATE))
     return template.render()
 
@@ -399,12 +399,12 @@ def form_history(history, limit=-6):
     return context
 
 
-def analyze_task(chat_mdl, prompt, task_name, tools_description: list[dict], user_defined_prompts: dict={}):
+def analyze_task(chat_mdl, prompt, task_name, tools_description: list[dict], user_defined_prompts: dict = {}):
     """同步版本 - 内部调用异步版本"""
     return asyncio.run(analyze_task_async(chat_mdl, prompt, task_name, tools_description, user_defined_prompts))
 
 
-async def analyze_task_async(chat_mdl, prompt, task_name, tools_description: list[dict], user_defined_prompts: dict={}):
+async def analyze_task_async(chat_mdl, prompt, task_name, tools_description: list[dict], user_defined_prompts: dict = {}):
     """异步版本 - 主要实现"""
     tools_desc = tool_schema(tools_description)
     context = ""
@@ -423,12 +423,12 @@ async def analyze_task_async(chat_mdl, prompt, task_name, tools_description: lis
     return kwd
 
 
-def next_step(chat_mdl, history: list, tools_description: list[dict], task_desc, user_defined_prompts: dict={}):
+def next_step(chat_mdl, history: list, tools_description: list[dict], task_desc, user_defined_prompts: dict = {}):
     """同步版本 - 内部调用异步版本"""
     return asyncio.run(next_step_async(chat_mdl, history, tools_description, task_desc, user_defined_prompts))
 
 
-async def next_step_async(chat_mdl, history: list, tools_description: list[dict], task_desc, user_defined_prompts: dict={}):
+async def next_step_async(chat_mdl, history: list, tools_description: list[dict], task_desc, user_defined_prompts: dict = {}):
     """异步版本 - 主要实现"""
     if not tools_description:
         return "", 0
@@ -500,7 +500,7 @@ def structured_output_prompt(schema=None) -> str:
     return template.render(schema=schema)
 
 
-async def tool_call_summary(chat_mdl, name: str, params: dict, result: str, user_defined_prompts: dict={}) -> str:
+async def tool_call_summary(chat_mdl, name: str, params: dict, result: str, user_defined_prompts: dict = {}) -> str:
     template = PROMPT_JINJA_ENV.from_string(SUMMARY4MEMORY)
     system_prompt = template.render(name=name, params=json.dumps(params, ensure_ascii=False, indent=2), result=result)
     user_prompt = "→ Summary: "
@@ -514,7 +514,7 @@ async def tool_call_summary(chat_mdl, name: str, params: dict, result: str, user
     return re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
 
 
-async def rank_memories_async(chat_mdl, goal:str, sub_goal:str, tool_call_summaries: list[str], user_defined_prompts: dict={}):
+async def rank_memories_async(chat_mdl, goal:str, sub_goal:str, tool_call_summaries: list[str], user_defined_prompts: dict = {}):
     template = PROMPT_JINJA_ENV.from_string(RANK_MEMORY)
     system_prompt = template.render(goal=goal, sub_goal=sub_goal, results=[{"i": i, "content": s} for i,s in enumerate(tool_call_summaries)])
     user_prompt = " → rank: "

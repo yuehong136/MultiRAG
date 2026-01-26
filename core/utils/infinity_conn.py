@@ -30,7 +30,6 @@ from common.doc_store.infinity_conn_base import InfinityConnectionBase
 
 @singleton
 class InfinityConnection(InfinityConnectionBase):
-
     """
     Dataframe and fields convert
     """

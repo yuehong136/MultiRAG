@@ -99,7 +99,6 @@ class OpenDALStorage:
     def obj_exist(self, bucket, fnm, tenant_id=None):
         return self._operator.exists(f"{bucket}/{fnm}")
 
-
     def init_db_config(self):
         try:
             conn = pymysql.connect(

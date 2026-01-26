@@ -26,7 +26,6 @@ EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb"}
 CSV_EXTENSIONS = {".csv", ".tsv"}
 STRUCTURED_EXTENSIONS = EXCEL_EXTENSIONS | CSV_EXTENSIONS
 
-
 def is_structured_file_type(file_type: str | None) -> bool:
     """
     Check if a file type is structured data (Excel, CSV, etc.)

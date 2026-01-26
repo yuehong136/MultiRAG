@@ -79,7 +79,7 @@ class SyncBase:
         if task["poll_range_start"]:
             next_update = task["poll_range_start"]
 
-        async for document_batch in document_batch_generator:  # 如果是 async generator
+        async for document_batch in document_batch_generator:
             if not document_batch:
                 continue
 
@@ -778,6 +778,7 @@ class Airtable(SyncBase):
         )
 
         return document_generator
+
 
 func_factory = {
     FileSource.S3: S3,

@@ -42,6 +42,7 @@ class MultiRAGOSS:
             # If there is a default bucket, use the default bucket
             actual_bucket = self.bucket if self.bucket else bucket
             return method(self, actual_bucket, *args, **kwargs)
+
         return wrapper
 
     @staticmethod

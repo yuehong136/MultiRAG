@@ -173,6 +173,9 @@ def chunk(filename, binary=None, callback=None, **kwargs):
 if __name__ == "__main__":
     import sys
 
+
     def dummy(a, b):
         pass
+
+
     chunk(sys.argv[1], callback=dummy)

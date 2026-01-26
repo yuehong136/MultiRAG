@@ -24,17 +24,17 @@ import copy
 from opensearchpy import OpenSearch, NotFoundError
 from opensearchpy import UpdateByQuery, Q, Search, Index
 from opensearchpy import ConnectionTimeout
-
-from core.nlp import is_english, rag_tokenizer
-from common.constants import TAG_FLD, PAGERANK_FLD
 from common.decorator import singleton
 from common.file_utils import get_project_base_directory
+from common.doc_store.doc_store_base import DocStoreConnection, MatchExpr, OrderByExpr, MatchTextExpr, MatchDenseExpr, \
+    FusionExpr
+from core.nlp import is_english, rag_tokenizer
+from common.constants import PAGERANK_FLD, TAG_FLD
 from common import settings
-from common.doc_store.doc_store_base import DocStoreConnection, MatchExpr, OrderByExpr, MatchTextExpr, MatchDenseExpr, FusionExpr
 
 ATTEMPT_TIME = 2
 
-logger = logging.getLogger('ragflow.opensearch_conn')
+logger = logging.getLogger('multirag.opensearch_conn')
 
 
 @singleton
@@ -157,19 +157,7 @@ class OSConnection(DocStoreConnection):
                 if v == 0:
                     bqry.filter.append(Q("range", available_int={"lt": 1}))
                 else:
-                    bqry.filter.append(
-                        Q("bool", must_not=Q("range", available_int={"lt": 1})))
-                continue
-            if k == "exists":
-                # OpenSearch native exists query
-                bqry.filter.append(Q("exists", field=v))
-                continue
-            if k == "must_not":
-                # Handle negative conditions
-                if isinstance(v, dict):
-                    for kk, vv in v.items():
-                        if kk == "exists":
-                            bqry.must_not.append(Q("exists", field=vv))
+                    bqry.filter.append(Q("bool", must_not=Q("range", available_int={"lt": 1})))
                 continue
             if not v:
                 continue
@@ -185,9 +173,7 @@ class OSConnection(DocStoreConnection):
         vector_similarity_weight = 0.5
         for m in matchExprs:
             if isinstance(m, FusionExpr) and m.method == "weighted_sum" and "weights" in m.fusion_params:
-                assert len(matchExprs) == 3 and isinstance(matchExprs[0], MatchTextExpr) and isinstance(matchExprs[1],
-                                                                                                        MatchDenseExpr) and isinstance(
-                    matchExprs[2], FusionExpr)
+                assert len(matchExprs) == 3 and isinstance(matchExprs[0], MatchTextExpr) and isinstance(matchExprs[1], MatchDenseExpr) and isinstance(matchExprs[2], FusionExpr)
                 weights = m.fusion_params["weights"]
                 vector_similarity_weight = float(weights.split(",")[1])
         knn_query = {}
@@ -235,8 +221,7 @@ class OSConnection(DocStoreConnection):
             for field, order in orderBy.fields:
                 order = "asc" if order == 0 else "desc"
                 if field in ["page_num_int", "top_int"]:
-                    order_info = {"order": order, "unmapped_type": "float",
-                                  "mode": "avg", "numeric_type": "double"}
+                    order_info = {"order": order, "unmapped_type": "float", "mode": "avg", "numeric_type": "double"}
                 elif field.endswith("_int") or field.endswith("_flt"):
                     order_info = {"order": order, "unmapped_type": "float"}
                 else:
@@ -279,8 +264,7 @@ class OSConnection(DocStoreConnection):
     def get(self, chunkId: str, indexName: str, knowledgebaseIds: list[str]) -> dict | None:
         for i in range(ATTEMPT_TIME):
             try:
-                res = self.os.get(index=(indexName),
-                                  id=chunkId, _source=True, )
+                res = self.os.get(index=(indexName), id=chunkId, _source=True, )
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("Es Timeout.")
                 chunk = res["_source"]
@@ -340,7 +324,7 @@ class OSConnection(DocStoreConnection):
             chunkId = condition["id"]
             for i in range(ATTEMPT_TIME):
                 try:
-                    self.os.update(index=indexName, id=chunkId, body={"doc":doc})
+                    self.os.update(index=indexName, id=chunkId, body={"doc": doc})
                     return True
                 except Exception as e:
                     logger.exception(
@@ -517,8 +501,7 @@ class OSConnection(DocStoreConnection):
             txts = []
             for t in re.split(r"[.?!;\n]", txt):
                 for w in keywords:
-                    t = re.sub(r"(^|[ .?/'\"\(\)!,:;-])(%s)([ .?/'\"\(\)!,:;-])" % re.escape(w), r"\1<em>\2</em>\3", t,
-                               flags=re.IGNORECASE | re.MULTILINE)
+                    t = re.sub(r"(^|[ .?/'\"\(\)!,:;-])(%s)([ .?/'\"\(\)!,:;-])" % re.escape(w), r"\1<em>\2</em>\3", t, flags=re.IGNORECASE | re.MULTILINE)
                 if not re.search(r"<em>[^<>]+</em>", t, flags=re.IGNORECASE | re.MULTILINE):
                     continue
                 txts.append(t)

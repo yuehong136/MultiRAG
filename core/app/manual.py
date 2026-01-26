@@ -135,7 +135,7 @@ class Docx(DocxParser):
                 last_answer = f'{last_answer}\n{p_text}'
                 current_image = self.get_picture(self.doc, p)
                 last_image = self.concat_img(last_image, current_image)
-            else:  # is a question
+            else: # is a question
                 if last_answer or last_image:
                     sum_question = '\n'.join(question_stack)
                     if sum_question:
@@ -239,10 +239,10 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             if isinstance(poss, str):
                 poss = pdf_parser.extract_positions(poss)
                 if poss:
-                    first = poss[0]          # tuple: ([pn], x1, x2, y1, y2)
+                    first = poss[0]  # tuple: ([pn], x1, x2, y1, y2)
                     pn = first[0]
                     if isinstance(pn, list) and pn:
-                        pn = pn[0]           # [pn] -> pn
+                        pn = pn[0]  # [pn] -> pn
                         poss[0] = (pn, *first[1:])
 
             return (txt, layoutno, poss)
