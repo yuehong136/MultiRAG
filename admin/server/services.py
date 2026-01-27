@@ -20,7 +20,7 @@ class UserMgr:
     def get_all_users(db: Session):
         """获取所有用户"""
         # 使用 query 方法获取所有用户（query 方法已经返回列表）
-        users = UserService.query(db)
+        users = UserService.get_all_users(db)
         result = []
         for user in users:
             result.append({
