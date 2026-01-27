@@ -140,7 +140,7 @@ app = FastAPI(
     title="Multi-RAG",
     description=description,
     summary="大模型底座接口",
-    version="0.9.7",
+    version="0.9.8",
     terms_of_service="https://cake-doom-0c6.notion.site/4b6c4b3a5338497494620b3dd82e4acc?pvs=4",
     contact={
         "name": "Du Xiaolong",
@@ -423,8 +423,10 @@ def login(data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
 
     # 统一按照Flask思路：更新数据库会话标识（用于load_user验证）
     user.access_token = get_uuid()
-    user.update_time = current_timestamp()
-    user.update_date = datetime_format(datetime.now())
+    current_ts = current_timestamp()
+    current_date = datetime_format(datetime.now())
+    user.update_time = current_ts
+    user.update_date = current_date
     db.add(user)
 
     try:
