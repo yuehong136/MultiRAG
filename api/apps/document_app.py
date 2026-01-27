@@ -34,7 +34,7 @@ from api.apps import manager
 from common.constants import VALID_TASK_STATUS, TaskStatus, ParserType
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
-from api.db.services.document_service import DocumentService, queue_analyze_v2_task
+from api.db.services.document_service import DocumentService, queue_analyze_v2_task, doc_upload_and_parse
 from api.db.services.document_analysis_service import DocumentAnalysisService
 from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.file2document_service import File2DocumentService
@@ -2995,9 +2995,6 @@ def get_image(
         return construct_error_response(e)
 
 
-# todo ragflow的def upload_and_parse待补充
-
-
 @router.post("/parse", summary="解析网页或文件内容", response_description="成功解析内容")
 async def parse(
         url: str | None = Form(None, description="网页URL（可选）"),
@@ -3306,6 +3303,47 @@ def update_metadata_setting(
         return get_data_error_result(retmsg="Document not found!")
 
     return get_json_result(data=doc.to_dict())
+
+
+@router.post("/upload_and_parse", summary="上传文件并解析", response_description="成功上传并解析文件")
+async def upload_and_parse(
+        conversation_id: str = Form(..., description="会话ID"),
+        files: list[UploadFile] = File(..., alias="file"),
+        db: Session = Depends(get_db),
+        user=Depends(manager)
+):
+    """在对话上下文中上传文件并自动解析入库。
+
+    - **conversation_id**: 会话ID，用于关联对话所绑定的知识库
+    - **files**: 要上传的文件列表
+    - **返回值**: 成功上传并解析后的文档ID列表
+    """
+    # 验证文件
+    for file_obj in files:
+        if not file_obj.filename:
+            return get_json_result(
+                data=False,
+                retmsg="No file selected!",
+                retcode=RetCode.ARGUMENT_ERROR
+            )
+
+    try:
+        doc_ids = doc_upload_and_parse(db, conversation_id, files, user.id)
+        return get_json_result(data=doc_ids)
+    except AssertionError as e:
+        return get_json_result(
+            data=False,
+            retmsg=str(e),
+            retcode=RetCode.ARGUMENT_ERROR
+        )
+    except LookupError as e:
+        return get_json_result(
+            data=False,
+            retmsg=str(e),
+            retcode=RetCode.DATA_ERROR
+        )
+    except Exception as e:
+        return server_error_response(e)
 
 
 @router.post("/set_meta", summary="设置文档元数据", response_description="成功设置文档元数据")
