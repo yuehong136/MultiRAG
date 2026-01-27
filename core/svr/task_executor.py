@@ -2512,6 +2512,7 @@ async def do_handle_task(db, task):
     task_embedding_id = task["embd_id"]
     task_language = task["language"]
     task_llm_id = task["parser_config"].get("llm_id") or task["llm_id"]
+    task["llm_id"] = task_llm_id
     task_dataset_id = task.get("kb_id")  # analyze_v2 之外的任务必须有 kb_id
     task_doc_id = task["doc_id"]
     task_document_name = task.get("name", "unknown")
