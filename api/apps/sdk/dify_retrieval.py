@@ -203,7 +203,7 @@ class RetrievalResponse(BaseModel):
         500: {"description": "服务器内部错误"},
     },
 )
-def retrieval(
+async def retrieval(
     request_data: RetrievalRequest,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(apikey_dependency),
@@ -272,7 +272,7 @@ def retrieval(
 
         # 知识图谱增强检索
         if use_kg:
-            kg_result = settings.kg_retriever.retrieval(
+            kg_result = await settings.kg_retriever.retrieval(
                 question,
                 [tenant_id],
                 [kb.name],

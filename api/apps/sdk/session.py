@@ -1182,7 +1182,7 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
             question, embd_mdl, tenant_ids, kb_ids, page, size, similarity_threshold, vector_similarity_weight, top, doc_ids, rerank_mdl=rerank_mdl, highlight=req.get("highlight"), rank_feature=labels
         )
         if use_kg:
-            ck = settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, LLMBundle(db, kb.tenant_id, LLMType.CHAT))
+            ck = await settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, LLMBundle(db, kb.tenant_id, LLMType.CHAT))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
 

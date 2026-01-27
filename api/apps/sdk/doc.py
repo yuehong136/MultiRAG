@@ -1359,11 +1359,11 @@ async def retrieval_test(
                 ranks["chunks"] = cks
         # 知识图谱增强
         if use_kg:
-            ck = settings.kg_retriever.retrieval(
-                question, 
-                [k.tenant_id for k in kbs], 
-                kb_ids, 
-                embd_mdl, 
+            ck = await settings.kg_retriever.retrieval(
+                question,
+                [k.tenant_id for k in kbs],
+                kb_ids,
+                embd_mdl,
                 LLMBundle(db, kb.tenant_id, LLMType.CHAT)
             )
             if ck["content_with_weight"]:

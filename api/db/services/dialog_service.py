@@ -561,7 +561,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = settings.kg_retriever.retrieval(" ".join(questions), dialog.tenant_id, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
+                ck = asyncio.run(settings.kg_retriever.retrieval(" ".join(questions), dialog.tenant_id, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT)))
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
@@ -853,7 +853,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = settings.kg_retriever.retrieval(" ".join(questions), dialog.tenant_id, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
+                ck = await settings.kg_retriever.retrieval(" ".join(questions), dialog.tenant_id, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 

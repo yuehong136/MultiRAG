@@ -1629,7 +1629,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
                                highlight=request.highlight if request.highlight is not None else False,
                                rank_feature=labels, search_mode=search_mode_dict, kb_ids=request.kb_ids)
         if request.use_kg:
-            ck = settings.kg_retriever.retrieval(question,
+            ck = await settings.kg_retriever.retrieval(question,
                                                    kb.tenant_id,
                                                    [kb.name],
                                                    embd_mdl,

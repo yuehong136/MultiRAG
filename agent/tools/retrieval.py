@@ -262,7 +262,7 @@ class Retrieval(ToolBase, ABC):
                         kbinfos["chunks"] = cks
                 kbinfos["chunks"] = settings.retriever.retrieval_by_children(kbinfos["chunks"], [kb.tenant_id for kb in kbs])
                 if self._param.use_kg:
-                    ck = settings.kg_retriever.retrieval(query,
+                    ck = await settings.kg_retriever.retrieval(query,
                                                            tenant_ids,
                                                            kb_ids,
                                                            embd_mdl,
@@ -275,7 +275,7 @@ class Retrieval(ToolBase, ABC):
                 kbinfos = {"chunks": [], "doc_aggs": []}
 
             if self._param.use_kg and kbs:
-                ck = settings.kg_retriever.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, LLMType.CHAT))
+                ck = await settings.kg_retriever.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, LLMType.CHAT))
                 if self.check_if_canceled("Retrieval processing"):
                     return
                 if ck["content_with_weight"]:
