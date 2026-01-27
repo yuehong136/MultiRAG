@@ -96,7 +96,7 @@ class SyncBase:
         if task["poll_range_start"]:
             next_update = task["poll_range_start"]
 
-        async for document_batch in document_batch_generator:
+        for document_batch in document_batch_generator:
             if not document_batch:
                 continue
 
@@ -306,12 +306,12 @@ class Confluence(SyncBase):
             if pending_docs:
                 yield pending_docs
 
-        async def async_wrapper():
+        def wrapper():
             for batch in document_batches():
                 yield batch
 
         logging.info("Connect to Confluence: {} {}".format(self.conf["wiki_base"], begin_info))
-        return async_wrapper()
+        return wrapper()
 
 
 class IMAP(SyncBase):
@@ -369,7 +369,7 @@ class IMAP(SyncBase):
             if pending_docs:
                 yield pending_docs
 
-        async def async_wrapper():
+        def wrapper():
             for batch in document_batches():
                 yield batch
 
@@ -381,7 +381,7 @@ class IMAP(SyncBase):
             self.conf["imap_mailbox"],
             begin_info
         )
-        return async_wrapper()
+        return wrapper()
 
 
 class Zendesk(SyncBase):
@@ -452,7 +452,7 @@ class Zendesk(SyncBase):
             if pending_docs:
                 yield pending_docs
 
-        async def async_wrapper():
+        def wrapper():
             for batch in document_batches():
                 yield batch
 
@@ -462,7 +462,7 @@ class Zendesk(SyncBase):
             begin_info,
         )
 
-        return async_wrapper()
+        return wrapper()
 
 
 class Notion(SyncBase):
@@ -828,11 +828,11 @@ class WebDAV(SyncBase):
             begin_info
         ))
 
-        async def async_wrapper():
+        def wrapper():
             for document_batch in document_batch_generator:
                 yield document_batch
 
-        return async_wrapper()
+        return wrapper()
 
 
 class Moodle(SyncBase):
@@ -1147,7 +1147,7 @@ class Bitbucket(SyncBase):
                         checkpoint = e.value
                         break
 
-        async def async_wrapper():
+        def wrapper():
             for batch in document_batches():
                 yield batch
 
@@ -1157,7 +1157,7 @@ class Bitbucket(SyncBase):
             begin_info,
         )
 
-        return async_wrapper()
+        return wrapper()
 
 func_factory = {
     FileSource.S3: S3,
