@@ -191,6 +191,39 @@ class UserMgr:
         UserService.update_user(db, usr.id, {"is_active": target_status})
         return f"Turn {_activate_status} user activate status successfully!"
 
+    @staticmethod
+    def grant_admin(db: Session, username: str) -> str:
+        # use email to find user. check exist and unique.
+        user_list = UserService.query_user_by_email(db, username)
+        if not user_list:
+            raise UserNotFoundError(username)
+        elif len(user_list) > 1:
+            raise AdminException(f"Exist more than 1 user: {username}!")
+
+        usr = user_list[0]
+        if usr.is_superuser:
+            return f"{usr} is already superuser!"
+
+        UserService.update_user(db, usr.id, {"is_superuser": True})
+        return "Grant successfully!"
+
+    @staticmethod
+    def revoke_admin(db: Session, username: str) -> str:
+        # use email to find user. check exist and unique.
+        user_list = UserService.query_user_by_email(db, username)
+        if not user_list:
+            raise UserNotFoundError(username)
+        elif len(user_list) > 1:
+            raise AdminException(f"Exist more than 1 user: {username}!")
+
+        usr = user_list[0]
+        if not usr.is_superuser:
+            return f"{usr} isn't superuser, yet!"
+
+        UserService.update_user(db, usr.id, {"is_superuser": False})
+        return "Revoke successfully!"
+
+
 class UserServiceMgr:
 
     @staticmethod

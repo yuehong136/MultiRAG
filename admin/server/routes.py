@@ -287,6 +287,50 @@ def alter_user_activate_status(
     except Exception as e:
         return error_response(str(e), 500)
 
+@admin_router.put(
+    "/users/{username}/admin",
+    response_model=APIResponse[None],
+    summary="授予管理员权限",
+    description="授予指定用户管理员权限"
+)
+def grant_admin(
+    username: str,
+    user=Depends(admin_manager),
+    db: Session = Depends(get_db)
+) -> APIResponse[None]:
+    """授予管理员权限"""
+    try:
+        if user.email == username:
+            return error_response(f"can't grant current user: {username}", 409)
+        msg = UserMgr.grant_admin(db, username)
+        return success_response(None, msg)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+@admin_router.delete(
+    "/users/{username}/admin",
+    response_model=APIResponse[None],
+    summary="撤销管理员权限",
+    description="撤销指定用户管理员权限"
+)
+def revoke_admin(
+    username: str,
+    user=Depends(admin_manager),
+    db: Session = Depends(get_db)
+) -> APIResponse[None]:
+    """撤销管理员权限"""
+    try:
+        if user.email == username:
+            return error_response(f"can't grant current user: {username}", 409)
+        msg = UserMgr.revoke_admin(db, username)
+        return success_response(None, msg)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
 
 @admin_router.get(
     "/users/{username}",
