@@ -80,6 +80,7 @@ class FileSource(StrEnum):
     GITHUB = "github"
     GITLAB = "gitlab"
     IMAP = "imap"
+    ZENDESK = "zendesk"
 
 
 class MCPServerType(StrEnum):
