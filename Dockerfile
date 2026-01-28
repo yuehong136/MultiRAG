@@ -64,10 +64,10 @@ RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
 # 安装 MSSQL ODBC 驱动 (pyodbc 依赖)
 # macOS ARM64 环境安装 msodbcsql18，x86_64 环境安装 msodbcsql17
 # 使用 Ubuntu 22.04 仓库，因为它同时包含 msodbcsql17 和 msodbcsql18
-# 使用现代方式导入 GPG 密钥（apt-key 在 Ubuntu 24.04 中已弃用）
+# 注意：msodbcsql17 不支持 Ubuntu 24.04，所以需要用 22.04 的仓库
 RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
-    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/22.04/prod noble main" > /etc/apt/sources.list.d/mssql-release.list && \
+    curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - && \
+    curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list > /etc/apt/sources.list.d/mssql-release.list && \
     apt update && \
     arch="$(uname -m)"; \
     if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then \
