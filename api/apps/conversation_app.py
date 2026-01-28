@@ -91,6 +91,12 @@ class CompletionRequest(BaseModel):
     stream: bool | None = True
     """是否使用流式响应，默认值为 True。"""
 
+    reasoning: bool | None = None
+    """是否启用推理模式。"""
+
+    internet: bool | None = None
+    """是否启用联网检索。"""
+
     filter_condition: str | None = ""
     """过滤条件，可以根据实际需求自定义结构。"""
 

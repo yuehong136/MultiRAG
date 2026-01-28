@@ -457,6 +457,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         attachments_ = "\n\n".join(FileService.get_files(messages[-1]["files"]))
 
     prompt_config = dialog.prompt_config
+    internet_enabled = kwargs.get("internet") is not False
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
@@ -504,10 +505,14 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     if attachments is not None and "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
-        if prompt_config.get("reasoning", False):
+        prompt_config_for_reasoning = prompt_config
+        if not internet_enabled:
+            prompt_config_for_reasoning = dict(prompt_config)
+            prompt_config_for_reasoning.pop("tavily_api_key", None)
+        if prompt_config.get("reasoning", False) or kwargs.get("reasoning"):
             reasoner = DeepResearcher(
                 chat_mdl,
-                prompt_config,
+                prompt_config_for_reasoning,
                 partial(
                     retriever.retrieval,
                     filter_exp="",
@@ -555,7 +560,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     if cks:
                         kbinfos["chunks"] = cks
                 kbinfos["chunks"] = retriever.retrieval_by_children(kbinfos["chunks"], tenant_ids)
-            if prompt_config.get("tavily_api_key"):
+            if internet_enabled and prompt_config.get("tavily_api_key"):
                 tav = Tavily(prompt_config["tavily_api_key"])
                 tav_res = tav.retrieve_chunks(" ".join(questions))
                 kbinfos["chunks"].extend(tav_res["chunks"])
@@ -753,6 +758,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
         attachments_ = "\n\n".join(FileService.get_files(messages[-1]["files"]))
 
     prompt_config = dialog.prompt_config
+    internet_enabled = kwargs.get("internet") is not False
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
@@ -796,10 +802,14 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     if attachments is not None and "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
-        if prompt_config.get("reasoning", False):
+        prompt_config_for_reasoning = prompt_config
+        if not internet_enabled:
+            prompt_config_for_reasoning = dict(prompt_config)
+            prompt_config_for_reasoning.pop("tavily_api_key", None)
+        if prompt_config.get("reasoning", False) or kwargs.get("reasoning"):
             reasoner = DeepResearcher(
                 chat_mdl,
-                prompt_config,
+                prompt_config_for_reasoning,
                 partial(
                     retriever.retrieval,
                     filter_exp="",
@@ -847,7 +857,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                     if cks:
                         kbinfos["chunks"] = cks
                 kbinfos["chunks"] = retriever.retrieval_by_children(kbinfos["chunks"], tenant_ids)
-            if prompt_config.get("tavily_api_key"):
+            if internet_enabled and prompt_config.get("tavily_api_key"):
                 tav = Tavily(prompt_config["tavily_api_key"])
                 tav_res = tav.retrieve_chunks(" ".join(questions))
                 kbinfos["chunks"].extend(tav_res["chunks"])
