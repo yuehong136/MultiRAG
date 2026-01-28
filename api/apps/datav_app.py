@@ -157,6 +157,7 @@ class VectorSearchRequest(BaseModel):
         query_text: 查询文本
         vector_field: 向量字段名，如 q_768_vec
         output_fields: 要返回的字段列表
+        database: 数据库名称 (可选，Milvus/Infinity 等支持多数据库的场景)
         embedding: 向量模型配置 (可选，为空使用系统默认)
         search: 搜索配置 (可选)
         filter: 过滤条件 (可选)
@@ -172,6 +173,13 @@ class VectorSearchRequest(BaseModel):
     query_text: str
     vector_field: str
     output_fields: list[str]
+    
+    # ===== 数据库选择 (可选，支持多数据库场景) =====
+    database: str | None = Field(
+        default=None,
+        description="数据库名称，用于 Milvus/Infinity 等支持多数据库的向量数据库。"
+                    "如不指定，则使用系统配置的默认数据库。"
+    )
     
     # ===== 配置对象 (可选，可扩展) =====
     embedding: EmbeddingConfig | None = None
@@ -468,9 +476,13 @@ class VectorDBFactory:
     """向量数据库连接工厂"""
     
     @staticmethod
-    def get_connection(db_type: SupportedVectorDBType):
+    def get_connection(db_type: SupportedVectorDBType, database: str | None = None):
         """
         获取向量数据库连接
+        
+        Args:
+            db_type: 向量数据库类型
+            database: 数据库名称 (可选，用于 Milvus/Infinity 等支持多数据库的场景)
         
         注意: 使用项目现有的单例连接，避免重复创建
         """
@@ -482,11 +494,20 @@ class VectorDBFactory:
         import core.utils.vastbase_conn
         
         if db_type == SupportedVectorDBType.MILVUS:
-            return core.utils.milvus_conn.MilvusConnection()
+            conn = core.utils.milvus_conn.MilvusConnection()
+            # 如果指定了数据库，切换到对应的数据库
+            if database:
+                VectorDBFactory._switch_milvus_database(conn, database)
+            return conn
         elif db_type == SupportedVectorDBType.ELASTICSEARCH:
             return core.utils.es_conn.ESConnection()
         elif db_type == SupportedVectorDBType.INFINITY:
-            return core.utils.infinity_conn.InfinityConnection()
+            conn = core.utils.infinity_conn.InfinityConnection()
+            # Infinity 的 database 通过 search 方法内部使用 self.dbName 处理
+            # 如需切换，可以在这里设置 conn.dbName = database
+            if database:
+                conn.dbName = database
+            return conn
         elif db_type == SupportedVectorDBType.OPENSEARCH:
             return core.utils.opensearch_conn.OSConnection()
         elif db_type == SupportedVectorDBType.OCEANBASE:
@@ -495,7 +516,25 @@ class VectorDBFactory:
             return core.utils.vastbase_conn.VastBaseConnection()
         else:
             raise ValueError(f"不支持的向量数据库类型: {db_type}")
-
+    
+    @staticmethod
+    def _switch_milvus_database(conn, database: str):
+        """
+        切换 Milvus 数据库
+        
+        Args:
+            conn: Milvus 连接对象
+            database: 目标数据库名称
+        """
+        try:
+            from pymilvus import db
+            # 使用 db.using_database 切换到指定数据库
+            # using 参数是连接别名，conn._using 存储了当前连接的别名
+            db.using_database(database, using=conn._using)
+            logger.debug(f"已切换到 Milvus 数据库: {database}")
+        except Exception as e:
+            logger.warning(f"切换 Milvus 数据库失败: {database}, 错误: {str(e)}")
+            raise ValueError(f"切换 Milvus 数据库失败: {database}. {str(e)}")
 
 # =============================================================================
 # 核心检索逻辑
@@ -710,6 +749,7 @@ def vector_search(
     #### 配置参数 (可选)
     | 字段 | 类型 | 描述 |
     |------|------|------|
+    | `database` | `string` | 数据库名称，用于 Milvus/Infinity 等支持多数据库的场景，不指定则使用系统默认 |
     | `embedding` | `object` | 向量模型配置，为空使用系统默认 |
     | `search` | `object` | 搜索配置 (limit, offset, distance_type 等) |
     | `filter` | `object` | 过滤条件 |
@@ -730,10 +770,23 @@ def vector_search(
     }
     ```
     
+    #### 指定数据库
+    ```json
+    {
+        "db_type": "milvus",
+        "database": "my_database",
+        "collection_name": "my_collection",
+        "query_text": "什么是人工智能",
+        "vector_field": "q_768_vec",
+        "output_fields": ["content", "title", "kb_id"]
+    }
+    ```
+    
     #### 完整调用
     ```json
     {
         "db_type": "milvus",
+        "database": "production_db",
         "collection_name": "my_collection",
         "query_text": "什么是人工智能",
         "vector_field": "q_2048_vec",
@@ -801,8 +854,8 @@ def vector_search(
         
         vector_dimension = len(query_vector) if query_vector else None
         
-        # 3. 获取数据库连接
-        conn = VectorDBFactory.get_connection(request.db_type)
+        # 3. 获取数据库连接 (支持指定数据库名称)
+        conn = VectorDBFactory.get_connection(request.db_type, database=request.database)
         
         # 4. 转换过滤条件
         filter_expr = FilterConverter.to_milvus(request.filter)
