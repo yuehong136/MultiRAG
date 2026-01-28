@@ -38,48 +38,62 @@ ENV LANG=zh_CN.UTF-8 \
 # python-pptx:   default-jdk
 # selenium:      libatk-bridge2.0-0
 # Building C extensions: libpython3-dev libgtk-4-1 libnss3 xdg-utils libgbm-dev
-RUN apt update && apt -y install ca-certificates && \
+RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
+    apt update && apt -y install ca-certificates && \
     if [ "$NEED_MIRROR" == "1" ]; then \
         sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
         sed -i 's|http://security.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
     fi; \
-    apt update && apt install -y --no-install-recommends \
-    lsb-release curl gpg libgl1 libdatrie-dev default-jdk vim net-tools less gcc \
-    build-essential libglib2.0-0 libglx-mesa0 pkg-config libicu-dev libatk-bridge2.0-0 \
-    libpython3-dev libjemalloc-dev nginx ghostscript \
-    libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus tcl-dev \
-    fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg \
-    pandoc texlive fonts-freefont-ttf fonts-noto-cjk && \
-    # 安装 MSSQL ODBC 驱动 (pyodbc 依赖)
-    # 使用 Ubuntu 22.04 仓库，因为 24.04 仓库中没有 msodbcsql17
-    curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - && \
-    curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list > /etc/apt/sources.list.d/mssql-release.list && \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
+    apt update && \
+    apt install -y libglib2.0-0 libglx-mesa0 libgl1 && \
+    apt install -y pkg-config libicu-dev libgdiplus && \
+    apt install -y default-jdk && \
+    apt install -y libatk-bridge2.0-0 && \
+    apt install -y libpython3-dev libgtk-4-1 libnss3 xdg-utils libgbm-dev && \
+    apt install -y libjemalloc-dev && \
+    apt install -y nginx unzip curl wget git vim less && \
+    apt install -y ghostscript && \
+    apt install -y pandoc && \
+    apt install -y texlive && \
+    apt install -y fonts-freefont-ttf fonts-noto-cjk && \
+    apt install -y fonts-wqy-zenhei fonts-wqy-microhei && \
+    apt install -y lsb-release build-essential gcc libdatrie-dev net-tools tcl-dev ffmpeg gpg
+
+# 安装 MSSQL ODBC 驱动 (pyodbc 依赖)
+# macOS ARM64 环境安装 msodbcsql18，x86_64 环境安装 msodbcsql17
+# 使用 Ubuntu 22.04 仓库，因为它同时包含 msodbcsql17 和 msodbcsql18
+# 使用现代方式导入 GPG 密钥（apt-key 在 Ubuntu 24.04 中已弃用）
+RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/22.04/prod noble main" > /etc/apt/sources.list.d/mssql-release.list && \
     apt update && \
     arch="$(uname -m)"; \
     if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then \
         ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql18; \
     else \
         ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql17; \
-    fi && \
-    # 安装Redis
-    wget https://download.redis.io/releases/redis-7.4.3.tar.gz && \
+    fi || \
+    { echo "Failed to install ODBC driver"; exit 1; }
+
+# 安装Redis (从源码编译)
+RUN wget https://download.redis.io/releases/redis-7.4.3.tar.gz && \
     tar -zxvf redis-7.4.3.tar.gz && \
     cd redis-7.4.3 && \
     make && \
     make install PREFIX=/usr/local/redis && \
-    mkdir -p /etc/redis  && \
-    mkdir /mirror && \
+    mkdir -p /etc/redis /mirror && \
     cp redis.conf /etc/redis/redis.conf && \
     cd .. && \
     rm -rf redis-7.4.3 redis-7.4.3.tar.gz && \
-    cd /usr/local/redis/bin && \
     ln -s /usr/local/redis/bin/redis-server /usr/local/bin/redis-server && \
     ln -s /usr/local/redis/bin/redis-cli /usr/local/bin/redis-cli && \
     ln -s /usr/local/redis/bin/redis-benchmark /usr/local/bin/redis-benchmark && \
     sed -i 's/daemonize no/daemonize yes/' /etc/redis/redis.conf && \
     sed -i 's/# supervised no/supervised systemd/' /etc/redis/redis.conf && \
     echo "pidfile /var/run/redis.pid" >> /etc/redis/redis.conf && \
-    # 清理apt缓存和安装包
+    # 清理apt缓存
     apt clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 #将本地/mirror下的所有文件复制到容器中/mirror
