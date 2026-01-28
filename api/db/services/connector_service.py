@@ -10,7 +10,8 @@ import logging
 import os
 from datetime import datetime
 
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, cast, literal_column
+from sqlalchemy.dialects.postgresql import INTERVAL as Interval
 from sqlalchemy.sql import desc as sa_desc
 from sqlalchemy.orm import Session
 
@@ -184,8 +185,12 @@ class SyncLogsService(CommonService):
             # 根据数据库类型选择正确的 INTERVAL 语法
             database_type = os.getenv("DB_TYPE", "postgresql")
             if "postgres" in database_type.lower():
-                # PostgreSQL 使用 make_interval 函数
-                interval_expr = func.now() - func.make_interval(mins=Connector.refresh_freq)
+                # PostgreSQL 使用 INTERVAL 表达式
+                # 构造: NOW() - (refresh_freq || ' minutes')::INTERVAL
+                interval_expr = func.now() - cast(
+                    Connector.refresh_freq.concat(literal_column("' minutes'")),
+                    Interval
+                )
                 time_condition = cls.model.update_date < interval_expr
             else:
                 # MySQL 使用 TIMESTAMPDIFF 函数
