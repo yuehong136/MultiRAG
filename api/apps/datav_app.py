@@ -363,6 +363,29 @@ class ResultNormalizer:
     """统一各数据库返回结果格式"""
     
     @staticmethod
+    def _to_serializable(value: Any) -> Any:
+        """递归转换为 JSON 可序列化类型，自动解析字符串形式的数组/字典"""
+        if value is None or isinstance(value, (int, float, bool)):
+            return value
+        if isinstance(value, str):
+            # 尝试解析字符串形式的 list/dict (如 "['a', 'b']")
+            if value.startswith(("[", "{")):
+                try:
+                    import ast
+                    return ResultNormalizer._to_serializable(ast.literal_eval(value))
+                except Exception:
+                    pass
+            return value
+        if hasattr(value, "tolist"):  # numpy 数组
+            return value.tolist()
+        if isinstance(value, dict):
+            return {k: ResultNormalizer._to_serializable(v) for k, v in value.items()}
+        try:  # 可迭代对象 (list, tuple, Milvus Array 等)
+            return [ResultNormalizer._to_serializable(item) for item in value]
+        except Exception:
+            return str(value)
+    
+    @staticmethod
     def normalize_milvus(
         hits: list,
         output_fields: list[str],
@@ -371,32 +394,38 @@ class ResultNormalizer:
         """归一化 Milvus 检索结果"""
         results = []
         for hit in hits:
-            # Milvus 返回格式可能是 dict 或带有 entity 属性的对象
-            if isinstance(hit, dict):
-                doc_id = hit.get("id") or hit.get("pk", "")
-                distance = hit.get("distance", 0)
-                fields = {k: hit.get(k) for k in output_fields if k in hit}
-            else:
-                doc_id = getattr(hit, "id", "") or getattr(hit, "pk", "")
-                distance = getattr(hit, "distance", 0)
-                entity = getattr(hit, "entity", {})
-                if isinstance(entity, dict):
-                    fields = {k: entity.get(k) for k in output_fields if k in entity}
-                else:
-                    fields = {k: getattr(entity, k, None) for k in output_fields if hasattr(entity, k)}
+            # 统一转为 dict
+            if hasattr(hit, "to_dict"):
+                hit = hit.to_dict()
+            elif not isinstance(hit, dict):
+                hit = {"id": str(hit), "distance": 0, "entity": {}}
             
-            # 归一化分数: COSINE/IP 越大越好，L2 越小越好
-            if distance_type == DistanceType.L2:
-                # L2 距离转换为相似度分数 (0-1)
-                score = 1.0 / (1.0 + distance) if distance >= 0 else 0
-            else:
-                # COSINE/IP: distance 本身就是相似度
-                score = float(distance) if distance else 0
+            doc_id = hit.get("id") or hit.get("pk", "")
+            distance = float(hit.get("distance", 0) or 0)
+            
+            # entity 可能在子对象中，也可能直接在 hit 中
+            entity = hit.get("entity", {})
+            if not isinstance(entity, dict):
+                entity = dict(entity) if hasattr(entity, "items") else {}
+            
+            # 提取字段：优先从 entity，其次从 hit 顶层
+            raw_fields = {}
+            for k in output_fields:
+                if k in entity:
+                    raw_fields[k] = entity[k]
+                elif k in hit and k not in ("id", "pk", "distance", "entity"):
+                    raw_fields[k] = hit[k]
+            
+            # 转换为可序列化类型
+            fields = {k: ResultNormalizer._to_serializable(v) for k, v in raw_fields.items()}
+            
+            # 计算分数: L2 越小越好，COSINE/IP 越大越好
+            score = 1.0 / (1.0 + distance) if distance_type == DistanceType.L2 else distance
             
             results.append(SearchResultItem(
                 id=str(doc_id),
                 score=score,
-                distance=float(distance) if distance else None,
+                distance=distance or None,
                 fields=fields,
                 highlight=None
             ))
@@ -924,7 +953,14 @@ def vector_search(
         logger.warning(f"向量检索参数错误: {str(e)}")
         return get_data_error_result(retmsg=str(e))
     except Exception as e:
-        logger.exception(f"向量检索失败: {str(e)}")
+        error_msg = str(e)
+        # 处理 Milvus 连接异常，提供更友好的错误信息
+        if "MilvusException" in repr(e) or "recvmsg" in error_msg:
+            logger.error(f"切换 Milvus 数据库失败: {request.database}. {error_msg}")
+            return get_data_error_result(
+                retmsg=f"Milvus 连接失败，请检查服务状态。数据库: {request.database or 'default'}"
+            )
+        logger.exception(f"向量检索失败: {error_msg}")
         return server_error_response(e)
 
 
