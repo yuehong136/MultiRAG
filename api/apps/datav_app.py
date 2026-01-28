@@ -926,7 +926,18 @@ def vector_search(
             if total == 0:
                 total = len(results)
         
-        # 7. 构建响应
+        # 7. 根据相似度阈值过滤结果
+        if search_config.similarity_threshold is not None and search_config.similarity_threshold > 0:
+            threshold = search_config.similarity_threshold
+            original_count = len(results)
+            results = [r for r in results if r.score >= threshold]
+            filtered_count = original_count - len(results)
+            if filtered_count > 0:
+                logger.debug(f"相似度阈值过滤: 阈值={threshold}, 原始数量={original_count}, 过滤掉={filtered_count}")
+            # 更新总数
+            total = len(results)
+        
+        # 8. 构建响应
         elapsed_ms = (time.time() - start_time) * 1000
         
         # 构建模型名称
