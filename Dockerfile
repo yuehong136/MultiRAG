@@ -32,20 +32,28 @@ ENV LANG=zh_CN.UTF-8 \
     LANGUAGE=zh_CN:zh:en_US:en
 
 # 设置apt镜像并安装依赖
+# Python package and implicit dependencies:
+# opencv-python: libglib2.0-0 libglx-mesa0 libgl1
+# aspose-slides: pkg-config libicu-dev libgdiplus
+# python-pptx:   default-jdk
+# selenium:      libatk-bridge2.0-0
+# Building C extensions: libpython3-dev libgtk-4-1 libnss3 xdg-utils libgbm-dev
 RUN apt update && apt -y install ca-certificates && \
     if [ "$NEED_MIRROR" == "1" ]; then \
         sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
         sed -i 's|http://security.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
     fi; \
     apt update && apt install -y --no-install-recommends \
-    lsb-release curl gpg libgl1-mesa-glx libdatrie-dev default-jdk vim net-tools less gcc \
+    lsb-release curl gpg libgl1 libdatrie-dev default-jdk vim net-tools less gcc \
     build-essential libglib2.0-0 libglx-mesa0 pkg-config libicu-dev libatk-bridge2.0-0 \
     libpython3-dev libjemalloc-dev nginx ghostscript \
-    libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus tcl-dev pkg-config \
-    fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg && \
+    libgtk-4-1 libnss3 xdg-utils unzip libgbm-dev wget git libgdiplus tcl-dev \
+    fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg \
+    pandoc texlive fonts-freefont-ttf fonts-noto-cjk && \
     # 安装 MSSQL ODBC 驱动 (pyodbc 依赖)
+    # 使用 Ubuntu 22.04 仓库，因为 24.04 仓库中没有 msodbcsql17
     curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - && \
-    curl https://packages.microsoft.com/config/ubuntu/24.04/prod.list > /etc/apt/sources.list.d/mssql-release.list && \
+    curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list > /etc/apt/sources.list.d/mssql-release.list && \
     apt update && \
     arch="$(uname -m)"; \
     if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then \
@@ -53,8 +61,6 @@ RUN apt update && apt -y install ca-certificates && \
     else \
         ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql17; \
     fi && \
-    fonts-wqy-zenhei fonts-wqy-microhei ttf-wqy-zenhei ttf-wqy-microhei ffmpeg \
-    pandoc texlive fonts-freefont-ttf fonts-noto-cjk && \
     # 安装Redis
     wget https://download.redis.io/releases/redis-7.4.3.tar.gz && \
     tar -zxvf redis-7.4.3.tar.gz && \
