@@ -733,7 +733,9 @@ async def upload(
                                    retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.",
                                    retcode=RetCode.DATA_ERROR)
 
-        return construct_json_result(data=result_files, code=RetCode.SUCCESS)
+        # 只返回文档信息，不包含二进制数据
+        docs = [doc for doc, _ in result_files]
+        return construct_json_result(data=docs, code=RetCode.SUCCESS)
 
     return await asyncio.to_thread(_upload_sync)
 
@@ -3105,9 +3107,6 @@ async def parse(
                     with open(self.filepath, "rb") as f:
                         return f.read()
 
-            if not r or r.group(1):
-                return get_json_result(
-                    data=False, retmsg="Can't not identify downloaded file", retcode=RetCode.ARGUMENT_ERROR)
             f = File(r.group(1), os.path.join(download_path, r.group(1)))
             txt = FileService.parse_docs([f], user.id)
             return get_json_result(data=txt)
@@ -3318,7 +3317,8 @@ async def upload_and_parse(
     - **files**: 要上传的文件列表
     - **返回值**: 成功上传并解析后的文档ID列表
     """
-    # 验证文件
+    # 验证文件并读取内容
+    file_contents = []
     for file_obj in files:
         if not file_obj.filename:
             return get_json_result(
@@ -3326,9 +3326,11 @@ async def upload_and_parse(
                 retmsg="No file selected!",
                 retcode=RetCode.ARGUMENT_ERROR
             )
+        # 读取文件内容并转换为 (bytes, filename) 元组
+        file_contents.append((await file_obj.read(), file_obj.filename))
 
     try:
-        doc_ids = doc_upload_and_parse(db, conversation_id, files, user.id)
+        doc_ids = doc_upload_and_parse(db, conversation_id, file_contents, user.id)
         return get_json_result(data=doc_ids)
     except AssertionError as e:
         return get_json_result(

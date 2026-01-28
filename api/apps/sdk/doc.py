@@ -197,17 +197,21 @@ def upload_documents(
     if len(files) > MAXIMUM_OF_UPLOADING_FILES:
         return get_error_data_result(retmsg=f"You try to upload {len(files)} files, which exceeds the maximum number: {MAXIMUM_OF_UPLOADING_FILES}")
     
+    # 验证文件并读取内容
+    file_contents = []
     for file_obj in files:
         if file_obj.filename == "":
             return get_result(retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
         if len(file_obj.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
             return get_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=RetCode.ARGUMENT_ERROR)
+        # 读取文件内容并转换为 (bytes, filename) 元组
+        file_contents.append((file_obj.file.read(), file_obj.filename))
     
     kb = KnowledgebaseService.get_by_id(db, dataset_id)
     if not kb:
         raise HTTPException(status_code=RetCode.NOT_FOUND, detail=f"Can't find the dataset with ID {dataset_id}!")
     
-    err, uploaded_files = FileService.upload_document(db, kb, files, tenant_id, parent_path=parent_path)
+    err, uploaded_files = FileService.upload_document(db, kb, file_contents, tenant_id, parent_path=parent_path)
     if err:
         return get_result(retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
     

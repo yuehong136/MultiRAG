@@ -364,7 +364,7 @@ class FileService(CommonService):
             raise RuntimeError("Database error (File move)!")
 
     @classmethod
-    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: list, user_id, labels: list[str] | None = None, src: str="local", parent_path: str | None = None) -> tuple[list[str], list[dict]]:
+    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: list, user_id, labels: list[str] | None = None, src: str="local", parent_path: str | None = None) -> tuple[list[str], list[tuple[dict, bytes]]]:
         # 初始化根文件夹和知识库文件夹
         root_folder = cls.get_root_folder(db, user_id)
         pf_id = root_folder["id"]
@@ -430,7 +430,7 @@ class FileService(CommonService):
                 DocumentService.insert(db, doc)
 
                 cls.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
-                files_info.append(doc)  # 仅返回文档信息，不包含二进制数据
+                files_info.append((doc, file_blob))  # 返回文档信息和二进制数据
             except Exception as e:
                 err.append(f"{filename}: {str(e)}")
 
