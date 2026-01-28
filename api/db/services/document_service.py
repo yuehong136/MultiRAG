@@ -3056,7 +3056,10 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
         for ck in th.result():
             d = deepcopy(doc)
             d.update(ck)
-            d["id"] = xxhash.xxh64((ck["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
+            chunk_id = xxhash.xxh64((ck["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
+            # 同时设置 pk 和 id 字段：Milvus 使用 pk，其他向量存储使用 id
+            d["pk"] = chunk_id
+            d["id"] = chunk_id
             d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
             d["create_timestamp_flt"] = datetime.now().timestamp()
             if not d.get("image"):
@@ -3069,8 +3072,8 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
             else:
                 d["image"].save(output_buffer, format='JPEG')
 
-            settings.STORAGE_IMPL.put(kb.id, d["id"], output_buffer.getvalue())
-            d["img_id"] = "{}-{}".format(kb.id, d["id"])
+            settings.STORAGE_IMPL.put(kb.id, chunk_id, output_buffer.getvalue())
+            d["img_id"] = "{}-{}".format(kb.id, chunk_id)
             d.pop("image", None)
             docs.append(d)
 
@@ -3106,8 +3109,10 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
                 mind_map = json.dumps(mind_map.output, ensure_ascii=False, indent=2)
                 if len(mind_map) < 32:
                     raise Exception("Few content: " + mind_map)
+                mind_map_id = get_uuid()
                 cks.append({
-                    "id": get_uuid(),
+                    "pk": mind_map_id,  # Milvus 使用 pk 作为主键
+                    "id": mind_map_id,  # 其他向量存储使用 id
                     "doc_id": doc_id,
                     "kb_id": [kb.id],
                     "docnm_kwd": doc_nm[doc_id],
@@ -3121,9 +3126,40 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
 
         vectors = embedding(doc_id, [c["content_with_weight"] for c in cks])
         assert len(cks) == len(vectors)
+        vector_dim = len(vectors[0]) if vectors else 0
         for i, d in enumerate(cks):
             v = vectors[i]
-            d["q_%d_vec" % len(v)] = v
+            # 始终保存到标准 vector 字段（兼容旧 schema）
+            d["vector"] = v
+            # 同时保存到维度特定字段（兼容新 schema）
+            d[f"q_{vector_dim}_vec"] = v
+            # 补充 Milvus schema 中必需但可能缺少的字段
+            if "content_ltks" not in d:
+                d["content_ltks"] = rag_tokenizer.tokenize(d.get("content_with_weight", ""))
+            if "content_sm_ltks" not in d:
+                d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
+            if "title_tks" not in d:
+                d["title_tks"] = rag_tokenizer.tokenize(d.get("docnm_kwd", ""))
+            if "title_sm_tks" not in d:
+                d["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(d.get("title_tks", ""))
+            if "important_tks" not in d:
+                d["important_tks"] = ""
+            if "important_kwd" not in d:
+                d["important_kwd"] = []
+            if "question_tks" not in d:
+                d["question_tks"] = ""
+            if "question_kwd" not in d:
+                d["question_kwd"] = []
+            if "available_int" not in d:
+                d["available_int"] = 1
+            if "pagerank_fea" not in d:
+                d["pagerank_fea"] = 0
+            if "position_int" not in d:
+                d["position_int"] = []
+            if "page_num_int" not in d:
+                d["page_num_int"] = []
+            if "top_int" not in d:
+                d["top_int"] = []
         for b in range(0, len(cks), es_bulk_size):
             if try_create_idx:
                 if not settings.docStoreConn.index_exist(idxnm, kb_id):
@@ -3133,5 +3169,11 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
 
         DocumentService.increment_chunk_num(
             db, doc_id, kb.id, token_counts[doc_id], chunk_counts[doc_id], 0)
+        # 更新文档状态为完成
+        DocumentService.update_by_id(db, doc_id, {
+            "progress": 1.0,
+            "run": TaskStatus.DONE.value,
+            "progress_msg": "Parsing completed via upload_and_parse"
+        })
 
     return [d["id"] for d, _ in files]
