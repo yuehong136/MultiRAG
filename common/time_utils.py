@@ -94,12 +94,13 @@ def get_format_time() -> datetime.datetime:
     return datetime_format(datetime.datetime.now())
 
 
-def delta_seconds(date_string: str):
+def delta_seconds(date_input: str | datetime.datetime):
     """
-    Calculate seconds elapsed from a given date string to now.
+    Calculate seconds elapsed from a given date to now.
 
     Args:
-        date_string: Date string in "YYYY-MM-DD HH:MM:SS" format
+        date_input: Date string in "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM:SS.ffffff" format,
+                    or datetime object
 
     Returns:
         float: Number of seconds between the given date and current time
@@ -107,8 +108,23 @@ def delta_seconds(date_string: str):
     Example:
         >>> delta_seconds("2024-01-01 12:00:00")
         3600.0  # If current time is 2024-01-01 13:00:00
+        >>> delta_seconds("2024-01-01 12:00:00.123456")
+        3600.0
+        >>> delta_seconds(datetime.datetime(2024, 1, 1, 12, 0, 0))
+        3600.0
     """
-    dt = datetime.datetime.strptime(date_string, "%Y-%m-%d %H:%M:%S")
+    if isinstance(date_input, datetime.datetime):
+        dt = date_input
+    else:
+        # 尝试多种日期格式
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                dt = datetime.datetime.strptime(date_input, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            raise ValueError(f"time data '{date_input}' does not match expected formats")
     return (datetime.datetime.now() - dt).total_seconds()
 
 

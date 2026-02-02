@@ -237,7 +237,7 @@ class UserServiceMgr:
         # find tenants
         usr = user_list[0]
         tenants = TenantService.get_joined_tenants_by_user_id(db, usr.id)
-        tenant_ids = [m["tenant_id"] for m in tenants]
+        tenant_ids = [m.tenant_id for m in tenants]
         # filter permitted kb and owned kb
         return KnowledgebaseService.get_all_kb_by_tenant_ids(db, tenant_ids, usr.id)
 
@@ -252,7 +252,7 @@ class UserServiceMgr:
         # find tenants
         usr = user_list[0]
         tenants = TenantService.get_joined_tenants_by_user_id(db, usr.id)
-        tenant_ids = [m["tenant_id"] for m in tenants]
+        tenant_ids = [m.tenant_id for m in tenants]
         # filter permitted agents and owned agents
         res = UserCanvasService.get_all_agents_by_tenant_ids(db, tenant_ids, usr.id)
         return [{

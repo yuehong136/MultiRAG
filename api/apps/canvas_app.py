@@ -1245,7 +1245,7 @@ def list_canvas(
     if not owner_id_list:
         # 默认模式：获取用户有权限的所有Canvas
         tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
-        tenant_ids = [m["tenant_id"] for m in tenants]
+        tenant_ids = [m.tenant_id for m in tenants]
         tenant_ids.append(user.id)
         canvas, total = UserCanvasService.get_by_tenant_ids(
             db, tenant_ids, user.id,

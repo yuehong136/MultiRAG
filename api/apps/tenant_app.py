@@ -10,7 +10,7 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Body
 from sqlalchemy import inspect
 
 from api.db import UserTenantRole
@@ -55,8 +55,8 @@ def tenant_list(db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.get("/<tenant_id>/user/list", summary="获取租户下用户列表", response_model=dict)
-def user_list(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
+@router.get("/{tenant_id}/user/list", summary="获取租户下用户列表", response_model=dict)
+def user_list(tenant_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取特定租户下的用户列表。
 
@@ -80,8 +80,13 @@ def user_list(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.post('/<tenant_id>/user', summary="新增租户下用户", response_model=dict)
-def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager)):
+@router.post('/{tenant_id}/user', summary="新增租户下用户", response_model=dict)
+async def create(
+    tenant_id: str,
+    email: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+    user=Depends(manager)
+):
     """
     添加新用户到指定租户。
 
@@ -89,7 +94,7 @@ def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager
 
     参数:
        - tenant_id (str): 租户 ID。
-       - email (str): 要添加的用户邮箱。
+       - email (str): 要添加的用户邮箱（请求体中的 JSON 字段）。
 
     返回:
         JSON 响应，其中包含成功添加的用户信息。
@@ -120,14 +125,14 @@ def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager
         id=get_uuid(),
         user_id=user_id_to_invite,
         tenant_id=tenant_id,
+        invited_by=user.id,
         role=UserTenantRole.INVITE,
-        invited_by=user.id,  # 默认当前操作的用户是邀请人
         status=StatusEnum.VALID.value)
 
     # Send invitation email asynchronously in background
     try:
         user_name = ""
-        _, inviter_user = UserService.get_by_id(db, user.id)
+        inviter_user = UserService.get_by_id(db, user.id)
         if inviter_user:
             user_name = inviter_user.nickname
 
@@ -155,8 +160,8 @@ def create(tenant_id, email, db: Session = Depends(get_db), user=Depends(manager
     return get_json_result(data=usr)
 
 
-@router.delete('/<tenant_id>/user/<user_id>', summary="删除租户下用户", response_model=dict)
-def rm(tenant_id, user_id, db: Session = Depends(get_db), user=Depends(manager)):
+@router.delete('/{tenant_id}/user/{user_id}', summary="删除租户下用户", response_model=dict)
+def rm(tenant_id: str, user_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     从租户中删除指定用户。
 
@@ -197,8 +202,8 @@ def rm(tenant_id, user_id, db: Session = Depends(get_db), user=Depends(manager))
         return server_error_response(e)
 
 
-@router.put("/agree/<tenant_id>", summary="同意加入租户", response_model=dict)
-def agree(tenant_id, db: Session = Depends(get_db), user=Depends(manager)):
+@router.put("/agree/{tenant_id}", summary="同意加入租户", response_model=dict)
+def agree(tenant_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     同意加入租户。
 

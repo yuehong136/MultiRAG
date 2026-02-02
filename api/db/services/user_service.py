@@ -317,18 +317,18 @@ class UserTenantService(CommonService):
         results = db.execute(stmt).all()
         return [
             {
-                "user_id": result[0],
-                "status": result[1],
-                "role": result[2],
-                "nickname": result[3],
-                "email": result[4],
-                "avatar": result[5],
-                "is_authenticated": result[6],
-                "is_active": result[7],
-                "is_anonymous": result[8],
-                "user_status": result[9],
-                "update_date": result[10],
-                "is_superuser": result[11],
+                "id": result[0],
+                "user_id": result[1],
+                "role": result[3],
+                "nickname": result[4],
+                "email": result[5],
+                "avatar": result[6],
+                "is_authenticated": result[7],
+                "is_active": result[8],
+                "is_anonymous": result[9],
+                "status": result[10],  # User.status，和 ragflow 一致
+                "update_date": result[11],
+                "is_superuser": result[12],
             }
             for result in results
         ]

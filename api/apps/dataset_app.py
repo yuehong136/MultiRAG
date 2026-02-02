@@ -163,7 +163,7 @@ def list_datasets(
         tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
         datasets = KnowledgebaseService.get_by_tenant_ids_by_offset(
             db,
-            [m["tenant_id"] for m in tenants],
+            [m.tenant_id for m in tenants],
             user.id,
             offset,
             count,

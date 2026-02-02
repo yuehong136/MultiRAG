@@ -382,7 +382,7 @@ def list_kbs(
         if not owner_ids:
             # 原有逻辑：获取用户加入的租户
             tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
-            tenants = [m["tenant_id"] for m in tenants]
+            tenants = [m.tenant_id for m in tenants]
             kbs, total = KnowledgebaseService.get_by_tenant_ids(
                 db, tenants, user.id, page_number, items_per_page, orderby, desc, keywords)
         else:

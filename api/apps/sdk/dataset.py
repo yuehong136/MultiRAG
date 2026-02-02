@@ -330,7 +330,7 @@ def list_datasets(
         tenants = TenantService.get_joined_tenants_by_user_id(db, tenant_id)
         kbs, total = KnowledgebaseService.get_list(
             db,
-            [m["tenant_id"] for m in tenants],
+            [m.tenant_id for m in tenants],
             tenant_id,
             page,
             page_size,
