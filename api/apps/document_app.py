@@ -2885,16 +2885,16 @@ def change_parser(
 
     def reset_doc():
         """重置文档的处理状态和数据"""
-        e = DocumentService.update_by_id(
-            db, doc.id,
-            {
-                "pipeline_id": req["pipeline_id"],
-                "parser_id": req.get("parser_id", doc.parser_id),
-                "progress": 0,
-                "progress_msg": "",
-                "run": TaskStatus.UNSTART.value
-            }
-        )
+        update_data = {
+            "parser_id": req.get("parser_id", doc.parser_id),
+            "progress": 0,
+            "progress_msg": "",
+            "run": TaskStatus.UNSTART.value
+        }
+        if req.get("pipeline_id"):
+            update_data["pipeline_id"] = req["pipeline_id"]
+
+        e = DocumentService.update_by_id(db, doc.id, update_data)
         if not e:
             return get_data_error_result(retmsg="Document not found!")
 
@@ -2943,8 +2943,8 @@ def change_parser(
         return None
 
     try:
-        # 处理 pipeline_id 更新
-        if "pipeline_id" in req and req["pipeline_id"] != "":
+        # 处理 pipeline_id 更新（只有当 pipeline_id 有实际值时才处理）
+        if req.get("pipeline_id"):  # 修复：使用 get() 检查是否有实际值，而不是检查 key 是否存在
             if doc.pipeline_id == req["pipeline_id"]:
                 return get_json_result(data=True)
 

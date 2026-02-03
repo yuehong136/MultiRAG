@@ -2247,6 +2247,7 @@ class DocumentService(CommonService):
     def update_parser_config(cls, db: Session, id: str, config: dict):
         if not config:
             return
+
         doc = cls.get_by_id(db, id)
         if not doc:
             raise LookupError(f"Document({id}) not found.")
@@ -2256,16 +2257,17 @@ class DocumentService(CommonService):
                 if k not in old:
                     old[k] = v
                     continue
-                if isinstance(v, dict):
-                    assert isinstance(old[k], dict)
+                if isinstance(v, dict) and isinstance(old[k], dict):
                     dfs_update(old[k], v)
                 else:
                     old[k] = v
 
-        dfs_update(doc.parser_config, config)
-        if not config.get("raptor") and doc.parser_config.get("raptor"):
-            del doc.parser_config["raptor"]
-        cls.update_by_id(db, id, {"parser_config": doc.parser_config})
+        parser_config = doc.parser_config or {}
+        dfs_update(parser_config, config)
+        if not config.get("raptor") and parser_config.get("raptor"):
+            del parser_config["raptor"]
+
+        cls.update_by_id(db, id, {"parser_config": parser_config})
 
     @classmethod
     def get_doc_count(cls, db: Session, tenant_id: str):
