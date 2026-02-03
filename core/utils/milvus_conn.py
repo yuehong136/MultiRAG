@@ -337,10 +337,13 @@ class MilvusConnection(MilvusConnectionBase):
             if "kb_id" in new_row and isinstance(new_row["kb_id"], list):
                 new_row["kb_id"] = new_row["kb_id"][0] if new_row["kb_id"] else ""
 
-            # Handle keyword fields
-            for kwd_field in ["important_kwd", "question_kwd", "entities_kwd"]:
-                if kwd_field in new_row and isinstance(new_row[kwd_field], list):
-                    new_row[kwd_field] = "###".join(new_row[kwd_field])
+            # Handle keyword fields - 保持列表格式用于 ARRAY 类型字段
+            # 注意：convert_data_types 已经根据 schema 类型处理了这些字段
+            # 如果 schema 是 ARRAY 类型，保持列表；如果是 VARCHAR 类型，已转为字符串
+            # 这里只处理 VARCHAR 类型（已经是字符串的情况不需要处理）
+            # for kwd_field in ["important_kwd", "question_kwd", "entities_kwd"]:
+            #     if kwd_field in new_row and isinstance(new_row[kwd_field], list):
+            #         new_row[kwd_field] = "###".join(new_row[kwd_field])
 
             # Handle position fields
             if "position_int" in new_row and isinstance(new_row["position_int"], list):
@@ -607,9 +610,16 @@ class MilvusConnection(MilvusConnectionBase):
                 else:
                     continue
 
-                # Special field processing
-                if field in ["important_kwd", "question_kwd", "entities_kwd"] and isinstance(value, str):
-                    value = value.split("###") if value else []
+                # Special field processing - 处理关键词和问题列表字段
+                if field in ["important_kwd", "question_kwd", "entities_kwd"]:
+                    if isinstance(value, list):
+                        # ARRAY 类型直接返回列表，确保元素是字符串
+                        value = [str(v).strip() for v in value if v]
+                    elif isinstance(value, str):
+                        # VARCHAR 类型用换行符分隔以保持与存储时一致
+                        value = [v.strip() for v in value.split("\n") if v.strip()] if value else []
+                    else:
+                        value = []
                 elif field == "position_int" and isinstance(value, str):
                     if value:
                         try:

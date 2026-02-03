@@ -278,7 +278,7 @@
             "type": "ARRAY",
             "element_type": "VARCHAR",
             "max_length": 256,
-            "max_capacity": 100
+            "max_capacity": 1000
           }
         }
       },
@@ -289,7 +289,7 @@
             "type": "ARRAY",
             "element_type": "VARCHAR",
             "max_length": 256,
-            "max_capacity": 100
+            "max_capacity": 4096
           }
         }
       },
@@ -298,7 +298,7 @@
           "match": "important_tks",
           "mapping": {
             "type": "VARCHAR",
-            "max_length": 256,
+            "max_length": 65535,
             "enable_analyzer": true,
             "enable_match": true,
             "analyzer_params": {
@@ -326,8 +326,8 @@
           "mapping": {
             "type": "ARRAY",
             "element_type": "VARCHAR",
-            "max_length": 256,
-            "default_value": ""
+            "max_length": 1024,
+            "max_capacity": 4096
           }
         }
       },
@@ -336,7 +336,7 @@
           "match": "question_tks",
           "mapping": {
             "type": "VARCHAR",
-            "max_length": 256,
+            "max_length": 65535,
             "enable_analyzer": true,
             "enable_match": true,
             "analyzer_params": {

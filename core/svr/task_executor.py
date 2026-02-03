@@ -468,8 +468,10 @@ async def build_chunks(task, progress_callback, db: Session):
         try:
             d = copy.deepcopy(document)
             d.update(chunk)
-            d["pk"] = xxhash.xxh64(
+            chunk_hash = xxhash.xxh64(
                 (chunk["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
+            d["pk"] = chunk_hash
+            d["id"] = chunk_hash  # 同时设置 id 以兼容 ES 和 build_TOC 等函数
             d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
             d["create_timestamp_flt"] = datetime.now().timestamp()
             d["page_num_int"] = d.get("page_num_int", [])
@@ -681,27 +683,43 @@ def build_TOC(task, docs, progress_callback):
     ))
     toc: list[dict] = asyncio.run(run_toc_from_text([d["content_with_weight"] for d in docs], chat_mdl, progress_callback))
     logging.info("------------ T O C -------------\n" + json.dumps(toc, ensure_ascii=False, indent='  '))
-    ii = 0
-    while ii < len(toc):
+
+    def get_chunk_id(doc):
+        return doc.get("pk") or doc.get("id")
+
+    for ii, item in enumerate(toc):
         try:
-            idx = int(toc[ii]["chunk_id"])
-            del toc[ii]["chunk_id"]
-            toc[ii]["ids"] = [docs[idx]["id"]]
-            if ii == len(toc) - 1:
-                break
-            for jj in range(idx + 1, int(toc[ii + 1]["chunk_id"]) + 1):
-                toc[ii]["ids"].append(docs[jj]["id"])
+            chunk_val = item.pop("chunk_id", None)
+            if chunk_val is None or str(chunk_val).strip() == "":
+                logging.warning(f"Index {ii}: chunk_id is missing or empty. Skipping.")
+                continue
+            curr_idx = int(chunk_val)
+            if curr_idx >= len(docs):
+                logging.error(f"Index {ii}: chunk_id {curr_idx} exceeds docs length {len(docs)}.")
+                continue
+            item["ids"] = [get_chunk_id(docs[curr_idx])]
+            if ii + 1 < len(toc):
+                next_chunk_val = toc[ii + 1].get("chunk_id", "")
+                if str(next_chunk_val).strip() != "":
+                    next_idx = int(next_chunk_val)
+                    for jj in range(curr_idx + 1, min(next_idx + 1, len(docs))):
+                        item["ids"].append(get_chunk_id(docs[jj]))
+                else:
+                    logging.warning(f"Index {ii + 1}: next chunk_id is empty, range fill skipped.")
+        except (ValueError, TypeError) as e:
+            logging.error(f"Index {ii}: Data conversion error - {e}")
         except Exception as e:
-            logging.exception(e)
-        ii += 1
+            logging.exception(f"Index {ii}: Unexpected error - {e}")
 
     if toc:
         d = copy.deepcopy(docs[-1])
         d["content_with_weight"] = json.dumps(toc, ensure_ascii=False)
         d["toc_kwd"] = "toc"
         d["available_int"] = 0
-        d["page_num_int"] = 100000000
-        d["pk"] = xxhash.xxh64((d["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
+        d["page_num_int"] = [100000000]
+        toc_hash = xxhash.xxh64((d["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
+        d["pk"] = toc_hash
+        d["id"] = toc_hash  # 同时设置 id 以兼容 ES
         return d
     return None
 
@@ -851,7 +869,10 @@ def convert_data_types(data, schema):
                     result[field_name] = list(result[field_name])
             elif field_type == DataType.VARCHAR:
                 if isinstance(result[field_name], list):
-                    result[field_name] = ','.join(map(str, result[field_name]))
+                    if field_name in ["question_kwd", "important_kwd", "entities_kwd"]:
+                        result[field_name] = '\n'.join(map(str, result[field_name]))
+                    else:
+                        result[field_name] = ','.join(map(str, result[field_name]))
                 else:
                     result[field_name] = str(result[field_name])
             elif field_type == DataType.FLOAT:
@@ -869,6 +890,11 @@ def convert_data_types(data, schema):
                         result[field_name] = result[field_name].split(',')
                     else:
                         result[field_name] = [result[field_name]]
+                result[field_name] = [str(v) for v in result[field_name]]
+                max_capacity = field_info.get('params', {}).get('max_capacity', 4096)
+                if len(result[field_name]) > max_capacity:
+                    logging.warning(f"Array field '{field_name}' has {len(result[field_name])} elements, truncating to {max_capacity}")
+                    result[field_name] = result[field_name][:max_capacity]
 
     # 处理动态向量字段 (q_*_vec) - 仅用于 Milvus，ES 使用动态 mapping 自动处理
     vector_fields = [k for k in result.keys() if re.match(r'q_\d+_vec', k)]
