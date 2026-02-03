@@ -8,7 +8,7 @@
 """
 from typing import Annotated, Literal, Any
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Body
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, Discriminator, model_validator, field_validator, ConfigDict
 
@@ -504,7 +504,7 @@ def list_dialogs_next(
     # 原逻辑：默认 true；当传入字符串 "false" 时才为 False。
     # 在 FastAPI 中直接使用 bool 会自动解析 ?desc=false 为 False，因此等价且更安全。
     desc: Annotated[bool, Query(alias="desc", description="是否降序")] = True,
-    body: ListDialogsRequest = Depends(),
+    body: ListDialogsRequest = Body(default=ListDialogsRequest()),
     db: Session = Depends(get_db),
     user=Depends(manager)
 ):

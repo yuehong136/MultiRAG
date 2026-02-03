@@ -158,30 +158,40 @@ class DialogService(CommonService):
     @classmethod
     def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc,
                           keywords=None, parser_id=None):
+        """
+        获取对话列表（支持分页、搜索、排序）
+        
+        直接查询 update_date/create_date（DateTime 类型），与 ragflow 保持一致。
+        SQLAlchemy 会自动将 DateTime 对象序列化为 ISO 格式字符串。
+        """
         from api.db.db_models import User
+        
+        # 查询字段列表 - 使用 update_date/create_date 而不是 update_time/create_time
         fields = [
-            cls.model.id,
-            cls.model.tenant_id,
-            cls.model.name,
-            cls.model.description,
-            cls.model.language,
-            cls.model.llm_id,
-            cls.model.llm_setting,
-            cls.model.prompt_type,
-            cls.model.prompt_config,
-            cls.model.similarity_threshold,
-            cls.model.vector_similarity_weight,
-            cls.model.top_n,
-            cls.model.top_k,
-            cls.model.do_refer,
-            cls.model.rerank_id,
-            cls.model.kb_ids,
-            cls.model.icon,
-            cls.model.status,
-            User.nickname,
-            User.avatar.label("tenant_avatar"),
-            cls.model.update_time,
-            cls.model.create_time,
+            cls.model.id,               # 0
+            cls.model.tenant_id,        # 1
+            cls.model.name,             # 2
+            cls.model.description,      # 3
+            cls.model.language,         # 4
+            cls.model.llm_id,           # 5
+            cls.model.llm_setting,      # 6
+            cls.model.prompt_type,      # 7
+            cls.model.prompt_config,    # 8
+            cls.model.similarity_threshold,      # 9
+            cls.model.vector_similarity_weight,  # 10
+            cls.model.top_n,            # 11
+            cls.model.top_k,            # 12
+            cls.model.do_refer,         # 13
+            cls.model.rerank_id,        # 14
+            cls.model.kb_ids,           # 15
+            cls.model.icon,             # 16
+            cls.model.status,           # 17
+            User.nickname,              # 18
+            User.avatar.label("tenant_avatar"),  # 19
+            cls.model.update_date,      # 20 - DateTime 类型
+            cls.model.create_date,      # 21 - DateTime 类型
+            cls.model.update_time,      # 22 - 毫秒时间戳（可选）
+            cls.model.create_time,      # 23 - 毫秒时间戳（可选）
         ]
 
         # 构建查询表达式
@@ -211,7 +221,7 @@ class DialogService(CommonService):
         else:
             dialogs = query.all()
 
-        # 转换结果为字典
+        # 转换结果为字典 - 字段名与索引一一对应
         result = []
         for dlg in dialogs:
             dlg_dict = {
@@ -231,11 +241,15 @@ class DialogService(CommonService):
                 'do_refer': dlg[13],
                 'rerank_id': dlg[14],
                 'kb_ids': dlg[15],
-                'status': dlg[16],
-                'nickname': dlg[17],
-                'tenant_avatar': dlg[18],
-                'update_time': dlg[19],
-                'create_time': dlg[20],
+                'icon': dlg[16],
+                'status': dlg[17],
+                'nickname': dlg[18],
+                'tenant_avatar': dlg[19],
+                # DateTime 对象直接转为 ISO 格式字符串（与 ragflow 一致）
+                'update_date': dlg[20].isoformat() if dlg[20] else None,
+                'create_date': dlg[21].isoformat() if dlg[21] else None,
+                'update_time': dlg[22],
+                'create_time': dlg[23],
             }
             result.append(dlg_dict)
 
