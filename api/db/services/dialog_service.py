@@ -458,6 +458,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     bind_models_ts = timer()
 
     kb_names = list([kb.name for kb in kbs])
+    kb_tenant_ids = [kb.tenant_id for kb in kbs]  # 1:1 with kb_names, for correct collection lookup
     print("正在检索的知识库 --> ", kb_names)
 
     retriever = settings.retriever
@@ -476,7 +477,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
         logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
-        ans = use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
+        ans = use_sql(questions[-1], field_map, kb_tenant_ids, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
         if ans:
             yield ans
             return
@@ -531,7 +532,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     retriever.retrieval,
                     filter_exp="",
                     embd_mdl=embd_mdl,
-                    tenant_id=dialog.tenant_id,
+                    tenant_id=kb_tenant_ids,
                     kb_names=kb_names,
                     page=1,
                     page_size=dialog.top_n,
@@ -555,7 +556,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     " ".join(questions),
                     filter_exp,
                     embd_mdl,
-                    dialog.tenant_id,
+                    kb_tenant_ids,
                     kb_names,
                     1,
                     dialog.top_n,
@@ -580,7 +581,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = asyncio.run(settings.kg_retriever.retrieval(" ".join(questions), dialog.tenant_id, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT)))
+                ck = asyncio.run(settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT)))
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
@@ -759,6 +760,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     bind_models_ts = timer()
 
     kb_names = list([kb.name for kb in kbs])
+    kb_tenant_ids = [kb.tenant_id for kb in kbs]  # 1:1 with kb_names, for correct collection lookup
     print("正在检索的知识库 --> ", kb_names)
 
     retriever = settings.retriever
@@ -777,7 +779,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
         logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
-        ans = await use_sql(questions[-1], field_map, dialog.tenant_id, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
+        ans = await use_sql(questions[-1], field_map, kb_tenant_ids, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
         if ans:
             yield ans
             return
@@ -828,7 +830,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                     retriever.retrieval,
                     filter_exp="",
                     embd_mdl=embd_mdl,
-                    tenant_id=dialog.tenant_id,
+                    tenant_id=kb_tenant_ids,
                     kb_names=kb_names,
                     page=1,
                     page_size=dialog.top_n,
@@ -852,7 +854,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                     " ".join(questions),
                     filter_exp,
                     embd_mdl,
-                    dialog.tenant_id,
+                    kb_tenant_ids,
                     kb_names,
                     1,
                     dialog.top_n,
@@ -877,7 +879,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = await settings.kg_retriever.retrieval(" ".join(questions), dialog.tenant_id, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
+                ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
