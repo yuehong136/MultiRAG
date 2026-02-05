@@ -14,6 +14,11 @@ from api.service.askdata_service.event.event_handlers import create_sse_response
 from api.service.askdata_service.util.sql_retry_handler import SQLRetryHandler
 from api.service.askdata_service.util.askdata_perf_tracker import askdata_perf_tracker
 from api.service.askdata_service.util.perf_logger import PerfSpan
+from api.service.askdata_service.util.sqlglot_utils import (
+    try_extract_components,
+    try_apply_pagination,
+    normalize_sql_components,
+)
 from api.service.askdata_service.stop_request_manager import stop_request_manager
 from api.service.askdata_service.cache import semantic_layer_cache
 from api.service.nl2sql_service.query_data_from_zt_by_sql import query_data_with_params
@@ -151,6 +156,17 @@ async def get_sql_and_table_config(
         query_complexity = sql_generation_result["queryComplexity"]
         sql_span.end(status="ok", query_complexity=query_complexity, used_models=used_models)
 
+        llm_sql_components = normalize_sql_components(sql_generation_result.get("sqlComponents", {}))
+
+        def _components_valid(components: dict[str, Any] | None) -> bool:
+            return bool(
+                components
+                and components.get("select")
+                and components.get("from")
+            )
+
+        llm_components_valid = _components_valid(llm_sql_components)
+
         # 构建使用到的模型和表的详情字典
         model_span = PerfSpan("askdata.model_details_resolve", meta=perf_meta)
         used_model_detail_dict, used_table_detail_dict, model_list, intersection_dataset_ids = \
@@ -281,23 +297,70 @@ async def get_sql_and_table_config(
         page_size = 20
         pagination_sql = None
         pagination_info = None
+        components_sql = sql
         # 数据量过大就需要进行分页
         if data_count > page_size:
             # 生成分页的sql
             pagination_span = PerfSpan("askdata.sql_pagination_convert", meta=perf_meta)
-            pagination_sql = await service.sql_pagination_converter.convert_to_pagination(sql,
-                                                                                          database_type="PostgreSQL",
-                                                                                          llm_name=body.llm_name)
-            pagination_span.end(status="ok")
-            components_span = PerfSpan("askdata.sql_components_extract", meta=perf_meta)
-            sql_components = await service.sql_components_extractor.extract_sql_components(pagination_sql,
-                                                                                           body.llm_name)
-            components_span.end(status="ok")
+            pagination_source = None
+            try:
+                pagination_sql = try_apply_pagination(sql, limit=page_size, offset=0, dialect="postgres")
+                if pagination_sql:
+                    pagination_source = "sqlglot"
+                else:
+                    pagination_sql = await service.sql_pagination_converter.convert_to_pagination(
+                        sql,
+                        database_type="PostgreSQL",
+                        llm_name=body.llm_name
+                    )
+                    pagination_source = "llm"
+                pagination_span.end(status="ok", source=pagination_source)
+            except Exception as e:
+                pagination_span.end(status="error", source=pagination_source or "unknown", error=str(e))
+                raise
+            components_sql = pagination_sql
             pass
         else:
-            components_span = PerfSpan("askdata.sql_components_extract", meta=perf_meta)
-            sql_components = await service.sql_components_extractor.extract_sql_components(sql, body.llm_name)
-            components_span.end(status="ok")
+            components_sql = sql
+
+        components_span = PerfSpan("askdata.sql_components_extract", meta=perf_meta)
+        components_source = None
+        try:
+            use_cached_components = (
+                components_sql == sql
+                and llm_components_valid
+                and not execution_result.get("was_fixed", False)
+            )
+            if use_cached_components:
+                sql_components = llm_sql_components
+                components_source = "llm_cached"
+            else:
+                sql_components = try_extract_components(components_sql, dialect="postgres")
+                sql_components = normalize_sql_components(sql_components) or sql_components
+                if _components_valid(sql_components):
+                    components_source = "sqlglot"
+                else:
+                    if llm_components_valid and not execution_result.get("was_fixed", False):
+                        sql_components = dict(llm_sql_components or {})
+                        if pagination_sql:
+                            sql_components["pagination"] = {
+                                "limit": str(page_size),
+                                "offset": "0",
+                            }
+                        components_source = "llm_cached_fallback"
+                    else:
+                        sql_components = await service.sql_components_extractor.extract_sql_components(
+                            components_sql,
+                            body.llm_name
+                        )
+                        sql_components = normalize_sql_components(sql_components) or sql_components
+                        components_source = "llm"
+            if not _components_valid(sql_components):
+                raise ValueError("sql_components_missing_from_or_select")
+            components_span.end(status="ok", source=components_source)
+        except Exception as e:
+            components_span.end(status="error", source=components_source or "unknown", error=str(e))
+            raise
 
         if pagination_sql:
             pagination_query_span = PerfSpan("askdata.pagination_query", meta=perf_meta)
