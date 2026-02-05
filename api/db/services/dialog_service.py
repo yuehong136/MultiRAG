@@ -1114,14 +1114,21 @@ async def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True
         except Exception:
             return
 
-    if len(tbl["rows"]) == 0:
+    # 检查返回值是否有效
+    if tbl is None:
+        logging.info("SQL查询返回None，跳过SQL检索")
         return None
-    
-    # 检查是否有rows字段且不为空
+
+    # 检查是否有error字段（SQL执行失败）
+    if "error" in tbl:
+        logging.error(f"SQL执行失败: {tbl.get('error')}")
+        return None
+
+    # 检查是否有rows字段
     if "rows" not in tbl:
         logging.error(f"SQL查询返回格式错误，缺少rows字段: {tbl}")
         return None
-    
+
     if len(tbl["rows"]) == 0:
         logging.info("SQL查询返回空结果")
         return None

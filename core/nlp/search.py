@@ -1305,12 +1305,13 @@ class Dealer:
             sql = sql.replace(p, r, 1)
         logging.info(f"To es: {sql}")
 
-        try:
-            tbl = self.dataStore.sql(sql, fetch_size, format)
-            return tbl
-        except Exception as e:
-            logging.error(f"SQL failure: {sql} =>" + str(e))
-            return {"error": str(e)}
+        tbl = self.dataStore.sql(sql, fetch_size, format)
+        # 检查 Milvus 后端返回的错误格式
+        if isinstance(tbl, dict) and "error" in tbl:
+            error_msg = tbl.get("error", "Unknown SQL error")
+            logging.error(f"SQL failure: {sql} => {error_msg}")
+            raise Exception(error_msg)
+        return tbl
 
 
     def chunk_list(self, doc_id: str, tenant_id: str,
