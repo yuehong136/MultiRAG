@@ -34,6 +34,7 @@ from deepdoc.parser.figure_parser import vision_figure_parser_figure_xlsx_wrappe
 from deepdoc.parser.utils import get_text
 from core.nlp import rag_tokenizer, tokenize, tokenize_table
 from deepdoc.parser import ExcelParser
+from common import settings
 
 
 class Excel(ExcelParser):
@@ -44,7 +45,7 @@ class Excel(ExcelParser):
             wb = Excel._load_excel_to_workbook(BytesIO(binary))
         total = 0
         for sheet_name in wb.sheetnames:
-            total += len(list(wb[sheet_name].rows))
+            total += Excel._get_actual_row_count(wb[sheet_name])
         res, fails, done = [], [], 0
         rn = 0
         flow_images = []
@@ -70,7 +71,7 @@ class Excel(ExcelParser):
                         else:
                             flow_images.append(img)
             try:
-                rows = list(ws.rows)
+                rows = Excel._get_rows_limited(ws)
             except Exception as e:
                 logging.warning(f"Skip sheet '{sheet_name}' due to rows access error: {e}")
                 continue
