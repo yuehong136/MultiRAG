@@ -36,6 +36,7 @@ from api.service.askdata_service.util.merge_dimensions_and_metrics import merge_
 from api.service.askdata_service.util.parse_from_clause import parse_from_clause
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
 from api.service.askdata_service.util.semantic_filter_processor import apply_semantic_filter
+from api.service.askdata_service.util.perf_logger import PerfSpan
 from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
     filter_metrics_by_permissions
 from api.service.askdata_service.util.timer import time_task
@@ -195,332 +196,367 @@ class AskdataService:
         if ask_id:
             await self._async_check_if_stopped(ask_id)
 
+        perf_meta = {
+            "ask_id": ask_id,
+            "event_id": event_id,
+            "dataset_count": len(dataset_id_list)
+        }
+        total_span = PerfSpan("askdata.semantic_layer.total", meta=perf_meta)
+
         await send_event(event_id, {"current_step": 0, "total_steps": 13}, "progress_total")
 
-        # 1. 第一批并行任务：获取dataset_details和用户权限（完全独立，可以同时开始）
-        dataset_details_task = time_task(
-            self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list, event_id=event_id),
-            name="获取数据集详情"
-        )
-        user_permissions_task = time_task(
-            self.semantic_api_client.get_user_semantic_permissions_async(
-                userid, dataset_id_list, event_id=event_id),
-            name="获取用户语义权限"
-        )
+        try:
+            # 1. 第一批并行任务：获取dataset_details和用户权限（完全独立，可以同时开始）
+            base_fetch_span = PerfSpan("askdata.semantic_layer.base_fetch", meta=perf_meta)
+            dataset_details_task = time_task(
+                self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list, event_id=event_id),
+                name="获取数据集详情"
+            )
+            user_permissions_task = time_task(
+                self.semantic_api_client.get_user_semantic_permissions_async(
+                    userid, dataset_id_list, event_id=event_id),
+                name="获取用户语义权限"
+            )
 
-        dataset_details, user_semantic_permissions = await asyncio.gather(
-            dataset_details_task,
-            user_permissions_task
-        )
+            dataset_details, user_semantic_permissions = await asyncio.gather(
+                dataset_details_task,
+                user_permissions_task
+            )
+            base_fetch_span.end(status="ok", dataset_count=len(dataset_details))
 
-        # 检查是否在获取基础数据后被停止
-        if ask_id:
-            await self._async_check_if_stopped(ask_id)
+            # 检查是否在获取基础数据后被停止
+            if ask_id:
+                await self._async_check_if_stopped(ask_id)
 
-        # 2. 第二批并行任务：定义三个主要的并行任务（依赖dataset_details）
+            # 2. 第二批并行任务：定义三个主要的并行任务（依赖dataset_details）
 
-        async def llm_extraction_task():
-            """LLM提取语义字段，静默执行，不发送事件"""
-            await send_event(event_id, {"task_name": "LLM提取语义字段", "task_status": "working"}, "task")
+            async def llm_extraction_task():
+                """LLM提取语义字段，静默执行，不发送事件"""
+                await send_event(event_id, {"task_name": "LLM提取语义字段", "task_status": "working"}, "task")
 
-            try:
-                extracted_fields = await time_task(
-                    self.semantic_field_extractor.extract_semantic_fields(
-                        user_query=user_query,
-                        dataset_info=dataset_details,
-                        llm_name=llm_name
+                try:
+                    extracted_fields = await time_task(
+                        self.semantic_field_extractor.extract_semantic_fields(
+                            user_query=user_query,
+                            dataset_info=dataset_details,
+                            llm_name=llm_name
+                        ),
+                        name="LLM提取语义字段"
+                    )
+
+                    logger.info(f"LLM提取到的语义字段：{extracted_fields}")
+
+                    llm_dimension_ids = [field["dimension_id"] for field in extracted_fields if "dimension_id" in field]
+                    llm_metric_ids = [field["metric_id"] for field in extracted_fields if "metric_id" in field]
+
+                    await send_event(event_id, {"task_name": "LLM提取语义字段", "task_data": {
+                        "dimension_info_list": [field for field in extracted_fields if "dimension_name" in field],
+                        "metric_info_list": [field for field in extracted_fields if "metric_name" in field]
+                    }}, "task_data")
+                    await send_event(event_id, {"task_name": "LLM提取语义字段", "task_status": "completed"}, "task")
+                    await send_event(event_id, {}, "progress_up")
+                    return llm_dimension_ids, llm_metric_ids
+                except Exception as e:
+                    logger.warning(f"LLM extraction failed: {e}")
+                    return [], []
+
+            async def keyword_search_and_semantic_layer_task():
+                """分词检索和语义层构建"""
+                # 1. 分词
+                await send_event(event_id, {"task_name": "分词", "task_status": "working"}, "task")
+                segmented_words = await custom_tokenize_with_semantic_words(
+                    text=user_query,
+                    dataset_id_list=dataset_id_list
+                )
+                await send_event(event_id, {"task_name": "分词", "task_data": {"segmented_words": segmented_words}},
+                                 "task_data")
+                await send_event(event_id, {"task_name": "分词", "task_status": "completed"}, "task")
+                await send_event(event_id, {}, "progress_up")
+
+                # 2. 开始获取维度信息
+                # 并行获取维度相关信息
+                dimensions_by_keyword_task = time_task(
+                    self.semantic_api_client.get_dimension_info_by_keyword_async(
+                        keyword=segmented_words,
+                        dataset_ids=dataset_id_list,
+                        event_id=event_id
                     ),
-                    name="LLM提取语义字段"
+                    name="按关键字获取维度"
+                )
+                dimensions_by_value_task = time_task(
+                    self.semantic_api_client.get_dimension_by_dimension_value_async(
+                        keyword=segmented_words,
+                        dataset_ids=dataset_id_list,
+                        event_id=event_id
+                    ),
+                    name="按维度值获取维度"
                 )
 
-                logger.info(f"LLM提取到的语义字段：{extracted_fields}")
+                dimensions_by_keyword, dimensions_by_value = await asyncio.gather(
+                    dimensions_by_keyword_task,
+                    dimensions_by_value_task
+                )
 
-                llm_dimension_ids = [field["dimension_id"] for field in extracted_fields if "dimension_id" in field]
-                llm_metric_ids = [field["metric_id"] for field in extracted_fields if "metric_id" in field]
+                keyword_dimension_ids = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
 
-                await send_event(event_id, {"task_name": "LLM提取语义字段", "task_data": {
-                    "dimension_info_list": [field for field in extracted_fields if "dimension_name" in field],
-                    "metric_info_list": [field for field in extracted_fields if "metric_name" in field]
-                }}, "task_data")
-                await send_event(event_id, {"task_name": "LLM提取语义字段", "task_status": "completed"}, "task")
-                await send_event(event_id, {}, "progress_up")
-                return llm_dimension_ids, llm_metric_ids
-            except Exception as e:
-                logger.warning(f"LLM extraction failed: {e}")
-                return [], []
+                # 高基数维度检索（如果启用）
+                hc_dim_ids = []
+                if enable_deep_search:
+                    hc_dimensions_by_value = await time_task(
+                        self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
+                            keyword_list=segmented_words,
+                            dataset_ids=dataset_id_list,
+                            exclude_dim_ids=keyword_dimension_ids,
+                            event_id=event_id
+                        ), name="获取高基数维度信息")
+                    hc_dim_ids = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
 
-        async def keyword_search_and_semantic_layer_task():
-            """分词检索和语义层构建"""
-            # 1. 分词
-            await send_event(event_id, {"task_name": "分词", "task_status": "working"}, "task")
-            segmented_words = await custom_tokenize_with_semantic_words(
-                text=user_query,
-                dataset_id_list=dataset_id_list
-            )
-            await send_event(event_id, {"task_name": "分词", "task_data": {"segmented_words": segmented_words}},
-                             "task_data")
-            await send_event(event_id, {"task_name": "分词", "task_status": "completed"}, "task")
-            await send_event(event_id, {}, "progress_up")
+                keyword_dimension_ids.extend(hc_dim_ids)
 
-            # 2. 开始获取维度信息
-            # 并行获取维度相关信息
-            dimensions_by_keyword_task = time_task(
-                self.semantic_api_client.get_dimension_info_by_keyword_async(
-                    keyword=segmented_words,
-                    dataset_ids=dataset_id_list,
-                    event_id=event_id
-                ),
-                name="按关键字获取维度"
-            )
-            dimensions_by_value_task = time_task(
-                self.semantic_api_client.get_dimension_by_dimension_value_async(
-                    keyword=segmented_words,
-                    dataset_ids=dataset_id_list,
-                    event_id=event_id
-                ),
-                name="按维度值获取维度"
-            )
-
-            dimensions_by_keyword, dimensions_by_value = await asyncio.gather(
-                dimensions_by_keyword_task,
-                dimensions_by_value_task
-            )
-
-            keyword_dimension_ids = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
-
-            # 高基数维度检索（如果启用）
-            hc_dim_ids = []
-            if enable_deep_search:
-                hc_dimensions_by_value = await time_task(
-                    self.semantic_api_client.get_hc_dimension_by_dimension_value_async(
-                        keyword_list=segmented_words,
+                # 3. 获取指标信息
+                await send_event(event_id, {"message": "获取指标信息", "action": "start"}, "message")
+                keyword_metrics = await time_task(
+                    self.semantic_api_client.get_metric_info_by_keyword_async(
+                        keyword=segmented_words,
                         dataset_ids=dataset_id_list,
-                        exclude_dim_ids=keyword_dimension_ids,
                         event_id=event_id
-                    ), name="获取高基数维度信息")
-                hc_dim_ids = [item["dimensionId"] for item in hc_dimensions_by_value if "dimensionId" in item]
+                    ),
+                    name="按关键字获取指标"
+                )
 
-            keyword_dimension_ids.extend(hc_dim_ids)
+                return keyword_dimension_ids, keyword_metrics, segmented_words
 
-            # 3. 获取指标信息
-            await send_event(event_id, {"message": "获取指标信息", "action": "start"}, "message")
-            keyword_metrics = await time_task(
-                self.semantic_api_client.get_metric_info_by_keyword_async(
-                    keyword=segmented_words,
-                    dataset_ids=dataset_id_list,
-                    event_id=event_id
+            async def chart_recommendation_task():
+                """图表推荐，静默执行"""
+                recommended_chart, recommendation_reason = await self.query_intent_analyzer.recommend_chart_without_semantic(
+                    user_question=user_query,
+                    supported_charts_list=["明细表", "聚合表"],
+                    llm_name=llm_name
+                )
+                return recommended_chart, recommendation_reason
+
+            # 3. 并行执行三个任务
+            logger.info("开始并行执行：LLM字段提取、关键字检索和图表推荐...")
+
+            parallel_span = PerfSpan("askdata.semantic_layer.parallel_tasks", meta=perf_meta)
+            (llm_dim_ids, llm_metric_ids), \
+                (keyword_dim_ids, keyword_metrics, segmented_words), \
+                (recommended_chart, recommendation_reason) = await asyncio.gather(
+                llm_extraction_task(),
+                keyword_search_and_semantic_layer_task(),
+                chart_recommendation_task()
+            )
+            parallel_span.end(
+                status="ok",
+                segmented_words=len(segmented_words),
+                llm_dimensions=len(llm_dim_ids),
+                llm_metrics=len(llm_metric_ids)
+            )
+
+            # 检查是否在并行任务完成后被停止
+            if ask_id:
+                await self._async_check_if_stopped(ask_id)
+
+            # 4. 合并LLM提取和关键字检索的结果
+            # 合并维度ID（去重）
+            all_dimension_ids = list(set(keyword_dim_ids + llm_dim_ids))
+
+            # 处理指标：检查LLM提取的指标是否已在keyword_metrics中
+            existing_metric_ids = {metric["metricId"] for metric in keyword_metrics}
+            new_metric_ids = [mid for mid in llm_metric_ids if mid not in existing_metric_ids]
+
+            # 如果有新的指标ID，需要单独查询
+            all_metrics = keyword_metrics
+            if new_metric_ids:
+                metrics_span = PerfSpan("askdata.semantic_layer.metric_enrich", meta=perf_meta)
+                new_metrics = await time_task(
+                    self.semantic_api_client.get_metric_info_by_id_async(metric_ids=new_metric_ids, event_id=event_id),
+                    name="获取LLM提取的指标信息")
+                all_metrics.extend(new_metrics)
+                metrics_span.end(status="ok", new_metric_count=len(new_metrics))
+
+            all_metric_ids = [metric["metricId"] for metric in all_metrics]
+
+            # 5. 使用已经获取的用户权限进行过滤
+            # 过滤权限
+            allowed_dimension_ids, prohibited_dimension_ids = filter_dimensions_by_permissions(
+                all_dimension_ids, user_semantic_permissions
+            )
+            allowed_metric_ids, prohibited_metric_ids = filter_metrics_by_permissions(
+                all_metric_ids, user_semantic_permissions
+            )
+
+            # 6. 获取维度值和维度详情（并行）
+            dim_span = PerfSpan("askdata.semantic_layer.dimension_values", meta=perf_meta)
+            dimension_values_task = time_task(
+                self.semantic_api_client.get_dimension_values_async(
+                    dimension_ids=allowed_dimension_ids, event_id=event_id
                 ),
-                name="按关键字获取指标"
+                name="获取维度值"
+            )
+            dimensions_task = time_task(
+                self.semantic_api_client.get_dimension_info_by_id_async(
+                    dimension_ids=all_dimension_ids, event_id=event_id
+                ),
+                name="获取维度详情"
             )
 
-            return keyword_dimension_ids, keyword_metrics, segmented_words
-
-        async def chart_recommendation_task():
-            """图表推荐，静默执行"""
-            recommended_chart, recommendation_reason = await self.query_intent_analyzer.recommend_chart_without_semantic(
-                user_question=user_query,
-                supported_charts_list=["明细表", "聚合表"],
-                llm_name=llm_name
+            dimension_values, dimensions = await asyncio.gather(
+                dimension_values_task,
+                dimensions_task
             )
-            return recommended_chart, recommendation_reason
+            dim_span.end(status="ok", dimension_count=len(dimensions), dimension_values_count=len(dimension_values))
 
-        # 3. 并行执行三个任务
-        logger.info("开始并行执行：LLM字段提取、关键字检索和图表推荐...")
+            model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
+            if len(model_ids) == 0:
+                raise ValueError("没有检索到任何与当前问题相关的语义信息，请换个问题，或者检查语义层数据集。")
 
-        (llm_dim_ids, llm_metric_ids), \
-            (keyword_dim_ids, keyword_metrics, segmented_words), \
-            (recommended_chart, recommendation_reason) = await asyncio.gather(
-            llm_extraction_task(),
-            keyword_search_and_semantic_layer_task(),
-            chart_recommendation_task()
-        )
+            domain_ids = self._extract_unique_domain_ids(dataset_details)
 
-        # 检查是否在并行任务完成后被停止
-        if ask_id:
-            await self._async_check_if_stopped(ask_id)
+            model_span = PerfSpan("askdata.semantic_layer.model_details", meta=perf_meta)
+            model_details_task = time_task(
+                self.semantic_api_client.get_model_detail_async(model_ids=model_ids),
+                name="获取模型详情"
+            )
+            model_relations_task = time_task(
+                self.semantic_api_client.get_model_relationships_async(model_ids=model_ids),
+                name="获取模型关系"
+            )
+            business_term_task = time_task(
+                self.semantic_api_client.get_business_term_info_async(
+                    keyword=segmented_words,
+                    domain_ids=domain_ids),
+                name="获取业务术语"
+            )
 
-        # 4. 合并LLM提取和关键字检索的结果
-        # 合并维度ID（去重）
-        all_dimension_ids = list(set(keyword_dim_ids + llm_dim_ids))
+            model_details, model_relations, business_term_rows = await asyncio.gather(
+                model_details_task,
+                model_relations_task,
+                business_term_task
+            )
+            model_span.end(
+                status="ok",
+                model_count=len(model_details),
+                relation_count=len(model_relations),
+                business_term_count=len(business_term_rows)
+            )
 
-        # 处理指标：检查LLM提取的指标是否已在keyword_metrics中
-        existing_metric_ids = {metric["metricId"] for metric in keyword_metrics}
-        new_metric_ids = [mid for mid in llm_metric_ids if mid not in existing_metric_ids]
+            # 检查是否在获取模型详情后被停止
+            if ask_id:
+                await self._async_check_if_stopped(ask_id)
 
-        # 如果有新的指标ID，需要单独查询
-        all_metrics = keyword_metrics
-        if new_metric_ids:
-            new_metrics = await time_task(
-                self.semantic_api_client.get_metric_info_by_id_async(metric_ids=new_metric_ids, event_id=event_id),
-                name="获取LLM提取的指标信息")
-            all_metrics.extend(new_metrics)
+            # 将维度和指标简化后进行合并，为交给LLM进一步排除冗余语义做准备
+            merged_dimensions_and_metrics = merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics)
 
-        all_metric_ids = [metric["metricId"] for metric in all_metrics]
+            relevance_span = PerfSpan("askdata.semantic_layer.relevance_filter", meta=perf_meta)
+            await send_event(event_id, {"task_name": "LLM过滤不相关的维度和指标", "task_status": "working"}, "task")
+            exclude_dim_and_metric = await time_task(
+                self.semantic_relevance_filter.filter_irrelevant_fields(
+                    user_query=user_query,
+                    dataset_info=merged_dimensions_and_metrics,
+                    model_relations=model_relations,
+                    llm_name=llm_name
+                ),
+                name="LLM过滤不相关的维度和指标"
+            )
+            await send_event(event_id, {"task_name": "LLM过滤不相关的维度和指标", "task_status": "completed"}, "task")
+            await send_event(event_id, {}, "progress_up")
+            relevance_span.end(status="ok")
 
-        # 5. 使用已经获取的用户权限进行过滤
-        # 过滤权限
-        allowed_dimension_ids, prohibited_dimension_ids = filter_dimensions_by_permissions(
-            all_dimension_ids, user_semantic_permissions
-        )
-        allowed_metric_ids, prohibited_metric_ids = filter_metrics_by_permissions(
-            all_metric_ids, user_semantic_permissions
-        )
+            dimensions, all_metrics, excluded_details = apply_semantic_filter(
+                dimensions=dimensions,
+                all_metrics=all_metrics,
+                exclude_dim_and_metric=exclude_dim_and_metric,
+                log_details=True  # 是否打印详细日志
+            )
+            # 标记无权限的维度和指标
+            for dimension in dimensions:
+                if dimension['dimensionId'] in prohibited_dimension_ids:
+                    dimension['hasPermission'] = False
 
-        # 6. 获取维度值和维度详情（并行）
-        dimension_values_task = time_task(
-            self.semantic_api_client.get_dimension_values_async(
-                dimension_ids=allowed_dimension_ids, event_id=event_id
-            ),
-            name="获取维度值"
-        )
-        dimensions_task = time_task(
-            self.semantic_api_client.get_dimension_info_by_id_async(
-                dimension_ids=all_dimension_ids, event_id=event_id
-            ),
-            name="获取维度详情"
-        )
+            for metric in all_metrics:
+                if metric["metricId"] in prohibited_metric_ids:
+                    metric["hasPermission"] = False
 
-        dimension_values, dimensions = await asyncio.gather(
-            dimension_values_task,
-            dimensions_task
-        )
+            model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
+            await send_event(event_id, {"message": "最终模型信息", "data": {
+                "model_info_list": model_mappings,
+                "dimension_info_list": [
+                    {
+                        "dimension_id": item.get("dimensionId"),
+                        "dimension_name": item.get("dimensionName"),
+                        "model_name": item.get("modelName", None),
+                        "has_permission": item.get("hasPermission", True)
+                    }
+                    for item in dimensions],
+                "metric_info_list": [
+                    {
+                        "metric_id": item.get("metricId"),
+                        "metric_name": item.get("metricName"),
+                        "model_name": item.get("modelName", None),
+                        "has_permission": item.get("hasPermission", True)
+                    }
+                    for item in all_metrics]
+            }},
+                             "final_data")
 
-        model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
-        if len(model_ids) == 0:
-            raise ValueError("没有检索到任何与当前问题相关的语义信息，请换个问题，或者检查语义层数据集。")
+            model_relations = filter_model_relations_by_ids(model_ids, model_relations)
 
-        domain_ids = self._extract_unique_domain_ids(dataset_details)
+            # 这里需要把有关系的模型详情再拉一下（已经存在的模型不需要再次拉），然后放到model_details中
+            # 从model_relations中提取所有涉及的模型ID
+            related_model_ids = set()
+            for relation in model_relations:
+                if relation.get('sourceModelId'):
+                    related_model_ids.add(relation['sourceModelId'])
+                if relation.get('targetModelId'):
+                    related_model_ids.add(relation['targetModelId'])
 
-        model_details_task = time_task(
-            self.semantic_api_client.get_model_detail_async(model_ids=model_ids),
-            name="获取模型详情"
-        )
-        model_relations_task = time_task(
-            self.semantic_api_client.get_model_relationships_async(model_ids=model_ids),
-            name="获取模型关系"
-        )
-        business_term_task = time_task(
-            self.semantic_api_client.get_business_term_info_async(
-                keyword=segmented_words,
-                domain_ids=domain_ids),
-            name="获取业务术语"
-        )
+            # 找出已存在的模型ID
+            existing_model_ids = {model['modelId'] for model in model_details if 'modelId' in model}
 
-        model_details, model_relations, business_term_rows = await asyncio.gather(
-            model_details_task,
-            model_relations_task,
-            business_term_task
-        )
+            # 找出需要补充的模型ID
+            missing_model_ids = list(related_model_ids - existing_model_ids)
 
-        # 检查是否在获取模型详情后被停止
-        if ask_id:
-            await self._async_check_if_stopped(ask_id)
+            # 如果有缺失的模型，获取其详情并合并
+            if missing_model_ids:
+                logger.info(f"发现 {len(missing_model_ids)} 个关联模型需要补充详情")
+                additional_model_details = await time_task(
+                    self.semantic_api_client.get_model_detail_async(model_ids=missing_model_ids),
+                    name="获取关联模型详情"
+                )
+                model_details.extend(additional_model_details)
+                logger.info(f"已补充 {len(additional_model_details)} 个模型详情")
 
-        # 将维度和指标简化后进行合并，为交给LLM进一步排除冗余语义做准备
-        merged_dimensions_and_metrics = merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics)
-
-        await send_event(event_id, {"task_name": "LLM过滤不相关的维度和指标", "task_status": "working"}, "task")
-        exclude_dim_and_metric = await time_task(
-            self.semantic_relevance_filter.filter_irrelevant_fields(
-                user_query=user_query,
-                dataset_info=merged_dimensions_and_metrics,
+            # 9. 构建最终的语义层
+            semantic_layer_original = dict(
+                dataset_details=dataset_details,
+                dimensions=dimensions,
+                dimension_values=dimension_values,
+                metrics=all_metrics,
+                model_details=model_details,
                 model_relations=model_relations,
-                llm_name=llm_name
-            ),
-            name="LLM过滤不相关的维度和指标"
-        )
-        await send_event(event_id, {"task_name": "LLM过滤不相关的维度和指标", "task_status": "completed"}, "task")
-        await send_event(event_id, {}, "progress_up")
-
-        dimensions, all_metrics, excluded_details = apply_semantic_filter(
-            dimensions=dimensions,
-            all_metrics=all_metrics,
-            exclude_dim_and_metric=exclude_dim_and_metric,
-            log_details=True  # 是否打印详细日志
-        )
-
-        # 标记无权限的维度和指标
-        for dimension in dimensions:
-            if dimension['dimensionId'] in prohibited_dimension_ids:
-                dimension['hasPermission'] = False
-
-        for metric in all_metrics:
-            if metric["metricId"] in prohibited_metric_ids:
-                metric["hasPermission"] = False
-
-        model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
-        await send_event(event_id, {"message": "最终模型信息", "data": {
-            "model_info_list": model_mappings,
-            "dimension_info_list": [
-                {
-                    "dimension_id": item.get("dimensionId"),
-                    "dimension_name": item.get("dimensionName"),
-                    "model_name": item.get("modelName", None),
-                    "has_permission": item.get("hasPermission", True)
-                }
-                for item in dimensions],
-            "metric_info_list": [
-                {
-                    "metric_id": item.get("metricId"),
-                    "metric_name": item.get("metricName"),
-                    "model_name": item.get("modelName", None),
-                    "has_permission": item.get("hasPermission", True)
-                }
-                for item in all_metrics]
-        }},
-                         "final_data")
-
-        model_relations = filter_model_relations_by_ids(model_ids, model_relations)
-
-        # 这里需要把有关系的模型详情再拉一下（已经存在的模型不需要再次拉），然后放到model_details中
-        # 从model_relations中提取所有涉及的模型ID
-        related_model_ids = set()
-        for relation in model_relations:
-            if relation.get('sourceModelId'):
-                related_model_ids.add(relation['sourceModelId'])
-            if relation.get('targetModelId'):
-                related_model_ids.add(relation['targetModelId'])
-
-        # 找出已存在的模型ID
-        existing_model_ids = {model['modelId'] for model in model_details if 'modelId' in model}
-
-        # 找出需要补充的模型ID
-        missing_model_ids = list(related_model_ids - existing_model_ids)
-
-        # 如果有缺失的模型，获取其详情并合并
-        if missing_model_ids:
-            logger.info(f"发现 {len(missing_model_ids)} 个关联模型需要补充详情")
-            additional_model_details = await time_task(
-                self.semantic_api_client.get_model_detail_async(model_ids=missing_model_ids),
-                name="获取关联模型详情"
+                business_term_rows=business_term_rows
             )
-            model_details.extend(additional_model_details)
-            logger.info(f"已补充 {len(additional_model_details)} 个模型详情")
 
-        # 9. 构建最终的语义层
-        semantic_layer_original = dict(
-            dataset_details=dataset_details,
-            dimensions=dimensions,
-            dimension_values=dimension_values,
-            metrics=all_metrics,
-            model_details=model_details,
-            model_relations=model_relations,
-            business_term_rows=business_term_rows
-        )
+            process_span = PerfSpan("askdata.semantic_layer.process", meta=perf_meta)
+            processed_semantic_layer = process_semantic_layer(
+                semantic_layer_original,
+                user_semantic_permissions,
+                segmented_words
+            )
+            process_span.end(status="ok")
 
-        processed_semantic_layer = process_semantic_layer(
-            semantic_layer_original,
-            user_semantic_permissions,
-            segmented_words
-        )
+            logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
 
-        logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
+            await send_event(event_id, {}, "stream_end")
 
-        await send_event(event_id, {}, "stream_end")
+            logger.info(f"recommended_chart: {recommended_chart}, recommendation_reason: {recommendation_reason}")
 
-        logger.info(f"recommended_chart: {recommended_chart}, recommendation_reason: {recommendation_reason}")
-
-        return processed_semantic_layer, [model_detail["modelId"] for model_detail in model_details], recommended_chart, recommendation_reason
+            total_span.end(status="ok", model_count=len(model_details))
+            return processed_semantic_layer, [model_detail["modelId"] for model_detail in model_details], recommended_chart, recommendation_reason
+        except Exception as e:
+            total_span.end(status="error", error=str(e))
+            raise
 
     async def analyze_user_query_stream(
             self, event_id: str, user_query: str, rewritten_question: Optional[str], round_id: Optional[str],
@@ -566,8 +602,20 @@ class AskdataService:
         if ask_id:
             await self._async_check_if_stopped(ask_id)
 
-        await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
-                                            llm_name=llm_name)
+        log_thinking = os.getenv("ASKDATA_PERF_LOG_THINKING", "1").lower() not in {"0", "false", "no", "off"}
+        if log_thinking:
+            perf_meta = {"ask_id": ask_id, "event_id": event_id, "llm": llm_name}
+            analysis_span = PerfSpan("askdata.analysis_stream", meta=perf_meta)
+            try:
+                await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
+                                                    llm_name=llm_name)
+                analysis_span.end(status="ok")
+            except Exception as e:
+                analysis_span.end(status="error", error=str(e))
+                raise
+        else:
+            await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
+                                                llm_name=llm_name)
 
     async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any],
                                  recommended_chart: str, ask_id: str = None) -> Optional[
