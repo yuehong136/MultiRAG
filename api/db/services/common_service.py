@@ -1,6 +1,7 @@
 # common_services.py
 import uuid
 import logging
+import functools
 from datetime import datetime, timezone
 from typing import Any, Type, Generic, TypeVar
 
@@ -17,6 +18,38 @@ from common.misc_utils import get_uuid
 
 # 配置日志
 logger = logging.getLogger(__name__)
+
+RETRYABLE_DB_EXCEPTIONS = (
+    exc.OperationalError,
+    exc.DisconnectionError,
+    exc.InterfaceError,
+    exc.TimeoutError,
+    exc.PendingRollbackError,
+)
+
+
+def _get_session_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Session | None:
+    """从函数参数中提取 Session，用于失败时自动回滚。"""
+    db = kwargs.get("db")
+    if isinstance(db, Session):
+        return db
+
+    for arg in args:
+        if isinstance(arg, Session):
+            return arg
+
+    for value in kwargs.values():
+        if isinstance(value, Session):
+            return value
+
+    return None
+
+
+def _safe_rollback(db: Session, func_name: str) -> None:
+    try:
+        db.rollback()
+    except Exception as rollback_error:
+        logger.warning(f"[DB Retry] {func_name} 回滚失败: {rollback_error}")
 
 
 def retry_db_operation(max_attempts=3, min_wait=1, max_wait=5):
@@ -41,24 +74,29 @@ def retry_db_operation(max_attempts=3, min_wait=1, max_wait=5):
             pass
     """
     def decorator(func):
-        @retry(
-            stop=stop_after_attempt(max_attempts),
-            wait=wait_exponential(multiplier=1, min=min_wait, max=max_wait),
-            retry=retry_if_exception_type((
-                exc.OperationalError,      # MySQL/PostgreSQL 操作错误（连接断开等）
-                exc.DisconnectionError,    # 连接断开错误
-                exc.InterfaceError,        # 数据库接口错误
-                exc.TimeoutError,          # 超时错误
-            )),
-            before_sleep=lambda retry_state: logger.warning(
+        def _before_sleep(retry_state):
+            logger.warning(
                 f"[DB Retry] {func.__name__} 执行失败，"
                 f"{retry_state.next_action.sleep:.1f}秒后重试 "
                 f"(第 {retry_state.attempt_number}/{max_attempts} 次重试)"
-            ),
+            )
+
+        @retry(
+            stop=stop_after_attempt(max_attempts),
+            wait=wait_exponential(multiplier=1, min=min_wait, max=max_wait),
+            retry=retry_if_exception_type(RETRYABLE_DB_EXCEPTIONS),
+            before_sleep=_before_sleep,
             reraise=True,  # 重试失败后重新抛出异常
         )
+        @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
+            db = _get_session_from_call(args, kwargs)
+            try:
+                return func(*args, **kwargs)
+            except RETRYABLE_DB_EXCEPTIONS:
+                if db is not None:
+                    _safe_rollback(db, func.__name__)
+                raise
         return wrapper
     return decorator
 
@@ -358,6 +396,7 @@ class CommonService(Generic[ModelType]):
             return 0
 
     @classmethod
+    @retry_db_operation(max_attempts=3)
     def filter_update(cls, db: Session, filters: list[Any], update_data: dict[str, Any]):
         """
         批量更新方法（SQLAlchemy 2.0 Core 风格）。
@@ -370,22 +409,31 @@ class CommonService(Generic[ModelType]):
         Returns:
             bool: 是否有记录被更新
         """
-        update_data["update_time"] = cls.current_timestamp()
-        update_data["update_date"] = cls.current_datetime()
-        stmt = update(cls.model).where(*filters).values(update_data)
-        result = db.execute(stmt)
-        db.commit()
-        return result.rowcount > 0
+        try:
+            update_data["update_time"] = cls.current_timestamp()
+            update_data["update_date"] = cls.current_datetime()
+            stmt = update(cls.model).where(*filters).values(update_data)
+            result = db.execute(stmt)
+            db.commit()
+            return result.rowcount > 0
+        except Exception:
+            db.rollback()
+            raise
 
     @classmethod
+    @retry_db_operation(max_attempts=3)
     def filter_delete(cls, db: Session, filters: list[Any]) -> int:
         """
         根据条件批量删除记录（SQLAlchemy 2.0 Core 风格）。
         """
-        stmt = delete(cls.model).where(*filters)
-        result = db.execute(stmt)
-        db.commit()
-        return result.rowcount
+        try:
+            stmt = delete(cls.model).where(*filters)
+            result = db.execute(stmt)
+            db.commit()
+            return result.rowcount
+        except Exception:
+            db.rollback()
+            raise
 
     @classmethod
     def cut_list(cls, tar_list: list[Any], n: int) -> list[tuple]:

@@ -11,12 +11,13 @@ import os
 import sys
 import inspect
 from sqlalchemy import create_engine, String, DateTime, BigInteger, event, Integer, Float, Boolean, Text, text, JSON, select
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, Session, object_session, DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.exc import OperationalError, DisconnectionError, SQLAlchemyError
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.orm.attributes import get_history
 from sqlalchemy.dialects.postgresql import JSONB
-from typing import Type
+from typing import Any, Type
 import uuid
 from datetime import datetime, timezone
 import time
@@ -35,12 +36,37 @@ DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
 DATABASE = decrypt_database_config(name=DATABASE_TYPE)
 database_config = DATABASE
 
-DATABASE_URL = (
-    f"{database_config['name']}://"
-    f"{database_config['user']}:{database_config['password']}@"
-    f"{database_config['host']}:{database_config['port']}/"
-    f"{database_config.get('dbname', 'postgres')}"
-)
+def build_database_url(db_config: dict[str, Any]) -> str:
+    """
+    使用 SQLAlchemy URL.create 构建连接串，避免手动拼接导致特殊字符解析错误。
+    """
+    drivername = str(db_config.get("name", "postgresql")).strip()
+    drivername_lower = drivername.lower()
+
+    if drivername_lower.startswith("sqlite"):
+        sqlite_db = db_config.get("dbname") or db_config.get("database") or ":memory:"
+        return URL.create(drivername="sqlite+pysqlite", database=str(sqlite_db)).render_as_string(
+            hide_password=False
+        )
+
+    database = db_config.get("dbname") or db_config.get("database")
+    if not database and drivername_lower.startswith("postgresql"):
+        database = "postgres"
+
+    port = db_config.get("port")
+    if isinstance(port, str):
+        port = port.strip() or None
+    return URL.create(
+        drivername=drivername,
+        username=db_config.get("user"),
+        password=db_config.get("password"),
+        host=db_config.get("host"),
+        port=int(port) if port is not None else None,
+        database=database,
+    ).render_as_string(hide_password=False)
+
+
+DATABASE_URL = build_database_url(database_config)
 
 
 def get_engine_config(db_config: dict) -> dict:
@@ -101,11 +127,11 @@ def get_engine_config(db_config: dict) -> dict:
 
 
 engine_config = get_engine_config(database_config)
-engine = create_engine(
-    DATABASE_URL,
-    client_encoding='utf8',
-    **engine_config
-)
+engine_kwargs = dict(engine_config)
+if str(database_config.get("name", "")).lower().startswith("postgresql"):
+    engine_kwargs["client_encoding"] = "utf8"
+
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 
 
 # ==================== 连接池事件监听器 ====================

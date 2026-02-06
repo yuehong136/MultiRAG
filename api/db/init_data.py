@@ -131,15 +131,17 @@ def init_llm_factory(db: Session):
         llm_infos = info.pop("llm")
         try:
             LLMFactoriesService.save(db, **info)
-        except Exception:
-            pass
+        except Exception as e:
+            db.rollback()
+            logging.warning(f"初始化 LLMFactory 失败，已回滚: {e}")
         LLMService.filter_delete(db, [LLM.fid == factory_llm_info["name"]])
         for llm_info in llm_infos:
             llm_info["fid"] = factory_llm_info["name"]
             try:
                 LLMService.save(db, **llm_info)
-            except Exception:
-                pass
+            except Exception as e:
+                db.rollback()
+                logging.warning(f"初始化 LLM 失败，已回滚: {e}")
 
     LLMFactoriesService.filter_delete(db, [(LLMFactories.name == "Local") | (LLMFactories.name == "novita.ai")])
     LLMService.filter_delete(db, [LLM.fid == "Local"])
