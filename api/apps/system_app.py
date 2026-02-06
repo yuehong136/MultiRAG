@@ -27,7 +27,7 @@ from common import settings
 from timeit import default_timer as timer
 from core.utils.redis_conn import REDIS_CONN
 from api.apps import manager
-from api.utils.health_utils import run_health_checks
+from api.utils.health_utils import run_health_checks, is_health_result_ok
 
 router = APIRouter()
 
@@ -138,12 +138,17 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
 
     st = timer()
     try:
-        settings.STORAGE_IMPL.health()
+        health_result = settings.STORAGE_IMPL.health()
+        storage_ok = is_health_result_ok(health_result)
         res["storage"] = {
             "storage": settings.STORAGE_IMPL_TYPE.lower(),
-            "status": "green",
+            "status": "green" if storage_ok else "red",
             "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
         }
+        if not storage_ok:
+            res["storage"]["error"] = f"storage health returned unhealthy result: {health_result!r}"
+            if isinstance(health_result, dict):
+                res["storage"]["health"] = health_result
     except Exception as e:
         res["storage"] = {
             "storage": settings.STORAGE_IMPL_TYPE.lower(),

@@ -18,6 +18,39 @@ def _ok_nok(ok: bool) -> str:
     return "ok" if ok else "nok"
 
 
+def is_health_result_ok(result: object) -> bool:
+    """
+    Normalize health() return values from different backends.
+
+    Notes:
+    - Some storage backends return strict booleans.
+    - Some return dicts with status/alive fields.
+    - Some return non-bool values (e.g., SDK response/None) and only raise on failure.
+      Keep historical behavior for those by treating them as success.
+    """
+    if isinstance(result, bool):
+        return result
+
+    if isinstance(result, dict):
+        status = result.get("status")
+        if isinstance(status, str):
+            lowered = status.lower()
+            if lowered in {"green", "ok", "alive", "healthy", "up"}:
+                return True
+            if lowered in {"red", "nok", "timeout", "unhealthy", "down", "error", "failed"}:
+                return False
+
+        alive = result.get("alive")
+        if isinstance(alive, bool):
+            return alive
+
+        ok = result.get("ok")
+        if isinstance(ok, bool):
+            return ok
+
+    return True
+
+
 def check_db() -> tuple[bool, dict]:
     """检查数据库连接是否正常"""
     st = timer()
@@ -86,8 +119,16 @@ def check_doc_engine() -> tuple[bool, dict]:
 def check_storage() -> tuple[bool, dict]:
     st = timer()
     try:
-        settings.STORAGE_IMPL.health()
-        return True, {"elapsed": f"{(timer() - st) * 1000.0:.1f}"}
+        health_result = settings.STORAGE_IMPL.health()
+        ok = is_health_result_ok(health_result)
+        meta = {"elapsed": f"{(timer() - st) * 1000.0:.1f}"}
+
+        if isinstance(health_result, dict):
+            meta["health"] = health_result
+        if not ok:
+            meta["error"] = f"storage health returned unhealthy result: {health_result!r}"
+
+        return ok, meta
     except Exception as e:
         return False, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", "error": str(e)}
 
