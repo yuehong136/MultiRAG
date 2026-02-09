@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import json
 import logging
@@ -28,7 +29,8 @@ from api.db.db_models import get_db, APIToken, Task
 from api.db.services.canvas_service import (
     CanvasTemplateService,
     UserCanvasService,
-    API4ConversationService
+    API4ConversationService,
+    completion as agent_completion,
 )
 from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
@@ -519,6 +521,63 @@ async def run(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no"
         }
+    )
+
+
+@router.post('/{canvas_id}/completion', summary="Agent Completion (实验性)", response_description="SSE流式返回Agent推理结果")
+async def exp_agent_completion(
+        canvas_id: str,
+        request_body: dict,
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+):
+    """
+    实验性Agent Completion端点，支持trace返回。
+
+    通过 canvas_id 指定Agent，流式执行并返回SSE事件。
+    当 return_trace=True 时，node_finished 事件会附带完整 trace 链。
+    """
+    tenant_id = user.id
+    return_trace = bool(request_body.get("return_trace", False))
+
+    async def generate():
+        trace_items = []
+        async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=canvas_id, **request_body):
+            if isinstance(answer, str):
+                try:
+                    ans = json.loads(answer[5:])  # remove "data:"
+                except Exception:
+                    continue
+
+            event = ans.get("event")
+            if event == "node_finished":
+                if return_trace:
+                    data = ans.get("data", {})
+                    trace_items.append(
+                        {
+                            "component_id": data.get("component_id"),
+                            "trace": [copy.deepcopy(data)],
+                        }
+                    )
+                    ans.setdefault("data", {})["trace"] = trace_items
+                    answer = "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
+                yield answer
+
+            if event not in ("message", "message_end"):
+                continue
+
+            yield answer
+
+        yield "data:[DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -1392,6 +1451,7 @@ def trace(
 def sessions(
         canvas_id: str,
         user_id: str | None = Query(None, description="用户ID筛选"),
+        exp_user_id: str | None = Query(None, description="实验用户ID筛选"),
         page: int = Query(1, description="页码"),
         page_size: int = Query(30, description="每页数量"),
         orderby: str = Query("update_time", description="排序字段"),
@@ -1454,16 +1514,20 @@ def sessions(
     - 支持日期范围查询
     """
     tenant_id = user.id
-    
+
     if not UserCanvasService.accessible(db, canvas_id, tenant_id):
         return get_json_result(
             data=False,
             retmsg='Only owner of canvas authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR
         )
-    
+
+    if exp_user_id:
+        sess = API4ConversationService.get_names(db, canvas_id, exp_user_id)
+        return get_json_result(data={"total": len(sess), "sessions": sess})
+
     include_dsl = dsl
-    
+
     try:
         total, sess = API4ConversationService.get_list(
             db, canvas_id, tenant_id,
@@ -1471,11 +1535,80 @@ def sessions(
             orderby, desc,
             None, user_id,
             include_dsl,
-            keywords, from_date, to_date
+            keywords, from_date, to_date,
+            exp_user_id=exp_user_id,
         )
         return get_json_result(data={"total": total, "sessions": sess})
     except Exception as e:
         return server_error_response(e)
+
+
+@router.put('/{canvas_id}/sessions', summary="创建Canvas会话", response_description="成功创建会话")
+async def set_session(
+        canvas_id: str,
+        request_body: dict,
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+):
+    """
+    为指定Canvas创建一个新的会话。
+
+    参数：
+    - **canvas_id**: Canvas ID
+    - **name**: 可选，会话名称
+
+    返回：
+    - dict: 新建会话的完整信息
+    """
+    tenant_id = user.id
+    ok, cvs = UserCanvasService.get_by_id(db, canvas_id)
+    assert ok, "Agent not found."
+    if not isinstance(cvs.dsl, str):
+        cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
+    session_id = get_uuid()
+    canvas = Canvas(cvs.dsl, tenant_id, canvas_id, canvas_id=cvs.id)
+    canvas.reset()
+    conv = {
+        "id": session_id,
+        "name": request_body.get("name", ""),
+        "dialog_id": cvs.id,
+        "user_id": tenant_id,
+        "exp_user_id": tenant_id,
+        "message": [],
+        "source": "agent",
+        "dsl": cvs.dsl,
+        "reference": [],
+    }
+    API4ConversationService.save(db, **conv)
+    return get_json_result(data=conv)
+
+
+@router.get('/{canvas_id}/sessions/{session_id}', summary="获取单个Canvas会话", response_description="成功获取会话详情")
+def get_session(
+        canvas_id: str,
+        session_id: str,
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+):
+    """
+    获取指定Canvas下的单个会话详情。
+
+    参数：
+    - **canvas_id**: Canvas ID
+    - **session_id**: 会话 ID
+
+    返回：
+    - dict: 会话的完整信息
+    """
+    tenant_id = user.id
+    if not UserCanvasService.accessible(db, canvas_id, tenant_id):
+        return get_json_result(
+            data=False,
+            retmsg='Only owner of canvas authorized for this operation.',
+            retcode=RetCode.OPERATING_ERROR,
+        )
+    ok, conv = API4ConversationService.get_by_id(db, session_id)
+    return get_json_result(data=conv.to_dict())
 
 
 @router.get('/prompts', summary="获取系统提示词", response_description="成功获取提示词")

@@ -1137,8 +1137,10 @@ class API4Conversation(BaseModel):
     __table_args__ = {"schema": "usr_ai"}
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True, doc="conversation name")
     dialog_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     user_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="user_id")
+    exp_user_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="exp_user_id")
     message: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True)
     reference: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True, default=[])
     tokens: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)

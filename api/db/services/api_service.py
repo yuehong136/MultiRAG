@@ -89,12 +89,13 @@ class API4ConversationService(CommonService):
         items_per_page: int,
         orderby: str,
         desc: bool,
-        id: str | None,
+        id: str | None = None,
         user_id: str | None = None,
         include_dsl: bool = True,
         keywords: str = "",
         from_date: str | None = None,
         to_date: str | None = None,
+        exp_user_id: str | None = None,
     ) -> tuple[int, list[dict]]:
         """
         返回： (count, sessions_as_dicts)
@@ -142,6 +143,8 @@ class API4ConversationService(CommonService):
             base = base.where(cls.model.create_date >= _from)
         if _to:
             base = base.where(cls.model.create_date <= _to)
+        if exp_user_id:
+            base = base.where(cls.model.exp_user_id == exp_user_id)
 
         # 排序
         order_col = getattr(cls.model, orderby)
@@ -155,6 +158,19 @@ class API4ConversationService(CommonService):
 
         rows = db.execute(stmt).mappings().all()
         return total, [dict(r) for r in rows]
+
+    @classmethod
+    def get_names(cls, db: Session, dialog_id: str, exp_user_id: str) -> list[dict]:
+        stmt = (
+            select(cls.model.id, cls.model.name)
+            .where(
+                cls.model.dialog_id == dialog_id,
+                cls.model.exp_user_id == exp_user_id,
+            )
+            .order_by(sa_desc(cls.model.create_date))
+        )
+        rows = db.execute(stmt).mappings().all()
+        return [dict(r) for r in rows]
 
     # ---------- 追加消息 & 自增轮次 ----------
     @classmethod
