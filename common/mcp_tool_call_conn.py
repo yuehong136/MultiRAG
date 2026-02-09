@@ -10,6 +10,8 @@ from typing import Any, Literal, Protocol
 
 # MCP 服务器初始化超时时间（秒），可通过环境变量配置
 MCP_INIT_TIMEOUT = int(os.environ.get("MCP_INIT_TIMEOUT", 15))
+# MCP 工具调用超时时间（秒），可通过环境变量配置
+MCP_TOOL_CALL_TIMEOUT = int(os.environ.get("MCP_TOOL_CALL_TIMEOUT", 60))
 
 from typing_extensions import override
 
@@ -21,6 +23,15 @@ from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
 
 MCPTaskType = Literal["list_tools", "tool_call"]
 MCPTask = tuple[MCPTaskType, dict[str, Any], asyncio.Queue[Any]]
+
+
+class MCPToolTimeoutError(Exception):
+    """MCP 工具调用内部超时异常。
+
+    与 asyncio.TimeoutError / concurrent.futures.TimeoutError 区分开，
+    避免 Python 3.12+ 中两者是同一个类 (builtins.TimeoutError) 导致
+    except 分支错误捕获的问题。
+    """
 
 
 class ToolCallSession(Protocol):
@@ -155,7 +166,7 @@ class MCPToolCallSession(ToolCallSession):
             except asyncio.CancelledError:
                 break
 
-    async def _call_mcp_server(self, task_type: MCPTaskType, request_timeout: float | int = 8, **kwargs) -> Any:
+    async def _call_mcp_server(self, task_type: MCPTaskType, request_timeout: float | int = MCP_TOOL_CALL_TIMEOUT, **kwargs) -> Any:
         if self._close:
             raise ValueError("Session is closed")
 
@@ -168,11 +179,15 @@ class MCPToolCallSession(ToolCallSession):
                 raise result
             return result
         except asyncio.TimeoutError:
-            raise asyncio.TimeoutError(f"MCP task '{task_type}' timeout after {request_timeout}s")
+            # 用自定义异常包装，避免 Python 3.12+ 中 asyncio.TimeoutError
+            # 与 concurrent.futures.TimeoutError 是同一类导致外层 except 分支误捕获
+            raise MCPToolTimeoutError(
+                f"MCP tool call '{task_type}' timed out after {request_timeout}s"
+            ) from None
         except Exception:
             raise
 
-    async def _call_mcp_tool(self, name: str, arguments: dict[str, Any], request_timeout: float | int = 10) -> str:
+    async def _call_mcp_tool(self, name: str, arguments: dict[str, Any], request_timeout: float | int = MCP_TOOL_CALL_TIMEOUT) -> str:
         result: CallToolResult = await self._call_mcp_server("tool_call", name=name, arguments=arguments,
                                                              request_timeout=request_timeout)
 
@@ -185,7 +200,7 @@ class MCPToolCallSession(ToolCallSession):
         else:
             return f"Unsupported content type {type(result.content)}"
 
-    async def _get_tools_from_mcp_server(self, request_timeout: float | int = 8) -> list[Tool]:
+    async def _get_tools_from_mcp_server(self, request_timeout: float | int = 15) -> list[Tool]:
         try:
             result: ListToolsResult = await self._call_mcp_server("list_tools", request_timeout=request_timeout)
             return result.tools
@@ -240,15 +255,25 @@ class MCPToolCallSession(ToolCallSession):
             raise
 
     @override
-    def tool_call(self, name: str, arguments: dict[str, Any], timeout: float | int = 10) -> str:
+    def tool_call(self, name: str, arguments: dict[str, Any], timeout: float | int = MCP_TOOL_CALL_TIMEOUT) -> str:
         if self._close:
             return "Error: Session is closed"
 
-        future = asyncio.run_coroutine_threadsafe(self._call_mcp_tool(name, arguments), self._event_loop)
+        # 将 timeout 传递给内层 _call_mcp_tool，确保 MCP 实际调用也使用相同的超时
+        future = asyncio.run_coroutine_threadsafe(
+            self._call_mcp_tool(name, arguments, request_timeout=timeout),
+            self._event_loop
+        )
         try:
-            return future.result(timeout=timeout)
+            # 外层 future 超时略大于内层，给调度留缓冲
+            return future.result(timeout=timeout + 10)
+        except MCPToolTimeoutError as e:
+            # 内层 MCP 调用超时（从协程内部抛出），说明 MCP 服务端在 timeout 秒内未响应
+            logging.error(f"MCP tool '{name}' timed out on server {self._mcp_server.id}: {e}")
+            return f"Timeout calling tool '{name}' (timeout={timeout}s). The MCP server did not respond in time."
         except FuturesTimeoutError:
-            logging.error(f"Timeout calling tool '{name}' on MCP server: {self._mcp_server.id} (timeout={timeout})")
+            # 外层 future 超时（调度层面），一般不会触发（因为外层 timeout 更大）
+            logging.error(f"Future timeout calling tool '{name}' on MCP server: {self._mcp_server.id} (timeout={timeout})")
             return f"Timeout calling tool '{name}' (timeout={timeout})."
         except Exception as e:
             logging.exception(f"Error calling tool '{name}' on MCP server: {self._mcp_server.id}")

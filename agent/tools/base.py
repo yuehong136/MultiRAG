@@ -23,7 +23,7 @@ from typing import TypedDict, List, Any
 from agent.component.base import ComponentParamBase, ComponentBase
 from common.misc_utils import hash_str2int
 from core.prompts.generator import kb_prompt
-from common.mcp_tool_call_conn import MCPToolCallSession, ToolCallSession
+from common.mcp_tool_call_conn import MCPToolCallSession, ToolCallSession, MCP_TOOL_CALL_TIMEOUT
 from timeit import default_timer as timer
 
 
@@ -65,7 +65,7 @@ class LLMToolPluginCallSession(ToolCallSession):
         tool_obj = self.tools_map[name]
         if isinstance(tool_obj, MCPToolCallSession):
             # MCP 调用仍然是同步的，需要放到线程中
-            resp = await asyncio.to_thread(tool_obj.tool_call, name, arguments, 60)
+            resp = await asyncio.to_thread(tool_obj.tool_call, name, arguments, MCP_TOOL_CALL_TIMEOUT)
         else:
             if hasattr(tool_obj, "invoke_async") and asyncio.iscoroutinefunction(tool_obj.invoke_async):
                 resp = await tool_obj.invoke_async(**arguments)
