@@ -919,6 +919,13 @@
             "rank": "960",
             "llm": [
                 {
+                    "llm_name": "kimi-k2-thinking",
+                    "tags": "LLM,CHAT,256k",
+                    "max_tokens": 262144,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
                     "llm_name": "kimi-k2.5",
                     "tags": "LLM,CHAT,256k",
                     "max_tokens": 256000,
@@ -927,13 +934,6 @@
                 },
                 {
                     "llm_name": "kimi-k2-0905-preview",
-                    "tags": "LLM,CHAT,256k",
-                    "max_tokens": 262144,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "kimi-k2-thinking",
                     "tags": "LLM,CHAT,256k",
                     "max_tokens": 262144,
                     "mdl_type": "chat",
