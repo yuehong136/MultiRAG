@@ -588,8 +588,6 @@ class AddLLMRequest(BaseModel):
     aws_role_arn: str | None = None
     fish_audio_ak: str | None = None
     fish_audio_refid: str | None = None
-    hunyuan_sid: str | None = None
-    hunyuan_sk: str | None = None
     tencent_cloud_sid: str | None = None
     tencent_cloud_sk: str | None = None
     spark_api_password: str | None = None
@@ -1027,10 +1025,6 @@ POST
         # For VolcEngine, due to its special authentication method
         # Assemble ark_api_key endpoint_id into api_key
         api_key = apikey_json(["ark_api_key", "endpoint_id"])
-
-    elif factory == "Tencent Hunyuan":
-        req["api_key"] = apikey_json(["hunyuan_sid", "hunyuan_sk"])
-        return set_api_key(SetAPIKeyRequest(**req), db, user)
 
     elif factory == "Tencent Cloud":
         req["api_key"] = apikey_json(["tencent_cloud_sid", "tencent_cloud_sk"])
