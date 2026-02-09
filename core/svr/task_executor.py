@@ -2487,11 +2487,14 @@ async def do_handle_task(db, task):
         task_tenant_id = task["tenant_id"]
         task_embedding_id = task["embd_id"]
         task_language = task["language"]
-        task_llm_id = task["parser_config"].get("llm_id") or task["llm_id"]
-
-        # 解析配置
         task_data = json.loads(task.get("chunk_ids", "{}"))
-        enable_sse = task_data.get("enable_sse", False)
+        config = task_data.get("config", {}) or {}
+        task_parser_config = (task.get("parser_config") or config.get("parser_config") or {})
+        task_llm_id = task_parser_config.get("llm_id") or config.get("llm_id") or task.get("llm_id")
+        if not task_llm_id:
+            raise ValueError(f"analyze_v2 task {task_id} missing llm_id configuration")
+
+        enable_sse = task_data.get("enable_sse", config.get("enable_sse", False))
 
         # 创建进度回调
         progress_callback_sse = partial(
@@ -2537,7 +2540,7 @@ async def do_handle_task(db, task):
     task_tenant_id = task["tenant_id"]
     task_embedding_id = task["embd_id"]
     task_language = task["language"]
-    task_llm_id = task["parser_config"].get("llm_id") or task["llm_id"]
+    task_llm_id = (task.get("parser_config") or {}).get("llm_id") or task["llm_id"]
     task["llm_id"] = task_llm_id
     task_dataset_id = task.get("kb_id")  # analyze_v2 之外的任务必须有 kb_id
     task_doc_id = task["doc_id"]
