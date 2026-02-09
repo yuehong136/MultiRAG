@@ -66,6 +66,11 @@ class LLMToolPluginCallSession(ToolCallSession):
         if isinstance(tool_obj, MCPToolCallSession):
             # MCP 调用仍然是同步的，需要放到线程中
             resp = await asyncio.to_thread(tool_obj.tool_call, name, arguments, MCP_TOOL_CALL_TIMEOUT)
+            # Phase 4: 将 MCP 服务端日志/进度通过 callback 上报前端
+            # 兼容性：无日志时 _recent_logs 为空列表，自动跳过
+            recent_logs = getattr(tool_obj, "_recent_logs", None)
+            if recent_logs:
+                self.callback(f"{name}:mcp_logs", {}, "\n".join(recent_logs))
         else:
             if hasattr(tool_obj, "invoke_async") and asyncio.iscoroutinefunction(tool_obj.invoke_async):
                 resp = await tool_obj.invoke_async(**arguments)

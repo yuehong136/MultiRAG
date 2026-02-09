@@ -304,8 +304,18 @@ class Agent(LLM, ToolBase):
         else:
             user_request = history[-1]["content"]
 
-        def build_task_desc(prompt: str, user_request: str, user_defined_prompt: dict | None = None) -> str:
-            """Build a minimal task_desc by concatenating prompt, query, and tool schemas."""
+        def build_task_desc(
+            prompt: str,
+            user_request: str,
+            user_defined_prompt: dict | None = None,
+            mcp_instructions: list[str] | None = None,
+        ) -> str:
+            """Build a minimal task_desc by concatenating prompt, query, and tool schemas.
+
+            Phase 1 增强：注入 MCP 服务端 instructions（工作流说明等），
+            让 LLM 获得完整的服务使用指南，不再只从工具描述碎片中猜测。
+            兼容性：mcp_instructions 为空或 None 时与改动前行为完全一致。
+            """
             user_defined_prompt = user_defined_prompt or {}
 
             task_desc = (
@@ -318,6 +328,11 @@ class Agent(LLM, ToolBase):
             if user_defined_prompt:
                 udp_json = json.dumps(user_defined_prompt, ensure_ascii=False, indent=2)
                 task_desc += "\n### User Defined Prompts\n" + udp_json + "\n"
+
+            # Phase 1: 注入 MCP 服务端 instructions
+            if mcp_instructions:
+                task_desc += "\n### MCP Server Instructions\n"
+                task_desc += "\n---\n".join(mcp_instructions) + "\n"
 
             return task_desc
 
@@ -389,8 +404,16 @@ class Agent(LLM, ToolBase):
             else:
                 hist.append({"role": "user", "content": content})
 
+        # Phase 1: 收集所有 MCP 服务端的 instructions
+        # 兼容性：未提供 instructions 的服务器返回 None，自动过滤
+        mcp_instructions = [
+            s.server_instructions
+            for s in self._mcp_sessions
+            if getattr(s, "server_instructions", None)
+        ]
+
         st = timer()
-        task_desc = build_task_desc(prompt, user_request, user_defined_prompt)
+        task_desc = build_task_desc(prompt, user_request, user_defined_prompt, mcp_instructions)
         self.callback("analyze_task", {}, task_desc, elapsed_time=timer()-st)
         for _ in range(self._param.max_rounds + 1):
             if self.check_if_canceled("Agent streaming"):
@@ -401,6 +424,9 @@ class Agent(LLM, ToolBase):
             hist.append({"role": "assistant", "content": response})
             try:
                 functions = json_repair.loads(re.sub(r"```.*", "", response))
+                # 兼容：部分 LLM 只调一个工具时返回单个对象 {...} 而非数组 [{...}]
+                if isinstance(functions, dict) and "name" in functions:
+                    functions = [functions]
                 if not isinstance(functions, list):
                     raise TypeError(f"List should be returned, but `{functions}`")
                 for f in functions:

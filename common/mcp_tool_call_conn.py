@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -19,7 +20,19 @@ from common.constants import MCPServerType
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
-from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
+from mcp.types import CallToolResult, ImageContent, ListToolsResult, TextContent, Tool
+
+# MCP 日志级别 → Python logging 级别映射（Phase 4）
+_MCP_LEVEL_MAP: dict[str, int] = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "notice": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+    "alert": logging.CRITICAL,
+    "emergency": logging.CRITICAL,
+}
 
 MCPTaskType = Literal["list_tools", "tool_call"]
 MCPTask = tuple[MCPTaskType, dict[str, Any], asyncio.Queue[Any]]
@@ -51,6 +64,13 @@ class MCPToolCallSession(ToolCallSession):
         self._initialized = asyncio.Event()
         self._init_error: str | None = None
 
+        # Phase 1: MCP server instructions & capabilities from initialize()
+        self._server_instructions: str | None = None
+        self._server_capabilities: Any = None
+
+        # Phase 4: Accumulator for MCP logging/progress notifications during tool calls
+        self._recent_logs: list[str] = []
+
         self._event_loop = asyncio.new_event_loop()
         self._thread_pool = ThreadPoolExecutor(max_workers=1)
         self._thread_pool.submit(self._event_loop.run_forever)
@@ -72,9 +92,10 @@ class MCPToolCallSession(ToolCallSession):
             # SSE transport
             try:
                 async with sse_client(url, headers) as stream:
-                    async with ClientSession(*stream) as client_session:
+                    async with ClientSession(*stream, logging_callback=self._on_logging) as client_session:
                         try:
-                            await asyncio.wait_for(client_session.initialize(), timeout=MCP_INIT_TIMEOUT)
+                            init_result = await asyncio.wait_for(client_session.initialize(), timeout=MCP_INIT_TIMEOUT)
+                            self._save_init_result(init_result)
                             logging.info(f"client_session initialized successfully for server {self._mcp_server.id}")
                             self._initialized.set()
                             await self._process_mcp_tasks(client_session)
@@ -99,9 +120,10 @@ class MCPToolCallSession(ToolCallSession):
             # Streamable HTTP transport
             try:
                 async with streamablehttp_client(url, headers) as (read_stream, write_stream, _):
-                    async with ClientSession(read_stream, write_stream) as client_session:
+                    async with ClientSession(read_stream, write_stream, logging_callback=self._on_logging) as client_session:
                         try:
-                            await asyncio.wait_for(client_session.initialize(), timeout=MCP_INIT_TIMEOUT)
+                            init_result = await asyncio.wait_for(client_session.initialize(), timeout=MCP_INIT_TIMEOUT)
+                            self._save_init_result(init_result)
                             logging.info(f"client_session initialized successfully for server {self._mcp_server.id}")
                             self._initialized.set()
                             await self._process_mcp_tasks(client_session)
@@ -127,6 +149,34 @@ class MCPToolCallSession(ToolCallSession):
             self._init_error = msg
             self._initialized.set()
             await self._process_mcp_tasks(None, msg)
+
+    def _save_init_result(self, init_result: Any) -> None:
+        """Phase 1: 保存 MCP 服务器 initialize() 返回的 instructions 和 capabilities。
+
+        使用 getattr 兼容不同版本的 MCP SDK 以及不提供这些字段的服务器。
+        """
+        self._server_instructions = getattr(init_result, "instructions", None)
+        self._server_capabilities = getattr(init_result, "capabilities", None)
+        if self._server_instructions:
+            logging.info(
+                f"MCP server {self._mcp_server.id} provides instructions "
+                f"({len(self._server_instructions)} chars)"
+            )
+
+    async def _on_logging(self, params: Any) -> None:
+        """Phase 4: MCP logging notification callback.
+
+        当服务端通过 ctx.info() / ctx.log() 发送日志通知时触发。
+        日志同时写入 Python logging 和 _recent_logs 列表，
+        后者在 _call_mcp_tool 中附加到工具返回结果。
+
+        如果服务端不发送日志通知，此回调永远不会被调用（零开销）。
+        """
+        level_str = getattr(params, "level", "info")
+        data = getattr(params, "data", "")
+        py_level = _MCP_LEVEL_MAP.get(level_str, logging.INFO)
+        logging.log(py_level, f"[MCP:{self._mcp_server.id}] {data}")
+        self._recent_logs.append(f"[{level_str}] {data}")
 
     async def _process_mcp_tasks(self, client_session: ClientSession | None, error_message: str | None = None) -> None:
         while not self._close:
@@ -188,17 +238,59 @@ class MCPToolCallSession(ToolCallSession):
             raise
 
     async def _call_mcp_tool(self, name: str, arguments: dict[str, Any], request_timeout: float | int = MCP_TOOL_CALL_TIMEOUT) -> str:
-        result: CallToolResult = await self._call_mcp_server("tool_call", name=name, arguments=arguments,
-                                                             request_timeout=request_timeout)
+        # Phase 4: 清空日志累积器，本次调用期间的服务端日志/进度会写入 _recent_logs
+        self._recent_logs = []
+
+        # Phase 4: 定义进度回调，将服务端 report_progress 收集到 _recent_logs
+        # 如果服务端不调用 report_progress，此回调不会被触发（零开销）
+        async def _on_progress(progress: float, total: float | None, message: str | None) -> None:
+            total_str = f"/{total}" if total is not None else ""
+            msg = f" {message}" if message else ""
+            self._recent_logs.append(f"[progress {progress}{total_str}]{msg}")
+
+        result: CallToolResult = await self._call_mcp_server(
+            "tool_call",
+            name=name,
+            arguments=arguments,
+            progress_callback=_on_progress,
+            request_timeout=request_timeout,
+        )
 
         if result.isError:
             return f"MCP server error: {result.content}"
 
-        # For now, we only support text content
-        if isinstance(result.content[0], TextContent):
-            return result.content[0].text
+        parts: list[str] = []
+
+        # Phase 3: 优先使用 structuredContent（服务端返回结构化 JSON 时）
+        # 兼容性：不提供 structuredContent 的服务器此字段为 None，自动走 content 分支
+        if result.structuredContent:
+            parts.append(json.dumps(result.structuredContent, ensure_ascii=False, indent=2))
+        elif result.content:
+            # 遍历所有 content 项（不仅仅是 [0]），兼容多内容和非文本内容
+            for item in result.content:
+                if isinstance(item, TextContent):
+                    parts.append(item.text)
+                elif isinstance(item, ImageContent):
+                    parts.append(f"[Image: {getattr(item, 'mimeType', 'unknown')}]")
+                else:
+                    parts.append(f"[{type(item).__name__}]")
         else:
-            return f"Unsupported content type {type(result.content)}"
+            # 兼容性：content 为空列表时不再 IndexError（修复现有隐患）
+            parts.append("(empty response)")
+
+        # Phase 3: 附加 meta 信息（如缓存标识 cached=True/False）
+        # 兼容性：不提供 meta 的服务器此字段为 None，自动跳过
+        if result.meta:
+            meta_str = ", ".join(f"{k}={v}" for k, v in result.meta.items())
+            parts.append(f"(meta: {meta_str})")
+
+        # Phase 4: 附加本次调用期间收集的服务端日志/进度
+        # 兼容性：不发送通知的服务器 _recent_logs 为空，自动跳过
+        if self._recent_logs:
+            parts.append("\n--- Server Logs ---")
+            parts.extend(self._recent_logs[-10:])  # 最多附带 10 条，防止过长
+
+        return "\n".join(parts)
 
     async def _get_tools_from_mcp_server(self, request_timeout: float | int = 15) -> list[Tool]:
         try:
@@ -238,6 +330,23 @@ class MCPToolCallSession(ToolCallSession):
     def is_ready(self) -> bool:
         """检查 MCP 会话是否已初始化完成且无错误"""
         return self._initialized.is_set() and self._init_error is None
+
+    @property
+    def server_instructions(self) -> str | None:
+        """Phase 1: 获取 MCP 服务端在 initialize() 中返回的 instructions。
+
+        如果服务端未提供 instructions 或尚未初始化完成，返回 None。
+        """
+        return self._server_instructions
+
+    @property
+    def server_capabilities(self) -> Any:
+        """Phase 1: 获取 MCP 服务端在 initialize() 中返回的 capabilities。
+
+        可用于检查服务端是否支持 prompts、resources、logging 等特性。
+        如果服务端尚未初始化完成，返回 None。
+        """
+        return self._server_capabilities
 
     def get_tools(self, timeout: float | int = 10) -> list[Tool]:
         if self._close:
@@ -366,22 +475,86 @@ def shutdown_all_mcp_sessions():
     logging.info("All MCPToolCallSession instances have been closed.")
 
 
+def _summarize_output_schema(output_schema: dict) -> str:
+    """从 output_schema JSON Schema 中提取简短的返回字段摘要。
+
+    将嵌套的 JSON Schema 压缩为一行可读文本，避免把完整 Schema 塞入 prompt。
+    例：{type: object, properties: {sql: ..., size: ..., time: ...}}
+      → "Returns fields: sql(string), size(int|string), time(string)"
+    """
+    props = output_schema.get("properties")
+    if not props:
+        return ""
+
+    fields: list[str] = []
+    for field_name, field_def in props.items():
+        # 提取类型信息
+        if "type" in field_def:
+            ftype = field_def["type"]
+        elif "anyOf" in field_def:
+            ftype = "|".join(
+                t.get("type", "?") for t in field_def["anyOf"] if isinstance(t, dict) and t.get("type") != "null"
+            )
+        else:
+            ftype = "any"
+        fields.append(f"{field_name}({ftype})")
+
+    return "Returns fields: " + ", ".join(fields)
+
+
 def mcp_tool_metadata_to_openai_tool(mcp_tool: Tool | dict) -> dict[str, Any]:
+    """将 MCP Tool 元数据转换为 OpenAI function calling 格式。
+
+    Phase 2 增强：
+    - 将 annotations (readOnlyHint / destructiveHint / openWorldHint) 追加到 description，
+      让 LLM 能区分只读安全工具和有副作用的工具。
+    - 将 output_schema 压缩为简短的返回字段摘要追加到 description，
+      避免把完整 JSON Schema 塞入 prompt 导致 token 膨胀。
+
+    兼容性：
+    - 如果 MCP 服务端不提供 annotations / outputSchema / description，
+      对应字段为 None，自动跳过，行为与改动前完全一致。
+    """
     if isinstance(mcp_tool, dict):
-        return {
-            "type": "function",
-            "function": {
-                "name": mcp_tool["name"],
-                "description": mcp_tool["description"],
-                "parameters": mcp_tool["inputSchema"],
-            },
-        }
+        name = mcp_tool["name"]
+        desc = mcp_tool.get("description") or ""
+        schema = mcp_tool["inputSchema"]
+        annotations = mcp_tool.get("annotations")
+        output_schema = mcp_tool.get("outputSchema")
+    else:
+        name = mcp_tool.name
+        desc = mcp_tool.description or ""
+        schema = mcp_tool.inputSchema
+        annotations = mcp_tool.annotations
+        output_schema = getattr(mcp_tool, "outputSchema", None)
+
+    # Phase 2: 将 annotations 安全标注追加到 description 末尾
+    hints: list[str] = []
+    if annotations:
+        ann = annotations if isinstance(annotations, dict) else annotations.model_dump(exclude_none=True)
+        if ann.get("readOnlyHint"):
+            hints.append("READ-ONLY (safe, no side effects)")
+        if ann.get("destructiveHint"):
+            hints.append("DESTRUCTIVE (may modify data)")
+        if ann.get("idempotentHint"):
+            hints.append("idempotent (safe to retry)")
+        if ann.get("openWorldHint"):
+            hints.append("calls external service")
+    if hints:
+        desc += f"\n[Hints: {', '.join(hints)}]"
+
+    # Phase 2: 将 output_schema 压缩为简短摘要追加到 description
+    # 不把完整 JSON Schema 放进 tool dict，避免 prompt 过长导致小模型返回空
+    if output_schema and isinstance(output_schema, dict):
+        summary = _summarize_output_schema(output_schema)
+        if summary:
+            desc += f"\n[{summary}]"
 
     return {
         "type": "function",
         "function": {
-            "name": mcp_tool.name,
-            "description": mcp_tool.description,
-            "parameters": mcp_tool.inputSchema,
+            "name": name,
+            "description": desc,
+            "parameters": schema,
         },
     }
