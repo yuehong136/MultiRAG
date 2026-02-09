@@ -3392,7 +3392,7 @@ wheels = [
 
 [[package]]
 name = "mcp"
-version = "1.19.0"
+version = "1.26.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "anyio" },
@@ -3401,15 +3401,18 @@ dependencies = [
     { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "sse-starlette" },
     { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
     { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/69/2b/916852a5668f45d8787378461eaa1244876d77575ffef024483c94c0649c/mcp-1.19.0.tar.gz", hash = "sha256:213de0d3cd63f71bc08ffe9cc8d4409cc87acffd383f6195d2ce0457c021b5c1" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/fc/6d/62e76bbb8144d6ed86e202b5edd8a4cb631e7c8130f3f4893c3f90262b10/mcp-1.26.0.tar.gz", hash = "sha256:db6e2ef491eecc1a0d93711a76f28dec2e05999f93afd48795da1c1137142c66" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/ce/a3/3e71a875a08b6a830b88c40bc413bff01f1650f1efe8a054b5e90a9d4f56/mcp-1.19.0-py3-none-any.whl", hash = "sha256:f5907fe1c0167255f916718f376d05f09a830a215327a3ccdd5ec8a519f2e572" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/fd/d9/eaa1f80170d2b7c5ba23f3b59f766f3a0bb41155fbc32a69adfa1adaaef9/mcp-1.26.0-py3-none-any.whl", hash = "sha256:904a21c33c25aa98ddbeb47273033c435e595bbacfdb177f4bd87f6dceebe1ca" },
 ]
 
 [[package]]
@@ -3785,7 +3788,6 @@ dependencies = [
     { name = "xpinyin" },
     { name = "xxhash" },
     { name = "yfinance" },
-    { name = "zhipuai" },
 ]
 
 [package.dev-dependencies]
@@ -3855,7 +3857,7 @@ requires-dist = [
     { name = "markdown", specifier = "==3.6" },
     { name = "markdown-to-json", specifier = "==2.1.1" },
     { name = "markdownify", specifier = ">=1.2.0" },
-    { name = "mcp", specifier = ">=1.19.0" },
+    { name = "mcp", specifier = ">=1.26.0" },
     { name = "mini-racer", specifier = ">=0.12.4,<0.13.0" },
     { name = "minio", specifier = "==7.2.4" },
     { name = "mistralai", specifier = "==0.4.2" },
@@ -3931,7 +3933,6 @@ requires-dist = [
     { name = "xpinyin", specifier = "==0.7.6" },
     { name = "xxhash", specifier = ">=3.5.0,<4.0.0" },
     { name = "yfinance", specifier = "==0.2.65" },
-    { name = "zhipuai", specifier = ">=2.1.5" },
 ]
 
 [package.metadata.requires-dev]
@@ -5397,11 +5398,11 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-version = "2.8.0"
+version = "2.11.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/30/72/8259b2bccfe4673330cea843ab23f86858a419d8f1493f66d413a76c7e3b/PyJWT-2.8.0.tar.gz", hash = "sha256:57e28d156e3d5c10088e0c68abb90bfac3df82b40a71bd0daa20c65ccd5c23de" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/5c/5a/b46fa56bf322901eee5b0454a34343cdbdae202cd421775a8ee4e42fd519/pyjwt-2.11.0.tar.gz", hash = "sha256:35f95c1f0fbe5d5ba6e43f00271c275f7a1a4db1dab27bf708073b75318ea623" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/2b/4f/e04a8067c7c96c364cef7ef73906504e2f40d690811c021e1a1901473a19/PyJWT-2.8.0-py3-none-any.whl", hash = "sha256:59127c392cc44c2da5bb3192169a91f429924e17aff6534d70fdc02ab3e04320" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/6f/01/c26ce75ba460d5cd503da9e13b21a33804d38c2165dec7b716d06b13010c/pyjwt-2.11.0-py3-none-any.whl", hash = "sha256:94a6bde30eb5c8e04fee991062b534071fd1439ef58d2adc9ccb823e7bcd0469" },
 ]
 
 [package.optional-dependencies]
@@ -7767,22 +7768,6 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/a3/c1/2ef5acda45a71297f4be22e205359e0f93b0171f2b6ebdd681362e725686/yfinance-0.2.65.tar.gz", hash = "sha256:3d465e58c49be9d61f9862829de3e00bef6b623809f32f4efb5197b62fc60485" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/c9/1e/631c80e0f97aef46eb73549b9b0f60d94057294e040740f4cad0cb1f48e4/yfinance-0.2.65-py2.py3-none-any.whl", hash = "sha256:7be13abb0d80a17230bf798e9c6a324fa2bef0846684a6d4f7fa2abd21938963" },
-]
-
-[[package]]
-name = "zhipuai"
-version = "2.1.5.20250421"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "cachetools" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "pydantic-core" },
-    { name = "pyjwt" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/74/3a/622508148236575f9b80d0af9d51c2fe8b91133388a90b197be44d63ef16/zhipuai-2.1.5.20250421.tar.gz", hash = "sha256:11fe754ea11f5ec7c806ec281ecc4a169a4371f347b1cecccea6f0e538dc17ea" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/b9/09/9aab30ba41501e83dd696c827eb539d05e39fe5d902cdabccf97166b7de1/zhipuai-2.1.5.20250421-py3-none-any.whl", hash = "sha256:98d3bf624d8da0f5f9003bfd053b86349a17ccd8724f52334903e6ae6ea8b974" },
 ]
 
 [[package]]
