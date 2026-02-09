@@ -610,6 +610,12 @@ class ListLLMRequest(BaseModel):
     mdl_type: str | None = None
 
 
+class EnableLLMRequest(BaseModel):
+    llm_factory: str
+    llm_name: str
+    status: str = "1"
+
+
 class DeleteFactoryRequest(BaseModel):
     llm_factory: str | None = None
 
@@ -1253,6 +1259,17 @@ def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), user=De
         return get_json_result(data=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post('/enable_llm', summary="启用/禁用模型", response_description="成功更新模型状态")
+def enable_llm(request: EnableLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    req = request.model_dump()
+    TenantLLMService.filter_update(
+        db,
+        [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == req["llm_factory"], TenantLLM.llm_name == req["llm_name"]],
+        {"status": req["status"]},
+    )
+    return get_json_result(data=True)
 
 
 @router.post('/delete_factory', summary="删除模型厂商", response_description="成功删除模型厂商")
