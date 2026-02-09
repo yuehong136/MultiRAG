@@ -3921,27 +3921,6 @@
             ]
         },
         {
-            "name": "Google Cloud",
-            "logo": "",
-            "tags": "LLM",
-            "status": "1",
-            "llm": []
-        },
-        {
-            "name": "HuggingFace",
-            "logo": "",
-            "tags": "TEXT EMBEDDING,TEXT RE-RANK",
-            "status": "1",
-            "llm": []
-        },
-        {
-            "name": "GPUStack",
-            "logo": "",
-            "tags": "LLM,TEXT EMBEDDING,TTS,SPEECH2TEXT,TEXT RE-RANK",
-            "status": "1",
-            "llm": []
-        },
-        {
             "name": "DeepInfra",
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,TTS,SPEECH2TEXT,MODERATION",
