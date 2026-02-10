@@ -36,6 +36,7 @@ class UpdateSearchRequest(BaseModel):
     description: str | None = None
     search_config: dict | None = None
     tenant_id: str
+    avatar: str | None = None
 
 
 class SearchDetailRequest(BaseModel):
