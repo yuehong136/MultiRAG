@@ -39,6 +39,9 @@ sql_command: list_services
            | show_version
            | grant_admin
            | revoke_admin
+           | set_variable
+           | show_variable
+           | list_variables
 
 // meta command definition
 meta_command: "\\" meta_command_name [meta_args]
@@ -82,6 +85,8 @@ RESOURCES: "RESOURCES"i
 ON: "ON"i
 SET: "SET"i
 VERSION: "VERSION"i
+VAR: "VAR"i
+VARS: "VARS"i
 
 list_services: LIST SERVICES ";"
 show_service: SHOW SERVICE NUMBER ";"
@@ -112,6 +117,10 @@ show_user_permission: SHOW USER PERMISSION quoted_string ";"
 
 grant_admin: GRANT ADMIN quoted_string ";"
 revoke_admin: REVOKE ADMIN quoted_string ";"
+
+set_variable: SET VAR identifier identifier ";"
+show_variable: SHOW VAR identifier ";"
+list_variables: LIST VARS ";"
 
 show_version: SHOW VERSION ";"
 
@@ -251,6 +260,18 @@ class AdminTransformer(Transformer):
         user_name = items[2]
         return {"type": "revoke_admin", "user_name": user_name}
 
+    def set_variable(self, items):
+        var_name = items[2]
+        var_value = items[3]
+        return {"type": "set_variable", "var_name": var_name, "var_value": var_value}
+
+    def show_variable(self, items):
+        var_name = items[2]
+        return {"type": "show_variable", "var_name": var_name}
+
+    def list_variables(self, items):
+        return {"type": "list_variables"}
+
     def action_list(self, items):
         return items
 
@@ -317,6 +338,9 @@ SHOW USER PERMISSION <user>
 SHOW VERSION
 GRANT ADMIN <user>
 REVOKE ADMIN <user>
+SET VAR <name> <value>
+SHOW VAR <name>
+LIST VARS
 
 Meta Commands:
 \\?, \\h, \\help     Show this help
@@ -591,57 +615,63 @@ class AdminCLI(Cmd):
         command_type = command_dict['type']
 
         match command_type:
-            case 'list_services':
+            case "list_services":
                 self._handle_list_services(command_dict)
-            case 'show_service':
+            case "show_service":
                 self._handle_show_service(command_dict)
-            case 'restart_service':
+            case "restart_service":
                 self._handle_restart_service(command_dict)
-            case 'shutdown_service':
+            case "shutdown_service":
                 self._handle_shutdown_service(command_dict)
-            case 'startup_service':
+            case "startup_service":
                 self._handle_startup_service(command_dict)
-            case 'list_users':
+            case "list_users":
                 self._handle_list_users(command_dict)
-            case 'show_user':
+            case "show_user":
                 self._handle_show_user(command_dict)
-            case 'drop_user':
+            case "drop_user":
                 self._handle_drop_user(command_dict)
-            case 'alter_user':
+            case "alter_user":
                 self._handle_alter_user(command_dict)
-            case 'create_user':
+            case "create_user":
                 self._handle_create_user(command_dict)
-            case 'activate_user':
+            case "activate_user":
                 self._handle_activate_user(command_dict)
-            case 'list_datasets':
+            case "list_datasets":
                 self._handle_list_datasets(command_dict)
-            case 'list_agents':
+            case "list_agents":
                 self._handle_list_agents(command_dict)
-            case 'create_role':
+            case "create_role":
                 self._create_role(command_dict)
-            case 'drop_role':
+            case "drop_role":
                 self._drop_role(command_dict)
-            case 'alter_role':
+            case "alter_role":
                 self._alter_role(command_dict)
-            case 'list_roles':
+            case "list_roles":
                 self._list_roles(command_dict)
-            case 'show_role':
+            case "show_role":
                 self._show_role(command_dict)
-            case 'grant_permission':
+            case "grant_permission":
                 self._grant_permission(command_dict)
-            case 'revoke_permission':
+            case "revoke_permission":
                 self._revoke_permission(command_dict)
-            case 'alter_user_role':
+            case "alter_user_role":
                 self._alter_user_role(command_dict)
-            case 'show_user_permission':
+            case "show_user_permission":
                 self._show_user_permission(command_dict)
-            case 'show_version':
+            case "show_version":
                 self._show_version(command_dict)
-            case 'grant_admin':
+            case "grant_admin":
                 self._grant_admin(command_dict)
             case 'revoke_admin':
                 self._revoke_admin(command_dict)
-            case 'meta':
+            case "set_variable":
+                self._set_variable(command_dict)
+            case "show_variable":
+                self._show_variable(command_dict)
+            case "list_variables":
+                self._list_variables(command_dict)
+            case "meta":
                 self._handle_meta_command(command_dict)
             case _:
                 print(f"Command '{command_type}' would be executed with API")
@@ -1090,6 +1120,39 @@ class AdminCLI(Cmd):
             self._print_table_simple(res_json['data'])
         else:
             print(f"Fail to show version, code: {res_json['code']}, message: {res_json['message']}")
+
+    def _set_variable(self, command):
+        var_name_tree: Tree = command["var_name"]
+        var_name = var_name_tree.children[0].strip("'\"")
+        var_value_tree: Tree = command["var_value"]
+        var_value = var_value_tree.children[0].strip("'\"")
+        url = f"http://{self.host}:{self.port}/api/v1/admin/variables"
+        response = self.session.put(url, json={"var_name": var_name, "var_value": var_value})
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get('code') == 0:
+            print(res_json.get("message", "Set variable successfully"))
+        else:
+            print(f"Fail to set variable {var_name} to {var_value}, code: {res_json.get('code')}, message: {res_json.get('message')}")
+
+    def _show_variable(self, command):
+        var_name_tree: Tree = command["var_name"]
+        var_name = var_name_tree.children[0].strip("'\"")
+        url = f"http://{self.host}:{self.port}/api/v1/admin/variables"
+        response = self.session.get(url, params={"var_name": var_name})
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get('code') == 0:
+            self._print_table_simple(res_json.get("data"))
+        else:
+            print(f"Fail to get variable {var_name}, code: {res_json.get('code')}, message: {res_json.get('message')}")
+
+    def _list_variables(self, command):
+        url = f"http://{self.host}:{self.port}/api/v1/admin/variables"
+        response = self.session.get(url)
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get('code') == 0:
+            self._print_table_simple(res_json.get("data"))
+        else:
+            print(f"Fail to list variables, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
     def _handle_meta_command(self, command):
         meta_command = command['command']

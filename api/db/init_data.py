@@ -23,6 +23,7 @@ from common import settings
 from common.file_utils import get_project_base_directory
 from common.constants import LLMType
 from scripts.init_ai_guard_system import init_ai_guard_system
+from api.db.services.system_settings_service import SystemSettingsService
 from api.db.joint_services.memory_message_service import init_message_id_sequence, init_memory_size_cache
 # from api.common.base64 import encode_to_base64
 
@@ -218,10 +219,8 @@ def add_graph_templates(db: Session):
                     logging.exception(f"Error saving template {cnvs['id']}: {e}")
                     db.rollback()  # 回滚事务
 
-        except Exception:
-            # print("Add graph templates error: ", e)
-            # print("------------", flush=True)
-            logging.exception("Add agent templates error: ")
+        except Exception as e:
+            logging.exception(f"Add agent templates error: {e}")
 
             db.rollback()  # 回滚事务
 
@@ -255,9 +254,37 @@ def init_guard_system_wrapper(db: Session, tenant_id: str, user_id: str):
         raise
 
 
+def init_table(db: Session):
+    """从 configs/system_settings.json 初始化系统设置（幂等）"""
+    settings_file = os.path.join(get_project_base_directory(), "configs", "system_settings.json")
+    if not os.path.exists(settings_file):
+        logging.warning("Missing system_settings.json, skipping system settings initialization")
+        return
+
+    with open(settings_file, "r", encoding="utf-8") as f:
+        records_from_file = json.load(f)["system_settings"]
+
+    # 获取已有记录，构建索引
+    records_from_db = SystemSettingsService.get_all(db)
+    existing_names = {record.name for record in records_from_db}
+
+    # 筛选出需要新增的记录
+    to_save = [record for record in records_from_file if record["name"] not in existing_names]
+
+    if to_save:
+        try:
+            SystemSettingsService.insert_many(db, to_save, len(to_save))
+            logging.info(f"Initialized {len(to_save)} system settings")
+        except Exception as e:
+            logging.exception(f"System settings init error: {e}")
+            raise
+
+
 def _init_web_data_with_db(db: Session) -> None:
     start_time = time.time()
     try:
+        init_table(db)
+
         init_llm_factory(db)
 
         # 获取所有用户（只查询一次）

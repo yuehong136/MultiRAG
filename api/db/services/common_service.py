@@ -279,6 +279,8 @@ class CommonService(Generic[ModelType]):
         for data in data_list:
             data["create_time"] = now
             data["create_date"] = now_datetime
+            data["update_time"] = now
+            data["update_date"] = now_datetime
 
         # SQLAlchemy 2.0 Core 风格：使用 insert().values() 批量插入
         for i in range(0, len(data_list), batch_size):

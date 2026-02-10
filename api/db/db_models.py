@@ -1797,6 +1797,20 @@ class Memory(BaseModel):
         }
 
 
+class SystemSettings(BaseModel):
+    """系统设置模型
+
+    用于存储全局系统配置项，支持按名称查询和更新
+    """
+    __tablename__ = "t_ai_system_settings"
+    __table_args__ = {"schema": "usr_ai"}
+
+    name: Mapped[str] = mapped_column(String(128), primary_key=True, index=False, nullable=False, doc="Setting name")
+    setting_type: Mapped[str] = mapped_column(String(32), nullable=False, index=False, doc="Setting type (e.g. config)")
+    data_type: Mapped[str] = mapped_column(String(32), nullable=False, index=False, doc="Data type (e.g. bool, string, integer)")
+    value: Mapped[str] = mapped_column(String(1024), nullable=False, index=False, doc="Setting value")
+
+
 '''
 拥有权限，采用这种方式
 '''

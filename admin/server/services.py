@@ -10,6 +10,7 @@ from api.db.services import UserService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService
+from api.db.services.system_settings_service import SystemSettingsService
 from api.utils import health_utils
 
 from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
@@ -356,3 +357,46 @@ class ServiceMgr:
     def restart_service(service_id: int):
         """重启服务"""
         raise AdminException("restart_service: not implemented", 501)
+
+
+class SettingsMgr:
+    @staticmethod
+    def get_all(db: Session) -> list[dict]:
+        settings = SystemSettingsService.get_all(db)
+        return [
+            {
+                'name': setting.name,
+                'setting_type': setting.setting_type,
+                'data_type': setting.data_type,
+                'value': setting.value,
+            }
+            for setting in settings
+        ]
+
+    @staticmethod
+    def get_by_name(db: Session, name: str) -> list[dict]:
+        settings = SystemSettingsService.get_by_name(db, name)
+        if not settings:
+            raise AdminException(f"Can't get setting: {name}")
+        return [
+            {
+                'name': setting.name,
+                'setting_type': setting.setting_type,
+                'data_type': setting.data_type,
+                'value': setting.value,
+            }
+            for setting in settings
+        ]
+
+    @staticmethod
+    def update_by_name(db: Session, name: str, value: str):
+        settings = SystemSettingsService.get_by_name(db, name)
+        if len(settings) == 1:
+            setting = settings[0]
+            setting.value = value
+            setting_dict = setting.to_dict()
+            SystemSettingsService.update_by_name(db, name, setting_dict)
+        elif len(settings) > 1:
+            raise AdminException(f"Can't update more than 1 setting: {name}")
+        else:
+            raise AdminException(f"No setting: {name}")

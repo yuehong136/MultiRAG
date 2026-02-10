@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from auth import AdminAuth, admin_manager, login_admin, logout_admin
 from responses import APIResponse, success_response, error_response
-from services import UserMgr, ServiceMgr, UserServiceMgr
+from services import UserMgr, ServiceMgr, UserServiceMgr, SettingsMgr
 from roles import RoleMgr
 from api.common.exceptions import AdminException
 from api.db.db_models import get_db
@@ -626,6 +626,70 @@ def get_user_permission(user_name: str, user=Depends(admin_manager)) -> APIRespo
     try:
         res = RoleMgr.get_user_permission(user_name)
         return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+class VariableSet(BaseModel):
+    """设置系统变量请求"""
+    var_name: str = Field(..., description="变量名称")
+    var_value: str = Field(..., description="变量值")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {"var_name": "enable_whitelist", "var_value": "true"}
+    })
+
+
+class VariableGet(BaseModel):
+    """查询系统变量请求"""
+    var_name: str = Field(..., description="变量名称")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {"var_name": "enable_whitelist"}
+    })
+
+
+@admin_router.put(
+    "/variables",
+    response_model=APIResponse[None],
+    summary="设置系统变量",
+    description="设置或更新一个系统变量的值"
+)
+def set_variable(
+    data: VariableSet,
+    user=Depends(admin_manager),
+    db: Session = Depends(get_db)
+) -> APIResponse[None]:
+    """设置系统变量"""
+    try:
+        SettingsMgr.update_by_name(db, data.var_name, data.var_value)
+        return success_response(None, "Set variable successfully")
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/variables",
+    response_model=APIResponse[list[dict]],
+    summary="获取系统变量",
+    description="获取所有系统变量或按名称查询"
+)
+def get_variable(
+    var_name: str | None = None,
+    user=Depends(admin_manager),
+    db: Session = Depends(get_db)
+) -> APIResponse[list[dict]]:
+    """获取系统变量"""
+    try:
+        if var_name:
+            res = SettingsMgr.get_by_name(db, var_name)
+        else:
+            res = SettingsMgr.get_all(db)
+        return success_response(res)
+    except AdminException as e:
+        return error_response(e.message, e.code)
     except Exception as e:
         return error_response(str(e), 500)
 
