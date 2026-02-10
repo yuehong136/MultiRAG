@@ -275,7 +275,7 @@ async def retrieval(
             kg_result = await settings.kg_retriever.retrieval(
                 question,
                 [tenant_id],
-                [kb.name],
+                [kb_id],
                 embd_mdl,
                 LLMBundle(db, kb.tenant_id, LLMType.CHAT),
             )

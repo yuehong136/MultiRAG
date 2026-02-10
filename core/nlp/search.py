@@ -24,17 +24,47 @@ from common.constants import TAG_FLD, PAGERANK_FLD
 from common import settings
 
 
-def index_name(uid, kb_names):
+def index_name(uid, kb_names=None):
     # return [f"multirag_{uid}_{kb_name}" for kb_name in kb_names]
+    if kb_names is None:
+        kb_names = []
+    elif isinstance(kb_names, str):
+        kb_names = [kb_names]
 
-    # 情况1：单个 UID
+    # 无知识库名时兼容旧调用，避免返回 None
+    if not kb_names:
+        if isinstance(uid, str):
+            return [f"multirag_{uid}"]
+        if isinstance(uid, list):
+            return [f"multirag_{u}" for u in uid if isinstance(u, str) and u]
+        return []
+
+    # 情况1：单个 UID + 多个 KB
     if isinstance(uid, str):
         return [f"multirag_{uid}_{kb}" for kb in kb_names]
 
     # 情况2：UID 列表
-    # 完全一一对应
-    if len(uid) == len(kb_names):
-        return [f"multirag_{u}_{kb}" for u, kb in zip(uid, kb_names)]
+    if isinstance(uid, list):
+        uid = [u for u in uid if isinstance(u, str) and u]
+        if not uid:
+            return []
+
+        # 完全一一对应
+        if len(uid) == len(kb_names):
+            return [f"multirag_{u}_{kb}" for u, kb in zip(uid, kb_names)]
+
+        # 单租户 + 多 KB
+        if len(uid) == 1:
+            return [f"multirag_{uid[0]}_{kb}" for kb in kb_names]
+
+        # 多租户 + 单 KB
+        if len(kb_names) == 1:
+            return [f"multirag_{u}_{kb_names[0]}" for u in uid]
+
+        # 多租户 + 多 KB（数量不一致），兜底返回笛卡尔积
+        return [f"multirag_{u}_{kb}" for u in uid for kb in kb_names]
+
+    return []
 
 
 
@@ -1139,6 +1169,9 @@ class Dealer:
         }
 
         idxnms = index_name(tenant_id, kb_names)
+        if not idxnms:
+            logging.warning("No valid index names built: tenant_id=%s, kb_names=%s", tenant_id, kb_names)
+            return ranks
         
         # 优先使用 kb_ids（知识库ID），如果没有则使用 kb_names（仅适用于Milvus场景）
         search_kb_ids = kb_ids if kb_ids else kb_names
@@ -1236,6 +1269,7 @@ class Dealer:
             d = {
                 "chunk_id": id,
                 "content_ltks": sres.field[id].get("content_ltks", ""),
+                "content_with_weight": text,
                 "text": text,
                 "doc_id": did,
                 "docnm_kwd": dnm,

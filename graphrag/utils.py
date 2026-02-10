@@ -656,6 +656,15 @@ def merge_tuples(list1, list2):
 
 
 async def get_entity_type2samples(idxnms, kb_ids: list):
+    if isinstance(idxnms, list):
+        flattened_idxnms = []
+        for idx in idxnms:
+            if isinstance(idx, str):
+                if idx:
+                    flattened_idxnms.append(idx)
+            elif isinstance(idx, list):
+                flattened_idxnms.extend([name for name in idx if isinstance(name, str) and name])
+        idxnms = flattened_idxnms
     es_res = await asyncio.to_thread(settings.retriever.search, {"knowledge_graph_kwd": "ty2ents", "kb_id": kb_ids, "size": 10000, "fields": ["content_with_weight"]}, idxnms, kb_ids)
 
     res = defaultdict(list)

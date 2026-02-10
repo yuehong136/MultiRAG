@@ -581,7 +581,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = asyncio.run(settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT)))
+                ck = asyncio.run(settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT)))
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
@@ -879,7 +879,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, kb_names, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
+                ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
@@ -1427,7 +1427,10 @@ async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=No
         aggs=False,
         rerank_mdl=rerank_mdl,
         rank_feature=label_question(db, question, kbs),
+        kb_ids=kb_ids,
     )
     mindmap = MindMapExtractor(chat_mdl)
-    mind_map = await mindmap([c["content_with_weight"] for c in ranks["chunks"]])
+    contents = [c.get("content_with_weight") or c.get("text") for c in ranks["chunks"]]
+    contents = [c for c in contents if isinstance(c, str) and c]
+    mind_map = await mindmap(contents)
     return mind_map.output

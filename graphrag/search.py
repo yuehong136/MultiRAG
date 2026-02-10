@@ -43,7 +43,22 @@ class KGSearch(Dealer):
         set_llm_cache(llm_bdl.llm_name, system, response, history, gen_conf)
         return response
 
+    @staticmethod
+    def _normalize_idx_names(idxnms: str | list[str] | list[list[str]]) -> str | list[str]:
+        if isinstance(idxnms, str):
+            return idxnms
+        normalized: list[str] = []
+        for idx in idxnms or []:
+            if isinstance(idx, str):
+                if idx:
+                    normalized.append(idx)
+                continue
+            if isinstance(idx, list):
+                normalized.extend([name for name in idx if isinstance(name, str) and name])
+        return normalized
+
     async def query_rewrite(self, llm, question, idxnms, kb_ids):
+        idxnms = self._normalize_idx_names(idxnms)
         ty2ents = await get_entity_type2samples(idxnms, kb_ids)
         hint_prompt = PROMPTS["minirag_query2kwd"].format(query=question,
                                                           TYPE_POOL=json.dumps(ty2ents, ensure_ascii=False, indent=2))
@@ -72,17 +87,27 @@ class KGSearch(Dealer):
         milvus_res = self.dataStore.get_fields(milvus_res, flds)
 
         for _, ent in milvus_res.items():
+            if not isinstance(ent, dict):
+                continue
             for f in flds:
                 if f in ent and ent[f] is None:
                     del ent[f]
             if get_float(ent.get("_score", 0)) < sim_thr:
                 continue
-            if isinstance(ent["entity_kwd"], list):
-                ent["entity_kwd"] = ent["entity_kwd"][0]
-            res[ent["entity_kwd"]] = {
+            entity_kwd = ent.get("entity_kwd")
+            if isinstance(entity_kwd, list):
+                entity_kwd = entity_kwd[0] if entity_kwd else None
+            if not isinstance(entity_kwd, str) or not entity_kwd:
+                continue
+            n_hop_ents = []
+            try:
+                n_hop_ents = json.loads(ent.get("n_hop_with_weight", "[]"))
+            except Exception:
+                logging.warning("Invalid n_hop_with_weight: %s", ent.get("n_hop_with_weight"))
+            res[entity_kwd] = {
                 "sim": get_float(ent.get("_score", 0)),
                 "pagerank": get_float(ent.get("rank_flt", 0)),
-                "n_hop_ents": json.loads(ent.get("n_hop_with_weight", "[]")),
+                "n_hop_ents": n_hop_ents,
                 "description": ent.get("content_with_weight", "{}")
             }
         return res
@@ -92,17 +117,23 @@ class KGSearch(Dealer):
         milvus_res = self.dataStore.get_fields(milvus_res, ["content_with_weight", "_score", "from_entity_kwd", "to_entity_kwd",
                                                    "weight_int"])
         for _, ent in milvus_res.items():
-            if get_float(ent["_score"]) < sim_thr:
+            if not isinstance(ent, dict):
                 continue
-            f, t = sorted([ent["from_entity_kwd"], ent["to_entity_kwd"]])
-            if isinstance(f, list):
-                f = f[0]
-            if isinstance(t, list):
-                t = t[0]
+            if get_float(ent.get("_score", 0)) < sim_thr:
+                continue
+            from_ent = ent.get("from_entity_kwd")
+            to_ent = ent.get("to_entity_kwd")
+            if isinstance(from_ent, list):
+                from_ent = from_ent[0] if from_ent else None
+            if isinstance(to_ent, list):
+                to_ent = to_ent[0] if to_ent else None
+            if not isinstance(from_ent, str) or not isinstance(to_ent, str):
+                continue
+            f, t = sorted([from_ent, to_ent])
             res[(f, t)] = {
-                "sim": get_float(ent["_score"]),
+                "sim": get_float(ent.get("_score", 0)),
                 "pagerank": get_float(ent.get("weight_int", 0)),
-                "description": ent["content_with_weight"]
+                "description": ent.get("content_with_weight", "")
             }
         return res
 
@@ -156,14 +187,15 @@ class KGSearch(Dealer):
         qst = question
         filters = self.get_filters({"kb_ids": kb_ids})
         if isinstance(tenant_ids, str):
-            tenant_ids = tenant_ids.split(",")
+            tenant_ids = [tid.strip() for tid in tenant_ids.split(",") if tid.strip()]
         with db_connection() as db:
+            from api.db.services.knowledgebase_service import KnowledgebaseService
             kb_names = [kb.name for kb in KnowledgebaseService.get_by_ids(db, kb_ids, cols=["name"])]
 
-        idxnms = [index_name(tid, kb_names) for tid in tenant_ids]
+        idxnms = self._normalize_idx_names([index_name(tid, kb_names) for tid in tenant_ids])
         ty_kwds = []
         try:
-            ty_kwds, ents = await self.query_rewrite(llm, qst, [index_name(tid, kb_names) for tid in tenant_ids], kb_ids)
+            ty_kwds, ents = await self.query_rewrite(llm, qst, idxnms, kb_ids)
             logging.info(f"Q: {qst}, Types: {ty_kwds}, Entities: {ents}")
         except Exception as e:
             logging.exception(e)
@@ -296,6 +328,8 @@ class KGSearch(Dealer):
 
     def _community_retrieval_(self, entities, condition, kb_ids, idxnms, topn, max_token):
         ## Community retrieval
+        if not entities:
+            return ""
         fields = ["docnm_kwd", "content_with_weight"]
         odr = OrderByExpr()
         odr.desc("weight_flt")
@@ -307,9 +341,20 @@ class KGSearch(Dealer):
         comm_res_fields = self.dataStore.get_fields(comm_res, fields)
         txts = []
         for ii, (_, row) in enumerate(comm_res_fields.items()):
-            obj = json.loads(row["content_with_weight"])
+            if not isinstance(row, dict):
+                continue
+            raw_content = row.get("content_with_weight")
+            if not raw_content:
+                continue
+            try:
+                obj = json.loads(raw_content)
+            except Exception:
+                logging.warning("Invalid community_report content: %s", raw_content)
+                continue
+            if not isinstance(obj, dict):
+                continue
             txts.append("# {}. {}\n## Content\n{}\n## Evidences\n{}\n".format(
-                ii + 1, row["docnm_kwd"], obj["report"], obj["evidences"]))
+                ii + 1, row.get("docnm_kwd", ""), obj.get("report", ""), obj.get("evidences", "")))
             max_token -= num_tokens_from_string(str(txts[-1]))
 
         if not txts:

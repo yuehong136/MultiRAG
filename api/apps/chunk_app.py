@@ -1631,7 +1631,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
         if request.use_kg:
             ck = await settings.kg_retriever.retrieval(question,
                                                    kb.tenant_id,
-                                                   [kb.name],
+                                                   request.kb_ids,
                                                    embd_mdl,
                                                    LLMBundle(db, kb.tenant_id, LLMType.CHAT))
             if ck["content_with_weight"]:
