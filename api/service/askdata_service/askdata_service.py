@@ -633,7 +633,7 @@ class AskdataService:
             await self._async_check_if_stopped(ask_id)
 
         # 调用更新后的方法
-        result = await self.nlq_to_initial_sql_generator.generate_sql_query_with_components(
+        result = await self.nlq_to_initial_sql_generator.generate_sql_query(
             user_query, semantic_layer, llm_name, recommended_chart
         )
 

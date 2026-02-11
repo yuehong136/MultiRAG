@@ -120,11 +120,11 @@ class NLQToInitialSQLGenerator:
 
         return result
 
-    async def generate_sql_query_with_components(self, user_query: str, semantic_layer: Dict[str, Any],
-                                                 llm_name: str, recommended_chart: str) -> \
+    async def generate_sql_query(self, user_query: str, semantic_layer: Dict[str, Any],
+                                llm_name: str, recommended_chart: str) -> \
             Optional[Dict[str, Any]]:
         """
-        根据用户问题和语义层信息生成SQL查询，包含分解后的组件和使用的模型信息。
+        根据用户问题和语义层信息生成SQL查询及使用的模型信息。
 
         参数:
             user_query: 用户的自然语言查询问题
@@ -230,7 +230,7 @@ class NLQToInitialSQLGenerator:
     #     """
     #     生成并验证SQL（包含组件和模型信息）。
     #     """
-    #     result = await self.generate_sql_query_with_components(user_query, semantic_layer, llm_name)
+    #     result = await self.generate_sql_query(user_query, semantic_layer, llm_name)
     #
     #     if not result:
     #         return None, False, "SQL查询生成失败或LLM响应格式错误"

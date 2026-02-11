@@ -97,9 +97,17 @@ def try_extract_components(sql_query: str, dialect: str = "postgres") -> dict[st
         select_sql = ", ".join(item.sql(dialect=dialect) for item in select_expr.expressions)
         components["select"] = f"SELECT {select_sql}" if select_sql else ""
 
-    from_expr = select_expr.args.get("from")
+    # sqlglot 将 FROM 主表存储在 "from_" key 中，JOIN 部分存储在 "joins" key 中
+    from_expr = select_expr.args.get("from_")
+    joins_expr = select_expr.args.get("joins")
+    from_parts: list[str] = []
     if from_expr is not None:
-        components["from"] = from_expr.sql(dialect=dialect)
+        from_parts.append(from_expr.sql(dialect=dialect))
+    if joins_expr:
+        for join in joins_expr:
+            from_parts.append(join.sql(dialect=dialect))
+    if from_parts:
+        components["from"] = " ".join(from_parts)
 
     where_expr = select_expr.args.get("where")
     if where_expr is not None:

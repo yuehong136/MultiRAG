@@ -1,4 +1,6 @@
+import json as _json
 import logging
+import os
 from enum import Enum
 from typing import List, Any, Dict, Optional
 
@@ -27,6 +29,17 @@ router = APIRouter()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# ── 独立的诊断日志，输出到 logs/askdata_components_debug.log ──
+_debug_logger = logging.getLogger("askdata_components_debug")
+_debug_logger.setLevel(logging.DEBUG)
+_debug_logger.propagate = False
+if not _debug_logger.handlers:
+    _log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "logs")
+    os.makedirs(_log_dir, exist_ok=True)
+    _fh = logging.FileHandler(os.path.join(_log_dir, "askdata_components_debug.log"), encoding="utf-8")
+    _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    _debug_logger.addHandler(_fh)
 
 
 class StatusEnum(str, Enum):
@@ -156,16 +169,12 @@ async def get_sql_and_table_config(
         query_complexity = sql_generation_result["queryComplexity"]
         sql_span.end(status="ok", query_complexity=query_complexity, used_models=used_models)
 
-        llm_sql_components = normalize_sql_components(sql_generation_result.get("sqlComponents", {}))
-
         def _components_valid(components: dict[str, Any] | None) -> bool:
             return bool(
                 components
                 and components.get("select")
                 and components.get("from")
             )
-
-        llm_components_valid = _components_valid(llm_sql_components)
 
         # 构建使用到的模型和表的详情字典
         model_span = PerfSpan("askdata.model_details_resolve", meta=perf_meta)
@@ -297,7 +306,6 @@ async def get_sql_and_table_config(
         page_size = 20
         pagination_sql = None
         pagination_info = None
-        components_sql = sql
         # 数据量过大就需要进行分页
         if data_count > page_size:
             # 生成分页的sql
@@ -318,43 +326,47 @@ async def get_sql_and_table_config(
             except Exception as e:
                 pagination_span.end(status="error", source=pagination_source or "unknown", error=str(e))
                 raise
-            components_sql = pagination_sql
-            pass
-        else:
-            components_sql = sql
 
+        # 从原始 SQL 提取组件（分页只是加 LIMIT/OFFSET，不影响 select/from/where 等）
         components_span = PerfSpan("askdata.sql_components_extract", meta=perf_meta)
         components_source = None
         try:
-            use_cached_components = (
-                components_sql == sql
-                and llm_components_valid
-                and not execution_result.get("was_fixed", False)
+            sql_components = try_extract_components(sql, dialect="postgres")
+            sql_components = normalize_sql_components(sql_components) or sql_components
+
+            _debug_logger.info(
+                "===== [ask_id=%s] sqlglot 组件提取 =====\n"
+                "sql (前300字符): %s\n"
+                "result: %s\n"
+                "_components_valid: %s",
+                body.ask_id,
+                sql[:300] if sql else None,
+                _json.dumps(sql_components, ensure_ascii=False, default=str)[:2000] if sql_components else None,
+                _components_valid(sql_components),
             )
-            if use_cached_components:
-                sql_components = llm_sql_components
-                components_source = "llm_cached"
+
+            if _components_valid(sql_components):
+                components_source = "sqlglot"
+                # 如果有分页，补上 pagination 信息
+                if pagination_sql:
+                    sql_components["pagination"] = {
+                        "limit": str(page_size),
+                        "offset": "0",
+                    }
             else:
-                sql_components = try_extract_components(components_sql, dialect="postgres")
+                # sqlglot 失败，回退到 LLM 提取
+                _debug_logger.info(
+                    "===== [ask_id=%s] sqlglot 失败，回退 LLM =====",
+                    body.ask_id,
+                )
+                target_sql = pagination_sql if pagination_sql else sql
+                sql_components = await service.sql_components_extractor.extract_sql_components(
+                    target_sql,
+                    body.llm_name
+                )
                 sql_components = normalize_sql_components(sql_components) or sql_components
-                if _components_valid(sql_components):
-                    components_source = "sqlglot"
-                else:
-                    if llm_components_valid and not execution_result.get("was_fixed", False):
-                        sql_components = dict(llm_sql_components or {})
-                        if pagination_sql:
-                            sql_components["pagination"] = {
-                                "limit": str(page_size),
-                                "offset": "0",
-                            }
-                        components_source = "llm_cached_fallback"
-                    else:
-                        sql_components = await service.sql_components_extractor.extract_sql_components(
-                            components_sql,
-                            body.llm_name
-                        )
-                        sql_components = normalize_sql_components(sql_components) or sql_components
-                        components_source = "llm"
+                components_source = "llm"
+
             if not _components_valid(sql_components):
                 raise ValueError("sql_components_missing_from_or_select")
             components_span.end(status="ok", source=components_source)
