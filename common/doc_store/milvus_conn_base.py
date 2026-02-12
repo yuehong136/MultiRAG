@@ -73,9 +73,9 @@ class MilvusConnectionBase(DocStoreConnection):
             self.logger.warning(f"Failed to load search field configs: {e}")
             self.search_field_configs = {}
 
-    def _get_connection(self):
+    def _get_connection(self, using: str | None = None):
         """Get the Milvus connection handler."""
-        return connections._fetch_handler(self._using)
+        return connections._fetch_handler(using or self._using)
 
     def _create_connection(
         self,
@@ -1085,7 +1085,8 @@ class MilvusConnectionBase(DocStoreConnection):
         """Milvus-specific vector search."""
         collections = [collection_name] if isinstance(collection_name, str) else collection_name
 
-        conn = self._get_connection()
+        using = kwargs.pop("using", None)
+        conn = self._get_connection(using=using)
         all_hits = []
         costs = []
         recalls = []

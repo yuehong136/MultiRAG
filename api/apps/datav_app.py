@@ -523,11 +523,7 @@ class VectorDBFactory:
         import core.utils.vastbase_conn
         
         if db_type == SupportedVectorDBType.MILVUS:
-            conn = core.utils.milvus_conn.MilvusConnection()
-            # 如果指定了数据库，切换到对应的数据库
-            if database:
-                VectorDBFactory._switch_milvus_database(conn, database)
-            return conn
+            return core.utils.milvus_conn.MilvusConnection()
         elif db_type == SupportedVectorDBType.ELASTICSEARCH:
             return core.utils.es_conn.ESConnection()
         elif db_type == SupportedVectorDBType.INFINITY:
@@ -546,25 +542,6 @@ class VectorDBFactory:
         else:
             raise ValueError(f"不支持的向量数据库类型: {db_type}")
     
-    @staticmethod
-    def _switch_milvus_database(conn, database: str):
-        """
-        切换 Milvus 数据库
-        
-        Args:
-            conn: Milvus 连接对象
-            database: 目标数据库名称
-        """
-        try:
-            from pymilvus import db
-            # 使用 db.using_database 切换到指定数据库
-            # using 参数是连接别名，conn._using 存储了当前连接的别名
-            db.using_database(database, using=conn._using)
-            logger.debug(f"已切换到 Milvus 数据库: {database}")
-        except Exception as e:
-            logger.warning(f"切换 Milvus 数据库失败: {database}, 错误: {str(e)}")
-            raise ValueError(f"切换 Milvus 数据库失败: {database}. {str(e)}")
-
 # =============================================================================
 # 核心检索逻辑
 # =============================================================================
@@ -623,7 +600,9 @@ def execute_vector_search(
     vector_field: str,
     output_fields: list[str],
     filter_expr: str,
-    search_config: SearchConfig
+    search_config: SearchConfig,
+    database: str | None = None,
+    trace_id: str | None = None,
 ) -> tuple[list, int]:
     """
     执行向量检索
@@ -645,7 +624,23 @@ def execute_vector_search(
             search_params["params"]["nprobe"] = search_config.nprobe
         if search_config.ef_search:
             search_params["params"]["ef"] = search_config.ef_search
-        
+
+        from common.doc_store.milvus_conn_pool import MILVUS_CONN
+
+        try:
+            using_alias = MILVUS_CONN.get_conn_for_db(database)
+            logger.debug(
+                "Milvus search routing: trace_id=%s database=%s using_alias=%s collection=%s",
+                trace_id or "-",
+                database or "<default>",
+                using_alias,
+                collection_name,
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Milvus 连接失败，请检查服务状态。数据库: {database or 'default'}。{str(e)}"
+            ) from e
+
         results = conn.search_by_milvus(
             collection_name=collection_name,
             data=[query_vector],
@@ -653,7 +648,8 @@ def execute_vector_search(
             limit=limit,
             output_fields=output_fields,
             search_params=search_params,
-            anns_field=vector_field
+            anns_field=vector_field,
+            using=using_alias,
         )
         
         return results, len(results)
@@ -898,7 +894,9 @@ def vector_search(
             vector_field=request.vector_field,
             output_fields=request.output_fields,
             filter_expr=filter_expr,
-            search_config=search_config
+            search_config=search_config,
+            database=request.database,
+            trace_id=(request.extra or {}).get("trace_id") if isinstance(request.extra, dict) else None,
         )
         
         # 6. 归一化结果
@@ -967,7 +965,7 @@ def vector_search(
         error_msg = str(e)
         # 处理 Milvus 连接异常，提供更友好的错误信息
         if "MilvusException" in repr(e) or "recvmsg" in error_msg:
-            logger.error(f"切换 Milvus 数据库失败: {request.database}. {error_msg}")
+            logger.error(f"Milvus 检索失败: database={request.database}. {error_msg}")
             return get_data_error_result(
                 retmsg=f"Milvus 连接失败，请检查服务状态。数据库: {request.database or 'default'}"
             )
