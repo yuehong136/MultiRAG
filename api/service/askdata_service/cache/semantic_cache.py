@@ -3,6 +3,7 @@
 用于临时存储敏感的语义层数据，避免通过前端传输
 """
 
+import copy
 import json
 import time
 import threading
@@ -80,7 +81,7 @@ class SemanticLayerCache:
 
         actual_ttl = ttl or self._default_ttl
         entry = CacheEntry(
-            data=data.copy(),  # 深拷贝避免外部修改影响缓存
+            data=copy.deepcopy(data),  # 深拷贝避免外部修改影响缓存
             created_at=time.time(),
             ttl=actual_ttl
         )
@@ -122,7 +123,7 @@ class SemanticLayerCache:
                 return None
 
             logger.debug(f"缓存命中: ask_id={ask_id}")
-            return entry.data.copy()  # 返回副本避免外部修改影响缓存
+            return copy.deepcopy(entry.data)  # 返回深拷贝避免外部修改影响缓存
 
     def remove(self, ask_id: str) -> bool:
         """

@@ -527,6 +527,19 @@ class AskdataService:
                 model_details.extend(additional_model_details)
                 logger.info(f"已补充 {len(additional_model_details)} 个模型详情")
 
+            # 8.5 预拉所有模型的 dimsAndMetrics，供 Phase 2 缓存使用（并行请求）
+            dims_metrics_tasks = [
+                self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
+                    model_id=model_detail["modelId"]
+                )
+                for model_detail in model_details
+            ]
+            if dims_metrics_tasks:
+                dims_metrics_results = await asyncio.gather(*dims_metrics_tasks)
+                for model_detail, dims_metrics in zip(model_details, dims_metrics_results):
+                    model_detail['dimsAndMetrics'] = dims_metrics
+                logger.info(f"预拉 {len(dims_metrics_tasks)} 个模型的 dimsAndMetrics 完成")
+
             # 9. 构建最终的语义层
             semantic_layer_original = dict(
                 dataset_details=dataset_details,
@@ -553,7 +566,15 @@ class AskdataService:
             logger.info(f"recommended_chart: {recommended_chart}, recommendation_reason: {recommendation_reason}")
 
             total_span.end(status="ok", model_count=len(model_details))
-            return processed_semantic_layer, [model_detail["modelId"] for model_detail in model_details], recommended_chart, recommendation_reason
+
+            # 构建 Phase 2 可复用的预拉数据
+            phase2_prefetch_data = {
+                "model_details": model_details,
+                "model_relations": model_relations,
+                "dimension_values": dimension_values,
+            }
+
+            return processed_semantic_layer, [model_detail["modelId"] for model_detail in model_details], recommended_chart, recommendation_reason, phase2_prefetch_data
         except Exception as e:
             total_span.end(status="error", error=str(e))
             raise
@@ -670,7 +691,9 @@ class AskdataService:
 
     async def generate_table_config(self,
                                     used_table_detail_dict: Dict[str, Dict], model_list: List[Dict],
-                                    sql_components: Dict[str, Any], recommended_chart: str):
+                                    sql_components: Dict[str, Any], recommended_chart: str,
+                                    cached_model_relations: list | None = None,
+                                    cached_dimension_values: dict | None = None):
         """
         生成表配置信息。
         将逻辑委托给 TableConfigGenerator。
@@ -679,21 +702,25 @@ class AskdataService:
             used_table_detail_dict=used_table_detail_dict,
             model_list=model_list,
             sql_components=sql_components,
-            recommended_chart=recommended_chart
+            recommended_chart=recommended_chart,
+            cached_model_relations=cached_model_relations,
+            cached_dimension_values=cached_dimension_values,
         )
 
     async def get_model_details_and_determine_dataset(
             self,
             model_ids: List[str],
             used_models: List[str],
-            dataset_id_list: List[str]
+            dataset_id_list: List[str],
+            cached_model_details: list | None = None,
     ) -> Tuple[Dict, Dict, List, Set]:
         """
         构建模型详情字典，并确定使用的数据集
         委托给专门的解析器处理
         """
         return await self.model_dataset_resolver.get_model_details_and_determine_dataset(
-            model_ids, used_models, dataset_id_list
+            model_ids, used_models, dataset_id_list,
+            cached_model_details=cached_model_details,
         )
 
     async def add_ask_data_history(self, conversation_id: str, ask_id: str, user_id: str, data: str,
@@ -887,7 +914,7 @@ class AskdataService:
                     table_alias = self._find_table_alias(semantic_field["from_model_id"],
                                                          model_table_alias_mapping_list)
                     if semantic_field["semantic_type"] == "metric":
-                        column_name = f"{table_alias}.{semantic_field.get("semantic_field_name", "").split(".")[1]}"
+                        column_name = f"{table_alias}.{semantic_field.get('semantic_field_name', '').split('.')[1]}"
                     else:
                         column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
                     assembler.add_column(column_name)

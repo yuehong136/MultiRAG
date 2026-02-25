@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Dict, List, Set, Tuple
 from collections import Counter
@@ -17,7 +18,8 @@ class ModelDatasetResolver:
             self,
             model_ids: List[str],
             used_models: List[str],
-            dataset_id_list: List[str]
+            dataset_id_list: List[str],
+            cached_model_details: list | None = None,
     ) -> Tuple[Dict, Dict, List, Set]:
         """
         构建模型详情字典，并确定使用的数据集
@@ -26,6 +28,7 @@ class ModelDatasetResolver:
             model_ids: 分词检索后可能涉及的模型ID列表
             used_models: SQL中实际使用的模型名称列表
             dataset_id_list: 传入的数据集ID列表
+            cached_model_details: Phase 1 预拉的模型详情（含 dimsAndMetrics），缓存优先
 
         Returns:
             used_model_detail_dict: 使用的模型详情字典 {模型名: 模型详情}
@@ -38,7 +41,7 @@ class ModelDatasetResolver:
             logger.info(f"只传入一个数据集ID: {dataset_id_list[0]}，跳过数据集验证")
 
             used_model_detail_dict, used_table_detail_dict, model_list = await self._build_model_dicts(
-                model_ids, used_models
+                model_ids, used_models, cached_model_details
             )
 
             return used_model_detail_dict, used_table_detail_dict, model_list, set(dataset_id_list)
@@ -49,29 +52,28 @@ class ModelDatasetResolver:
         model_list = []
         model_in_dataset_dict: Dict[str, List[str]] = {}
 
-        # 获取模型详情
-        model_detail_list = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
+        # 获取模型详情：缓存优先，API 兜底
+        model_detail_list = await self._get_model_details(model_ids, cached_model_details)
         logger.info(f"获取到 {len(model_detail_list)} 个模型详情")
 
+        # 筛选实际使用的模型
+        matched_models = [m for m in model_detail_list if m.get('modelName') in used_models]
+
+        # 并行补全缺少 dimsAndMetrics 的模型
+        await self._ensure_dims_and_metrics(matched_models)
+
         # 处理实际使用的模型
-        for model_detail in model_detail_list:
-            if model_detail.get('modelName') in used_models:
-                # 获取模型的指标和维度信息
-                model_detail[
-                    'dimsAndMetrics'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
-                    model_id=model_detail["modelId"]
-                )
+        for model_detail in matched_models:
+            model_list.append(model_detail)
+            used_model_detail_dict[model_detail["modelName"]] = model_detail
+            used_table_detail_dict[model_detail["tableName"]] = model_detail
 
-                model_list.append(model_detail)
-                used_model_detail_dict[model_detail["modelName"]] = model_detail
-                used_table_detail_dict[model_detail["tableName"]] = model_detail
-
-                # 收集该模型所在的数据集
-                used_in_dataset_ids = [
-                    dataset["datasetId"]
-                    for dataset in model_detail.get("usedInDatasets", [])
-                ]
-                model_in_dataset_dict[model_detail["modelId"]] = used_in_dataset_ids
+            # 收集该模型所在的数据集
+            used_in_dataset_ids = [
+                dataset["datasetId"]
+                for dataset in model_detail.get("usedInDatasets", [])
+            ]
+            model_in_dataset_dict[model_detail["modelId"]] = used_in_dataset_ids
 
         logger.info(f"实际使用的模型及其数据集: {model_in_dataset_dict}")
 
@@ -80,10 +82,50 @@ class ModelDatasetResolver:
 
         return used_model_detail_dict, used_table_detail_dict, model_list, final_dataset_ids
 
+    async def _get_model_details(
+            self,
+            model_ids: List[str],
+            cached_model_details: list | None,
+    ) -> list:
+        """缓存优先获取模型详情，缓存未命中则调用 API"""
+        if cached_model_details:
+            # 检查缓存是否覆盖了所有需要的 model_ids
+            cached_ids = {m.get('modelId') for m in cached_model_details}
+            missing_ids = [mid for mid in model_ids if mid not in cached_ids]
+            if not missing_ids:
+                logger.info(f"模型详情全部命中缓存 ({len(cached_model_details)} 个)")
+                return cached_model_details
+            # 部分命中：只拉缺失的
+            logger.info(f"模型详情部分命中缓存，缺失 {len(missing_ids)} 个，从 API 补充")
+            additional = await self.semantic_api_client.get_model_detail_async(model_ids=missing_ids)
+            return cached_model_details + additional
+
+        logger.info("模型详情缓存未命中，从 API 获取")
+        return await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
+
+    async def _ensure_dims_and_metrics(self, model_details: list) -> None:
+        """并行补全缺少 dimsAndMetrics 的模型（gather 替代串行 await）"""
+        models_needing_fetch = [m for m in model_details if 'dimsAndMetrics' not in m]
+        if not models_needing_fetch:
+            logger.info("所有模型的 dimsAndMetrics 已从缓存获取，跳过 API 调用")
+            return
+
+        logger.info(f"需要从 API 获取 {len(models_needing_fetch)} 个模型的 dimsAndMetrics")
+        tasks = [
+            self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
+                model_id=m["modelId"]
+            )
+            for m in models_needing_fetch
+        ]
+        results = await asyncio.gather(*tasks)
+        for model_detail, dims_metrics in zip(models_needing_fetch, results):
+            model_detail['dimsAndMetrics'] = dims_metrics
+
     async def _build_model_dicts(
             self,
             model_ids: List[str],
-            used_models: List[str]
+            used_models: List[str],
+            cached_model_details: list | None = None,
     ) -> Tuple[Dict, Dict, List]:
         """
         构建模型相关的字典（仅用于单数据集场景）
@@ -92,17 +134,18 @@ class ModelDatasetResolver:
         used_table_detail_dict = {}
         model_list = []
 
-        model_detail_list = await self.semantic_api_client.get_model_detail_async(model_ids=model_ids)
+        model_detail_list = await self._get_model_details(model_ids, cached_model_details)
 
-        for model_detail in model_detail_list:
-            if model_detail.get('modelName') in used_models:
-                model_detail[
-                    'dimsAndMetrics'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
-                    model_id=model_detail["modelId"]
-                )
-                model_list.append(model_detail)
-                used_model_detail_dict[model_detail["modelName"]] = model_detail
-                used_table_detail_dict[model_detail["tableName"]] = model_detail
+        # 筛选实际使用的模型
+        matched_models = [m for m in model_detail_list if m.get('modelName') in used_models]
+
+        # 并行补全缺少 dimsAndMetrics 的模型
+        await self._ensure_dims_and_metrics(matched_models)
+
+        for model_detail in matched_models:
+            model_list.append(model_detail)
+            used_model_detail_dict[model_detail["modelName"]] = model_detail
+            used_table_detail_dict[model_detail["tableName"]] = model_detail
 
         return used_model_detail_dict, used_table_detail_dict, model_list
 

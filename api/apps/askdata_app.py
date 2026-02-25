@@ -117,8 +117,10 @@ async def get_sql_and_table_config(
         logger.info(f"从缓存中获取到语义层数据: ask_id={body.ask_id}")
         processed_semantic_layer_data = cached_semantic_data.get('processed_semantic_layer', {})
         model_ids_data = cached_semantic_data.get('model_ids', [])
+        phase2_prefetch = cached_semantic_data.get('phase2_prefetch', {})
         logger.info(f"获取内容 - processed_semantic_layer: {processed_semantic_layer_data}")
         logger.info(f"获取内容 - model_ids: {model_ids_data}")
+        logger.info(f"获取内容 - phase2_prefetch keys: {list(phase2_prefetch.keys()) if phase2_prefetch else []}")
 
         # 1. 调用Service层获取包含SQL及其组件的完整结果
         sql_span = PerfSpan("askdata.sql_generation", meta=perf_meta)
@@ -182,7 +184,8 @@ async def get_sql_and_table_config(
             await service.get_model_details_and_determine_dataset(
                 model_ids=model_ids_data,  # 使用从缓存获取的model_ids
                 used_models=used_models,
-                dataset_id_list=body.dataset_id_list
+                dataset_id_list=body.dataset_id_list,
+                cached_model_details=phase2_prefetch.get('model_details'),
             )
         model_span.end(status="ok", model_count=len(model_list))
 
@@ -271,7 +274,8 @@ async def get_sql_and_table_config(
                     await service.get_model_details_and_determine_dataset(
                         model_ids=model_ids_data,  # 使用从缓存获取的model_ids
                         used_models=final_used_models,
-                        dataset_id_list=body.dataset_id_list
+                        dataset_id_list=body.dataset_id_list,
+                        cached_model_details=phase2_prefetch.get('model_details'),
                     )
 
                 # 检查新的数据集ID
@@ -409,7 +413,9 @@ async def get_sql_and_table_config(
             used_table_detail_dict=used_table_detail_dict,
             model_list=model_list,
             sql_components=sql_components,
-            recommended_chart=body.semantic_layer.get('recommended_chart')
+            recommended_chart=body.semantic_layer.get('recommended_chart'),
+            cached_model_relations=phase2_prefetch.get('model_relations'),
+            cached_dimension_values=phase2_prefetch.get('dimension_values'),
         )
         table_config_span.end(status="ok")
 
@@ -716,7 +722,7 @@ async def get_semantic_layer_streaming(
         )
 
     try:
-        processed_semantic_layer, model_ids, recommended_chart, recommendation_reason = await service.generate_semantic_layer(
+        processed_semantic_layer, model_ids, recommended_chart, recommendation_reason, phase2_prefetch_data = await service.generate_semantic_layer(
             user_query=final_user_query,
             dataset_id_list=body.dataset_id_list,
             userid=body.userid,
@@ -734,7 +740,8 @@ async def get_semantic_layer_streaming(
         if body.ask_id:
             cache_data = {
                 "processed_semantic_layer": processed_semantic_layer,
-                "model_ids": model_ids
+                "model_ids": model_ids,
+                "phase2_prefetch": phase2_prefetch_data,
             }
             logger.info(f"准备存储语义层数据到缓存: ask_id={body.ask_id}")
             logger.info(f"存储内容 - processed_semantic_layer: {processed_semantic_layer}")

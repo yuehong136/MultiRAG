@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import uuid
@@ -19,7 +20,9 @@ class TableConfigGenerator:
         self.semantic_api_client = semantic_api_client
 
     async def generate(self, used_table_detail_dict: Dict[str, Dict], model_list: List[Dict],
-                       sql_components: Dict[str, Any], recommended_chart: str):
+                       sql_components: Dict[str, Any], recommended_chart: str,
+                       cached_model_relations: list | None = None,
+                       cached_dimension_values: dict | None = None):
         """
         生成表配置信息，将SQL解析结果映射到语义层。
 
@@ -28,6 +31,8 @@ class TableConfigGenerator:
             model_list: 所有相关的模型信息列表
             sql_components: SQL句子成分
             recommended_chart: 推荐的图表类型
+            cached_model_relations: Phase 1 预拉的模型关系，缓存优先
+            cached_dimension_values: Phase 1 预拉的维度值，缓存优先
 
         Returns:
             包含列、过滤器和排序信息的配置字典
@@ -51,10 +56,19 @@ class TableConfigGenerator:
         related_model_relationships = []
         if main_table_model_id:
             try:
-                related_model_relationships = await self.semantic_api_client.get_model_relationships_async(
-                    model_ids=main_table_model_id
-                )
-                logging.info(f"获取到 {len(related_model_relationships)} 条与主表相关的模型关系")
+                if cached_model_relations is not None:
+                    # 缓存优先：从 Phase 1 缓存的全量关系中过滤出与主表相关的
+                    related_model_relationships = [
+                        r for r in cached_model_relations
+                        if r.get('sourceModelId') == main_table_model_id
+                        or r.get('targetModelId') == main_table_model_id
+                    ]
+                    logging.info(f"从缓存中过滤到 {len(related_model_relationships)} 条与主表相关的模型关系")
+                else:
+                    related_model_relationships = await self.semantic_api_client.get_model_relationships_async(
+                        model_ids=main_table_model_id
+                    )
+                    logging.info(f"从 API 获取到 {len(related_model_relationships)} 条与主表相关的模型关系")
             except Exception as e:
                 logging.warning(f"获取主表模型关系失败: {str(e)}")
         
@@ -82,11 +96,20 @@ class TableConfigGenerator:
                     model_ids=list(missing_model_ids)
                 )
 
-                # 为每个新模型获取 dimsAndMetrics，保持与 model_list 中已有模型的格式一致
+                # 并行获取缺少 dimsAndMetrics 的模型（gather 替代串行 await）
+                models_needing_dims = [m for m in missing_models_details if 'dimsAndMetrics' not in m]
+                if models_needing_dims:
+                    dims_tasks = [
+                        self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
+                            model_id=m["modelId"]
+                        )
+                        for m in models_needing_dims
+                    ]
+                    dims_results = await asyncio.gather(*dims_tasks)
+                    for model_detail, dims_metrics in zip(models_needing_dims, dims_results):
+                        model_detail['dimsAndMetrics'] = dims_metrics
+
                 for model_detail in missing_models_details:
-                    model_detail['dimsAndMetrics'] = await self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
-                        model_id=model_detail["modelId"]
-                    )
                     model_list.append(model_detail)
                     logging.info(f"成功添加关联模型: {model_detail.get('modelName')} (ID: {model_detail.get('modelId')})")
 
@@ -154,7 +177,7 @@ class TableConfigGenerator:
 
         if recommended_chart == "明细表":
             # 4. 一次性构建所有语义字段信息
-            semantic_fields_info = await self._build_semantic_fields_info(model_list)
+            semantic_fields_info = await self._build_semantic_fields_info(model_list, cached_dimension_values)
 
             # 5. 处理SELECT列
             selected_columns = self._process_select_columns(parts, used_table_detail_dict)
@@ -186,7 +209,7 @@ class TableConfigGenerator:
             }
         elif recommended_chart == "聚合表":
             # 4. 一次性构建所有语义字段信息
-            semantic_fields_info = await self._build_semantic_fields_info_for_aggr(model_list)
+            semantic_fields_info = await self._build_semantic_fields_info_for_aggr(model_list, cached_dimension_values)
 
             # 5. 处理维度，维度是group by中的内容
             selected_dimensions = self._build_selected_dimensions(parts, used_table_detail_dict)
@@ -360,7 +383,8 @@ class TableConfigGenerator:
                 })
         return selected_metrics
 
-    async def _build_semantic_fields_info(self, model_list: List[Dict]) -> Dict[str, List]:
+    async def _build_semantic_fields_info(self, model_list: List[Dict],
+                                          cached_dimension_values: dict | None = None) -> Dict[str, List]:
         """一次性构建所有语义字段信息，避免重复遍历"""
         available_fields, filterable_fields, sortable_fields, all_fields = [], [], [], []
         all_dimension_ids = []
@@ -372,9 +396,16 @@ class TableConfigGenerator:
                     continue
                 all_dimension_ids.append(dim['dimensionId'])
 
-        dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
-            dimension_ids=all_dimension_ids
-        ) if all_dimension_ids else {}
+        # 缓存优先获取维度值
+        if cached_dimension_values is not None:
+            dimensions_value_dict = cached_dimension_values
+            logging.info(f"使用缓存的维度值 ({len(dimensions_value_dict)} 个)")
+        elif all_dimension_ids:
+            dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
+                dimension_ids=all_dimension_ids
+            )
+        else:
+            dimensions_value_dict = {}
 
         for model in model_list:
             model_id = model["modelId"]
@@ -420,7 +451,8 @@ class TableConfigGenerator:
             "sortable_fields": sortable_fields, "all_fields": all_fields
         }
 
-    async def _build_semantic_fields_info_for_aggr(self, model_list: List[Dict]) -> Dict[str, List]:
+    async def _build_semantic_fields_info_for_aggr(self, model_list: List[Dict],
+                                                    cached_dimension_values: dict | None = None) -> Dict[str, List]:
         """一次性构建所有语义字段信息，避免重复遍历"""
         available_dimensions, available_metrics, sortable_fields, whereable_fields, havingable_fields, all_fields = [], [], [], [], [], []
         all_dimension_ids = []
@@ -432,9 +464,16 @@ class TableConfigGenerator:
                     continue
                 all_dimension_ids.append(dim['dimensionId'])
 
-        dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
-            dimension_ids=all_dimension_ids
-        ) if all_dimension_ids else {}
+        # 缓存优先获取维度值
+        if cached_dimension_values is not None:
+            dimensions_value_dict = cached_dimension_values
+            logging.info(f"使用缓存的维度值 ({len(dimensions_value_dict)} 个)")
+        elif all_dimension_ids:
+            dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
+                dimension_ids=all_dimension_ids
+            )
+        else:
+            dimensions_value_dict = {}
 
         for model in model_list:
             model_id = model["modelId"]
