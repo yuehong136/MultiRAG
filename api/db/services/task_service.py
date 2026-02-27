@@ -339,6 +339,41 @@ class TaskService(CommonService):
         # Note: 不在此处 commit，由调用者控制事务边界
 
     @classmethod
+    def get_tasks_progress_by_doc_ids(cls, db: Session, doc_ids: list[str]):
+        """Retrieve all tasks associated with specific documents.
+
+        This method fetches all processing tasks for given document ids, ordered by
+        creation time. It includes task progress and chunk information.
+
+        Args:
+            db: Database session.
+            doc_ids: The unique identifiers of the documents.
+
+        Returns:
+            list[dict]: List of task dictionaries containing task details.
+                       Returns None if no tasks are found.
+        """
+        fields = [
+            cls.model.id,
+            cls.model.doc_id,
+            cls.model.from_page,
+            cls.model.progress,
+            cls.model.progress_msg,
+            cls.model.digest,
+            cls.model.chunk_ids,
+            cls.model.create_time,
+        ]
+        stmt = (
+            select(*fields)
+            .where(cls.model.doc_id.in_(doc_ids))
+            .order_by(desc(cls.model.create_time))
+        )
+        tasks = db.execute(stmt).mappings().all()
+        if not tasks:
+            return None
+        return [dict(task) for task in tasks]
+
+    @classmethod
     def delete_by_doc_ids(cls, db: Session, doc_ids: list[str]) -> int:
         """根据文档ID列表删除相关的任务记录"""
         try:

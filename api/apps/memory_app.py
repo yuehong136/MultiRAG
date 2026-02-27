@@ -19,6 +19,7 @@ from api.db.db_models import get_db
 from api.db.services.memory_service import MemoryService
 from api.db.services.user_service import UserTenantService
 from api.db.services.canvas_service import UserCanvasService
+from api.db.services.task_service import TaskService
 from api.db.joint_services.memory_message_service import get_memory_size_cache, judge_system_prompt_is_default
 from api.utils.memory_utils import format_ret_data_from_memory, get_memory_type_human
 from api.utils.api_utils import get_json_result
@@ -490,13 +491,21 @@ def get_memory_detail(
 
     # 获取 agent 名称映射
     agent_name_mapping = {}
+    extract_task_mapping = {}
     if messages.get("message_list"):
         agent_ids = [msg.get("agent_id") for msg in messages["message_list"] if msg.get("agent_id")]
         agent_list = UserCanvasService.get_basic_info_by_canvas_ids(db, agent_ids)
         agent_name_mapping = {agent["id"]: agent.get("title", "Unknown") for agent in agent_list}
+        task_list = TaskService.get_tasks_progress_by_doc_ids(db, [memory_id])
+        if task_list:
+            task_list.sort(key=lambda t: t["create_time"])  # asc, use newer when exist more than one task
+            for task in task_list:
+                # the 'digest' field carries the source_id when a task is created, so use 'digest' as key
+                extract_task_mapping.update({int(task["digest"]): task})
 
     for message in messages.get("message_list", []):
         message["agent_name"] = agent_name_mapping.get(message.get("agent_id"), "Unknown")
+        message["task"] = extract_task_mapping.get(message.get("message_id"), {})
 
     return get_json_result(data={
         "messages": messages,
