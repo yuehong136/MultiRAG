@@ -676,145 +676,80 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
 @router.post('/set', summary="设置文档块")
 def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    ### POST `/set` 设置文档块接口
+    ### POST `/set` 更新文档块
 
-**功能描述**:
-此接口用于设置和更新文档块，支持处理内容的分词、关键词提取、问答模式验证以及向量计算，并将结果存储到数据库中。
+    更新指定文档块的内容、关键词、向量及关联图片，变更立即写入向量存储。
 
----
+    ---
 
-### 请求体 (Request Body)
+    ### 请求体
 
-| 字段                  | 类型          | 必填 | 描述                                                                                 |
-|-----------------------|---------------|------|--------------------------------------------------------------------------------------|
-| `chunk_id`            | `string`     | 是   | 文档块的唯一标识符。                                                                 |
-| `doc_id`              | `string`     | 是   | 所属文档的唯一标识符。                                                               |
-| `content_with_weight` | `string`     | 是   | 带权重的内容字符串，用于分词和向量计算。                                             |
-| `important_kwd`       | `list[str]`  | 否   | 重要关键词列表，用于额外的分词和向量计算。                                            |
-| `question_kwd`        | `list[str]`  | 否   | 问题关键词列表，用于问答模式或补充向量计算。                                          |
-| `available_int`       | `int`        | 否   | 可用性标记，用于记录当前文档块的可用状态。                                            |
-| `image_base64`        | `string`     | 否   | Base64编码的图片数据，用于更新文档块关联的图片。                                      |
+    | 字段                  | 类型         | 必填 | 描述                                                                          |
+    |-----------------------|--------------|------|-------------------------------------------------------------------------------|
+    | `chunk_id`            | `string`     | 是   | 文档块唯一标识符。                                                            |
+    | `doc_id`              | `string`     | 是   | 所属文档唯一标识符。                                                          |
+    | `content_with_weight` | `string`     | 是   | 文档块正文，用于分词与向量计算。QA 模式下需包含问题和答案，以 TAB 或换行分隔。|
+    | `important_kwd`       | `list[str]`  | 否   | 重要关键词列表，参与额外分词与向量加权。                                      |
+    | `question_kwd`        | `list[str]`  | 否   | 问题关键词列表；存在时以其内容替代正文参与向量计算。                          |
+    | `available_int`       | `int`        | 否   | 可用性标记（如 `1` 启用、`0` 禁用）。                                        |
+    | `tag_kwd`             | `string`     | 否   | 标签关键词，用于分类或过滤。                                                  |
+    | `tag_feas`            | `string`     | 否   | 标签特征值，与 `tag_kwd` 配合使用。                                           |
+    | `img_id`              | `string`     | 否   | 关联图片的存储路径，格式为 `{bucket}-{object_name}`，与 `image_base64` 配合使用。|
+    | `image_base64`        | `string`     | 否   | Base64 编码的图片数据；仅当 `img_id` 格式合法（含 `-`）时才会写入对象存储。  |
 
----
+    ---
 
-### 响应 (Response)
+    ### 处理流程
 
-#### 成功响应 (200)
+    1. 对 `content_with_weight` 执行分词，提取 `important_kwd` 和 `question_kwd` 的分词结果。
+    2. 校验 `doc_id` 对应的租户与文档是否存在。
+    3. 若文档解析类型为 `QA`，验证正文包含问题和答案（TAB 或换行分隔），并自动识别语言。
+    4. 调用 Embedding 模型生成语义向量（非 QA：`0.1 × 文档名向量 + 0.9 × 正文向量`；QA：仅用答案向量）。
+    5. 将结果写入向量存储（`vector` 字段及维度特定字段 `q_{dim}_vec`）。
+    6. 若 `image_base64` 与合法 `img_id` 同时提供，将图片写入对象存储的对应 bucket。
 
-- **`Content-Type: application/json`**
-- **示例**:
+    ---
+
+    ### 响应
+
+    #### 成功 (200)
+
+    ```json
+    {"retcode": 0, "retmsg": "success", "data": true}
+    ```
+
+    #### 错误
+
+    | 场景                        | retcode | retmsg                                      |
+    |-----------------------------|---------|---------------------------------------------|
+    | 租户不存在                  | 400     | `Tenant not found!`                         |
+    | 文档不存在                  | 400     | `Document not found!`                       |
+    | `important_kwd` 非列表      | 400     | `` `important_kwd` should be a list ``      |
+    | `question_kwd` 非列表       | 400     | `` `question_kwd` should be a list ``       |
+    | QA 格式不合法               | 400     | `Q&A must be separated by TAB/ENTER key.`   |
+    | 服务内部异常                | 500     | 具体错误信息                                |
+
+    ---
+
+    ### 示例
+
+    **请求体（QA 模式）**:
     ```json
     {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": true
+        "chunk_id": "12345",
+        "doc_id": "67890",
+        "content_with_weight": "人工智能是什么？\t人工智能是计算机科学的一个分支。",
+        "important_kwd": ["人工智能", "计算机科学"],
+        "available_int": 1,
+        "img_id": "mybucket-images/fig1.png",
+        "image_base64": "<base64-encoded-data>"
     }
     ```
 
-#### 错误响应
-
-- **404: Tenant not found**
-    - **描述**: 当根据 `doc_id` 查询租户信息失败时，返回此错误。
-    - **示例**:
-        ```json
-        {
-            "detail": "Tenant not found!"
-        }
-        ```
-
-- **404: Document not found**
-    - **描述**: 当根据 `doc_id` 查询文档信息失败时，返回此错误。
-    - **示例**:
-        ```json
-        {
-            "detail": "Document not found!"
-        }
-        ```
-
-- **400: Q&A 格式错误**
-    - **描述**: 当文档块的内容不符合问答模式的要求时返回此错误。
-    - **示例**:
-        ```json
-        {
-            "retcode": 400,
-            "retmsg": "Q&A must be separated by TAB/ENTER key."
-        }
-        ```
-
-- **500: 内部错误**
-    - **描述**: 当发生意外错误时，返回此错误。
-    - **示例**:
-        ```json
-        {
-            "retcode": 500,
-            "retmsg": "Internal server error",
-            "detail": "具体错误信息"
-        }
-        ```
-
----
-
-### 主要流程
-
-1. 从请求体提取内容并解析关键词。
-    - 对 `content_with_weight` 执行分词。
-    - 分析重要关键词 (`important_kwd`) 和问题关键词 (`question_kwd`)。
-2. 验证文档块所属的租户 (`tenant_id`) 和文档是否存在。
-3. 判断文档解析类型 (`parser_id`)，处理问答模式的特殊逻辑：
-    - 验证问答内容是否由 TAB 或 ENTER 分隔。
-    - 检测问答内容的语言特性（是否包含中文）。
-4. 通过向量模型生成文档块的语义向量。
-5. 更新数据库：
-    - 根据主键 (`chunk_id`) 更新或插入文档块数据。
-    - 将内容、关键词及向量信息存储到对应的知识库中。
-
----
-
-### 注意事项
-
-- **问答模式验证**:
-    - 文档解析类型为 `QA` 时，`content_with_weight` 必须包含两个部分（问题和答案），通过 TAB 或 ENTER 分隔。
-    - 自动判断问答内容的语言，决定是否使用特定的分词逻辑。
-- **向量计算**:
-    - 文档块的向量由内容和关键词生成。
-    - 支持加权计算：如果 `question_kwd` 存在，则使用其内容替代默认的内容生成逻辑。
-    - 当前向量字段名为 `vector`，未来可能支持动态字段名。
-- **数据库更新**:
-    - 更新操作基于主键 `chunk_id`。
-    - 确保知识库名称 (`kb.name`) 与租户信息一致。
-
----
-
-### 示例请求
-
-#### 请求体:
-```json
-{
-    "chunk_id": "12345",
-    "doc_id": "67890",
-    "content_with_weight": "问题：人工智能是什么？\n答案：人工智能是计算机科学的一个分支。",
-    "important_kwd": ["人工智能", "计算机科学"],
-    "question_kwd": ["人工智能是什么", "计算机科学"],
-    "available_int": 1
-}
-```
-
-- **成功响应**:
-```json
-{
-    "retcode": 0,
-    "retmsg": "success",
-    "data": true
-}
-```
-
-- **错误响应 (问答格式错误)**:
-```json
-{
-    "retcode": 400,
-    "retmsg": "Q&A must be separated by TAB/ENTER key."
-}
-```
+    **成功响应**:
+    ```json
+    {"retcode": 0, "retmsg": "success", "data": true}
+    ```
     """
     d = {
         "id": request.chunk_id,
@@ -880,8 +815,9 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         settings.docStoreConn.update(update_condition, d, search.index_name_one(tenant_id, kb.name), doc.kb_id)
 
         # update image
-        if request.image_base64:
-            bkt, name = (request.img_id or "-").split("-")
+        img_id = request.img_id or ""
+        if request.image_base64 and img_id and "-" in img_id:
+            bkt, name = img_id.split("-", 1)
             image_binary = base64.b64decode(request.image_base64)
             settings.STORAGE_IMPL.put(bkt, name, image_binary)
 
