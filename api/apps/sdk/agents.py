@@ -244,7 +244,7 @@ async def webhook(
         return get_error_data_result(retcode=RetCode.BAD_REQUEST, retmsg="Invalid DSL format.")
 
     # 4. Check webhook configuration in DSL
-    webhook_cfg = None
+    webhook_cfg = {}
     components = dsl.get("components", {})
     for k in components:
         cpn_obj = components[k]["obj"]
