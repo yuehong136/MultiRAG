@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from auth import AdminAuth, admin_manager, login_admin, logout_admin
 from responses import APIResponse, success_response, error_response
-from services import UserMgr, ServiceMgr, UserServiceMgr, SettingsMgr
+from services import UserMgr, ServiceMgr, UserServiceMgr, SettingsMgr, ConfigMgr, EnvironmentsMgr
 from roles import RoleMgr
 from api.common.exceptions import AdminException
 from api.db.db_models import get_db
@@ -687,6 +687,40 @@ def get_variable(
             res = SettingsMgr.get_by_name(db, var_name)
         else:
             res = SettingsMgr.get_all(db)
+        return success_response(res)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/configs",
+    response_model=APIResponse[list[dict]],
+    summary="获取服务配置列表",
+    description="获取所有服务配置信息"
+)
+def get_configs(user=Depends(admin_manager)) -> APIResponse[list[dict]]:
+    """获取服务配置列表"""
+    try:
+        res = list(ConfigMgr.get_all())
+        return success_response(res)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/environments",
+    response_model=APIResponse[list[dict]],
+    summary="获取环境变量列表",
+    description="获取系统关键环境变量信息"
+)
+def get_environments(user=Depends(admin_manager)) -> APIResponse[list[dict]]:
+    """获取环境变量列表"""
+    try:
+        res = list(EnvironmentsMgr.get_all())
         return success_response(res)
     except AdminException as e:
         return error_response(e.message, e.code)

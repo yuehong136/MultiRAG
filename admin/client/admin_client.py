@@ -42,6 +42,8 @@ sql_command: list_services
            | set_variable
            | show_variable
            | list_variables
+           | list_configs
+           | list_environments
 
 // meta command definition
 meta_command: "\\" meta_command_name [meta_args]
@@ -87,6 +89,8 @@ SET: "SET"i
 VERSION: "VERSION"i
 VAR: "VAR"i
 VARS: "VARS"i
+CONFIGS: "CONFIGS"i
+ENVS: "ENVS"i
 
 list_services: LIST SERVICES ";"
 show_service: SHOW SERVICE NUMBER ";"
@@ -121,6 +125,8 @@ revoke_admin: REVOKE ADMIN quoted_string ";"
 set_variable: SET VAR identifier identifier ";"
 show_variable: SHOW VAR identifier ";"
 list_variables: LIST VARS ";"
+list_configs: LIST CONFIGS ";"
+list_environments: LIST ENVS ";"
 
 show_version: SHOW VERSION ";"
 
@@ -272,6 +278,12 @@ class AdminTransformer(Transformer):
     def list_variables(self, items):
         return {"type": "list_variables"}
 
+    def list_configs(self, items):
+        return {"type": "list_configs"}
+
+    def list_environments(self, items):
+        return {"type": "list_environments"}
+
     def action_list(self, items):
         return items
 
@@ -341,6 +353,8 @@ REVOKE ADMIN <user>
 SET VAR <name> <value>
 SHOW VAR <name>
 LIST VARS
+LIST CONFIGS
+LIST ENVS
 
 Meta Commands:
 \\?, \\h, \\help     Show this help
@@ -671,6 +685,10 @@ class AdminCLI(Cmd):
                 self._show_variable(command_dict)
             case "list_variables":
                 self._list_variables(command_dict)
+            case "list_configs":
+                self._list_configs(command_dict)
+            case "list_environments":
+                self._list_environments(command_dict)
             case "meta":
                 self._handle_meta_command(command_dict)
             case _:
@@ -916,6 +934,24 @@ class AdminCLI(Cmd):
                 print(f"Fail to revoke {user_name} admin authorization, code: {res_json.get('code')}, message: {res_json.get('message')}")
         else:
             print(f"HTTP error, status: {response.status_code}")
+
+    def _list_configs(self, command):
+        url = f"http://{self.host}:{self.port}/api/v1/admin/configs"
+        response = self.session.get(url)
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get('code') == 0:
+            self._print_table_simple(res_json.get("data"))
+        else:
+            print(f"Fail to list configs, code: {res_json.get('code')}, message: {res_json.get('message')}")
+
+    def _list_environments(self, command):
+        url = f"http://{self.host}:{self.port}/api/v1/admin/environments"
+        response = self.session.get(url)
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get('code') == 0:
+            self._print_table_simple(res_json.get("data"))
+        else:
+            print(f"Fail to list environments, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
     def _handle_list_datasets(self, command):
         user_name_tree: Tree = command['user_name']

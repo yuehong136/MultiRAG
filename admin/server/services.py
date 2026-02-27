@@ -400,3 +400,30 @@ class SettingsMgr:
             raise AdminException(f"Can't update more than 1 setting: {name}")
         else:
             raise AdminException(f"No setting: {name}")
+
+
+class ConfigMgr:
+
+    @staticmethod
+    def get_all():
+        result = []
+        configs = SERVICE_CONFIGS.configs
+        for config in configs:
+            config_dict = config.to_dict()
+            result.append(config_dict)
+        return result
+
+
+class EnvironmentsMgr:
+
+    @staticmethod
+    def get_all():
+        result = []
+
+        result.append({"env": "DOC_ENGINE", "value": os.getenv("DOC_ENGINE")})
+        result.append({"env": "DEFAULT_SUPERUSER_EMAIL", "value": os.getenv("DEFAULT_SUPERUSER_EMAIL", "admin@datav.com")})
+        result.append({"env": "DB_TYPE", "value": os.getenv("DB_TYPE", "postgresql")})
+        result.append({"env": "DEVICE", "value": os.getenv("DEVICE", "cpu")})
+        result.append({"env": "STORAGE_IMPL", "value": os.getenv("STORAGE_IMPL", "MINIO")})
+
+        return result
