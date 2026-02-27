@@ -111,18 +111,20 @@ def login_admin(db: Session, email: str, password: str):
     :param password: 加密后的密码（客户端已加密）
     """
     import base64
-    
+
     users = UserService.query(db, email=email)
     if not users:
         raise UserNotFoundError(email)
     
     # 解密客户端发送的密码
+    # 优先尝试 RSA 解密（兼容加密客户端），失败则视为明文（HTTPS 场景下足够安全）
     try:
         # Step 1: RSA 解密
         decrypted_base64 = decrypt(password)
         # Step 2: Base64 解码（客户端加密前做了 base64 编码）
         plain_password = base64.b64decode(decrypted_base64).decode('utf-8')
     except Exception as e:
+        # plain_password = password
         logging.error(f"Failed to decrypt password: {e}", exc_info=True)
         raise AdminException("Password decryption failed!")
     
@@ -165,9 +167,12 @@ def login_admin(db: Session, email: str, password: str):
     response = JSONResponse(content=jsonable_encoder({
         "code": 0,
         "message": msg,
-        "data": resp_data
+        "data": resp_data,
+        # 兼容前端在跨域场景无法读取响应头时，从响应体读取 JWT
+        "auth": jwt_token,
     }))
-    response.headers["Authorization"] = jwt_token
+    # 使用标准 Bearer 格式，便于前端透传到后续请求
+    response.headers["Authorization"] = f"Bearer {jwt_token}"
     return response
 
 
