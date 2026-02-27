@@ -1806,7 +1806,7 @@ class SystemSettings(BaseModel):
     __table_args__ = {"schema": "usr_ai"}
 
     name: Mapped[str] = mapped_column(String(128), primary_key=True, index=False, nullable=False, doc="Setting name")
-    setting_type: Mapped[str] = mapped_column(String(32), nullable=False, index=False, doc="Setting type (e.g. config)")
+    source: Mapped[str] = mapped_column(String(32), nullable=False, index=False, doc="Setting type (e.g. config)")
     data_type: Mapped[str] = mapped_column(String(32), nullable=False, index=False, doc="Data type (e.g. bool, string, integer)")
     value: Mapped[str] = mapped_column(String(1024), nullable=False, index=False, doc="Setting value")
 
