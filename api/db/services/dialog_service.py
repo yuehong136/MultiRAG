@@ -571,7 +571,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     kb_ids = dialog.kb_ids
                 )
                 if prompt_config.get("toc_enhance"):
-                    cks = retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n)
+                    cks = asyncio.run(retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n))
                     if cks:
                         kbinfos["chunks"] = cks
                 kbinfos["chunks"] = retriever.retrieval_by_children(kbinfos["chunks"], tenant_ids)
@@ -869,7 +869,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                     kb_ids=dialog.kb_ids
                 )
                 if prompt_config.get("toc_enhance"):
-                    cks = retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n)
+                    cks = await retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n)
                     if cks:
                         kbinfos["chunks"] = cks
                 kbinfos["chunks"] = retriever.retrieval_by_children(kbinfos["chunks"], tenant_ids)

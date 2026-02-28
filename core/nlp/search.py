@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import re
@@ -1444,7 +1443,7 @@ class Dealer:
                          key=lambda x: x[1] * -1)[:topn_tags]
         return {a.replace(".", "_"): max(1, c) for a, c in tag_fea}
 
-    def retrieval_by_toc(self, query: str, chunks: list[dict], tenant_ids: list[str], kb_names: list[str], chat_mdl, topn: int = 6):
+    async def retrieval_by_toc(self, query: str, chunks: list[dict], tenant_ids: list[str], kb_names: list[str], chat_mdl, topn: int = 6):
         """
         基于 TOC (Table of Contents) 的检索增强方法
         
@@ -1503,7 +1502,7 @@ class Dealer:
         if not toc:
             return chunks
 
-        ids = asyncio.run(relevant_chunks_with_toc(query, toc, chat_mdl, topn * 2))
+        ids = await relevant_chunks_with_toc(query, toc, chat_mdl, topn * 2)
         if not ids:
             return chunks
 

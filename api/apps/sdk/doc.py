@@ -1358,7 +1358,7 @@ async def retrieval_test(
         )
         if toc_enhance:
             chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
-            cks = settings.retriever.retrieval_by_toc(question, ranks["chunks"], tenant_ids, chat_mdl, size)
+            cks = await settings.retriever.retrieval_by_toc(question, ranks["chunks"], tenant_ids, chat_mdl, size)
             if cks:
                 ranks["chunks"] = cks
         # 知识图谱增强
