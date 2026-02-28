@@ -535,6 +535,7 @@ def cancel_all_task_of(db: Session, doc_id: str):
 def has_canceled(task_id: str) -> bool:
     try:
         if REDIS_CONN.get(f"{task_id}-cancel"):
+            logging.info(f"Task: {task_id} has been canceled")
             return True
     except Exception as e:
         logging.exception(e)

@@ -94,6 +94,19 @@ def delete_chunks_by_doc_id(collection_name: str, doc_id: str, kb_id: str = "") 
         logging.warning(f"delete_chunks_by_doc_id failed for {db_type}: {e}")
         return 0
 
+
+def doc_store_exists(collection_name: str, kb_id: str = "") -> bool:
+    """
+    统一判断 doc store 中集合/索引是否存在。
+
+    - Milvus: 使用 has_collection
+    - 其他存储: 使用 index_exist(index_name, kb_id)
+    """
+    db_type = settings.docStoreConn.db_type()
+    if db_type == "milvus":
+        return bool(settings.docStoreConn.has_collection(collection_name))
+    return bool(settings.docStoreConn.index_exist(collection_name, kb_id))
+
 FACTORY = {
     "general": naive,
     ParserType.NAIVE.value: naive,
@@ -2415,7 +2428,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 "Insert chunk error, detail info please check log file. Please check doc store status!"
             )
             try:
-                if await asyncio.to_thread(settings.docStoreConn.has_collection, collection_name):
+                if await asyncio.to_thread(doc_store_exists, collection_name, task_dataset_id):
                     # 删除本批次已经尝试插入的记录
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
@@ -2447,7 +2460,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             logging.warning(f"insert_milvus update_chunk_ids failed since task {task_id} is unknown.")
             # 如果TaskService中没有这个task，则删除已插入数据并退出
             try:
-                if await asyncio.to_thread(settings.docStoreConn.has_collection, collection_name):
+                if await asyncio.to_thread(doc_store_exists, collection_name, task_dataset_id):
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
                             doc_id = chunk['doc_id']
@@ -2768,8 +2781,9 @@ async def do_handle_task(db, task):
         if has_canceled(task_id):
             try:
                 exists = await asyncio.to_thread(
-                    settings.docStoreConn.has_collection,
+                    doc_store_exists,
                     collection_name,
+                    task_dataset_id,
                 )
                 if exists:
                     await asyncio.to_thread(
