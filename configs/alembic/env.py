@@ -83,6 +83,20 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    # Prefer an externally managed SQLAlchemy connection when provided by caller.
+    # This avoids ConfigParser URL interpolation edge-cases for credentials containing `%`.
+    connection = config.attributes.get("connection", None)
+    if connection is not None:
+        context.configure(
+            connection=connection, target_metadata=target_metadata,
+            include_schemas=True,  # 包含schema
+            include_object=include_object,  # 过滤对象
+            version_table_schema="usr_ai",  # 将版本表放在usr_ai模式下
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

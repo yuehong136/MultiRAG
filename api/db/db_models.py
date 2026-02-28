@@ -17,7 +17,7 @@ from sqlalchemy.exc import OperationalError, DisconnectionError, SQLAlchemyError
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.orm.attributes import get_history
 from sqlalchemy.dialects.postgresql import JSONB
-from typing import Any, Type
+from typing import Any
 import uuid
 from datetime import datetime, timezone
 import time
@@ -377,7 +377,7 @@ AUTO_DATE_TIMESTAMP_FIELD_PREFIX = {
     "write_access"}
 
 
-def is_continuous_field(cls: Type) -> bool:
+def is_continuous_field(cls: type[Any]) -> bool:
     """检查类型是否是连续字段类型（例如数值或日期类型）。"""
     if cls in CONTINUOUS_FIELD_TYPE:
         return True
@@ -1978,17 +1978,17 @@ def upgrade_database_tables():
     if not os.path.exists(alembic_ini_path):
         error_msg = f"Alembic配置文件不存在: {alembic_ini_path}"
         logging.error(error_msg)
-        return error_msg
+        raise FileNotFoundError(error_msg)
 
     try:
         # 创建Alembic配置对象
         alembic_cfg = Config(alembic_ini_path)
 
-        # 更新SQLAlchemy URL
-        alembic_cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+        # 仅设置迁移脚本路径。数据库连接通过 attributes 传递，避免 URL 中 `%` 被 ConfigParser 插值解析。
         alembic_cfg.set_main_option("script_location", alembic_path)
         # 获取数据库连接
         with engine.connect() as connection:
+            alembic_cfg.attributes["connection"] = connection
             # 检查schema是否存在
             schema_name = 'usr_ai'
 
@@ -2019,7 +2019,7 @@ def upgrade_database_tables():
         logging.error(error_msg)
         import traceback
         logging.error(traceback.format_exc())
-        return error_msg
+        raise RuntimeError(error_msg) from e
 
 
 def with_retry(max_retries=3, retry_delay=1.0):
