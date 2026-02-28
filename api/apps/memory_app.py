@@ -384,17 +384,19 @@ def list_memory(
     """
     try:
         # 构建过滤条件
-        filter_dict = {
-            "memory_type": memory_type,
-            "storage_type": storage_type
-        }
+        filter_dict: dict = {"storage_type": storage_type}
 
         if not tenant_id:
             # 限制为当前用户可访问的租户
             user_tenants = UserTenantService.get_user_tenant_relation_by_user_id(db, user.id)
             filter_dict["tenant_id"] = [tenant["tenant_id"] for tenant in user_tenants]
         else:
+            if len(tenant_id) == 1 and ',' in tenant_id[0]:
+                tenant_id = tenant_id[0].split(',')
             filter_dict["tenant_id"] = tenant_id
+        if memory_type and len(memory_type) == 1 and ',' in memory_type[0]:
+            memory_type = memory_type[0].split(',')
+        filter_dict["memory_type"] = memory_type
 
         memory_list, count = MemoryService.get_by_filter(
             db,
@@ -480,6 +482,8 @@ def get_memory_detail(
             retcode=RetCode.NOT_FOUND
         )
 
+    if agent_id and len(agent_id) == 1 and ',' in agent_id[0]:
+        agent_id = agent_id[0].split(',')
     messages = MessageService.list_message(
         memory.tenant_id,
         memory_id,

@@ -151,6 +151,8 @@ async def search_message(
     user=Depends(manager),
 ):
     """Search messages in memory."""
+    if len(memory_id) == 1 and ',' in memory_id[0]:
+        memory_id = memory_id[0].split(',')
     filter_dict = {"memory_id": memory_id, "agent_id": agent_id, "session_id": session_id}
     params = {
         "query": query,
@@ -172,6 +174,8 @@ async def get_messages(
     user=Depends(manager),
 ):
     """Get recent messages from memory."""
+    if len(memory_id) == 1 and ',' in memory_id[0]:
+        memory_id = memory_id[0].split(',')
     from api.db.services.memory_service import MemoryService
 
     memory_list = MemoryService.get_by_ids(db, memory_id)
