@@ -510,6 +510,8 @@ def get_memory_detail(
     for message in messages.get("message_list", []):
         message["agent_name"] = agent_name_mapping.get(message.get("agent_id"), "Unknown")
         message["task"] = extract_task_mapping.get(message.get("message_id"), {})
+        for extract_msg in message.get("extract", []):
+            extract_msg["agent_name"] = agent_name_mapping.get(extract_msg.get("agent_id"), "Unknown")
 
     return get_json_result(data={
         "messages": messages,
