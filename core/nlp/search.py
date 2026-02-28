@@ -1494,6 +1494,7 @@ class Dealer:
                                        kb_ids)
         toc = []
         dict_chunks = self.dataStore.get_fields(es_res, ["content_with_weight"])
+        dict_chunks.pop("distance", None)
         for _, doc in dict_chunks.items():
             try:
                 toc.extend(json.loads(doc["content_with_weight"]))
