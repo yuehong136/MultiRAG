@@ -55,3 +55,64 @@ def clean_markdown_block(text):
 
     # Return text with surrounding whitespace removed
     return text.strip()
+
+
+def truncate_utf8_bytes(text: str, max_bytes: int) -> str:
+    """
+    Truncate a string to at most `max_bytes` in UTF-8 byte length.
+    """
+    if max_bytes <= 0:
+        return ""
+    if not text:
+        return ""
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text
+
+    truncated = raw[:max_bytes]
+    while truncated:
+        try:
+            return truncated.decode("utf-8")
+        except UnicodeDecodeError:
+            truncated = truncated[:-1]
+    return ""
+
+
+def split_and_sanitize_terms(
+    raw: str | list[str] | tuple[str, ...] | None,
+    split_pattern: str = r"[,，;；、\n\r|]+",
+    max_term_bytes: int | None = None,
+    max_terms: int | None = None,
+) -> list[str]:
+    """
+    Split text/list into clean terms with optional UTF-8 byte-length limit.
+    """
+    if raw is None:
+        return []
+
+    if isinstance(raw, str):
+        chunks = [raw]
+    elif isinstance(raw, (list, tuple)):
+        chunks = [str(item) for item in raw if item is not None]
+    else:
+        chunks = [str(raw)]
+
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    for chunk in chunks:
+        for term in re.split(split_pattern, chunk):
+            cleaned = term.strip().strip('"').strip("'")
+            if not cleaned:
+                continue
+            if max_term_bytes is not None:
+                cleaned = truncate_utf8_bytes(cleaned, max_term_bytes).strip()
+                if not cleaned:
+                    continue
+            if cleaned in seen:
+                continue
+            seen.add(cleaned)
+            terms.append(cleaned)
+            if max_terms is not None and len(terms) >= max_terms:
+                return terms
+    return terms

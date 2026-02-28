@@ -54,6 +54,7 @@ from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as
 from common.constants import PAGERANK_FLD, TAG_FLD, SVR_CONSUMER_GROUP_NAME
 from common.token_utils import num_tokens_from_string, truncate
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
+from common.string_utils import split_and_sanitize_terms, truncate_utf8_bytes
 from common.exceptions import TaskCanceledException
 from common import settings
 from graphrag.utils import chat_limiter
@@ -518,7 +519,12 @@ async def build_chunks(task, progress_callback, db: Session):
                     cached = await keyword_extraction(chat_mdl, d["content_with_weight"], topn)
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "keywords", {"topn": topn})
             if cached:
-                d["important_kwd"] = cached.split(",")
+                d["important_kwd"] = split_and_sanitize_terms(
+                    cached,
+                    split_pattern=r"[,，;；、\n\r|]+",
+                    max_term_bytes=256,
+                    max_terms=4096,
+                )
                 d["important_tks"] = rag_tokenizer.tokenize(" ".join(d["important_kwd"]))
             return
 
@@ -890,7 +896,15 @@ def convert_data_types(data, schema):
                         result[field_name] = result[field_name].split(',')
                     else:
                         result[field_name] = [result[field_name]]
+                max_length = field_info.get('params', {}).get('max_length')
                 result[field_name] = [str(v) for v in result[field_name]]
+                if isinstance(max_length, int) and max_length > 0:
+                    result[field_name] = [
+                        truncate_utf8_bytes(v, max_length)
+                        for v in result[field_name]
+                        if v is not None
+                    ]
+                    result[field_name] = [v for v in result[field_name] if v]
                 max_capacity = field_info.get('params', {}).get('max_capacity', 4096)
                 if len(result[field_name]) > max_capacity:
                     logging.warning(f"Array field '{field_name}' has {len(result[field_name])} elements, truncating to {max_capacity}")
@@ -1079,8 +1093,13 @@ async def run_dataflow(db: Session, task: dict):
             del ck["questions"]
         if "keywords" in ck:
             if "important_tks" not in ck:
-                ck["important_kwd"] = ck["keywords"].split(",")
-                ck["important_tks"] = rag_tokenizer.tokenize(str(ck["keywords"]))
+                ck["important_kwd"] = split_and_sanitize_terms(
+                    ck["keywords"],
+                    split_pattern=r"[,，;；、\n\r|]+",
+                    max_term_bytes=256,
+                    max_terms=4096,
+                )
+                ck["important_tks"] = rag_tokenizer.tokenize(" ".join(ck["important_kwd"]))
             del ck["keywords"]
         if "summary" in ck:
             if "content_ltks" not in ck:
@@ -1106,14 +1125,14 @@ async def run_dataflow(db: Session, task: dict):
             DocumentService.update_by_id(db, doc_id, {"meta_fields": metadata})
 
     start_ts = timer()
-    set_progress(task_id, prog=0.82, msg="[DOC Engine]:\nStart to index...")
+    set_progress(db, task_id, prog=0.82, msg="[DOC Engine]:\nStart to index...")
     # 获取知识库名称和集合信息
     kb = KnowledgebaseService.get_by_id(db, task_dataset_id)
     kb_name = kb.name if kb else "default"
     collection_name = search.index_name_one(task["tenant_id"], kb_name)
     schema = await get_schema(collection_name)
     
-    e = await insert_milvus(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, task_id, 0, 100000000), collection_name, schema)
+    e = await insert_milvus(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, db, task_id, 0, 100000000), collection_name, schema)
     if not e:
         PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
         return
@@ -2606,7 +2625,7 @@ async def do_handle_task(db, task):
                     },
                 }
             )
-            if not KnowledgebaseService.update_by_id(kb.id, {"parser_config": kb_parser_config}):
+            if not KnowledgebaseService.update_by_id(db, kb.id, {"parser_config": kb_parser_config}):
                 progress_callback(prog=-1.0, msg="Internal error: Invalid RAPTOR configuration")
                 return
 

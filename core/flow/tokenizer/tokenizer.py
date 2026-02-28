@@ -31,6 +31,7 @@ from core.nlp import rag_tokenizer
 from common import settings
 from core.svr.task_executor import embed_limiter
 from common.token_utils import truncate
+from common.string_utils import split_and_sanitize_terms
 
 
 class TokenizerParam(ProcessParamBase):
@@ -128,8 +129,13 @@ class Tokenizer(ProcessBase):
                         ck["question_kwd"] = ck["questions"].split("\n")
                         ck["question_tks"] = rag_tokenizer.tokenize(str(ck["questions"]))
                     if ck.get("keywords"):
-                        ck["important_kwd"] = ck["keywords"].split(",")
-                        ck["important_tks"] = rag_tokenizer.tokenize(str(ck["keywords"]))
+                        ck["important_kwd"] = split_and_sanitize_terms(
+                            ck["keywords"],
+                            split_pattern=r"[,，;；、\n\r|]+",
+                            max_term_bytes=256,
+                            max_terms=4096,
+                        )
+                        ck["important_tks"] = rag_tokenizer.tokenize(" ".join(ck["important_kwd"]))
                     if ck.get("summary"):
                         ck["content_ltks"] = rag_tokenizer.tokenize(str(ck["summary"]))
                         ck["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(ck["content_ltks"])
