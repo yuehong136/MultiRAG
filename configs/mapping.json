@@ -72,7 +72,7 @@
           "match": "content_with_weight",
           "mapping": {
             "type": "VARCHAR",
-            "max_length": 16384,
+            "max_length": 65535,
             "enable_analyzer": true,
             "enable_match": true,
             "analyzer_params": {
@@ -99,7 +99,7 @@
           "match": "content_ltks",
           "mapping": {
             "type": "VARCHAR",
-            "max_length": 16384,
+            "max_length": 65535,
             "enable_analyzer": true,
             "enable_match": true,
             "analyzer_params": {
@@ -126,7 +126,7 @@
           "match": "content_sm_ltks",
           "mapping": {
             "type": "VARCHAR",
-            "max_length": 16384,
+            "max_length": 65535,
             "enable_analyzer": true,
             "enable_match": true,
             "analyzer_params": {
@@ -332,6 +332,17 @@
         }
       },
       {
+        "entities_kwd_template": {
+          "match": "entities_kwd",
+          "mapping": {
+            "type": "ARRAY",
+            "element_type": "VARCHAR",
+            "max_length": 256,
+            "max_capacity": 4096
+          }
+        }
+      },
+      {
         "question_tks_template": {
           "match": "question_tks",
           "mapping": {
@@ -375,8 +386,42 @@
         }
       },
       {
+        "weight_int_template": {
+          "match": "weight_int",
+          "mapping": {
+            "type": "INT64"
+          }
+        }
+      },
+      {
+        "rank_int_template": {
+          "match": "rank_int",
+          "mapping": {
+            "type": "INT64"
+          }
+        }
+      },
+      {
         "tag_kwd_template": {
           "match": "tag_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "name_kwd_template": {
+          "match": "name_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "knowledge_graph_kwd_template": {
+          "match": "knowledge_graph_kwd",
           "mapping": {
             "type": "VARCHAR",
             "max_length": 256
@@ -396,8 +441,15 @@
         "rank_flt_template": {
           "match": "rank_flt",
           "mapping": {
-            "type": "VARCHAR",
-            "max_length": 256
+            "type": "FLOAT"
+          }
+        }
+      },
+      {
+        "weight_flt_template": {
+          "match": "weight_flt",
+          "mapping": {
+            "type": "FLOAT"
           }
         }
       },
@@ -467,6 +519,15 @@
       {
         "removed_kwd_template": {
           "match": "removed_kwd",
+          "mapping": {
+            "type": "VARCHAR",
+            "max_length": 256
+          }
+        }
+      },
+      {
+        "raptor_kwd_template": {
+          "match": "raptor_kwd",
           "mapping": {
             "type": "VARCHAR",
             "max_length": 256

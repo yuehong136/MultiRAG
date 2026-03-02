@@ -45,6 +45,7 @@ from common.doc_store.doc_store_base import (
     OrderByExpr,
 )
 from common.float_utils import get_float
+from common.string_utils import truncate_utf8_bytes
 
 ATTEMPT_TIME = 2
 
@@ -337,13 +338,9 @@ class MilvusConnection(MilvusConnectionBase):
             if "kb_id" in new_row and isinstance(new_row["kb_id"], list):
                 new_row["kb_id"] = new_row["kb_id"][0] if new_row["kb_id"] else ""
 
-            # Handle keyword fields - 保持列表格式用于 ARRAY 类型字段
-            # 注意：convert_data_types 已经根据 schema 类型处理了这些字段
-            # 如果 schema 是 ARRAY 类型，保持列表；如果是 VARCHAR 类型，已转为字符串
-            # 这里只处理 VARCHAR 类型（已经是字符串的情况不需要处理）
-            # for kwd_field in ["important_kwd", "question_kwd", "entities_kwd"]:
-            #     if kwd_field in new_row and isinstance(new_row[kwd_field], list):
-            #         new_row[kwd_field] = "###".join(new_row[kwd_field])
+            # source_id is stored as VARCHAR; serialize list → newline-delimited string
+            if "source_id" in new_row and isinstance(new_row["source_id"], list):
+                new_row["source_id"] = "\n".join(new_row["source_id"])
 
             # Handle position fields
             if "position_int" in new_row and isinstance(new_row["position_int"], list):
@@ -355,6 +352,55 @@ class MilvusConnection(MilvusConnectionBase):
                     new_row[pos_field] = "_".join(f"{num:08x}" for num in new_row[pos_field])
 
             processed_rows.append(new_row)
+
+        # Fill defaults for every non-nullable schema field that is absent from a row.
+        # This handles mixed-type chunk batches (e.g. graph/subgraph chunks alongside
+        # entity/relation chunks) without requiring callers to know the full schema.
+        #
+        # conn.describe_collection() returns a plain dict (GrpcHandler calls .dict()).
+        # Field entries: {"name":..., "type": DataType, "params":{...}, "nullable": True, ...}
+        # "nullable" / "is_primary" / "is_function_output" are only present when True.
+        try:
+            schema_dict = conn.describe_collection(collection_name)
+            for fld in schema_dict.get("fields", []):
+                # Skip primary keys, auto-generated BM25 outputs, and nullable fields —
+                # Milvus only rejects inserts for non-nullable fields with missing values.
+                if fld.get("is_primary") or fld.get("is_function_output") or fld.get("nullable"):
+                    continue
+                name = fld["name"]
+                ftype = fld.get("type")
+                if ftype == DataType.FLOAT_VECTOR:
+                    dim = int(fld.get("params", {}).get("dim", 0))
+                    if dim > 0:
+                        zero_vec = [0.0] * dim
+                        for row in processed_rows:
+                            if name not in row:
+                                row[name] = zero_vec
+                elif ftype == DataType.VARCHAR:
+                    max_len = int(fld.get("params", {}).get("max_length", 65535))
+                    for row in processed_rows:
+                        if name not in row:
+                            row[name] = ""
+                        elif isinstance(row[name], str) and len(row[name].encode()) > max_len:
+                            row[name] = truncate_utf8_bytes(row[name], max_len)
+                elif ftype == DataType.FLOAT:
+                    for row in processed_rows:
+                        if name not in row:
+                            row[name] = 0.0
+                elif ftype == DataType.INT64:
+                    for row in processed_rows:
+                        if name not in row:
+                            row[name] = 0
+                elif ftype == DataType.JSON:
+                    for row in processed_rows:
+                        if name not in row:
+                            row[name] = "{}"
+                elif ftype == DataType.ARRAY:
+                    for row in processed_rows:
+                        if name not in row:
+                            row[name] = []
+        except Exception:
+            pass
 
         # Execute insert
         try:
@@ -533,6 +579,12 @@ class MilvusConnection(MilvusConnectionBase):
             self.logger.warning(f"Collection {collection_name} does not exist")
             return 0
 
+        # Mirror ES behaviour: inject kb_id from dataset_id into the condition so that
+        # the delete is always scoped to the correct knowledge base.
+        condition = dict(condition)
+        if dataset_id and "kb_id" not in condition:
+            condition["kb_id"] = dataset_id
+
         # Build filter expression - use "id" field preferentially (consistent with ES)
         filter_expr = ""
         chunk_ids = condition.get("id") or condition.get("pk")
@@ -611,7 +663,14 @@ class MilvusConnection(MilvusConnectionBase):
                     continue
 
                 # Special field processing - 处理关键词和问题列表字段
-                if field in ["important_kwd", "question_kwd", "entities_kwd"]:
+                if field == "source_id":
+                    if isinstance(value, list):
+                        value = [str(v) for v in value if v]
+                    elif isinstance(value, str):
+                        value = [v for v in value.split("\n") if v]
+                    else:
+                        value = []
+                elif field in ["important_kwd", "question_kwd", "entities_kwd"]:
                     if isinstance(value, list):
                         # ARRAY 类型直接返回列表，确保元素是字符串
                         value = [str(v).strip() for v in value if v]

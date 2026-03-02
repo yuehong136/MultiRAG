@@ -410,8 +410,9 @@ async def does_graph_contains(tenant_id, kb_id, doc_id):
     )
     fields2 = settings.docStoreConn.get_fields(res, fields)
     graph_doc_ids = set()
-    for chunk_id in fields2.keys():
-        graph_doc_ids = set(fields2[chunk_id]["source_id"])
+    for chunk_id, chunk_data in fields2.items():
+        if isinstance(chunk_data, dict) and "source_id" in chunk_data:
+            graph_doc_ids = set(chunk_data["source_id"])
     return doc_id in graph_doc_ids
 
 
@@ -712,6 +713,7 @@ async def rebuild_graph(tenant_id, kb_id, exclude_rebuild=None):
         )
         # tot = settings.docStoreConn.get_total(es_res)
         es_res = settings.docStoreConn.get_fields(es_res, flds)
+        es_res = {k: v for k, v in es_res.items() if isinstance(v, dict)}
 
         if len(es_res) == 0:
             break
