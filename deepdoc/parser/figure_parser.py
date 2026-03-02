@@ -138,7 +138,8 @@ def vision_figure_parser_docx_wrapper_naive(chunks, idx_lst, callback=None, **kw
     if not chunks:
         return []
     try:
-        vision_model = LLMBundle(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        with db_connection() as db:
+            vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
         callback(0.7, "Visual model detected. Attempting to enhance figure extraction...")
         print(" \n\n Yes vision model \n\n")
     except Exception:
