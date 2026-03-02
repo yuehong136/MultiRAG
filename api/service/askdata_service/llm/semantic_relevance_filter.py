@@ -212,6 +212,13 @@ class SemanticRelevanceFilter:
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
 
+            # 检查性能缓存
+            from api.service.askdata_service.cache import perf_cache
+            cached = perf_cache.get(prompt, namespace="relevance_filter")
+            if cached is not None:
+                logger.info("PerfCache命中，跳过LLM调用 [relevance_filter]")
+                return cached
+
             # 创建包含提示词的对话历史
             history = [{"role": "user", "content": prompt}]
 
@@ -242,6 +249,9 @@ class SemanticRelevanceFilter:
 
             # 验证和清理返回的数据
             validated_data = self._validate_exclude_format(exclude_data)
+
+            # 缓存验证后的结果
+            perf_cache.set(prompt, validated_data, namespace="relevance_filter")
 
             return validated_data
 

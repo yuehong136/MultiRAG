@@ -157,6 +157,13 @@ class NLQToInitialSQLGenerator:
                 }
             )
 
+            # 检查性能缓存
+            from api.service.askdata_service.cache import perf_cache
+            cached = perf_cache.get(prompt, namespace="sql_generation")
+            if cached is not None:
+                logger.info("PerfCache命中，跳过LLM调用 [sql_generation]")
+                return cached
+
             history = [{"role": "user", "content": prompt}]
             gen_conf = {
                 "temperature": 0.1,
@@ -196,6 +203,8 @@ class NLQToInitialSQLGenerator:
                 return None
 
             logger.info("成功生成并验证了SQL及其组件。")
+            # 缓存成功的结果（failed 不缓存）
+            perf_cache.set(prompt, validated_data, namespace="sql_generation")
             return validated_data
 
         except FileNotFoundError as e:

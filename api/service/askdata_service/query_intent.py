@@ -214,6 +214,13 @@ class QueryIntentAnalyzer:
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
 
+            # 检查性能缓存
+            from api.service.askdata_service.cache import perf_cache
+            cached = perf_cache.get(prompt, namespace="chart_recommendation")
+            if cached is not None:
+                logger.info("PerfCache命中，跳过LLM调用 [chart_recommendation]")
+                return cached
+
             # 创建包含我们提示词的对话历史
             history = [{"role": "user", "content": prompt}]
 
@@ -242,6 +249,10 @@ class QueryIntentAnalyzer:
             # 提取和处理响应
             parsed_data, success = self._extract_json_from_response(response)
             chart, reason = self._extract_chart_recommendation(parsed_data, response, supported_charts_list)
+
+            # 缓存成功的结果
+            perf_cache.set(prompt, (chart, reason), namespace="chart_recommendation")
+
             return chart, reason
 
         except Exception as e:

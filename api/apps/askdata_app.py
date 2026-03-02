@@ -22,7 +22,7 @@ from api.service.askdata_service.util.sqlglot_utils import (
     normalize_sql_components,
 )
 from api.service.askdata_service.stop_request_manager import stop_request_manager
-from api.service.askdata_service.cache import semantic_layer_cache
+from api.service.askdata_service.cache import semantic_layer_cache, perf_cache
 from api.service.nl2sql_service.query_data_from_zt_by_sql import query_data_with_params
 
 router = APIRouter()
@@ -61,6 +61,7 @@ class GetSqlAndTableConfigReq(BaseModel):
     conversation_id: str = Field(None, title="conversation_id", description="conversation_id")
     ask_id: str = Field(None, title="ask_id", description="用户的提问ID")
     semantic_layer: Dict[str, Any] = Field({}, title="语义层", description="语义层")
+    clear_cache: bool = Field(False, title="清除缓存", description="是否清除LLM响应缓存")
 
 
 @router.post("/get-sql-and-table-config", response_model=ResponseSchema)
@@ -82,6 +83,10 @@ async def get_sql_and_table_config(
     overall_reason = None
 
     try:
+        if body.clear_cache:
+            perf_cache.clear_all()
+            logger.info("已清除LLM响应性能缓存")
+
         # 从缓存中获取敏感的语义层数据
         cached_semantic_data = None
         processed_semantic_layer_data = None
@@ -680,6 +685,11 @@ class SemanticLayerRequest(BaseModel):
         title="多轮对话的分组ID",
         description="如果是多轮对话，那么同一组对话所享有的ID"
     )
+    clear_cache: bool = Field(
+        False,
+        title="清除缓存",
+        description="是否清除LLM响应缓存"
+    )
 
 
 @router.post("/get-semantic-layer-streaming/{custom_event_id}", response_model=ResponseSchema,
@@ -722,6 +732,10 @@ async def get_semantic_layer_streaming(
         )
 
     try:
+        if body.clear_cache:
+            perf_cache.clear_all()
+            logger.info("已清除LLM响应性能缓存")
+
         processed_semantic_layer, model_ids, recommended_chart, recommendation_reason, phase2_prefetch_data = await service.generate_semantic_layer(
             user_query=final_user_query,
             dataset_id_list=body.dataset_id_list,

@@ -171,6 +171,13 @@ class SemanticFieldExtractor:
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
 
+            # 检查性能缓存
+            from api.service.askdata_service.cache import perf_cache
+            cached = perf_cache.get(prompt, namespace="field_extraction")
+            if cached is not None:
+                logger.info("PerfCache命中，跳过LLM调用 [field_extraction]")
+                return cached
+
             # 创建包含我们提示词的对话历史
             history = [{"role": "user", "content": prompt}]
 
@@ -202,6 +209,8 @@ class SemanticFieldExtractor:
             if success:
                 # 验证和清理字段
                 cleaned_fields = self._validate_and_clean_fields(extracted_fields)
+                # 缓存成功的结果
+                perf_cache.set(prompt, cleaned_fields, namespace="field_extraction")
                 return cleaned_fields
             else:
                 logger.error("Failed to extract valid JSON from LLM response")
