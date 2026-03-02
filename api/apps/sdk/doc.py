@@ -683,9 +683,9 @@ async def metadata_batch_update(
         if not isinstance(d, dict) or not d.get("key"):
             return get_error_data_result(retmsg="Each delete requires key.")
 
-    kb_doc_ids = KnowledgebaseService.list_documents_by_ids(db, [dataset_id])
-    target_doc_ids = set(kb_doc_ids)
     if document_ids:
+        kb_doc_ids = KnowledgebaseService.list_documents_by_ids(db, [dataset_id])
+        target_doc_ids = set(kb_doc_ids)
         invalid_ids = set(document_ids) - set(kb_doc_ids)
         if invalid_ids:
             return get_error_data_result(retmsg=f"These documents do not belong to dataset {dataset_id}: {', '.join(invalid_ids)}")
@@ -1292,10 +1292,11 @@ async def retrieval_test(
         return get_error_data_result(retmsg="`document_ids` should be a list")
     
     # 验证文档ID
-    doc_ids_list = KnowledgebaseService.list_documents_by_ids(db, kb_ids)
-    for doc_id in doc_ids:
-        if doc_id not in doc_ids_list:
-            return get_error_data_result(retmsg=f"The datasets don't own the document {doc_id}")
+    if doc_ids:
+        doc_ids_list = KnowledgebaseService.list_documents_by_ids(db, kb_ids)
+        for doc_id in doc_ids:
+            if doc_id not in doc_ids_list:
+                return get_error_data_result(retmsg=f"The datasets don't own the document {doc_id}")
     
     # 处理元数据过滤
     if not doc_ids:
