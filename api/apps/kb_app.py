@@ -559,7 +559,7 @@ def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get
     return get_json_result(data=True)
 
 
-@router.get("/<kb_id>/knowledge_graph'", summary="获取知识图谱")
+@router.get("/{kb_id}/knowledge_graph", summary="获取知识图谱")
 def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(
@@ -597,7 +597,7 @@ def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(mana
     return get_json_result(data=obj)
 
 
-@router.delete('/<kb_id>/knowledge_graph', summary="删除知识图谱")
+@router.delete('/{kb_id}/knowledge_graph', summary="删除知识图谱")
 def delete_knowledge_graph(kb_id, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(
