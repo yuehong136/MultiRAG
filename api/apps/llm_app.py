@@ -37,6 +37,7 @@ from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel, 
 
 from core.prompts.generator import kb_prompt
 from core.utils.tavily_conn import Tavily
+from api.db.services.dialog_service import _stream_with_think_delta
 from api.db.services.mcp_server_service import MCPServerService
 from api.utils.web_utils import CONTENT_TYPE_MAP
 from common import settings
@@ -373,12 +374,44 @@ class ChatAgentAdapter:
         elif not original_prompt:
             self.agent._param.sys_prompt = "You are a helpful AI assistant."
 
+        def _emit_text_delta(delta: str, in_think: bool):
+            """解析 delta 中的 <think></think> 标记，返回结构化事件列表。
+            marker 事件统一使用 start_to_think/end_to_think，与其他 SSE 端点保持一致。
+            think 块内的文本同样作为 {"type": "text"} 事件输出，客户端通过 marker 判断上下文。
+            """
+            events = []
+            text = delta
+            while text:
+                if not in_think:
+                    pos = text.find("<think>")
+                    if pos == -1:
+                        events.append({"type": "text", "content": text})
+                        text = ""
+                    else:
+                        if pos > 0:
+                            events.append({"type": "text", "content": text[:pos]})
+                        in_think = True
+                        events.append({"start_to_think": True})
+                        text = text[pos + len("<think>"):]
+                else:
+                    pos = text.find("</think>")
+                    if pos == -1:
+                        events.append({"type": "text", "content": text})
+                        text = ""
+                    else:
+                        if pos > 0:
+                            events.append({"type": "text", "content": text[:pos]})
+                        in_think = False
+                        events.append({"end_to_think": True})
+                        text = text[pos + len("</think>"):]
+            return events, in_think
+
         try:
             self.canvas_mock.history = history
             self.agent._param.prompts = history
             prompt, msg, _ = self.agent._prepare_prompt_variables()
 
-            accumulated_text = ""
+            in_think = False
 
             if self.agent.tools:
                 from core.prompts.generator import message_fit_in
@@ -427,11 +460,9 @@ class ChatAgentAdapter:
                         previous_tool_count = len(use_tools)
 
                     if delta_ans:
-                        accumulated_text += delta_ans
-                        yield {
-                            "type": "text",
-                            "content": accumulated_text
-                        }
+                        events, in_think = _emit_text_delta(delta_ans, in_think)
+                        for event in events:
+                            yield event
 
                 if use_tools:
                     yield {
@@ -453,11 +484,9 @@ class ChatAgentAdapter:
                 # 使用异步流式输出
                 async for delta in self.agent._stream_output_async(prompt, msg):
                     if delta:
-                        accumulated_text += delta
-                        yield {
-                            "type": "text",
-                            "content": accumulated_text
-                        }
+                        events, in_think = _emit_text_delta(delta, in_think)
+                        for event in events:
+                            yield event
 
         except Exception as e:
             yield {
@@ -1973,7 +2002,9 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
     # 根据是否流式调用选择合适的方法
     if req["stream"]:
         data = []
-        async for chunk in chat_mdl.async_chat_streamly(**call_params):
+        async for chunk in chat_mdl.async_chat_streamly_delta(**call_params):
+            if isinstance(chunk, int):
+                break
             data.append(chunk)
     else:
         data = await chat_mdl.async_chat(**call_params)
@@ -2238,20 +2269,14 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
             # 获取初始设置
             chat_mdl, call_params = get_initial_setup()
 
-            # 使用异步流式生成
-            last_ans = ""
-            async for chunk in chat_mdl.async_chat_streamly(**call_params):
-                if isinstance(chunk, int):
-                    break
-
-                # 计算增量，与原代码保持一致
-                delta_ans = chunk[len(last_ans):]  # 计算增量
-                if not delta_ans:  # 如果没有新内容，跳过
-                    continue
-
-                last_ans = chunk  # 更新累加内容
-                sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": last_ans}, ensure_ascii=False)
-                yield f"data: {sse_data}\n\n"  # 注意这里返回的是累加的内容，与原代码一致
+            stream_iter = chat_mdl.async_chat_streamly_delta(**call_params)
+            async for kind, value, state in _stream_with_think_delta(stream_iter):
+                if kind == "marker":
+                    flags = {"start_to_think": True} if value == "<think>" else {"end_to_think": True}
+                    sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": "", **flags}, ensure_ascii=False)
+                else:
+                    sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": value}, ensure_ascii=False)
+                yield f"data: {sse_data}\n\n"
 
             # 流结束
             end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
@@ -2836,12 +2861,12 @@ async def enhanced_chat_service_sse(
                         knowledge_context=knowledge_context,
                         files=request.files
                     ):
-                        wrapped_message = {
-                            "retcode": 0,
-                            "retmsg": "",
-                            "data": message
-                        }
-                        yield f"data: {json.dumps(wrapped_message, ensure_ascii=False)}\n\n"
+                        if "start_to_think" in message or "end_to_think" in message:
+                            # think 标记提升到 SSE 顶层，与其他端点格式一致
+                            key = "start_to_think" if "start_to_think" in message else "end_to_think"
+                            yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': '', key: True}, ensure_ascii=False)}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': message}, ensure_ascii=False)}\n\n"
 
                     # 发送完成消息
                     end_data = {
@@ -2852,42 +2877,26 @@ async def enhanced_chat_service_sse(
                     yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
                 else:
-                    # 非结构化输出模式 - 使用异步方法
-                    accumulated_content = ""
-                    start_data = {
-                        "retcode": 0,
-                        "retmsg": "Chat started",
-                        "data": ""
-                    }
-                    yield f"data: {json.dumps(start_data, ensure_ascii=False)}\n\n"
-
-                    async for delta in chat_agent.chat_with_tools_stream_async(
+                    # 非结构化输出模式 - 使用异步方法，带 think 块处理
+                    stream_iter = chat_agent.chat_with_tools_stream_async(
                         query=request.messages[-1]["content"] if request.messages else "",
                         messages=request.messages[:-1] if request.messages else [],
                         knowledge_context=knowledge_context,
                         files=request.files
-                    ):
-                        if delta:
-                            accumulated_content += delta
-                            response_data = {
-                                "retcode": 0,
-                                "retmsg": "",
-                                "data": accumulated_content
-                            }
-                            yield f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
+                    )
+                    async for kind, value, state in _stream_with_think_delta(stream_iter):
+                        if kind == "marker":
+                            flags = {"start_to_think": True} if value == "<think>" else {"end_to_think": True}
+                            yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': '', **flags}, ensure_ascii=False)}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': value}, ensure_ascii=False)}\n\n"
 
                     # 添加工具使用摘要（如果启用）
                     if request.verbose_tool_use and chat_agent.agent.tools:
                         use_tools = getattr(chat_agent.agent, '_last_use_tools', [])
                         if use_tools:
                             tools_summary = f"\n\n📊 **本次对话使用了 {len(use_tools)} 个工具调用**"
-                            accumulated_content += tools_summary
-                            final_data = {
-                                "retcode": 0,
-                                "retmsg": "",
-                                "data": accumulated_content
-                            }
-                            yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
+                            yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': tools_summary}, ensure_ascii=False)}\n\n"
 
                     # 发送完成消息
                     end_data = {
