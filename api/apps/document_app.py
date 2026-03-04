@@ -2651,6 +2651,7 @@ def run(
 
             if str(req["run"]) == TaskStatus.RUNNING.value:
                 if req.get("apply_kb"):
+                    d["parser_config"]["llm_id"] = kb.parser_config.get("llm_id")
                     d["parser_config"]["enable_metadata"] = kb.parser_config.get("enable_metadata", False)
                     d["parser_config"]["metadata"] = kb.parser_config.get("metadata", {})
                     DocumentService.update_parser_config(db, id, d["parser_config"])
