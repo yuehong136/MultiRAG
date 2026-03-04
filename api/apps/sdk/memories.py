@@ -2,9 +2,9 @@
 """
 @project: multirag
 @Author：龙
-@file： memory_app.py
+@file： memories.py
 @date：2025/01/14
-@desc: Memory数据集管理API - 采用Pydantic V2风格
+@desc: Memory数据集管理API (SDK) - 采用Pydantic V2风格
 """
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ class MemoryListParams(BaseModel):
 
 # ==================== API Endpoints ====================
 
-@router.post('', summary="创建Memory", response_description="成功创建Memory")
+@router.post('/memories', summary="创建Memory", response_description="成功创建Memory")
 def create_memory(
     request_body: CreateMemoryRequest,
     db: Session = Depends(get_db),
@@ -155,7 +155,7 @@ def create_memory(
         )
 
 
-@router.put('/{memory_id}', summary="更新Memory", response_description="成功更新Memory")
+@router.put('/memories/{memory_id}', summary="更新Memory", response_description="成功更新Memory")
 def update_memory(
     memory_id: str,
     request_body: UpdateMemoryRequest,
@@ -314,7 +314,7 @@ def update_memory(
         )
 
 
-@router.delete('/{memory_id}', summary="删除Memory", response_description="成功删除Memory")
+@router.delete('/memories/{memory_id}', summary="删除Memory", response_description="成功删除Memory")
 def delete_memory(
     memory_id: str,
     db: Session = Depends(get_db),
@@ -355,7 +355,7 @@ def delete_memory(
         )
 
 
-@router.get('', summary="获取Memory列表", response_description="成功获取Memory列表")
+@router.get('/memories', summary="获取Memory列表", response_description="成功获取Memory列表")
 def list_memory(
     tenant_id: list[str] | None = Query(None, description="租户ID列表"),
     memory_type: list[str] | None = Query(None, description="Memory类型列表"),
@@ -421,7 +421,7 @@ def list_memory(
         )
 
 
-@router.get('/{memory_id}/config', summary="获取Memory配置", response_description="成功获取Memory配置")
+@router.get('/memories/{memory_id}/config', summary="获取Memory配置", response_description="成功获取Memory配置")
 def get_memory_config(
     memory_id: str,
     db: Session = Depends(get_db),
@@ -449,7 +449,7 @@ def get_memory_config(
     return get_json_result(data=format_ret_data_from_memory(memory))
 
 
-@router.get('/{memory_id}', summary="获取Memory详情", response_description="成功获取Memory详情及消息列表")
+@router.get('/memories/{memory_id}', summary="获取Memory详情", response_description="成功获取Memory详情及消息列表")
 def get_memory_detail(
     memory_id: str,
     agent_id: list[str] | None = Query(None, description="Agent ID列表"),

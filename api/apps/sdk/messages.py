@@ -14,7 +14,7 @@
 #  limitations under the License.
 #
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -27,7 +27,7 @@ from common.constants import RetCode
 from common.time_utils import current_timestamp, timestamp_to_date
 from memory.services.messages import MessageService
 
-logger = logging.getLogger("multirag.messages_app")
+logger = logging.getLogger("multirag.messages")
 
 router = APIRouter()
 
@@ -54,7 +54,7 @@ class SearchMessageRequest(BaseModel):
     session_id: str = Field(default="", description="Optional Session ID filter")
 
 
-@router.post("", summary="添加消息到记忆")
+@router.post("/messages", summary="添加消息到记忆")
 async def add_message(
     request: AddMessageRequest,
     db: Session = Depends(get_db),
@@ -86,7 +86,7 @@ async def add_message(
     return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg="Some messages failed to add.", data=res)
 
 
-@router.delete("/{memory_id}:{message_id}", summary="忘记（软删除）消息")
+@router.delete("/messages/{memory_id}:{message_id}", summary="忘记（软删除）消息")
 async def forget_message(
     memory_id: str,
     message_id: int,
@@ -111,7 +111,7 @@ async def forget_message(
         return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg=f"Failed to forget message '{message_id}' in memory '{memory_id}'.")
 
 
-@router.put("/{memory_id}:{message_id}", summary="更新消息状态")
+@router.put("/messages/{memory_id}:{message_id}", summary="更新消息状态")
 async def update_message(
     memory_id: str,
     message_id: int,
@@ -120,8 +120,6 @@ async def update_message(
     user=Depends(manager),
 ):
     """Update message status."""
-    from api.db.services.memory_service import MemoryService
-
     memory = MemoryService.get_by_memory_id(db, memory_id)
     if not memory:
         return get_json_result(retcode=RetCode.NOT_FOUND, retmsg=f"Memory '{memory_id}' not found.")
@@ -138,7 +136,7 @@ async def update_message(
         return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg=f"Failed to set status for message '{message_id}' in memory '{memory_id}'.")
 
 
-@router.get("/search", summary="搜索记忆中的消息")
+@router.get("/messages/search", summary="搜索记忆中的消息")
 async def search_message(
     memory_id: list[str] = Query(..., description="List of Memory IDs"),
     query: str = Query(..., description="Search query"),
@@ -164,7 +162,7 @@ async def search_message(
     return get_json_result(retmsg=True, data=res)
 
 
-@router.get("", summary="获取最近的消息")
+@router.get("/messages", summary="获取最近的消息")
 async def get_messages(
     memory_id: list[str] = Query(..., description="List of Memory IDs"),
     agent_id: str = Query(default="", description="Agent ID"),
@@ -176,7 +174,6 @@ async def get_messages(
     """Get recent messages from memory."""
     if len(memory_id) == 1 and ',' in memory_id[0]:
         memory_id = memory_id[0].split(',')
-    from api.db.services.memory_service import MemoryService
 
     memory_list = MemoryService.get_by_ids(db, memory_id)
     uids = [memory.tenant_id for memory in memory_list]
@@ -184,7 +181,7 @@ async def get_messages(
     return get_json_result(retmsg=True, data=res)
 
 
-@router.get("/{memory_id}:{message_id}/content", summary="获取消息内容")
+@router.get("/messages/{memory_id}:{message_id}/content", summary="获取消息内容")
 async def get_message_content(
     memory_id: str,
     message_id: int,
@@ -192,8 +189,6 @@ async def get_message_content(
     user=Depends(manager),
 ):
     """Get message content by ID."""
-    from api.db.services.memory_service import MemoryService
-
     memory = MemoryService.get_by_memory_id(db, memory_id)
     if not memory:
         return get_json_result(retcode=RetCode.NOT_FOUND, retmsg=f"Memory '{memory_id}' not found.")
