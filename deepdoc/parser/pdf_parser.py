@@ -474,7 +474,7 @@ class RAGFlowPdfParser:
         self.boxes = bxs
 
     def _naive_vertical_merge(self, zoomin=3):
-        #bxs = self._assign_column(self.boxes, zoomin)
+        # bxs = self._assign_column(self.boxes, zoomin)
         bxs = self.boxes
 
         grouped = defaultdict(list)
@@ -552,6 +552,7 @@ class RAGFlowPdfParser:
             merged_boxes.extend(bxs)
 
         # self.boxes = sorted(merged_boxes, key=lambda x: (x["page_number"], x.get("col_id", 0), x["top"]))
+        self.boxes = merged_boxes
 
     def _final_reading_order_merge(self, zoomin=3):
         if not self.boxes:
