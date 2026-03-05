@@ -368,18 +368,15 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         if is_create and DialogService.get_or_none(db, tenant_id=user.id, name=request.name):
             return get_data_error_result(retmsg=f"Duplicated Dialog name {request.name}.")
 
-        if not is_create:
-            # 针对更新逻辑的特殊校验
-            if not request.kb_ids and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config['system']:
-                return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no dataset / Tavily used here.")
+        if not (request.kb_ids or []) and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config.get("system", ""):
+            return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no dataset / Tavily used here.")
 
-            # 验证系统提示中是否包含所有必需参数
-            for p in prompt_config["parameters"]:
-                if p["optional"]:
-                    continue
-                if prompt_config["system"].find("{%s}" % p["key"]) < 0:
-                    return get_data_error_result(
-                        retmsg="Parameter '{}' is not used".format(p["key"]))
+        for p in prompt_config.get("parameters", []):
+            if p["optional"]:
+                continue
+            if prompt_config.get("system", "").find("{%s}" % p["key"]) < 0:
+                return get_data_error_result(
+                    retmsg="Parameter '{}' is not used".format(p["key"]))
 
         tenant = TenantService.get_by_id(db, user.id)
         if not tenant:

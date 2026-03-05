@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi_login import LoginManager
@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import get_db, SessionLocal
 from api.db.services import UserService
 from common import settings
+from common.constants import RetCode
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
 from datetime import datetime
@@ -371,14 +372,38 @@ async def not_found_handler(request: Request, exc):
     """
     处理 404 错误，记录无效的 URL 请求
     """
-    error_msg = f"The requested URL {request.url.path} was not found"
-    logging.error(error_msg)
+    logging.error(f"The requested URL {request.url.path} was not found")
+    message = f"Not Found: {request.url.path}"
     return JSONResponse(
         status_code=404,
         content={
+            "code": RetCode.NOT_FOUND,
+            "message": message,
+            "data": None,
             "error": "Not Found",
-            "message": error_msg,
         }
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """
+    统一处理 HTTPException，对 401 返回规范化响应
+    """
+    if exc.status_code == 401:
+        logging.warning("Unauthorized request")
+        return JSONResponse(
+            status_code=401,
+            content={
+                "code": RetCode.UNAUTHORIZED,
+                "message": exc.detail or "Unauthorized",
+                "data": None,
+            }
+        )
+    # 其他 HTTPException 保持默认行为
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
     )
 
 

@@ -1928,6 +1928,7 @@ class DocumentService(CommonService):
         ).filter(
             cls.model.status == StatusEnum.VALID.value,
             cls.model.type != FileType.VIRTUAL.value,
+            or_(cls.model.run.is_(None), cls.model.run != TaskStatus.CANCEL.value),
             or_(
                 and_(cls.model.progress < 1, cls.model.progress > 0),
                 cls.model.id.in_(unfinished_task_query)  # including unfinished tasks like GraphRAG, RAPTOR and Mindmap
@@ -2560,6 +2561,8 @@ class DocumentService(CommonService):
                 bad = 0
                 doc = DocumentService.get_by_id(db, doc_id)
                 status = doc.run  # TaskStatus.RUNNING.value
+                if status == TaskStatus.CANCEL.value:
+                    continue
                 doc_progress = doc.progress if doc and doc.progress else 0.0
                 special_task_running = False
                 priority = 0
@@ -2607,7 +2610,17 @@ class DocumentService(CommonService):
                         info["progress_msg"] += "\n%d tasks are ahead in the queue..."%get_queue_length(priority)
                 else:
                     info["progress_msg"] = "%d tasks are ahead in the queue..."%get_queue_length(priority)
-                cls.update_by_id(db, d["id"], info)
+                info["update_time"] = current_timestamp()
+                info["update_date"] = get_format_time()
+                db.execute(
+                    update(cls.model)
+                    .where(
+                        cls.model.id == d["id"],
+                        or_(cls.model.run.is_(None), cls.model.run != TaskStatus.CANCEL.value)
+                    )
+                    .values(info)
+                )
+                db.commit()
             except Exception as e:
                 if str(e).find("'0'") < 0:
                     logging.exception("fetch task exception")

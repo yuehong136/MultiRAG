@@ -35,50 +35,48 @@ from common.constants import RetCode
 async def _coerce_request_data(request: Request) -> dict:
     """
     Fetch JSON body with sane defaults; fallback to form data.
-    
+
     Note: FastAPI typically uses Pydantic models for request validation,
-    making this function rarely needed. However, it's provided for 
+    making this function rarely needed. However, it's provided for
     edge cases where manual request body parsing is required.
-    
+
     Args:
         request: FastAPI Request object
-        
+
     Returns:
         dict: Parsed request data from JSON body or form data
-        
+
     Raises:
         ValueError: When no JSON body or form data found
         TypeError: When payload type is unsupported
     """
+    if hasattr(request.state, '_cached_payload'):
+        return request.state._cached_payload
     payload: Any = None
-    last_error: Exception | None = None
 
-    try:
+    body_bytes = await request.body()
+    has_body = bool(body_bytes)
+    content_type = (request.headers.get("content-type") or "").lower()
+    is_json = content_type.startswith("application/json")
+
+    if not has_body:
+        payload = {}
+    elif is_json:
         payload = await request.json()
-    except Exception as e:
-        last_error = e
-        payload = None
+        if isinstance(payload, dict):
+            payload = payload or {}
+        elif isinstance(payload, str):
+            raise AttributeError("'str' object has no attribute 'get'")
+        else:
+            raise TypeError("JSON payload must be an object.")
+    else:
+        form = await request.form()
+        payload = dict(form) if form else None
+        if payload is None:
+            raise TypeError("Request body is not a valid form payload.")
 
-    if payload is None:
-        try:
-            form = await request.form()
-            payload = dict(form)
-        except Exception as e:
-            last_error = e
-            payload = None
-
-    if payload is None:
-        if last_error is not None:
-            raise last_error
-        raise ValueError("No JSON body or form data found in request.")
-
-    if isinstance(payload, dict):
-        return payload or {}
-
-    if isinstance(payload, str):
-        raise AttributeError("'str' object has no attribute 'get'")
-
-    raise TypeError(f"Unsupported request payload type: {type(payload)!r}")
+    request.state._cached_payload = payload
+    return payload
 
 
 async def get_request_json(request: Request) -> dict:
@@ -133,21 +131,17 @@ def get_data_error_result(retcode=RetCode.DATA_ERROR, retmsg='Sorry! Data missin
 
 
 def server_error_response(e):
-    # Quart invokes this handler outside the original except block, so we must pass exc_info manually.
     logging.error("Unhandled exception during request", exc_info=(type(e), e, e.__traceback__))
     try:
         msg = repr(e).lower()
         if getattr(e, "code", None) == 401 or ("unauthorized" in msg) or ("401" in msg):
-            return get_json_result(retcode=RetCode.UNAUTHORIZED, retmsg=repr(e))
+            return JSONResponse(
+                status_code=RetCode.UNAUTHORIZED,
+                content=jsonable_encoder({"retcode": RetCode.UNAUTHORIZED, "retmsg": "Unauthorized", "data": None}),
+            )
     except Exception as ex:
         logging.warning(f"error checking authorization: {ex}")
 
-    if len(e.args) > 1:
-        try:
-            serialized_data = serialize_for_json(e.args[1])
-            return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=serialized_data)
-        except Exception:
-            return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=repr(e.args[0]), data=None)
     if repr(e).find("index_not_found_exception") >= 0:
         return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg="No chunk found, please upload file and parse it.")
 
@@ -190,11 +184,17 @@ def validate_request(*args, **kwargs):
     def wrapper(func):
         @wraps(func)
         async def decorated_function(request: Request, *_args, **_kwargs):
-            input_arguments = await _coerce_request_data(request)
+            if args or kwargs:
+                try:
+                    input_arguments = await _coerce_request_data(request)
+                except (AttributeError, TypeError):
+                    input_arguments = {}
+            else:
+                input_arguments = await _coerce_request_data(request)
             errs = process_args(input_arguments)
             if errs:
                 return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg=errs)
-            
+
             # 支持同步和异步函数
             if inspect.iscoroutinefunction(func):
                 return await func(request, *_args, **_kwargs)

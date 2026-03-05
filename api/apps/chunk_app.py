@@ -1067,25 +1067,32 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
 
         collection_name = search.index_name_one(kb.tenant_id, kb.name)
         db_type = settings.docStoreConn.db_type()
-        # Include doc_id in condition to properly scope the delete
         condition = {"id": req["chunk_ids"], "doc_id": req["doc_id"]}
-        if db_type == "milvus":
-            delete_result = settings.docStoreConn.delete(
-                condition=condition,
-                index_name=collection_name,
-                dataset_id=kb.id
-            )
-        else:
-            # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
-            delete_result = settings.docStoreConn.delete(
-                condition,
-                collection_name,
-                kb.id
-            )
-        if delete_result is None:
+        try:
+            if db_type == "milvus":
+                deleted_count = settings.docStoreConn.delete(
+                    condition=condition,
+                    index_name=collection_name,
+                    dataset_id=kb.id
+                )
+            else:
+                deleted_count = settings.docStoreConn.delete(
+                    condition,
+                    collection_name,
+                    kb.id
+                )
+        except Exception:
             return get_data_error_result(retmsg="Chunk deleting failure")
         deleted_chunk_ids = req["chunk_ids"]
-        chunk_number = len(deleted_chunk_ids)
+        if isinstance(deleted_chunk_ids, list):
+            unique_chunk_ids = list(dict.fromkeys(deleted_chunk_ids))
+            has_ids = len(unique_chunk_ids) > 0
+        else:
+            unique_chunk_ids = [deleted_chunk_ids]
+            has_ids = deleted_chunk_ids not in (None, "")
+        if has_ids and deleted_count == 0:
+            return get_data_error_result(retmsg="Index updating failure")
+        chunk_number = deleted_count if deleted_count else 0
         DocumentService.decrement_chunk_num(db, doc.id, doc.kb_id, 1, chunk_number, 0)
         for cid in deleted_chunk_ids:
             if settings.STORAGE_IMPL.obj_exist(doc.kb_id, cid):
