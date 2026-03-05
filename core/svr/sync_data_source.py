@@ -14,6 +14,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any
 
+from api.utils.common import hash128
 from api.db.services.connector_service import ConnectorService, SyncLogsService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.db_models import db_connection
@@ -109,7 +110,7 @@ class SyncBase:
             docs = []
             for doc in document_batch:
                 d = {
-                    "id": doc.id,
+                    "id": hash128(doc.id),
                     "connector_id": task["connector_id"],
                     "source": self.SOURCE_NAME,
                     "semantic_identifier": doc.semantic_identifier,

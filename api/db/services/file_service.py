@@ -375,7 +375,25 @@ class FileService(CommonService):
         safe_parent_path = sanitize_path(parent_path)
 
         err, files_info = [], []
-        for file_blob, filename in file_objs:  # 解包元组
+        for file_obj in file_objs:
+            # 支持 FileObj 对象（带 id/read()）和原始 (blob, filename) 元组两种格式
+            if isinstance(file_obj, tuple):
+                file_blob, filename = file_obj
+                file_id = None
+            else:
+                file_blob = file_obj.read()
+                filename = file_obj.filename
+                file_id = file_obj.id if hasattr(file_obj, "id") else None
+
+            # 如果文档 id 已存在，直接更新存储内容而非新建
+            if file_id is not None:
+                existing_doc = DocumentService.get_by_id(db, file_id)
+                if existing_doc is not None:
+                    settings.STORAGE_IMPL.put(kb.id, existing_doc.location, file_blob)
+                    DocumentService.update_by_id(db, file_id, {"size": len(file_blob)})
+                    files_info.append((existing_doc.__dict__, file_blob))
+                    continue
+
             try:
                 DocumentService.check_doc_health(db, kb.tenant_id, filename)
                 filename = duplicate_name(
@@ -397,13 +415,8 @@ class FileService(CommonService):
 
                 settings.STORAGE_IMPL.put(kb.id, location, file_blob)
 
-                # # 根据 labels 是否有值来决定 id 的生成方式
-                # if labels:
-                #     file_id = os.path.splitext(filename)[0]  # 使用文件名的部分
-                # else:
-                #     file_id = get_uuid()  # 默认使用 UUID
-
-                file_id = get_uuid()
+                if file_id is None:
+                    file_id = get_uuid()
 
                 img = thumbnail_img(filename, file_blob)
                 thumbnail_location = ""

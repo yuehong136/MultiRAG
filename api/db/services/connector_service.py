@@ -10,6 +10,8 @@ import logging
 import os
 from datetime import datetime
 
+from pydantic import BaseModel
+
 from sqlalchemy import select, func, text, cast, literal_column
 from sqlalchemy.dialects.postgresql import INTERVAL as Interval
 from sqlalchemy.sql import desc as sa_desc
@@ -385,9 +387,21 @@ class SyncLogsService(CommonService):
         if not docs:
             return [], []
 
-        # 将文档转换为 (blob, filename) 元组格式
+        class FileObj(BaseModel):
+            id: str
+            filename: str
+            blob: bytes
+
+            def read(self) -> bytes:
+                return self.blob
+
+        # 将文档转换为 FileObj 对象，携带 id 以支持重复检测
         files = [
-            (d["blob"], d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d['extension'][::-1]) < 0 else ""))
+            FileObj(
+                id=d["id"],
+                filename=d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d['extension'][::-1]) < 0 else ""),
+                blob=d["blob"]
+            )
             for d in docs
         ]
 
