@@ -331,7 +331,4 @@ class MemoryService(CommonService):
         Returns:
             删除的记录数
         """
-        stmt = delete(cls.model).where(cls.model.id == memory_id)
-        result = db.execute(stmt)
-        db.commit()
-        return result.rowcount
+        return cls.delete_by_id(db, memory_id)
