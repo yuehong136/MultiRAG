@@ -1,9 +1,11 @@
+import time
+start_ts = time.time()
+
 import asyncio
 import random
 import socket
 import sys
 import threading
-import time
 import concurrent.futures
 
 from api.db.db_models import db_connection
@@ -3033,6 +3035,8 @@ async def main():
 
     report_task = asyncio.create_task(report_status())
     tasks = []
+
+    logging.info(f"MultiRAG ingestion is ready after {time.time() - start_ts}s initialization.")
     try:
         while not stop_event.is_set():
             await task_limiter.acquire()

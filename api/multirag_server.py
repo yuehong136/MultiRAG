@@ -6,6 +6,9 @@
 @date：2024/7/30 18:00
 @desc:
 """
+import time
+start_ts = time.time()
+
 from common.log_utils import init_root_logger
 from plugin import GlobalPluginManager
 init_root_logger("multirag_server")
@@ -203,7 +206,7 @@ if __name__ == '__main__':
     # • 无需在 lifespan 中重复初始化
     
     try:
-        logging.info(f"Starting MultiRAG HTTP server on {settings.HOST_IP}:{settings.HOST_PORT}...")
+        logging.info(f"MultiRAG server is ready after {time.time() - start_ts}s initialization.")
         uvicorn.run(
             "api.multirag_server:app",
             host=settings.HOST_IP,
