@@ -137,6 +137,22 @@ class DefaultRerank(Base):
         res = self._process_batch(pairs, max_batch_size=batch_size)
         return np.array(res), token_count
 
+    @staticmethod
+    def _normalize_rank(rank: np.ndarray) -> np.ndarray:
+        """
+        Normalize rank values to the range 0 to 1.
+        Avoids division by zero if all ranks are identical.
+        """
+        min_rank = np.min(rank)
+        max_rank = np.max(rank)
+
+        if not np.isclose(min_rank, max_rank, atol=1e-3):
+            rank = (rank - min_rank) / (max_rank - min_rank)
+        else:
+            rank = np.zeros_like(rank)
+
+        return rank
+
 
 class JinaRerank(Base):
     _FACTORY_NAME = "Jina"
@@ -252,15 +268,7 @@ class LocalAIRerank(Base):
         except Exception as _e:
             log_exception(_e, res)
 
-        # Normalize the rank values to the range 0 to 1
-        min_rank = np.min(rank)
-        max_rank = np.max(rank)
-
-        # Avoid division by zero if all ranks are identical
-        if not np.isclose(min_rank, max_rank, atol=1e-3):
-            rank = (rank - min_rank) / (max_rank - min_rank)
-        else:
-            rank = np.zeros_like(rank)
+        rank = Base._normalize_rank(rank)
 
         return rank, token_count
 
@@ -346,15 +354,7 @@ class OpenAI_APIRerank(Base):
         except Exception as _e:
             log_exception(_e, res)
 
-        # Normalize the rank values to the range 0 to 1
-        min_rank = np.min(rank)
-        max_rank = np.max(rank)
-
-        # Avoid division by zero if all ranks are identical
-        if not np.isclose(min_rank, max_rank, atol=1e-3):
-            rank = (rank - min_rank) / (max_rank - min_rank)
-        else:
-            rank = np.zeros_like(rank)
+        rank = Base._normalize_rank(rank)
 
         return rank, token_count
 
