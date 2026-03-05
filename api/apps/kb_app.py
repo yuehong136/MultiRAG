@@ -184,6 +184,20 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         return get_data_error_result(
             retmsg=f"Dataset name length is {len(req_data['name'])} which is large than {DATASET_NAME_LIMIT}")
     req_data["name"] = req_data["name"].strip()
+    if settings.DOC_ENGINE_INFINITY:
+        parser_id = req_data.get("parser_id")
+        if isinstance(parser_id, str) and parser_id.lower() == "tag":
+            return get_json_result(
+                retcode=RetCode.OPERATING_ERROR,
+                retmsg="The chunking method Tag has not been supported by Infinity yet.",
+                data=False,
+            )
+        if "pagerank" in req_data and req_data["pagerank"] is not None:
+            return get_json_result(
+                retcode=RetCode.DATA_ERROR,
+                retmsg="'pagerank' can only be set when doc_engine is elasticsearch",
+                data=False,
+            )
 
     if not KnowledgebaseService.accessible4deletion(db, req_data["kb_id"], user.id):
         return get_json_result(
