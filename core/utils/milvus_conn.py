@@ -585,29 +585,31 @@ class MilvusConnection(MilvusConnectionBase):
         if dataset_id and "kb_id" not in condition:
             condition["kb_id"] = dataset_id
 
-        # Build filter expression - use "id" field preferentially (consistent with ES)
-        filter_expr = ""
+        # Build filter expression - combine id filter with other conditions
+        filter_parts = []
+
+        # Handle chunk IDs if present
         chunk_ids = condition.get("id") or condition.get("pk")
         if chunk_ids:
             if not isinstance(chunk_ids, list):
                 chunk_ids = [chunk_ids]
-            id_strs = [f"'{id}'" for id in chunk_ids]
-            filter_expr = f"pk in [{','.join(id_strs)}]"
-        else:
-            filter_parts = []
-            for k, v in condition.items():
-                if k in ("pk", "id") or not v:
-                    continue
-                if isinstance(v, list):
-                    values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
-                    filter_parts.append(f"{k} in [{','.join(values)}]")
-                elif isinstance(v, str):
-                    filter_parts.append(f"{k} == '{v}'")
-                elif isinstance(v, (int, float)):
-                    filter_parts.append(f"{k} == {v}")
+            if chunk_ids:
+                id_strs = [f"'{id}'" for id in chunk_ids]
+                filter_parts.append(f"pk in [{','.join(id_strs)}]")
 
-            if filter_parts:
-                filter_expr = " && ".join(filter_parts)
+        # Add all other conditions
+        for k, v in condition.items():
+            if k in ("pk", "id") or not v:
+                continue
+            if isinstance(v, list):
+                values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
+                filter_parts.append(f"{k} in [{','.join(values)}]")
+            elif isinstance(v, str):
+                filter_parts.append(f"{k} == '{v}'")
+            elif isinstance(v, (int, float)):
+                filter_parts.append(f"{k} == {v}")
+
+        filter_expr = " && ".join(filter_parts) if filter_parts else ""
 
         if not filter_expr:
             self.logger.error("Delete operation requires valid conditions")

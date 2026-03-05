@@ -1840,12 +1840,27 @@ class DocumentService(CommonService):
         # 构建 Milvus 集合名称
         collection_name = search.index_name_one(tenant_id, kb.name)
 
-        TaskService.filter_delete(db, [Task.doc_id == doc.id])
-        cls.delete_chunk_images(doc, collection_name)
-        if doc.thumbnail and not doc.thumbnail.startswith(IMG_BASE64_PREFIX):
-            if settings.STORAGE_IMPL.obj_exist(doc.kb_id, doc.thumbnail):
-                settings.STORAGE_IMPL.rm(doc.kb_id, doc.thumbnail)
+        # Delete tasks first
+        try:
+            TaskService.filter_delete(db, [Task.doc_id == doc.id])
+        except Exception as e:
+            logging.warning(f"Failed to delete tasks for document {doc_id}: {e}")
 
+        # Delete chunk images (non-critical, log and continue)
+        try:
+            cls.delete_chunk_images(doc, collection_name)
+        except Exception as e:
+            logging.warning(f"Failed to delete chunk images for document {doc_id}: {e}")
+
+        # Delete thumbnail (non-critical, log and continue)
+        try:
+            if doc.thumbnail and not doc.thumbnail.startswith(IMG_BASE64_PREFIX):
+                if settings.STORAGE_IMPL.obj_exist(doc.kb_id, doc.thumbnail):
+                    settings.STORAGE_IMPL.rm(doc.kb_id, doc.thumbnail)
+        except Exception as e:
+            logging.warning(f"Failed to delete thumbnail for document {doc_id}: {e}")
+
+        # Delete chunks from doc store - this is critical, log errors
         try:
             # 检查集合是否存在并删除向量数据库中的数据
             if settings.docStoreConn.has_collection(collection_name):
@@ -1878,7 +1893,8 @@ class DocumentService(CommonService):
             #     settings.docStoreConn.delete({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
             #                                 search.index_name(tenant_id, [kb.name]), kb_id)
         except Exception as e:
-            return e
+            logging.error(f"Failed to delete chunks from doc store for document {doc_id}: {e}")
+
         return cls.delete_by_id(db, doc_id)
 
     @classmethod

@@ -1067,16 +1067,18 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
 
         collection_name = search.index_name_one(kb.tenant_id, kb.name)
         db_type = settings.docStoreConn.db_type()
+        # Include doc_id in condition to properly scope the delete
+        condition = {"id": req["chunk_ids"], "doc_id": req["doc_id"]}
         if db_type == "milvus":
             delete_result = settings.docStoreConn.delete(
-                condition={"id": req["chunk_ids"]},
+                condition=condition,
                 index_name=collection_name,
                 dataset_id=kb.id
             )
         else:
             # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
             delete_result = settings.docStoreConn.delete(
-                {"id": req["chunk_ids"]},
+                condition,
                 collection_name,
                 kb.id
             )
