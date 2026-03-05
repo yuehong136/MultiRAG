@@ -329,7 +329,7 @@ async def graph_node_to_chunk(kb_id, embd_mdl, ent_name, meta, chunks):
 
 
 @timeout(3, 3)
-def get_relation(tenant_id, kb_id, from_ent_name, to_ent_name, size=1):
+async def get_relation(tenant_id, kb_id, from_ent_name, to_ent_name, size=1):
     ents = from_ent_name
     if isinstance(ents, str):
         ents = [from_ent_name]
@@ -345,7 +345,7 @@ def get_relation(tenant_id, kb_id, from_ent_name, to_ent_name, size=1):
 
     # 缓存 index_name，避免重复查询
     index_name = search.index_name(tenant_id, [kb_name])
-    milvus_res = settings.retriever.search(conds, index_name, [kb_id] if isinstance(kb_id, str) else kb_id)
+    milvus_res = await settings.retriever.search(conds, index_name, [kb_id] if isinstance(kb_id, str) else kb_id)
     for id in milvus_res.ids:
         try:
             if size == 1:
@@ -423,12 +423,7 @@ async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
         kb_name = kb.name
 
     index_name = search.index_name(tenant_id, [kb_name])
-    res = await asyncio.to_thread(
-        settings.retriever.search,
-        conds,
-        index_name,
-        [kb_id]
-    )
+    res = await settings.retriever.search(conds, index_name, [kb_id])
     doc_ids = []
     if res.total == 0:
         return doc_ids
@@ -444,12 +439,7 @@ async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
         kb_name = kb.name
 
     index_name = search.index_name(tenant_id, [kb_name])
-    res = await asyncio.to_thread(
-        settings.retriever.search,
-        conds,
-        index_name,
-        [kb_id]
-    )
+    res = await settings.retriever.search(conds, index_name, [kb_id])
     if not res.total == 0:
         for id in res.ids:
             try:
@@ -666,7 +656,7 @@ async def get_entity_type2samples(idxnms, kb_ids: list):
             elif isinstance(idx, list):
                 flattened_idxnms.extend([name for name in idx if isinstance(name, str) and name])
         idxnms = flattened_idxnms
-    es_res = await asyncio.to_thread(settings.retriever.search, {"knowledge_graph_kwd": "ty2ents", "kb_id": kb_ids, "size": 10000, "fields": ["content_with_weight"]}, idxnms, kb_ids)
+    es_res = await settings.retriever.search({"knowledge_graph_kwd": "ty2ents", "kb_id": kb_ids, "size": 10000, "fields": ["content_with_weight"]}, idxnms, kb_ids)
 
     res = defaultdict(list)
     for id in es_res.ids:

@@ -58,7 +58,7 @@ class KGSearch(Dealer):
         return normalized
 
     async def query_rewrite(self, llm, question, idxnms, kb_ids):
-        idxnms = self._normalize_idx_names(idxnms)
+        idxnms = await self._normalize_idx_names(idxnms)
         ty2ents = await get_entity_type2samples(idxnms, kb_ids)
         hint_prompt = PROMPTS["minirag_query2kwd"].format(query=question,
                                                           TYPE_POOL=json.dumps(ty2ents, ensure_ascii=False, indent=2))
@@ -278,7 +278,7 @@ class KGSearch(Dealer):
         for (f, t), rel in rels_from_txt:
             if not rel.get("description"):
                 for tid in tenant_ids:
-                    rela = get_relation(tid, kb_ids, f, t)
+                    rela = await get_relation(tid, kb_ids, f, t)
                     if rela:
                         break
                 else:
