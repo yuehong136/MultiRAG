@@ -102,6 +102,9 @@ CONTENT_TYPE_MAP = {
     "webm": "video/webm",
     "wmv": "video/x-ms-wmv",
     "flv": "video/x-flv",
+    # PPTX
+    "ppt": "application/vnd.ms-powerpoint",
+    "pptx": "application/vnd.openxmLformats-officedocument.presentationml.presentation",
 }
 
 
