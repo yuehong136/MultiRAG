@@ -15,129 +15,19 @@
 #
 
 import copy
+import logging
 import re
 from collections import defaultdict
 from io import BytesIO
-import os
-import uuid
-from pathlib import Path
 
 from PIL import Image
 from PyPDF2 import PdfReader as pdf2_read
 
 from core.app.naive import by_plaintext, PARSERS
 from core.nlp import rag_tokenizer
-from core.nlp import tokenize, is_english
+from core.nlp import tokenize
 from common.parser_config_utils import normalize_layout_recognizer
 from deepdoc.parser import PdfParser, PptParser, PlainParser
-
-
-class Ppt(PptParser):
-    def __call__(self, fnm, from_page, to_page, callback=None):
-        txts = super().__call__(fnm, from_page, to_page)
-
-        callback(0.5, "Text extraction finished.")
-        import aspose.slides as slides
-        import aspose.pydrawing as drawing
-
-        imgs = []
-        # fnm 既可能是二进制（task 里传入的 binary），也可能是文件路径（某些调用路径）。
-        ppt_bytes: bytes
-        if isinstance(fnm, (bytes, bytearray, memoryview)):
-            ppt_bytes = bytes(fnm)
-        else:
-            ppt_bytes = Path(fnm).read_bytes()
-
-        def slide_to_pil(slide):
-            """
-            兼容不同 Aspose.Slides Python 包/版本：
-            - 某些版本提供 Slide.get_thumbnail(scaleX, scaleY) 并支持保存到 BytesIO。
-            - 新版常见为 Slide.get_image(...)，返回 IImage；优先写入 BytesIO（aspose.slides.ImageFormat），不行再落盘兜底。
-            """
-            def _is_gdiplus_missing(err: Exception) -> bool:
-                msg = str(err)
-                return ("libgdiplus" in msg) or ("Gdip" in msg) or ("DllNotFoundException" in msg)
-
-            def _gdiplus_hint() -> str:
-                # Aspose.Slides for Python via .NET 渲染图片通常依赖 GDI+（libgdiplus / System.Drawing.Common）。
-                # 不同系统的安装方式不同，这里给出通用指引，避免只针对本地开发机。
-                if os.name == "posix":
-                    if sys.platform == "darwin":
-                        return (
-                            "macOS：请安装 libgdiplus（例如通过 Homebrew 安装 mono-libgdiplus），"
-                            "必要时配置 DYLD_FALLBACK_LIBRARY_PATH 指向其 lib 目录。"
-                        )
-                    return "Linux：请安装 libgdiplus（Debian/Ubuntu 通常为 `apt-get install libgdiplus`）。"
-                if os.name == "nt":
-                    return (
-                        "Windows：请确保 System.Drawing 相关运行时/依赖可用（例如安装 .NET 运行时及相关组件）。"
-                    )
-                return "请安装/配置 libgdiplus（GDI+）相关依赖后重试。"
-
-            # 1) 旧 API：get_thumbnail
-            if hasattr(slide, "get_thumbnail"):
-                with BytesIO() as buffered:
-                    try:
-                        slide.get_thumbnail(0.1, 0.1).save(buffered, drawing.imaging.ImageFormat.jpeg)
-                    except Exception as e:
-                        if _is_gdiplus_missing(e):
-                            raise RuntimeError("Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。" + _gdiplus_hint()) from e
-                        raise
-                    buffered.seek(0)
-                    return Image.open(buffered).copy()
-
-            # 2) 新 API：get_image
-            #    注意：IImage.save 的 format 类型是 aspose.slides.ImageFormat（不是 aspose.pydrawing.imaging.ImageFormat）
-            if hasattr(slide, "get_image"):
-                try:
-                    img = slide.get_image(0.1, 0.1)
-                except Exception as e:
-                    if _is_gdiplus_missing(e):
-                        raise RuntimeError("Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。" + _gdiplus_hint()) from e
-                    raise
-                # 2.1) 优先写入内存流
-                try:
-                    with BytesIO() as buffered:
-                        img.save(buffered, slides.ImageFormat.JPEG)
-                        buffered.seek(0)
-                        return Image.open(buffered).copy()
-                except Exception:
-                    # 2.2) 兜底：落盘再读回（兼容部分绑定对 BytesIO 不友好的情况）
-                    pass
-
-            # 3) 兜底：临时文件（格式由后缀决定）
-            tmp_root = Path(os.getenv("MULTIRAG_TMP_DIR", Path.cwd() / ".cache" / "aspose_slides"))
-            tmp_root.mkdir(parents=True, exist_ok=True)
-            tmp_path = tmp_root / f"slide_{uuid.uuid4().hex}.jpg"
-            try:
-                try:
-                    img = slide.get_image(0.1, 0.1) if hasattr(slide, "get_image") else None
-                except Exception as e:
-                    if _is_gdiplus_missing(e):
-                        raise RuntimeError("Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。" + _gdiplus_hint()) from e
-                    raise
-                if img is None:
-                    raise AttributeError("Slide has neither get_thumbnail nor get_image")
-                img.save(str(tmp_path))
-                return Image.open(tmp_path).copy()
-            finally:
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except Exception:
-                    # 临时文件删除失败不应中断解析流程
-                    pass
-
-        with slides.Presentation(BytesIO(ppt_bytes)) as presentation:
-            for i, slide in enumerate(presentation.slides[from_page: to_page]):
-                try:
-                    imgs.append(slide_to_pil(slide))
-                except Exception as e:
-                    raise RuntimeError(f'ppt parse error at page {i + 1}, original error: {str(e)}') from e
-        assert len(imgs) == len(
-            txts), "Slides text and image do not match: {} vs. {}".format(len(imgs), len(txts))
-        callback(0.9, "Image extraction finished")
-        self.is_english = is_english(txts)
-        return [(txts[i], imgs[i]) for i in range(len(txts))]
 
 
 class Pdf(PdfParser):
@@ -245,7 +135,7 @@ class PlainPdf(PlainParser):
 
 def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, parser_config=None, **kwargs):
     """
-    The supported file formats are pdf, pptx.
+    The supported file formats are pdf, ppt, pptx.
     Every page will be treated as a chunk. And the thumbnail of every page will be stored.
     PPT file will be parsed by using this method automatically, setting-up for every PPT file is not necessary.
     """
@@ -259,18 +149,62 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])
     res = []
     if re.search(r"\.pptx?$", filename, re.IGNORECASE):
-        ppt_parser = Ppt()
-        for pn, (txt, img) in enumerate(ppt_parser(filename if not binary else binary, from_page, 1000000, callback)):
-            d = copy.deepcopy(doc)
-            pn += from_page
-            d["image"] = img
-            d["doc_type_kwd"] = "image"
-            d["page_num_int"] = [pn + 1]
-            d["top_int"] = [0]
-            d["position_int"] = [(pn + 1, 0, img.size[0], 0, img.size[1])]
-            tokenize(d, txt, eng)
-            res.append(d)
-        return res
+        try:
+            ppt_parser = PptParser()
+            for pn, txt in enumerate(ppt_parser(filename if not binary else binary, from_page, 1000000, callback)):
+                d = copy.deepcopy(doc)
+                pn += from_page
+                d["doc_type_kwd"] = "image"
+                d["page_num_int"] = [pn + 1]
+                d["top_int"] = [0]
+                d["position_int"] = [(pn + 1, 0, 0, 0, 0)]
+                tokenize(d, txt, eng)
+                res.append(d)
+            return res
+        except Exception as e:
+            logging.warning(f"python-pptx parsing failed for {filename}: {e}, trying tika as fallback")
+            if callback:
+                callback(0.1, "python-pptx failed, trying tika as fallback")
+
+            try:
+                from tika import parser as tika_parser
+            except Exception as tika_error:
+                error_msg = f"tika not available: {tika_error}. Unsupported .ppt/.pptx parsing."
+                if callback:
+                    callback(0.8, error_msg)
+                logging.warning(f"{error_msg} for {filename}.")
+                raise NotImplementedError(error_msg)
+
+            if binary:
+                binary_data = binary
+            else:
+                with open(filename, "rb") as f:
+                    binary_data = f.read()
+            doc_parsed = tika_parser.from_buffer(BytesIO(binary_data))
+
+            if doc_parsed.get("content", None) is not None:
+                sections = doc_parsed["content"].split("\n")
+                sections = [s for s in sections if s.strip()]
+
+                for pn, txt in enumerate(sections):
+                    d = copy.deepcopy(doc)
+                    pn += from_page
+                    d["doc_type_kwd"] = "text"
+                    d["page_num_int"] = [pn + 1]
+                    d["top_int"] = [0]
+                    d["position_int"] = [(pn + 1, 0, 0, 0, 0)]
+                    tokenize(d, txt, eng)
+                    res.append(d)
+
+                if callback:
+                    callback(0.8, "Finish parsing with tika.")
+                return res
+
+            error_msg = f"tika.parser got empty content from {filename}."
+            if callback:
+                callback(0.8, error_msg)
+            logging.warning(error_msg)
+            raise NotImplementedError(error_msg)
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
         layout_recognizer, parser_model_name = normalize_layout_recognizer(
             parser_config.get("layout_recognize", "DeepDOC")
@@ -318,7 +252,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             res.append(d)
         return res
 
-    raise NotImplementedError("file type not supported yet(pptx, pdf supported)")
+    raise NotImplementedError("file type not supported yet(ppt, pptx, pdf supported)")
 
 
 if __name__ == "__main__":

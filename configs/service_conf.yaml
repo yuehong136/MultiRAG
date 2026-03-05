@@ -122,6 +122,15 @@ oceanbase:
     host: 'localhost'
     port: 2881
 
+seekdb:
+  scheme: 'oceanbase' # SeekDB is the lite version of OceanBase
+  config:
+    db_name: 'multirag_doc'
+    user: 'root'
+    password: 'infini_rag_flow'
+    host: 'seekdb'
+    port: 2881
+
 redis:
   db: 1
   username: ''

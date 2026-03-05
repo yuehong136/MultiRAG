@@ -14,6 +14,7 @@
 #    - infinity: Infinity 向量数据库
 #    - milvus: Milvus 向量数据库
 #    - oceanbase: OceanBase 向量数据库
+#    - seekdb: SeekDB 向量数据库 (OceanBase 精简版)
 #    - sandbox: 沙箱执行器
 #    - tei-cpu / tei-gpu: Text Embeddings Inference 服务
 #    - kibana: Elasticsearch 可视化
@@ -259,6 +260,31 @@ services:
       - multirag
     restart: on-failure
 
+  # ========== SeekDB 向量数据库 ==========
+  seekdb:
+    profiles:
+      - seekdb
+    image: oceanbase/seekdb:latest
+    container_name: multirag-seekdb
+    volumes:
+      - ./seekdb:/var/lib/oceanbase
+    ports:
+      - ${SEEKDB_PORT:-2881}:2881
+    env_file: .env
+    environment:
+      - ROOT_PASSWORD=${SEEKDB_PASSWORD:-infini_rag_flow}
+      - MEMORY_LIMIT=${SEEKDB_MEMORY_LIMIT:-2G}
+      - REPORTER=multirag-seekdb
+    mem_limit: ${MEM_LIMIT:-8073741824}
+    healthcheck:
+      test: ['CMD-SHELL', 'mysql -h127.0.0.1 -P2881 -uroot -p${SEEKDB_PASSWORD:-infini_rag_flow} -e "CREATE DATABASE IF NOT EXISTS ${SEEKDB_DOC_DBNAME:-multirag_doc};"']
+      interval: 5s
+      retries: 60
+      timeout: 5s
+    networks:
+      - multirag
+    restart: unless-stopped
+
   # ========== Sandbox 沙箱执行器 ==========
   sandbox-executor-manager:
     profiles:
@@ -429,6 +455,8 @@ volumes:
   milvus_data:
     driver: local
   ob_data:
+    driver: local
+  seekdb_data:
     driver: local
   minio_data:
     driver: local

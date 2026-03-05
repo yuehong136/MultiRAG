@@ -286,6 +286,9 @@ def init_settings():
     elif lower_case_doc_engine == "oceanbase":
         OB = get_base_config("oceanbase", {})
         docStoreConn = core.utils.ob_conn.OBConnection()
+    elif lower_case_doc_engine == "seekdb":
+        OB = get_base_config("seekdb", {})
+        docStoreConn = core.utils.ob_conn.OBConnection()
     elif lower_case_doc_engine == "vastbase":
         VASTBASE = get_base_config("vastbase", {})
         docStoreConn = core.utils.vastbase_conn.VastBaseConnection()
