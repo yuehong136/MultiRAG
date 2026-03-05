@@ -93,6 +93,8 @@ class FlowSplitter:
                 split_sec = re.split(r"(%s)" % custom_pattern, c, flags=re.DOTALL)
                 if split_sec:
                     for j in range(0, len(split_sec), 2):
+                        if not split_sec[j].strip():
+                            continue
                         result.append({
                             "text": split_sec[j],
                             "mom": c
@@ -187,6 +189,8 @@ class FlowSplitter:
                 if split_sec:
                     c["mom"] = c["text"]
                     for j in range(0, len(split_sec), 2):
+                        if not split_sec[j].strip():
+                            continue
                         cc = deepcopy(c)
                         cc["text"] = split_sec[j]
                         result.append(cc)

@@ -1899,9 +1899,10 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
     """
     self_deployed = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio", "GPUStack"]
     weighted = ["Youdao", "FastEmbed", "BAAI"] if settings.LIGHTEN != 0 else []
+    tenant_id = user.id
     try:
-        TenantLLMService.ensure_mineru_from_env(db, user.id)
-        objs = TenantLLMService.query(db, tenant_id=user.id)
+        TenantLLMService.ensure_mineru_from_env(db, tenant_id)
+        objs = TenantLLMService.query(db, tenant_id=tenant_id)
         facts = set(o.llm_factory for o in objs if o.api_key and o.status==StatusEnum.VALID.value)
         status = {(o.llm_name + "@" + o.llm_factory) for o in objs if o.status == StatusEnum.VALID.value}
         llms = LLMService.get_all(db)
