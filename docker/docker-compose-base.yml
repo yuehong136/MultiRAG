@@ -129,7 +129,7 @@ services:
   infinity:
     profiles:
       - infinity
-    image: infiniflow/infinity:v0.6.15
+    image: infiniflow/infinity:v0.7.0-dev1
     container_name: multirag-infinity
     volumes:
       - infinity_data:/var/infinity
