@@ -6,6 +6,7 @@
 @date：2024/7/30 13:56
 @desc:
 """
+import asyncio
 import datetime
 import json
 from typing import Literal, Annotated, Any
@@ -572,7 +573,7 @@ def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post('/vector_store/query', summary="向量存储字段查询（可选语义检索）")
-def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     根据 `doc_id` 或自定义过滤条件从向量存储中查询指定字段。
 
@@ -636,7 +637,7 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
             dealer = search.Dealer(settings.docStoreConn)
             # 使用固定的 topk 以确保 total 保持一致
             match_exprs.append(
-                dealer.get_vector(
+                await dealer.get_vector(
                     request.question,
                     embd_mdl,
                     topk=1024,
@@ -644,7 +645,8 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
                 )
             )
 
-        search_res = settings.docStoreConn.search(
+        search_res = await asyncio.to_thread(
+            settings.docStoreConn.search,
             request.fields,
             [],
             condition,
@@ -653,7 +655,7 @@ def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(g
             offset,
             request.size,
             index_name,
-            [kb.id]
+            [kb.id],
         )
 
         total = settings.docStoreConn.get_total(search_res)
