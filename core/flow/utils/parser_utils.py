@@ -279,7 +279,7 @@ class FlowParser:
                     bboxes.append({"text": section})
 
         elif method == "paddleocr":
-            # PaddleOCR 解析（参考 core/flow/parser/parser.py 第 330-400 行）
+            # PaddleOCR 解析（参考 core/flow/parser/parser.py 第 330-370 行）
             from api.db.services.tenant_llm_service import TenantLLMService
 
             parser_model_name = method_kwargs.get("paddleocr_llm_name")
@@ -320,29 +320,13 @@ class FlowParser:
             )
 
             bboxes = []
-            for section in lines:
-                text = section[0]
-                position_tag = ""
-                if len(section) == 2:
-                    position_tag = section[1]
-                elif len(section) == 3:
-                    position_tag = section[2]
-
-                page_number, x0, x1, top, bottom = 1, 0, 0, 0, 0
-                if position_tag:
-                    tag_match = re.match(r"@@([0-9-]+)\t([0-9.]+)\t([0-9.]+)\t([0-9.]+)\t([0-9.]+)##", position_tag)
-                    if tag_match:
-                        pn, x0_str, x1_str, top_str, bottom_str = tag_match.groups()
-                        page_number = int(pn.split("-")[0])
-                        x0, x1, top, bottom = float(x0_str), float(x1_str), float(top_str), float(bottom_str)
-
+            for t, poss in lines:
+                # 参考 core/flow/parser/parser.py 第 358-368 行（commit 4fe3c241）
+                cropped_image, positions = pdf_parser.crop(poss, need_position=True)
                 bboxes.append({
-                    "text": text,
-                    "page_number": page_number,
-                    "x0": x0,
-                    "x1": x1,
-                    "top": top,
-                    "bottom": bottom,
+                    "text": t,
+                    "image": cropped_image,
+                    "positions": positions,
                 })
 
         else:
