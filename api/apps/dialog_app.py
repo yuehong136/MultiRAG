@@ -368,8 +368,10 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         if is_create and DialogService.get_or_none(db, tenant_id=user.id, name=request.name):
             return get_data_error_result(retmsg=f"Duplicated Dialog name {request.name}.")
 
-        if not (request.kb_ids or []) and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config.get("system", ""):
-            return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no dataset / Tavily used here.")
+        if not is_create:
+            # only for chat updating
+            if not (request.kb_ids or []) and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config.get("system", ""):
+                return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no dataset / Tavily used here.")
 
         for p in prompt_config.get("parameters", []):
             if p["optional"]:
