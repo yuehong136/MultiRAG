@@ -21,4 +21,4 @@ test = [
 ]
 
 [project.scripts]
-multirag-cli = "admin_client:main"
+multirag-cli = "multirag_cli:main"

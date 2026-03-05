@@ -13,7 +13,7 @@ Built with scalability and reliability in mind, the Admin Service ensures smooth
 It consists of a server-side Service and a command-line client (CLI), both implemented in Python. User commands are parsed using the Lark parsing toolkit.
 
 - **Admin Service**: A backend service that interfaces with the MultiRAG system to execute administrative operations and monitor its status.
-- **Admin CLI**: A command-line interface that allows users to connect to the Admin Service and issue commands for system management.
+- **MultiRAG CLI**: A command-line interface that allows users to connect to the Admin Service and issue commands for system management.
 
 
 
@@ -43,7 +43,7 @@ It consists of a server-side Service and a command-line client (CLI), both imple
 
 
 
-### Using the Admin CLI
+### Using the MultiRAG CLI
 
 1.  Ensure the Admin Service is running.
 2.  Install multirag-cli.
@@ -114,7 +114,7 @@ Meta-commands are prefixed with a backslash (`\`).
 ## Examples
 
 ```commandline
-admin> list users;
+multirag> list users;
 +-------------------------------+------------------------+-----------+-------------+
 | create_date                   | email                  | is_active | nickname    |
 +-------------------------------+------------------------+-----------+-------------+
@@ -122,7 +122,7 @@ admin> list users;
 | Fri, 22 Nov 2024 16:10:55 GMT | dxl@datav.com     | 1         | dxl       |
 +-------------------------------+------------------------+-----------+-------------+
 
-admin> list services;
+multirag> list services;
 +----+---------------+-----------------+-------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------------------+
 | id | name          | host            | port  | service_type    | status  | extra                                                                                                                                      |
 +----+---------------+-----------------+-------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------------------+

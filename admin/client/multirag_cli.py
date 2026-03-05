@@ -2,10 +2,10 @@ import argparse
 import base64
 import urllib.parse
 from cmd import Cmd
+from typing import Any
 
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Cipher import PKCS1_v1_5 as Cipher_pkcs1_v1_5
-from typing import Dict, List, Any
 from lark import Lark, Transformer, Tree
 import requests
 import getpass
@@ -48,6 +48,11 @@ sql_command: list_services
            | generate_key
            | list_keys
            | drop_key
+           | list_user_datasets
+           | list_user_agents
+           | list_user_chats
+           | list_user_model_providers
+           | list_user_default_models
 
 // meta command definition
 meta_command: "\\" meta_command_name [meta_args]
@@ -98,6 +103,11 @@ ENVS: "ENVS"i
 KEY: "KEY"i
 KEYS: "KEYS"i
 GENERATE: "GENERATE"i
+MODEL: "MODEL"i
+MODELS: "MODELS"i
+PROVIDERS: "PROVIDERS"i
+DEFAULT: "DEFAULT"i
+CHATS: "CHATS"i
 
 list_services: LIST SERVICES ";"
 show_service: SHOW SERVICE NUMBER ";"
@@ -141,6 +151,12 @@ drop_key: DROP KEY quoted_string OF quoted_string ";"
 
 show_version: SHOW VERSION ";"
 
+list_user_datasets: LIST DATASETS ";"
+list_user_agents: LIST AGENTS ";"
+list_user_chats: LIST CHATS ";"
+list_user_model_providers: LIST MODEL PROVIDERS ";"
+list_user_default_models: LIST DEFAULT MODELS ";"
+
 action_list: identifier ("," identifier)*
 
 identifier: WORD
@@ -155,7 +171,7 @@ NUMBER: /[0-9]+/
 %ignore WS
 """
 
-class AdminTransformer(Transformer):
+class MultiRAGCLITransformer(Transformer):
 
     def start(self, items):
         return items[0]
@@ -308,6 +324,21 @@ class AdminTransformer(Transformer):
         user_name = items[4]
         return {"type": "drop_key", "key": key, "user_name": user_name}
 
+    def list_user_datasets(self, items):
+        return {"type": "list_user_datasets"}
+
+    def list_user_agents(self, items):
+        return {"type": "list_user_agents"}
+
+    def list_user_chats(self, items):
+        return {"type": "list_user_chats"}
+
+    def list_user_model_providers(self, items):
+        return {"type": "list_user_model_providers"}
+
+    def list_user_default_models(self, items):
+        return {"type": "list_user_default_models"}
+
     def action_list(self, items):
         return items
 
@@ -377,6 +408,11 @@ REVOKE ADMIN <user>
 GENERATE KEY FOR USER <user>
 LIST KEYS OF <user>
 DROP KEY <key> OF <user>
+LIST DATASETS
+LIST AGENTS
+LIST CHATS
+LIST MODEL PROVIDERS
+LIST DEFAULT MODELS
 SET VAR <name> <value>
 SHOW VAR <name>
 LIST VARS
@@ -390,21 +426,22 @@ Meta Commands:
     print(help_text)
 
 
-class AdminCLI(Cmd):
+class MultiRAGCLI(Cmd):
     def __init__(self):
         super().__init__()
-        self.parser = Lark(GRAMMAR, start='start', parser='lalr', transformer=AdminTransformer())
+        self.parser = Lark(GRAMMAR, start='start', parser='lalr', transformer=MultiRAGCLITransformer())
         self.command_history = []
         self.is_interactive = False
-        self.admin_account = "admin@datav.com"
-        self.admin_password: str = "admin"
+        self.account = "admin@datav.com"
+        self.account_password: str = "admin"
         self.session = requests.Session()
         self.access_token: str = ""
         self.host: str = ""
         self.port: int = 0
+        self.mode: str = "admin"
 
     intro = r"""Type "\h" for help, "\q" to quit."""
-    prompt = "admin> "
+    prompt = "multirag> "
 
     def onecmd(self, command: str) -> bool:
         try:
@@ -447,11 +484,18 @@ class AdminCLI(Cmd):
         except Exception as e:
             return {'type': 'error', 'message': f'Parse error: {str(e)}'}
 
-    def verify_admin(self, arguments: dict, single_command: bool):
-        self.host = arguments['host']
-        self.port = arguments['port']
-        print("Attempt to access server for admin login")
-        url = f"http://{self.host}:{self.port}/api/v1/admin/login"
+    def verify_auth(self, arguments: dict[str, str | int], single_command: bool) -> bool:
+        self.host = str(arguments["host"])
+        self.port = int(arguments["port"])
+        self.mode = str(arguments.get("type", "admin"))
+        self.account = str(arguments.get("username", "admin@datav.com"))
+
+        if self.mode == "admin":
+            print("Attempt to access server for admin login")
+            url = f"http://{self.host}:{self.port}/api/v1/admin/login"
+        else:
+            print("Attempt to access server for user login")
+            url = f"http://{self.host}:{self.port}/v1/user/login"
 
         attempt_count = 3
         if single_command:
@@ -463,42 +507,42 @@ class AdminCLI(Cmd):
             if try_count > attempt_count:
                 return False
 
-            if single_command:
-                admin_passwd = arguments['password']
-            else:
-                admin_passwd = getpass.getpass(f"password for {self.admin_account}: ").strip()
+            account_passwd = str(arguments["password"]) if single_command else getpass.getpass(
+                f"password for {self.account}: "
+            ).strip()
             try:
-                self.admin_password = encrypt(admin_passwd)
-                response = self.session.post(url, json={'email': self.admin_account, 'password': self.admin_password})
+                self.account_password = encrypt(account_passwd)
+                payload: dict[str, str] = {"password": self.account_password}
+                if self.mode == "admin":
+                    payload["email"] = self.account
+                else:
+                    payload["username"] = self.account
+
+                response = self.session.post(url, json=payload)
                 if response.status_code == 200:
                     res_json = response.json()
-                    error_code = res_json.get('code', -1)
+                    error_code = res_json.get("code", res_json.get("retcode", -1))
                     if error_code == 0:
-                        # 检查是否有 Authorization header
-                        auth_header = response.headers.get('Authorization')
+                        auth_header = response.headers.get("Authorization")
                         if auth_header:
-                            # fastapi-login 需要 "Bearer <token>" 格式
-                            if not auth_header.startswith('Bearer '):
-                                auth_header = f'Bearer {auth_header}'
+                            if not auth_header.startswith("Bearer "):
+                                auth_header = f"Bearer {auth_header}"
                             self.session.headers.update({
-                                'Content-Type': 'application/json',
-                                'Authorization': auth_header,
-                                'User-Agent': 'MultiRAG-CLI/0.9.8'
+                                "Content-Type": "application/json",
+                                "Authorization": auth_header,
+                                "User-Agent": "MultiRAG-CLI/0.9.8",
                             })
                             print("Authentication successful.")
                             return True
-                        else:
-                            print("Authentication failed: No Authorization header in response")
-                            continue
-                    else:
-                        error_message = res_json.get('message', 'Unknown error')
-                        print(f"Authentication failed: {error_message}, try again")
+                        print("Authentication failed: No Authorization header in response")
                         continue
-                else:
-                    print(f"Bad response，status: {response.status_code}, password is wrong")
+                    error_message = res_json.get("message", res_json.get("retmsg", "Unknown error"))
+                    print(f"Authentication failed: {error_message}, try again")
+                    continue
+                print(f"Bad response, status: {response.status_code}, password is wrong")
             except Exception as e:
                 print(str(e))
-                print("Can't access server for admin login (connection failed)")
+                print("Can't access server for login (connection failed)")
 
     def _format_service_detail_table(self, data):
         # 如果 data 是列表，直接返回
@@ -586,11 +630,11 @@ class AdminCLI(Cmd):
     def run_interactive(self):
 
         self.is_interactive = True
-        print("MultiRAG Admin CLI - Type '\\h' for help, '\\q' to quit")
+        print("MultiRAG CLI - Type '\\h' for help, '\\q' to quit")
 
         while True:
             try:
-                command = input("admin> ").strip()
+                command = input("multirag> ").strip()
                 if not command:
                     continue
 
@@ -614,46 +658,80 @@ class AdminCLI(Cmd):
         result = self.parse_command(command)
         self.execute_command(result)
 
-    def parse_connection_args(self, args: List[str]) -> Dict[str, Any]:
-        parser = argparse.ArgumentParser(description='Admin CLI Client', add_help=False)
-        parser.add_argument('-h', '--host', default='localhost', help='Admin service host')
-        parser.add_argument('-p', '--port', type=int, default=8130, help='Admin service port')
-        parser.add_argument('-w', '--password', default='admin', type=str, help='Superuser password')
-        parser.add_argument('command', nargs='?', help='Single command')
+    def parse_connection_args(self, args: list[str]) -> dict[str, Any]:
+        parser = argparse.ArgumentParser(description="MultiRAG CLI Client", add_help=False)
+        parser.add_argument("-h", "--host", default="localhost", help="Admin or MultiRAG service host")
+        parser.add_argument("-p", "--port", type=int, default=8130, help="Admin or MultiRAG service port")
+        parser.add_argument("-w", "--password", default="admin", type=str, help="Account password")
+        parser.add_argument("-t", "--type", default="admin", type=str, help="CLI mode: admin or user")
+        parser.add_argument(
+            "-u", "--username", default=None,
+            help="Username. In admin mode default is admin@datav.com, in user mode this is required."
+        )
+        parser.add_argument("command", nargs="?", help="Single command")
 
         try:
             parsed_args, remaining_args = parser.parse_known_args(args)
+            mode = parsed_args.type.lower()
+            username = parsed_args.username
+            if mode == "admin":
+                if username is None:
+                    username = "admin@datav.com"
+            else:
+                if username is None:
+                    print("Error: username (-u) is required in user mode")
+                    return {"error": "Username required"}
+
             if remaining_args:
                 command = remaining_args[0]
                 return {
-                    'host': parsed_args.host,
-                    'port': parsed_args.port,
-                    'password': parsed_args.password,
-                    'command': command
+                    "host": parsed_args.host,
+                    "port": parsed_args.port,
+                    "password": parsed_args.password,
+                    "type": mode,
+                    "username": username,
+                    "command": command,
                 }
-            else:
-                return {
-                    'host': parsed_args.host,
-                    'port': parsed_args.port,
-                }
+            return {
+                "host": parsed_args.host,
+                "port": parsed_args.port,
+                "type": mode,
+                "username": username,
+            }
         except SystemExit:
-            return {'error': 'Invalid connection arguments'}
+            return {"error": "Invalid connection arguments"}
 
-    def execute_command(self, parsed_command: Dict[str, Any]):
+    def execute_command(self, parsed_command: dict[str, Any]):
 
         command_dict: dict
         if isinstance(parsed_command, Tree):
             command_dict = parsed_command.children[0]
         else:
-            if parsed_command['type'] == 'error':
+            if parsed_command["type"] == "error":
                 print(f"Error: {parsed_command['message']}")
                 return
             else:
                 command_dict = parsed_command
 
-        # print(f"Parsed command: {command_dict}")
-
-        command_type = command_dict['type']
+        command_type = command_dict["type"]
+        admin_only_commands = {
+            "list_services", "show_service", "restart_service", "shutdown_service", "startup_service",
+            "list_users", "show_user", "drop_user", "alter_user", "create_user", "activate_user",
+            "list_datasets", "list_agents", "create_role", "drop_role", "alter_role", "list_roles",
+            "show_role", "grant_permission", "revoke_permission", "alter_user_role", "show_user_permission",
+            "grant_admin", "revoke_admin", "set_variable", "show_variable", "list_variables",
+            "list_configs", "list_environments", "generate_key", "list_keys", "drop_key",
+        }
+        user_only_commands = {
+            "list_user_datasets", "list_user_agents", "list_user_chats",
+            "list_user_model_providers", "list_user_default_models",
+        }
+        if command_type in admin_only_commands and self.mode != "admin":
+            print("This command is only allowed in ADMIN mode")
+            return
+        if command_type in user_only_commands and self.mode != "user":
+            print("This command is only allowed in USER mode")
+            return
 
         match command_type:
             case "list_services":
@@ -722,6 +800,16 @@ class AdminCLI(Cmd):
                 self._list_keys(command_dict)
             case "drop_key":
                 self._drop_key(command_dict)
+            case "list_user_datasets":
+                self._list_user_datasets(command_dict)
+            case "list_user_agents":
+                self._list_user_agents(command_dict)
+            case "list_user_chats":
+                self._list_user_chats(command_dict)
+            case "list_user_model_providers":
+                self._list_user_model_providers(command_dict)
+            case "list_user_default_models":
+                self._list_user_default_models(command_dict)
             case "meta":
                 self._handle_meta_command(command_dict)
             case _:
@@ -1181,14 +1269,20 @@ class AdminCLI(Cmd):
                 f"Fail to show user: {user_name_str} permission, code: {res_json['code']}, message: {res_json['message']}")
 
     def _show_version(self, command):
-        print("show_version")
-        url = f'http://{self.host}:{self.port}/api/v1/admin/version'
+        if self.mode == "admin":
+            url = f"http://{self.host}:{self.port}/api/v1/admin/version"
+        else:
+            url = f"http://{self.host}:{self.port}/v1/system/version"
+
         response = self.session.get(url)
         res_json = response.json()
         if response.status_code == 200:
-            self._print_table_simple(res_json['data'])
+            if self.mode == "admin":
+                self._print_table_simple(res_json["data"])
+            else:
+                self._print_table_simple({"version": res_json.get("data")})
         else:
-            print(f"Fail to show version, code: {res_json['code']}, message: {res_json['message']}")
+            print(f"Fail to show version, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
     def _set_variable(self, command):
         var_name_tree: Tree = command["var_name"]
@@ -1262,6 +1356,69 @@ class AdminCLI(Cmd):
         else:
             print(f"Failed to drop key for user {user_name}, code: {res_json['code']}, message: {res_json['message']}")
 
+    def _list_user_datasets(self, command):
+        url = f"http://{self.host}:{self.port}/v1/kb/list"
+        response = self.session.post(url, json={})
+        res_json = response.json()
+        if response.status_code == 200:
+            self._print_table_simple(res_json.get("data", []))
+        else:
+            print(f"Fail to list datasets, code: {res_json.get('retcode')}, message: {res_json.get('retmsg')}")
+
+    def _list_user_agents(self, command):
+        url = f"http://{self.host}:{self.port}/v1/canvas/list"
+        response = self.session.get(url)
+        res_json = response.json()
+        if response.status_code == 200:
+            self._print_table_simple(res_json.get("data", []))
+        else:
+            print(f"Fail to list agents, code: {res_json.get('retcode')}, message: {res_json.get('retmsg')}")
+
+    def _list_user_chats(self, command):
+        url = f"http://{self.host}:{self.port}/v1/dialog/next"
+        response = self.session.post(url, json={})
+        res_json = response.json()
+        if response.status_code == 200:
+            data = res_json.get("data", {})
+            self._print_table_simple(data.get("dialogs", []))
+        else:
+            print(f"Fail to list chats, code: {res_json.get('retcode')}, message: {res_json.get('retmsg')}")
+
+    def _list_user_model_providers(self, command):
+        url = f"http://{self.host}:{self.port}/v1/llm/my_llms"
+        response = self.session.get(url)
+        res_json = response.json()
+        if response.status_code == 200:
+            new_input = []
+            for key, value in res_json.get("data", {}).items():
+                new_input.append({"model_provider": key, "models": value})
+            self._print_table_simple(new_input)
+        else:
+            print(f"Fail to list model providers, code: {res_json.get('retcode')}, message: {res_json.get('retmsg')}")
+
+    def _list_user_default_models(self, command):
+        url = f"http://{self.host}:{self.port}/v1/user/tenant_info"
+        response = self.session.get(url)
+        res_json = response.json()
+        if response.status_code == 200:
+            new_input = []
+            for key, value in res_json.get("data", {}).items():
+                if key == "asr_id" and value != "":
+                    new_input.append({"model_category": "ASR", "model_name": value})
+                elif key == "embd_id" and value != "":
+                    new_input.append({"model_category": "Embedding", "model_name": value})
+                elif key == "llm_id" and value != "":
+                    new_input.append({"model_category": "LLM", "model_name": value})
+                elif key == "rerank_id" and value != "":
+                    new_input.append({"model_category": "Reranker", "model_name": value})
+                elif key == "tts_id" and value != "":
+                    new_input.append({"model_category": "TTS", "model_name": value})
+                elif key == "img2txt_id" and value != "":
+                    new_input.append({"model_category": "VLM", "model_name": value})
+            self._print_table_simple(new_input)
+        else:
+            print(f"Fail to list default models, code: {res_json.get('retcode')}, message: {res_json.get('retmsg')}")
+
     def _handle_meta_command(self, command):
         meta_command = command['command']
         args = command.get('args', [])
@@ -1277,7 +1434,7 @@ class AdminCLI(Cmd):
 def main():
     import sys
 
-    cli = AdminCLI()
+    cli = MultiRAGCLI()
 
     args = cli.parse_connection_args(sys.argv)
     if 'error' in args:
@@ -1289,19 +1446,19 @@ def main():
         if 'password' not in args:
             print("Error: password is missing")
             return
-        if cli.verify_admin(args, single_command=True):
+        if cli.verify_auth(args, single_command=True):
             command: str = args['command']
             # print(f"Run single command: {command}")
             cli.run_single_command(command)
     else:
         # 交互模式
-        if cli.verify_admin(args, single_command=False):
+        if cli.verify_auth(args, single_command=False):
             print(r"""
-        __  ___      __  _ ____  ___   ______   ___       __          _     
-       /  |/  /_  __/ /_(_) __ \/   | / ____/  /   | ____/ /___ ___  (_)___ 
-      / /|_/ / / / / __/ / /_/ / /| |/ / __   / /| |/ __  / __ `__ \/ / __ \
-     / /  / / /_/ / /_/ / _, _/ ___ / /_/ /  / ___ / /_/ / / / / / / / / / /
-    /_/  /_/\__,_/\__/_/_/ |_/_/  |_\____/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/ 
+        __  ___      __  _ ____  ___   ______   ________    ____
+       /  |/  /_  __/ /_(_) __ \/   | / ____/  / ____/ /   /  _/
+      / /|_/ / / / / __/ / /_/ / /| |/ / __   / /   / /    / /
+     / /  / / /_/ / /_/ / _, _/ ___ / /_/ /  / /___/ /____/ /
+    /_/  /_/\__,_/\__/_/_/ |_/_/  |_\____/   \____/_____/___/
             """)
             cli.cmdloop()
 
