@@ -350,9 +350,9 @@ def list_datasets(
 
 
 @router.get("/datasets/{dataset_id}/knowledge_graph", summary="获取数据集知识图谱")
-def get_knowledge_graph(
-    dataset_id: str, 
-    db: Session = Depends(get_db), 
+async def get_knowledge_graph(
+    dataset_id: str,
+    db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     """
@@ -383,7 +383,7 @@ def get_knowledge_graph(
     if not settings.docStoreConn.index_exist(search.index_name_one(kb.tenant_id, kb.name), dataset_id):
         return get_result(data=obj)
     
-    sres = settings.retriever.search(req, search.index_name_one(kb.tenant_id,kb.name), [dataset_id])
+    sres = await settings.retriever.search(req, search.index_name_one(kb.tenant_id, kb.name), [dataset_id])
     if not len(sres.ids):
         return get_result(data=obj)
 

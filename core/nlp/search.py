@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -113,8 +114,8 @@ class Dealer:
         group_docs: list[list] | None = None
 
     # def get_vector(self, collection_name, txt, emb_mdl, topk=10, similarity=0.1):
-    def get_vector(self, txt, emb_mdl, topk=10, similarity=0.1):
-        qv, _ = emb_mdl.encode_queries(txt)
+    async def get_vector(self, txt, emb_mdl, topk=10, similarity=0.1):
+        qv, _ = await asyncio.to_thread(emb_mdl.encode_queries, txt)
         shape = np.array(qv).shape
         if len(shape) > 1:
             raise Exception(
@@ -208,7 +209,7 @@ class Dealer:
         return " && ".join(filter_parts) if filter_parts else ""
 
 
-    def search(self, req, idx_names: str | list[str],
+    async def search(self, req, idx_names: str | list[str],
                kb_ids: list[str],
                emb_mdl=None,
                highlight: bool | list | None = False,
@@ -274,7 +275,7 @@ class Dealer:
             order_by = OrderByExpr()
             if req.get("sort"):
                 order_by.asc("page_num_int").asc("top_int").desc("create_timestamp_flt")
-            res = self.dataStore.search(src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
+            res = await asyncio.to_thread(self.dataStore.search, src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
             keywords_raw: list[str] =  []
             return _build_result(res, keywords_raw)
 
@@ -293,7 +294,7 @@ class Dealer:
                 weight_dense = hybrid_params.get("weight_dense", 0.7)
                 weight_sparse = hybrid_params.get("weight_sparse", 0.3)
 
-                match_dense = self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
+                match_dense = await self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
                 q_vec = match_dense.embedding_data
                 vector_field = f"q_{len(q_vec)}_vec"
                 src.append(vector_field)
@@ -313,7 +314,8 @@ class Dealer:
                     expr=self._build_filter_expr(filters) if filters else "",
                 )
                 ranker = WeightedRanker(weight_dense, weight_sparse)
-                results = self.dataStore.hybrid_search(
+                results = await asyncio.to_thread(
+                    self.dataStore.hybrid_search,
                     collection_name=idx_names,
                     reqs=[dense_req, sparse_req],
                     ranker=ranker,
@@ -326,7 +328,8 @@ class Dealer:
             # === Sparse 模式 ===
             if "sparse" in search_mode:
                 logging.info("执行全文检索…")
-                results = self.dataStore.search_by_milvus(
+                results = await asyncio.to_thread(
+                    self.dataStore.search_by_milvus,
                     collection_name=idx_names,
                     data=[qst],
                     anns_field="sparse_vector",
@@ -358,14 +361,15 @@ class Dealer:
             match_exprs = [match_text]
             logging.info("执行向量融合检索「默认」")
             if emb_mdl:
-                match_dense = self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
+                match_dense = await self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
                 q_vec = match_dense.embedding_data
                 if not settings.DOC_ENGINE_INFINITY:
                     src.append(f"q_{len(q_vec)}_vec")
                 fusion_expr = FusionExpr("weighted_sum", topk, {"weights": "0.05,0.95"})
                 match_exprs = [match_text, match_dense, fusion_expr]
 
-            res = self.dataStore.search(
+            res = await asyncio.to_thread(
+                self.dataStore.search,
                 src,
                 highlight_fields,
                 filters,
@@ -384,7 +388,8 @@ class Dealer:
                 match_text_low, _ = self.qryr.question(qst, min_match=0.1)
                 filters.pop("doc_ids", None)
                 match_dense.extra_options["similarity"] = 0.17
-                res = self.dataStore.search(
+                res = await asyncio.to_thread(
+                    self.dataStore.search,
                     src,
                     highlight_fields,
                     filters,
@@ -1102,7 +1107,7 @@ class Dealer:
                                            rag_tokenizer.tokenize(ans).split(),
                                            rag_tokenizer.tokenize(inst).split())
 
-    def retrieval(
+    async def retrieval(
             self,
             question,
             filter_exp,
@@ -1153,6 +1158,7 @@ class Dealer:
 
         # Ensure RERANK_LIMIT is multiple of page_size
         RERANK_LIMIT = math.ceil(64/page_size) * page_size if page_size > 1 else 1
+        RERANK_LIMIT = max(30, RERANK_LIMIT)
         req = {
             "kb_names": kb_names,
             "doc_ids": doc_ids,
@@ -1175,10 +1181,11 @@ class Dealer:
         # 优先使用 kb_ids（知识库ID），如果没有则使用 kb_names（仅适用于Milvus场景）
         search_kb_ids = kb_ids if kb_ids else kb_names
 
-        sres = self.search(req, idxnms, search_kb_ids, embd_mdl, highlight=highlight, rank_feature=rank_feature)
+        sres = await self.search(req, idxnms, search_kb_ids, embd_mdl, highlight=highlight, rank_feature=rank_feature)
 
         if rerank_mdl and sres.total > 0:
-            sim, tsim, vsim = self.rerank_by_model(
+            sim, tsim, vsim = await asyncio.to_thread(
+                self.rerank_by_model,
                 rerank_mdl,
                 sres,
                 question,

@@ -16,7 +16,6 @@ import re
 from copy import deepcopy
 from timeit import default_timer as timer
 from langfuse import Langfuse
-from agentic_reasoning import DeepResearcher
 from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
@@ -32,6 +31,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from graphrag.general.mind_map_extractor import MindMapExtractor
 from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
+from core.advanced_rag import DeepResearcher
 from core.nlp.search import index_name
 from core.prompts.generator import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
     citation_prompt, cross_languages, PROMPT_JINJA_ENV, ASK_SUMMARY
@@ -546,7 +546,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     yield think
         else:
             if embd_mdl:
-                kbinfos = retriever.retrieval(
+                kbinfos = asyncio.run(retriever.retrieval(
                     " ".join(questions),
                     filter_exp,
                     embd_mdl,
@@ -563,7 +563,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     rank_feature=label_question(db, " ".join(questions), kbs),
                     search_mode=dialog.search_mode,
                     kb_ids = dialog.kb_ids
-                )
+                ))
                 if prompt_config.get("toc_enhance"):
                     cks = asyncio.run(retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n))
                     if cks:
@@ -836,15 +836,28 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                 )
             )
 
-            async for think in reasoner.thinking(kbinfos, attachments_ + " ".join(questions)):
-                if isinstance(think, str):
-                    thought = think
-                    knowledges = [t for t in think.split("\n") if t]
-                elif stream:
-                    yield think
+            queue = asyncio.Queue()
+            async def callback(msg: str):
+                nonlocal queue
+                await queue.put(msg + "<br/>")
+
+            await callback("<START_DEEP_RESEARCH>")
+            task = asyncio.create_task(reasoner.research(kbinfos, questions[-1], questions[-1], callback=callback))
+            while True:
+                msg = await queue.get()
+                if msg.find("<START_DEEP_RESEARCH>") == 0:
+                    yield {"answer": "", "reference": {}, "audio_binary": None, "final": False, "start_to_think": True}
+                elif msg.find("<END_DEEP_RESEARCH>") == 0:
+                    yield {"answer": "", "reference": {}, "audio_binary": None, "final": False, "end_to_think": True}
+                    break
+                else:
+                    yield {"answer": msg, "reference": {}, "audio_binary": None, "final": False}
+
+            await task
+
         else:
             if embd_mdl:
-                kbinfos = retriever.retrieval(
+                kbinfos = await retriever.retrieval(
                     " ".join(questions),
                     filter_exp,
                     embd_mdl,
@@ -877,7 +890,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
-            knowledges = kb_prompt(kbinfos, max_tokens)
+    knowledges = kb_prompt(kbinfos, max_tokens)
 
     logging.debug("{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
 
@@ -1337,7 +1350,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = list([kb.name for kb in kbs])
-    kbinfos = retriever.retrieval(
+    kbinfos = asyncio.run(retriever.retrieval(
         question=question,
         filter_exp=filter_exp,
         embd_mdl=embd_mdl,
@@ -1353,7 +1366,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
         rerank_mdl=rerank_mdl,
         rank_feature=label_question(db, question, kbs),
         search_mode=None #todo 无法传递应用里的配置，所以只能使用一种默认检索模式
-    )
+    ))
     knowledges = kb_prompt(kbinfos, max_tokens)
     sys_prompt = PROMPT_JINJA_ENV.from_string(ASK_SUMMARY).render(knowledge="\n".join(knowledges))
 
@@ -1414,7 +1427,7 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
 
     filter_exp = ""
     kb_names = list([kb.name for kb in kbs])
-    kbinfos = retriever.retrieval(
+    kbinfos = await retriever.retrieval(
         question=question,
         filter_exp=filter_exp,
         embd_mdl=embd_mdl,
@@ -1494,7 +1507,7 @@ async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=No
         metas = DocumentService.get_meta_by_kbs(db, kb_ids)
         doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
-    ranks = settings.retriever.retrieval(
+    ranks = await settings.retriever.retrieval(
         question=question,
         filter_exp="",
         embd_mdl=embd_mdl,

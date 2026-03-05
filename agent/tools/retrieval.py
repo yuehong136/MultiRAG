@@ -233,7 +233,7 @@ class Retrieval(ToolBase, ABC):
             if kbs:
                 kb_names = list([kb.name for kb in kbs])
                 query = re.sub(r"^user[:：\s]*", "", query, flags=re.IGNORECASE)
-                kbinfos = settings.retriever.retrieval(
+                kbinfos = await settings.retriever.retrieval(
                     query,
                     "",
                     embd_mdl,

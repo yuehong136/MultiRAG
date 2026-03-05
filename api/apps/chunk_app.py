@@ -169,7 +169,7 @@ class RetrievalTestRequest(BaseModel):
 
 
 @router.post('/list', summary="列出文档块")
-def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/list` 列出文档块接口
 
@@ -381,7 +381,7 @@ def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=De
         # total = settings.retriever.count(query_count, search.index_name_one(tenant_id, kb.name)).total
         # sres = settings.retriever.search(query, search.index_name_one(tenant_id, kb.name))
         # total = settings.retriever.search(query_count, search.index_name_one(tenant_id, kb.name), kb_ids).total
-        sres = settings.retriever.search(query, search.index_name_one(tenant_id, kb.name), kb_ids, highlight=["content_ltks"])
+        sres = await settings.retriever.search(query, search.index_name_one(tenant_id, kb.name), kb_ids, highlight=["content_ltks"])
         res = {"total": sres.total, "chunks": [], "doc": doc.to_dict()}
         for id in sres.ids:
             d = {
@@ -1559,7 +1559,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
 
         # 当调用retrieval函数时，传递维度信息
         # 注意：kb_ids 参数应传递知识库 ID 列表，而不是名称列表，用于 ES 的 kb_id 过滤
-        ranks = settings.retriever.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
+        ranks = await settings.retriever.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
                                request.size, request.similarity_threshold, request.vector_similarity_weight,
                                request.top_k, doc_ids, rerank_mdl=rerank_mdl,
                                highlight=request.highlight if request.highlight is not None else False,
@@ -1587,7 +1587,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
 
 
 @router.get('/knowledge_graph', summary="获取知识图谱")
-def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+async def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/knowledge_graph` 获取文档知识图谱接口
 
@@ -1703,8 +1703,7 @@ def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depends(man
     }
     tenant_id = DocumentService.get_tenant_id(db, doc_id)
     kb_names = KnowledgebaseService.get_kb_ids(db, tenant_id)
-    # todo 因为search参数里缺少knowledge_graph_kwd ，所以暂时无法使用，后续需要调整milvus集合创建的schema
-    sres = settings.retriever.search(req, search.index_name_one(tenant_id, kb_names))
+    sres = await settings.retriever.search(req, search.index_name_one(tenant_id, kb_names))
     obj = {"graph": {}, "mind_map": {}}
     for id in sres.ids[:2]:
         ty = sres.field[id]["knowledge_graph_kwd"]

@@ -255,7 +255,7 @@ async def retrieval(
                 doc_ids = ["-999"]
 
         # 执行检索
-        ranks = settings.retriever.retrieval(
+        ranks = await settings.retriever.retrieval(
             question,
             embd_mdl,
             kb.tenant_id,

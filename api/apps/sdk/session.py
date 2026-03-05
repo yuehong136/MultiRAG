@@ -1165,7 +1165,7 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
             question += await keyword_extraction(chat_mdl, question)
 
         labels = label_question(db, question, [kb])
-        ranks = settings.retriever.retrieval(
+        ranks = await settings.retriever.retrieval(
             question, embd_mdl, tenant_ids, kb_ids, page, size, similarity_threshold, vector_similarity_weight, top, doc_ids, rerank_mdl=rerank_mdl, highlight=req.get("highlight"), rank_feature=labels
         )
         if use_kg:

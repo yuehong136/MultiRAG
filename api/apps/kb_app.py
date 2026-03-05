@@ -111,6 +111,7 @@ class CheckEmbeddingRequest(BaseModel):
 class UpdateMetadataSettingRequest(BaseModel):
     kb_id: str
     metadata: dict
+    enable_metadata: bool = True
 
 
 @router.post('/create', summary="创建知识库", response_description="成功创建知识库")
@@ -316,6 +317,7 @@ def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session =
     if kb_dict.get("parser_config") is None:
         kb_dict["parser_config"] = {}
     kb_dict["parser_config"]["metadata"] = request.metadata
+    kb_dict["parser_config"]["enable_metadata"] = request.enable_metadata
     KnowledgebaseService.update_by_id(db, kb_dict["id"], {"parser_config": kb_dict["parser_config"]})
     return get_json_result(data=kb_dict)
 
@@ -560,7 +562,7 @@ def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get
 
 
 @router.get("/{kb_id}/knowledge_graph", summary="获取知识图谱")
-def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+async def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(
             data=False,
@@ -575,7 +577,7 @@ def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(mana
     obj = {"graph": {}, "mind_map": {}}
     if not settings.docStoreConn.index_exist(search.index_name(kb.tenant_id, [kb.name]), kb_id):
         return get_json_result(data=obj)
-    sres = settings.retriever.search(req, search.index_name(kb.tenant_id, [kb.name]), [kb_id])
+    sres = await settings.retriever.search(req, search.index_name(kb.tenant_id, [kb.name]), [kb_id])
     if not len(sres.ids):
         return get_json_result(data=obj)
 

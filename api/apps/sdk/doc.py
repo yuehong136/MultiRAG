@@ -917,7 +917,7 @@ def stop_parsing_documents(
 
 
 @router.get("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="获取文档分块列表")
-def list_chunks(
+async def list_chunks(
     dataset_id: str,
     document_id: str,
     page: int = Query(1, ge=1),
@@ -1019,7 +1019,7 @@ def list_chunks(
         _ = ChunkModel(**final_chunk)  # validate the chunk
 
     elif settings.docStoreConn.index_exist(search.index_name(tenant_id, [kb.name]), dataset_id):
-        sres = settings.retriever.search(query, search.index_name(tenant_id, [kb.name]), [dataset_id], emb_mdl=None, highlight=True)
+        sres = await settings.retriever.search(query, search.index_name(tenant_id, [kb.name]), [dataset_id], emb_mdl=None, highlight=True)
         res["total"] = sres.total
         for chunk_id in sres.ids:
             chunk_data = sres.field[chunk_id]
@@ -1341,7 +1341,7 @@ async def retrieval_test(
             question += await keyword_extraction(chat_mdl, question)
         
         # 执行检索
-        ranks = settings.retriever.retrieval(
+        ranks = await settings.retriever.retrieval(
             question,
             embd_mdl,
             tenant_ids,
