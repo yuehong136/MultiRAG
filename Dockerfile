@@ -173,7 +173,9 @@ RUN --mount=type=cache,id=multirag_uv,target=/root/.cache/uv,sharing=locked \
     else \
         sed -i 's|pypi.tuna.tsinghua.edu.cn|pypi.org|g' uv.lock; \
     fi; \
-    uv sync --python 3.12 --frozen --all-extras
+    uv sync --python 3.12 --frozen --all-extras && \
+    # Ensure pip is available in the venv for runtime package installation (fixes #12651)
+    .venv/bin/python3 -m ensurepip --upgrade
 
 COPY .git /multirag/.git
 RUN version_info=$(git describe --tags --match=v* --first-parent --always); \
