@@ -17,6 +17,7 @@ import base64
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -170,9 +171,6 @@ class TencentCloudAPIClient:
             return None
 
         try:
-            response = requests.get(download_url)
-            response.raise_for_status()
-
             # Ensure output directory exists
             os.makedirs(output_dir, exist_ok=True)
 
@@ -181,15 +179,22 @@ class TencentCloudAPIClient:
             filename = f"tcadp_result_{timestamp}.zip"
             file_path = os.path.join(output_dir, filename)
 
-            # Save file
-            with open(file_path, "wb") as f:
-                f.write(response.content)
+            with requests.get(download_url, stream=True) as response:
+                response.raise_for_status()
+                with open(file_path, "wb") as f:
+                    response.raw.decode_content = True
+                    shutil.copyfileobj(response.raw, f)
 
             logging.info(f"[TCADP] Document parsing result downloaded to: {os.path.basename(file_path)}")
             return file_path
 
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             logging.error(f"[TCADP] Failed to download file: {e}")
+            try:
+                if "file_path" in locals() and os.path.exists(file_path):
+                    os.unlink(file_path)
+            except Exception:
+                pass
             return None
 
 
@@ -240,6 +245,10 @@ class TCADPParser(RAGFlowPdfParser):
         if not self.secret_id or not self.secret_key:
             raise ValueError("[TCADP] Please set Tencent Cloud API keys, configure tcadp_config in service_conf.yaml")
 
+    @staticmethod
+    def _is_zipinfo_symlink(member: zipfile.ZipInfo) -> bool:
+        return (member.external_attr >> 16) & 0o170000 == 0o120000
+
     def check_installation(self) -> bool:
         """Check if Tencent Cloud API configuration is correct"""
         try:
@@ -274,23 +283,34 @@ class TCADPParser(RAGFlowPdfParser):
 
         try:
             with zipfile.ZipFile(zip_path, "r") as zip_file:
-                # Find JSON result files
-                json_files = [f for f in zip_file.namelist() if f.endswith(".json")]
+                members = zip_file.infolist()
+                for member in members:
+                    name = member.filename.replace("\\", "/")
+                    if member.is_dir():
+                        continue
+                    if member.flag_bits & 0x1:
+                        raise RuntimeError(f"[TCADP] Encrypted zip entry not supported: {member.filename}")
+                    if self._is_zipinfo_symlink(member):
+                        raise RuntimeError(f"[TCADP] Symlink zip entry not supported: {member.filename}")
+                    if name.startswith("/") or name.startswith("//") or re.match(r"^[A-Za-z]:", name):
+                        raise RuntimeError(f"[TCADP] Unsafe zip path (absolute): {member.filename}")
+                    parts = [p for p in name.split("/") if p not in ("", ".")]
+                    if any(p == ".." for p in parts):
+                        raise RuntimeError(f"[TCADP] Unsafe zip path (traversal): {member.filename}")
 
-                for json_file in json_files:
-                    with zip_file.open(json_file) as f:
-                        data = json.load(f)
-                        if isinstance(data, list):
-                            results.extend(data)
+                    if not (name.endswith(".json") or name.endswith(".md")):
+                        continue
+
+                    with zip_file.open(member) as f:
+                        if name.endswith(".json"):
+                            data = json.load(f)
+                            if isinstance(data, list):
+                                results.extend(data)
+                            else:
+                                results.append(data)
                         else:
-                            results.append(data)
-
-                # Find Markdown files
-                md_files = [f for f in zip_file.namelist() if f.endswith(".md")]
-                for md_file in md_files:
-                    with zip_file.open(md_file) as f:
-                        content = f.read().decode("utf-8")
-                        results.append({"type": "text", "content": content, "file": md_file})
+                            content = f.read().decode("utf-8")
+                            results.append({"type": "text", "content": content, "file": name})
 
         except Exception as e:
             self.logger.error(f"[TCADP] Failed to extract ZIP file content: {e}")
