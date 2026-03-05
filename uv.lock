@@ -3887,7 +3887,7 @@ requires-dist = [
     { name = "pyexcel-xlsx", specifier = ">=0.6.0" },
     { name = "pygithub", specifier = ">=2.8.1" },
     { name = "pymilvus", specifier = ">=2.5.11" },
-    { name = "pyobvector", specifier = "==0.2.18" },
+    { name = "pyobvector", specifier = "==0.2.22" },
     { name = "pyodbc", specifier = ">=5.2.0,<6.0.0" },
     { name = "pypandoc", specifier = ">=1.16" },
     { name = "pypdf", specifier = "==6.4.0" },
@@ -5490,7 +5490,7 @@ wheels = [
 
 [[package]]
 name = "pyobvector"
-version = "0.2.18"
+version = "0.2.22"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "aiomysql" },
@@ -5500,9 +5500,9 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "sqlglot" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/82/33/adf722744a88eb75b4422129cbc4fe9b05738064ee79762348e285d93520/pyobvector-0.2.18.tar.gz", hash = "sha256:58ca2765ab99de188e99c815aab914ab9efd003cfa1ce9c5f2e41d0e2b4878be" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/30/b9/443d65757cdfb47d31ef4b9ed0609628ae468e52e57033051e1fad256c59/pyobvector-0.2.22.tar.gz", hash = "sha256:0bd4af46cfdfbc67e691d5b49f3b0662f702a7a42a7f7a240f1021af378e793c" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/5c/1f/73fa42b215722ec36172ac155626db5d2b95ea9f884cf9fb0624492e303b/pyobvector-0.2.18-py3-none-any.whl", hash = "sha256:93e34b7796e4cbc6ad139118d655eb127d1e7a0f5df76df66e25520533a15488" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/e0/88/1583888a4ce85202d93fa03f2817681637465668e8b260ef1b9d5a39c3ca/pyobvector-0.2.22-py3-none-any.whl", hash = "sha256:4a0f5c094af7ca8242fdf9e5111e75544de0a9615491e9ec2f9d218dc909b509" },
 ]
 
 [[package]]
