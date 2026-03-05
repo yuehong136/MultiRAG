@@ -10,6 +10,8 @@ from services import UserMgr, ServiceMgr, UserServiceMgr, SettingsMgr, ConfigMgr
 from roles import RoleMgr
 from api.common.exceptions import AdminException
 from api.db.db_models import get_db
+from api.utils.api_utils import generate_confirmation_token
+from common.time_utils import current_timestamp, datetime_format
 from common.versions import get_multirag_version
 
 
@@ -722,6 +724,79 @@ def get_environments(user=Depends(admin_manager)) -> APIResponse[list[dict]]:
     try:
         res = list(EnvironmentsMgr.get_all())
         return success_response(res)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.post(
+    "/users/{username}/new_token",
+    response_model=APIResponse[dict],
+    summary="为用户生成 API Token",
+    description="为指定用户生成一个新的 API Token"
+)
+def generate_user_api_key(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[dict]:
+    """为用户生成 API Token"""
+    try:
+        user_details = UserMgr.get_user_details(db, username)
+        if not user_details:
+            return error_response("User not found!", 404)
+        tenants = UserServiceMgr.get_user_tenants(db, username)
+        if not tenants:
+            return error_response("Tenant not found!", 404)
+        tenant_id: str = tenants[0]["tenant_id"]
+        token: str = generate_confirmation_token()
+        obj: dict = {
+            "tenant_id": tenant_id,
+            "token": token,
+            "name": "admin-generated",
+            "beta": generate_confirmation_token().replace("multirag-", "")[:32],
+            "create_time": current_timestamp(),
+            "create_date": datetime_format(datetime.now()),
+            "update_time": None,
+            "update_date": None,
+        }
+        if not UserMgr.save_api_token(db, obj):
+            return error_response("Failed to generate API key!", 500)
+        return success_response(obj, "API key generated successfully")
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/users/{username}/token_list",
+    response_model=APIResponse[list[dict]],
+    summary="获取用户的 API Token 列表",
+    description="获取指定用户的所有 API Token"
+)
+def get_user_api_keys(username: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[list[dict]]:
+    """获取用户的 API Token 列表"""
+    try:
+        api_keys = UserMgr.get_user_api_key(db, username)
+        return success_response(api_keys, "Get user API keys")
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.delete(
+    "/users/{username}/token/{token}",
+    response_model=APIResponse[None],
+    summary="删除用户的 API Token",
+    description="删除指定用户的某个 API Token"
+)
+def delete_user_api_key(username: str, token: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[None]:
+    """删除用户的 API Token"""
+    try:
+        deleted = UserMgr.delete_api_token(db, username, token)
+        if deleted:
+            return success_response(None, "API key deleted successfully")
+        else:
+            return error_response("API key not found or could not be deleted", 404)
     except AdminException as e:
         return error_response(e.message, e.code)
     except Exception as e:

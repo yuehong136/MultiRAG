@@ -1,16 +1,19 @@
 import logging
 import os
 import re
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from common.constants import ActiveEnum
 from api.db.joint_services.user_account_service import create_new_user, delete_user_data
 from api.db.services import UserService
+from api.db.services.api_service import APITokenService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.user_service import TenantService
+from api.db.services.user_service import TenantService, UserTenantService
 from api.db.services.system_settings_service import SystemSettingsService
+from api.db.db_models import APIToken
 from api.utils import health_utils
 
 from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
@@ -224,6 +227,36 @@ class UserMgr:
         UserService.update_user(db, usr.id, {"is_superuser": False})
         return "Revoke successfully!"
 
+    @staticmethod
+    def get_user_api_key(db: Session, username: str) -> list[dict[str, Any]]:
+        user_list = UserService.query_user_by_email(db, username)
+        if not user_list:
+            raise UserNotFoundError(username)
+        elif len(user_list) > 1:
+            raise AdminException(f"More than one user with username '{username}' found!")
+        usr = user_list[0]
+        api_tokens = APITokenService.query(db, tenant_id=usr.id)
+        return [token.to_dict() for token in api_tokens]
+
+    @staticmethod
+    def save_api_token(db: Session, api_token: dict[str, Any]) -> bool:
+        try:
+            APITokenService.save(db, **api_token)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def delete_api_token(db: Session, username: str, token: str) -> bool:
+        user_list = UserService.query_user_by_email(db, username)
+        if not user_list:
+            raise UserNotFoundError(username)
+        elif len(user_list) > 1:
+            raise AdminException(f"Exist more than 1 user: {username}!")
+        usr = user_list[0]
+        deleted_count = APITokenService.filter_delete(db, [APIToken.tenant_id == usr.id, APIToken.token == token])
+        return deleted_count > 0
+
 
 class UserServiceMgr:
 
@@ -262,6 +295,14 @@ class UserServiceMgr:
             'canvas_category': r['canvas_category'].split('_')[0],
             'avatar': r['avatar']
         } for r in res]
+
+    @staticmethod
+    def get_user_tenants(db: Session, username: str) -> list[dict[str, Any]]:
+        users = UserService.query_user_by_email(db, username)
+        if not users:
+            raise UserNotFoundError(username)
+        user = users[0]
+        return UserTenantService.get_tenants_by_user_id(db, user.id)
 
 class ServiceMgr:
 
