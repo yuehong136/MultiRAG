@@ -123,7 +123,7 @@ class FlowParser:
         filename: str,
         binary: bytes,
         tenant_id: str,
-        parse_method: Literal["deepdoc", "plain_text", "mineru", "tcadp parser"] | str = "deepdoc",
+        parse_method: Literal["deepdoc", "plain_text", "mineru", "tcadp parser", "paddleocr"] | str = "deepdoc",
         output_format: Literal["json", "markdown"] = "json",
         lang: str = "Chinese",
         callback=None,
@@ -132,14 +132,15 @@ class FlowParser:
         **method_kwargs
     ) -> dict:
         """
-        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 229-334 行）
-        
+        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 229-400 行）
+
         Args:
-            parse_method: 
+            parse_method:
                 - deepdoc: 深度布局解析（保留位置、表格、图片）
                 - plain_text: 纯文本解析（快速）
                 - mineru: MinerU 解析（需要安装 mineru）
                 - tcadp parser: 腾讯云 ADP 解析（支持定位信息）
+                - paddleocr: PaddleOCR 解析（通过 PaddleOCR API 服务）
                 - 其他: VLM 模型名称（如 "qwen-vl-plus"）
             output_format: json（保留位置） 或 markdown
             lang: 语言（VLM 模式使用）
@@ -153,7 +154,7 @@ class FlowParser:
         if callback:
             callback(0.1, "Start to work on a PDF.")
         
-        # 解析 mineru@模型名 或 模型名@mineru 格式（参考 parser.py 第 234-246 行）
+        # 解析 模型名@mineru 或 模型名@paddleocr 格式（参考 parser.py 第 234-246 行）
         raw_method = parse_method or "deepdoc"
         method = raw_method
         parser_model_name = None
@@ -162,12 +163,17 @@ class FlowParser:
             if lowered.endswith("@mineru"):
                 parser_model_name = raw_method.rsplit("@", 1)[0]
                 method = "MinerU"
+            elif lowered.endswith("@paddleocr"):
+                parser_model_name = raw_method.rsplit("@", 1)[0]
+                method = "PaddleOCR"
             else:
                 method = lowered
-        
-        # 将 parser_model_name 传入 method_kwargs 以便 mineru 分支使用
+
+        # 将 parser_model_name 传入 method_kwargs 以便 mineru/paddleocr 分支使用
         if parser_model_name and "mineru_llm_name" not in method_kwargs:
             method_kwargs["mineru_llm_name"] = parser_model_name
+        if parser_model_name and "paddleocr_llm_name" not in method_kwargs:
+            method_kwargs["paddleocr_llm_name"] = parser_model_name
         
         if method == "deepdoc":
             parser = RAGFlowPdfParser()
@@ -271,7 +277,74 @@ class FlowParser:
                         bboxes.append({"text": section})
                 else:
                     bboxes.append({"text": section})
-        
+
+        elif method == "paddleocr":
+            # PaddleOCR 解析（参考 core/flow/parser/parser.py 第 330-400 行）
+            from api.db.services.tenant_llm_service import TenantLLMService
+
+            parser_model_name = method_kwargs.get("paddleocr_llm_name")
+
+            def resolve_paddleocr_llm_name():
+                if parser_model_name:
+                    return parser_model_name
+
+                if not tenant_id:
+                    return None
+
+                with db_connection() as db:
+                    env_name = TenantLLMService.ensure_paddleocr_from_env(db, tenant_id)
+                    candidates = TenantLLMService.query(
+                        db, tenant_id=tenant_id,
+                        llm_factory="PaddleOCR",
+                        mdl_type=LLMType.OCR.value
+                    )
+                    if candidates:
+                        return candidates[0].llm_name
+                    return env_name
+
+            resolved_model_name = resolve_paddleocr_llm_name()
+            if not resolved_model_name:
+                raise RuntimeError("PaddleOCR model not configured. Please add PaddleOCR in Model Providers or set PADDLEOCR_* env.")
+
+            with db_connection() as db:
+                ocr_model = LLMBundle(db, tenant_id, LLMType.OCR, llm_name=resolved_model_name)
+                pdf_parser = ocr_model.mdl
+
+            paddleocr_parse_method = method_kwargs.get("paddleocr_parse_method", "raw")
+            lines, _ = await _to_thread(
+                pdf_parser.parse_pdf,
+                filepath=filename,
+                binary=binary,
+                callback=callback,
+                parse_method=paddleocr_parse_method,
+            )
+
+            bboxes = []
+            for section in lines:
+                text = section[0]
+                position_tag = ""
+                if len(section) == 2:
+                    position_tag = section[1]
+                elif len(section) == 3:
+                    position_tag = section[2]
+
+                page_number, x0, x1, top, bottom = 1, 0, 0, 0, 0
+                if position_tag:
+                    tag_match = re.match(r"@@([0-9-]+)\t([0-9.]+)\t([0-9.]+)\t([0-9.]+)\t([0-9.]+)##", position_tag)
+                    if tag_match:
+                        pn, x0_str, x1_str, top_str, bottom_str = tag_match.groups()
+                        page_number = int(pn.split("-")[0])
+                        x0, x1, top, bottom = float(x0_str), float(x1_str), float(top_str), float(bottom_str)
+
+                bboxes.append({
+                    "text": text,
+                    "page_number": page_number,
+                    "x0": x0,
+                    "x1": x1,
+                    "top": top,
+                    "bottom": bottom,
+                })
+
         else:
             # VLM 模式（参考第 244-251 行）
             # parse_method 是 VLM 模型名称（如 "qwen-vl-plus"）

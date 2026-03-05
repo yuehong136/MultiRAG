@@ -130,7 +130,7 @@ def by_docling(filename, binary=None, from_page=0, to_page=100000, lang="Chinese
         callback=callback,
         output_dir=os.environ.get("MINERU_OUTPUT_DIR", ""),
         delete_output=bool(int(os.environ.get("MINERU_DELETE_OUTPUT", 1))),
-        parse_method=parse_method
+        parse_method=parse_method,
     )
     return sections, tables, pdf_parser
 
@@ -150,6 +150,56 @@ def by_tcadp(filename, binary=None, from_page=0, to_page=100000, lang="Chinese",
         file_type="PDF"
     )
     return sections, tables, tcadp_parser
+
+
+def by_paddleocr(
+    filename,
+    binary=None,
+    from_page=0,
+    to_page=100000,
+    lang="Chinese",
+    callback=None,
+    pdf_cls=None,
+    parse_method: str = "raw",
+    paddleocr_llm_name: str | None = None,
+    tenant_id: str | None = None,
+    **kwargs,
+):
+    pdf_parser = None
+    if tenant_id:
+        if not paddleocr_llm_name:
+            try:
+                from api.db.services.tenant_llm_service import TenantLLMService
+
+                with db_connection() as db:
+                    env_name = TenantLLMService.ensure_paddleocr_from_env(db, tenant_id)
+                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="PaddleOCR", mdl_type=LLMType.OCR)
+                    if candidates:
+                        paddleocr_llm_name = candidates[0].llm_name
+                    elif env_name:
+                        paddleocr_llm_name = env_name
+            except Exception as e:  # best-effort fallback
+                logging.warning(f"fallback to env paddleocr: {e}")
+
+        if paddleocr_llm_name:
+            try:
+                with db_connection() as db:
+                    ocr_model = LLMBundle(db, tenant_id=tenant_id, llm_type=LLMType.OCR, llm_name=paddleocr_llm_name, lang=lang)
+                    pdf_parser = ocr_model.mdl
+                    sections, tables = pdf_parser.parse_pdf(
+                        filepath=filename,
+                        binary=binary,
+                        callback=callback,
+                        parse_method=parse_method,
+                        **kwargs,
+                    )
+                    return sections, tables, pdf_parser
+            except Exception as e:
+                logging.error(f"Failed to parse pdf via LLMBundle PaddleOCR ({paddleocr_llm_name}): {e}")
+
+    if callback:
+        callback(-1, "PaddleOCR not found.")
+    return None, None, None
 
 
 def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
@@ -184,6 +234,7 @@ PARSERS = {
     "mineru": by_mineru,
     "docling": by_docling,
     "tcadp": by_tcadp,
+    "paddleocr": by_paddleocr,
     "plaintext": by_plaintext,  # default
 }
 
@@ -193,12 +244,12 @@ class Docx(DocxParser):
         pass
 
     def get_picture(self, document, paragraph):
-        imgs = paragraph._element.xpath('.//pic:pic')
+        imgs = paragraph._element.xpath(".//pic:pic")
         if not imgs:
             return None
         res_img = None
         for img in imgs:
-            embed = img.xpath('.//a:blip/@r:embed')
+            embed = img.xpath(".//a:blip/@r:embed")
             if not embed:
                 continue
             embed = embed[0]
@@ -221,7 +272,7 @@ class Docx(DocxParser):
                 logging.warning(f"The recognized image stream appears to be corrupted. Skipping image, exception: {e}")
                 continue
             try:
-                image = Image.open(BytesIO(image_blob)).convert('RGB')
+                image = Image.open(BytesIO(image_blob)).convert("RGB")
                 if res_img is None:
                     res_img = image
                 else:
@@ -253,11 +304,11 @@ class Docx(DocxParser):
         try:
             # Iterate through all paragraphs and tables in document order
             for i, block in enumerate(self.doc._element.body):
-                if block.tag.endswith('p'):  # Paragraph
+                if block.tag.endswith("p"):  # Paragraph
                     p = Paragraph(block, self.doc)
-                    blocks.append(('p', i, p))
-                elif block.tag.endswith('tbl'):  # Table
-                    blocks.append(('t', i, None))  # Table object will be retrieved later
+                    blocks.append(("p", i, p))
+                elif block.tag.endswith("tbl"):  # Table
+                    blocks.append(("t", i, None))  # Table object will be retrieved later
         except Exception as e:
             logging.error(f"Error collecting blocks: {e}")
             return ""
@@ -266,7 +317,7 @@ class Docx(DocxParser):
         target_table_pos = -1
         table_count = 0
         for i, (block_type, pos, _) in enumerate(blocks):
-            if block_type == 't':
+            if block_type == "t":
                 if table_count == table_index:
                     target_table_pos = pos
                     break
@@ -282,7 +333,7 @@ class Docx(DocxParser):
             if pos >= target_table_pos:  # Skip blocks after the table
                 continue
 
-            if block_type != 'p':
+            if block_type != "p":
                 continue
 
             if block.style and block.style.name and re.search(r"Heading\s*(\d+)", block.style.name, re.I):
@@ -311,7 +362,7 @@ class Docx(DocxParser):
                     if pos >= target_table_pos:  # Skip blocks after the table
                         continue
 
-                    if block_type != 'p':
+                    if block_type != "p":
                         continue
 
                     if block.style and re.search(r"Heading\s*(\d+)", block.style.name, re.I):
@@ -342,8 +393,7 @@ class Docx(DocxParser):
         return ""
 
     def __call__(self, filename, binary=None, from_page=0, to_page=100000):
-        self.doc = Document(
-            filename) if not binary else Document(BytesIO(binary))
+        self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0
         lines = []
         last_image = None
@@ -359,7 +409,7 @@ class Docx(DocxParser):
             if pn > to_page:
                 break
 
-            if block.tag.endswith('p'):
+            if block.tag.endswith("p"):
                 p = Paragraph(block, self.doc)
 
                 if from_page <= pn < to_page:
@@ -419,7 +469,7 @@ class Docx(DocxParser):
                     if "w:br" in xml and 'type="page"' in xml:
                         pn += 1
 
-            elif block.tag.endswith('tbl'):
+            elif block.tag.endswith("tbl"):
                 if pn < from_page or pn > to_page:
                     table_idx += 1
                     continue
@@ -505,8 +555,7 @@ class Pdf(PdfParser):
     def __init__(self):
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0,
-                 to_page=100000, zoomin=3, callback=None, separate_tables_figures=False):
+    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None, separate_tables_figures=False):
         start = timer()
         first_start = start
         callback(msg="OCR started")
@@ -559,13 +608,14 @@ class Markdown(MarkdownParser):
             return []
 
         from bs4 import BeautifulSoup
+
         html_content = markdown(text)
-        soup = BeautifulSoup(html_content, 'html.parser')
+        soup = BeautifulSoup(html_content, "html.parser")
         return soup
 
     def get_hyperlink_urls(self, soup):
         if soup:
-            return set([a.get('href') for a in soup.find_all('a') if a.get('href')])
+            return set([a.get("href") for a in soup.find_all("a") if a.get("href")])
         return []
 
     def extract_image_urls_with_lines(self, text):
@@ -588,10 +638,10 @@ class Markdown(MarkdownParser):
         try:
             from bs4 import BeautifulSoup
 
-            soup = BeautifulSoup(text, 'html.parser')
+            soup = BeautifulSoup(text, "html.parser")
             newline_offsets = [m.start() for m in re.finditer(r"\n", text)] + [len(text)]
-            for img_tag in soup.find_all('img'):
-                src = img_tag.get('src')
+            for img_tag in soup.find_all("img"):
+                src = img_tag.get("src")
                 if not src:
                     continue
 
@@ -627,14 +677,14 @@ class Markdown(MarkdownParser):
                 continue
             img_obj = None
             try:
-                if url.startswith(('http://', 'https://')):
+                if url.startswith(("http://", "https://")):
                     response = requests.get(url, stream=True, timeout=30)
-                    if response.status_code == 200 and response.headers.get('Content-Type', '').startswith('image/'):
-                        img_obj = Image.open(BytesIO(response.content)).convert('RGB')
+                    if response.status_code == 200 and response.headers.get("Content-Type", "").startswith("image/"):
+                        img_obj = Image.open(BytesIO(response.content)).convert("RGB")
                 else:
                     local_path = Path(url)
                     if local_path.exists():
-                        img_obj = Image.open(url).convert('RGB')
+                        img_obj = Image.open(url).convert("RGB")
                     else:
                         logging.warning(f"Local image file not found: {url}")
             except Exception as e:
@@ -652,7 +702,7 @@ class Markdown(MarkdownParser):
             with open(filename, "r") as f:
                 txt = f.read()
 
-        remainder, tables = self.extract_tables_and_remainder(f'{txt}\n', separate_tables=separate_tables)
+        remainder, tables = self.extract_tables_and_remainder(f"{txt}\n", separate_tables=separate_tables)
         # To eliminate duplicate tables in chunking result, uncomment code below and set separate_tables to True in line 410.
         # extractor = MarkdownElementExtractor(remainder)
         extractor = MarkdownElementExtractor(txt)
@@ -678,7 +728,7 @@ class Markdown(MarkdownParser):
 
         tbls = []
         for table in tables:
-            tbls.append(((None, markdown(table, extensions=['markdown.extensions.tables'])), ""))
+            tbls.append(((None, markdown(table, extensions=["markdown.extensions.tables"])), ""))
         if return_section_images:
             return sections, tbls, section_images
         return sections, tbls
@@ -694,29 +744,28 @@ def load_from_xml_v2(baseURI, rels_item_xml):
     if rels_item_xml is not None:
         rels_elm = parse_xml(rels_item_xml)
         for rel_elm in rels_elm.Relationship_lst:
-            if rel_elm.target_ref in ('../NULL', 'NULL'):
+            if rel_elm.target_ref in ("../NULL", "NULL"):
                 continue
             srels._srels.append(_SerializedRelationship(baseURI, rel_elm))
     return srels
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000,
-          lang="Chinese", callback=None, **kwargs):
+def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
     """
-        Supported file formats are docx, pdf, excel, txt.
-        This method apply the naive ways to chunk files.
-        Successive text will be sliced into pieces using 'delimiter'.
-        Next, these successive pieces are merge into chunks whose token number is no more than 'Max token number'.
+    Supported file formats are docx, pdf, excel, txt.
+    This method apply the naive ways to chunk files.
+    Successive text will be sliced into pieces using 'delimiter'.
+    Next, these successive pieces are merge into chunks whose token number is no more than 'Max token number'.
     """
     urls = set()
     url_res = []
 
     is_english = lang.lower() == "english"  # is_english(cks)
     parser_config = kwargs.get(
-        "parser_config", {
-            "chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC", "analyze_hyperlink": True})
+        "parser_config", {"chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC", "analyze_hyperlink": True}
+    )
 
-    child_deli = (parser_config.get("children_delimiter") or "").encode('utf-8').decode('unicode_escape').encode('latin1').decode('utf-8')
+    child_deli = (parser_config.get("children_delimiter") or "").encode("utf-8").decode("unicode_escape").encode("latin1").decode("utf-8")
     cust_child_deli = re.findall(r"`([^`]+)`", child_deli)
     child_deli = "|".join(re.sub(r"`([^`]+)`", "", child_deli))
     if cust_child_deli:
@@ -782,10 +831,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
         # chunks list[dict]
         # images list - index of image chunk in chunks
-        chunks, images = naive_merge_docx(
-            sections, int(parser_config.get(
-                "chunk_token_num", 128)), parser_config.get(
-                "delimiter", "\n!?。；！？"), table_context_size, image_context_size)
+        chunks, images = naive_merge_docx(sections, int(parser_config.get("chunk_token_num", 128)), parser_config.get("delimiter", "\n!?。；！？"), table_context_size, image_context_size)
 
         vision_figure_parser_docx_wrapper_naive(chunks=chunks, idx_lst=images, callback=callback, **kwargs)
 
@@ -822,7 +868,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             callback=callback,
             layout_recognizer=layout_recognizer,  # 传递原始值给 plaintext_parser 以支持 VLM
             mineru_llm_name=parser_model_name,
-            **kwargs
+            paddleocr_llm_name=parser_model_name,
+            **kwargs,
         )
 
         if not sections and not tables:
@@ -831,7 +878,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         if table_context_size or image_context_size:
             tables = append_context2table_image4pdf(sections, tables, image_context_size)
 
-        if name in ["tcadp", "docling", "mineru"]:
+        if name in ["tcadp", "docling", "mineru", "paddleocr"]:
             parser_config["chunk_token_num"] = 0
 
         res = tokenize_table(tables, doc, is_english)
@@ -877,9 +924,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
     elif re.search(r"\.(txt|py|js|java|c|cpp|h|php|go|ts|sh|cs|kt|sql)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
-        sections = TxtParser()(filename, binary,
-                               parser_config.get("chunk_token_num", 128),
-                               parser_config.get("delimiter", "\n!?;。；！？"))
+        sections = TxtParser()(filename, binary, parser_config.get("chunk_token_num", 128), parser_config.get("delimiter", "\n!?;。；！？"))
         callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.(md|markdown|mdx)$", filename, re.IGNORECASE):
@@ -959,8 +1004,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
         binary = BytesIO(binary)
         doc_parsed = tika_parser.from_buffer(binary)
-        if doc_parsed.get('content', None) is not None:
-            sections = doc_parsed['content'].split('\n')
+        if doc_parsed.get("content", None) is not None:
+            sections = doc_parsed["content"].split("\n")
             sections = [(_, "") for _ in sections if _]
             callback(0.8, "Finish parsing.")
         else:
@@ -969,8 +1014,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             logging.warning(error_msg)
             return []
     else:
-        raise NotImplementedError(
-            "file type not supported yet(pdf, xlsx, doc, docx, txt supported)")
+        raise NotImplementedError("file type not supported yet(pdf, xlsx, doc, docx, txt supported)")
 
     st = timer()
     if is_markdown:
@@ -1034,10 +1078,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             )
             res.extend(tokenize_chunks_with_images(chunks, doc, is_english, images, child_delimiters_pattern=child_deli))
         else:
-            chunks = naive_merge(
-                sections, int(parser_config.get(
-                    "chunk_token_num", 128)), parser_config.get(
-                    "delimiter", "\n!?。；！？"))
+            chunks = naive_merge(sections, int(parser_config.get("chunk_token_num", 128)), parser_config.get("delimiter", "\n!?。；！？"))
 
             res.extend(tokenize_chunks(chunks, doc, is_english, pdf_parser, child_delimiters_pattern=child_deli))
 
@@ -1067,9 +1108,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 if __name__ == "__main__":
     import sys
 
-
     def dummy(prog=None, msg=""):
         pass
-
 
     chunk(sys.argv[1], from_page=0, to_page=10, callback=dummy)

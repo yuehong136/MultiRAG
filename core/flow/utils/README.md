@@ -102,8 +102,8 @@ async def parse_audio(...):
 
 **修改 core/flow 后记得更新行号！**
 
-> ⚠️ 注意：parser.py 最近重构了 MinerU 解析逻辑（第 252-293 行），
-> 现在使用 `LLMBundle` + `LLMType.OCR` 获取模型，支持 `mineru@模型名` 格式。
+> ⚠️ 注意：parser.py 已支持 MinerU 和 PaddleOCR 两种 OCR 解析器，
+> 均使用 `LLMBundle` + `LLMType.OCR` 获取模型，支持 `模型名@mineru` / `模型名@paddleocr` 格式。
 
 ## 📚 使用示例
 
@@ -155,6 +155,35 @@ parsed = await parse_file(
     pdf_config={
         "parse_method": "my-mineru-model@mineru",
         "output_format": "json"
+    }
+)
+```
+
+### 使用 PaddleOCR 解析
+
+```python
+from core.flow.utils import parse_file
+
+# 方式1：使用默认配置的 PaddleOCR 模型
+parsed = await parse_file(
+    filename="document.pdf",
+    binary=file_content,
+    tenant_id=tenant_id,
+    pdf_config={
+        "parse_method": "paddleocr",
+        "output_format": "json"
+    }
+)
+
+# 方式2：指定 PaddleOCR 模型名（模型名@paddleocr 格式）
+parsed = await parse_file(
+    filename="document.pdf",
+    binary=file_content,
+    tenant_id=tenant_id,
+    pdf_config={
+        "parse_method": "my-paddleocr-model@paddleocr",
+        "output_format": "json",
+        "paddleocr_parse_method": "raw"  # 可选：raw/manual/paper
     }
 )
 ```

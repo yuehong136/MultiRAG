@@ -201,7 +201,7 @@ class AnalyzeDocumentRequest(BaseModel):
     # Parser 配置（简化方式）
     parse_method: str | None = Field(
         default="deepdoc",
-        description="解析方法：deepdoc/plain_text/mineru/tcadp parser/ocr 或 VLM 模型名（如 qwen-vl-plus）。tcadp parser 使用腾讯云 ADP 解析，支持 PDF/Excel/PPT"
+        description="解析方法：deepdoc/plain_text/mineru/paddleocr/tcadp parser/ocr 或 VLM 模型名（如 qwen-vl-plus）。tcadp parser 使用腾讯云 ADP 解析，支持 PDF/Excel/PPT；paddleocr 使用 PaddleOCR API 服务解析"
     )
     output_format: str | None = Field(
         default="json",
@@ -4144,7 +4144,7 @@ async def run_analyze_v2(
     ```json
     {
       // ========== Parser 配置方式 1：简化方式（推荐简单场景） ==========
-      "parse_method": "deepdoc",        // 默认值："deepdoc"，可选：deepdoc/plain_text/mineru/tcadp parser/ocr 或 VLM模型名
+      "parse_method": "deepdoc",        // 默认值："deepdoc"，可选：deepdoc/plain_text/mineru/paddleocr/tcadp parser/ocr 或 VLM模型名
       "output_format": "json",          // 默认值："json"，可选：json/text/markdown/html
       "lang": "Chinese",                // 默认值："Chinese"，VLM 模式使用
       "image_llm_name": null,           // 默认值：null，图片文件 VLM 模型名（parse_method="vlm"时）
@@ -4157,7 +4157,7 @@ async def run_analyze_v2(
       // ========== Parser 配置方式 2：完整方式（推荐代码调用） ==========
       "parser_config": {                // 默认值：null，按文件类型单独配置（优先级高于简化方式）
         "pdf": {
-          "parse_method": "deepdoc",    // deepdoc/plain_text/mineru/tcadp parser/VLM模型名
+          "parse_method": "deepdoc",    // deepdoc/plain_text/mineru/paddleocr/tcadp parser/VLM模型名
           "output_format": "json",      // json/markdown
           "lang": "Chinese",            // VLM 模式使用
           "table_result_type": "1",     // TCADP 表格结果类型
@@ -4271,6 +4271,7 @@ async def run_analyze_v2(
         - `"deepdoc"`: 深度布局解析（保留位置、表格、图片）✅ 默认
         - `"plain_text"`: 纯文本解析（快速）
         - `"mineru"`: MinerU 解析（需要安装，适合复杂排版）
+        - `"paddleocr"`: PaddleOCR 解析（通过 PaddleOCR API 服务，支持 模型名@paddleocr 格式）
         - VLM 模型名: 如 `"qwen-vl-plus"` 视觉理解（转录整页，适合扫描件）
       - **图片专用：**
         - `"ocr"`: 文字识别（快速）

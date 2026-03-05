@@ -657,6 +657,7 @@ class LLMServiceRequest(BaseModel):
     gen_conf: dict[str, Any]
     image: str = ""
     tavily_api_key: str = ""
+    delta_stream: bool = True
 
 
 class ChatRequest(BaseModel):
@@ -675,6 +676,7 @@ class ChatRequest(BaseModel):
     files: list[str] = []
     # 结构化输出控制
     structured_output: bool = False  # 是否使用结构化的SSE消息格式
+    delta_stream: bool = True
 
 
 class EmbeddingsRequest(BaseModel):
@@ -1119,6 +1121,9 @@ POST
         api_key = apikey_json(["api_key", "provider_order"])
 
     elif factory == "MinerU":
+        api_key = apikey_json(["api_key", "provider_order"])
+
+    elif factory == "PaddleOCR":
         api_key = apikey_json(["api_key", "provider_order"])
 
     llm = {
@@ -2002,10 +2007,14 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
     # 根据是否流式调用选择合适的方法
     if req["stream"]:
         data = []
-        async for chunk in chat_mdl.async_chat_streamly_delta(**call_params):
-            if isinstance(chunk, int):
-                break
-            data.append(chunk)
+        if req["delta_stream"]:
+            async for chunk in chat_mdl.async_chat_streamly_delta(**call_params):
+                if isinstance(chunk, int):
+                    break
+                data.append(chunk)
+        else:
+            async for chunk in chat_mdl.async_chat_streamly(**call_params):
+                data.append(chunk)
     else:
         data = await chat_mdl.async_chat(**call_params)
 
@@ -2270,12 +2279,18 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
             chat_mdl, call_params = get_initial_setup()
 
             stream_iter = chat_mdl.async_chat_streamly_delta(**call_params)
+            accumulated = ""
             async for kind, value, state in _stream_with_think_delta(stream_iter):
                 if kind == "marker":
                     flags = {"start_to_think": True} if value == "<think>" else {"end_to_think": True}
                     sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": "", **flags}, ensure_ascii=False)
                 else:
-                    sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": value}, ensure_ascii=False)
+                    if req["delta_stream"]:
+                        text_data = value
+                    else:
+                        accumulated += value
+                        text_data = accumulated
+                    sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": text_data}, ensure_ascii=False)
                 yield f"data: {sse_data}\n\n"
 
             # 流结束
@@ -2855,6 +2870,7 @@ async def enhanced_chat_service_sse(
             try:
                 if request.structured_output:
                     # 结构化输出模式 - 使用异步方法
+                    accumulated_text = ""
                     async for message in chat_agent.chat_with_tools_stream_structured_async(
                         query=request.messages[-1]["content"] if request.messages else "",
                         messages=request.messages[:-1] if request.messages else [],
@@ -2865,6 +2881,13 @@ async def enhanced_chat_service_sse(
                             # think 标记提升到 SSE 顶层，与其他端点格式一致
                             key = "start_to_think" if "start_to_think" in message else "end_to_think"
                             yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': '', key: True}, ensure_ascii=False)}\n\n"
+                        elif isinstance(message, dict) and message.get("type") == "text":
+                            if request.delta_stream:
+                                out = message
+                            else:
+                                accumulated_text += message["content"]
+                                out = {**message, "content": accumulated_text}
+                            yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': out}, ensure_ascii=False)}\n\n"
                         else:
                             yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': message}, ensure_ascii=False)}\n\n"
 
@@ -2884,12 +2907,18 @@ async def enhanced_chat_service_sse(
                         knowledge_context=knowledge_context,
                         files=request.files
                     )
+                    accumulated_content = ""
                     async for kind, value, state in _stream_with_think_delta(stream_iter):
                         if kind == "marker":
                             flags = {"start_to_think": True} if value == "<think>" else {"end_to_think": True}
                             yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': '', **flags}, ensure_ascii=False)}\n\n"
                         else:
-                            yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': value}, ensure_ascii=False)}\n\n"
+                            if request.delta_stream:
+                                text_data = value
+                            else:
+                                accumulated_content += value
+                                text_data = accumulated_content
+                            yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': text_data}, ensure_ascii=False)}\n\n"
 
                     # 添加工具使用摘要（如果启用）
                     if request.verbose_tool_use and chat_agent.agent.tools:

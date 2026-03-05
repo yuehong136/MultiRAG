@@ -16,13 +16,13 @@ class ActiveEnum(Enum):
 
 
 class LLMType(StrEnum):
-    CHAT = 'chat'
-    EMBEDDING = 'embedding'
-    SPEECH2TEXT = 'speech2text'
-    IMAGE2TEXT = 'image2text'
-    RERANK = 'rerank'
-    TTS = 'tts'
-    OCR = 'ocr'
+    CHAT = "chat"
+    EMBEDDING = "embedding"
+    SPEECH2TEXT = "speech2text"
+    IMAGE2TEXT = "image2text"
+    RERANK = "rerank"
+    TTS = "tts"
+    OCR = "ocr"
 
 
 class TaskStatus(StrEnum):
@@ -240,4 +240,11 @@ MINERU_DEFAULT_CONFIG = {
     "MINERU_BACKEND": "pipeline",
     "MINERU_SERVER_URL": "",
     "MINERU_DELETE_OUTPUT": 1,
+}
+
+PADDLEOCR_ENV_KEYS = ["PADDLEOCR_API_URL", "PADDLEOCR_ACCESS_TOKEN", "PADDLEOCR_ALGORITHM"]
+PADDLEOCR_DEFAULT_CONFIG = {
+    "PADDLEOCR_API_URL": "",
+    "PADDLEOCR_ACCESS_TOKEN": None,
+    "PADDLEOCR_ALGORITHM": "PaddleOCR-VL",
 }

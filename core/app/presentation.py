@@ -39,8 +39,8 @@ class Ppt(PptParser):
         callback(0.5, "Text extraction finished.")
         import aspose.slides as slides
         import aspose.pydrawing as drawing
-        imgs = []
 
+        imgs = []
         # fnm 既可能是二进制（task 里传入的 binary），也可能是文件路径（某些调用路径）。
         ppt_bytes: bytes
         if isinstance(fnm, (bytes, bytearray, memoryview)):
@@ -78,15 +78,10 @@ class Ppt(PptParser):
             if hasattr(slide, "get_thumbnail"):
                 with BytesIO() as buffered:
                     try:
-                        slide.get_thumbnail(0.1, 0.1).save(
-                            buffered, drawing.imaging.ImageFormat.jpeg
-                        )
+                        slide.get_thumbnail(0.1, 0.1).save(buffered, drawing.imaging.ImageFormat.jpeg)
                     except Exception as e:
                         if _is_gdiplus_missing(e):
-                            raise RuntimeError(
-                                "Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。"
-                                + _gdiplus_hint()
-                            ) from e
+                            raise RuntimeError("Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。" + _gdiplus_hint()) from e
                         raise
                     buffered.seek(0)
                     return Image.open(buffered).copy()
@@ -98,10 +93,7 @@ class Ppt(PptParser):
                     img = slide.get_image(0.1, 0.1)
                 except Exception as e:
                     if _is_gdiplus_missing(e):
-                        raise RuntimeError(
-                            "Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。"
-                            + _gdiplus_hint()
-                        ) from e
+                        raise RuntimeError("Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。" + _gdiplus_hint()) from e
                     raise
                 # 2.1) 优先写入内存流
                 try:
@@ -122,10 +114,7 @@ class Ppt(PptParser):
                     img = slide.get_image(0.1, 0.1) if hasattr(slide, "get_image") else None
                 except Exception as e:
                     if _is_gdiplus_missing(e):
-                        raise RuntimeError(
-                            "Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。"
-                            + _gdiplus_hint()
-                        ) from e
+                        raise RuntimeError("Aspose.Slides 渲染 PPTX 图片依赖 libgdiplus（GDI+），当前运行环境缺失/无法加载该动态库。" + _gdiplus_hint()) from e
                     raise
                 if img is None:
                     raise AttributeError("Slide has neither get_thumbnail nor get_image")
@@ -155,12 +144,10 @@ class Pdf(PdfParser):
     def __init__(self):
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0,
-                 to_page=100000, zoomin=3, callback=None, **kwargs):
+    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None, **kwargs):
         # 1. OCR
         callback(msg="OCR started")
-        self.__images__(filename if not binary else binary, zoomin, from_page,
-                        to_page, callback)
+        self.__images__(filename if not binary else binary, zoomin, from_page, to_page, callback)
 
         # 2. Layout Analysis
         callback(msg="Layout Analysis")
@@ -247,8 +234,7 @@ class Pdf(PdfParser):
 
 
 class PlainPdf(PlainParser):
-    def __call__(self, filename, binary=None, from_page=0,
-                 to_page=100000, callback=None, **kwargs):
+    def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
         self.pdf = pdf2_read(filename if not binary else BytesIO(binary))
         page_txt = []
         for page in self.pdf.pages[from_page: to_page]:
@@ -257,8 +243,7 @@ class PlainPdf(PlainParser):
         return [(txt, None) for txt in page_txt], []
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000,
-          lang="Chinese", callback=None, parser_config=None, **kwargs):
+def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, parser_config=None, **kwargs):
     """
     The supported file formats are pdf, pptx.
     Every page will be treated as a chunk. And the thumbnail of every page will be stored.
@@ -275,8 +260,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     res = []
     if re.search(r"\.pptx?$", filename, re.IGNORECASE):
         ppt_parser = Ppt()
-        for pn, (txt, img) in enumerate(ppt_parser(
-                filename if not binary else binary, from_page, 1000000, callback)):
+        for pn, (txt, img) in enumerate(ppt_parser(filename if not binary else binary, from_page, 1000000, callback)):
             d = copy.deepcopy(doc)
             pn += from_page
             d["image"] = img
@@ -309,13 +293,14 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             pdf_cls=Pdf,
             layout_recognizer=layout_recognizer,
             mineru_llm_name=parser_model_name,
-            **kwargs
+            paddleocr_llm_name=parser_model_name,
+            **kwargs,
         )
 
         if not sections:
             return []
 
-        if name in ["tcadp", "docling", "mineru"]:
+        if name in ["tcadp", "docling", "mineru", "paddleocr"]:
             parser_config["chunk_token_num"] = 0
 
         callback(0.8, "Finish parsing.")
@@ -333,16 +318,13 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             res.append(d)
         return res
 
-    raise NotImplementedError(
-        "file type not supported yet(pptx, pdf supported)")
+    raise NotImplementedError("file type not supported yet(pptx, pdf supported)")
 
 
 if __name__ == "__main__":
     import sys
 
-
     def dummy(a, b):
         pass
-
 
     chunk(sys.argv[1], callback=dummy)

@@ -1589,6 +1589,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 - "deepdoc": 深度解析（默认）
                 - "plain_text": 纯文本解析
                 - "mineru": MinerU 解析
+                - "paddleocr": PaddleOCR 解析
                 - "tcadp parser": 腾讯云 ADP 解析（支持 PDF/Excel/PPT）
                 - "qwen-vl-plus": VLM 视觉理解（对每张原始图片）
                 - "ocr": OCR 识别（对每张原始图片）
@@ -1740,7 +1741,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 parse_method = config.get("parse_method", "deepdoc")
                 output_format = config.get("output_format", "json")
 
-                # PDF 支持的 parse_method: deepdoc, plain_text, mineru, tcadp parser, 或 VLM 模型名
+                # PDF 支持的 parse_method: deepdoc, plain_text, mineru, paddleocr, tcadp parser, 或 VLM 模型名
                 pdf_parse_method = parse_method
                 if parse_method in ["auto", "ocr", "vlm"]:
                     pdf_parse_method = "deepdoc"
@@ -1784,14 +1785,14 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 video_llm_name = config.get("video_llm_name")
                 if not video_llm_name:
                     candidate = config.get("parse_method")
-                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm", "tcadp parser"]:
+                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "paddleocr", "auto", "ocr", "vlm", "tcadp parser"]:
                         video_llm_name = candidate
                 video_config = {"llm_id": video_llm_name}
                 # Audio 配置
                 audio_llm_name = config.get("audio_llm_name")
                 if not audio_llm_name:
                     candidate = config.get("parse_method")
-                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "auto", "ocr", "vlm", "tcadp parser"]:
+                    if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "paddleocr", "auto", "ocr", "vlm", "tcadp parser"]:
                         audio_llm_name = candidate
                 audio_config = {"llm_id": audio_llm_name}
                 # PPT/Slides 支持的 parse_method: deepdoc, tcadp parser

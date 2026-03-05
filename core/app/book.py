@@ -32,17 +32,12 @@ from PIL import Image
 
 
 class Pdf(PdfParser):
-    def __call__(self, filename, binary=None, from_page=0,
-                 to_page=100000, zoomin=3, callback=None):
+    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
         from timeit import default_timer as timer
+
         start = timer()
         callback(msg="OCR started")
-        self.__images__(
-            filename if not binary else binary,
-            zoomin,
-            from_page,
-            to_page,
-            callback)
+        self.__images__(filename if not binary else binary, zoomin, from_page, to_page, callback)
         callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
 
         start = timer()
@@ -62,20 +57,16 @@ class Pdf(PdfParser):
         self._merge_with_same_bullet()
         callback(0.8, "Text extraction ({:.2f}s)".format(timer() - start))
 
-        return [(b["text"] + self._line_tag(b, zoomin), b.get("layoutno", ""))
-                for b in self.boxes], tbls
+        return [(b["text"] + self._line_tag(b, zoomin), b.get("layoutno", "")) for b in self.boxes], tbls
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000,
-          lang="Chinese", callback=None, **kwargs):
+def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
     """
-        Supported file formats are docx, pdf, txt.
-        Since a book is long and not all the parts are useful, if it's a PDF,
-        please set up the page ranges for every book in order eliminate negative effects and save elapsed computing time.
+    Supported file formats are docx, pdf, txt.
+    Since a book is long and not all the parts are useful, if it's a PDF,
+    please set up the page ranges for every book in order eliminate negative effects and save elapsed computing time.
     """
-    parser_config = kwargs.get(
-        "parser_config", {
-            "chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC"})
+    parser_config = kwargs.get("parser_config", {"chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC"})
     doc = {
         "docnm_kwd": filename,
         "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))
@@ -124,13 +115,14 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             pdf_cls=Pdf,
             layout_recognizer=layout_recognizer,
             mineru_llm_name=parser_model_name,
+            paddleocr_llm_name=parser_model_name,
             **kwargs
         )
 
         if not sections and not tables:
             return []
 
-        if name in ["tcadp", "docling", "mineru"]:
+        if name in ["tcadp", "docling", "mineru", "paddleocr"]:
             parser_config["chunk_token_num"] = 0
 
         callback(0.8, "Finish parsing.")
@@ -163,23 +155,19 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
         binary = BytesIO(binary)
         doc_parsed = tika_parser.from_buffer(binary)
-        if doc_parsed.get('content', None) is not None:
-            sections = doc_parsed['content'].split('\n')
+        if doc_parsed.get("content", None) is not None:
+            sections = doc_parsed["content"].split('\n')
             sections = [(line, "") for line in sections if line]
-            remove_contents_table(sections, eng=is_english(
-                random_choices([t for t, _ in sections], k=200)))
+            remove_contents_table(sections, eng=is_english(random_choices([t for t, _ in sections], k=200)))
             callback(0.8, "Finish parsing.")
 
     else:
-        raise NotImplementedError(
-            "file type not supported yet(doc, docx, pdf, txt supported)")
+        raise NotImplementedError("file type not supported yet(doc, docx, pdf, txt supported)")
 
     make_colon_as_title(sections)
-    bull = bullets_category(
-        [t for t in random_choices([t for t, _ in sections], k=100)])
+    bull = bullets_category([t for t in random_choices([t for t, _ in sections], k=100)])
     if bull >= 0:
-        chunks = ["\n".join(ck)
-                  for ck in hierarchical_merge(bull, sections, 5)]
+        chunks = ["\n".join(ck) for ck in hierarchical_merge(bull, sections, 5)]
     else:
         sections = [s.split("@") for s, _ in sections]
         sections = [(pr[0], "@" + pr[1]) if len(pr) == 2 else (pr[0], '') for pr in sections]
@@ -206,9 +194,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 if __name__ == "__main__":
     import sys
 
-
     def dummy(prog=None, msg=""):
         pass
-
 
     chunk(sys.argv[1], from_page=1, to_page=10, callback=dummy)
