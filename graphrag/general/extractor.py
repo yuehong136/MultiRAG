@@ -24,8 +24,12 @@ from typing import Callable
 import networkx as nx
 
 from api.db.services.task_service import has_canceled
+from core.llm.chat import Base as CompletionLLM
+from core.prompts.generator import message_fit_in
+from common.exceptions import TaskCanceledException
 from common.connection_utils import timeout
 from common.token_utils import truncate
+from common.misc_utils import thread_pool_exec
 from graphrag.general.graph_prompt import SUMMARIZE_DESCRIPTIONS_PROMPT
 from graphrag.utils import (
     GraphChange,
@@ -38,9 +42,6 @@ from graphrag.utils import (
     set_llm_cache,
     split_string_by_multi_markers,
 )
-from core.llm.chat import Base as CompletionLLM
-from core.prompts.generator import message_fit_in
-from common.exceptions import TaskCanceledException
 
 GRAPH_FIELD_SEP = "<SEP>"
 DEFAULT_ENTITY_TYPES = ["organization", "person", "geo", "event", "category"]
@@ -338,5 +339,5 @@ class Extractor:
             raise TaskCanceledException(f"Task {task_id} was cancelled during summary handling")
 
         async with chat_limiter:
-            summary = await asyncio.to_thread(self._chat, "", [{"role": "user", "content": use_prompt}], {}, task_id)
+            summary = await thread_pool_exec(self._chat, "", [{"role": "user", "content": use_prompt}], {}, task_id)
         return summary

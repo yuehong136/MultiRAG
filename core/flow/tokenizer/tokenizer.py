@@ -12,27 +12,26 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import asyncio
 import logging
 import random
 import re
 
 import numpy as np
 
-from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import TenantService
-from common.connection_utils import timeout
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.tokenizer.schema import TokenizerFromUpstream
 from core.nlp import rag_tokenizer
-from common import settings
 from core.svr.task_executor import embed_limiter
+from common import settings
+from common.misc_utils import thread_pool_exec
 from common.token_utils import truncate
 from common.string_utils import split_and_sanitize_terms
-
+from common.connection_utils import timeout
+from common.constants import LLMType
 
 class TokenizerParam(ProcessParamBase):
     def __init__(self):
@@ -87,7 +86,7 @@ class Tokenizer(ProcessBase):
         cnts_ = np.array([])
         for i in range(0, len(texts), settings.EMBEDDING_BATCH_SIZE):
             async with embed_limiter:
-                vts, c = await asyncio.to_thread(batch_encode,texts[i : i + settings.EMBEDDING_BATCH_SIZE],)
+                vts, c = await thread_pool_exec(batch_encode,texts[i : i + settings.EMBEDDING_BATCH_SIZE],)
             if len(cnts_) == 0:
                 cnts_ = vts
             else:

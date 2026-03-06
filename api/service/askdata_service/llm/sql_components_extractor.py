@@ -1,16 +1,16 @@
-import asyncio
 import json
 import os
 import re
 import logging
-from typing import Any, Optional, Dict, Tuple
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class SQLComponentsExtractor:
         else:
             self.prompt_dir = prompt_dir
 
-    def _extract_json_from_response(self, response: str) -> Tuple[Optional[Dict], bool]:
+    def _extract_json_from_response(self, response: str) -> tuple[dict | None, bool]:
         """
         从响应中提取JSON对象数据。
 
@@ -80,7 +80,7 @@ class SQLComponentsExtractor:
             logger.warning("Failed to parse response as JSON")
             return {}, False
 
-    def _validate_sql_components(self, components: Dict) -> Dict:
+    def _validate_sql_components(self, components: dict) -> dict:
         """
         验证和清理提取的SQL组件，确保格式正确
 
@@ -130,7 +130,7 @@ class SQLComponentsExtractor:
 
         return validated_components
 
-    def _post_process_components(self, components: Dict) -> Dict:
+    def _post_process_components(self, components: dict) -> dict:
         """
         对提取的SQL组件进行后处理，确保格式一致性
 
@@ -172,7 +172,7 @@ class SQLComponentsExtractor:
             self,
             sql_query: str,
             llm_name: str
-    ) -> Dict:
+    ) -> dict:
         """
         解析SQL语句并提取各个组件部分
 
@@ -231,7 +231,7 @@ class SQLComponentsExtractor:
                     )
 
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(_chat_in_thread)
+            response = await thread_pool_exec(_chat_in_thread)
 
             # 提取和处理响应
             extracted_components, success = self._extract_json_from_response(response)
@@ -252,7 +252,7 @@ class SQLComponentsExtractor:
             # 返回默认的空组件结构
             return self._get_default_components()
 
-    def _get_default_components(self) -> Dict:
+    def _get_default_components(self) -> dict:
         """
         返回默认的空组件结构
 
@@ -276,7 +276,7 @@ class SQLComponentsExtractor:
             self,
             sql_query: str,
             llm_name: str
-    ) -> Tuple[Dict, str]:
+    ) -> tuple[dict, str]:
         """
         提取SQL组件并重构SQL语句
 
@@ -325,7 +325,7 @@ class SQLComponentsExtractor:
 
         return components, reconstructed_sql
 
-    def get_pagination_info(self, components: Dict) -> Dict[str, str]:
+    def get_pagination_info(self, components: dict) -> dict[str, str]:
         """
         从组件中提取分页信息
 
@@ -342,8 +342,8 @@ class SQLComponentsExtractor:
             "offset": pagination.get("offset", "")
         }
 
-    def update_pagination(self, components: Dict, limit: Optional[str] = None,
-                          offset: Optional[str] = None) -> Dict:
+    def update_pagination(self, components: dict, limit: str | None = None,
+                          offset: str | None = None) -> dict:
         """
         更新组件中的分页信息
 

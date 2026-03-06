@@ -6,7 +6,6 @@
 @date：2025/7/17 11:30
 @desc:
 """
-import asyncio
 import logging
 import os.path
 import json
@@ -47,7 +46,7 @@ from api.utils.api_utils import construct_json_result, construct_error_response,
     get_json_result, get_data_error_result, server_error_response
 from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import CONTENT_TYPE_MAP, html2pdf, is_valid_url
-from common.misc_utils import get_uuid
+from common.misc_utils import get_uuid, thread_pool_exec
 from common.metadata_utils import meta_filter, convert_conditions
 from common.constants import RetCode
 from common.file_utils import get_project_base_directory
@@ -738,7 +737,7 @@ async def upload(
         docs = [doc for doc, _ in result_files]
         return construct_json_result(data=docs, code=RetCode.SUCCESS)
 
-    return await asyncio.to_thread(_upload_sync)
+    return await thread_pool_exec(_upload_sync)
 
 
 @router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页")

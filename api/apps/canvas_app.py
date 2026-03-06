@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import copy
 import inspect
 import json
@@ -22,7 +21,6 @@ from sqlalchemy.orm import Session
 from peewee import MySQLDatabase, PostgresqlDatabase
 
 from agent.component.llm import LLM
-from common import settings
 from api.apps import manager
 from api.db import CanvasCategory
 from api.db.db_models import get_db, APIToken, Task
@@ -38,14 +36,15 @@ from api.db.services.pipeline_operation_log_service import PipelineOperationLogS
 from api.db.services.task_service import queue_dataflow, CANVAS_DEBUG_DOC_ID, TaskService
 from api.db.services.user_service import TenantService
 from api.db.services.user_canvas_version import UserCanvasVersionService
-from common.constants import RetCode
-from common.misc_utils import get_uuid
 from api.utils.api_utils import (
     get_json_result,
     server_error_response,
     get_data_error_result
 )
 from agent.canvas import Canvas
+from common.constants import RetCode
+from common import settings
+from common.misc_utils import get_uuid, thread_pool_exec
 from core.flow.pipeline import Pipeline
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
@@ -461,14 +460,14 @@ async def run(
     inputs = req.get("inputs", {})
     user_id = req.get("user_id", user.id)
     
-    if not await asyncio.to_thread(UserCanvasService.accessible, db, req["id"], user.id):
+    if not await thread_pool_exec(UserCanvasService.accessible, db, req["id"], user.id):
         return get_json_result(
             data=False,
             retmsg='Only owner of canvas authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR
         )
     
-    cvs = await asyncio.to_thread(UserCanvasService.get_by_id, db, req["id"])
+    cvs = await thread_pool_exec(UserCanvasService.get_by_id, db, req["id"])
     if not cvs:
         return get_data_error_result(retmsg="canvas not found.")
     
@@ -479,7 +478,7 @@ async def run(
     if cvs.canvas_category == CanvasCategory.DataFlow:
         task_id = get_uuid()
         Pipeline(cvs.dsl, tenant_id=user.id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
-        ok, error_message = await asyncio.to_thread(
+        ok, error_message = await thread_pool_exec(
             queue_dataflow,
             db,
             user_id,
@@ -505,7 +504,7 @@ async def run(
             async for ans in canvas.run(query=query, files=files, user_id=user_id, inputs=inputs):
                 yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
             cvs.dsl = json.loads(str(canvas))
-            await asyncio.to_thread(UserCanvasService.update_by_id, db, req["id"], cvs.to_dict())
+            await thread_pool_exec(UserCanvasService.update_by_id, db, req["id"], cvs.to_dict())
 
         except Exception as e:
             logging.exception(e)
@@ -1695,7 +1694,7 @@ def download(
     - 返回原始二进制内容
     - 不包含文件名等元信息
     """
-    blob = FileService.get_blob(db, created_by, id)
+    blob = FileService.get_blob(created_by, id)
     
     response = Response(content=blob)
     response.headers["Content-Type"] = "application/octet-stream"

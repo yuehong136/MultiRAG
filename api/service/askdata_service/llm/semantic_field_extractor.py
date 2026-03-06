@@ -1,16 +1,16 @@
-import asyncio
 import json
 import os
 import re
 import logging
-from typing import Any, List, Optional, Dict, Tuple
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class SemanticFieldExtractor:
         else:
             self.prompt_dir = prompt_dir
 
-    def _extract_json_from_response(self, response: str) -> Tuple[Optional[List[Dict]], bool]:
+    def _extract_json_from_response(self, response: str) -> tuple[list[dict] | None, bool]:
         """
         从响应中提取JSON数组数据。
 
@@ -80,7 +80,7 @@ class SemanticFieldExtractor:
             logger.warning("Failed to parse response as JSON")
             return [], False
 
-    def _validate_and_clean_fields(self, fields: List[Dict]) -> List[Dict]:
+    def _validate_and_clean_fields(self, fields: list[dict]) -> list[dict]:
         """
         验证和清理提取的字段，确保格式正确
 
@@ -116,7 +116,7 @@ class SemanticFieldExtractor:
 
         return cleaned_fields
 
-    def _separate_dimensions_and_metrics(self, fields: List[Dict]) -> Dict[str, List[Dict]]:
+    def _separate_dimensions_and_metrics(self, fields: list[dict]) -> dict[str, list[dict]]:
         """
         将字段分离为维度和指标
 
@@ -143,9 +143,9 @@ class SemanticFieldExtractor:
     async def extract_semantic_fields(
             self,
             user_query: str,
-            dataset_info: List[Dict],
+            dataset_info: list[dict],
             llm_name: str
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         从语义层中提取用户查询所需的维度和指标
 
@@ -201,7 +201,7 @@ class SemanticFieldExtractor:
                     )
 
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(_chat_in_thread)
+            response = await thread_pool_exec(_chat_in_thread)
 
             # 提取和处理响应
             extracted_fields, success = self._extract_json_from_response(response)

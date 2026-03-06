@@ -1,17 +1,17 @@
-import asyncio
 import json
 import os
 import re
 import logging
 from datetime import date
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class NLQToInitialSQLGenerator:
         sql = re.sub(r'\n\s*\n', '\n', sql)
         return sql
 
-    def _extract_llm_response_json(self, response: str) -> Optional[Dict]:
+    def _extract_llm_response_json(self, response: str) -> dict | None:
         """
         从LLM响应中稳健地提取JSON数据。
         """
@@ -79,7 +79,7 @@ class NLQToInitialSQLGenerator:
 
         return None
 
-    def _parse_and_validate_llm_json(self, json_data: Dict) -> Optional[Dict[str, Any]]:
+    def _parse_and_validate_llm_json(self, json_data: dict) -> dict[str, Any] | None:
         """
         验证从LLM获取的JSON数据结构，并填充缺失的键。
         """
@@ -120,9 +120,9 @@ class NLQToInitialSQLGenerator:
 
         return result
 
-    async def generate_sql_query(self, user_query: str, semantic_layer: Dict[str, Any],
+    async def generate_sql_query(self, user_query: str, semantic_layer: dict[str, Any],
                                 llm_name: str, recommended_chart: str) -> \
-            Optional[Dict[str, Any]]:
+            dict[str, Any] | None:
         """
         根据用户问题和语义层信息生成SQL查询及使用的模型信息。
 
@@ -183,7 +183,7 @@ class NLQToInitialSQLGenerator:
                         gen_conf=gen_conf
                     )
 
-            response = await asyncio.to_thread(_chat_in_thread)
+            response = await thread_pool_exec(_chat_in_thread)
 
             logger.info(f"智能问数-LLM-生成SQL")
             logger.info(f"prompt:{prompt}")
@@ -214,7 +214,7 @@ class NLQToInitialSQLGenerator:
             logger.error(f"生成SQL查询时出错: {e}", exc_info=True)
             return None
 
-    def validate_sql_syntax(self, sql: str) -> Tuple[bool, str]:
+    def validate_sql_syntax(self, sql: str) -> tuple[bool, str]:
         """
         基本的SQL语法验证
         """
@@ -254,7 +254,7 @@ class NLQToInitialSQLGenerator:
     #     return result, is_valid, message
 
     async def fix_sql_query_with_components(self, user_query: str, original_sql: str, error_message: str,
-                                            semantic_layer: Dict[str, Any], llm_name: str) -> Optional[Dict[str, Any]]:
+                                            semantic_layer: dict[str, Any], llm_name: str) -> dict[str, Any] | None:
         """
         修复执行失败的SQL查询
 
@@ -305,7 +305,7 @@ class NLQToInitialSQLGenerator:
                         gen_conf=gen_conf
                     )
 
-            response = await asyncio.to_thread(_chat_in_thread)
+            response = await thread_pool_exec(_chat_in_thread)
 
             logger.info(f"SQL修复-LLM响应")
             logger.info(f"原始SQL: {original_sql}")

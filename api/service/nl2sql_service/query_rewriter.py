@@ -1,15 +1,15 @@
-import asyncio
 import json
 import os
 import re
 import logging
-from typing import Any, List, Optional, Dict, Tuple
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class QueryRewriter:
         else:
             self.prompt_dir = prompt_dir
 
-    def _extract_json_from_response(self, response: str) -> Tuple[Optional[Dict], bool]:
+    def _extract_json_from_response(self, response: str) -> tuple[dict | None, bool]:
         """
         从响应中提取JSON数据。
 
@@ -65,7 +65,7 @@ class QueryRewriter:
             logger.warning("Failed to parse response as JSON")
             return None, False
 
-    def _extract_rewritten_queries(self, data: Optional[Dict], response: str) -> List[str]:
+    def _extract_rewritten_queries(self, data: dict | None, response: str) -> list[str]:
         """
         从解析后的数据中提取重写的查询列表。
 
@@ -90,7 +90,7 @@ class QueryRewriter:
         logger.info("Response format not as expected, returning original")
         return [response]
 
-    async def rewrite_query(self, query_text: str, llm_name: str) -> List[str]:
+    async def rewrite_query(self, query_text: str, llm_name: str) -> list[str]:
         """
         使用LLM重写自然语言查询，生成多个变体。
 
@@ -126,7 +126,7 @@ class QueryRewriter:
             }
 
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(
+            response = await thread_pool_exec(
                 llm_model_instance.chat,
                 system="",
                 history=history,

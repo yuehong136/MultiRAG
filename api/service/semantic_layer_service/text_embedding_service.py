@@ -1,17 +1,16 @@
-import logging
-import asyncio
-from typing import Any, List, Optional, Dict, Union
+from typing import Any
 
 from fastapi.params import Depends
 from pymilvus import CollectionSchema, DataType
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from common.constants import LLMType
 from api.db.db_models import get_db
 from api.db.services.llm_service import LLMBundle
-from common import settings
 from api.service.semantic_layer_service.models import SemanticTextData, OwnerType, SemanticElementType
+from common import settings
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 
 class TextEmbeddingService:
@@ -26,7 +25,7 @@ class TextEmbeddingService:
         """将单条文本转为向量并保存到数据库"""
         await self.save_semantic_texts_to_embedding_batch([semantic_data])
 
-    async def save_semantic_texts_to_embedding_batch(self, semantic_data_list: List[SemanticTextData]):
+    async def save_semantic_texts_to_embedding_batch(self, semantic_data_list: list[SemanticTextData]):
         """批量将多个文本转为向量并保存到数据库"""
         if not semantic_data_list:
             return
@@ -41,7 +40,7 @@ class TextEmbeddingService:
         embedding_model = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model_name)
 
         # 使用asyncio.to_thread将同步encode方法转为异步
-        vectors, _ = await asyncio.to_thread(embedding_model.encode, texts)
+        vectors, _ = await thread_pool_exec(embedding_model.encode, texts)
 
         # 组装批量插入数据
         batch_data = []
@@ -60,7 +59,7 @@ class TextEmbeddingService:
 
         # 批量插入到向量数据库
         # 如果vector_database.insert是耗时操作，也可以考虑使用asyncio.to_thread包装
-        await asyncio.to_thread(
+        await thread_pool_exec(
             self.vector_database.insert,
             collection_name=self.COLLECTION_NAME,
             data=batch_data
@@ -70,13 +69,13 @@ class TextEmbeddingService:
             self,
             query_text: str,
             embedding_model: str,
-            element_types: Optional[List[SemanticElementType]] = None,
-            theme_domain_ids: Optional[List[str]] = None,
-            dataset_ids: Optional[List[str]] = None,
-            model_ids: Optional[List[str]] = None,
+            element_types: list[SemanticElementType] | None = None,
+            theme_domain_ids: list[str] | None = None,
+            dataset_ids: list[str] | None = None,
+            model_ids: list[str] | None = None,
             top_k: int = 10,
             score_threshold: float = 0.6
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         根据文本查询相似的向量数据，支持组合条件过滤
 
@@ -97,7 +96,7 @@ class TextEmbeddingService:
             RuntimeError: 当集合不存在时
         """
         # 检查集合是否存在
-        has_collection = await asyncio.to_thread(
+        has_collection = await thread_pool_exec(
             self.vector_database.has_collection,
             collection_name=self.COLLECTION_NAME
         )
@@ -107,7 +106,7 @@ class TextEmbeddingService:
         # 生成查询向量
         embedding_model_instance = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
         # 使用asyncio.to_thread将同步encode方法转为异步
-        query_vector, _ = await asyncio.to_thread(embedding_model_instance.encode, [query_text])
+        query_vector, _ = await thread_pool_exec(embedding_model_instance.encode, [query_text])
 
         # 构建过滤条件
         filter_conditions = []
@@ -146,7 +145,7 @@ class TextEmbeddingService:
         }
 
         # 使用asyncio.to_thread将search_by_milvus方法转为异步
-        results = await asyncio.to_thread(
+        results = await thread_pool_exec(
             self.vector_database.search_by_milvus,
             collection_name=self.COLLECTION_NAME,
             data=[query_vector[0]],
@@ -190,7 +189,7 @@ class TextEmbeddingService:
             RuntimeError: 当集合不存在时
         """
         # 检查集合是否存在
-        has_collection = await asyncio.to_thread(
+        has_collection = await thread_pool_exec(
             self.vector_database.has_collection,
             collection_name=self.COLLECTION_NAME
         )
@@ -206,7 +205,7 @@ class TextEmbeddingService:
 
         field_name = field_mapping[owner_type]
         # 使用asyncio.to_thread将delete方法转为异步
-        result = await asyncio.to_thread(
+        result = await thread_pool_exec(
             self.vector_database.delete,
             collection_name=self.COLLECTION_NAME,
             filter=f"{field_name} == '{original_id}'"
@@ -228,7 +227,7 @@ class TextEmbeddingService:
             RuntimeError: 当集合不存在时
         """
         # 检查集合是否存在
-        has_collection = await asyncio.to_thread(
+        has_collection = await thread_pool_exec(
             self.vector_database.has_collection,
             collection_name=self.COLLECTION_NAME
         )
@@ -239,7 +238,7 @@ class TextEmbeddingService:
         element_id = f"{element_type.value}_{original_id}"
 
         # 使用asyncio.to_thread将delete方法转为异步
-        result = await asyncio.to_thread(
+        result = await thread_pool_exec(
             self.vector_database.delete,
             collection_name=self.COLLECTION_NAME,
             filter=f"element_id == '{element_id}'"
@@ -251,7 +250,7 @@ class TextEmbeddingService:
         """获取嵌入模型的向量维度"""
         embedding_model_instance = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
         # 使用asyncio.to_thread将encode方法转为异步
-        sample_vec, _ = await asyncio.to_thread(embedding_model_instance.encode, ["测试"])
+        sample_vec, _ = await thread_pool_exec(embedding_model_instance.encode, ["测试"])
         vector_dim = len(sample_vec[0])
         return vector_dim
 
@@ -266,7 +265,7 @@ class TextEmbeddingService:
         dimension = await self._get_embedding_model_dim(embedding_model)
 
         # 使用asyncio.to_thread将create_collection方法转为异步
-        await asyncio.to_thread(
+        await thread_pool_exec(
             self.vector_database.create_collection,
             collection_name=self.COLLECTION_NAME,
             dimension=dimension,

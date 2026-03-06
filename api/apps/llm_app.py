@@ -41,7 +41,7 @@ from api.db.services.dialog_service import _stream_with_think_delta
 from api.db.services.mcp_server_service import MCPServerService
 from api.utils.web_utils import CONTENT_TYPE_MAP
 from common import settings
-from common.misc_utils import get_uuid
+from common.misc_utils import get_uuid, thread_pool_exec
 from common.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
 
 
@@ -884,7 +884,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
             mdl = EmbeddingModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
             try:
                 arr, tc = await asyncio.wait_for(
-                    asyncio.to_thread(mdl.encode, ["Test if the api key is available"]),
+                    thread_pool_exec(mdl.encode, ["Test if the api key is available"]),
                     timeout=timeout_seconds,
                 )
                 if len(arr[0]) == 0:
@@ -914,7 +914,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
             mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
             try:
                 arr, tc = await asyncio.wait_for(
-                    asyncio.to_thread(mdl.similarity, "What's the weather?", ["Is it sunny today?"]),
+                    thread_pool_exec(mdl.similarity, "What's the weather?", ["Is it sunny today?"]),
                     timeout=timeout_seconds,
                 )
                 if len(arr) == 0 or tc == 0:
@@ -1148,7 +1148,7 @@ POST
             mdl = EmbeddingModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
             try:
                 arr, tc = await asyncio.wait_for(
-                    asyncio.to_thread(mdl.encode, ["Test if the api key is available"]),
+                    thread_pool_exec(mdl.encode, ["Test if the api key is available"]),
                     timeout=timeout_seconds,
                 )
                 if len(arr[0]) == 0:
@@ -1182,7 +1182,7 @@ POST
             try:
                 mdl = RerankModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
                 arr, tc = await asyncio.wait_for(
-                    asyncio.to_thread(mdl.similarity, "Hello~ MultiRAGer!", ["Hi, there!", "Ohh, my friend!"]),
+                    thread_pool_exec(mdl.similarity, "Hello~ MultiRAGer!", ["Hi, there!", "Ohh, my friend!"]),
                     timeout=timeout_seconds,
                 )
                 if len(arr) == 0:
@@ -1198,7 +1198,7 @@ POST
             try:
                 image_data = test_image
                 m, tc = await asyncio.wait_for(
-                    asyncio.to_thread(mdl.describe, image_data),
+                    thread_pool_exec(mdl.describe, image_data),
                     timeout=timeout_seconds,
                 )
                 if not tc and m.find("**ERROR**:") >= 0:
@@ -1214,7 +1214,7 @@ POST
                         pass
 
                 await asyncio.wait_for(
-                    asyncio.to_thread(drain_tts),
+                    thread_pool_exec(drain_tts),
                     timeout=timeout_seconds,
                 )
             except RuntimeError as e:
@@ -1224,7 +1224,7 @@ POST
             try:
                 mdl = OcrModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
                 ok, reason = await asyncio.wait_for(
-                    asyncio.to_thread(mdl.check_available),
+                    thread_pool_exec(mdl.check_available),
                     timeout=timeout_seconds,
                 )
                 if not ok:

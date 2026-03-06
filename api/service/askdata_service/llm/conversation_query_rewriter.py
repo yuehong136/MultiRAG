@@ -1,16 +1,17 @@
-import asyncio
 import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
+
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class ConversationQueryRewriter:
 
     JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
 
-    def __init__(self, db: Session, user_id: Any, prompt_dir: Optional[str] = None):
+    def __init__(self, db: Session, user_id: Any, prompt_dir: str | None = None):
         """初始化会话查询改写器"""
         self.db = db
         self.user_id = user_id
@@ -31,7 +32,7 @@ class ConversationQueryRewriter:
         else:
             self.prompt_dir = prompt_dir
 
-    def _extract_json_from_response(self, response: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+    def _extract_json_from_response(self, response: str) -> tuple[dict[str, Any] | None, bool]:
         """从LLM响应中提取JSON对象"""
         json_match = self.JSON_PATTERN.search(response)
 
@@ -65,9 +66,9 @@ class ConversationQueryRewriter:
             return value.strip().lower() in {"true", "1", "yes"}
         return bool(value)
 
-    def _normalize_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_result(self, result: dict[str, Any]) -> dict[str, Any]:
         """验证并规整LLM返回的结构"""
-        normalized: Dict[str, Any] = {
+        normalized: dict[str, Any] = {
             "is_related": False,
             "rewritten_question": ""
         }
@@ -95,10 +96,10 @@ class ConversationQueryRewriter:
 
     async def rewrite_question(
             self,
-            conversation_history: List[Dict[str, Any]],
+            conversation_history: list[dict[str, Any]],
             new_user_question: str,
             llm_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """调用LLM判断新问题是否与上下文相关并进行改写"""
         try:
             template_path = os.path.join(self.prompt_dir, "conversation_query_rewriter_prompt.txt")
@@ -138,7 +139,7 @@ class ConversationQueryRewriter:
                         gen_conf=gen_conf
                     )
 
-            response = await asyncio.to_thread(_chat_in_thread)
+            response = await thread_pool_exec(_chat_in_thread)
 
             extracted_result, success = self._extract_json_from_response(response)
 

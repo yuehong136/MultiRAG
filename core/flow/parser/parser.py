@@ -38,7 +38,7 @@ from core.llm.cv import Base as VLM
 from core.utils.base64_image import image2id
 from common import settings
 from common.constants import LLMType
-from common.misc_utils import get_uuid
+from common.misc_utils import get_uuid, thread_pool_exec
 
 
 class ParserParam(ProcessParamBase):
@@ -826,7 +826,7 @@ class Parser(ProcessBase):
         for p_type, conf in self._param.setups.items():
             if from_upstream.name.split(".")[-1].lower() not in conf.get("suffix", []):
                 continue
-            await asyncio.to_thread(function_map[p_type], name, blob)
+            await thread_pool_exec(function_map[p_type], name, blob)
             done = True
             break
 

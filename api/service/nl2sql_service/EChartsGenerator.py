@@ -1,15 +1,14 @@
-import asyncio
-import json
 import os
 import re
 import logging
-from typing import Any, Optional, Dict, Tuple
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ class EChartsGenerator:
         else:
             self.prompt_dir = prompt_dir
 
-    def _extract_js_from_response(self, response: str) -> Tuple[Optional[str], bool]:
+    def _extract_js_from_response(self, response: str) -> tuple[str | None, bool]:
         """
         从响应中提取JavaScript代码。
 
@@ -65,7 +64,7 @@ class EChartsGenerator:
         return None, False
 
     async def generate_echarts_config(self, user_query: str, sql_query: str, column_and_type,
-                                      sample_data, llm_name: str) -> Optional[str]:
+                                      sample_data, llm_name: str) -> str | None:
         """
         使用LLM生成ECharts配置代码。
 
@@ -109,7 +108,7 @@ class EChartsGenerator:
             }
 
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(
+            response = await thread_pool_exec(
                 llm_model_instance.chat,
                 system="You are an expert data visualization developer specializing in ECharts.",
                 history=history,

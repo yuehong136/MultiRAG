@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import re
@@ -12,6 +11,7 @@ from pymilvus import AnnSearchRequest, WeightedRanker
 from api.db.db_models import db_connection
 from core.prompts.generator import relevant_chunks_with_toc
 from core.nlp import rag_tokenizer, query, is_english
+from common import settings
 from common.doc_store.doc_store_base import (
     DocStoreConnection,
     MatchDenseExpr,
@@ -20,8 +20,8 @@ from common.doc_store.doc_store_base import (
 )
 from common.string_utils import remove_redundant_spaces
 from common.float_utils import get_float
+from common.misc_utils import thread_pool_exec
 from common.constants import TAG_FLD, PAGERANK_FLD
-from common import settings
 
 
 def index_name(uid, kb_names=None):
@@ -115,11 +115,10 @@ class Dealer:
 
     # def get_vector(self, collection_name, txt, emb_mdl, topk=10, similarity=0.1):
     async def get_vector(self, txt, emb_mdl, topk=10, similarity=0.1):
-        qv, _ = await asyncio.to_thread(emb_mdl.encode_queries, txt)
+        qv, _ = await thread_pool_exec(emb_mdl.encode_queries, txt)
         shape = np.array(qv).shape
         if len(shape) > 1:
-            raise Exception(
-                f"Dealer.get_vector returned array's shape {shape} doesn't match expectation(exact one dimension).")
+            raise Exception(f"Dealer.get_vector returned array's shape {shape} doesn't match expectation(exact one dimension).")
 
         embedding_data = [get_float(v) for v in qv]
         vector_dim = len(embedding_data)
@@ -275,7 +274,7 @@ class Dealer:
             order_by = OrderByExpr()
             if req.get("sort"):
                 order_by.asc("page_num_int").asc("top_int").desc("create_timestamp_flt")
-            res = await asyncio.to_thread(self.dataStore.search, src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
+            res = await thread_pool_exec(self.dataStore.search, src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
             keywords_raw: list[str] =  []
             return _build_result(res, keywords_raw)
 
@@ -314,7 +313,7 @@ class Dealer:
                     expr=self._build_filter_expr(filters) if filters else "",
                 )
                 ranker = WeightedRanker(weight_dense, weight_sparse)
-                results = await asyncio.to_thread(
+                results = await thread_pool_exec(
                     self.dataStore.hybrid_search,
                     collection_name=idx_names,
                     reqs=[dense_req, sparse_req],
@@ -328,7 +327,7 @@ class Dealer:
             # === Sparse 模式 ===
             if "sparse" in search_mode:
                 logging.info("执行全文检索…")
-                results = await asyncio.to_thread(
+                results = await thread_pool_exec(
                     self.dataStore.search_by_milvus,
                     collection_name=idx_names,
                     data=[qst],
@@ -368,7 +367,7 @@ class Dealer:
                 fusion_expr = FusionExpr("weighted_sum", topk, {"weights": "0.05,0.95"})
                 match_exprs = [match_text, match_dense, fusion_expr]
 
-            res = await asyncio.to_thread(
+            res = await thread_pool_exec(
                 self.dataStore.search,
                 src,
                 highlight_fields,
@@ -388,7 +387,7 @@ class Dealer:
                 match_text_low, _ = self.qryr.question(qst, min_match=0.1)
                 filters.pop("doc_ids", None)
                 match_dense.extra_options["similarity"] = 0.17
-                res = await asyncio.to_thread(
+                res = await thread_pool_exec(
                     self.dataStore.search,
                     src,
                     highlight_fields,
@@ -415,395 +414,6 @@ class Dealer:
                 field={},
                 keywords=list(kwds),
             )
-
-    # def search(self, req, idx_names: str | list[str], kb_ids: list[str], emb_mdl=None, highlight=False,
-    #            rank_feature: dict | None = None):
-    #     """
-    #     Search method aligning with ES-based implementation but using Milvus as backend
-    #
-    #     Args:
-    #         req: Request parameters dictionary
-    #         idx_names: Index name(s) as string or list
-    #         kb_ids: Knowledge base IDs list
-    #         emb_mdl: Embedding model for vector search
-    #         highlight: Whether to highlight matching results
-    #         rank_feature: Ranking features dictionary
-    #
-    #     Returns:
-    #         SearchResult: Search results object
-    #     """
-    #     # Get filter conditions
-    #     filters = self.get_filters(req)
-    #
-    #     # Create ordering expression
-    #     orderBy = OrderByExpr()
-    #
-    #     # Calculate pagination parameters
-    #     pg = int(req.get("page", 1)) - 1
-    #     topk = int(req.get("topk", 1024))
-    #     ps = int(req.get("size", topk))
-    #     offset, limit = pg * ps, ps
-    #
-    #     # Determine fields to return
-    #     src = req.get("fields",
-    #                   ["docnm_kwd", "content_ltks", "kb_id", "img_id", "title_tks", "important_kwd", "position_int",
-    #                    "doc_id", "page_num_int", "top_int", "create_timestamp_flt", "knowledge_graph_kwd",
-    #                    "question_kwd", "question_tks", "available_int", "content_with_weight", PAGERANK_FLD, TAG_FLD])
-    #
-    #     kwds = set([])
-    #
-    #     # Get query string
-    #     qst = req.get("question", "")
-    #     q_vec = []
-    #
-    #     # 如果使用混合检索模式
-    #     if req.get("search_mode") == "hybrid" and qst and emb_mdl:
-    #         logging.info("执行混合检索...")
-    #         matchDense = self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
-    #         q_vec = matchDense.embedding_data
-    #         vector_field = f"q_{len(q_vec)}_vec"
-    #         src.append(vector_field)
-    #
-    #         # 获取高亮字段
-    #         highlightFields = ["content_ltks", "title_tks"] if highlight else []
-    #
-    #         # Generate text matching expression
-    #         matchText, keywords = self.qryr.question(qst, min_match=0.3)
-    #         try:
-    #             # 构建密集向量搜索请求
-    #             dense_request = AnnSearchRequest(
-    #                 data=[q_vec],
-    #                 anns_field=vector_field,
-    #                 param={
-    #                     "metric_type": "COSINE",
-    #                     "params": {"nprobe": 10}
-    #                 },
-    #                 limit=topk,
-    #                 expr=self._build_filter_expr(filters) if filters else ""
-    #             )
-    #
-    #             # 构建稀疏向量搜索请求
-    #             sparse_request = AnnSearchRequest(
-    #                 data=[qst],  # 直接使用查询文本
-    #                 anns_field="sparse_vector",
-    #                 param={
-    #                     "metric_type": "BM25",
-    #                     "params": {
-    #                         "drop_ratio_search": 0.1  # 可配置的参数
-    #                     }
-    #                 },
-    #                 limit=topk,
-    #                 expr=self._build_filter_expr(filters) if filters else ""
-    #             )
-    #
-    #             # 设置权重配置
-    #             weight_dense = req.get("weight_dense", 0.7)
-    #             weight_sparse = req.get("weight_sparse", 0.3)
-    #             ranker = WeightedRanker(weight_dense, weight_sparse)
-    #
-    #             logging.info(f"混合搜索请求已配置: 集合={idx_names}, 密集向量字段={vector_field}, "
-    #                          f"权重={weight_dense}/{weight_sparse}, 限制={topk}")
-    #
-    #             # 执行混合搜索
-    #             results = self.dataStore.hybrid_search(
-    #                 collection_name=idx_names,
-    #                 reqs=[dense_request, sparse_request],
-    #                 ranker=ranker,
-    #                 limit=topk,
-    #                 output_fields=src,
-    #                 offset=offset
-    #             )
-    #
-    #             # 处理查询结果
-    #             total = len(results)
-    #             logging.info(f"混合搜索完成: 返回结果数={total}")
-    #
-    #             # Process keywords
-    #             for k in keywords:
-    #                 kwds.add(k)
-    #                 for kk in rag_tokenizer.fine_grained_tokenize(k).split():
-    #                     if len(kk) < 2:
-    #                         continue
-    #                     if kk in kwds:
-    #                         continue
-    #                     kwds.add(kk)
-    #
-    #             # 处理结果和高亮
-    #             ids = self.dataStore.get_chunk_ids(results)
-    #             keywords = list(kwds)
-    #             highlight_results = self.dataStore.get_highlight(results, keywords, "content_with_weight")
-    #             aggs = self.dataStore.get_aggregation(results, "docnm_kwd")
-    #
-    #             # 创建搜索结果对象
-    #             return self.SearchResult(
-    #                 total=total,
-    #                 ids=ids,
-    #                 query_vector=q_vec,
-    #                 aggregation=aggs,
-    #                 highlight=highlight_results,
-    #                 field=self.dataStore.get_fields(results, src),
-    #                 keywords=keywords
-    #             )
-    #
-    #         except Exception as e:
-    #             logging.error(f"混合搜索失败: {str(e)}")
-    #             # 如果混合搜索失败，回退到普通搜索
-    #             logging.info("回退到常规搜索...")
-    #
-    #     elif req.get("search_mode") == "sparse" and qst:
-    #         logging.info("执行全文检索...")
-    #
-    #         highlightFields = ["content_ltks", "title_tks"] if highlight else []
-    #
-    #         # Generate text matching expression
-    #         matchText, keywords = self.qryr.question(qst, min_match=0.3)
-    #
-    #         results = self.dataStore.search_by_milvus(
-    #             collection_name=idx_names,
-    #             data=[qst],
-    #             anns_field="sparse_vector",
-    #             limit=topk,
-    #             output_fields=src,
-    #         )
-    #         # 处理查询结果
-    #         total = len(results)
-    #         logging.info(f"全文搜索完成: 返回结果数={total}")
-    #
-    #         # Process keywords
-    #         for k in keywords:
-    #             kwds.add(k)
-    #             for kk in rag_tokenizer.fine_grained_tokenize(k).split():
-    #                 if len(kk) < 2:
-    #                     continue
-    #                 if kk in kwds:
-    #                     continue
-    #                 kwds.add(kk)
-    #
-    #         # 处理结果和高亮
-    #         ids = self.dataStore.get_chunk_ids(results)
-    #         keywords = list(kwds)
-    #         highlight_results = self.dataStore.get_highlight(results, keywords, "content_with_weight")
-    #         aggs = self.dataStore.get_aggregation(results, "docnm_kwd")
-    #         return self.SearchResult(
-    #             total=total,
-    #             ids=ids,
-    #             query_vector=q_vec,
-    #             aggregation=aggs,
-    #             highlight=highlight_results,
-    #             field=self.dataStore.get_fields(results, src),
-    #             keywords=keywords
-    #         )
-    #
-    #     # 如果不是混合搜索或混合搜索失败，执行常规搜索
-    #     # If no query string, return sorted results
-    #     if not qst:
-    #         if req.get("sort"):
-    #             orderBy.asc("page_num_int")
-    #             orderBy.asc("top_int")
-    #             orderBy.desc("create_timestamp_flt")
-    #         res = self.dataStore.search(src, [], filters, [], orderBy, offset, limit, idx_names, kb_ids)
-    #         total = self.dataStore.get_total(res)
-    #         logging.debug(f"Dealer.search TOTAL: {total}")
-    #     else:
-    #         # If query string exists, use highlight fields if needed
-    #         highlightFields = ["content_ltks", "title_tks"] if highlight else []
-    #
-    #         # Generate text matching expression
-    #         matchText, keywords = self.qryr.question(qst, min_match=0.3)
-    #
-    #         # If no embedding model, use only text matching
-    #         if emb_mdl is None:
-    #             matchExprs = [matchText]
-    #             res = self.dataStore.search(src, highlightFields, filters, matchExprs, orderBy, offset, limit,
-    #                                         idx_names, kb_ids, rank_feature=rank_feature)
-    #             total = self.dataStore.get_total(res)
-    #             logging.debug(f"Dealer.search TOTAL: {total}")
-    #         else:
-    #             # If embedding model exists, use fusion search (text + vector)
-    #             # for idxnm in idx_names:
-    #             matchDense = self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
-    #             q_vec = matchDense.embedding_data
-    #             src.append(f"q_{len(q_vec)}_vec")
-    #
-    #             fusionExpr = FusionExpr("weighted_sum", topk, {"weights": "0.05, 0.95"})
-    #             matchExprs = [matchText, matchDense, fusionExpr]
-    #
-    #             res, total = self.dataStore.search(src, highlightFields, filters, matchExprs, orderBy, offset, limit,
-    #                                         idx_names, kb_ids, rank_feature=rank_feature)
-    #             # total = self.dataStore.get_total(res)
-    #             logging.debug(f"Dealer.search TOTAL: {total}")
-    #
-    #             # If no results, try with lower match threshold
-    #             if total == 0:
-    #                 matchText, _ = self.qryr.question(qst, min_match=0.1)
-    #                 filters.pop("doc_ids", None)
-    #                 matchDense.extra_options["similarity"] = 0.17
-    #                 res = self.dataStore.search(src, highlightFields, filters, [matchText, matchDense, fusionExpr],
-    #                                             orderBy, offset, limit, idx_names, kb_ids, rank_feature=rank_feature)
-    #                 total = self.dataStore.get_total(res)
-    #                 logging.debug(f"Dealer.search 2 TOTAL: {total}")
-    #
-    #         # Process keywords
-    #         for k in keywords:
-    #             kwds.add(k)
-    #             for kk in rag_tokenizer.fine_grained_tokenize(k).split():
-    #                 if len(kk) < 2:
-    #                     continue
-    #                 if kk in kwds:
-    #                     continue
-    #                 kwds.add(kk)
-    #
-    #     # Get results
-    #     logging.debug(f"TOTAL: {total}")
-    #     ids = self.dataStore.get_chunk_ids(res)
-    #     keywords = list(kwds)
-    #     highlight_results = self.dataStore.get_highlight(res, keywords, "content_with_weight")
-    #     aggs = self.dataStore.get_aggregation(res, "docnm_kwd")
-    #
-    #     # Return search result object
-    #     return self.SearchResult(
-    #         total=total,
-    #         ids=ids,
-    #         query_vector=q_vec,
-    #         aggregation=aggs,
-    #         highlight=highlight_results,
-    #         field=self.dataStore.get_fields(res, src),
-    #         keywords=keywords
-    #     )
-
-    # def count(self, req, idxnms, embd_mdl=None):
-    #     qst = req.get("question", "")
-    #     bqry, keywords = self.qryr.question(qst, min_match=0.3)
-    #     total, ids, fields = 0, [], {}
-    #     if bqry is None:
-    #         raise ValueError("Failed to generate query for the given question.")
-    #
-    #     src = req.get("fields", ["docnm_kwd", "content_ltks", "kb_id", "img_id", "title_tks",
-    #                              "doc_id", "position_int", "content_with_weight"])
-    #                              # "doc_id", "vector", "position_int", "content_with_weight"])
-    #     filter = req.get("filter_exp", "")
-    #
-    #     # # 检查是否需要添加维度特定向量字段
-    #     # vector_dim = None
-    #     # if req.get("vector") and embd_mdl:
-    #     #     # 获取向量维度
-    #     #     sample_vec, _ = embd_mdl.encode_queries("测试")
-    #     #     if len(sample_vec) > 0:
-    #     #         vector_dim = len(sample_vec)
-    #     #         dim_field = f"q_{vector_dim}_vec"
-    #     #         if dim_field not in src:
-    #     #             src.append(dim_field)
-    #     #             logging.info(f"添加维度特定向量字段 {dim_field} 到查询字段")
-    #
-    #     # Vector search parameters
-    #     if req.get("vector"):
-    #         assert embd_mdl, "No embedding model selected"
-    #
-    #         for idxnm in idxnms:
-    #             logging.info(f"正在搜索的集合: {idxnm}")
-    #             vector_search_params = self.get_vector(idxnm, qst, embd_mdl, req.get("topk", 1024), req.get("similarity", 0.1))
-    #             query_vector = vector_search_params.embedding_data
-    #             vector_column_name = vector_search_params.vector_column_name
-    #             src.append(vector_column_name)
-    #             # todo 后续考虑不同维度字段检索情况，目前统一叫vector，eg.用户512维的输入无法比对718存储的vector，动态名字就可以了
-    #             try:
-    #                 # 在Milvus中执行搜索
-    #                 # 参数:
-    #                 # collection_name: 指定要搜索的集合名称
-    #                 # data: 查询向量
-    #                 # anns_field: 指定用于向量搜索的字段
-    #                 # limit: 要返回的结果数量，默认为10，如果未指定的话
-    #                 # search_params: 搜索参数，包括度量类型和nprobe值
-    #                 # output_fields: 指定要在搜索结果中返回的字段
-    #                 search_results = self.dataStore.search_by_milvus(
-    #                     collection_name=idxnm,
-    #                     data=[query_vector],
-    #                     anns_field=vector_search_params.vector_column_name,
-    #                     search_params={"metric_type": "COSINE", "params": {"nprobe": 10}},
-    #                     output_fields=src,
-    #                     filter=filter
-    #                 )
-    #
-    #                 #logging.info(f"Search results for {idxnm}: {search_results}")
-    #                 logging.info(f"Search results for {idxnm} ~ 详细查询数据请解开 core/nlp/search 下的注释")
-    #
-    #                 # Process search results
-    #                 if search_results:
-    #                     total += len(search_results[0])
-    #                     for hit in search_results[0]:
-    #                         # 根据Milvus版本选择pk或id，2.5.2及以下版本hit中是id
-    #                         hit_id = str(hit.get('pk', hit.get('id')))
-    #                         ids.append(hit_id)
-    #
-    #                         hit_fields = {}
-    #                         for field in src:
-    #                             hit_fields[field] = hit['entity'].get(field, "")  # 提取每个字段的数据
-    #
-    #                         # 存储到fields字典中
-    #                         fields[hit_id] = hit_fields
-    #             except Exception as e:
-    #                 logging.error(f"Error searching in collection {idxnm}: {str(e)}")
-    #
-    #     # 如果没有向量搜索条件，则执行基于doc_id的简单查询
-    #     else:
-    #         doc_ids = req.get("doc_ids")
-    #
-    #         if not doc_ids:
-    #             raise ValueError("doc_ids is required for non-vector search.")
-    #
-    #         fields_to_return = req.get("fields", ["pk", "content_with_weight", "doc_id", "docnm_kwd", "img_id", "position_int", "auth"])
-    #
-    #         for doc_id in doc_ids:
-    #             logging.info(f"正在从集合 {idxnms} 获取文档 ID 为 {doc_id} 的数据")
-    #             try:
-    #                 # 使用 Milvus query 方法进行简单查询
-    #                 search_results = self.dataStore.query(
-    #                     collection_name=idxnms,
-    #                     # filter=f"doc_id == {doc_id}",
-    #                     filter=f"doc_id == '{{doc_id}}'".format(doc_id=doc_id),
-    #                     output_fields=fields_to_return,
-    #                 )
-    #                 if search_results:
-    #                     total += len(search_results)
-    #                     for hit in search_results:
-    #                         hit_id = str(hit["pk"])
-    #                         ids.append(hit_id)
-    #                         hit_fields = {field: hit.get(field, "") for field in fields_to_return}
-    #                         fields[hit_id] = hit_fields
-    #                 logging.info(f"Query results for {idxnms}->{doc_id}: {search_results}")
-    #             except Exception as e:
-    #                 logging.error(f"Error querying in collection {idxnms}->{doc_id}: {str(e)}")
-    #
-    #     kwds = set([])
-    #     for k in keywords:
-    #         kwds.add(k)
-    #         for kk in rag_tokenizer.fine_grained_tokenize(k).split():
-    #             if len(kk) < 2:
-    #                 continue
-    #             if kk in kwds:
-    #                 continue
-    #             kwds.add(kk)
-    #
-    #     aggs = self.get_aggregation(search_results, "docnm_kwd")
-    #     if req.get("vector"):
-    #         return self.SearchResult(
-    #             total=total,
-    #             ids=ids,
-    #             query_vector=query_vector,
-    #             aggregation=aggs,
-    #             highlight=self.get_highlight(search_results, keywords, "content_with_weight"),
-    #             field=fields,
-    #             keywords=list(kwds)
-    #         )
-    #
-    #     else:
-    #         return self.QueryResult(
-    #             total=total,
-    #             ids=ids,
-    #             aggregation=aggs,
-    #             field=fields,
-    #             keywords=list(kwds)
-    #         )
 
     def get_aggregation(self, res, g):
         if not "aggregations" in res or "aggs_" + g not in res["aggregations"]:
@@ -1184,7 +794,7 @@ class Dealer:
         sres = await self.search(req, idxnms, search_kb_ids, embd_mdl, highlight=highlight, rank_feature=rank_feature)
 
         if rerank_mdl and sres.total > 0:
-            sim, tsim, vsim = await asyncio.to_thread(
+            sim, tsim, vsim = await thread_pool_exec(
                 self.rerank_by_model,
                 rerank_mdl,
                 sres,

@@ -24,9 +24,12 @@ from api.db.db_models import db_connection
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import has_canceled
+from common import settings
 from common.exceptions import TaskCanceledException
-from common.misc_utils import get_uuid
+from common.misc_utils import get_uuid, thread_pool_exec
 from common.connection_utils import timeout
+from core.nlp import rag_tokenizer, search
+from core.utils.redis_conn import RedisDistributedLock
 from graphrag.entity_resolution import EntityResolution
 from graphrag.general.community_reports_extractor import CommunityReportsExtractor
 from graphrag.general.extractor import Extractor
@@ -41,9 +44,6 @@ from graphrag.utils import (
     set_graph,
     tidy_graph,
 )
-from core.nlp import rag_tokenizer, search
-from core.utils.redis_conn import RedisDistributedLock
-from common import settings
 
 
 async def run_graphrag(
@@ -473,8 +473,8 @@ async def generate_subgraph(
         kb_name = kb.name
 
     index_name = search.index_name(tenant_id, [kb_name])
-    await asyncio.to_thread(settings.docStoreConn.delete,{"knowledge_graph_kwd": "subgraph", "source_id": doc_id}, index_name, kb_id,)
-    await asyncio.to_thread(settings.docStoreConn.insert,[{"id": cid, **chunk}], index_name, kb_id,)
+    await thread_pool_exec(settings.docStoreConn.delete,{"knowledge_graph_kwd": "subgraph", "source_id": doc_id}, index_name, kb_id,)
+    await thread_pool_exec(settings.docStoreConn.insert,[{"id": cid, **chunk}], index_name, kb_id,)
     now = asyncio.get_running_loop().time()
     callback(msg=f"generated subgraph for doc {doc_id} in {now - start:.2f} seconds.")
     return subgraph
@@ -610,10 +610,10 @@ async def extract_community(
         kb_name = kb.name
 
     index_name = search.index_name(tenant_id, [kb_name])
-    await asyncio.to_thread(settings.docStoreConn.delete,{"knowledge_graph_kwd": "community_report", "kb_id": kb_id}, index_name, kb_id,)
+    await thread_pool_exec(settings.docStoreConn.delete,{"knowledge_graph_kwd": "community_report", "kb_id": kb_id}, index_name, kb_id,)
     es_bulk_size = 4
     for b in range(0, len(chunks), es_bulk_size):
-        doc_store_result = await asyncio.to_thread(settings.docStoreConn.insert,chunks[b : b + es_bulk_size], index_name, kb_id,)
+        doc_store_result = await thread_pool_exec(settings.docStoreConn.insert,chunks[b : b + es_bulk_size], index_name, kb_id,)
         if doc_store_result:
             error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
             raise Exception(error_message)

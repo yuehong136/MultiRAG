@@ -7,22 +7,6 @@ import socket
 import sys
 import threading
 import concurrent.futures
-
-from api.db.db_models import db_connection
-from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
-from api.db.joint_services.memory_message_service import handle_save_to_memory_task
-from common.connection_utils import timeout
-from common.file_utils import get_project_base_directory
-from core.utils.base64_image import image2id
-from core.utils.raptor_utils import should_skip_raptor, get_skip_reason
-from common.log_utils import init_root_logger
-from common.config_utils import show_configs
-from common.metadata_utils import update_metadata_to, metadata_schema
-from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
-from graphrag.general.index import run_graphrag_for_kb
-from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache
-from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text, gen_metadata
 import logging
 from datetime import datetime
 import json
@@ -31,35 +15,48 @@ import xxhash
 import copy
 import re
 from functools import partial
-
-from pymilvus import DataType
-
-import numpy as np
-from sqlalchemy.orm.exc import NoResultFound
-from sqlalchemy.orm import Session
-
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
 import signal
 import exceptiongroup
 import faulthandler
-from common.constants import LLMType, ParserType, PipelineTaskType, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
+
+from pymilvus import DataType
+import numpy as np
+from sqlalchemy.orm.exc import NoResultFound
+from sqlalchemy.orm import Session
+
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, has_canceled, CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID
 from api.db.services.file2document_service import File2DocumentService
-from common.versions import get_multirag_version
+from api.db.db_models import db_connection
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
+from api.db.joint_services.memory_message_service import handle_save_to_memory_task
 from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, \
     email, tag
+from core.utils.base64_image import image2id
+from core.utils.raptor_utils import should_skip_raptor, get_skip_reason
+from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 from core.nlp import search, rag_tokenizer, add_positions, concat_img
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from common.constants import PAGERANK_FLD, TAG_FLD, SVR_CONSUMER_GROUP_NAME
+from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text, gen_metadata
+from common import settings
+from common.constants import LLMType, ParserType, PipelineTaskType, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, PAGERANK_FLD, TAG_FLD, SVR_CONSUMER_GROUP_NAME
 from common.token_utils import num_tokens_from_string, truncate
-from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 from common.string_utils import split_and_sanitize_terms, truncate_utf8_bytes
 from common.exceptions import TaskCanceledException
-from common import settings
-from graphrag.utils import chat_limiter
+from common.log_utils import init_root_logger
+from common.config_utils import show_configs
+from common.metadata_utils import update_metadata_to, metadata_schema
+from common.misc_utils import thread_pool_exec
+from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
+from common.connection_utils import timeout
+from common.file_utils import get_project_base_directory
+from common.versions import get_multirag_version
+from graphrag.general.index import run_graphrag_for_kb
+from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache, chat_limiter
 
 BATCH_SIZE = 64
 
@@ -416,7 +413,7 @@ async def collect(db: Session):
 
 
 async def get_storage_binary(bucket, name):
-    return await asyncio.to_thread(settings.STORAGE_IMPL.get, bucket, name)
+    return await thread_pool_exec(settings.STORAGE_IMPL.get, bucket, name)
 
 
 @timeout(60 * 80, 1)
@@ -447,7 +444,7 @@ async def build_chunks(task, progress_callback, db: Session):
 
     try:
         async with chunk_limiter:
-            cks = await asyncio.to_thread(
+            cks = await thread_pool_exec(
                 chunker.chunk,
                 task["name"],
                 binary=binary,
@@ -789,10 +786,10 @@ async def init_kb(row, kb_name):
 
     # 快速检查：集合/索引已存在则直接返回（避免不必要的 embedding 调用）
     if db_type == "milvus":
-        if await asyncio.to_thread(settings.docStoreConn.has_collection, idxnm):
+        if await thread_pool_exec(settings.docStoreConn.has_collection, idxnm):
             return
     else:
-        if await asyncio.to_thread(settings.docStoreConn.index_exist, idxnm, kb_id):
+        if await thread_pool_exec(settings.docStoreConn.index_exist, idxnm, kb_id):
             return
 
     # 获取向量维度
@@ -803,7 +800,7 @@ async def init_kb(row, kb_name):
     if db_type == "milvus":
         await _create_milvus_collection(idxnm, vector_dim)
     else:
-        await asyncio.to_thread(settings.docStoreConn.create_idx, idxnm, kb_id, vector_dim, parser_id)
+        await thread_pool_exec(settings.docStoreConn.create_idx, idxnm, kb_id, vector_dim, parser_id)
 
 
 async def _create_milvus_collection(collection_name: str, vector_dim: int):
@@ -814,7 +811,7 @@ async def _create_milvus_collection(collection_name: str, vector_dim: int):
         with open(mapping_path, 'r') as f:
             return json.load(f)
 
-    mapping = await asyncio.to_thread(load_mapping)
+    mapping = await thread_pool_exec(load_mapping)
 
     # 更新 mapping 中的向量维度
     for template in mapping["mappings"]["dynamic_templates"]:
@@ -828,7 +825,7 @@ async def _create_milvus_collection(collection_name: str, vector_dim: int):
     }
 
     # 创建集合（内部会检查集合是否已存在）
-    await asyncio.to_thread(
+    await thread_pool_exec(
         settings.docStoreConn.create_collection_with_mapping,
         collection_name, mapping, auto_dimensions
     )
@@ -937,7 +934,7 @@ def convert_data_types(data, schema):
 
 
 async def get_schema(collection_name):
-    schema = await asyncio.to_thread(settings.docStoreConn.describe_collection, collection_name)
+    schema = await thread_pool_exec(settings.docStoreConn.describe_collection, collection_name)
     return schema
 
 
@@ -969,7 +966,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
 
     tk_count = 0
     if len(tts) == len(cnts):
-        vts, c = await asyncio.to_thread(mdl.encode, tts[0:1])
+        vts, c = await thread_pool_exec(mdl.encode, tts[0:1])
         tts = np.tile(vts[0], (len(cnts), 1))
         tk_count += c
 
@@ -981,7 +978,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
     cnts_ = np.array([])
     for i in range(0, len(cnts), settings.EMBEDDING_BATCH_SIZE):
         async with embed_limiter:
-            vts, c = await asyncio.to_thread(batch_encode, cnts[i : i + settings.EMBEDDING_BATCH_SIZE])
+            vts, c = await thread_pool_exec(batch_encode, cnts[i : i + settings.EMBEDDING_BATCH_SIZE])
         if len(cnts_) == 0:
             cnts_ = vts
         else:
@@ -1073,7 +1070,7 @@ async def run_dataflow(db: Session, task: dict):
             prog = 0.8
             for i in range(0, len(texts), settings.EMBEDDING_BATCH_SIZE):
                 async with embed_limiter:
-                    vts, c = await asyncio.to_thread(batch_encode, texts[i : i + settings.EMBEDDING_BATCH_SIZE])
+                    vts, c = await thread_pool_exec(batch_encode, texts[i : i + settings.EMBEDDING_BATCH_SIZE])
                 if len(vects) == 0:
                     vects = vts
                 else:
@@ -2040,7 +2037,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
                     for chunk in chapter_chunks:
                         text = chunk.get("content_with_weight", "")
-                        embd_result, _ = await asyncio.to_thread(embd_mdl.encode, [text])
+                        embd_result, _ = await thread_pool_exec(embd_mdl.encode, [text])
                         embd = embd_result[0] if len(embd_result) > 0 else np.array([])
                         if len(embd) > 0:
                             chapter_raptor_inputs.append((text, embd))
@@ -2145,7 +2142,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     embd = chunk.get("embeddings")
 
                     if embd is None or (isinstance(embd, np.ndarray) and embd.size == 0):
-                        embd_result, _ = await asyncio.to_thread(embd_mdl.encode, [text])
+                        embd_result, _ = await thread_pool_exec(embd_mdl.encode, [text])
                         embd = embd_result[0] if len(embd_result) > 0 else np.array([])
 
                     if len(embd) > 0:
@@ -2247,7 +2244,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                             "max_tokens": field_config.get("max_tokens", 512)
                         })
 
-                    raw_output = await asyncio.to_thread(do_chat_single)
+                    raw_output = await thread_pool_exec(do_chat_single)
 
                     # 清理输出（参考 keyword_extraction）
                     raw_output = re.sub(r"^.*</think>", "", raw_output, flags=re.DOTALL).strip()
@@ -2270,7 +2267,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                                 "max_tokens": field_config.get("max_tokens", 512)
                             })
 
-                        result = await asyncio.to_thread(do_chat_batch, msg)
+                        result = await thread_pool_exec(do_chat_batch, msg)
 
                         result = re.sub(r"^.*</think>", "", result, flags=re.DOTALL).strip()
                         if result.find("**ERROR**") < 0:
@@ -2391,7 +2388,7 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         try:
             db_type = settings.docStoreConn.db_type()
             if db_type == "milvus":
-                await asyncio.to_thread(settings.docStoreConn.insert, documents=converted_batch, index_name=collection_name)
+                await thread_pool_exec(settings.docStoreConn.insert, documents=converted_batch, index_name=collection_name)
             else:
                 es_batch = []
                 for doc in converted_batch:
@@ -2399,7 +2396,7 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                     if "id" not in es_doc and "pk" in es_doc:
                         es_doc["id"] = es_doc["pk"]
                     es_batch.append(es_doc)
-                await asyncio.to_thread(settings.docStoreConn.insert, es_batch, collection_name, task_dataset_id)
+                await thread_pool_exec(settings.docStoreConn.insert, es_batch, collection_name, task_dataset_id)
         except Exception as e:
             logging.warning(f"Insert mother chunks error: {e}")
 
@@ -2429,7 +2426,7 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             if db_type == "milvus":
                 # Milvus 使用 collection_name 和 data 参数
                 # insert 返回 list[str]：空列表表示成功，非空列表包含错误信息
-                doc_store_errors = await asyncio.to_thread(settings.docStoreConn.insert, documents=converted_batch, index_name=collection_name)
+                doc_store_errors = await thread_pool_exec(settings.docStoreConn.insert, documents=converted_batch, index_name=collection_name)
                 # 检查是否有错误（非空列表表示有错误）
                 if doc_store_errors:
                     error_message = f"Insert failed: {doc_store_errors}"
@@ -2447,7 +2444,7 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                     if "id" not in es_doc and "pk" in es_doc:
                         es_doc["id"] = es_doc["pk"]
                     es_batch.append(es_doc)
-                errors = await asyncio.to_thread(settings.docStoreConn.insert, es_batch, collection_name, task_dataset_id)
+                errors = await thread_pool_exec(settings.docStoreConn.insert, es_batch, collection_name, task_dataset_id)
                 if errors:
                     logging.warning(f"Insert errors: {errors}")
                 # 记录成功插入
@@ -2461,12 +2458,12 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 "Insert chunk error, detail info please check log file. Please check doc store status!"
             )
             try:
-                if await asyncio.to_thread(doc_store_exists, collection_name, task_dataset_id):
+                if await thread_pool_exec(doc_store_exists, collection_name, task_dataset_id):
                     # 删除本批次已经尝试插入的记录
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
                             doc_id = chunk['doc_id']
-                            await asyncio.to_thread(delete_chunks_by_doc_id, collection_name, doc_id, task_dataset_id)
+                            await thread_pool_exec(delete_chunks_by_doc_id, collection_name, doc_id, task_dataset_id)
             except Exception as e:
                 logging.exception(f"Failed to rollback inserted chunks: {e}")
             logging.exception("Insert error:")
@@ -2493,11 +2490,11 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             logging.warning(f"insert_chunks update_chunk_ids failed since task {task_id} is unknown.")
             # 如果TaskService中没有这个task，则删除已插入数据并退出
             try:
-                if await asyncio.to_thread(doc_store_exists, collection_name, task_dataset_id):
+                if await thread_pool_exec(doc_store_exists, collection_name, task_dataset_id):
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
                             doc_id = chunk['doc_id']
-                            await asyncio.to_thread(delete_chunks_by_doc_id, collection_name, doc_id, task_dataset_id)
+                            await thread_pool_exec(delete_chunks_by_doc_id, collection_name, doc_id, task_dataset_id)
             except Exception as e:
                 logging.exception(f"Failed to rollback after task not found: {e}")
             async with asyncio.TaskGroup() as tg:
@@ -2806,13 +2803,13 @@ async def do_handle_task(db, task):
     finally:
         if has_canceled(task_id):
             try:
-                exists = await asyncio.to_thread(
+                exists = await thread_pool_exec(
                     doc_store_exists,
                     collection_name,
                     task_dataset_id,
                 )
                 if exists:
-                    await asyncio.to_thread(
+                    await thread_pool_exec(
                         delete_chunks_by_doc_id,
                         collection_name,
                         task_doc_id,

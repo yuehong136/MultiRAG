@@ -6,7 +6,6 @@
 @date：2025/7/17 13:50
 @desc:
 """
-import asyncio
 import logging
 import os
 import pathlib
@@ -15,26 +14,24 @@ from io import BytesIO
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-
 from starlette.responses import StreamingResponse
 
-from api.common.check_team_permission import check_file_team_permission
+from api.apps import manager
 from api.db import FileType
-from common.constants import FileSource
+from api.utils.file_utils import filename_type
+from api.utils.web_utils import CONTENT_TYPE_MAP
+from api.common.check_team_permission import check_file_team_permission
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.utils.api_utils import get_json_result, construct_error_response, get_data_error_result
-from common.misc_utils import get_uuid
-from common.constants import RetCode
-from api.utils.file_utils import filename_type
-from api.utils.web_utils import CONTENT_TYPE_MAP
 from common import settings
-from api.apps import manager
-from pydantic import BaseModel, Field
+from common.misc_utils import get_uuid, thread_pool_exec
+from common.constants import RetCode, FileSource
 
 router = APIRouter()
 
@@ -122,7 +119,7 @@ async def upload_media_redirect(
                 "filename": unique_filename
             })
 
-        return await asyncio.to_thread(_upload_sync)
+        return await thread_pool_exec(_upload_sync)
 
     except Exception as e:
         logging.exception("Upload media redirect failed")
@@ -232,7 +229,7 @@ async def upload(
         return get_json_result(data=file_dict)
 
     try:
-        return await asyncio.to_thread(_upload_sync)
+        return await thread_pool_exec(_upload_sync)
     except Exception as e:
         return construct_error_response(e)
 

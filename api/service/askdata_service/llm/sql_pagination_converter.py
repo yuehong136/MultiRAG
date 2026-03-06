@@ -1,4 +1,3 @@
-import asyncio
 import os
 import re
 import logging
@@ -6,10 +5,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ class SQLPaginationConverter:
                     )
 
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(_chat_in_thread)
+            response = await thread_pool_exec(_chat_in_thread)
 
             # 提取并返回SQL语句
             paginated_sql = self._extract_sql_from_response(response)

@@ -255,8 +255,8 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
 
         # ===== 向量数据库集合重命名逻辑 =====
         # 只有当名称实际发生变化时才执行重命名
+        db_type = settings.docStoreConn.db_type()
         if "name" in req_data and req_data["name"] != old_name:
-            db_type = settings.docStoreConn.db_type()
             old_coll = search.index_name_one(kb.tenant_id, old_name)
             new_coll = search.index_name_one(kb.tenant_id, req_data["name"])
 
@@ -275,7 +275,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
 
         if kb.pagerank != req_data.get("pagerank", 0):
             # todo 测试 milvus 能否利用 pagerank【20250715】
-            if os.environ.get("DOC_ENGINE", "milvus") != "milvus":
+            if db_type != "milvus":
                 logging.warning("'pagerank' can only be set when doc_engine is elasticsearch")
                 # return get_data_error_result(retmsg="'pagerank' can only be set when doc_engine is elasticsearch")
 

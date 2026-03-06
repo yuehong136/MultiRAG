@@ -6,7 +6,6 @@
 @date：2024/7/30 13:56
 @desc:
 """
-import asyncio
 import datetime
 import json
 from typing import Literal, Annotated, Any
@@ -31,11 +30,12 @@ from api.utils.api_utils import get_json_result
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
-from common.doc_store.doc_store_base import OrderByExpr
-from core.prompts.generator import keyword_extraction, cross_languages
 from common import settings
+from core.prompts.generator import keyword_extraction, cross_languages
+from common.doc_store.doc_store_base import OrderByExpr
 from common.metadata_utils import apply_meta_data_filter
 from common.constants import RetCode, LLMType, ParserType, PAGERANK_FLD
+from common.misc_utils import thread_pool_exec
 from common.string_utils import remove_redundant_spaces
 
 router = APIRouter()
@@ -645,7 +645,7 @@ async def query_vector_store(request: VectorStoreQueryRequest, db: Session = Dep
                 )
             )
 
-        search_res = await asyncio.to_thread(
+        search_res = await thread_pool_exec(
             settings.docStoreConn.search,
             request.fields,
             [],

@@ -1,4 +1,3 @@
-import asyncio
 import pathlib
 import re
 
@@ -20,7 +19,7 @@ from api.utils.api_utils import get_error_data_result, get_result, server_error_
 from api.utils.file_utils import filename_type
 from api.utils.web_utils import CONTENT_TYPE_MAP
 from common import settings
-from common.misc_utils import get_uuid
+from common.misc_utils import get_uuid, thread_pool_exec
 from common.constants import RetCode
 
 router = APIRouter()
@@ -485,7 +484,7 @@ async def download_attachment(
         文件流
     """
     try:
-        data = await asyncio.to_thread(settings.STORAGE_IMPL.get, tenant_id, attachment_id)
+        data = await thread_pool_exec(settings.STORAGE_IMPL.get, tenant_id, attachment_id)
         content_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
 
         from io import BytesIO

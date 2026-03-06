@@ -1,16 +1,16 @@
-import asyncio
 import json
 import os
 import re
 import logging
-from typing import Any, List, Optional, Dict
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.misc_utils import thread_pool_exec
+from common.constants import LLMType
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class SemanticRelevanceFilter:
         else:
             self.prompt_dir = prompt_dir
 
-    def _extract_json_from_response(self, response: str) -> Dict[str, List[str]]:
+    def _extract_json_from_response(self, response: str) -> dict[str, list[str]]:
         """
         从LLM响应中提取排除列表的JSON数据
 
@@ -71,7 +71,7 @@ class SemanticRelevanceFilter:
             logger.warning("Failed to parse response as JSON, returning empty exclude lists")
             return {"excludeDim": [], "excludeMetric": []}
 
-    def _validate_exclude_format(self, exclude_data: Dict) -> Dict[str, List[str]]:
+    def _validate_exclude_format(self, exclude_data: dict) -> dict[str, list[str]]:
         """
         验证和清理排除列表的格式
 
@@ -125,9 +125,9 @@ class SemanticRelevanceFilter:
 
     def apply_exclusion_filter(
             self,
-            dataset_info: List[Dict],
-            exclude_data: Dict[str, List[str]]
-    ) -> List[Dict]:
+            dataset_info: list[dict],
+            exclude_data: dict[str, list[str]]
+    ) -> list[dict]:
         """
         应用排除列表，从数据集中移除不相关的字段
 
@@ -175,10 +175,10 @@ class SemanticRelevanceFilter:
     async def filter_irrelevant_fields(
             self,
             user_query: str,
-            dataset_info: List[Dict],
-            model_relations: List[Dict],
+            dataset_info: list[dict],
+            model_relations: list[dict],
             llm_name: str
-    ) -> Dict[str, List[str]]:
+    ) -> dict[str, list[str]]:
         """
         从语义层中过滤掉与用户查询明显不相关的维度和指标
 
@@ -242,7 +242,7 @@ class SemanticRelevanceFilter:
                     )
 
             # 调用LLM处理提示词
-            response = await asyncio.to_thread(_chat_in_thread)
+            response = await thread_pool_exec(_chat_in_thread)
 
             # 提取和处理响应
             exclude_data = self._extract_json_from_response(response)
@@ -263,9 +263,9 @@ class SemanticRelevanceFilter:
     async def filter_and_apply(
             self,
             user_query: str,
-            dataset_info: List[Dict],
+            dataset_info: list[dict],
             llm_name: str
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         一步完成过滤和应用，返回过滤后的语义层信息
 
@@ -287,9 +287,9 @@ class SemanticRelevanceFilter:
 
     def get_filter_statistics(
             self,
-            original_data: List[Dict],
-            filtered_data: List[Dict]
-    ) -> Dict[str, Any]:
+            original_data: list[dict],
+            filtered_data: list[dict]
+    ) -> dict[str, Any]:
         """
         获取过滤统计信息
 

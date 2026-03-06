@@ -10,20 +10,20 @@ core/flow/splitter 的纯函数提取
 @project: multirag
 @date: 2025-11-10
 """
-import asyncio
 import logging
 import re
 from copy import deepcopy
 
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 from core.nlp import naive_merge, naive_merge_with_images, attach_media_context
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
 
 async def _to_thread(func, *args, **kwargs):
     """在线程中执行阻塞函数"""
-    return await asyncio.to_thread(func, *args, **kwargs)
+    return await thread_pool_exec(func, *args, **kwargs)
 
 
 class FlowSplitter:

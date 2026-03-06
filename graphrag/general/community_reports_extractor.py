@@ -12,19 +12,21 @@ import os
 import re
 from typing import Callable
 from dataclasses import dataclass
+
 import networkx as nx
 import pandas as pd
 
 from api.db.services.task_service import has_canceled
+from core.llm.chat_model.base import Base as CompletionLLM
+from common.token_utils import num_tokens_from_string
 from common.exceptions import TaskCanceledException
 from common.connection_utils import timeout
+from common.misc_utils import thread_pool_exec
 from graphrag.general import leiden
 from graphrag.general.community_report_prompt import COMMUNITY_REPORT_PROMPT
 from graphrag.general.extractor import Extractor
 from graphrag.general.leiden import add_community_info2graph
-from core.llm.chat_model.base import Base as CompletionLLM
 from graphrag.utils import perform_variable_replacements, dict_has_keys_with_types, chat_limiter
-from common.token_utils import num_tokens_from_string
 
 
 @dataclass
@@ -105,7 +107,7 @@ class CommunityReportsExtractor(Extractor):
                     try:
                         timeout = 180 if enable_timeout_assertion else 1000000000
                         response = await asyncio.wait_for(
-                            asyncio.to_thread(self._chat, text, [{"role": "user", "content": "Output:"}], {}, task_id), timeout=timeout)
+                            thread_pool_exec(self._chat, text, [{"role": "user", "content": "Output:"}], {}, task_id), timeout=timeout)
                     except asyncio.TimeoutError:
                         logging.warning("extract_community_report._chat timeout, skipping...")
                         return

@@ -16,6 +16,7 @@ import logging
 import re
 import time
 import asyncio
+from common.misc_utils import thread_pool_exec
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -306,7 +307,7 @@ class DocumentAnalysisService:
         logging.info(f"Reparsing document {doc_id} from storage")
 
         # FastAPI最佳实践: 使用asyncio.to_thread
-        chunks = await asyncio.to_thread(
+        chunks = await thread_pool_exec(
             DocumentService.preview_document_chunks,
             self.db,
             doc_id,
@@ -376,7 +377,7 @@ class DocumentAnalysisService:
             if hasattr(file.read, '__self__'):  # async read
                 file_content = await file.read()
             else:  # sync read
-                file_content = await asyncio.to_thread(file.read)
+                file_content = await thread_pool_exec(file.read)
         else:
             raise ValueError("file must be readable")
 
@@ -398,7 +399,7 @@ class DocumentAnalysisService:
                 return None
             
             # 执行切片 (使用asyncio.to_thread)
-            result = await asyncio.to_thread(
+            result = await thread_pool_exec(
                 module.chunk,
                 fname,
                 binary=file_content,
@@ -538,18 +539,18 @@ class DocumentAnalysisService:
             content = chunk.get("content_with_weight", "")
 
             # 检查缓存的embedding
-            cached_embd = await asyncio.to_thread(
+            cached_embd = await thread_pool_exec(
                 get_embed_cache, embd_model.llm_name, content
             )
 
             if cached_embd is not None:
                 embd = cached_embd
             else:
-                embd_result, _ = await asyncio.to_thread(
+                embd_result, _ = await thread_pool_exec(
                     embd_model.encode, [content]
                 )
                 embd = embd_result[0]
-                await asyncio.to_thread(
+                await thread_pool_exec(
                     set_embed_cache, embd_model.llm_name, content, embd
                 )
 
@@ -658,7 +659,7 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
 
             # 检查缓存
             if use_cache:
-                cached = await asyncio.to_thread(
+                cached = await thread_pool_exec(
                     get_llm_cache, llm_model.llm_name, prompt, [], {}
                 )
                 if cached:
@@ -666,7 +667,7 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
 
             # LLM调用
             async with _asyncio_chat_limiter:
-                keywords = await asyncio.to_thread(
+                keywords = await thread_pool_exec(
                     llm_model.chat,
                     "You're a helpful assistant.",
                     [{"role": "user", "content": prompt}],
@@ -677,7 +678,7 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
 
             # 保存缓存
             if use_cache:
-                await asyncio.to_thread(
+                await thread_pool_exec(
                     set_llm_cache, llm_model.llm_name, prompt, keywords, [], {}
                 )
 
@@ -711,7 +712,7 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
         logging.info(f"Global tag prompt preview (first 500 chars):\n{global_tag_prompt_text[:500]}...")
 
         async with _asyncio_chat_limiter:
-            semantic_tags_str = await asyncio.to_thread(
+            semantic_tags_str = await thread_pool_exec(
                 llm_model.chat,
                 "You're a helpful assistant.",
                 [{"role": "user", "content": global_tag_prompt_text}],
@@ -754,7 +755,7 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
 
         # LLM调用
         async with _asyncio_chat_limiter:
-            summary = await asyncio.to_thread(
+            summary = await thread_pool_exec(
                 llm_model.chat,
                 "You're a helpful assistant.",
                 [{"role": "user", "content": prompt}],
@@ -832,7 +833,7 @@ Generate 2-3 high-level semantic tags for the following document.
 Just output 2-3 tags separated by comma, nothing else."""
 
         async with _asyncio_chat_limiter:
-            semantic_tags_str = await asyncio.to_thread(
+            semantic_tags_str = await thread_pool_exec(
                 llm_model.chat,
                 "You're a helpful assistant.",
                 [{"role": "user", "content": tag_prompt}],
@@ -880,7 +881,7 @@ Write a comprehensive summary (500-800 words) of the following document.
 Just output the summary, nothing else."""
 
         async with _asyncio_chat_limiter:
-            summary = await asyncio.to_thread(
+            summary = await thread_pool_exec(
                 llm_model.chat,
                 "You're a helpful assistant.",
                 [{"role": "user", "content": summary_prompt}],

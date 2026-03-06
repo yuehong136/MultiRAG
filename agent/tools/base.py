@@ -14,24 +14,25 @@
 #  limitations under the License.
 #
 import asyncio
+from timeit import default_timer as timer
 import logging
 import re
 import time
 from copy import deepcopy
 from functools import partial
-from typing import TypedDict, List, Any
+from typing import TypedDict, Any
+
 from agent.component.base import ComponentParamBase, ComponentBase
-from common.misc_utils import hash_str2int
 from core.prompts.generator import kb_prompt
 from common.mcp_tool_call_conn import MCPToolCallSession, ToolCallSession, MCP_TOOL_CALL_TIMEOUT
-from timeit import default_timer as timer
+from common.misc_utils import hash_str2int, thread_pool_exec
 
 
 class ToolParameter(TypedDict):
     type: str
     description: str
     displayDescription: str
-    enum: List[str]
+    enum: list[str]
     required: bool
 
 
@@ -65,7 +66,7 @@ class LLMToolPluginCallSession(ToolCallSession):
         tool_obj = self.tools_map[name]
         if isinstance(tool_obj, MCPToolCallSession):
             # MCP 调用仍然是同步的，需要放到线程中
-            resp = await asyncio.to_thread(tool_obj.tool_call, name, arguments, MCP_TOOL_CALL_TIMEOUT)
+            resp = await thread_pool_exec(tool_obj.tool_call, name, arguments, MCP_TOOL_CALL_TIMEOUT)
             # Phase 4: 将 MCP 服务端日志/进度通过 callback 上报前端
             # 兼容性：无日志时 _recent_logs 为空列表，自动跳过
             recent_logs = getattr(tool_obj, "_recent_logs", None)
@@ -75,7 +76,7 @@ class LLMToolPluginCallSession(ToolCallSession):
             if hasattr(tool_obj, "invoke_async") and asyncio.iscoroutinefunction(tool_obj.invoke_async):
                 resp = await tool_obj.invoke_async(**arguments)
             else:
-                resp = await asyncio.to_thread(tool_obj.invoke, **arguments)
+                resp = await thread_pool_exec(tool_obj.invoke, **arguments)
 
         self.callback(name, arguments, resp, elapsed_time=timer()-st)
         return resp
@@ -136,6 +137,7 @@ class ToolParamBase(ComponentParamBase):
 class ToolBase(ComponentBase):
     def __init__(self, canvas, id, param: ComponentParamBase):
         from agent.canvas import Canvas  # Local import to avoid cyclic dependency
+
         assert isinstance(canvas, Canvas), "canvas must be an instance of Canvas"
         self._canvas = canvas
         self._id = id
@@ -178,7 +180,7 @@ class ToolBase(ComponentBase):
             elif asyncio.iscoroutinefunction(self._invoke):
                 res = await self._invoke(**kwargs)
             else:
-                res = await asyncio.to_thread(self._invoke, **kwargs)
+                res = await thread_pool_exec(self._invoke, **kwargs)
         except Exception as e:
             self._param.outputs["_ERROR"] = {"value": str(e)}
             logging.exception(e)

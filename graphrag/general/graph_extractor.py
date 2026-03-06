@@ -5,18 +5,19 @@ Reference:
  - [graphrag](https://github.com/microsoft/graphrag)
 """
 
-import asyncio
 import re
 from typing import Any
 from dataclasses import dataclass
-import tiktoken
 
+import tiktoken
+import networkx as nx
+
+from core.llm.chat_model.base import Base as CompletionLLM
+from common.token_utils import num_tokens_from_string
+from common.misc_utils import thread_pool_exec
 from graphrag.general.extractor import Extractor, ENTITY_EXTRACTION_MAX_GLEANINGS
 from graphrag.general.graph_prompt import GRAPH_EXTRACTION_PROMPT, CONTINUE_PROMPT, LOOP_PROMPT
 from graphrag.utils import ErrorHandlerFn, perform_variable_replacements, chat_limiter, split_string_by_multi_markers
-from core.llm.chat_model.base import Base as CompletionLLM
-import networkx as nx
-from common.token_utils import num_tokens_from_string
 
 DEFAULT_TUPLE_DELIMITER = "<|>"
 DEFAULT_RECORD_DELIMITER = "##"
@@ -107,7 +108,7 @@ class GraphExtractor(Extractor):
         }
         hint_prompt = perform_variable_replacements(self._extraction_prompt, variables=variables)
         async with chat_limiter:
-            response = await asyncio.to_thread(self._chat,hint_prompt,[{"role": "user", "content": "Output:"}],{},task_id)
+            response = await thread_pool_exec(self._chat,hint_prompt,[{"role": "user", "content": "Output:"}],{},task_id)
         token_count += num_tokens_from_string(hint_prompt + response)
 
         results = response or ""
@@ -117,7 +118,7 @@ class GraphExtractor(Extractor):
         for i in range(self._max_gleanings):
             history.append({"role": "user", "content": CONTINUE_PROMPT})
             async with chat_limiter:
-                response = await asyncio.to_thread(self._chat, "", history, {})
+                response = await thread_pool_exec(self._chat, "", history, {})
             token_count += num_tokens_from_string("\n".join([m["content"] for m in history]) + response)
             results += response or ""
 
@@ -127,7 +128,7 @@ class GraphExtractor(Extractor):
             history.append({"role": "assistant", "content": response})
             history.append({"role": "user", "content": LOOP_PROMPT})
             async with chat_limiter:
-                continuation = await asyncio.to_thread(self._chat, "", history)
+                continuation = await thread_pool_exec(self._chat, "", history)
             token_count += num_tokens_from_string("\n".join([m["content"] for m in history]) + response)
             if continuation != "Y":
                 break

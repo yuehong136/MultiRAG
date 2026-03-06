@@ -20,14 +20,16 @@ import collections
 import re
 from typing import Any
 from dataclasses import dataclass
+from functools import reduce
 
+import markdown_to_json
+
+from common.misc_utils import thread_pool_exec
+from common.token_utils import num_tokens_from_string
+from core.llm.chat_model.base import Base as CompletionLLM
 from graphrag.general.extractor import Extractor
 from graphrag.general.mind_map_prompt import MIND_MAP_EXTRACTION_PROMPT
 from graphrag.utils import ErrorHandlerFn, perform_variable_replacements, chat_limiter
-from core.llm.chat_model.base import Base as CompletionLLM
-import markdown_to_json
-from functools import reduce
-from common.token_utils import num_tokens_from_string
 
 
 @dataclass
@@ -42,11 +44,11 @@ class MindMapExtractor(Extractor):
     _on_error: ErrorHandlerFn
 
     def __init__(
-            self,
-            llm_invoker: CompletionLLM,
-            prompt: str | None = None,
-            input_text_key: str | None = None,
-            on_error: ErrorHandlerFn | None = None,
+        self,
+        llm_invoker: CompletionLLM,
+        prompt: str | None = None,
+        input_text_key: str | None = None,
+        on_error: ErrorHandlerFn | None = None,
     ):
         """Init method definition."""
         # TODO: streamline construction
@@ -78,9 +80,7 @@ class MindMapExtractor(Extractor):
                 )
         return arr
 
-    async def __call__(
-            self, sections: list[str], prompt_variables: dict[str, Any] | None = None
-    ) -> MindMapResult:
+    async def __call__(self, sections: list[str], prompt_variables: dict[str, Any] | None = None) -> MindMapResult:
         """Call method definition."""
         if prompt_variables is None:
             prompt_variables = {}
@@ -176,16 +176,14 @@ class MindMapExtractor(Extractor):
 
         return self._list_to_kv(to_ret)
 
-    async def _process_document(
-            self, text: str, prompt_variables: dict[str, str], out_res
-    ) -> str:
+    async def _process_document(self, text: str, prompt_variables: dict[str, str], out_res) -> str:
         variables = {
             **prompt_variables,
             self._input_text_key: text,
         }
         text = perform_variable_replacements(self._mind_map_prompt, variables=variables)
         async with chat_limiter:
-            response = await asyncio.to_thread(self._chat,text,[{"role": "user", "content": "Output:"}],{})
+            response = await thread_pool_exec(self._chat,text,[{"role": "user", "content": "Output:"}],{})
         response = re.sub(r"```[^\n]*", "", response)
         logging.debug(response)
         logging.debug(self._todict(markdown_to_json.dictify(response)))

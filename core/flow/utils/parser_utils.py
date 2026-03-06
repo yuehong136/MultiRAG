@@ -10,7 +10,6 @@ core/flow/parser 的纯函数提取
 @project: multirag
 @date: 2025-11-10
 """
-import asyncio
 import logging
 import tempfile
 import os
@@ -21,26 +20,27 @@ from functools import reduce
 
 import numpy as np
 from PIL import Image
+from tika import parser as tika_parser
 
-from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
+from core.app.naive import Docx, Markdown as MarkdownParser
+from core.nlp import concat_img
+from core.llm.cv import Base as VLM
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 from deepdoc.parser import ExcelParser
 from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
 from deepdoc.parser.ppt_parser import RAGFlowPptParser
 from deepdoc.parser.tcadp_parser import TCADPParser
-from tika import parser as tika_parser
-from core.app.naive import Docx, Markdown as MarkdownParser
-from core.nlp import concat_img
 from deepdoc.vision import OCR
-from core.llm.cv import Base as VLM
 
 logger = logging.getLogger(__name__)
 
 
 async def _to_thread(func, *args, **kwargs):
     """在线程中执行阻塞函数"""
-    return await asyncio.to_thread(func, *args, **kwargs)
+    return await thread_pool_exec(func, *args, **kwargs)
 
 
 class FlowParser:

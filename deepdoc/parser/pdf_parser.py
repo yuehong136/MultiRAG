@@ -36,12 +36,12 @@ from pypdf import PdfReader as pdf2_read
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
+from common import settings
 from common.file_utils import get_project_base_directory
-from common.misc_utils import pip_install_torch
-from deepdoc.vision import OCR, AscendLayoutRecognizer, LayoutRecognizer, Recognizer, TableStructureRecognizer
+from common.misc_utils import pip_install_torch, thread_pool_exec
 from core.nlp import rag_tokenizer
 from core.prompts.generator import vision_llm_describe_prompt
-from common import settings
+from deepdoc.vision import OCR, AscendLayoutRecognizer, LayoutRecognizer, Recognizer, TableStructureRecognizer
 
 LOCK_KEY_pdfplumber = "global_shared_lock_pdfplumber"
 if LOCK_KEY_pdfplumber not in sys.modules:
@@ -1112,7 +1112,7 @@ class RAGFlowPdfParser:
 
             if limiter:
                 async with limiter:
-                    await asyncio.to_thread(self.__ocr, i + 1, img, chars, zoomin, id)
+                    await thread_pool_exec(self.__ocr, i + 1, img, chars, zoomin, id)
             else:
                 self.__ocr(i + 1, img, chars, zoomin, id)
 

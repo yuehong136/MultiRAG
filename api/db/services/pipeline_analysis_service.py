@@ -9,6 +9,7 @@ Pipeline 文档分析服务 - 集成 core/flow 所有组件
 @date: 2025-11-05
 """
 import asyncio
+from common.misc_utils import thread_pool_exec
 import logging
 import re
 import time
@@ -148,7 +149,7 @@ class SemanticTagDeduplicator:
         
         try:
             # 生成 embeddings
-            embeddings, _ = await asyncio.to_thread(
+            embeddings, _ = await thread_pool_exec(
                 lambda: self.embd_model.encode(valid_tags)
             )
             
@@ -411,7 +412,7 @@ class PipelineAnalysisService:
             if asyncio.iscoroutinefunction(file.read):
                 file_content = await file.read()
             else:
-                file_content = await asyncio.to_thread(file.read)
+                file_content = await thread_pool_exec(file.read)
         else:
             raise ValueError("file must be readable")
         
@@ -503,7 +504,7 @@ class PipelineAnalysisService:
             if asyncio.iscoroutinefunction(file.read):
                 file_content = await file.read()
             else:
-                file_content = await asyncio.to_thread(file.read)
+                file_content = await thread_pool_exec(file.read)
         else:
             raise ValueError("file must be readable")
         
@@ -521,7 +522,7 @@ class PipelineAnalysisService:
                 return None
             
             # 执行切片
-            result = await asyncio.to_thread(
+            result = await thread_pool_exec(
                 module.chunk,
                 fname,
                 binary=file_content,
@@ -979,7 +980,7 @@ class PipelineAnalysisService:
                 embd = chunk["embeddings"]
             else:
                 # 生成 embedding
-                embd, _ = await asyncio.to_thread(
+                embd, _ = await thread_pool_exec(
                     lambda: embd_model.encode([text])
                 )
                 embd = embd[0] if embd else []

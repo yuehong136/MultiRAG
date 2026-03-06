@@ -1,16 +1,16 @@
-import asyncio
 import json
 import os
 import re
 import logging
 from datetime import date
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class LLMSQLTemplating:
         else:
             self.prompt_dir = prompt_dir
 
-    def _extract_json_from_response(self, response: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+    def _extract_json_from_response(self, response: str) -> tuple[dict[str, Any] | None, bool]:
         """
         从响应中提取JSON数据
 
@@ -73,8 +73,7 @@ class LLMSQLTemplating:
         logger.warning("无法从响应中提取JSON数据")
         return None, False
 
-    async def generate_sql_template(self, original_question: str, sql: str, semantic_layer: Dict[str, Any], llm_name: str) -> \
-            Optional[Dict[str, Any]]:
+    async def generate_sql_template(self, original_question: str, sql: str, semantic_layer: dict[str, Any], llm_name: str) -> dict[str, Any] | None:
         """
         生成SQL模板
 
@@ -120,7 +119,7 @@ class LLMSQLTemplating:
             }
 
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(
+            response = await thread_pool_exec(
                 llm_model_instance.chat,
                 system="",
                 history=history,

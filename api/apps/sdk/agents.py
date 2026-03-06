@@ -22,7 +22,7 @@ from api.db.services.file_service import FileService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.utils.api_utils import get_error_data_result, get_result, token_required
 from common.constants import RetCode
-from common.misc_utils import get_uuid
+from common.misc_utils import get_uuid, thread_pool_exec
 from core.utils.redis_conn import REDIS_CONN
 
 router = APIRouter()
@@ -230,7 +230,7 @@ async def webhook(
     start_ts = time.time()
 
     # 1. Fetch canvas by agent_id
-    cvs = await asyncio.to_thread(UserCanvasService.get_by_id, db, agent_id)
+    cvs = await thread_pool_exec(UserCanvasService.get_by_id, db, agent_id)
     if not cvs:
         return get_error_data_result(retcode=RetCode.BAD_REQUEST, retmsg="Canvas not found.")
 
@@ -535,7 +535,7 @@ async def webhook(
                         if len(files_list) >= 10:
                             raise Exception("Too many uploaded files")
 
-                        desc = await asyncio.to_thread(
+                        desc = await thread_pool_exec(
                             FileService.upload_info,
                             cvs.user_id,
                             value,
@@ -816,7 +816,7 @@ async def webhook(
                     )
 
                 cvs.dsl = json.loads(str(canvas))
-                await asyncio.to_thread(UserCanvasService.update_by_id, db, agent_id, cvs.to_dict())
+                await thread_pool_exec(UserCanvasService.update_by_id, db, agent_id, cvs.to_dict())
 
             except Exception as e:
                 logging.exception("Webhook background run failed")

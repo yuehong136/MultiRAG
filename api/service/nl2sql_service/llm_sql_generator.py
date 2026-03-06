@@ -1,12 +1,12 @@
-import asyncio
 import re
 import logging
-from typing import Any, Optional, Tuple
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class LLMSQLGenerator:
             return sql[:semicolon_pos + 1]
         return sql
 
-    def _extract_sql_from_response(self, response: str) -> Tuple[Optional[str], bool]:
+    def _extract_sql_from_response(self, response: str) -> tuple[str | None, bool]:
         """
         从LLM响应中提取SQL查询。
 
@@ -93,7 +93,7 @@ class LLMSQLGenerator:
             }
 
             # 调用LLM处理提示词
-            response = await asyncio.to_thread(
+            response = await thread_pool_exec(
                 llm_model_instance.chat,
                 system="You are a SQL expert. Generate concise, correct SQL code based on the requirements.",
                 history=history,

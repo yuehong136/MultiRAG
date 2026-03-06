@@ -2,8 +2,10 @@ import asyncio
 from typing import Any
 from dataclasses import dataclass
 import copy
-from common.constants import LLMType
+
 from api.db.services.llm_service import LLMBundle
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.utils import parse_template, match_parameters, dict_arrays_to_array_dicts, map_schema_with_values
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
@@ -195,7 +197,7 @@ class LLMComponent(BaseComponent):
             history = [{"role": "user", "content": actual_prompt}]
 
             # 使用 asyncio.to_thread 防止阻塞主事件循环
-            response = await asyncio.to_thread(
+            response = await thread_pool_exec(
                 chat_mdl.chat,
                 system=actual_system_prompt,
                 history=history,
@@ -255,7 +257,7 @@ class LLMComponent(BaseComponent):
             history = [{"role": "user", "content": actual_prompt}]
 
             # 使用 asyncio.to_thread 防止阻塞主事件循环
-            response = await asyncio.to_thread(
+            response = await thread_pool_exec(
                 chat_mdl.chat,
                 system=actual_system_prompt,
                 history=history,
@@ -276,7 +278,7 @@ async def process_single_chat_async(db, user_id, model, system_prompt, prompt, l
     history = [{"role": "user", "content": prompt}]
 
     # 使用 asyncio.to_thread 防止阻塞
-    response = await asyncio.to_thread(
+    response = await thread_pool_exec(
         chat_mdl.chat,
         system=system_prompt,
         history=history,

@@ -1,16 +1,16 @@
-import asyncio
 import json
 import os
 import re
 import logging
-from typing import Any, List, Optional, Dict, Tuple, Set
+from typing import Any
 from enum import Enum
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ class QueryIntentType(Enum):
         return descriptions.get(intent_type, "未知查询类型")
 
     @classmethod
-    def from_string(cls, intent_str: str) -> Optional['QueryIntentType']:
+    def from_string(cls, intent_str: str) -> "QueryIntentType | None":
         """
         从字符串转换为枚举值，处理可能的格式差异
 
@@ -171,7 +171,7 @@ class QueryIntentAnalyzer:
         else:
             self.prompt_dir = prompt_dir
 
-    def _extract_data_from_response(self, response: str) -> Tuple[Optional[List[str]], bool]:
+    def _extract_data_from_response(self, response: str) -> tuple[list[str] | None, bool]:
         """
         从响应中提取意图列表数据
 
@@ -243,7 +243,7 @@ class QueryIntentAnalyzer:
         logger.warning("无法从响应中提取意图列表")
         return None, False
 
-    def _extract_intents(self, data: Optional[List[str]], response: str) -> List[QueryIntentType]:
+    def _extract_intents(self, data: list[str] | None, response: str) -> list[QueryIntentType]:
         """
         从解析后的数据中提取查询意图列表
 
@@ -286,7 +286,7 @@ class QueryIntentAnalyzer:
 
         return intents
 
-    async def analyze_query_intent(self, query_text: str, llm_name: str) -> List[QueryIntentType]:
+    async def analyze_query_intent(self, query_text: str, llm_name: str) -> list[QueryIntentType]:
         """
         使用LLM分析自然语言查询意图
 
@@ -322,7 +322,7 @@ class QueryIntentAnalyzer:
             }
 
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(
+            response = await thread_pool_exec(
                 llm_model_instance.chat,
                 system="",
                 history=history,
@@ -337,7 +337,7 @@ class QueryIntentAnalyzer:
             logger.error(f"分析查询意图时出错: {e}", exc_info=True)
             return [QueryIntentType.AMBIGUOUS]  # 发生错误时，返回模糊查询类型
 
-    async def get_query_intents(self, query_text: str, llm_name: str) -> Set[str]:
+    async def get_query_intents(self, query_text: str, llm_name: str) -> set[str]:
         """
         获取查询的意图标签集合（便捷方法）
 
@@ -351,7 +351,7 @@ class QueryIntentAnalyzer:
         intents = await self.analyze_query_intent(query_text, llm_name)
         return {intent.value for intent in intents}
 
-    async def get_query_intents_with_descriptions(self, query_text: str, llm_name: str) -> List[Dict[str, str]]:
+    async def get_query_intents_with_descriptions(self, query_text: str, llm_name: str) -> list[dict[str, str]]:
         """
         获取查询的意图标签及其中文描述（便捷方法）
 
@@ -374,7 +374,7 @@ class QueryIntentAnalyzer:
 
         return result
 
-    def get_all_intent_types_with_descriptions(self) -> List[Dict[str, str]]:
+    def get_all_intent_types_with_descriptions(self) -> list[dict[str, str]]:
         """
         获取所有可能的查询意图类型及其中文描述
 

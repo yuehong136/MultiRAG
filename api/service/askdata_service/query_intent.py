@@ -1,16 +1,16 @@
-import asyncio
 import json
 import os
 import re
 import logging
-from typing import Any, List, Optional, Dict, Tuple
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.utils.prompt_template_util import PromptTemplateUtil
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class QueryIntentAnalyzer:
         else:
             self.prompt_dir = prompt_dir
 
-    def _extract_json_from_response(self, response: str) -> Tuple[Optional[Dict], bool]:
+    def _extract_json_from_response(self, response: str) -> tuple[dict | None, bool]:
         """
         从响应中提取JSON数据。
 
@@ -66,8 +66,7 @@ class QueryIntentAnalyzer:
             logger.warning("Failed to parse response as JSON")
             return None, False
 
-    def _extract_chart_recommendation(self, data: Optional[Dict], response: str, supported_charts: List[str]) -> Tuple[
-        str, Optional[str]]:
+    def _extract_chart_recommendation(self, data: dict | None, response: str, supported_charts: list[str]) -> tuple[str, str | None]:
         """
         从解析后的数据中提取推荐的图表类型和推荐理由。
 
@@ -98,7 +97,7 @@ class QueryIntentAnalyzer:
             logger.error("No supported charts available")
             return "指标卡", "没有可用的图表类型，使用基础指标卡"
 
-    def _extract_recommended_chart(self, data: Optional[Dict], response: str, supported_charts: List[str]) -> str:
+    def _extract_recommended_chart(self, data: dict | None, response: str, supported_charts: list[str]) -> str:
         """
         从解析后的数据中提取推荐的图表类型（保持向后兼容性）。
 
@@ -116,10 +115,10 @@ class QueryIntentAnalyzer:
     async def recommend_chart_with_reason(
             self,
             user_question: str,
-            supported_charts_list: List[str],
-            semantic_layer_info: Dict,
+            supported_charts_list: list[str],
+            semantic_layer_info: dict,
             llm_name: str
-    ) -> Tuple[str, Optional[str]]:
+    ) -> tuple[str, str | None]:
         """
         分析用户查询意图并推荐合适的图表类型，同时返回推荐理由。
 
@@ -170,7 +169,7 @@ class QueryIntentAnalyzer:
                     )
 
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(_chat_in_thread)
+            response = await thread_pool_exec(_chat_in_thread)
 
             # 提取和处理响应
             parsed_data, success = self._extract_json_from_response(response)
@@ -186,9 +185,9 @@ class QueryIntentAnalyzer:
     async def recommend_chart_without_semantic(
             self,
             user_question: str,
-            supported_charts_list: List[str],
+            supported_charts_list: list[str],
             llm_name: str
-    ) -> Tuple[str, Optional[str]]:
+    ) -> tuple[str, str | None]:
         """
         不依赖语义层信息，仅基于用户问题推荐合适的图表类型。
 
@@ -244,7 +243,7 @@ class QueryIntentAnalyzer:
                     )
 
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(_chat_in_thread)
+            response = await thread_pool_exec(_chat_in_thread)
 
             # 提取和处理响应
             parsed_data, success = self._extract_json_from_response(response)
@@ -264,10 +263,10 @@ class QueryIntentAnalyzer:
     async def analyze_query_intent_with_details(
             self,
             user_question: str,
-            supported_charts_list: List[str],
-            semantic_layer_info: Dict,
+            supported_charts_list: list[str],
+            semantic_layer_info: dict,
             llm_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         分析用户查询意图并返回详细结果，包括推荐的图表类型、推荐理由和原始响应。
 
@@ -318,7 +317,7 @@ class QueryIntentAnalyzer:
                     )
 
             # 调用LLM处理我们的提示词
-            response = await asyncio.to_thread(_chat_in_thread)
+            response = await thread_pool_exec(_chat_in_thread)
 
             # 提取和处理响应
             parsed_data, success = self._extract_json_from_response(response)

@@ -30,6 +30,7 @@ import openai
 from openai import AsyncOpenAI, OpenAI
 from strenum import StrEnum
 
+from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from core.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, SupportedLiteLLMProvider
 from core.nlp import is_chinese, is_english
@@ -311,7 +312,7 @@ class Base(ABC):
                         name = tool_call.function.name
                         try:
                             args = json_repair.loads(tool_call.function.arguments)
-                            tool_response = await asyncio.to_thread(self.toolcall_session.tool_call, name, args)
+                            tool_response = await thread_pool_exec(self.toolcall_session.tool_call, name, args)
                             history = self._append_history(history, tool_call, tool_response)
                             ans += self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:
@@ -404,7 +405,7 @@ class Base(ABC):
                         try:
                             args = json_repair.loads(tool_call.function.arguments)
                             yield self._verbose_tool_use(name, args, "Begin to call...")
-                            tool_response = await asyncio.to_thread(self.toolcall_session.tool_call, name, args)
+                            tool_response = await thread_pool_exec(self.toolcall_session.tool_call, name, args)
                             history = self._append_history(history, tool_call, tool_response)
                             yield self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:
@@ -1362,7 +1363,7 @@ class LiteLLMBase(ABC):
                         name = tool_call.function.name
                         try:
                             args = json_repair.loads(tool_call.function.arguments)
-                            tool_response = await asyncio.to_thread(self.toolcall_session.tool_call, name, args)
+                            tool_response = await thread_pool_exec(self.toolcall_session.tool_call, name, args)
                             history = self._append_history(history, tool_call, tool_response)
                             ans += self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:
@@ -1462,7 +1463,7 @@ class LiteLLMBase(ABC):
                         try:
                             args = json_repair.loads(tool_call.function.arguments)
                             yield self._verbose_tool_use(name, args, "Begin to call...")
-                            tool_response = await asyncio.to_thread(self.toolcall_session.tool_call, name, args)
+                            tool_response = await thread_pool_exec(self.toolcall_session.tool_call, name, args)
                             history = self._append_history(history, tool_call, tool_response)
                             yield self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:

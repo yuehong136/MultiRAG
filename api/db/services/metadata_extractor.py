@@ -7,6 +7,7 @@
 @date: 2025-11-05
 """
 import asyncio
+from common.misc_utils import thread_pool_exec
 import logging
 import re
 from collections import Counter
@@ -89,7 +90,7 @@ class MetadataExtractor:
             ]
             
             # 调用 LLM
-            result = await asyncio.to_thread(
+            result = await thread_pool_exec(
                 self.llm.chat,
                 "",  # system prompt 已在 messages 中
                 messages,

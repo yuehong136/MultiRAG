@@ -26,8 +26,8 @@ from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api.db.services.tenant_llm_service import LLMFactoriesService
 from common import settings
-
 from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
+from common.misc_utils import thread_pool_exec
 from common.connection_utils import timeout
 from common.constants import RetCode
 
@@ -815,7 +815,7 @@ async def is_strong_enough(chat_model, embedding_model):
         nonlocal chat_model, embedding_model
         if embedding_model:
             await asyncio.wait_for(
-                asyncio.to_thread(embedding_model.encode, ["Are you strong enough!?"]),
+                thread_pool_exec(embedding_model.encode, ["Are you strong enough!?"]),
                 timeout=10
             )
 

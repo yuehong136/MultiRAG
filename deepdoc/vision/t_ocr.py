@@ -26,10 +26,12 @@ sys.path.insert(
                 os.path.abspath(__file__)),
             '../../')))
 
-from deepdoc.vision.seeit import draw_box
-from deepdoc.vision import OCR, init_in_out
 import argparse
 import numpy as np
+
+from common.misc_utils import thread_pool_exec
+from deepdoc.vision.seeit import draw_box
+from deepdoc.vision import OCR, init_in_out
 
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0,2' #2 gpus, uncontinuous
 os.environ['CUDA_VISIBLE_DEVICES'] = '0' #1 gpu
@@ -64,9 +66,9 @@ def main(args):
         if limiter:
             async with limiter:
                 print(f"Task {i} use device {id}")
-                await asyncio.to_thread(__ocr, i, id, img)
+                await thread_pool_exec(__ocr, i, id, img)
         else:
-            await asyncio.to_thread(__ocr, i, id, img)
+            await thread_pool_exec(__ocr, i, id, img)
 
 
     async def __ocr_launcher():
