@@ -461,7 +461,7 @@ def list_documents(
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
     orderby: str = Query("create_time"),
-    desc: str | bool = Query("true"),
+    desc: bool = Query(True),
     keywords: str | None = Query(None),
     id: str | None = Query(None),
     name: str | None = Query(None),
@@ -504,9 +504,6 @@ def list_documents(
     if name and not DocumentService.query(db, name=name, kb_id=dataset_id):
         return get_error_data_result(retmsg=f"You don't own the document {name}.")
     
-    # 处理 desc 参数
-    desc_bool = str(desc).strip().lower() != "false"
-    
     # 映射 run 状态（接受文本或数字格式）
     run_status_text_to_numeric = {
         "UNSTART": "0",
@@ -543,7 +540,7 @@ def list_documents(
             page,
             page_size,
             orderby,
-            desc_bool,
+            desc,
             keywords=keywords,
             id=id,
             name=name,
