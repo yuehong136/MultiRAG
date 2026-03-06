@@ -16,6 +16,7 @@
 import json
 import os
 import logging
+from dataclasses import dataclass
 from langfuse import Langfuse
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -38,6 +39,15 @@ class LLMFactoriesService(CommonService):
 
 class TenantLLMService(CommonService):
     model = TenantLLM
+
+    @dataclass(slots=True, frozen=True)
+    class UsageIdentity:
+        tenant_id: str
+        llm_type: str
+        model_name: str
+        llm_factory: str | None
+        llm_name_raw: str | None
+
     def __init__(self):
         super().__init__(TenantLLM)
 
@@ -194,38 +204,14 @@ class TenantLLMService(CommonService):
         return None
 
     @classmethod
-    def increase_usage(cls, db: Session | None, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str | None = None):
-        """增加LLM使用量
-
-        逻辑: 仅执行UPDATE操作,不创建新记录
-        重试: 处理索引损坏等临时错误,最多重试3次
-
-        注意: 当 db 为 None 时（如多线程场景），会自动创建独立的数据库连接
-        """
-        # 这里是"业务旁路指标"，必须 best-effort：任何 DB 波动都不应导致主链路 500
-        try:
-            if not isinstance(used_tokens, int) or used_tokens <= 0:
-                return 0
-
-            # db 为 None 时，自动创建独立连接（支持多线程场景）
-            if db is None:
-                with db_connection() as new_db:
-                    return cls._do_increase_usage(new_db, tenant_id, llm_type, used_tokens, llm_name)
-
-            return cls._do_increase_usage(db, tenant_id, llm_type, used_tokens, llm_name)
-
-        except Exception as e:
-            # 任何异常都不应向上抛出
-            logging.error(
-                f"TenantLLMService.increase_usage unexpected error (ignored), "
-                f"tenant_id={tenant_id}, llm_type={llm_type}, llm_name={llm_name}, used_tokens={used_tokens}: {e}"
-            )
-            return 0
-
-    @classmethod
-    def _do_increase_usage(cls, db: Session, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str | None = None):
-        """实际执行 token 用量更新的内部方法"""
-        # 优先使用调用方显式传入的 llm_name（可避免额外查询 tenant 表）
+    def resolve_usage_identity(
+        cls,
+        db: Session,
+        tenant_id: str,
+        llm_type: str,
+        llm_name: str | None = None,
+    ) -> "TenantLLMService.UsageIdentity | None":
+        """解析用量统计所需的稳定模型身份。"""
         mdlnm: str | None
         if llm_name:
             mdlnm = llm_name
@@ -233,7 +219,7 @@ class TenantLLMService(CommonService):
             tenant = TenantService.get_by_id(db, tenant_id)
             if not tenant:
                 logging.error(f"Tenant not found: {tenant_id}")
-                return 0
+                return None
 
             llm_map = {
                 LLMType.EMBEDDING.value: tenant.embd_id,
@@ -250,10 +236,83 @@ class TenantLLMService(CommonService):
             logging.error(
                 f"LLM type error or empty model: llm_type={llm_type}, tenant_id={tenant_id}, llm_name={llm_name}"
             )
-            return 0
+            return None
 
         model_name, llm_factory = TenantLLMService.split_model_name_and_factory(mdlnm)
+        if not model_name:
+            logging.error(
+                f"Resolved empty model name: llm_type={llm_type}, tenant_id={tenant_id}, llm_name={mdlnm}"
+            )
+            return None
 
+        return cls.UsageIdentity(
+            tenant_id=tenant_id,
+            llm_type=llm_type,
+            model_name=model_name,
+            llm_factory=llm_factory,
+            llm_name_raw=mdlnm,
+        )
+
+    @classmethod
+    def increase_usage(cls, db: Session | None, tenant_id: str, llm_type: str, used_tokens: int, llm_name: str | None = None):
+        """增加LLM使用量
+
+        逻辑: 仅执行UPDATE操作,不创建新记录
+        重试: 处理索引损坏等临时错误,最多重试3次
+
+        注意: 调用方传入的 db 仅保留兼容性，不再复用其事务状态
+        """
+        # 这里是"业务旁路指标"，必须 best-effort：任何 DB 波动都不应导致主链路 500
+        try:
+            if not isinstance(used_tokens, int) or used_tokens <= 0:
+                return 0
+
+            # 独立短连接执行旁路记账，避免污染调用方 session
+            with db_connection() as usage_db:
+                identity = cls.resolve_usage_identity(usage_db, tenant_id, llm_type, llm_name)
+                if identity is None:
+                    return 0
+                return cls._do_increase_usage(usage_db, identity, used_tokens)
+
+        except Exception as e:
+            # 任何异常都不应向上抛出
+            logging.error(
+                f"TenantLLMService.increase_usage unexpected error (ignored), "
+                f"tenant_id={tenant_id}, llm_type={llm_type}, llm_name={llm_name}, used_tokens={used_tokens}: {e}"
+            )
+            return 0
+
+    @classmethod
+    def increase_usage_by_identity(
+        cls,
+        identity: "TenantLLMService.UsageIdentity | None",
+        used_tokens: int,
+    ) -> int:
+        """按已解析身份执行独立 session 记账。"""
+        try:
+            if identity is None or not isinstance(used_tokens, int) or used_tokens <= 0:
+                return 0
+
+            with db_connection() as usage_db:
+                return cls._do_increase_usage(usage_db, identity, used_tokens)
+        except Exception as e:
+            logging.error(
+                "TenantLLMService.increase_usage_by_identity unexpected error (ignored), "
+                f"tenant_id={getattr(identity, 'tenant_id', None)}, "
+                f"llm_type={getattr(identity, 'llm_type', None)}, "
+                f"llm_name={getattr(identity, 'llm_name_raw', None)}, "
+                f"used_tokens={used_tokens}: {e}"
+            )
+            return 0
+
+    @classmethod
+    def _do_increase_usage(
+        cls,
+        db: Session,
+        identity: "TenantLLMService.UsageIdentity",
+        used_tokens: int,
+    ):
+        """实际执行 token 用量更新的内部方法。"""
         # 重试机制: 处理索引损坏等临时错误
         max_retries = 3
         for attempt in range(max_retries):
@@ -262,9 +321,9 @@ class TenantLLMService(CommonService):
                 stmt = (
                     update(cls.model)
                     .where(
-                        cls.model.tenant_id == tenant_id,
-                        cls.model.llm_name == model_name,
-                        cls.model.llm_factory == llm_factory if llm_factory else True,
+                        cls.model.tenant_id == identity.tenant_id,
+                        cls.model.llm_name == identity.model_name,
+                        cls.model.llm_factory == identity.llm_factory if identity.llm_factory else True,
                     )
                     .values(used_tokens=cls.model.used_tokens + used_tokens)
                 )
@@ -283,7 +342,7 @@ class TenantLLMService(CommonService):
                     if attempt < max_retries - 1:
                         logging.warning(
                             f"索引损坏错误,正在重试 ({attempt + 1}/{max_retries}): "
-                            f"tenant_id={tenant_id}, llm_name={model_name}"
+                            f"tenant_id={identity.tenant_id}, llm_name={identity.model_name}"
                         )
                         import time
                         time.sleep(0.1 * (2 ** attempt))
@@ -291,7 +350,7 @@ class TenantLLMService(CommonService):
 
                     logging.error(
                         f"索引损坏持续存在,需要数据库维护: "
-                        f"tenant_id={tenant_id}, llm_name={model_name}\n"
+                        f"tenant_id={identity.tenant_id}, llm_name={identity.model_name}\n"
                         "PostgreSQL: REINDEX INDEX usr_ai.ix_usr_ai_t_ai_tenant_llms_api_key;\n"
                         "MySQL: REPAIR TABLE usr_ai.t_ai_tenant_llms;"
                     )
@@ -300,7 +359,7 @@ class TenantLLMService(CommonService):
                 # 其他错误：best-effort，不影响主链路
                 logging.exception(
                     "TenantLLMService.increase_usage 记录用量失败（已忽略），"
-                    f"tenant_id={tenant_id}, llm_name={model_name}"
+                    f"tenant_id={identity.tenant_id}, llm_name={identity.model_name}"
                 )
                 return 0
 
@@ -472,21 +531,39 @@ class TenantLLMService(CommonService):
 
 
 class LLM4Tenant:
-    def __init__(self, db: Session, tenant_id: str, llm_type: str, llm_name: str | None = None, lang: str = "Chinese", **kwargs):
+    def __init__(self, db: Session | None, tenant_id: str, llm_type: str, llm_name: str | None = None, lang: str = "Chinese", **kwargs):
         self.db = db
         self.tenant_id = tenant_id
         self.llm_type = llm_type
         self.llm_name = llm_name
+        self.langfuse = None
+        self.trace_context = {}
+        self.usage_identity = None
+        self.verbose_tool_use = kwargs.get("verbose_tool_use")
+
+        if db is None:
+            with db_connection() as init_db:
+                self._initialize(init_db, tenant_id, llm_type, llm_name, lang, **kwargs)
+        else:
+            self._initialize(db, tenant_id, llm_type, llm_name, lang, **kwargs)
+
+    def _initialize(
+        self,
+        db: Session,
+        tenant_id: str,
+        llm_type: str,
+        llm_name: str | None,
+        lang: str,
+        **kwargs,
+    ) -> None:
         self.mdl = TenantLLMService.model_instance(db, tenant_id, llm_type, llm_name, lang=lang, **kwargs)
         assert self.mdl, "Can't find model for {}/{}/{}".format(tenant_id, llm_type, llm_name)
         model_config = TenantLLMService.get_model_config(db, tenant_id, llm_type, llm_name)
         self.max_length = model_config.get("max_tokens", 8192)
-
         self.is_tools = model_config.get("is_tools", False)
-        self.verbose_tool_use = kwargs.get("verbose_tool_use")
+        self.usage_identity = TenantLLMService.resolve_usage_identity(db, tenant_id, llm_type, llm_name)
 
         langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=tenant_id)
-        self.langfuse = None
         if langfuse_keys:
             langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
             try:

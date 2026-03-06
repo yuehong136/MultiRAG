@@ -568,18 +568,8 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
         logging.info(f"Running RAPTOR with config: {raptor_config}")
         original_length = len(raptor_chunks)
 
-        # ⭐ 创建 LLMBundle 用于 RAPTOR
-        # 参考 task_executor.py 的实现
-        from api.db.db_models import db_connection
-        
-        with db_connection() as db:
-            llm_model = LLMBundle(db, self.tenant_id, LLMType.CHAT)
-            embd_model_raptor = LLMBundle(db, self.tenant_id, LLMType.EMBEDDING)
-        
-        # ⚠️ 关键：禁用 usage tracking（避免 asyncio 并行任务冲突）
-        # 参考 task_executor.py 第 2027-2032 行
-        llm_model.db = None
-        embd_model_raptor.db = None
+        llm_model = LLMBundle(None, self.tenant_id, LLMType.CHAT)
+        embd_model_raptor = LLMBundle(None, self.tenant_id, LLMType.EMBEDDING)
 
         raptor = Raptor(
             max_cluster=raptor_config.get("max_cluster", 64),
@@ -684,18 +674,9 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
 
             return keywords
 
-        # ⚠️ 并行执行前临时禁用 usage tracking（避免 session 冲突）
-        original_db = llm_model.db
-        llm_model.db = None
-        
-        try:
-            # 并行提取 (使用asyncio.gather)
-            cluster_keywords_list = await asyncio.gather(
-                *[extract_cluster_keyword(summary) for summary in cluster_summaries]
-            )
-        finally:
-            # 恢复 db session
-            llm_model.db = original_db
+        cluster_keywords_list = await asyncio.gather(
+            *[extract_cluster_keyword(summary) for summary in cluster_summaries]
+        )
 
         logging.info(f"Extracted {len(cluster_keywords_list)} cluster keywords")
         logging.debug(f"Cluster keywords: {cluster_keywords_list}")
@@ -947,18 +928,8 @@ Just output the summary, nothing else."""
 
     def _get_llm_model(self):
         """获取LLM模型"""
-        from api.db.db_models import db_connection
-
-        with db_connection() as db:
-            llm = LLMBundle(db, self.tenant_id, LLMType.CHAT)
-
-        return llm
+        return LLMBundle(None, self.tenant_id, LLMType.CHAT)
 
     def _get_embedding_model(self):
         """获取Embedding模型"""
-        from api.db.db_models import db_connection
-
-        with db_connection() as db:
-            embd = LLMBundle(db, self.tenant_id, LLMType.EMBEDDING)
-
-        return embd
+        return LLMBundle(None, self.tenant_id, LLMType.EMBEDDING)

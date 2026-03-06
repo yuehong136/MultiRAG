@@ -1996,6 +1996,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             # 混合：先 HierarchicalMerger，再 RAPTOR
             components_used.extend(["HierarchicalMerger", "RAPTOR"])
             callback(prog=0.3, msg="混合处理：层次化 + RAPTOR...")
+            raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, LLMType.CHAT, llm_name=chat_mdl.llm_name, lang=task_language)
+            raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, LLMType.EMBEDDING, llm_name=embd_mdl.llm_name, lang=task_language)
 
             # 先层次化
             # ✨ 传递 tenant_id 和 db 以支持 VLM 图片理解
@@ -2037,7 +2039,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
                     for chunk in chapter_chunks:
                         text = chunk.get("content_with_weight", "")
-                        embd_result, _ = await thread_pool_exec(embd_mdl.encode, [text])
+                        embd_result, _ = await thread_pool_exec(raptor_embd_mdl.encode, [text])
                         embd = embd_result[0] if len(embd_result) > 0 else np.array([])
                         if len(embd) > 0:
                             chapter_raptor_inputs.append((text, embd))
@@ -2049,66 +2051,55 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                                 "page_nums": sorted(set(p[0] for p in positions)) if positions else []
                             })
 
-                    # 禁用 usage tracking
-                    original_db_chat = chat_mdl.db
-                    original_db_embd = embd_mdl.db
-                    chat_mdl.db = None
-                    embd_mdl.db = None
+                    raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
+                    raptor = Raptor(
+                        max_cluster=raptor_config.get("max_cluster", 64),
+                        llm_model=raptor_chat_mdl,
+                        embd_model=raptor_embd_mdl,
+                        prompt=raptor_prompt,
+                        max_token=raptor_config.get("max_token", 512),
+                        threshold=raptor_config.get("threshold", 0.1),
+                        max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
+                    )
+                    chapter_results = await raptor(
+                        chapter_raptor_inputs,
+                        random_state=raptor_config.get("random_seed", 42),
+                        callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR ({chapter['title'][:20]}): {msg}")
+                    )
 
-                    try:
-                        # 修复：避免括号格式导致的SyntaxWarning
-                        raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
-                        raptor = Raptor(
-                            max_cluster=raptor_config.get("max_cluster", 64),
-                            llm_model=chat_mdl,
-                            embd_model=embd_mdl,
-                            prompt=raptor_prompt,
-                            max_token=raptor_config.get("max_token", 512),
-                            threshold=raptor_config.get("threshold", 0.1),
-                            max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
-                        )
-                        chapter_results = await raptor(
-                            chapter_raptor_inputs,
-                            random_state=raptor_config.get("random_seed", 42),
-                            callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR ({chapter['title'][:20]}): {msg}")
-                        )
+                    # ✨ 提取聚类摘要（RAPTOR 生成的新节点）
+                    original_len = len(chapter_raptor_inputs)
+                    if len(chapter_results) > original_len:
+                        # RAPTOR 生成的摘要节点（索引 >= original_len）
+                        for i in range(original_len, len(chapter_results)):
+                            summary_text = chapter_results[i][0]
 
-                        # ✨ 提取聚类摘要（RAPTOR 生成的新节点）
-                        original_len = len(chapter_raptor_inputs)
-                        if len(chapter_results) > original_len:
-                            # RAPTOR 生成的摘要节点（索引 >= original_len）
-                            for i in range(original_len, len(chapter_results)):
-                                summary_text = chapter_results[i][0]
+                            # ✨ 聚类摘要继承成员的位置信息
+                            # RAPTOR 返回格式: [(text, embd, parent_ids), ...]
+                            # 找到这个摘要节点的所有子节点
+                            child_indices = []
+                            if len(chapter_results[i]) > 2:
+                                # 有 parent_ids 信息
+                                parent_ids = chapter_results[i][2] if isinstance(chapter_results[i], tuple) and len(chapter_results[i]) > 2 else []
+                                child_indices = [j for j in parent_ids if j < len(chunk_metadata)]
 
-                                # ✨ 聚类摘要继承成员的位置信息
-                                # RAPTOR 返回格式: [(text, embd, parent_ids), ...]
-                                # 找到这个摘要节点的所有子节点
-                                child_indices = []
-                                if len(chapter_results[i]) > 2:
-                                    # 有 parent_ids 信息
-                                    parent_ids = chapter_results[i][2] if isinstance(chapter_results[i], tuple) and len(chapter_results[i]) > 2 else []
-                                    child_indices = [j for j in parent_ids if j < len(chunk_metadata)]
+                            # 合并子节点的位置
+                            merged_positions = []
+                            merged_image = None
+                            for child_idx in child_indices:
+                                if child_idx < len(chunk_metadata):
+                                    meta = chunk_metadata[child_idx]
+                                    if meta["positions"]:
+                                        merged_positions.extend(meta["positions"])
+                                    if meta["image"]:
+                                        merged_image = concat_img(merged_image, meta["image"])
 
-                                # 合并子节点的位置
-                                merged_positions = []
-                                merged_image = None
-                                for child_idx in child_indices:
-                                    if child_idx < len(chunk_metadata):
-                                        meta = chunk_metadata[child_idx]
-                                        if meta["positions"]:
-                                            merged_positions.extend(meta["positions"])
-                                        if meta["image"]:
-                                            merged_image = concat_img(merged_image, meta["image"])
-
-                                all_summaries.append({
-                                    "text": summary_text,
-                                    "positions": merged_positions,
-                                    "image": merged_image,
-                                    "is_cluster_summary": True  # 标记为聚类摘要
-                                })
-                    finally:
-                        chat_mdl.db = original_db_chat
-                        embd_mdl.db = original_db_embd
+                            all_summaries.append({
+                                "text": summary_text,
+                                "positions": merged_positions,
+                                "image": merged_image,
+                                "is_cluster_summary": True  # 标记为聚类摘要
+                            })
                 else:
                     # ✨ 章节较短，直接使用（保留位置信息）
                     for c in chapter_chunks:
@@ -2126,6 +2117,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             # 使用 RAPTOR
             components_used.append("RAPTOR")
             callback(prog=0.3, msg="RAPTOR 聚类处理...")
+            raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, LLMType.CHAT, llm_name=chat_mdl.llm_name, lang=task_language)
+            raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, LLMType.EMBEDDING, llm_name=embd_mdl.llm_name, lang=task_language)
 
             # ⚠️ 降级保护：chunk 太少（< 3）时，RAPTOR 无法有效聚类
             if len(chunks) < 3:
@@ -2142,41 +2135,28 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     embd = chunk.get("embeddings")
 
                     if embd is None or (isinstance(embd, np.ndarray) and embd.size == 0):
-                        embd_result, _ = await thread_pool_exec(embd_mdl.encode, [text])
+                        embd_result, _ = await thread_pool_exec(raptor_embd_mdl.encode, [text])
                         embd = embd_result[0] if len(embd_result) > 0 else np.array([])
 
                     if len(embd) > 0:
                         raptor_inputs.append((text, embd))
 
-                # ⚠️ 关键：禁用 usage tracking（避免 asyncio 并行任务冲突）
-                # 参考 DocumentAnalysisService._analyze_with_raptor 第 611-613 行
-                original_db_chat = chat_mdl.db
-                original_db_embd = embd_mdl.db
-                chat_mdl.db = None
-                embd_mdl.db = None
+                raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
+                raptor = Raptor(
+                    max_cluster=raptor_config.get("max_cluster", 64),
+                    llm_model=raptor_chat_mdl,
+                    embd_model=raptor_embd_mdl,
+                    prompt=raptor_prompt,
+                    max_token=raptor_config.get("max_token", 512),
+                    threshold=raptor_config.get("threshold", 0.1),
+                    max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
+                )
 
-                try:
-                    # 修复：避免括号格式导致的SyntaxWarning
-                    raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
-                    raptor = Raptor(
-                        max_cluster=raptor_config.get("max_cluster", 64),
-                        llm_model=chat_mdl,
-                        embd_model=embd_mdl,
-                        prompt=raptor_prompt,
-                        max_token=raptor_config.get("max_token", 512),
-                        threshold=raptor_config.get("threshold", 0.1),
-                        max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
-                    )
-
-                    cluster_results = await raptor(
-                        raptor_inputs,
-                        random_state=raptor_config.get("random_seed", 42),
-                        callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR: {msg}")
-                    )
-                finally:
-                    # 恢复 db session
-                    chat_mdl.db = original_db_chat
-                    embd_mdl.db = original_db_embd
+                cluster_results = await raptor(
+                    raptor_inputs,
+                    random_state=raptor_config.get("random_seed", 42),
+                    callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR: {msg}")
+                )
 
                 original_length = len(raptor_inputs)
                 if len(cluster_results) > original_length:
@@ -2676,15 +2656,16 @@ async def do_handle_task(db, task):
             progress_callback(prog=1.0, msg=f"Raptor skipped: {skip_reason}")
             return
 
-        # bind LLM for raptor
-        chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
+        # bind detached LLM bundles for RAPTOR to avoid sharing the business session
+        chat_model = LLMBundle(None, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
+        raptor_embedding_model = LLMBundle(None, task_tenant_id, LLMType.EMBEDDING, llm_name=task_embedding_id, lang=task_language)
         # run RAPTOR
         async with kg_limiter:
             chunks, token_count = await run_raptor_for_kb(
                 row=task,
                 kb_parser_config=kb_parser_config,
                 chat_mdl=chat_model,
-                embd_mdl=embedding_model,
+                embd_mdl=raptor_embedding_model,
                 vector_size=vector_size,
                 callback=progress_callback,
                 doc_ids=task.get("doc_ids", []),

@@ -955,8 +955,8 @@ class PipelineAnalysisService:
             }
         
         # 获取 LLM 和 Embedding 模型
-        llm_model = LLMBundle(self.db, self.tenant_id, LLMType.CHAT)
-        embd_model = LLMBundle(self.db, self.tenant_id, LLMType.EMBEDDING)
+        llm_model = LLMBundle(None, self.tenant_id, LLMType.CHAT)
+        embd_model = LLMBundle(None, self.tenant_id, LLMType.EMBEDDING)
         
         # 创建 RAPTOR 实例
         raptor = Raptor(
@@ -989,23 +989,10 @@ class PipelineAnalysisService:
         
         logger.info(f"Running RAPTOR on {len(raptor_inputs)} chunks")
         
-        # ⚠️ 关键：禁用 usage tracking（避免 asyncio 并行任务冲突）
-        # 参考 task_executor.py 的实现
-        original_db_chat = llm_model.db
-        original_db_embd = embd_model.db
-        llm_model.db = None
-        embd_model.db = None
-        
-        try:
-            # 运行 RAPTOR（已改造为 asyncio）
-            cluster_results = await raptor(
-                raptor_inputs,
-                random_state=config.get("random_seed", 42)
-            )
-        finally:
-            # 恢复 db session
-            llm_model.db = original_db_chat
-            embd_model.db = original_db_embd
+        cluster_results = await raptor(
+            raptor_inputs,
+            random_state=config.get("random_seed", 42)
+        )
         
         # 提取聚类摘要
         summaries = [text for text, _ in cluster_results]
@@ -1131,4 +1118,3 @@ class PipelineAnalysisService:
                 "max_tokens": 400
             }
         ]
-

@@ -85,7 +85,7 @@ def get_init_tenant_llm(db, user_id):
 
 
 class LLMBundle(LLM4Tenant):
-    def __init__(self, db: Session, tenant_id: str, llm_type: str, llm_name: str | None = None, lang: str = "Chinese", **kwargs):
+    def __init__(self, db: Session | None, tenant_id: str, llm_type: str, llm_name: str | None = None, lang: str = "Chinese", **kwargs):
         super().__init__(db, tenant_id, llm_type, llm_name, lang, **kwargs)
 
     def bind_tools(self, toolcall_session, tools):
@@ -93,6 +93,11 @@ class LLMBundle(LLM4Tenant):
             logging.warning(f"Model {self.llm_name} does not support tool call, but you have assigned one or more tools to it!")
             return
         self.mdl.bind_tools(toolcall_session, tools)
+
+    def _record_usage(self, used_tokens: int) -> bool:
+        if not isinstance(used_tokens, int) or used_tokens <= 0:
+            return True
+        return bool(TenantLLMService.increase_usage_by_identity(self.usage_identity, used_tokens))
 
     def encode(self, texts: list):
         if self.langfuse:
@@ -111,12 +116,8 @@ class LLMBundle(LLM4Tenant):
         self._release_db_before_long_io()
         embeddings, used_tokens = self.mdl.encode(safe_texts)
         
-        # ⚠️ 线程安全：只在有 db session 时记录 usage
-        # 在 trio 等多线程环境中，db 可能为 None 以避免跨线程 session 冲突
-        if self.db is not None:
-            llm_name = getattr(self, "llm_name", None)
-            if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, llm_name):
-                logging.error("LLMBundle.encode can't update token usage for <tenant redacted>/EMBEDDING used_tokens: {}".format(used_tokens))
+        if not self._record_usage(used_tokens):
+            logging.error("LLMBundle.encode can't update token usage for <tenant redacted>/EMBEDDING used_tokens: {}".format(used_tokens))
 
         if self.langfuse:
             generation.update(usage_details={"total_tokens": used_tokens})
@@ -131,8 +132,7 @@ class LLMBundle(LLM4Tenant):
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
         emd, used_tokens = self.mdl.encode_queries(query)
-        llm_name = getattr(self, "llm_name", None)
-        if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, llm_name):
+        if not self._record_usage(used_tokens):
             logging.error("LLMBundle.encode_queries can't update token usage for <tenant redacted>/EMBEDDING used_tokens: {}".format(used_tokens))
 
         if self.langfuse:
@@ -148,7 +148,7 @@ class LLMBundle(LLM4Tenant):
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
         sim, used_tokens = self.mdl.similarity(query, texts)
-        if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+        if not self._record_usage(used_tokens):
             logging.error(f"Can't update token usage for {self.tenant_id}/RERANK used_tokens: {used_tokens}")
 
         if self.langfuse:
@@ -164,8 +164,7 @@ class LLMBundle(LLM4Tenant):
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
         txt, used_tokens = self.mdl.describe(image)
-        # increase_usage 会在 db 为 None 时自动创建独立连接（支持多线程场景）
-        if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+        if not self._record_usage(used_tokens):
             logging.error(f"Can't update token usage for {self.tenant_id}/IMAGE2TEXT used_tokens: {used_tokens}")
 
         if self.langfuse:
@@ -181,9 +180,7 @@ class LLMBundle(LLM4Tenant):
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
         txt, used_tokens = self.mdl.describe_with_prompt(image, prompt)
-        # increase_usage 会在 db 为 None 时自动创建独立连接（支持多线程场景）
-        if not TenantLLMService.increase_usage(
-                self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+        if not self._record_usage(used_tokens):
             logging.error("LLMBundle.describe can't update token usage for {}/IMAGE2TEXT used_tokens: {}".format(self.tenant_id, used_tokens))
 
         if self.langfuse:
@@ -199,8 +196,7 @@ class LLMBundle(LLM4Tenant):
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
         txt, used_tokens = self.mdl.transcription(audio)
-        if not TenantLLMService.increase_usage(
-                self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+        if not self._record_usage(used_tokens):
             logging.error("Can't update token usage for {}/SEQUENCE2TXT used_tokens: {}".format(self.tenant_id, used_tokens))
 
         if self.langfuse:
@@ -242,8 +238,7 @@ class LLMBundle(LLM4Tenant):
             finally:
                 if final_text:
                     used_tokens = num_tokens_from_string(final_text)
-                    if self.db is not None:
-                        TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name)
+                    self._record_usage(used_tokens)
 
                 if self.langfuse:
                     generation.update(
@@ -265,9 +260,7 @@ class LLMBundle(LLM4Tenant):
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
         full_text, used_tokens = mdl.transcription(audio)
-        if self.db is not None and not TenantLLMService.increase_usage(
-            self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name
-        ):
+        if not self._record_usage(used_tokens):
             logging.error(f"LLMBundle.stream_transcription can't update token usage for {self.tenant_id}/SEQUENCE2TXT used_tokens: {used_tokens}")
 
         if self.langfuse:
@@ -291,7 +284,7 @@ class LLMBundle(LLM4Tenant):
         self._release_db_before_long_io()
         for chunk in self.mdl.tts(text):
             if isinstance(chunk, int):
-                if not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, chunk, self.llm_name):
+                if not self._record_usage(chunk):
                     logging.error("LLMBundle.tts can't update token usage for {}/TTS".format(self.tenant_id))
                 return
             yield chunk
@@ -470,7 +463,7 @@ class LLMBundle(LLM4Tenant):
         if not self.verbose_tool_use:
             txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
 
-        if used_tokens and not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+        if used_tokens and not self._record_usage(used_tokens):
             logging.error("LLMBundle.async_chat can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, used_tokens))
 
         if generation:
@@ -527,7 +520,7 @@ class LLMBundle(LLM4Tenant):
                     generation.end()
                 raise
 
-            if total_tokens and not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, total_tokens, self.llm_name):
+            if total_tokens and not self._record_usage(total_tokens):
                 logging.error("LLMBundle.async_chat_streamly can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, total_tokens))
 
             if generation:
@@ -582,7 +575,7 @@ class LLMBundle(LLM4Tenant):
                     generation.end()
                 raise
 
-            if total_tokens and not TenantLLMService.increase_usage(self.db, self.tenant_id, self.llm_type, total_tokens, self.llm_name):
+            if total_tokens and not self._record_usage(total_tokens):
                 logging.error("LLMBundle.async_chat_streamly_delta can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, total_tokens))
 
             if generation:
