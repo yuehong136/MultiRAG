@@ -36,7 +36,6 @@ from api.service.askdata_service.util.merge_dimensions_and_metrics import merge_
 from api.service.askdata_service.util.parse_from_clause import parse_from_clause
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
 from api.service.askdata_service.util.semantic_filter_processor import apply_semantic_filter
-from api.service.askdata_service.util.perf_logger import PerfSpan
 from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
     filter_metrics_by_permissions
 from api.service.askdata_service.util.timer import time_task
@@ -196,18 +195,10 @@ class AskdataService:
         if ask_id:
             await self._async_check_if_stopped(ask_id)
 
-        perf_meta = {
-            "ask_id": ask_id,
-            "event_id": event_id,
-            "dataset_count": len(dataset_id_list)
-        }
-        total_span = PerfSpan("askdata.semantic_layer.total", meta=perf_meta)
-
         await send_event(event_id, {"current_step": 0, "total_steps": 13}, "progress_total")
 
         try:
             # 1. 第一批并行任务：获取dataset_details和用户权限（完全独立，可以同时开始）
-            base_fetch_span = PerfSpan("askdata.semantic_layer.base_fetch", meta=perf_meta)
             dataset_details_task = time_task(
                 self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list, event_id=event_id),
                 name="获取数据集详情"
@@ -222,7 +213,6 @@ class AskdataService:
                 dataset_details_task,
                 user_permissions_task
             )
-            base_fetch_span.end(status="ok", dataset_count=len(dataset_details))
 
             # 检查是否在获取基础数据后被停止
             if ask_id:
@@ -338,19 +328,12 @@ class AskdataService:
             # 3. 并行执行三个任务
             logger.info("开始并行执行：LLM字段提取、关键字检索和图表推荐...")
 
-            parallel_span = PerfSpan("askdata.semantic_layer.parallel_tasks", meta=perf_meta)
             (llm_dim_ids, llm_metric_ids), \
                 (keyword_dim_ids, keyword_metrics, segmented_words), \
                 (recommended_chart, recommendation_reason) = await asyncio.gather(
                 llm_extraction_task(),
                 keyword_search_and_semantic_layer_task(),
                 chart_recommendation_task()
-            )
-            parallel_span.end(
-                status="ok",
-                segmented_words=len(segmented_words),
-                llm_dimensions=len(llm_dim_ids),
-                llm_metrics=len(llm_metric_ids)
             )
 
             # 检查是否在并行任务完成后被停止
@@ -368,12 +351,10 @@ class AskdataService:
             # 如果有新的指标ID，需要单独查询
             all_metrics = keyword_metrics
             if new_metric_ids:
-                metrics_span = PerfSpan("askdata.semantic_layer.metric_enrich", meta=perf_meta)
                 new_metrics = await time_task(
                     self.semantic_api_client.get_metric_info_by_id_async(metric_ids=new_metric_ids, event_id=event_id),
                     name="获取LLM提取的指标信息")
                 all_metrics.extend(new_metrics)
-                metrics_span.end(status="ok", new_metric_count=len(new_metrics))
 
             all_metric_ids = [metric["metricId"] for metric in all_metrics]
 
@@ -387,7 +368,6 @@ class AskdataService:
             )
 
             # 6. 获取维度值和维度详情（并行）
-            dim_span = PerfSpan("askdata.semantic_layer.dimension_values", meta=perf_meta)
             dimension_values_task = time_task(
                 self.semantic_api_client.get_dimension_values_async(
                     dimension_ids=allowed_dimension_ids, event_id=event_id
@@ -405,7 +385,6 @@ class AskdataService:
                 dimension_values_task,
                 dimensions_task
             )
-            dim_span.end(status="ok", dimension_count=len(dimensions), dimension_values_count=len(dimension_values))
 
             model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
             if len(model_ids) == 0:
@@ -413,7 +392,6 @@ class AskdataService:
 
             domain_ids = self._extract_unique_domain_ids(dataset_details)
 
-            model_span = PerfSpan("askdata.semantic_layer.model_details", meta=perf_meta)
             model_details_task = time_task(
                 self.semantic_api_client.get_model_detail_async(model_ids=model_ids),
                 name="获取模型详情"
@@ -434,12 +412,6 @@ class AskdataService:
                 model_relations_task,
                 business_term_task
             )
-            model_span.end(
-                status="ok",
-                model_count=len(model_details),
-                relation_count=len(model_relations),
-                business_term_count=len(business_term_rows)
-            )
 
             # 检查是否在获取模型详情后被停止
             if ask_id:
@@ -448,7 +420,6 @@ class AskdataService:
             # 将维度和指标简化后进行合并，为交给LLM进一步排除冗余语义做准备
             merged_dimensions_and_metrics = merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics)
 
-            relevance_span = PerfSpan("askdata.semantic_layer.relevance_filter", meta=perf_meta)
             await send_event(event_id, {"task_name": "LLM过滤不相关的维度和指标", "task_status": "working"}, "task")
             exclude_dim_and_metric = await time_task(
                 self.semantic_relevance_filter.filter_irrelevant_fields(
@@ -461,7 +432,6 @@ class AskdataService:
             )
             await send_event(event_id, {"task_name": "LLM过滤不相关的维度和指标", "task_status": "completed"}, "task")
             await send_event(event_id, {}, "progress_up")
-            relevance_span.end(status="ok")
 
             dimensions, all_metrics, excluded_details = apply_semantic_filter(
                 dimensions=dimensions,
@@ -551,21 +521,17 @@ class AskdataService:
                 business_term_rows=business_term_rows
             )
 
-            process_span = PerfSpan("askdata.semantic_layer.process", meta=perf_meta)
             processed_semantic_layer = process_semantic_layer(
                 semantic_layer_original,
                 user_semantic_permissions,
                 segmented_words
             )
-            process_span.end(status="ok")
 
             logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
 
             await send_event(event_id, {}, "stream_end")
 
             logger.info(f"recommended_chart: {recommended_chart}, recommendation_reason: {recommendation_reason}")
-
-            total_span.end(status="ok", model_count=len(model_details))
 
             # 构建 Phase 2 可复用的预拉数据
             phase2_prefetch_data = {
@@ -576,7 +542,6 @@ class AskdataService:
 
             return processed_semantic_layer, [model_detail["modelId"] for model_detail in model_details], recommended_chart, recommendation_reason, phase2_prefetch_data
         except Exception as e:
-            total_span.end(status="error", error=str(e))
             raise
 
     async def analyze_user_query_stream(
@@ -623,20 +588,8 @@ class AskdataService:
         if ask_id:
             await self._async_check_if_stopped(ask_id)
 
-        log_thinking = os.getenv("ASKDATA_PERF_LOG_THINKING", "1").lower() not in {"0", "false", "no", "off"}
-        if log_thinking:
-            perf_meta = {"ask_id": ask_id, "event_id": event_id, "llm": llm_name}
-            analysis_span = PerfSpan("askdata.analysis_stream", meta=perf_meta)
-            try:
-                await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
-                                                    llm_name=llm_name)
-                analysis_span.end(status="ok")
-            except Exception as e:
-                analysis_span.end(status="error", error=str(e))
-                raise
-        else:
-            await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
-                                                llm_name=llm_name)
+        await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
+                                            llm_name=llm_name)
 
     async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any],
                                  recommended_chart: str, ask_id: str = None) -> Optional[
