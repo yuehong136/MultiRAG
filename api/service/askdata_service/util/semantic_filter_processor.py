@@ -2,10 +2,10 @@
 语义过滤处理器模块
 用于处理语义相关性过滤后的维度和指标
 """
-import logging
 from typing import List, Dict, Tuple, Set, Optional
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class SemanticFilterProcessor:
@@ -43,7 +43,6 @@ class SemanticFilterProcessor:
 
         # 处理被排除的维度
         if excluded_dim_ids:
-            excluded_dims_info = []
             for dim in dimensions:
                 dim_id = dim.get('dimensionId')
                 if dim_id in excluded_dim_ids:
@@ -56,20 +55,8 @@ class SemanticFilterProcessor:
                     }
                     excluded_fields_detail['excluded_dimensions'].append(dim_info)
 
-                    if log_details:
-                        excluded_dims_info.append(
-                            f"ID: {dim_id}, 名称: {dim_info['name']}, 英文名: {dim_info['enName']}"
-                        )
-                        logger.info(f"  - 维度ID: {dim_id}, 维度名称: {dim_info['name']}, "
-                                    f"英文名: {dim_info['enName']}, 模型: {dim_info['modelName']}")
-
-            if log_details and excluded_dims_info:
-                logger.info("被排除的维度:")
-                logger.info(f"共排除 {len(excluded_dims_info)} 个维度")
-
         # 处理被排除的指标
         if excluded_metric_ids:
-            excluded_metrics_info = []
             for metric in all_metrics:
                 metric_id = metric.get('metricId')
                 if metric_id in excluded_metric_ids:
@@ -81,17 +68,6 @@ class SemanticFilterProcessor:
                         'description': metric.get('description', '')
                     }
                     excluded_fields_detail['excluded_metrics'].append(metric_info)
-
-                    if log_details:
-                        excluded_metrics_info.append(
-                            f"ID: {metric_id}, 名称: {metric_info['name']}, 英文名: {metric_info['enName']}"
-                        )
-                        logger.info(f"  - 指标ID: {metric_id}, 指标名称: {metric_info['name']}, "
-                                    f"英文名: {metric_info['enName']}, 模型: {metric_info['modelName']}")
-
-            if log_details and excluded_metrics_info:
-                logger.info("被排除的指标:")
-                logger.info(f"共排除 {len(excluded_metrics_info)} 个指标")
 
         # 计算统计信息
         original_dim_count = len(dimensions)

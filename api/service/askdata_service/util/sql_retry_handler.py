@@ -1,8 +1,8 @@
 # sql_retry_handler.py
-import logging
 from typing import Callable, Dict, Any
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class SQLRetryHandler:

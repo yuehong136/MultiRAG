@@ -7,11 +7,12 @@ import copy
 import json
 import time
 import threading
-import logging
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
+logger = get_askdata_logger()
 
 
 @dataclass

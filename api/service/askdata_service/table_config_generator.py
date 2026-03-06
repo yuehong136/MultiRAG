@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import re
 import uuid
 from typing import Any, List, Dict, Tuple, Optional
@@ -9,6 +8,9 @@ from api.service.askdata_service.util.are_expressions_equal_ignore_quotes import
 from api.service.askdata_service.util.find_aggregate_columns import find_aggregate_columns
 from api.service.askdata_service.util.parse_sql_extract import parse_sql_extract
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
+logger = get_askdata_logger()
 
 
 class TableConfigGenerator:
@@ -37,10 +39,6 @@ class TableConfigGenerator:
         Returns:
             包含列、过滤器和排序信息的配置字典
         """
-        logging.info(f"used_table_detail_dict: {used_table_detail_dict}")
-        logging.info(f"sql_components: {sql_components}")
-        logging.info(f"recommended_chart: {recommended_chart}")
-
         # 1. 解析SQL
         parts = SQLComponentsParser(sql_components).parse_all()
         main_table = parts["main_table"]
@@ -63,14 +61,14 @@ class TableConfigGenerator:
                         if r.get('sourceModelId') == main_table_model_id
                         or r.get('targetModelId') == main_table_model_id
                     ]
-                    logging.info(f"从缓存中过滤到 {len(related_model_relationships)} 条与主表相关的模型关系")
+                    logger.info(f"从缓存中过滤到 {len(related_model_relationships)} 条与主表相关的模型关系")
                 else:
                     related_model_relationships = await self.semantic_api_client.get_model_relationships_async(
                         model_ids=main_table_model_id
                     )
-                    logging.info(f"从 API 获取到 {len(related_model_relationships)} 条与主表相关的模型关系")
+                    logger.info(f"从 API 获取到 {len(related_model_relationships)} 条与主表相关的模型关系")
             except Exception as e:
-                logging.warning(f"获取主表模型关系失败: {str(e)}")
+                logger.warning(f"获取主表模型关系失败: {str(e)}")
         
         # 从关系中提取所有涉及的模型ID
         related_model_ids = set()
@@ -90,7 +88,7 @@ class TableConfigGenerator:
         
         # 如果有缺失的模型,则获取它们的详情并添加到model_list
         if missing_model_ids:
-            logging.info(f"发现 {len(missing_model_ids)} 个关联模型不在model_list中,准备获取详情")
+            logger.info(f"发现 {len(missing_model_ids)} 个关联模型不在model_list中,准备获取详情")
             try:
                 missing_models_details = await self.semantic_api_client.get_model_detail_async(
                     model_ids=list(missing_model_ids)
@@ -111,18 +109,18 @@ class TableConfigGenerator:
 
                 for model_detail in missing_models_details:
                     model_list.append(model_detail)
-                    logging.info(f"成功添加关联模型: {model_detail.get('modelName')} (ID: {model_detail.get('modelId')})")
+                    logger.info(f"成功添加关联模型: {model_detail.get('modelName')} (ID: {model_detail.get('modelId')})")
 
-                logging.info(f"成功获取并添加 {len(missing_models_details)} 个关联模型的完整详情到model_list")
+                logger.info(f"成功获取并添加 {len(missing_models_details)} 个关联模型的完整详情到model_list")
             except Exception as e:
-                logging.warning(f"获取关联模型详情失败: {str(e)}")
+                logger.warning(f"获取关联模型详情失败: {str(e)}")
 
         # 重新构建 used_table_detail_dict，确保包含所有模型（包括新增的关联模型）
         for model in model_list:
             table_name = model.get("tableName")
             if table_name:
                 used_table_detail_dict[table_name] = model
-        logging.info(f"更新后的 used_table_detail_dict 包含 {len(used_table_detail_dict)} 个表/模型")
+        logger.info(f"更新后的 used_table_detail_dict 包含 {len(used_table_detail_dict)} 个表/模型")
 
         # 收集所有已存在的别名，避免冲突
         existing_aliases = set()
@@ -169,7 +167,7 @@ class TableConfigGenerator:
                         counter += 1
 
                 existing_aliases.add(alias)
-                logging.info(f"为新增模型 {model['modelName']} (表: {model['tableName']}) 生成别名: {alias}")
+                logger.info(f"为新增模型 {model['modelName']} (表: {model['tableName']}) 生成别名: {alias}")
 
             model_table_alias_mapping_list.append(
                 {"modelId": model["modelId"], "table": model["tableName"], "alias": alias,
@@ -341,8 +339,8 @@ class TableConfigGenerator:
                     })
             return group_by_dimensions
         except Exception as e:
-            logging.exception(f"parts: {parts}")
-            logging.exception(f"used_table_detail_dict: {used_table_detail_dict}")
+            logger.exception(f"parts: {parts}")
+            logger.exception(f"used_table_detail_dict: {used_table_detail_dict}")
             return []
 
     def _build_selected_metrics(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[Dict]:
@@ -399,7 +397,7 @@ class TableConfigGenerator:
         # 缓存优先获取维度值
         if cached_dimension_values is not None:
             dimensions_value_dict = cached_dimension_values
-            logging.info(f"使用缓存的维度值 ({len(dimensions_value_dict)} 个)")
+            logger.info(f"使用缓存的维度值 ({len(dimensions_value_dict)} 个)")
         elif all_dimension_ids:
             dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
                 dimension_ids=all_dimension_ids
@@ -467,7 +465,7 @@ class TableConfigGenerator:
         # 缓存优先获取维度值
         if cached_dimension_values is not None:
             dimensions_value_dict = cached_dimension_values
-            logging.info(f"使用缓存的维度值 ({len(dimensions_value_dict)} 个)")
+            logger.info(f"使用缓存的维度值 ({len(dimensions_value_dict)} 个)")
         elif all_dimension_ids:
             dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
                 dimension_ids=all_dimension_ids

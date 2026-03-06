@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import logging
 from datetime import date
 from typing import Any
 
@@ -11,10 +10,11 @@ from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.utils.prompt_template_util import PromptTemplateUtil
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
-logger = logging.getLogger(__name__)
+logger = get_askdata_logger()
 
 
 class NLQToInitialSQLGenerator:
@@ -187,14 +187,9 @@ class NLQToInitialSQLGenerator:
 
             response = await thread_pool_exec(_chat_in_thread)
 
-            logger.info(f"智能问数-LLM-生成SQL")
-            logger.info(f"prompt:{prompt}")
-            logger.info(f"gen_conf:{gen_conf}")
-            logger.info(f"response:{response}")
-
             json_response = self._extract_llm_response_json(response)
             if not json_response:
-                logger.error(f"无法从LLM的响应中提取JSON。原始响应: {response}")
+                logger.error(f"无法从LLM的响应中提取JSON")
                 return None
             if json_response.get("status") == "failed":
                 logger.error(f"生成SQL失败: {json_response.get('errorMessage')}")
@@ -310,14 +305,9 @@ class NLQToInitialSQLGenerator:
 
             response = await thread_pool_exec(_chat_in_thread)
 
-            logger.info(f"SQL修复-LLM响应")
-            logger.info(f"原始SQL: {original_sql}")
-            logger.info(f"错误信息: {error_message}")
-            logger.info(f"修复响应: {response}")
-
             json_response = self._extract_llm_response_json(response)
             if not json_response:
-                logger.error(f"无法从LLM的响应中提取JSON。原始响应: {response}")
+                logger.error(f"SQL修复: 无法从LLM的响应中提取JSON")
                 return None
 
             validated_data = self._parse_and_validate_llm_json(json_response)

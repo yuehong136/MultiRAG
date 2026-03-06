@@ -7,11 +7,12 @@ LLM 响应性能缓存
 import hashlib
 import time
 import threading
-import logging
 from typing import Any, Optional
 from dataclasses import dataclass, field
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
+logger = get_askdata_logger()
 
 
 @dataclass

@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -13,7 +12,8 @@ from api.utils.prompt_template_util import PromptTemplateUtil
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class SQLComponentsExtractor:
@@ -64,10 +64,9 @@ class SQLComponentsExtractor:
                 if isinstance(data, dict):
                     return data, True
                 else:
-                    logger.warning(f"Expected JSON object but got: {type(data)}")
                     return {}, False
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse JSON from code block: {e}")
+            except json.JSONDecodeError:
+                pass
 
         # 如果没有找到代码块或解析失败，尝试解析整个响应
         try:
@@ -75,10 +74,8 @@ class SQLComponentsExtractor:
             if isinstance(data, dict):
                 return data, True
             else:
-                logger.warning(f"Expected JSON object but got: {type(data)}")
                 return {}, False
         except json.JSONDecodeError:
-            logger.warning("Failed to parse response as JSON")
             return {}, False
 
     def _validate_sql_components(self, components: dict) -> dict:

@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import re
 from typing import Any
@@ -14,7 +13,8 @@ from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class ConversationQueryRewriter:
@@ -43,19 +43,16 @@ class ConversationQueryRewriter:
                 data = json.loads(json_str)
                 if isinstance(data, dict):
                     return data, True
-                logger.warning(f"Expected JSON object but got: {type(data)}")
                 return {}, False
-            except json.JSONDecodeError as error:
-                logger.warning(f"Failed to parse JSON from code block: {error}")
+            except json.JSONDecodeError:
+                pass
 
         try:
             data = json.loads(response)
             if isinstance(data, dict):
                 return data, True
-            logger.warning(f"Expected JSON object but got: {type(data)}")
             return {}, False
         except json.JSONDecodeError:
-            logger.warning("Failed to parse response as JSON")
             return {}, False
 
     @staticmethod

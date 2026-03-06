@@ -1,11 +1,11 @@
 from typing import Any, Dict, Optional
-import logging
 from contextlib import asynccontextmanager
 
 from api.service.askdata_service.event.event_manager import event_manager
 
 # 配置日志
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 async def send_event(event_id: str, data: Any, event_type: str = "data") -> bool:

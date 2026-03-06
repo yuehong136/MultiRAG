@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import logging
 from datetime import date
 from enum import Enum
 from typing import Any, List, Dict, Optional, Tuple, Set
@@ -45,8 +44,9 @@ from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_wi
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
 from api.service.askdata_service.model_dataset_resolver import ModelDatasetResolver
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 
-logger = logging.getLogger(__name__)
+logger = get_askdata_logger()
 
 
 class AskdataService:
@@ -233,8 +233,6 @@ class AskdataService:
                         ),
                         name="LLM提取语义字段"
                     )
-
-                    logger.info(f"LLM提取到的语义字段：{extracted_fields}")
 
                     llm_dimension_ids = [field["dimension_id"] for field in extracted_fields if "dimension_id" in field]
                     llm_metric_ids = [field["metric_id"] for field in extracted_fields if "metric_id" in field]
@@ -527,8 +525,6 @@ class AskdataService:
                 segmented_words
             )
 
-            logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
-
             await send_event(event_id, {}, "stream_end")
 
             logger.info(f"recommended_chart: {recommended_chart}, recommendation_reason: {recommendation_reason}")
@@ -618,7 +614,7 @@ class AskdataService:
         if result.get("status") == "failed":
             return result
 
-        logger.info(f"成功生成SQL: {result.get('sql')}")
+        logger.info(f"成功生成SQL: {str(result.get('sql'))[:200]}")
         return result
 
     async def fix_sql_query_with_components(self, user_query: str, original_sql: str, error_message: str,
@@ -639,7 +635,7 @@ class AskdataService:
         if not result:
             logger.warning("NLQ to Initial SQL 修复失败，返回 None。")
             return None
-        logger.info(f"成功修复SQL: {result.get('sql')}")
+        logger.info(f"成功修复SQL: {str(result.get('sql'))[:200]}")
         return result
 
     async def generate_table_config(self,
@@ -755,29 +751,24 @@ class AskdataService:
         from_info = parse_from_clause(from_sentence)
         main_table = from_info["main_table"]
         existing_tables = from_info["existing_tables"]
-        logger.info(f"主表: {main_table}, 已存在的表: {existing_tables}")
         # 获得用户手动调整/添加的字段ID列表
         adjusted_field_ids = extract_manually_adjusted_field_ids(table_config)
-        logger.info(f"用户手动调整/添加的字段ID列表: {adjusted_field_ids}")
         # 获取这些字段涉及的模型ID列表（去重）
         adjusted_model_ids = list({
             semantic_field["from_model_id"]
             for field_id in adjusted_field_ids
             if (semantic_field := self._find_semantic_field(field_id, all_semantic_fields)) is not None
         })
-        logger.info(f"用户手动调整涉及的模型ID: {adjusted_model_ids}")
         # 获取用户手动调整涉及的模型信息
         adjusted_models = [
             mapping for mapping in model_table_alias_mapping_list
             if mapping["modelId"] in adjusted_model_ids
         ]
-        logger.info(f"用户手动调整涉及的模型: {adjusted_models}")
         # 判断哪些表需要新增 JOIN
         tables_to_add = [
             mapping for mapping in adjusted_models
             if mapping["table"] not in existing_tables
         ]
-        logger.info(f"需要新增JOIN的表: {tables_to_add}")
 
         # 获取主表的 modelId
         main_table_model_id = next(
@@ -803,8 +794,6 @@ class AskdataService:
                 for adjusted_model_id in adjusted_model_ids:
                     involved_model_ids.add(adjusted_model_id)
 
-                logger.info(f"涉及的所有模型ID: {involved_model_ids}")
-
                 # 2. 获取权限信息
                 permissions_response = await self.semantic_api_client.get_user_semantic_permissions_async(
                     user_id=user_id,
@@ -817,15 +806,12 @@ class AskdataService:
                     model_table_alias_mapping_list
                 )
 
-                logger.info(f"权限映射: {model_permissions_map}")
-
                 # 记录有权限限制的模型
                 if model_permissions_map:
                     models_with_permissions = [
                         f"{perm['table']}({perm['alias']})"
                         for perm in model_permissions_map.values()
                     ]
-                    logger.info(f"以下模型有行级权限限制: {', '.join(models_with_permissions)}")
 
                 # ========== 权限逻辑结束 ==========
 
@@ -838,8 +824,6 @@ class AskdataService:
                     if rel["sourceModelId"] in tables_to_add_ids or rel["targetModelId"] in tables_to_add_ids
                 ]
 
-                logger.info(f"需要新增 JOIN 的关系: {relevant_relationships}")
-
                 # 只在找到关系时才更新 from_sentence
                 if relevant_relationships:
                     from_sentence = append_join_clauses(
@@ -848,7 +832,6 @@ class AskdataService:
                         model_table_alias_mapping_list,
                         existing_tables
                     )
-                    logger.info(f"更新后的 FROM 子句: {from_sentence}")
                 else:
                     logger.warning(f"未找到以下表与主表的关系信息: {[t['table'] for t in tables_to_add]}")
 
@@ -931,13 +914,11 @@ class AskdataService:
                             assembler.add_parameterized_where(f"{sql_column} {operator} %s", [value])
 
             # 注入权限条件
-            logger.info("开始注入权限条件（table-row）")
             apply_permissions_to_assembler(
                 assembler,
                 model_permissions_map,
                 model_table_alias_mapping_list
             )
-            logger.info("权限条件注入完成（table-row）")
 
             for order_by in table_config["order_by"]:
                 if order_by["is_semantic_field"]:
@@ -1088,13 +1069,11 @@ class AskdataService:
                         pass
 
             # 注入权限条件
-            logger.info(f"开始注入权限条件（{chart_type}）")
             apply_permissions_to_assembler(
                 assembler,
                 model_permissions_map,
                 model_table_alias_mapping_list
             )
-            logger.info(f"权限条件注入完成（{chart_type}）")
 
             for having_condition in table_config.get("having_conditions", []):
                 if having_condition["is_semantic_field"]:
@@ -1237,18 +1216,14 @@ class AskdataService:
             logger.info(f"开始生成宽表SQL - 数据集ID: {dataset_id}, 用户ID: {user_id}")
 
             # 1. 获取数据集详情
-            logger.info("步骤1: 获取数据集详情...")
             dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_id)
 
             if not dataset_details or len(dataset_details) == 0:
                 raise ValueError(f"未找到数据集 {dataset_id} 的详情信息")
 
             dataset_detail = dataset_details[0]
-            logger.info(f"数据集名称: {dataset_detail.get('datasetName')}")
-            logger.info(f"包含模型数: {len(dataset_detail.get('models', []))}")
 
             # 2. 获取模型关系
-            logger.info("步骤2: 获取模型关系...")
             model_ids = [model["modelId"] for model in dataset_detail.get("models", [])]
 
             if not model_ids:
@@ -1260,21 +1235,16 @@ class AskdataService:
             # 3. 获取用户权限（如果提供了用户ID）
             user_permissions = None
             if user_id:
-                logger.info("步骤3: 获取用户权限...")
                 try:
                     user_permissions = await self.semantic_api_client.get_user_semantic_permissions_async(
                         user_id,
                         [dataset_id]
                     )
-                    logger.info(f"成功获取用户 {user_id} 的权限信息")
                 except Exception as e:
                     logger.warning(f"获取用户权限失败，将使用默认权限: {str(e)}")
                     user_permissions = None
-            else:
-                logger.info("步骤3: 未提供用户ID，跳过权限获取")
 
             # 4. 生成SQL
-            logger.info("步骤4: 生成宽表SQL...")
             sql_generator = WideTableSQLGenerator()
             sql = sql_generator.generate_sql(
                 dataset_detail=dataset_detail,

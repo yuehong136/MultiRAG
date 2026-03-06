@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -10,10 +9,11 @@ from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.utils.prompt_template_util import PromptTemplateUtil
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
-logger = logging.getLogger(__name__)
+logger = get_askdata_logger()
 
 
 class SemanticFieldExtractor:
@@ -64,10 +64,9 @@ class SemanticFieldExtractor:
                 if isinstance(data, list):
                     return data, True
                 else:
-                    logger.warning(f"Expected JSON array but got: {type(data)}")
                     return [], False
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse JSON from code block: {e}")
+            except json.JSONDecodeError:
+                pass
 
         # 如果没有找到代码块或解析失败，尝试解析整个响应
         try:
@@ -75,10 +74,8 @@ class SemanticFieldExtractor:
             if isinstance(data, list):
                 return data, True
             else:
-                logger.warning(f"Expected JSON array but got: {type(data)}")
                 return [], False
         except json.JSONDecodeError:
-            logger.warning("Failed to parse response as JSON")
             return [], False
 
     def _validate_and_clean_fields(self, fields: list[dict]) -> list[dict]:
@@ -95,7 +92,6 @@ class SemanticFieldExtractor:
 
         for field in fields:
             if not isinstance(field, dict):
-                logger.warning(f"Skipping non-dict field: {field}")
                 continue
 
             # 检查是否为维度
@@ -113,7 +109,7 @@ class SemanticFieldExtractor:
                 }
                 cleaned_fields.append(cleaned_field)
             else:
-                logger.warning(f"Field doesn't match expected structure: {field}")
+                pass
 
         return cleaned_fields
 

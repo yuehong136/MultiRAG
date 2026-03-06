@@ -1,4 +1,3 @@
-import logging
 from enum import Enum
 from typing import List, Any, Dict, Optional
 
@@ -11,6 +10,7 @@ from api.db.db_models import get_db
 from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
 from api.service.askdata_service.event.event_handlers import create_sse_response
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger, askdata_ask_id
 from api.service.askdata_service.util.sql_retry_handler import SQLRetryHandler
 from api.service.askdata_service.util.sqlglot_utils import (
     try_extract_components,
@@ -22,9 +22,7 @@ from api.service.askdata_service.cache import semantic_layer_cache, perf_cache
 from api.service.nl2sql_service.query_data_from_zt_by_sql import query_data_with_params
 
 router = APIRouter()
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logger = get_askdata_logger()
 
 
 class StatusEnum(str, Enum):
@@ -56,12 +54,12 @@ async def get_sql_and_table_config(
         user=Depends(manager),
         service: AskdataService = Depends(get_askdata_service)
 ):
-    logging.info(f"get-sql-and-table-config请求体：{body.model_dump_json()}")
-
+    token = askdata_ask_id.set(body.ask_id or "-")
     try:
+        logger.info(f"get-sql-and-table-config, query={body.user_query[:80]}")
+
         if body.clear_cache:
             perf_cache.clear_all()
-            logger.info("已清除LLM响应性能缓存")
 
         # 从缓存中获取敏感的语义层数据
         cached_semantic_data = None
@@ -91,13 +89,9 @@ async def get_sql_and_table_config(
                 }
             )
 
-        logger.info(f"从缓存中获取到语义层数据: ask_id={body.ask_id}")
         processed_semantic_layer_data = cached_semantic_data.get('processed_semantic_layer', {})
         model_ids_data = cached_semantic_data.get('model_ids', [])
         phase2_prefetch = cached_semantic_data.get('phase2_prefetch', {})
-        logger.info(f"获取内容 - processed_semantic_layer: {processed_semantic_layer_data}")
-        logger.info(f"获取内容 - model_ids: {model_ids_data}")
-        logger.info(f"获取内容 - phase2_prefetch keys: {list(phase2_prefetch.keys()) if phase2_prefetch else []}")
 
         # 1. 调用Service层获取包含SQL及其组件的完整结果
         sql_generation_result = await service.nlq_to_initial_sql(
@@ -327,8 +321,6 @@ async def get_sql_and_table_config(
             cached_dimension_values=phase2_prefetch.get('dimension_values'),
         )
 
-        logger.info(f"model_table_alias_mapping_list:{model_table_alias_mapping_list}")
-
         # 4. 构建返回给前端的数据结构
         response_data = {
             "sql": sql,
@@ -348,7 +340,6 @@ async def get_sql_and_table_config(
         # 成功完成后清理缓存，释放内存
         if body.ask_id and cached_semantic_data:
             semantic_layer_cache.remove(body.ask_id)
-            logger.debug(f"处理完成，清理缓存数据: ask_id={body.ask_id}")
 
         return ResponseSchema(
             status=StatusEnum.SUCCESS,
@@ -362,7 +353,6 @@ async def get_sql_and_table_config(
         # 异常情况下也要清理缓存，避免内存泄漏
         if body.ask_id:
             semantic_layer_cache.remove(body.ask_id)
-            logger.debug(f"异常处理中清理缓存数据: ask_id={body.ask_id}")
 
         return ResponseSchema(
             # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
@@ -373,6 +363,8 @@ async def get_sql_and_table_config(
                 "message": str(e),
             }
         )
+    finally:
+        askdata_ask_id.reset(token)
 
 
 @router.get("/events/{event_id}")
@@ -418,6 +410,7 @@ async def analyze_user_query_background_task(
     通过将逻辑委托给服务层来处理流式聊天的后台任务。
     """
     cached_semantic_data = None  # 初始化变量
+    token = askdata_ask_id.set(request.ask_id or "-")
     try:
         service = get_askdata_service(db, user)
 
@@ -453,9 +446,7 @@ async def analyze_user_query_background_task(
             )
             return
 
-        logger.info(f"从缓存中获取到语义层数据: ask_id={request.ask_id}")
         processed_semantic_layer_data = cached_semantic_data.get('processed_semantic_layer', {})
-        logger.info(f"获取内容 - processed_semantic_layer: {processed_semantic_layer_data}")
 
         await service.analyze_user_query_stream(
             event_id=event_id,
@@ -473,15 +464,13 @@ async def analyze_user_query_background_task(
         # 成功完成后清理缓存，释放内存
         if request.ask_id and cached_semantic_data:
             semantic_layer_cache.remove(request.ask_id)
-            logger.debug(f"处理完成，清理缓存数据: ask_id={request.ask_id}")
 
     except Exception as e:
-        logger.exception(f"后台聊天任务失败，event_id {event_id}: {e}")
+        logger.exception(f"后台聊天任务失败，event_id {event_id}")
 
         # 异常情况下也要清理缓存，避免内存泄漏
         if request.ask_id:
             semantic_layer_cache.remove(request.ask_id)
-            logger.debug(f"异常处理中清理缓存数据: ask_id={request.ask_id}")
 
         # 错误报告逻辑保留在此处，因为它是一个横切关注点（发布到事件管理器）
         try:
@@ -497,6 +486,8 @@ async def analyze_user_query_background_task(
             )
         except Exception as publish_error:
             logger.error(f"为 {event_id} 发送错误事件失败: {publish_error}")
+    finally:
+        askdata_ask_id.reset(token)
 
 
 @router.post("/analyze-user-query-streaming/{custom_event_id}", response_model=ResponseSchema,
@@ -515,7 +506,7 @@ def analyze_user_query_streaming(
     """
     使用自定义事件ID启动流式聊天
     """
-    logger.info(f"使用自定义事件ID {custom_event_id} 启动流式聊天：{body}")
+    logger.info(f"analyze-user-query-streaming, event_id={custom_event_id}, query={body.user_query[:80]}")
 
     try:
         # 添加后台任务，调用重构后的后台任务函数
@@ -597,24 +588,24 @@ async def get_semantic_layer_streaming(
         ),
         service: AskdataService = Depends(get_askdata_service)
 ) -> ResponseSchema:
-    logger.info(f"使用自定义事件ID {custom_event_id} 获得语义层信息，参数：{body}")
-
-    original_user_query = body.user_query
-    final_user_query = original_user_query
-    llm_rewritten_question = None
-
-    if body.enable_multi_rounds_question:
-        # 将历史提问改写逻辑下沉到Service，保持路由层简洁
-        final_user_query, llm_rewritten_question = await service.prepare_user_query_for_semantic_layer(
-            round_id=body.round_id,
-            original_user_query=original_user_query,
-            llm_name=body.llm_name
-        )
-
+    token = askdata_ask_id.set(body.ask_id or "-")
     try:
+        logger.info(f"get-semantic-layer-streaming, event_id={custom_event_id}, query={body.user_query[:80]}")
+
+        original_user_query = body.user_query
+        final_user_query = original_user_query
+        llm_rewritten_question = None
+
+        if body.enable_multi_rounds_question:
+            # 将历史提问改写逻辑下沉到Service，保持路由层简洁
+            final_user_query, llm_rewritten_question = await service.prepare_user_query_for_semantic_layer(
+                round_id=body.round_id,
+                original_user_query=original_user_query,
+                llm_name=body.llm_name
+            )
+
         if body.clear_cache:
             perf_cache.clear_all()
-            logger.info("已清除LLM响应性能缓存")
 
         processed_semantic_layer, model_ids, recommended_chart, recommendation_reason, phase2_prefetch_data = await service.generate_semantic_layer(
             user_query=final_user_query,
@@ -625,10 +616,7 @@ async def get_semantic_layer_streaming(
             llm_name=body.llm_name,
             ask_id=body.ask_id)
 
-        logger.info(f"processed_semantic_layer:{processed_semantic_layer}")
-        logger.info(f"model_ids:{model_ids}")
-        logger.info(f"recommended_chart:{recommended_chart}")
-        logger.info(f"recommendation_reason:{recommendation_reason}")
+        logger.info(f"语义层生成完成, model_ids={model_ids}, chart={recommended_chart}")
 
         # 将敏感数据存入缓存，避免通过前端传输
         if body.ask_id:
@@ -637,18 +625,13 @@ async def get_semantic_layer_streaming(
                 "model_ids": model_ids,
                 "phase2_prefetch": phase2_prefetch_data,
             }
-            logger.info(f"准备存储语义层数据到缓存: ask_id={body.ask_id}")
-            logger.info(f"存储内容 - processed_semantic_layer: {processed_semantic_layer}")
-            logger.info(f"存储内容 - model_ids: {model_ids}")
 
             cache_success = semantic_layer_cache.store(
                 ask_id=body.ask_id,
                 data=cache_data
             )
-            if cache_success:
-                logger.info(f"成功将语义层敏感数据存入缓存: ask_id={body.ask_id}")
-            else:
-                logger.error(f"存储语义层数据到缓存失败: ask_id={body.ask_id}")
+            if not cache_success:
+                logger.error(f"存储语义层数据到缓存失败")
         else:
             logger.warning("ask_id为空，无法缓存语义层数据")
 
@@ -669,7 +652,6 @@ async def get_semantic_layer_streaming(
         # 异常情况下清理可能的缓存数据
         if body.ask_id:
             semantic_layer_cache.remove(body.ask_id)
-            logger.debug(f"异常处理中清理缓存数据: ask_id={body.ask_id}")
 
         return ResponseSchema(
             # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
@@ -680,6 +662,8 @@ async def get_semantic_layer_streaming(
                 "message": str(e),
             }
         )
+    finally:
+        askdata_ask_id.reset(token)
 
 
 class AddHistoryRequest(BaseModel):
@@ -845,15 +829,14 @@ async def re_query(
         ),
         service: AskdataService = Depends(get_askdata_service)
 ) -> ResponseSchema:
-    logger.info(
-        f"re-query chart_type: {body.chart_type}\n table_config: {body.table_config} \n sql_components: {body.sql_components} \n model_table_alias_mapping_list: {body.model_table_alias_mapping_list}")
-
+    token = askdata_ask_id.set(body.ask_id or "-")
     try:
+        logger.info(f"re-query, chart_type={body.chart_type}")
+
         requery_sql_result = await service.generate_requery_sql(body.chart_type, body.table_config,
                                                                 sql_components=body.sql_components,
                                                                 model_table_alias_mapping_list=body.model_table_alias_mapping_list,
                                                                 pagination_info=body.pagination_info, user_id=body.userid)
-        logger.info("re-query sql result: {}".format(requery_sql_result))
 
         if body.pagination_info:
             result = await query_data_with_params(requery_sql_result["count_sql"], int(body.dataset_id),
@@ -904,6 +887,8 @@ async def re_query(
             status=StatusEnum.ERROR,
             message=f"生成re-query SQL失败：{str(e)}"
         )
+    finally:
+        askdata_ask_id.reset(token)
 
 
 class GetHCDimValuesByDimValueRequest(BaseModel):
@@ -938,7 +923,7 @@ async def get_hc_dim_values_by_dim_value(
     通过提供关键词和维度ID，在指定的高基数维度中搜索匹配的维度值。
     支持模糊匹配和分页查询，只返回指定页面的数据。
     """
-    logger.info(f"收到高基数维度值搜索请求: {body}")
+    logger.info(f"get-hc-dim-values, keyword={body.keyword}, dim_id={body.dimension_id}")
 
     try:
         # 参数验证
@@ -1058,7 +1043,7 @@ def stop_request(ask_id: str) -> ResponseSchema:
     Returns:
         ResponseSchema: 停止操作的结果
     """
-    logger.info(f"收到停止请求，ask_id: {ask_id}")
+    logger.info(f"stop-request, ask_id={ask_id}")
 
     if not ask_id or not ask_id.strip():
         return ResponseSchema(
@@ -1071,14 +1056,13 @@ def stop_request(ask_id: str) -> ResponseSchema:
         success = stop_request_manager.stop_request(ask_id.strip())
 
         if success:
-            logger.info(f"请求 {ask_id} 已成功标记为停止")
             return ResponseSchema(
                 status=StatusEnum.SUCCESS,
                 message=f"请求 {ask_id} 已停止",
                 data={
                     "ask_id": ask_id,
                     "stopped": True,
-                    "timestamp": None  # 可以添加时间戳如果需要
+                    "timestamp": None
                 }
             )
         else:

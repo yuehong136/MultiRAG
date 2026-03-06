@@ -1,6 +1,5 @@
 import os
 import re
-import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -12,7 +11,8 @@ from api.utils.prompt_template_util import PromptTemplateUtil
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class SQLPaginationConverter:
