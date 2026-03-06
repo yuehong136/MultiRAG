@@ -134,7 +134,7 @@ def create_dataset(
 
 
 @router.delete("/datasets", summary="删除数据集")
-def delete_datasets(
+def delete(
     request: DeleteDatasetRequest, 
     db: Session = Depends(get_db), 
     tenant_id: str = Depends(token_required)
@@ -171,24 +171,38 @@ def delete_datasets(
 
         errors = []
         success_count = 0
+        db_type = settings.docStoreConn.db_type()
+        is_tenant_scoped = db_type in {"elasticsearch", "opensearch"}
         for kb_id, kb in kb_id_instance_pairs:
             for doc in DocumentService.query(db, kb_id=kb_id):
                 if not DocumentService.remove_document(db, doc, tenant_id):
                     errors.append(f"Remove document '{doc.id}' error for dataset '{kb_id}'")
                     continue
                 f2d = File2DocumentService.get_by_document_id(db, doc.id)
-                FileService.filter_delete(
-                    db,
-                    [
-                        File.source_type == FileSource.KNOWLEDGEBASE,
-                        File.id == f2d[0].file_id,
-                    ]
-                )
+                if f2d:
+                    FileService.filter_delete(
+                        db,
+                        [
+                            File.source_type == FileSource.KNOWLEDGEBASE,
+                            File.id == f2d[0].file_id,
+                        ]
+                    )
+
                 File2DocumentService.delete_by_document_id(db, doc.id)
             FileService.filter_delete(
                 db, 
                 [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kb.name]
             )
+
+            try:
+                if is_tenant_scoped:
+                    tenant_index_name = search.index_name(kb.tenant_id)[0]
+                    settings.docStoreConn.delete_idx(tenant_index_name, kb_id)
+                else:
+                    settings.docStoreConn.delete_idx(search.index_name_one(kb.tenant_id, kb.name), kb_id)
+            except Exception as e:
+                logging.warning(f"Failed to drop index for dataset {kb_id}: {e}")
+
             if not KnowledgebaseService.delete_by_id(db, kb_id):
                 errors.append(f"Delete dataset error for {kb_id}")
                 continue

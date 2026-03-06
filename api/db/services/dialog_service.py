@@ -29,7 +29,6 @@ from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from graphrag.general.mind_map_extractor import MindMapExtractor
-from core.app.resume import forbidden_select_fields4resume
 from core.app.tag import label_question
 from core.advanced_rag import DeepResearcher
 from core.nlp.search import index_name
@@ -727,6 +726,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
 async def async_chat(dialog, messages, db, stream=True, **kwargs):
     """异步版本的 chat"""
+    logging.debug("Begin async_chat")
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
     chat_start_ts = timer()
@@ -778,13 +778,20 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     prompt_config = dialog.prompt_config
     internet_enabled = kwargs.get("internet") is not False
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
+    logging.debug(f"field_map retrieved: {field_map}")
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
         logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
         ans = await use_sql(questions[-1], field_map, kb_tenant_ids, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
-        if ans:
+        # For aggregate queries (COUNT, SUM, etc.), chunks may be empty but answer is still valid
+        if ans and (ans.get("reference", {}).get("chunks") or ans.get("answer")):
             yield ans
             return
+        else:
+            logging.debug("SQL failed or returned no results, falling back to vector search")
+
+    param_keys = [p["key"] for p in prompt_config["parameters"]]
+    logging.debug(f"attachments={attachments}, param_keys={param_keys}, embd_mdl={embd_mdl}")
 
     # 处理提示配置中的参数，确保必要的参数存在
     for p in prompt_config["parameters"]:
@@ -817,7 +824,8 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     knowledges = []
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
-    if attachments is not None and "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
+    if attachments is not None and "knowledge" in param_keys:
+        logging.debug("Proceeding with retrieval")
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
         prompt_config_for_reasoning = prompt_config
@@ -1036,157 +1044,295 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
 
 
 async def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_ids=None):
-    sys_prompt = """
-    You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question.
-    Ensure that:
-    1. Field names should not start with a digit. If any field name starts with a digit, use double quotes around it.
-    2. Write only the SQL, no explanations or additional text.
-    """
-    user_prompt = """
-    Table name: {};
-    Table of database fields are as follows:
-    {}
+    logging.debug(f"use_sql: Question: {question}")
 
-    User's question:
-    {}
-    
-    Instructions:
-    1. First, check if the question is asking for data that exists in the table fields above
-    2. If the question is RELATED to the table data:
-       - Write a proper SQL SELECT statement to retrieve the relevant data
-    3. If the question is NOT RELATED to the table data (asking about general knowledge, explanations, or data not in the table):
-       - Write: SELECT doc_id, docnm_kwd, 'The question is unrelated to the table data' as result WHERE 1 = 0
-    
-    Please write ONLY the SQL statement, without any explanations or additional text.
-    """.format(
-        index_name(tenant_id, kb_names),
-        "\n".join([f"{k}: {v}" for k, v in field_map.items()]),
-        question
-    )
+    doc_engine = settings.DOC_ENGINE.lower()
+
+    # Construct the full table name
+    base_table = index_name(tenant_id, kb_names)
+    if doc_engine == "infinity" and kb_ids and len(kb_ids) == 1:
+        table_name = f"{base_table}_{kb_ids[0]}"
+        logging.debug(f"use_sql: Using Infinity table name: {table_name}")
+    else:
+        table_name = base_table
+        logging.debug(f"use_sql: Using table name: {table_name}")
+
+    def is_row_count_question(q: str) -> bool:
+        q = (q or "").lower()
+        if not re.search(r"\bhow many rows\b|\bnumber of rows\b|\brow count\b|多少行|多少条|总数", q):
+            return False
+        return bool(re.search(r"\bdataset\b|\btable\b|\bspreadsheet\b|\bexcel\b|数据|表格|记录", q))
+
+    # Engine-specific SQL prompts and user_prompt
+    json_field_names = list(field_map.keys())
+    uses_chunk_data = doc_engine in ("infinity", "milvus")
+
+    if doc_engine == "infinity":
+        row_count_override = f"SELECT COUNT(*) AS rows FROM {table_name}" if is_row_count_question(question) else None
+        sys_prompt = """You are a Database Administrator. Write SQL for a table with JSON 'chunk_data' column.
+
+JSON Extraction: json_extract_string(chunk_data, '$.FieldName')
+Numeric Cast: CAST(json_extract_string(chunk_data, '$.FieldName') AS INTEGER/FLOAT)
+NULL Check: json_extract_isnull(chunk_data, '$.FieldName') == false
+
+RULES:
+1. Use EXACT field names (case-sensitive) from the list below
+2. For SELECT: include doc_id, docnm, and json_extract_string() for requested fields
+3. For COUNT: use COUNT(*) or COUNT(DISTINCT json_extract_string(...))
+4. Add AS alias for extracted field names
+5. DO NOT select 'content' field
+6. Only add NULL check (json_extract_isnull() == false) in WHERE clause when:
+   - Question asks to "show me" or "display" specific columns
+   - Question mentions "not null" or "excluding null"
+   - Add NULL check for count specific column
+   - DO NOT add NULL check for COUNT(*) queries
+7. Output ONLY the SQL, no explanations"""
+        user_prompt = """Table: {}
+Fields (EXACT case): {}
+{}
+Question: {}
+Write SQL using json_extract_string() with exact field names. Include doc_id, docnm for data queries. Only SQL.""".format(
+            table_name,
+            ", ".join(json_field_names),
+            "\n".join([f"  - {field}" for field in json_field_names]),
+            question
+        )
+    elif doc_engine == "milvus":
+        row_count_override = f"SELECT COUNT(*) AS rows FROM {table_name}" if is_row_count_question(question) else None
+        sys_prompt = """You are a Database Administrator. Write SQL for a Milvus collection with JSON 'chunk_data' column.
+
+Field Access: chunk_data["FieldName"]
+String comparison: chunk_data["FieldName"] == 'value'
+Numeric comparison: chunk_data["FieldName"] > 100
+
+RULES:
+1. Use EXACT field names (case-sensitive) from the list below
+2. For SELECT: include doc_id, docnm_kwd, and chunk_data["field"] for requested fields
+3. For COUNT: use COUNT(*) or COUNT(DISTINCT chunk_data["field"])
+4. For SUM/AVG/MIN/MAX: use SUM(chunk_data["field"]) etc.
+5. Add AS alias for chunk_data fields
+6. DO NOT select 'content_with_weight' field
+7. In WHERE clause use: chunk_data["field"] == 'value' or chunk_data["field"] > 100
+8. Output ONLY the SQL, no explanations"""
+        user_prompt = """Table: {}
+Fields (EXACT case): {}
+{}
+Question: {}
+Write SQL using chunk_data["field"] with exact field names. Include doc_id, docnm_kwd for data queries. Only SQL.""".format(
+            table_name,
+            ", ".join(json_field_names),
+            "\n".join([f"  - {field}" for field in json_field_names]),
+            question
+        )
+    else:
+        row_count_override = None
+        sys_prompt = """You are a Database Administrator. Write SQL queries.
+
+RULES:
+1. Use EXACT field names from the schema below (e.g., product_tks, not product)
+2. Quote field names starting with digit: "123_field"
+3. Add IS NOT NULL in WHERE clause when:
+   - Question asks to "show me" or "display" specific columns
+4. Include doc_id/docnm_kwd in non-aggregate statement
+5. Output ONLY the SQL, no explanations"""
+        user_prompt = """Table: {}
+Available fields:
+{}
+Question: {}
+Write SQL using exact field names above. Include doc_id, docnm_kwd for data queries. Only SQL.""".format(
+            table_name,
+            "\n".join([f"  - {k} ({v})" for k, v in field_map.items()]),
+            question
+        )
+
     tried_times = 0
 
     async def get_table():
-        nonlocal sys_prompt, user_prompt, question, tried_times
-        sql = await chat_mdl.async_chat(sys_prompt, [{"role": "user", "content": user_prompt}], {"temperature": 0.06})
-        sql = re.sub(r"^.*</think>", "", sql, flags=re.DOTALL)
-        logging.debug(f"{question} ==> {user_prompt} get SQL: {sql}")
-        sql = re.sub(r"[\r\n]+", " ", sql.lower())
-        sql = re.sub(r".*select ", "select ", sql.lower())
-        sql = re.sub(r" +", " ", sql)
-        sql = re.sub(r"([;；]|```).*", "", sql)
-        sql = re.sub(r"&", "and", sql)
-        if sql[:len("select ")] != "select ":
-            return None, None
-        if not re.search(r"((sum|avg|max|min)\(|group by )", sql.lower()):
-            if sql[:len("select *")] != "select *":
-                # 检查是否已经包含doc_id和docnm_kwd，避免重复添加
-                if "doc_id" not in sql[7:sql.find("from") if "from" in sql else len(sql)]:
-                    sql = "select doc_id,docnm_kwd," + sql[6:]
-            else:
-                flds = []
-                for k in field_map.keys():
-                    if k in forbidden_select_fields4resume:
-                        continue
-                    if len(flds) > 11:
-                        break
-                    flds.append(k)
-                sql = "select doc_id,docnm_kwd," + ",".join(flds) + sql[8:]
+        nonlocal sys_prompt, user_prompt, question, tried_times, row_count_override
+        if row_count_override:
+            sql = row_count_override
+        else:
+            sql = await chat_mdl.async_chat(sys_prompt, [{"role": "user", "content": user_prompt}], {"temperature": 0.06})
+        logging.debug(f"use_sql: Raw SQL from LLM: {repr(sql[:500])}")
+        # Remove think blocks if present
+        sql = re.sub(r"</think>\n.*?\n\s*", "", sql, flags=re.DOTALL)
+        sql = re.sub(r"思考\n.*?\n", "", sql, flags=re.DOTALL)
+        # Remove markdown code blocks
+        sql = re.sub(r"```(?:sql)?\s*", "", sql, flags=re.IGNORECASE)
+        sql = re.sub(r"```\s*$", "", sql, flags=re.IGNORECASE)
+        # Remove trailing semicolons
+        sql = sql.rstrip().rstrip(';').strip()
 
-        if kb_ids:
-            kb_filter = "(" + " OR ".join([f"kb_id = '{kb_id}'" for kb_id in kb_ids]) + ")"
-            if "where" not in sql.lower():
+        # Add kb_id filter for non-Infinity engines (Infinity already has it in table name)
+        if doc_engine != "infinity" and kb_ids:
+            if len(kb_ids) == 1:
+                kb_filter = f"kb_id = '{kb_ids[0]}'"
+            else:
+                kb_filter = "(" + " OR ".join([f"kb_id = '{kb_id}'" for kb_id in kb_ids]) + ")"
+
+            if "where " not in sql.lower():
                 o = sql.lower().split("order by")
                 if len(o) > 1:
                     sql = o[0] + f" WHERE {kb_filter}  order by " + o[1]
                 else:
                     sql += f" WHERE {kb_filter}"
-            else:
-                sql += f" AND {kb_filter}"
+            elif "kb_id =" not in sql.lower() and "kb_id=" not in sql.lower():
+                sql = re.sub(r"\bwhere\b ", f"where {kb_filter} and ", sql, flags=re.IGNORECASE)
 
         logging.debug(f"{question} get SQL(refined): {sql}")
         tried_times += 1
-        return settings.retriever.sql_retrieval(sql, format="json"), sql
+        logging.debug(f"use_sql: Executing SQL retrieval (attempt {tried_times})")
+        tbl = settings.retriever.sql_retrieval(sql, format="json")
+        if tbl is None:
+            logging.debug("use_sql: SQL retrieval returned None")
+            return None, sql
+        logging.debug(f"use_sql: SQL retrieval completed, got {len(tbl.get('rows', []))} rows")
+        return tbl, sql
 
     try:
         tbl, sql = await get_table()
+        logging.debug(f"use_sql: Initial SQL execution SUCCESS. SQL: {sql}")
     except Exception as e:
-        user_prompt = """
-        Table name: {};
-        Table of database fields are as follows:
-        {}
+        logging.warning(f"use_sql: Initial SQL execution FAILED with error: {e}")
+        # Build engine-specific retry prompt
+        if uses_chunk_data:
+            if doc_engine == "infinity":
+                syntax_hint = "json_extract_string(chunk_data, '$.field_name')"
+            else:
+                syntax_hint = 'chunk_data["field_name"]'
+            user_prompt = """
+Table name: {};
+JSON fields available in 'chunk_data' column (use these exact names in {}):
+{}
 
-        Question are as follows:
-        {}
-        Please write the SQL, only SQL, without any other explanations or text.
+Question: {}
+Please write the SQL using {} with the field names from the list above. Only SQL, no explanations.
 
+The SQL error you provided last time is as follows:
+{}
 
-        The SQL error you provided last time is as follows:
-        {}
+Please correct the error and write SQL again using {} syntax with the correct field names. Only SQL, no explanations.
+""".format(table_name, syntax_hint, "\n".join([f"  - {field}" for field in json_field_names]),
+           question, syntax_hint, e, syntax_hint)
+        else:
+            user_prompt = """
+Table name: {};
+Table of database fields are as follows (use the field names directly in SQL):
+{}
 
-        Please correct the error and write SQL again, only SQL, without any other explanations or text.
-        """.format(index_name(tenant_id, kb_names), "\n".join([f"{k}: {v}" for k, v in field_map.items()]), question, e)
+Question are as follows:
+{}
+Please write the SQL using the exact field names above, only SQL, without any other explanations or text.
+
+The SQL error you provided last time is as follows:
+{}
+
+Please correct the error and write SQL again using the exact field names above, only SQL, without any other explanations or text.
+""".format(table_name, "\n".join([f"{k} ({v})" for k, v in field_map.items()]), question, e)
         try:
             tbl, sql = await get_table()
+            logging.debug(f"use_sql: Retry SQL execution SUCCESS. SQL: {sql}")
         except Exception:
+            logging.error("use_sql: Retry SQL execution also FAILED, returning None")
             return
 
-    # 检查返回值是否有效
-    if tbl is None:
-        logging.info("SQL查询返回None，跳过SQL检索")
+    if tbl is None or "error" in tbl or "rows" not in tbl or len(tbl["rows"]) == 0:
+        logging.warning(f"use_sql: No valid rows returned, returning None")
         return None
 
-    # 检查是否有error字段（SQL执行失败）
-    if "error" in tbl:
-        logging.error(f"SQL执行失败: {tbl.get('error')}")
-        return None
+    logging.debug(f"use_sql: Proceeding with {len(tbl['rows'])} rows to build answer")
 
-    # 检查是否有rows字段
-    if "rows" not in tbl:
-        logging.error(f"SQL查询返回格式错误，缺少rows字段: {tbl}")
-        return None
+    # Case-insensitive column index matching (aligned with ragflow)
+    docid_idx = set([ii for ii, c in enumerate(tbl["columns"]) if c["name"].lower() == "doc_id"])
+    doc_name_idx = set([ii for ii, c in enumerate(tbl["columns"]) if c["name"].lower() in ["docnm_kwd", "docnm"]])
 
-    if len(tbl["rows"]) == 0:
-        logging.info("SQL查询返回空结果")
-        return None
+    logging.debug(f"use_sql: All columns: {[(i, c['name']) for i, c in enumerate(tbl['columns'])]}")
+    logging.debug(f"use_sql: docid_idx={docid_idx}, doc_name_idx={doc_name_idx}")
 
-    docid_idx = set([ii for ii, c in enumerate(tbl["columns"]) if c["name"] == "doc_id"])
-    doc_name_idx = set([ii for ii, c in enumerate(tbl["columns"]) if c["name"] == "docnm_kwd"])
     column_idx = [ii for ii in range(len(tbl["columns"])) if ii not in (docid_idx | doc_name_idx)]
-    
-    # 检查是否只有字面量列（表示LLM判断问题不相关）
-    # 如果除了doc_id和docnm_kwd之外，只有1列且所有行的值都相同，很可能是字面量
-    if len(column_idx) == 1 and len(tbl["rows"]) > 0:
-        # 检查这一列的所有值是否都相同
-        first_value = str(tbl["rows"][0][column_idx[0]]) if len(tbl["rows"]) > 0 else ""
-        all_same = all(str(row[column_idx[0]]) == first_value for row in tbl["rows"])
-        
-        # 如果所有值都相同，且包含"unrelated"或"not"等关键词，判定为不相关
-        if all_same and any(keyword in first_value.lower() for keyword in ["unrelated", "not related", "not found", "no data", "cannot", "无关", "未找到", "无数据"]):
-            logging.info(f"SQL返回的是不相关的字面量结果: '{first_value}'，跳过SQL检索，使用向量检索")
-            return None
 
-    # compose Markdown table
+    # Helper: map column names to display names
+    def map_column_name(col_name):
+        if col_name.lower() == "count(star)":
+            return "COUNT(*)"
+        as_match = re.search(r'\s+AS\s+([^\s,)]+)', col_name, re.IGNORECASE)
+        if as_match:
+            alias = as_match.group(1).strip('"\'')
+            if alias in field_map:
+                return re.sub(r"(/.*|（[^（）]+）)", "", field_map[alias])
+            for field_key, display_value in field_map.items():
+                if field_key.lower() == alias.lower():
+                    return re.sub(r"(/.*|（[^（）]+）)", "", display_value)
+            return alias
+        if col_name in field_map:
+            return re.sub(r"(/.*|（[^（）]+）)", "", field_map[col_name])
+        col_lower = col_name.lower()
+        for field_key, display_value in field_map.items():
+            if field_key.lower() == col_lower:
+                return re.sub(r"(/.*|（[^（）]+）)", "", display_value)
+        result = col_name
+        for field_name, display_name in field_map.items():
+            result = result.replace(field_name, display_name)
+        result = re.sub(r"(/.*|（[^（）]+）)", "", result)
+        return result
+
+    # Compose Markdown table header
     columns = (
-        "|" + "|".join([re.sub(r"(/.*|（[^（）]+）)", "", field_map.get(tbl["columns"][i]["name"], tbl["columns"][i]["name"])) for i in column_idx]) + ("|Source|" if docid_idx and docid_idx else "|")
+        "|" + "|".join([map_column_name(tbl["columns"][i]["name"]) for i in column_idx])
+        + ("|Source|" if docid_idx and doc_name_idx else "|")
     )
+    line = "|" + "|".join(["------" for _ in range(len(column_idx))]) + ("|------|" if docid_idx and doc_name_idx else "|")
 
-    line = "|" + "|".join(["------" for _ in range(len(column_idx))]) + ("|------|" if docid_idx and docid_idx else "")
-
-    rows = ["|" + "|".join([remove_redundant_spaces(str(r[i])) for i in column_idx]).replace("None", " ") + "|" for r in tbl["rows"]]
-    rows = [r for r in rows if re.sub(r"[ |]+", "", r)]
-    if quota:
-        rows = "\n".join([r + f" ##{ii}$$ |" for ii, r in enumerate(rows)])
-    else:
-        rows = "\n".join([r + f" ##{ii}$$ |" for ii, r in enumerate(rows)])
+    # Build rows using dict-based access (robust against column order)
+    rows = []
+    for row_idx, r in enumerate(tbl["rows"]):
+        row_dict = {tbl["columns"][i]["name"]: r[i] for i in range(len(tbl["columns"])) if i < len(r)}
+        row_values = []
+        for col_idx in column_idx:
+            col_name = tbl["columns"][col_idx]["name"]
+            value = row_dict.get(col_name, " ")
+            row_values.append(remove_redundant_spaces(str(value)).replace("None", " "))
+        if docid_idx and doc_name_idx:
+            row_values.append(f" ##{row_idx}$$")
+        row_str = "|" + "|".join(row_values) + "|"
+        if re.sub(r"[ |]+", "", row_str):
+            rows.append(row_str)
+    rows = "\n".join(rows)
     rows = re.sub(r"T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+Z)?\|", "|", rows)
 
     if not docid_idx or not doc_name_idx:
-        logging.warning("SQL missing field: " + sql)
-        return {
-            "answer": "\n".join([columns, line, rows]),
-            "reference": {"chunks": [], "doc_aggs": []},
-            "prompt": sys_prompt
-        }
+        logging.warning(f"use_sql: SQL missing doc_id or docnm field. docid_idx={docid_idx}, doc_name_idx={doc_name_idx}. SQL: {sql}")
+        # For aggregate queries, fetch doc_id/docnm separately to provide source chunks
+        if re.search(r"(count|sum|avg|max|min|distinct)\s*\(", sql.lower()):
+            answer = "\n".join([columns, line, rows])
+            where_match = re.search(r"\bwhere\b(.+?)(?:\bgroup by\b|\border by\b|\blimit\b|$)", sql, re.IGNORECASE)
+            if where_match:
+                where_clause = where_match.group(1).strip()
+                docnm_field = "docnm" if doc_engine == "infinity" else "docnm_kwd"
+                chunks_sql = f"select doc_id, {docnm_field} from {table_name} where {where_clause}"
+                if "limit" not in chunks_sql.lower():
+                    chunks_sql += " limit 20"
+                logging.debug(f"use_sql: Fetching chunks with SQL: {chunks_sql}")
+                try:
+                    chunks_tbl = settings.retriever.sql_retrieval(chunks_sql, format="json")
+                    if chunks_tbl and chunks_tbl.get("rows") and len(chunks_tbl["rows"]) > 0:
+                        chunks_did_idx = next((i for i, c in enumerate(chunks_tbl["columns"]) if c["name"].lower() == "doc_id"), None)
+                        chunks_dn_idx = next((i for i, c in enumerate(chunks_tbl["columns"]) if c["name"].lower() in ["docnm_kwd", "docnm"]), None)
+                        if chunks_did_idx is not None and chunks_dn_idx is not None:
+                            chunks = [{"doc_id": r[chunks_did_idx], "docnm_kwd": r[chunks_dn_idx]} for r in chunks_tbl["rows"]]
+                            doc_aggs = {}
+                            for r in chunks_tbl["rows"]:
+                                did, dn = r[chunks_did_idx], r[chunks_dn_idx]
+                                if did not in doc_aggs:
+                                    doc_aggs[did] = {"doc_name": dn, "count": 0}
+                                doc_aggs[did]["count"] += 1
+                            doc_aggs_list = [{"doc_id": did, "doc_name": d["doc_name"], "count": d["count"]} for did, d in doc_aggs.items()]
+                            logging.debug(f"use_sql: Returning aggregate answer with {len(chunks)} chunks from {len(doc_aggs)} documents")
+                            return {"answer": answer, "reference": {"chunks": chunks, "doc_aggs": doc_aggs_list}, "prompt": sys_prompt}
+                except Exception as e:
+                    logging.warning(f"use_sql: Failed to fetch chunks: {e}")
+            return {"answer": answer, "reference": {"chunks": [], "doc_aggs": []}, "prompt": sys_prompt}
+        return {"answer": "\n".join([columns, line, rows]), "reference": {"chunks": [], "doc_aggs": []}, "prompt": sys_prompt}
 
     docid_idx = list(docid_idx)[0]
     doc_name_idx = list(doc_name_idx)[0]
@@ -1195,14 +1341,17 @@ async def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True
         if r[docid_idx] not in doc_aggs:
             doc_aggs[r[docid_idx]] = {"doc_name": r[doc_name_idx], "count": 0}
         doc_aggs[r[docid_idx]]["count"] += 1
-    return {
+
+    result = {
         "answer": "\n".join([columns, line, rows]),
         "reference": {
             "chunks": [{"doc_id": r[docid_idx], "docnm_kwd": r[doc_name_idx]} for r in tbl["rows"]],
-            "doc_aggs": [{"doc_id": did, "doc_name": d["doc_name"], "count": d["count"]} for did, d in doc_aggs.items()]
+            "doc_aggs": [{"doc_id": did, "doc_name": d["doc_name"], "count": d["count"]} for did, d in doc_aggs.items()],
         },
-        "prompt": sys_prompt
+        "prompt": sys_prompt,
     }
+    logging.debug(f"use_sql: Returning answer with {len(result['reference']['chunks'])} chunks from {len(doc_aggs)} documents")
+    return result
 
 
 def clean_tts_text(text: str) -> str:

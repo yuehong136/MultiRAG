@@ -278,7 +278,7 @@ def init_settings():
         MILVUS = get_base_config("milvus", {})
         docStoreConn = core.utils.milvus_conn.MilvusConnection()
     elif lower_case_doc_engine == "infinity":
-        INFINITY = get_base_config("infinity", {"uri": "infinity:23817"})
+        INFINITY = get_base_config("infinity", {"uri": "infinity:23817", "postgres_port": 5432, "db_name": "default_db"})
         docStoreConn = core.utils.infinity_conn.InfinityConnection()
     elif lower_case_doc_engine == "opensearch":
         OS = get_base_config("os", {})
@@ -302,6 +302,11 @@ def init_settings():
     elif lower_case_doc_engine == "milvus":
         msgStoreConn = memory_milvus_conn.MilvusConnection()
     elif lower_case_doc_engine == "infinity":
+        INFINITY = get_base_config("infinity", {
+            "uri": "infinity:23817",
+            "postgres_port": 5432,
+            "db_name": "default_db"
+        })
         msgStoreConn = memory_infinity_conn.InfinityConnection()
     # elif lower_case_doc_engine == "vastbase":
     #     VASTBASE = get_base_config("vastbase", {})

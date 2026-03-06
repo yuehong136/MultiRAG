@@ -458,12 +458,16 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
         kb_name = kbs[0].name
         kb_id = kbs[0].id
         kb_tenant_id = kbs[0].tenant_id
+        db_type = settings.docStoreConn.db_type()
+        is_tenant_scoped = db_type in {"elasticsearch", "opensearch"}
+        storage_fallback_targets: list[tuple[str, str]] = []
 
         # 遍历知识库中的所有文档，进行删除
         for doc in DocumentService.query(db, kb_id=req_data["kb_id"]):
             doc_id = doc.id  # 提前保存文档 ID，避免后续访问被删除的对象
 
             b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
+            storage_fallback_targets.append((b, n))
 
             # 删除文档，如果失败则返回错误信息
             if not DocumentService.remove_document(db, doc, kbs[0].tenant_id):
@@ -475,7 +479,6 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
                 FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
             # 删除文档与文件的关联记录
             File2DocumentService.delete_by_document_id(db, doc_id)
-            settings.STORAGE_IMPL.rm(b, n)
         FileService.filter_delete(
             db,
             [
@@ -485,15 +488,37 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
                 File.name == kb_name,
             ]
         )
-        # 删除 MinIO 存储桶
-        settings.STORAGE_IMPL.remove_bucket(kb_id)
+        bucket_removed = False
+        if hasattr(settings.STORAGE_IMPL, "remove_bucket"):
+            try:
+                settings.STORAGE_IMPL.remove_bucket(kb_id)
+                bucket_removed = True
+            except Exception as e:
+                logging.warning(f"Failed to remove bucket for dataset {kb_id}: {e}")
+
+        if not bucket_removed:
+            for bucket, name in storage_fallback_targets:
+                try:
+                    settings.STORAGE_IMPL.rm(bucket, name)
+                except Exception as e:
+                    logging.warning(f"Failed to remove source object {bucket}/{name} for dataset {kb_id}: {e}")
+
+        # Delete the index BEFORE deleting the database record
+        tenants = UserTenantService.query(db, user_id=user.id)
+        for tenant in tenants:
+            try:
+                if is_tenant_scoped:
+                    tenant_index_name = search.index_name(tenant.tenant_id)[0]
+                    settings.docStoreConn.delete({"kb_id": req_data["kb_id"]}, tenant_index_name, req_data["kb_id"])
+                    settings.docStoreConn.delete_idx(tenant_index_name, req_data["kb_id"])
+                else:
+                    settings.docStoreConn.delete_idx(search.index_name_one(tenant.tenant_id, kb_name), req_data["kb_id"])
+            except Exception as e:
+                logging.error(f"Failed to drop index for dataset {req_data['kb_id']}: {e}")
 
         # 删除知识库本身，如果失败则返回错误信息
         if not KnowledgebaseService.delete_by_id(db, req_data["kb_id"]):
             return get_data_error_result(retmsg="Database error (dataset removal)!")
-        tenants = UserTenantService.query(db, user_id=user.id)
-        for tenant in tenants:
-            settings.docStoreConn.delete_idx(search.index_name_one(tenant.tenant_id, kb_name), req_data["kb_id"])
         # 知识库删除成功，返回成功标志
         return get_json_result(data=True)
     except Exception as e:

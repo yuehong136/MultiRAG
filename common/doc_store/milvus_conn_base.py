@@ -115,7 +115,7 @@ class MilvusConnectionBase(DocStoreConnection):
     Table operations
     """
 
-    def create_idx(self, index_name: str | list[str], dataset_id: str, vector_size: int):
+    def create_idx(self, index_name: str | list[str], dataset_id: str, vector_size: int, parser_id: str = None):
         """Create a Milvus collection based on the index name and vector size."""
         if isinstance(index_name, list):
             if not index_name:
@@ -516,126 +516,293 @@ class MilvusConnectionBase(DocStoreConnection):
     """
 
     def sql(self, sql: str, fetch_size: int, format: str):
-        """Milvus doesn't support direct SQL queries. This method provides limited SQL-to-Milvus conversion."""
-        self.logger.debug(f"Attempting to parse SQL query: {sql}")
+        """
+        Execute SQL-like queries on Milvus by parsing SQL and converting to Milvus query API.
+        Supports chunk_data JSON field with path expressions: chunk_data["field"].
+        Aggregations (COUNT/SUM/AVG/MIN/MAX) are computed in Python via pandas.
+        """
+        import pandas as pd
+        self.logger.debug(f"Milvus sql() input: {sql}")
 
         try:
             sql = re.sub(r" +", " ", sql).strip()
 
-            if not sql.upper().startswith("SELECT"):
+            if not re.match(r"^SELECT\b", sql, re.IGNORECASE):
                 raise ValueError("Only SELECT statements are supported")
 
-            from_match = re.search(r"FROM\s+(\w+)", sql, re.IGNORECASE)
+            # --- Parse FROM clause ---
+            from_match = re.search(r"\bFROM\s+(\w+)", sql, re.IGNORECASE)
             if not from_match:
                 raise ValueError("Cannot identify FROM clause")
-
             collection_name = from_match.group(1)
 
-            select_match = re.search(r"SELECT\s+(.*?)\s+FROM", sql, re.IGNORECASE)
-            select_fields = []
+            # --- Parse SELECT clause ---
+            select_match = re.search(r"SELECT\s+(.*?)\s+FROM\b", sql, re.IGNORECASE | re.DOTALL)
+            select_raw = select_match.group(1).strip() if select_match else "*"
+
+            # Detect aggregate functions
+            has_aggregate = bool(re.search(r"\b(COUNT|SUM|AVG|MIN|MAX)\s*\(", select_raw, re.IGNORECASE))
+
+            # Parse GROUP BY
+            group_by_field = None
+            group_match = re.search(r"\bGROUP\s+BY\s+([\w\"\[\]\.]+)", sql, re.IGNORECASE)
+            if group_match:
+                group_by_field = group_match.group(1).strip().strip('"')
+
+            # --- Parse SELECT fields into (expr, alias) pairs ---
+            select_items = []
             literal_columns = {}
-
-            if select_match:
-                fields_str = select_match.group(1).strip()
-                if fields_str != "*":
-                    parsed_fields = []
-                    current_field = ""
-                    in_quotes = False
-                    quote_char = None
-
-                    for char in fields_str:
-                        if char in ("'", '"') and not in_quotes:
-                            in_quotes = True
-                            quote_char = char
-                            current_field += char
-                        elif char == quote_char and in_quotes:
-                            in_quotes = False
-                            quote_char = None
-                            current_field += char
-                        elif char == ',' and not in_quotes:
-                            parsed_fields.append(current_field.strip())
-                            current_field = ""
+            if select_raw != "*" and not has_aggregate:
+                for field in self._split_select_fields(select_raw):
+                    literal_match = re.match(r"^(['\"])(.+?)\1(\s+as\s+(\S+))?$", field, re.IGNORECASE)
+                    if literal_match:
+                        literal_columns[literal_match.group(4) or literal_match.group(2)] = literal_match.group(2)
+                    else:
+                        as_match = re.match(r"(.+?)\s+as\s+(\S+)$", field, re.IGNORECASE)
+                        if as_match:
+                            select_items.append((as_match.group(1).strip(), as_match.group(2).strip()))
                         else:
-                            current_field += char
+                            select_items.append((field.strip(), field.strip()))
 
-                    if current_field.strip():
-                        parsed_fields.append(current_field.strip())
-
-                    for field in parsed_fields:
-                        literal_match = re.match(r"^(['\"])(.+?)\1(\s+as\s+(['\"]?)(.+?)\4)?$", field, re.IGNORECASE)
-                        if literal_match:
-                            literal_value = literal_match.group(2)
-                            alias = literal_match.group(5) if literal_match.group(5) else literal_value
-                            literal_columns[alias] = literal_value
-                        else:
-                            if " as " in field.lower():
-                                actual_field = field.split(" as ")[0].strip()
-                                select_fields.append(actual_field)
-                            else:
-                                select_fields.append(field)
-
+            # --- Parse WHERE clause ---
             where_clause = ""
-            where_match = re.search(r"WHERE\s+(.*?)(?:ORDER BY|GROUP BY|LIMIT|$)", sql, re.IGNORECASE)
+            where_match = re.search(r"\bWHERE\s+(.*?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)", sql, re.IGNORECASE | re.DOTALL)
             if where_match:
                 where_clause = where_match.group(1).strip()
 
-            if where_clause and re.match(r"^\s*(1\s*=\s*0|0\s*=\s*1|false)\s*(and|or|&&|\|\|)?", where_clause, re.IGNORECASE):
-                self.logger.info(f"Detected always-false condition '{where_clause}', returning empty result")
+            if where_clause and re.match(r"^\s*(1\s*=\s*0|0\s*=\s*1|false)\s*", where_clause, re.IGNORECASE):
                 return {"rows": [], "columns": []}
 
+            # --- Parse LIMIT ---
             limit = fetch_size
-            limit_match = re.search(r"LIMIT\s+(\d+)", sql, re.IGNORECASE)
+            limit_match = re.search(r"\bLIMIT\s+(\d+)", sql, re.IGNORECASE)
             if limit_match:
                 limit = int(limit_match.group(1))
 
-            filter_expr = ""
-            if where_clause:
-                filter_expr = where_clause
-                filter_expr = re.sub(r"=", "==", filter_expr)
-                filter_expr = re.sub(r"AND", "&&", filter_expr, flags=re.IGNORECASE)
-                filter_expr = re.sub(r"OR", "||", filter_expr, flags=re.IGNORECASE)
-                filter_expr = re.sub(r"NOT", "!", filter_expr, flags=re.IGNORECASE)
+            # --- Convert WHERE to Milvus filter expression ---
+            filter_expr = self._where_to_milvus_expr(where_clause) if where_clause else ""
+            self.logger.debug(f"Milvus filter_expr: {filter_expr}")
 
+            # --- Execute Milvus query ---
             conn = self._get_connection()
-            output_fields = select_fields if select_fields else ["*"]
-            results = conn.query(collection_name, expr=filter_expr, output_fields=output_fields, limit=limit)
-
-            if format.lower() == "json":
-                if not results and not literal_columns:
-                    return {"rows": [], "columns": []}
-
-                columns = []
-                column_names = []
-
-                if len(results) > 0:
-                    column_names = list(results[0].keys())
-                    for key in column_names:
-                        columns.append({"name": key, "type": "text"})
-
-                for literal_name in literal_columns.keys():
-                    columns.append({"name": literal_name, "type": "text"})
-                    column_names.append(literal_name)
-
-                rows = []
-                if len(results) > 0:
-                    for result in results:
-                        row = []
-                        for col_name in list(results[0].keys()):
-                            row.append(result.get(col_name))
-                        for literal_name, literal_value in literal_columns.items():
-                            row.append(literal_value)
-                        rows.append(row)
-                elif literal_columns:
-                    row = [literal_columns[name] for name in literal_columns.keys()]
-                    rows.append(row)
-
-                return {"rows": rows, "columns": columns}
+            # Always fetch chunk_data + doc_id + docnm_kwd for table parser queries
+            output_fields = ["chunk_data", "doc_id", "docnm_kwd"]
+            if has_aggregate:
+                # Aggregate queries need all matching rows; use iterator to bypass 16384 limit
+                results = self._query_all(conn, collection_name, filter_expr or "", output_fields)
             else:
-                return results
+                results = conn.query(collection_name, expr=filter_expr or "", output_fields=output_fields, limit=limit)
+
+            if not results and not literal_columns:
+                return {"rows": [], "columns": []} if format == "json" else []
+
+            # --- Build DataFrame for processing ---
+            df = pd.DataFrame(results)
+
+            # Expand chunk_data JSON into columns
+            if "chunk_data" in df.columns:
+                json_expanded = df["chunk_data"].apply(
+                    lambda v: v if isinstance(v, dict) else (json.loads(v) if isinstance(v, str) and v else {})
+                )
+                json_df = pd.json_normalize(json_expanded)
+                df = pd.concat([df.drop(columns=["chunk_data"]), json_df], axis=1)
+
+            # --- Handle aggregation in Python ---
+            if has_aggregate:
+                return self._execute_aggregate(select_raw, df, group_by_field, format, fetch_size)
+
+            # --- Non-aggregate: select fields and build result ---
+            # Determine output columns
+            out_cols = []
+            col_names = []
+            if select_items:
+                for expr, alias in select_items:
+                    # chunk_data["field"] → field
+                    json_path = re.match(r'chunk_data\["(.+?)"\]', expr)
+                    col = json_path.group(1) if json_path else expr
+                    if col in df.columns:
+                        out_cols.append(col)
+                        col_names.append(alias)
+                    elif expr in df.columns:
+                        out_cols.append(expr)
+                        col_names.append(alias)
+            else:
+                # SELECT * - use all columns
+                out_cols = list(df.columns)
+                col_names = list(df.columns)
+
+            if format == "json":
+                columns = [{"name": n} for n in col_names]
+                for lit_name, lit_val in literal_columns.items():
+                    columns.append({"name": lit_name})
+                rows = []
+                for _, row in df.head(limit).iterrows():
+                    r = [row.get(c) for c in out_cols]
+                    for lit_val in literal_columns.values():
+                        r.append(lit_val)
+                    rows.append(r)
+                return {"rows": rows, "columns": columns}
+            return results
 
         except Exception as e:
-            self.logger.error(f"SQL parsing or execution failed: {str(e)}")
+            self.logger.error(f"Milvus SQL parsing or execution failed: {str(e)}")
             return {"error": f"SQL query failed: {str(e)}"}
+
+    def _split_select_fields(self, fields_str: str) -> list[str]:
+        """Split SELECT field list respecting parentheses and quotes."""
+        fields = []
+        current = ""
+        depth = 0
+        in_quotes = False
+        quote_char = None
+        for ch in fields_str:
+            if ch in ("'", '"') and not in_quotes:
+                in_quotes = True
+                quote_char = ch
+                current += ch
+            elif ch == quote_char and in_quotes:
+                in_quotes = False
+                quote_char = None
+                current += ch
+            elif ch == '(' and not in_quotes:
+                depth += 1
+                current += ch
+            elif ch == ')' and not in_quotes:
+                depth -= 1
+                current += ch
+            elif ch == ',' and depth == 0 and not in_quotes:
+                fields.append(current.strip())
+                current = ""
+            else:
+                current += ch
+        if current.strip():
+            fields.append(current.strip())
+        return fields
+
+    def _where_to_milvus_expr(self, where_clause: str) -> str:
+        """Convert SQL WHERE clause to Milvus filter expression with JSON path support."""
+        expr = where_clause
+
+        # Convert chunk_data["field"] op 'value' → chunk_data["field"] op 'value' (already Milvus-compatible)
+        # Convert SQL operators to Milvus
+        expr = re.sub(r"(?<!=)=(?!=)", "==", expr)
+        expr = re.sub(r"\bAND\b", "&&", expr, flags=re.IGNORECASE)
+        expr = re.sub(r"\bOR\b", "||", expr, flags=re.IGNORECASE)
+        expr = re.sub(r"\bNOT\b", "!", expr, flags=re.IGNORECASE)
+        # IS NOT NULL → field != ""
+        expr = re.sub(r'(\S+)\s+IS\s+NOT\s+NULL', r'\1 != ""', expr, flags=re.IGNORECASE)
+        expr = re.sub(r'(\S+)\s+IS\s+NULL', r'\1 == ""', expr, flags=re.IGNORECASE)
+
+        return expr
+
+    def _execute_aggregate(self, select_raw: str, df, group_by_field: str | None, format: str, fetch_size: int) -> dict:
+        """Execute aggregate functions (COUNT/SUM/AVG/MIN/MAX) in Python using pandas."""
+        import pandas as pd
+
+        # Parse aggregate expressions: COUNT(*), SUM(chunk_data["field"]), etc.
+        agg_pattern = re.compile(
+            r'(COUNT|SUM|AVG|MIN|MAX)\s*\(\s*(\*|(?:DISTINCT\s+)?[\w\"\[\]\.]+)\s*\)(?:\s+AS\s+(\w+))?',
+            re.IGNORECASE
+        )
+
+        agg_exprs = []
+        for m in agg_pattern.finditer(select_raw):
+            func = m.group(1).upper()
+            arg = m.group(2).strip()
+            alias = m.group(3) or f"{func}({arg})"
+            # Resolve chunk_data["field"] → column name
+            json_match = re.match(r'chunk_data\["(.+?)"\]', arg)
+            col = json_match.group(1) if json_match else arg
+            agg_exprs.append((func, col, alias))
+
+        if not agg_exprs:
+            return {"rows": [], "columns": []}
+
+        if group_by_field:
+            # Resolve group_by field
+            json_match = re.match(r'chunk_data\["(.+?)"\]', group_by_field)
+            gb_col = json_match.group(1) if json_match else group_by_field
+
+            if gb_col not in df.columns:
+                return {"rows": [], "columns": []}
+
+            grouped = df.groupby(gb_col)
+            columns = [{"name": gb_col}]
+            for func, col, alias in agg_exprs:
+                columns.append({"name": alias})
+
+            rows = []
+            for group_val, group_df in grouped:
+                row = [group_val]
+                for func, col, alias in agg_exprs:
+                    row.append(self._compute_agg(func, col, group_df))
+                rows.append(row)
+        else:
+            columns = [{"name": alias} for _, _, alias in agg_exprs]
+            row = []
+            for func, col, alias in agg_exprs:
+                row.append(self._compute_agg(func, col, df))
+            rows = [row]
+
+        if format == "json":
+            return {"rows": rows[:fetch_size] if fetch_size > 0 else rows, "columns": columns}
+        return rows
+
+    def _query_all(self, conn, collection_name: str, expr: str, output_fields: list[str]) -> list[dict]:
+        """
+        Use query_iterator to fetch all matching rows, bypassing the 16384 single-query limit.
+        Falls back to regular query() if iterator is not available.
+        """
+        BATCH_SIZE = 1000
+        MAX_ROWS = 100000  # safety cap
+        all_results = []
+        try:
+            iterator = conn.query_iterator(
+                collection_name=collection_name,
+                expr=expr,
+                output_fields=output_fields,
+                batch_size=BATCH_SIZE,
+            )
+            while True:
+                batch = iterator.next()
+                if not batch:
+                    break
+                all_results.extend(batch)
+                if len(all_results) >= MAX_ROWS:
+                    self.logger.warning(f"_query_all hit safety cap {MAX_ROWS}, stopping iteration")
+                    break
+            iterator.close()
+        except Exception as e:
+            self.logger.warning(f"query_iterator failed ({e}), falling back to query() with limit 16384")
+            all_results = conn.query(collection_name, expr=expr, output_fields=output_fields, limit=16384)
+        self.logger.debug(f"_query_all fetched {len(all_results)} rows from {collection_name}")
+        return all_results
+
+    @staticmethod
+    def _compute_agg(func: str, col: str, df) -> int | float | None:
+        """Compute a single aggregate function on a DataFrame."""
+        import pandas as pd
+        if func == "COUNT":
+            if col == "*":
+                return len(df)
+            if col.upper().startswith("DISTINCT "):
+                real_col = col.split(None, 1)[1]
+                json_match = re.match(r'chunk_data\["(.+?)"\]', real_col)
+                real_col = json_match.group(1) if json_match else real_col
+                return df[real_col].nunique() if real_col in df.columns else 0
+            return df[col].count() if col in df.columns else 0
+        if col not in df.columns:
+            return None
+        series = pd.to_numeric(df[col], errors="coerce")
+        if func == "SUM":
+            return series.sum()
+        if func == "AVG":
+            return round(series.mean(), 4) if not series.empty else None
+        if func == "MIN":
+            return series.min()
+        if func == "MAX":
+            return series.max()
+        return None
 
     """
     Internal search helper methods

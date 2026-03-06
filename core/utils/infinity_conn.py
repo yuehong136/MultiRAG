@@ -314,7 +314,16 @@ class InfinityConnection(InfinityConnectionBase):
                     break
             if vector_size == 0:
                 raise ValueError("Cannot infer vector size from documents")
-            self.create_idx(index_name, knowledgebase_id, vector_size)
+
+            # Determine parser_id from document structure
+            # Table parser documents have 'chunk_data' field
+            parser_id = None
+            if "chunk_data" in documents[0] and isinstance(documents[0].get("chunk_data"), dict):
+                from common.constants import ParserType
+                parser_id = ParserType.TABLE.value
+                self.logger.debug("Detected TABLE parser from document structure")
+
+            self.create_idx(index_name, knowledgebase_id, vector_size, parser_id)
             table_instance = db_instance.get_table(table_name)
 
         # embedding fields can't have a default value....
@@ -375,6 +384,12 @@ class InfinityConnection(InfinityConnectionBase):
                         d[k] = v
                 elif re.search(r"_feas$", k):
                     d[k] = json.dumps(v)
+                elif k == "chunk_data":
+                    # Convert data dict to JSON string for storage
+                    if isinstance(v, dict):
+                        d[k] = json.dumps(v)
+                    else:
+                        d[k] = v
                 elif k == "kb_id":
                     if isinstance(d[k], list):
                         d[k] = d[k][0]  # since d[k] is a list, but we need a str
@@ -579,6 +594,8 @@ class InfinityConnection(InfinityConnectionBase):
                 res2[column] = res2[column].apply(lambda v: [kwd for kwd in v.split("###") if kwd])
             elif re.search(r"_feas$", k):
                 res2[column] = res2[column].apply(lambda v: json.loads(v) if v else {})
+            elif k == "chunk_data":
+                res2[column] = res2[column].apply(lambda v: json.loads(v) if v and isinstance(v, str) else v)
             elif k == "position_int":
                 def to_position_int(v):
                     if v:

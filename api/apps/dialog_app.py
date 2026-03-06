@@ -8,6 +8,7 @@
 """
 from typing import Annotated, Literal, Any
 
+import logging
 from fastapi import APIRouter, Depends, Query, HTTPException, Body
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, Discriminator, model_validator, field_validator, ConfigDict
@@ -15,14 +16,13 @@ from pydantic import BaseModel, Field, Discriminator, model_validator, field_val
 from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.dialog_service import DialogService
-from common.constants import StatusEnum
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.utils.api_utils import server_error_response, get_data_error_result
+from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
+from common.constants import StatusEnum
 from common.misc_utils import get_uuid
 from common.constants import RetCode
-from api.utils.api_utils import get_json_result
 
 
 router = APIRouter()
@@ -362,6 +362,18 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         }
 
         prompt_config = request.prompt_config or default_prompt_config
+
+        # Set default parameters for datasets with knowledge retrieval
+        # All datasets with {knowledge} in system prompt need "knowledge" parameter to enable retrieval
+        kb_ids = request.kb_ids or []
+        parameters = prompt_config.get("parameters")
+        # Check if parameters is missing, None, or empty list
+        if kb_ids and not parameters:
+            # Check if system prompt uses {knowledge} placeholder
+            if "{knowledge}" in prompt_config.get("system", ""):
+                # Set default parameters for any dataset with knowledge placeholder
+                prompt_config["parameters"] = [{"key": "knowledge", "optional": False}]
+                logging.debug(f"Set default parameters for datasets with knowledge placeholder: {kb_ids}")
 
         is_create = not request.dialog_id
 

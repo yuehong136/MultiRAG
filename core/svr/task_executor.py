@@ -799,10 +799,11 @@ async def init_kb(row, kb_name):
     vector_dim = await _get_embedding_dimension(row)
 
     # 创建集合/索引（底层已有幂等保护）
+    parser_id = row.get("parser_id", None)
     if db_type == "milvus":
         await _create_milvus_collection(idxnm, vector_dim)
     else:
-        await asyncio.to_thread(settings.docStoreConn.create_idx, idxnm, kb_id, vector_dim)
+        await asyncio.to_thread(settings.docStoreConn.create_idx, idxnm, kb_id, vector_dim, parser_id)
 
 
 async def _create_milvus_collection(collection_name: str, vector_dim: int):
@@ -1147,7 +1148,7 @@ async def run_dataflow(db: Session, task: dict):
     collection_name = search.index_name_one(task["tenant_id"], kb_name)
     schema = await get_schema(collection_name)
     
-    e = await insert_milvus(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, db, task_id, 0, 100000000), collection_name, schema)
+    e = await insert_chunks(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, db, task_id, 0, 100000000), collection_name, schema)
     if not e:
         PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
         return
@@ -2312,7 +2313,7 @@ async def delete_image(kb_id, chunk_id):
         raise
 
 
-async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, progress_callback, collection_name,
+async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, progress_callback, collection_name,
                         schema):
     """
     将chunks批量插入向量数据库（支持 Milvus/ES/OpenSearch/Infinity），包含类型转换和错误处理
@@ -2460,7 +2461,7 @@ async def insert_milvus(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         try:
             TaskService.update_chunk_ids(db, task_id, chunk_ids_str)
         except NoResultFound:
-            logging.warning(f"insert_milvus update_chunk_ids failed since task {task_id} is unknown.")
+            logging.warning(f"insert_chunks update_chunk_ids failed since task {task_id} is unknown.")
             # 如果TaskService中没有这个task，则删除已插入数据并退出
             try:
                 if await asyncio.to_thread(doc_store_exists, collection_name, task_dataset_id):
@@ -2587,13 +2588,6 @@ async def do_handle_task(db, task):
 
     # prepare the progress callback function
     progress_callback = partial(set_progress, db, task_id, task_from_page, task_to_page)
-
-    # FIXME: workaround, Infinity doesn't support table parsing method, this check is to notify user
-    lower_case_doc_engine = settings.DOC_ENGINE.lower()
-    if lower_case_doc_engine == 'infinity' and task['parser_id'].lower() == 'table':
-        error_message = "Table parsing method is not supported by Infinity, please use other parsing methods or use Elasticsearch as the document engine."
-        progress_callback(-1, msg=error_message)
-        raise Exception(error_message)
 
     task_canceled = has_canceled(task_id)
     if task_canceled:
@@ -2740,15 +2734,15 @@ async def do_handle_task(db, task):
     schema = await get_schema(search.index_name_one(task_tenant_id, kb_name))
     collection_name = search.index_name_one(task_tenant_id, kb_name)
 
-    async def _maybe_insert_milvus(_chunks):
+    async def _maybe_insert_chunks(_chunks):
         if has_canceled(task_id):
             return True
-        insert_result = await insert_milvus(db, task_id, task_tenant_id, task_dataset_id, _chunks, progress_callback,
+        insert_result = await insert_chunks(db, task_id, task_tenant_id, task_dataset_id, _chunks, progress_callback,
                                 collection_name, schema)
         return bool(insert_result)
 
     try:
-        if not await _maybe_insert_milvus(chunks):
+        if not await _maybe_insert_chunks(chunks):
             return
 
         logging.info(
@@ -2764,7 +2758,7 @@ async def do_handle_task(db, task):
         if toc_thread:
             d = toc_thread.result()
             if d:
-                if not await _maybe_insert_milvus([d]):
+                if not await _maybe_insert_chunks([d]):
                     return
                 DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, 0, 1, 0)
 

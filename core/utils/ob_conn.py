@@ -562,7 +562,7 @@ class OBConnection(DocStoreConnection):
     Table operations
     """
 
-    def create_idx(self, indexName: str, knowledgebaseId: str, vectorSize: int):
+    def create_idx(self, indexName: str, knowledgebaseId: str, vectorSize: int, parser_id: str = None):
         vector_field_name = f"q_{vectorSize}_vec"
         vector_index_name = f"{vector_field_name}_idx"
 

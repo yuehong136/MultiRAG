@@ -247,7 +247,7 @@ class VastBaseConnection(DocStoreConnection):
     Table operations
     """
 
-    def create_idx(self, indexName: str | list[str], knowledgebaseId: str, vectorSize: int):
+    def create_idx(self, indexName: str | list[str], knowledgebaseId: str, vectorSize: int, parser_id: str = None):
         """
         Create an index with given name
         """

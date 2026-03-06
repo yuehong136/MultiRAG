@@ -1837,8 +1837,13 @@ class DocumentService(CommonService):
 
         document = DocumentService.get_by_doc_id(db, doc.id)
         kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
-        # 构建 Milvus 集合名称
-        collection_name = search.index_name_one(tenant_id, kb.name)
+        db_type = settings.docStoreConn.db_type()
+        is_tenant_scoped = db_type in {"elasticsearch", "opensearch"}
+        collection_name = (
+            search.index_name(tenant_id)[0]
+            if is_tenant_scoped
+            else search.index_name_one(tenant_id, kb.name)
+        )
 
         # Delete tasks first
         try:
@@ -1864,7 +1869,6 @@ class DocumentService(CommonService):
         try:
             # 检查集合是否存在并删除向量数据库中的数据
             if settings.docStoreConn.has_collection(collection_name):
-                db_type = settings.docStoreConn.db_type()
                 if db_type == "milvus":
                     settings.docStoreConn.delete(
                         condition={"doc_id": doc_id},
@@ -1878,22 +1882,52 @@ class DocumentService(CommonService):
                         collection_name,
                         doc.kb_id
                     )
-            # todo 待测试【settings.docStoreConn.delete等】，测试成功则替换上面的方法 优先级较高，不然graphrag玩不转
-            # kb_id = document["kb_id"]  # 使用从数据库重新获取的kb_id
-            # graph_source = settings.docStoreConn.get_fields(
-            #     settings.docStoreConn.search(["source_id"], [], {"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id, [kb.name]), [kb_id]), ["source_id"]
-            # )
-            # if len(graph_source) > 0 and doc_id in list(graph_source.values())[0]["source_id"]:
-            #     settings.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc_id},
-            #                                 {"remove": {"source_id": doc_id}},
-            #                                 search.index_name(tenant_id, [kb.name]), kb_id)
-            #     settings.docStoreConn.update({"kb_id": kb_id, "knowledge_graph_kwd": ["graph"]},
-            #                                 {"removed_kwd": "Y"},
-            #                                 search.index_name(tenant_id, [kb.name]), kb_id)
-            #     settings.docStoreConn.delete({"kb_id": kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
-            #                                 search.index_name(tenant_id, [kb.name]), kb_id)
         except Exception as e:
             logging.error(f"Failed to delete chunks from doc store for document {doc_id}: {e}")
+
+        try:
+            graph_source = settings.docStoreConn.get_fields(
+                settings.docStoreConn.search(
+                    ["source_id"],
+                    [],
+                    {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
+                    [],
+                    OrderByExpr(),
+                    0,
+                    1,
+                    collection_name,
+                    [doc.kb_id],
+                ),
+                ["source_id"],
+            )
+            if len(graph_source) > 0 and doc_id in list(graph_source.values())[0]["source_id"]:
+                settings.docStoreConn.update(
+                    {
+                        "kb_id": doc.kb_id,
+                        "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"],
+                        "source_id": doc_id,
+                    },
+                    {"remove": {"source_id": doc_id}},
+                    collection_name,
+                    doc.kb_id,
+                )
+                settings.docStoreConn.update(
+                    {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
+                    {"removed_kwd": "Y"},
+                    collection_name,
+                    doc.kb_id,
+                )
+                settings.docStoreConn.delete(
+                    {
+                        "kb_id": doc.kb_id,
+                        "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"],
+                        "must_not": {"exists": "source_id"},
+                    },
+                    collection_name,
+                    doc.kb_id,
+                )
+        except Exception as e:
+            logging.warning(f"Failed to cleanup knowledge graph for document {doc_id}: {e}")
 
         return cls.delete_by_id(db, doc_id)
 
@@ -3194,7 +3228,7 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
         for b in range(0, len(cks), es_bulk_size):
             if try_create_idx:
                 if not settings.docStoreConn.index_exist(idxnm, kb_id):
-                    settings.docStoreConn.create_idx(idxnm, kb_id, len(vectors[0]))
+                    settings.docStoreConn.create_idx(idxnm, kb_id, len(vectors[0]), kb.parser_id)
                 try_create_idx = False
             settings.docStoreConn.insert(cks[b:b + es_bulk_size], idxnm, kb_id)
 

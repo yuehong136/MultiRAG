@@ -113,6 +113,7 @@ os:
 
 infinity:
   uri: '${INFINITY_HOST:-infinity}:23817'
+  postgres_port: 5432
   db_name: 'default_db'
 
 oceanbase:
