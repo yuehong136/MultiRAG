@@ -726,7 +726,8 @@ async def upload(
         err, result_files = FileService.upload_document(db, kb, file_contents, user.id, parsed_labels)  # 传递labels参数
 
         if err:
-            return construct_json_result(data=False, message="\n".join(err), code=RetCode.SERVER_ERROR)
+            docs = [f[0] for f in result_files] if result_files else []
+            return construct_json_result(data=docs, message="\n".join(err), code=RetCode.SERVER_ERROR)
 
         if not result_files:
             return get_json_result(data=result_files,
