@@ -239,22 +239,22 @@ class UserMgr:
         return [token.to_dict() for token in api_tokens]
 
     @staticmethod
-    def save_api_token(db: Session, api_token: dict[str, Any]) -> bool:
+    def save_api_key(db: Session, api_key: dict[str, Any]) -> bool:
         try:
-            APITokenService.save(db, **api_token)
+            APITokenService.save(db, **api_key)
             return True
         except Exception:
             return False
 
     @staticmethod
-    def delete_api_token(db: Session, username: str, token: str) -> bool:
+    def delete_api_key(db: Session, username: str, key: str) -> bool:
         user_list = UserService.query_user_by_email(db, username)
         if not user_list:
             raise UserNotFoundError(username)
         elif len(user_list) > 1:
             raise AdminException(f"Exist more than 1 user: {username}!")
         usr = user_list[0]
-        deleted_count = APITokenService.filter_delete(db, [APIToken.tenant_id == usr.id, APIToken.token == token])
+        deleted_count = APITokenService.filter_delete(db, [APIToken.tenant_id == usr.id, APIToken.token == key])
         return deleted_count > 0
 
 
@@ -355,6 +355,13 @@ class ServiceMgr:
             raise AdminException(f"invalid service_index: {service_idx}")
 
         service_config = configs[service_idx]
+
+        # exclude retrieval service if retrieval_type is not matched
+        doc_engine = os.getenv("DOC_ENGINE", "milvus")
+        if service_config.service_type == "retrieval":
+            retrieval_type = service_config.to_dict().get("extra", {}).get("retrieval_type")
+            if retrieval_type != doc_engine:
+                raise AdminException(f"invalid service_index: {service_idx}")
 
         # 获取基本配置信息
         result = service_config.to_dict()

@@ -22,3 +22,6 @@ test = [
 
 [project.scripts]
 multirag-cli = "multirag_cli:main"
+
+[tool.setuptools]
+py-modules = ["multirag_cli", "parser"]

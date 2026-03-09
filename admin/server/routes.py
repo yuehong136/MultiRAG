@@ -731,7 +731,7 @@ def get_environments(user=Depends(admin_manager)) -> APIResponse[list[dict]]:
 
 
 @admin_router.post(
-    "/users/{username}/new_token",
+    "/users/{username}/keys",
     response_model=APIResponse[dict],
     summary="为用户生成 API Token",
     description="为指定用户生成一个新的 API Token"
@@ -746,10 +746,10 @@ def generate_user_api_key(username: str, user=Depends(admin_manager), db: Sessio
         if not tenants:
             return error_response("Tenant not found!", 404)
         tenant_id: str = tenants[0]["tenant_id"]
-        token: str = generate_confirmation_token()
+        key: str = generate_confirmation_token()
         obj: dict = {
             "tenant_id": tenant_id,
-            "token": token,
+            "token": key,
             "name": "admin-generated",
             "beta": generate_confirmation_token().replace("multirag-", "")[:32],
             "create_time": current_timestamp(),
@@ -757,7 +757,7 @@ def generate_user_api_key(username: str, user=Depends(admin_manager), db: Sessio
             "update_time": None,
             "update_date": None,
         }
-        if not UserMgr.save_api_token(db, obj):
+        if not UserMgr.save_api_key(db, obj):
             return error_response("Failed to generate API key!", 500)
         return success_response(obj, "API key generated successfully")
     except AdminException as e:
@@ -767,7 +767,7 @@ def generate_user_api_key(username: str, user=Depends(admin_manager), db: Sessio
 
 
 @admin_router.get(
-    "/users/{username}/token_list",
+    "/users/{username}/keys",
     response_model=APIResponse[list[dict]],
     summary="获取用户的 API Token 列表",
     description="获取指定用户的所有 API Token"
@@ -784,15 +784,15 @@ def get_user_api_keys(username: str, user=Depends(admin_manager), db: Session = 
 
 
 @admin_router.delete(
-    "/users/{username}/token/{token}",
+    "/users/{username}/keys/{key}",
     response_model=APIResponse[None],
     summary="删除用户的 API Token",
     description="删除指定用户的某个 API Token"
 )
-def delete_user_api_key(username: str, token: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[None]:
+def delete_user_api_key(username: str, key: str, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[None]:
     """删除用户的 API Token"""
     try:
-        deleted = UserMgr.delete_api_token(db, username, token)
+        deleted = UserMgr.delete_api_key(db, username, key)
         if deleted:
             return success_response(None, "API key deleted successfully")
         else:
