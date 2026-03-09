@@ -11,6 +11,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Body, Response
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Annotated, Any
@@ -265,8 +266,8 @@ def healthz(response: Response):
 
 
 @router.get("/ping", summary="连通测试") # noqa: F821
-def ping():
-    return "pong", 200
+async def ping():
+    return PlainTextResponse("pong")
 
 
 @router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌", response_model=dict[str, Any])

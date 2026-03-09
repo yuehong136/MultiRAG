@@ -1,19 +1,3 @@
-#
-#  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-#
-
 import json
 import time
 import urllib.parse
@@ -812,7 +796,9 @@ class MultiRAGClient:
         response = self.http_client.request("POST", "kb/list", json_body={}, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
-            self._print_table_simple(res_json.get("data", []))
+            data = res_json.get("data", {})
+            datasets = data.get("kbs", []) if isinstance(data, dict) else data
+            self._print_table_simple(datasets)
         else:
             print(f"Fail to list datasets, code: {res_json.get('retcode')}, message: {res_json.get('retmsg')}")
 
@@ -880,13 +866,12 @@ class MultiRAGClient:
 
     def login_user(self, command: dict):
         """Re-login as a different user during interactive session."""
-        from user import login_user as do_login, encrypt_password
+        from user import login_user as do_login
         email: str = command["email"]
         import getpass
         password = getpass.getpass(f"password for {email}: ").strip()
         try:
-            enc = encrypt_password(password)
-            token = do_login(self.http_client, self.server_type, email, enc)
+            token = do_login(self.http_client, self.server_type, email, password)
             if not token.startswith("Bearer "):
                 token = f"Bearer {token}"
             self.http_client.login_token = token
@@ -895,23 +880,36 @@ class MultiRAGClient:
             print(f"Login failed: {e}")
 
     def ping_server(self, command: dict):
-        if self.server_type == "admin":
-            response = self.http_client.request("GET", "admin/ping", use_api_base=True, auth_kind="admin")
+        iterations = command.get("iterations", 1)
+        if iterations > 1:
+            response = self.http_client.request("GET", "system/ping", use_api_base=False, auth_kind=None,
+                                                iterations=iterations)
+            return response
         else:
-            response = self.http_client.request("GET", "user/info", use_api_base=False, auth_kind="web")
-        if response.status_code == 200:
-            print("Server is alive")
-        else:
-            print("Server is down")
+            response = self.http_client.request("GET", "system/ping", use_api_base=False, auth_kind=None)
+            is_alive = False
+            if response.status_code == 200:
+                if response.content == b"pong":
+                    is_alive = True
+                else:
+                    try:
+                        payload = response.json()
+                    except Exception:
+                        payload = None
+                    if payload == ["pong", 200]:
+                        is_alive = True
+            if is_alive:
+                print("Server is alive")
+            else:
+                print("Server is down")
+            return None
 
     def register_user(self, command: dict):
-        from user import encrypt_password
         user_name: str = command["user_name"]
         nickname: str = command["nickname"]
         password: str = command["password"]
-        enc_password = encrypt_password(password)
         print(f"Register user: {nickname}, email: {user_name}, password: ******")
-        payload = {"email": user_name, "nickname": nickname, "password": enc_password}
+        payload = {"email": user_name, "nickname": nickname, "password": password}
         response = self.http_client.request("POST", "user/register", json_body=payload, use_api_base=False, auth_kind=None)
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
@@ -1500,7 +1498,7 @@ def run_command(client: MultiRAGClient, command_dict: dict):
         case "login_user":
             client.login_user(command_dict)
         case "ping_server":
-            client.ping_server(command_dict)
+            return client.ping_server(command_dict)
         case "register_user":
             client.register_user(command_dict)
         case "show_current_user":
@@ -1572,9 +1570,13 @@ def _run_benchmark(client: MultiRAGClient, command_dict: dict):
         count = 0
         for resp in response_list:
             try:
-                rj = resp.json()
-                if resp.status_code == 200 and rj.get("code", rj.get("retcode", -1)) == 0:
-                    count += 1
+                if command_type == "ping_server":
+                    if resp.status_code == 200:
+                        count += 1
+                else:
+                    rj = resp.json()
+                    if resp.status_code == 200 and rj.get("code", rj.get("retcode", -1)) == 0:
+                        count += 1
             except Exception:
                 pass
         return count

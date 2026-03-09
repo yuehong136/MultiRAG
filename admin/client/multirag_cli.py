@@ -1,13 +1,10 @@
 import argparse
-import base64
 import sys
 from cmd import Cmd
 from typing import Any
 
 import getpass
 import warnings
-from Cryptodome.PublicKey import RSA
-from Cryptodome.Cipher import PKCS1_v1_5 as Cipher_pkcs1_v1_5
 from lark import Lark, Tree
 from parser import GRAMMAR, MultiRAGCLITransformer
 from http_client import HttpClient
@@ -15,14 +12,6 @@ from multirag_client import MultiRAGClient, run_command, show_help
 from user import login_user
 
 warnings.filterwarnings("ignore", category=getpass.GetPassWarning)
-
-
-def encrypt(input_string):
-    pub = '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArq9XTUSeYr2+N1h3Afl/z8Dse/2yD0ZGrKwx+EEEcdsBLca9Ynmx3nIB5obmLlSfmskLpBo0UACBmB5rEjBp2Q2f3AG3Hjd4B+gNCG6BDaawuDlgANIhGnaTLrIqWrrcm4EMzJOnAOI1fgzJRsOOUEfaS318Eq9OVO3apEyCCt0lOQK6PuksduOjVxtltDav+guVAA068NrPYmRNabVKRNLJpL8w4D44sfth5RvZ3q9t+6RTArpEtc5sh5ChzvqPOzKGMXW83C95TxmXqpbK6olN4RevSfVjEAgCydH6HN6OhtOQEcnrU97r9H0iZOWwbw3pVrZiUkuRD1R56Wzs2wIDAQAB\n-----END PUBLIC KEY-----'
-    pub_key = RSA.importKey(pub)
-    cipher = Cipher_pkcs1_v1_5.new(pub_key)
-    cipher_text = cipher.encrypt(base64.b64encode(input_string.encode('utf-8')))
-    return base64.b64encode(cipher_text).decode("utf-8")
 
 
 class MultiRAGCLI(Cmd):
@@ -79,7 +68,7 @@ class MultiRAGCLI(Cmd):
         except Exception as e:
             return {'type': 'error', 'message': f'Parse error: {str(e)}'}
 
-    def verify_auth(self, arguments: dict[str, str | int], single_command: bool) -> bool:
+    def verify_auth(self, arguments: dict[str, str | int], single_command: bool, auth: bool = True) -> bool:
         host = str(arguments["host"])
         port = int(arguments["port"])
         server_type = str(arguments.get("type", "admin"))
@@ -87,6 +76,10 @@ class MultiRAGCLI(Cmd):
         self.mode = server_type
 
         http_client = HttpClient(host, port)
+
+        if not auth:
+            self.multirag_client = MultiRAGClient(http_client, server_type)
+            return True
 
         if server_type == "admin":
             print("Attempt to access server for admin login")
@@ -107,8 +100,7 @@ class MultiRAGCLI(Cmd):
                 f"password for {self.account}: "
             ).strip()
             try:
-                encrypted_passwd = encrypt(account_passwd)
-                token = login_user(http_client, server_type, self.account, encrypted_passwd)
+                token = login_user(http_client, server_type, self.account, account_passwd)
                 if not token.startswith("Bearer "):
                     token = f"Bearer {token}"
                 http_client.login_token = token
@@ -133,7 +125,7 @@ class MultiRAGCLI(Cmd):
         run_command(self.multirag_client, command_dict)
 
     def run_interactive(self, args: dict[str, Any]):
-        if self.verify_auth(args, single_command=False):
+        if self.verify_auth(args, single_command=False, auth=args.get("auth", True)):
             print(r"""
         __  ___      __  _ ____  ___   ______   ________    ____
        /  |/  /_  __/ /_(_) __ \/   | / ____/  / ____/ /   /  _/
@@ -144,15 +136,15 @@ class MultiRAGCLI(Cmd):
             self.cmdloop()
 
     def run_single_command(self, args: dict[str, Any]):
-        if self.verify_auth(args, single_command=True):
+        if self.verify_auth(args, single_command=True, auth=args.get("auth", True)):
             command: str = args['command']
             result = self.parse_command(command)
             self.execute_command(result)
 
     def parse_connection_args(self, args: list[str]) -> dict[str, Any]:
         parser = argparse.ArgumentParser(description="MultiRAG CLI Client", add_help=False)
-        parser.add_argument("-h", "--host", default="localhost", help="Admin or MultiRAG service host")
-        parser.add_argument("-p", "--port", type=int, default=8130, help="Admin or MultiRAG service port")
+        parser.add_argument("-h", "--host", default="127.0.0.1", help="Admin or MultiRAG service host")
+        parser.add_argument("-p", "--port", type=int, default=None, help="Service port (default: 8130 for admin mode, 8123 for user mode)")
         parser.add_argument("-w", "--password", default="admin", type=str, help="Account password")
         parser.add_argument("-t", "--type", default="admin", type=str, help="CLI mode: admin or user")
         parser.add_argument(
@@ -164,30 +156,33 @@ class MultiRAGCLI(Cmd):
         try:
             parsed_args, remaining_args = parser.parse_known_args(args)
             mode = parsed_args.type.lower()
+            port = parsed_args.port if parsed_args.port is not None else (8130 if mode == "admin" else 8123)
             username = parsed_args.username
+            auth = True
             if mode == "admin":
                 if username is None:
                     username = "admin@datav.com"
             else:
                 if username is None:
-                    print("Error: username (-u) is required in user mode")
-                    return {"error": "Username required"}
+                    auth = False
 
             if remaining_args:
                 command = remaining_args[0]
                 return {
                     "host": parsed_args.host,
-                    "port": parsed_args.port,
+                    "port": port,
                     "password": parsed_args.password,
                     "type": mode,
                     "username": username,
+                    "auth": auth,
                     "command": command,
                 }
             return {
                 "host": parsed_args.host,
-                "port": parsed_args.port,
+                "port": port,
                 "type": mode,
                 "username": username,
+                "auth": auth,
             }
         except SystemExit:
             return {"error": "Invalid connection arguments"}

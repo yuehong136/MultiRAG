@@ -19,8 +19,8 @@ def encrypt_password(password_plain: str) -> str:
 
 
 def login_user(client: HttpClient, server_type: str, email: str, password: str) -> str:
-    payload = {"email": email, "password": password}
     if server_type == "admin":
+        payload = {"email": email, "password": encrypt_password(password)}
         response = client.request("POST", "/admin/login", use_api_base=True, auth_kind=None, json_body=payload)
     else:
         payload = {"username": email, "password": password}
