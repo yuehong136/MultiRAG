@@ -5,7 +5,8 @@ start: command
 
 command: sql_command | meta_command
 
-sql_command: list_services
+sql_command: login_user
+           | list_services
            | show_service
            | startup_service
            | shutdown_service
@@ -43,6 +44,39 @@ sql_command: list_services
            | list_user_chats
            | list_user_model_providers
            | list_user_default_models
+           | ping_server
+           | register_user
+           | show_current_user
+           | set_default_llm
+           | set_default_vlm
+           | set_default_embedding
+           | set_default_reranker
+           | set_default_asr
+           | set_default_tts
+           | reset_default_llm
+           | reset_default_vlm
+           | reset_default_embedding
+           | reset_default_reranker
+           | reset_default_asr
+           | reset_default_tts
+           | create_model_provider
+           | drop_model_provider
+           | create_user_dataset_with_parser
+           | create_user_dataset_with_pipeline
+           | drop_user_dataset
+           | list_user_dataset_files
+           | create_user_chat
+           | drop_user_chat
+           | create_chat_session
+           | drop_chat_session
+           | list_chat_sessions
+           | chat_on_session
+           | import_docs_into_dataset
+           | search_on_datasets
+           | parse_dataset_docs
+           | parse_dataset_sync
+           | parse_dataset_async
+           | benchmark
 
 // meta command definition
 meta_command: "\\" meta_command_name [meta_args]
@@ -98,6 +132,34 @@ MODELS: "MODELS"i
 PROVIDERS: "PROVIDERS"i
 DEFAULT: "DEFAULT"i
 CHATS: "CHATS"i
+FILES: "FILES"i
+PING: "PING"i
+LOGIN: "LOGIN"i
+REGISTER: "REGISTER"i
+CURRENT: "CURRENT"i
+PROVIDER: "PROVIDER"i
+LLM: "LLM"i
+VLM: "VLM"i
+EMBEDDING: "EMBEDDING"i
+RERANKER: "RERANKER"i
+ASR: "ASR"i
+TTS: "TTS"i
+IMPORT: "IMPORT"i
+INTO: "INTO"i
+WITH: "WITH"i
+PARSER: "PARSER"i
+PIPELINE: "PIPELINE"i
+PARSE: "PARSE"i
+SEARCH: "SEARCH"i
+ASYNC: "ASYNC"i
+SYNC: "SYNC"i
+SESSION: "SESSION"i
+SESSIONS: "SESSIONS"i
+BENCHMARK: "BENCHMARK"i
+AS: "AS"i
+RESET: "RESET"i
+DATASET: "DATASET"i
+CHAT: "CHAT"i
 
 list_services: LIST SERVICES ";"
 show_service: SHOW SERVICE NUMBER ";"
@@ -146,6 +208,41 @@ list_user_agents: LIST AGENTS ";"
 list_user_chats: LIST CHATS ";"
 list_user_model_providers: LIST MODEL PROVIDERS ";"
 list_user_default_models: LIST DEFAULT MODELS ";"
+
+login_user: LOGIN USER quoted_string ";"
+ping_server: PING ";"
+show_current_user: SHOW CURRENT USER ";"
+register_user: REGISTER USER quoted_string AS quoted_string PASSWORD quoted_string ";"
+create_model_provider: CREATE MODEL PROVIDER quoted_string quoted_string ";"
+drop_model_provider: DROP MODEL PROVIDER quoted_string ";"
+set_default_llm: SET DEFAULT LLM quoted_string ";"
+set_default_vlm: SET DEFAULT VLM quoted_string ";"
+set_default_embedding: SET DEFAULT EMBEDDING quoted_string ";"
+set_default_reranker: SET DEFAULT RERANKER quoted_string ";"
+set_default_asr: SET DEFAULT ASR quoted_string ";"
+set_default_tts: SET DEFAULT TTS quoted_string ";"
+reset_default_llm: RESET DEFAULT LLM ";"
+reset_default_vlm: RESET DEFAULT VLM ";"
+reset_default_embedding: RESET DEFAULT EMBEDDING ";"
+reset_default_reranker: RESET DEFAULT RERANKER ";"
+reset_default_asr: RESET DEFAULT ASR ";"
+reset_default_tts: RESET DEFAULT TTS ";"
+create_user_dataset_with_parser: CREATE DATASET quoted_string WITH EMBEDDING quoted_string PARSER quoted_string ";"
+create_user_dataset_with_pipeline: CREATE DATASET quoted_string WITH EMBEDDING quoted_string PIPELINE quoted_string ";"
+drop_user_dataset: DROP DATASET quoted_string ";"
+list_user_dataset_files: LIST FILES OF DATASET quoted_string ";"
+create_user_chat: CREATE CHAT quoted_string ";"
+drop_user_chat: DROP CHAT quoted_string ";"
+create_chat_session: CREATE CHAT quoted_string SESSION ";"
+drop_chat_session: DROP CHAT quoted_string SESSION quoted_string ";"
+list_chat_sessions: LIST CHAT quoted_string SESSIONS ";"
+chat_on_session: CHAT quoted_string ON quoted_string SESSION quoted_string ";"
+import_docs_into_dataset: IMPORT quoted_string INTO DATASET quoted_string ";"
+search_on_datasets: SEARCH quoted_string ON DATASETS quoted_string ";"
+parse_dataset_docs: PARSE quoted_string OF DATASET quoted_string ";"
+parse_dataset_sync: PARSE DATASET quoted_string SYNC ";"
+parse_dataset_async: PARSE DATASET quoted_string ASYNC ";"
+benchmark: BENCHMARK NUMBER NUMBER sql_command
 
 action_list: identifier ("," identifier)*
 
@@ -329,6 +426,152 @@ class MultiRAGCLITransformer(Transformer):
 
     def list_user_default_models(self, items):
         return {"type": "list_user_default_models"}
+
+    def login_user(self, items):
+        email = items[2].children[0].strip("'\"")
+        return {"type": "login_user", "email": email}
+
+    def ping_server(self, items):
+        return {"type": "ping_server"}
+
+    def register_user(self, items):
+        user_name = items[2].children[0].strip("'\"")
+        nickname = items[4].children[0].strip("'\"")
+        password = items[6].children[0].strip("'\"")
+        return {"type": "register_user", "user_name": user_name, "nickname": nickname, "password": password}
+
+    def show_current_user(self, items):
+        return {"type": "show_current_user"}
+
+    def create_model_provider(self, items):
+        provider_name = items[3].children[0].strip("'\"")
+        provider_key = items[4].children[0].strip("'\"")
+        return {"type": "create_model_provider", "provider_name": provider_name, "provider_key": provider_key}
+
+    def drop_model_provider(self, items):
+        provider_name = items[3].children[0].strip("'\"")
+        return {"type": "drop_model_provider", "provider_name": provider_name}
+
+    def set_default_llm(self, items):
+        model_id = items[3].children[0].strip("'\"")
+        return {"type": "set_default_model", "model_type": "llm_id", "model_id": model_id}
+
+    def set_default_vlm(self, items):
+        model_id = items[3].children[0].strip("'\"")
+        return {"type": "set_default_model", "model_type": "img2txt_id", "model_id": model_id}
+
+    def set_default_embedding(self, items):
+        model_id = items[3].children[0].strip("'\"")
+        return {"type": "set_default_model", "model_type": "embd_id", "model_id": model_id}
+
+    def set_default_reranker(self, items):
+        model_id = items[3].children[0].strip("'\"")
+        return {"type": "set_default_model", "model_type": "rerank_id", "model_id": model_id}
+
+    def set_default_asr(self, items):
+        model_id = items[3].children[0].strip("'\"")
+        return {"type": "set_default_model", "model_type": "asr_id", "model_id": model_id}
+
+    def set_default_tts(self, items):
+        model_id = items[3].children[0].strip("'\"")
+        return {"type": "set_default_model", "model_type": "tts_id", "model_id": model_id}
+
+    def reset_default_llm(self, items):
+        return {"type": "reset_default_model", "model_type": "llm_id"}
+
+    def reset_default_vlm(self, items):
+        return {"type": "reset_default_model", "model_type": "img2txt_id"}
+
+    def reset_default_embedding(self, items):
+        return {"type": "reset_default_model", "model_type": "embd_id"}
+
+    def reset_default_reranker(self, items):
+        return {"type": "reset_default_model", "model_type": "rerank_id"}
+
+    def reset_default_asr(self, items):
+        return {"type": "reset_default_model", "model_type": "asr_id"}
+
+    def reset_default_tts(self, items):
+        return {"type": "reset_default_model", "model_type": "tts_id"}
+
+    def create_user_dataset_with_parser(self, items):
+        dataset_name = items[2].children[0].strip("'\"")
+        embedding = items[5].children[0].strip("'\"")
+        parser_type = items[7].children[0].strip("'\"")
+        return {"type": "create_user_dataset", "dataset_name": dataset_name, "embedding": embedding, "parser_type": parser_type}
+
+    def create_user_dataset_with_pipeline(self, items):
+        dataset_name = items[2].children[0].strip("'\"")
+        embedding = items[5].children[0].strip("'\"")
+        pipeline = items[7].children[0].strip("'\"")
+        return {"type": "create_user_dataset", "dataset_name": dataset_name, "embedding": embedding, "pipeline": pipeline}
+
+    def drop_user_dataset(self, items):
+        dataset_name = items[2].children[0].strip("'\"")
+        return {"type": "drop_user_dataset", "dataset_name": dataset_name}
+
+    def list_user_dataset_files(self, items):
+        dataset_name = items[4].children[0].strip("'\"")
+        return {"type": "list_user_dataset_files", "dataset_name": dataset_name}
+
+    def create_user_chat(self, items):
+        chat_name = items[2].children[0].strip("'\"")
+        return {"type": "create_user_chat", "chat_name": chat_name}
+
+    def drop_user_chat(self, items):
+        chat_name = items[2].children[0].strip("'\"")
+        return {"type": "drop_user_chat", "chat_name": chat_name}
+
+    def create_chat_session(self, items):
+        chat_name = items[2].children[0].strip("'\"")
+        return {"type": "create_chat_session", "chat_name": chat_name}
+
+    def drop_chat_session(self, items):
+        chat_name = items[2].children[0].strip("'\"")
+        session_id = items[4].children[0].strip("'\"")
+        return {"type": "drop_chat_session", "chat_name": chat_name, "session_id": session_id}
+
+    def list_chat_sessions(self, items):
+        chat_name = items[2].children[0].strip("'\"")
+        return {"type": "list_chat_sessions", "chat_name": chat_name}
+
+    def chat_on_session(self, items):
+        message = items[1].children[0].strip("'\"")
+        chat_name = items[3].children[0].strip("'\"")
+        session_id = items[5].children[0].strip("'\"")
+        return {"type": "chat_on_session", "message": message, "chat_name": chat_name, "session_id": session_id}
+
+    def import_docs_into_dataset(self, items):
+        document_list_str = items[1].children[0].strip("'\"")
+        document_paths = [p.strip() for p in document_list_str.split(",")]
+        dataset_name = items[4].children[0].strip("'\"")
+        return {"type": "import_docs_into_dataset", "dataset_name": dataset_name, "document_paths": document_paths}
+
+    def search_on_datasets(self, items):
+        question = items[1].children[0].strip("'\"")
+        datasets_str = items[4].children[0].strip("'\"")
+        datasets = [d.strip() for d in datasets_str.split(",")]
+        return {"type": "search_on_datasets", "datasets": datasets, "question": question}
+
+    def parse_dataset_docs(self, items):
+        document_list_str = items[1].children[0].strip("'\"")
+        document_names = [d.strip() for d in document_list_str.split(",")]
+        dataset_name = items[4].children[0].strip("'\"")
+        return {"type": "parse_dataset_docs", "dataset_name": dataset_name, "document_names": document_names}
+
+    def parse_dataset_sync(self, items):
+        dataset_name = items[2].children[0].strip("'\"")
+        return {"type": "parse_dataset", "dataset_name": dataset_name, "method": "sync"}
+
+    def parse_dataset_async(self, items):
+        dataset_name = items[2].children[0].strip("'\"")
+        return {"type": "parse_dataset", "dataset_name": dataset_name, "method": "async"}
+
+    def benchmark(self, items):
+        concurrency = int(str(items[1]))
+        iterations = int(str(items[2]))
+        command = items[3] if isinstance(items[3], dict) else items[3].children[0]
+        return {"type": "benchmark", "concurrency": concurrency, "iterations": iterations, "command": command}
 
     def action_list(self, items):
         return items

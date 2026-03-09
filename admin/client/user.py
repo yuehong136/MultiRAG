@@ -38,3 +38,14 @@ def login_user(client: HttpClient, server_type: str, email: str, password: str) 
     if not token:
         raise AuthException("Login failed: missing Authorization header")
     return token
+
+
+def register_user(client: HttpClient, email: str, nickname: str, password: str) -> None:
+    payload = {"email": email, "nickname": nickname, "password": password}
+    res = client.request_json("POST", "/user/register", use_api_base=False, auth_kind=None, json_body=payload)
+    if res.get("code", res.get("retcode", -1)) == 0:
+        return
+    msg = res.get("message", res.get("retmsg", ""))
+    if "has already registered" in msg:
+        return
+    raise AuthException(f"Register failed: {msg}")
