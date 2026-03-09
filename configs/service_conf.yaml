@@ -74,6 +74,8 @@ oss:
   region: 'cn-hangzhou'
   bucket: 'bucket_name'
   prefix_path: 'prefix_path'
+  signature_version: 's3'
+  addressing_style: 'virtual'
 
 milvus:
   # Milvus服务的主机地址
