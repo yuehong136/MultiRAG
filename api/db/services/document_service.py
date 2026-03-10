@@ -1820,7 +1820,7 @@ class DocumentService(CommonService):
 
     @classmethod
     def remove_document(cls, db: Session, doc: Document, tenant_id: str):
-        from api.db.services.task_service import TaskService
+        from api.db.services.task_service import TaskService, cancel_all_task_of
         # 在删除文档前先保存需要的属性
         doc_id = doc.id
         cls.clear_chunk_num(db, doc.id)
@@ -1835,7 +1835,14 @@ class DocumentService(CommonService):
             else search.index_name_one(tenant_id, kb.name)
         )
 
-        # Delete tasks first
+        # Cancel all running tasks first — set cancel flag in Redis
+        try:
+            cancel_all_task_of(db, doc.id)
+            logging.info(f"Cancelled all tasks for document {doc_id}")
+        except Exception as e:
+            logging.warning(f"Failed to cancel tasks for document {doc_id}: {e}")
+
+        # Delete tasks from database
         try:
             TaskService.filter_delete(db, [Task.doc_id == doc.id])
         except Exception as e:
