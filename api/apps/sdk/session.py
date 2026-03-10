@@ -1122,6 +1122,7 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
     use_kg = req.get("use_kg", False)
     top = int(req.get("top_k", 1024))
     langs = req.get("cross_languages", [])
+    rerank_id = req.get("rerank_id", "")
     tenant_ids = []
 
     if not tenant_id:
@@ -1136,6 +1137,15 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
             if meta_data_filter.get("method") in ["auto", "semi_auto"]:
                 chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
             doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
+        # Apply search_config settings if not explicitly provided in request
+        if not req.get("similarity_threshold"):
+            similarity_threshold = float(search_config.get("similarity_threshold", similarity_threshold))
+        if not req.get("vector_similarity_weight"):
+            vector_similarity_weight = float(search_config.get("vector_similarity_weight", vector_similarity_weight))
+        if not req.get("top_k"):
+            top = int(search_config.get("top_k", top))
+        if not req.get("rerank_id"):
+            rerank_id = search_config.get("rerank_id", "")
 
     try:
         tenants = UserTenantService.query(db, user_id=tenant_id)
@@ -1157,8 +1167,8 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
 
         rerank_mdl = None
-        if req.get("rerank_id"):
-            rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=req["rerank_id"])
+        if rerank_id:
+            rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=rerank_id)
 
         if req.get("keyword", False):
             chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
