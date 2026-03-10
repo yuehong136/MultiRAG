@@ -1025,6 +1025,7 @@ def chatbots_inputs(dialog_id: str, db: Session = Depends(get_db)):
             "title": dialog.name,
             "avatar": dialog.icon,
             "prologue": dialog.prompt_config.get("prologue", ""),
+            "has_tavily_key": bool(dialog.prompt_config.get("tavily_api_key", "").strip()),
         }
     )
 
