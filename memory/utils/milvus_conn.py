@@ -313,6 +313,45 @@ class MilvusConnection(MilvusConnectionBase):
             self.logger.warning(f"Milvus get_forgotten_messages error: {e}")
             return []
 
+    def get_missing_field_message(self, select_fields: list[str], index_name: str, memory_id: str, field_name: str, limit: int = 512):
+        """
+        Get messages missing a specific field.
+
+        :param select_fields: Fields to return
+        :param index_name: Index/collection name
+        :param memory_id: Memory ID
+        :param field_name: Field name to check for missing
+        :param limit: Maximum number of results
+        :return: List of result documents
+        """
+        collection_name = f"{index_name}_{memory_id}"
+        if not utility.has_collection(collection_name, using=self._using):
+            return []
+
+        collection = Collection(collection_name, using=self._using)
+        collection.load()
+
+        milvus_select_fields = [self.convert_field_name(f) for f in select_fields]
+        if "id" not in milvus_select_fields:
+            milvus_select_fields.append("id")
+
+        # Milvus with enable_dynamic_field: query records where field doesn't exist
+        # Since Milvus doesn't natively support "field not exists" filter,
+        # we query all and filter in Python
+        filter_expr = f'memory_id == "{memory_id}"'
+        try:
+            results = collection.query(
+                expr=filter_expr,
+                output_fields=milvus_select_fields + [field_name],
+                limit=limit,
+            )
+            # Filter records where the field is missing or empty
+            missing = [r for r in results if not r.get(field_name)]
+            return missing
+        except Exception as e:
+            self.logger.warning(f"Milvus get_missing_field_message error: {e}")
+            return []
+
     def get(self, doc_id: str, index_name: str, memory_ids: list[str]) -> dict | None:
         """
         Get a message by ID.

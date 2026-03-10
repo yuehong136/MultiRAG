@@ -24,7 +24,7 @@ from common.file_utils import get_project_base_directory
 from common.constants import LLMType
 from scripts.init_ai_guard_system import init_ai_guard_system
 from api.db.services.system_settings_service import SystemSettingsService
-from api.db.joint_services.memory_message_service import init_message_id_sequence, init_memory_size_cache
+from api.db.joint_services.memory_message_service import init_message_id_sequence, init_memory_size_cache, fix_missing_tokenized_memory
 # from api.common.base64 import encode_to_base64
 
 # 超级用户默认配置（支持环境变量覆盖）
@@ -322,6 +322,7 @@ def _init_web_data_with_db(db: Session) -> None:
         # Initialize message ID sequence and memory size cache
         init_message_id_sequence(db)
         init_memory_size_cache(db)
+        fix_missing_tokenized_memory(db)
 
         logging.info("init web data success:{}".format(time.time() - start_time))
     except Exception:
