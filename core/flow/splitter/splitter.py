@@ -23,6 +23,7 @@ from common.misc_utils import get_uuid
 from core.utils.base64_image import id2image, image2id
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.splitter.schema import SplitterFromUpstream
+from common.float_utils import normalize_overlapped_percent
 from core.nlp import attach_media_context, naive_merge, naive_merge_with_images
 from common import settings
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser
@@ -69,6 +70,7 @@ class Splitter(ProcessBase):
 
         self.set_output("output_format", "chunks")
         self.callback(random.randint(1, 5) / 100.0, "Start to split into chunks.")
+        overlapped_percent = normalize_overlapped_percent(self._param.overlapped_percent)
         if from_upstream.output_format in ["markdown", "text", "html"]:
             if from_upstream.output_format == "markdown":
                 payload = from_upstream.markdown_result
@@ -84,7 +86,7 @@ class Splitter(ProcessBase):
                 payload,
                 self._param.chunk_token_size,
                 deli,
-                self._param.overlapped_percent,
+                overlapped_percent,
             )
             if custom_pattern:
                 docs = []
@@ -130,7 +132,7 @@ class Splitter(ProcessBase):
             section_images,
             self._param.chunk_token_size,
             deli,
-            self._param.overlapped_percent,
+            overlapped_percent,
         )
         cks = [
             {

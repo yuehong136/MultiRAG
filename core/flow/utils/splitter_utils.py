@@ -15,6 +15,7 @@ import re
 from copy import deepcopy
 
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser
+from common.float_utils import normalize_overlapped_percent
 from core.nlp import naive_merge, naive_merge_with_images, attach_media_context
 from common.misc_utils import thread_pool_exec
 
@@ -81,7 +82,10 @@ class FlowSplitter:
         
         # 处理 children_delimiters（参考 core/flow/splitter/splitter.py 第 64 行简化后的逻辑）
         custom_pattern = "|".join(re.escape(t) for t in sorted(set(children_delimiters), key=len, reverse=True)) if children_delimiters else ""
-        
+
+        # 归一化重叠百分比（支持 0-1 小数和 0-90 整数两种格式）
+        overlapped_percent = normalize_overlapped_percent(overlapped_percent)
+
         # 调用底层切分函数
         chunks = await _to_thread(naive_merge, text, chunk_token_size, deli, overlapped_percent)
         
@@ -161,7 +165,10 @@ class FlowSplitter:
         
         # 处理 children_delimiters（参考 core/flow/splitter/splitter.py 第 64 行简化后的逻辑）
         custom_pattern = "|".join(re.escape(t) for t in sorted(set(children_delimiters), key=len, reverse=True)) if children_delimiters else ""
-        
+
+        # 归一化重叠百分比（支持 0-1 小数和 0-90 整数两种格式）
+        overlapped_percent = normalize_overlapped_percent(overlapped_percent)
+
         # 调用底层切分函数（带图片）
         chunks, chunk_images = await _to_thread(
             naive_merge_with_images,
