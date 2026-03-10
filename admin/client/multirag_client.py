@@ -866,6 +866,18 @@ class MultiRAGClient:
 
     def login_user(self, command: dict):
         """Re-login as a different user during interactive session."""
+        try:
+            response = self.http_client.request("GET", "system/ping", use_api_base=False, auth_kind="web")
+            if response.status_code == 200 and response.content == b"pong":
+                pass
+            else:
+                print("Server is down")
+                return
+        except Exception as e:
+            print(str(e))
+            print("Can't access server for login (connection failed)")
+            return
+
         from user import login_user as do_login
         email: str = command["email"]
         import getpass
