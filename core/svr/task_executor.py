@@ -49,7 +49,7 @@ from common.string_utils import split_and_sanitize_terms, truncate_utf8_bytes
 from common.exceptions import TaskCanceledException
 from common.log_utils import init_root_logger
 from common.config_utils import show_configs
-from common.metadata_utils import update_metadata_to, metadata_schema
+from common.metadata_utils import update_metadata_to, turn2jsonschema
 from common.misc_utils import thread_pool_exec
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from common.connection_utils import timeout
@@ -596,7 +596,7 @@ async def build_chunks(task, progress_callback, db: Session):
                     progress_callback(-1, msg="Task has been canceled.")
                     return
                 async with chat_limiter:
-                    cached = await gen_metadata(chat_mdl, metadata_schema(task["parser_config"]["metadata"]), d["content_with_weight"])
+                    cached = await gen_metadata(chat_mdl, turn2jsonschema(task["parser_config"]["metadata"]), d["content_with_weight"])
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "metadata", task["parser_config"]["metadata"])
             if cached:
                 d["metadata_obj"] = cached

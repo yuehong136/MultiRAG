@@ -46,6 +46,34 @@ class DocumentService(CommonService):
     def __init__(self):
         super().__init__(Document)
 
+    @staticmethod
+    def _normalize_graph_source_ids(graph_source: Any) -> list[str]:
+        if not graph_source:
+            return []
+
+        if isinstance(graph_source, dict):
+            if "source_id" in graph_source:
+                return DocumentService._normalize_graph_source_ids(graph_source["source_id"])
+
+            for value in graph_source.values():
+                source_ids = DocumentService._normalize_graph_source_ids(value)
+                if source_ids:
+                    return source_ids
+            return []
+
+        if isinstance(graph_source, str):
+            if "\n" in graph_source:
+                return [source_id for source_id in graph_source.splitlines() if source_id]
+            return [graph_source] if graph_source else []
+
+        if isinstance(graph_source, (list, tuple, set)):
+            source_ids: list[str] = []
+            for item in graph_source:
+                source_ids.extend(DocumentService._normalize_graph_source_ids(item))
+            return source_ids
+
+        return [str(graph_source)]
+
     @classmethod
     def get_cls_model_fields(cls):
         return [
@@ -261,16 +289,7 @@ class DocumentService(CommonService):
         if suffix:
             filters.append(cls.model.suffix.in_(suffix))
 
-        # 2) 构造“已 join”的基础 FROM（关键最小改动：select_from + join + 复用 filters）
-        base_join = (
-            select(cls.model.id)
-            .select_from(cls.model)
-            .join(File2Document, File2Document.document_id == cls.model.id)
-            .join(File, File.id == File2Document.file_id)
-            .where(*filters)
-        )
-
-        # 3) total：按文档去重计数，避免一文档多文件被重复计算
+        # 2) total：按文档去重计数，避免一文档多文件被重复计算
         total_stmt = (
             select(func.count(func.distinct(cls.model.id)))
             .select_from(cls.model)
@@ -732,11 +751,6 @@ class DocumentService(CommonService):
             has_more = (end < current_total) or (parsing_status == "parsing")
             current_batch_index = (start // bs) if bs > 0 else 0
             
-            if parsing_status == "completed":
-                total_batches = (current_total + bs - 1) // bs if bs > 0 else 0
-            else:
-                total_batches = (estimated_total + bs - 1) // bs if bs > 0 and estimated_total > 0 else None
-
             # 顺序模式推进 offset；并发批次模式在最后一批时清理会话
             if batch_index is None:
                 # 关键修复：无论status是什么，只要有更多数据，就更新offset
@@ -964,7 +978,7 @@ class DocumentService(CommonService):
                                 error_session["status"] = "error"
                                 error_session["error"] = str(e)
                                 REDIS_CONN.set_obj(session_key, error_session, exp=session_ttl)
-                        except:
+                        except Exception:
                             pass
                 
                 # 启动后台线程
@@ -1041,8 +1055,6 @@ class DocumentService(CommonService):
         current_chunks = session.get("chunks", [])
         current_total = len(current_chunks)
         parsing_status = session.get("status", "completed")
-        estimated_total = int(session.get("estimated_total", current_total))
-        
         if isinstance(batch_index, int) and batch_index >= 0:
             start = min(batch_index * bs, current_total)
         end = min(start + bs, current_total)
@@ -1061,11 +1073,6 @@ class DocumentService(CommonService):
         has_more = (end < current_total) or (parsing_status == "parsing")
         current_batch_index = (start // bs) if bs > 0 else 0
         
-        if parsing_status == "completed":
-            total_batches = (current_total + bs - 1) // bs if bs > 0 else 0
-        else:
-            total_batches = (estimated_total + bs - 1) // bs if bs > 0 and estimated_total > 0 else None
-
         # 更新或删除会话
         if batch_index is None:
             # 关键修复：无论status是什么，只要有更多数据，就更新offset
@@ -1425,13 +1432,6 @@ class DocumentService(CommonService):
             has_more = (end < current_total) or (parsing_status == "parsing")
             current_batch_index = (start // bs) if bs > 0 else 0
             
-            # 计算总批次数
-            if parsing_status == "completed":
-                total_batches = (current_total + bs - 1) // bs if bs > 0 else 0
-            else:
-                # 解析中，基于预估值计算
-                total_batches = (estimated_total + bs - 1) // bs if bs > 0 and estimated_total > 0 else None
-
             if batch_index is None:
                 # 关键修复：无论status是什么，只要有更多数据，就更新offset
                 # 避免用户晚点续取时跳过中间chunks
@@ -1525,9 +1525,6 @@ class DocumentService(CommonService):
                 effective_from = int(base_cfg.get("from_page", 0)) if isinstance(base_cfg, dict) else 0
                 effective_to = int(base_cfg.get("to_page", total_pages)) if isinstance(base_cfg, dict) else total_pages
                 effective_to = min(effective_to, total_pages)
-                
-                # 首批只解析前N页（快速返回）
-                initial_pages = min(15, effective_to - effective_from)  # 先解析15页
                 
                 # 预估总chunk数（假设每页平均3-5个chunks）
                 estimated_chunks = (effective_to - effective_from) * 4
@@ -1632,7 +1629,7 @@ class DocumentService(CommonService):
                                 error_session["status"] = "error"
                                 error_session["error"] = str(e)
                                 REDIS_CONN.set_obj(session_key, error_session, exp=session_ttl)
-                        except:
+                        except Exception:
                             pass
                 
                 # 获取信号量，限制并发解析数量
@@ -1714,8 +1711,6 @@ class DocumentService(CommonService):
         current_chunks = session.get("chunks", [])
         current_total = len(current_chunks)
         parsing_status = session.get("status", "completed")
-        estimated_total = int(session.get("estimated_total", current_total))
-        
         if isinstance(batch_index, int) and batch_index >= 0:
             start = min(batch_index * bs, current_total)
         end = min(start + bs, current_total)
@@ -1734,11 +1729,6 @@ class DocumentService(CommonService):
         has_more = (end < current_total) or (parsing_status == "parsing")
         current_batch_index = (start // bs) if bs > 0 else 0
         
-        if parsing_status == "completed":
-            total_batches = (current_total + bs - 1) // bs if bs > 0 else 0
-        else:
-            total_batches = (estimated_total + bs - 1) // bs if bs > 0 and estimated_total > 0 else None
-
         # 顺序/并发模式会话推进
         if batch_index is None:
             # 关键修复：无论status是什么，只要有更多数据，就更新offset
@@ -1900,7 +1890,8 @@ class DocumentService(CommonService):
                 ),
                 ["source_id"],
             )
-            if len(graph_source) > 0 and doc_id in list(graph_source.values())[0]["source_id"]:
+            graph_source_ids = cls._normalize_graph_source_ids(graph_source)
+            if doc_id in graph_source_ids:
                 settings.docStoreConn.update(
                     {
                         "kb_id": doc.kb_id,
@@ -2406,15 +2397,25 @@ class DocumentService(CommonService):
         return meta
 
     @classmethod
-    def get_metadata_summary(cls, db: Session, kb_id: str) -> dict:
-        """
-        获取知识库中文档元数据的汇总统计。
+    def get_metadata_summary(cls, db: Session, kb_id: str, document_ids: list[str] | None = None) -> dict:
 
-        返回: {key: [(value, count), ...], ...}，按计数降序排列
-        """
+        def _meta_value_type(value):
+            if value is None:
+                return None
+            if isinstance(value, list):
+                return "list"
+            if isinstance(value, bool):
+                return "string"
+            if isinstance(value, (int, float)):
+                return "number"
+            return "string"
+
         stmt = select(cls.model.id, cls.model.meta_fields).where(cls.model.kb_id == kb_id)
+        if document_ids:
+            stmt = stmt.where(cls.model.id.in_(document_ids))
 
         summary: dict = {}
+        type_counter: dict = {}
         for row in db.execute(stmt).mappings():
             meta_fields = row.get("meta_fields") or {}
             if isinstance(meta_fields, str):
@@ -2425,6 +2426,11 @@ class DocumentService(CommonService):
             if not isinstance(meta_fields, dict):
                 continue
             for k, v in meta_fields.items():
+                value_type = _meta_value_type(v)
+                if value_type:
+                    if k not in type_counter:
+                        type_counter[k] = {}
+                    type_counter[k][value_type] = type_counter[k].get(value_type, 0) + 1
                 values = v if isinstance(v, list) else [v]
                 for vv in values:
                     if not vv:
@@ -2433,15 +2439,21 @@ class DocumentService(CommonService):
                     if k not in summary:
                         summary[k] = {}
                     summary[k][sv] = summary[k].get(sv, 0) + 1
-        return {
-            k: sorted([(val, cnt) for val, cnt in v.items()], key=lambda x: x[1], reverse=True)
-            for k, v in summary.items()
-        }
+        result = {}
+        for k, v in summary.items():
+            values = sorted([(val, cnt) for val, cnt in v.items()], key=lambda x: x[1], reverse=True)
+            type_counts = type_counter.get(k, {})
+            value_type = "string"
+            if type_counts:
+                value_type = max(type_counts.items(), key=lambda item: item[1])[0]
+            result[k] = {"type": value_type, "values": values}
+        return result
 
     @classmethod
-    def batch_update_metadata(cls, db: Session, kb_id: str, doc_ids: list[str],
+    def batch_update_metadata(cls, db: Session, kb_id: str | None, doc_ids: list[str],
                               updates: list[dict] | None = None,
-                              deletes: list[dict] | None = None) -> int:
+                              deletes: list[dict] | None = None,
+                              adds: list[dict] | None = None) -> int:
         """
         批量更新文档元数据。
 
@@ -2479,6 +2491,8 @@ class DocumentService(CommonService):
                 key = upd.get("key")
                 if not key:
                     continue
+                if key not in meta:
+                    meta[key] = upd.get("value")
 
                 new_value = upd.get("value")
                 match_provided = "match" in upd
@@ -2547,8 +2561,7 @@ class DocumentService(CommonService):
 
         updated_docs = 0
         stmt = select(cls.model.id, cls.model.meta_fields).where(
-            cls.model.id.in_(doc_ids),
-            cls.model.kb_id == kb_id
+            cls.model.id.in_(doc_ids)
         )
         rows = list(db.execute(stmt).mappings())
 
@@ -2819,7 +2832,7 @@ class DocumentService(CommonService):
         try:
             _, doc = DocumentService.get_by_id(db, doc_id)
             return doc.run == TaskStatus.CANCEL.value or doc.progress < 0
-        except Exception as e:
+        except Exception:
             pass
         return False
 

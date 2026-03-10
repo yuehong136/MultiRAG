@@ -36,6 +36,7 @@ from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
 from common.constants import RetCode, PipelineTaskType, StatusEnum, VALID_TASK_STATUS, FileSource, LLMType, PAGERANK_FLD
 from common.doc_store.doc_store_base import OrderByExpr
+from common.metadata_utils import turn2jsonschema
 from common import settings
 
 
@@ -353,7 +354,9 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
             return get_data_error_result(retmsg="Can't find this dataset!")
         kb["size"] = DocumentService.get_total_size_by_kb_id(db, kb_id=kb["id"],keywords="", run_status=[], types=[])
         kb["connectors"] = Connector2KbService.list_connectors(db, kb_id)
-        
+        if kb.get("parser_config", {}).get("metadata"):
+            kb["parser_config"]["metadata"] = turn2jsonschema(kb["parser_config"]["metadata"])
+
         for key in ["graphrag_task_finish_at", "raptor_task_finish_at", "mindmap_task_finish_at"]:
             if finish_at := kb.get(key):
                 kb[key] = finish_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -361,19 +364,6 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     except Exception as e:
         return server_error_response(e)
 
-
-# @router.get('/list', summary="列出知识库", response_description="成功列出知识库")
-# def list_kbs(page: int = 1, page_size: int = 150, orderby: str = "create_time", desc: bool = True, keywords: str = "",
-#              db: Session = Depends(get_db), user=Depends(manager)):
-#     page_number = int(page)
-#     items_per_page = int(page_size)
-#     try:
-#         tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
-#         kbs, total = KnowledgebaseService.get_by_tenant_ids(
-#             db, [m["tenant_id"] for m in tenants], user.id, page_number, items_per_page, orderby, desc, keywords)
-#         return get_json_result(data={"kbs": kbs, "total": total})
-#     except Exception as e:
-#         return server_error_response(e)
 
 @router.post('/list', summary="列出知识库", response_description="成功列出知识库")
 def list_kbs(

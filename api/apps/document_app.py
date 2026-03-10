@@ -47,7 +47,7 @@ from api.utils.api_utils import construct_json_result, construct_error_response,
 from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import CONTENT_TYPE_MAP, html2pdf, is_valid_url
 from common.misc_utils import get_uuid, thread_pool_exec
-from common.metadata_utils import meta_filter, convert_conditions
+from common.metadata_utils import meta_filter, convert_conditions, turn2jsonschema
 from common.constants import RetCode
 from common.file_utils import get_project_base_directory
 from common import settings
@@ -513,8 +513,7 @@ class MetadataDeleteItem(BaseModel):
 
 class MetadataUpdateRequest(BaseModel):
     """元数据批量更新请求"""
-    kb_id: str = Field(..., description="知识库ID")
-    selector: MetadataUpdateSelector | None = Field(default=None, description="文档选择器")
+    doc_ids: list[str] = Field(..., description="文档ID列表")
     updates: list[MetadataUpdateItem] | list[dict] = Field(default=[], description="更新操作列表")
     deletes: list[MetadataDeleteItem] | list[dict] = Field(default=[], description="删除操作列表")
 
@@ -522,6 +521,7 @@ class MetadataUpdateRequest(BaseModel):
 class MetadataSummaryRequest(BaseModel):
     """元数据汇总请求"""
     kb_id: str = Field(..., description="知识库ID")
+    doc_ids: list[str] | None = Field(default=None, description="文档ID列表（可选，不提供则汇总整个知识库）")
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
@@ -1199,6 +1199,8 @@ def list_docs(
                 doc_item['thumbnail'] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
             if doc_item.get("source_type"):
                 doc_item["source_type"] = doc_item["source_type"].split("/")[0]
+            if doc_item.get("parser_config", {}).get("metadata"):
+                doc_item["parser_config"]["metadata"] = turn2jsonschema(doc_item["parser_config"]["metadata"])
 
         return construct_json_result(data={"total": tol, "docs": docs})
     except Exception as e:
@@ -1545,6 +1547,8 @@ def list_docs(
                 doc_item['thumbnail'] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
             if doc_item.get("source_type"):
                 doc_item["source_type"] = doc_item["source_type"].split("/")[0]
+            if doc_item.get("parser_config", {}).get("metadata"):
+                doc_item["parser_config"]["metadata"] = turn2jsonschema(doc_item["parser_config"]["metadata"])
 
         return construct_json_result(data={"total": tol, "docs": docs})
     except Exception as e:
@@ -1854,11 +1858,7 @@ def doc_infos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(ma
                 retcode=RetCode.AUTHENTICATION_ERROR
             )
     docs = DocumentService.get_by_ids(db, doc_ids)
-    # 将每个文档对象转换为字典
-    docs_dicts = [doc.__dict__ for doc in docs]
-    # 移除 '_sa_instance_state'，这个是 SQLAlchemy 内部使用的属性
-    for doc_dict in docs_dicts:
-        doc_dict.pop('_sa_instance_state', None)
+    docs_dicts = [doc.to_dict() for doc in docs]
     return get_json_result(data=docs_dicts)
 
 
@@ -3205,7 +3205,7 @@ def metadata_summary(
         )
 
     try:
-        summary = DocumentService.get_metadata_summary(db, kb_id)
+        summary = DocumentService.get_metadata_summary(db, kb_id, request.doc_ids)
         return get_json_result(data={"summary": summary})
     except Exception as e:
         return server_error_response(e)
@@ -3219,13 +3219,7 @@ def metadata_update(
 ):
     """批量更新或删除文档元数据。
 
-    如果 selector 中的 document_ids 和 metadata_condition 都未提供，则选择知识库中的所有文档。
-    如果同时提供，则取交集。
-
-    - **request.kb_id**: 知识库ID
-    - **request.selector**: 文档选择器
-        - document_ids: 文档ID列表
-        - metadata_condition: 元数据过滤条件
+    - **request.doc_ids**: 文档ID列表
     - **request.updates**: 更新操作列表
         - key: 元数据键名
         - value: 新值
@@ -3234,27 +3228,9 @@ def metadata_update(
         - key: 元数据键名
         - value: 匹配值（可选，对于列表会删除匹配的元素；不提供则删除整个键）
 
-    - **返回值**: {"updated": 更新的文档数, "matched_docs": 匹配的文档数}
+    - **返回值**: {"updated": 更新的文档数}
     """
-    kb_id = request.kb_id
-    if not kb_id:
-        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
-
-    tenants = UserTenantService.query(db, user_id=user.id)
-    for tenant in tenants:
-        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
-            break
-    else:
-        return get_json_result(
-            data=False,
-            retmsg="Only owner of dataset authorized for this operation.",
-            retcode=RetCode.OPERATING_ERROR
-        )
-
-    selector = request.selector or MetadataUpdateSelector()
-    if isinstance(selector, dict):
-        selector = MetadataUpdateSelector(**selector)
-
+    document_ids = request.doc_ids
     updates = request.updates or []
     deletes = request.deletes or []
 
@@ -3262,15 +3238,8 @@ def metadata_update(
     updates = [u.model_dump() if hasattr(u, 'model_dump') else u for u in updates]
     deletes = [d.model_dump() if hasattr(d, 'model_dump') else d for d in deletes]
 
-    metadata_condition = selector.metadata_condition
-    if metadata_condition and isinstance(metadata_condition, MetadataCondition):
-        metadata_condition = metadata_condition.model_dump()
-    if metadata_condition and not isinstance(metadata_condition, dict):
-        return get_json_result(data=False, retmsg="metadata_condition must be an object.", retcode=RetCode.ARGUMENT_ERROR)
-
-    document_ids = selector.document_ids or []
-    if document_ids and not isinstance(document_ids, list):
-        return get_json_result(data=False, retmsg="document_ids must be a list.", retcode=RetCode.ARGUMENT_ERROR)
+    if not isinstance(updates, list) or not isinstance(deletes, list):
+        return get_json_result(data=False, retmsg="updates and deletes must be lists.", retcode=RetCode.ARGUMENT_ERROR)
 
     for upd in updates:
         if not isinstance(upd, dict) or not upd.get("key") or "value" not in upd:
@@ -3279,28 +3248,8 @@ def metadata_update(
         if not isinstance(d, dict) or not d.get("key"):
             return get_json_result(data=False, retmsg="Each delete requires key.", retcode=RetCode.ARGUMENT_ERROR)
 
-    kb_doc_ids = KnowledgebaseService.list_documents_by_ids(db, [kb_id])
-    target_doc_ids = set(kb_doc_ids)
-    if document_ids:
-        invalid_ids = set(document_ids) - set(kb_doc_ids)
-        if invalid_ids:
-            return get_json_result(
-                data=False,
-                retmsg=f"These documents do not belong to dataset {kb_id}: {', '.join(invalid_ids)}",
-                retcode=RetCode.ARGUMENT_ERROR
-            )
-        target_doc_ids = set(document_ids)
-
-    if metadata_condition:
-        metas = DocumentService.get_flatted_meta_by_kbs(db, [kb_id])
-        filtered_ids = set(meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and")))
-        target_doc_ids = target_doc_ids & filtered_ids
-        if metadata_condition.get("conditions") and not target_doc_ids:
-            return get_json_result(data={"updated": 0, "matched_docs": 0})
-
-    target_doc_ids = list(target_doc_ids)
-    updated = DocumentService.batch_update_metadata(db, kb_id, target_doc_ids, updates, deletes)
-    return get_json_result(data={"updated": updated, "matched_docs": len(target_doc_ids)})
+    updated = DocumentService.batch_update_metadata(db, None, document_ids, updates, deletes)
+    return get_json_result(data={"updated": updated})
 
 
 @router.post("/update_metadata_setting", summary="更新文档元数据设置", response_description="成功更新文档元数据设置")
