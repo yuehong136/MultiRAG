@@ -312,7 +312,7 @@ def tokenize_chunks(chunks, doc, eng, pdf_parser=None, child_delimiters_pattern=
 def doc_tokenize_chunks_with_images(chunks, doc, eng, child_delimiters_pattern=None, batch_size=10):
     res = []
     for ii, ck in enumerate(chunks):
-        text = ck.get('context_above', "") + ck.get('text') + ck.get('context_below', "")
+        text = ck.get("context_above", "") + ck.get("text") + ck.get("context_below", "")
         if len(text.strip()) == 0:
             continue
         logging.debug("-- {}".format(ck))
@@ -323,7 +323,7 @@ def doc_tokenize_chunks_with_images(chunks, doc, eng, child_delimiters_pattern=N
 
         if ck.get("ck_type") == "text":
             if child_delimiters_pattern:
-                d["mom_with_weight"] = ck
+                d["mom_with_weight"] = text
                 res.extend(split_with_pattern(d, child_delimiters_pattern, text, eng))
                 continue
         elif ck.get("ck_type") == "image":
