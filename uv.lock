@@ -2667,7 +2667,7 @@ wheels = [
 
 [[package]]
 name = "infinity-sdk"
-version = "0.7.0.dev1"
+version = "0.7.0.dev2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "datrie" },
@@ -2684,9 +2684,9 @@ dependencies = [
     { name = "sqlglot", extra = ["rs"] },
     { name = "thrift" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/de/d8/7d3cc5cd15eadbb4500f927566cbae0db2db9bf291800d73134f4333c6b7/infinity_sdk-0.7.0.dev1.tar.gz", hash = "sha256:fa1f9be4cb2a4b1043960e0fae0c93bc9d4c544a5679ac6979a0c498d69123b5" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/99/3e/5d4f4d0b50750a6ef3a358e86b5d2347d511771b5a014956d3973f921f92/infinity_sdk-0.7.0.dev2.tar.gz", hash = "sha256:186a199f2250d19295ff93e52f8d2f023c96926c84e99c924c6567a3be73fb9a" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/21/d6/8e68c287d08af3a8c0511eadb81b8f9f1511be7437a369ec51ccd82b862e/infinity_sdk-0.7.0.dev1-py3-none-any.whl", hash = "sha256:5d4600b79bcff3a19c9963eddb37552749ea52358a8ab85090ee3e74b4c5a0c1" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/7c/9d/8322c9a3e13a721dedb37c5e978221b263cfbc3dae0644c5ad283c782235/infinity_sdk-0.7.0.dev2-py3-none-any.whl", hash = "sha256:8d7a071ad25a24b50e779f77d1997b792455349e87d259abcafb00539b24cd35" },
 ]
 
 [[package]]
@@ -3847,7 +3847,7 @@ requires-dist = [
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1,<0.29.0" },
     { name = "huggingface-hub", specifier = ">=0.25.0,<0.26.0" },
     { name = "infinity-emb", specifier = ">=0.0.66,<0.0.67" },
-    { name = "infinity-sdk", specifier = "==0.7.0.dev1" },
+    { name = "infinity-sdk", specifier = "==0.7.0.dev2" },
     { name = "itsdangerous", specifier = "==2.1.2" },
     { name = "jieba", specifier = ">=0.42.1" },
     { name = "jira", specifier = "==3.10.5" },
