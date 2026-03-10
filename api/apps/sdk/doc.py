@@ -1359,6 +1359,7 @@ async def retrieval_test(
             cks = await settings.retriever.retrieval_by_toc(question, ranks["chunks"], tenant_ids, chat_mdl, size)
             if cks:
                 ranks["chunks"] = cks
+        ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], tenant_ids)
         # 知识图谱增强
         if use_kg:
             ck = await settings.kg_retriever.retrieval(

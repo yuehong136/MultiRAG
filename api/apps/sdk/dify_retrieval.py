@@ -269,6 +269,7 @@ async def retrieval(
             rank_feature=label_question(db, question, [kb]),
             search_mode=search_mode_dict,
         )
+        ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], [tenant_id])
 
         # 知识图谱增强检索
         if use_kg:

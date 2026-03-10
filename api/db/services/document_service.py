@@ -2408,6 +2408,8 @@ class DocumentService(CommonService):
                 return "string"
             if isinstance(value, (int, float)):
                 return "number"
+            if re.match(r"\d{4}\-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", str(value)):
+                return "time"
             return "string"
 
         stmt = select(cls.model.id, cls.model.meta_fields).where(cls.model.kb_id == kb_id)
