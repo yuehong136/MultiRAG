@@ -2500,11 +2500,9 @@ class DocumentService(CommonService):
                 key = upd.get("key")
                 if not key:
                     continue
-                if key not in meta:
-                    meta[key] = upd.get("value")
 
                 new_value = upd.get("value")
-                match_provided = "match" in upd
+                match_provided = upd.get("match")
                 if key not in meta:
                     if match_provided:
                         continue
@@ -2517,7 +2515,7 @@ class DocumentService(CommonService):
                         if isinstance(new_value, list):
                             meta[key] = dedupe_list(new_value)
                         else:
-                            meta[key] = new_value
+                            meta[key].append(new_value)
                         changed = True
                     else:
                         match_value = upd.get("match")
