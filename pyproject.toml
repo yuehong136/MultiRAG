@@ -177,6 +177,7 @@ dependencies = [
 dev = [
     "debugpy>=1.8.13",
     "pytest>=8.3.4",
+    "ruff",
 ]
 
 [tool.uv]
@@ -185,3 +186,12 @@ python-install-mirror = "http://maven.datav.com/repository/static/indygreg/pytho
 url = "https://mirrors.aliyun.com/pypi/simple"
 trusted-host = "mirrors.aliyun.com"
 default = true
+
+[tool.ruff]
+line-length = 200
+exclude = [".venv", "core/svr/discord_svr.py"]
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "."
+]
