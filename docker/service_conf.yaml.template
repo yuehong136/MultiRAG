@@ -139,7 +139,8 @@ redis:
   db: 1
   username: '${REDIS_USERNAME:-}'
   password: '${REDIS_PASSWORD:-}'
-  host: '${REDIS_HOST:-redis}:6379'
+  host: '${REDIS_HOST:-redis}'
+  port: '${REDIS_PORT:-6379}'
 
 task_executor:
   message_queue_type: 'redis'

@@ -138,7 +138,8 @@ redis:
   db: 1
   username: ''
   password: ''
-  host: '127.0.0.1:6379'
+  host: '127.0.0.1'
+  port: 6379
 
 task_executor:
   message_queue_type: 'redis'
