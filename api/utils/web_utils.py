@@ -1,10 +1,14 @@
 import base64
+import asyncio
 import ipaddress
 import json
+from email.message import EmailMessage
+from email.utils import formataddr
 import re
 import socket
 from urllib.parse import urlparse
 import logging
+import smtplib
 
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
@@ -14,34 +18,60 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.expected_conditions import staleness_of
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
-from fastapi_mail import FastMail, MessageSchema, MessageType, ConnectionConfig
 from jinja2 import Template
 
 from api.utils.email_templates import EMAIL_TEMPLATES
 from common import settings
 
 
-def _get_mail_client() -> FastMail | None:
+def _get_mail_sender() -> tuple[str, str] | None:
     """
-    按需创建 FastMail 实例。
-    如果 SMTP 未配置，返回 None。
+    Resolve sender display name and email address from SMTP settings.
+    If SMTP is not configured, return None.
     """
     if not settings.SMTP_CONF:
         return None
 
-    config = ConnectionConfig(
-        MAIL_USERNAME=settings.MAIL_USERNAME,
-        MAIL_PASSWORD=settings.MAIL_PASSWORD,
-        MAIL_FROM=settings.MAIL_DEFAULT_SENDER[1] if settings.MAIL_DEFAULT_SENDER else settings.MAIL_USERNAME,
-        MAIL_FROM_NAME=settings.MAIL_DEFAULT_SENDER[0] if settings.MAIL_DEFAULT_SENDER else "MultiRAG",
-        MAIL_PORT=settings.MAIL_PORT,
-        MAIL_SERVER=settings.MAIL_SERVER,
-        MAIL_STARTTLS=settings.MAIL_USE_TLS,
-        MAIL_SSL_TLS=settings.MAIL_USE_SSL,
-        USE_CREDENTIALS=True,
-        VALIDATE_CERTS=True
-    )
-    return FastMail(config)
+    sender_email = settings.MAIL_DEFAULT_SENDER[1] if settings.MAIL_DEFAULT_SENDER else settings.MAIL_USERNAME
+    sender_name = settings.MAIL_DEFAULT_SENDER[0] if settings.MAIL_DEFAULT_SENDER else "MultiRAG"
+    if not sender_email:
+        return None
+    return sender_name, sender_email
+
+
+def _build_email_message(subject: str, to_email: str, html_body: str) -> EmailMessage:
+    sender = _get_mail_sender()
+    if sender is None:
+        raise ValueError("SMTP sender is not configured")
+
+    sender_name, sender_email = sender
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = formataddr((sender_name, sender_email))
+    message["To"] = to_email
+    message.set_content("This email requires an HTML-capable client.")
+    message.add_alternative(html_body, subtype="html")
+    return message
+
+
+def _send_email_sync(message: EmailMessage) -> None:
+    if settings.MAIL_USE_SSL:
+        with smtplib.SMTP_SSL(settings.MAIL_SERVER, settings.MAIL_PORT) as smtp:
+            if settings.MAIL_USERNAME:
+                smtp.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
+            smtp.send_message(message)
+        return
+
+    with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT) as smtp:
+        if settings.MAIL_USE_TLS:
+            smtp.starttls()
+        if settings.MAIL_USERNAME:
+            smtp.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
+        smtp.send_message(message)
+
+
+async def _send_email_message(message: EmailMessage) -> None:
+    await asyncio.to_thread(_send_email_sync, message)
 
 
 OTP_LENGTH = 4
@@ -249,8 +279,7 @@ async def send_email_html(subject: str, to_email: str, template_key: str, **cont
     if not tmpl:
         raise ValueError(f"Unknown email template: {template_key}")
 
-    mail_client = _get_mail_client()
-    if mail_client is None:
+    if _get_mail_sender() is None:
         logging.warning("SMTP not configured, skipping email send")
         return
 
@@ -258,15 +287,8 @@ async def send_email_html(subject: str, to_email: str, template_key: str, **cont
     template = Template(tmpl)
     html_body = template.render(**context)
 
-    # Create and send message
-    message = MessageSchema(
-        subject=subject,
-        recipients=[to_email],
-        body=html_body,
-        subtype=MessageType.html
-    )
-
-    await mail_client.send_message(message)
+    message = _build_email_message(subject, to_email, html_body)
+    await _send_email_message(message)
     logging.info(f"Email '{subject}' sent to {to_email}")
 
 
