@@ -1,24 +1,34 @@
-from mcp.client.session import ClientSession
-from mcp.client.sse import sse_client
+from fastmcp import Client
+from fastmcp.client.transports import SSETransport
 
 
 async def main():
     try:
-        # To access RAGFlow server in `host` mode, you need to attach `api_key` for each request to indicate identification.
-        # async with sse_client("http://localhost:9382/sse", headers={"api_key": "ragflow-IyMGI1ZDhjMTA2ZTExZjBiYTMyMGQ4Zm"}) as streams:
-        # Or follow the requirements of OAuth 2.1 Section 5 with Authorization header
-        # async with sse_client("http://localhost:9382/sse", headers={"Authorization": "Bearer ragflow-IyMGI1ZDhjMTA2ZTExZjBiYTMyMGQ4Zm"}) as streams:
+        # To access MultiRAG server in `host` mode, attach a Bearer token:
+        # transport = SSETransport(
+        #     url="http://localhost:9382/sse",
+        #     headers={"Authorization": "Bearer multirag-xxxxx"},
+        # )
+        # Or use api_key header:
+        # transport = SSETransport(
+        #     url="http://localhost:9382/sse",
+        #     headers={"api_key": "multirag-xxxxx"},
+        # )
 
-        async with sse_client("http://localhost:9382/sse") as streams:
-            async with ClientSession(
-                streams[0],
-                streams[1],
-            ) as session:
-                await session.initialize()
-                tools = await session.list_tools()
-                print(f"{tools.tools=}")
-                response = await session.call_tool(name="ragflow_retrieval", arguments={"dataset_ids": ["ce3bb17cf27a11efa69751e139332ced"], "document_ids": [], "question": "How to install neovim?"})
-                print(f"Tool response: {response.model_dump()}")
+        transport = SSETransport(url="http://localhost:9382/sse")
+        async with Client(transport) as client:
+            tools = await client.list_tools()
+            print(f"Tools: {[t.name for t in tools]}")
+
+            response = await client.call_tool(
+                name="multirag_retrieval",
+                arguments={
+                    "dataset_ids": ["ce3bb17cf27a11efa69751e139332ced"],
+                    "document_ids": [],
+                    "question": "How to install neovim?",
+                },
+            )
+            print(f"Tool response: {response}")
 
     except Exception as e:
         print(e)

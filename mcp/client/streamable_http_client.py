@@ -1,16 +1,25 @@
-from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from fastmcp import Client
 
 
 async def main():
     try:
-        async with streamablehttp_client("http://localhost:9382/mcp/") as (read_stream, write_stream, _):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                tools = await session.list_tools()
-                print(f"{tools.tools=}")
-                response = await session.call_tool(name="ragflow_retrieval", arguments={"dataset_ids": ["bc4177924a7a11f09eff238aa5c10c94"], "document_ids": [], "question": "How to install neovim?"})
-                print(f"Tool response: {response.model_dump()}")
+        # To access MultiRAG server in `host` mode, attach a Bearer token:
+        # async with Client("http://localhost:9382/mcp/", auth="multirag-xxxxx") as client:
+
+        async with Client("http://localhost:9382/mcp/") as client:
+            tools = await client.list_tools()
+            print(f"Tools: {[t.name for t in tools]}")
+
+            response = await client.call_tool(
+                name="multirag_retrieval",
+                arguments={
+                    "dataset_ids": ["bc4177924a7a11f09eff238aa5c10c94"],
+                    "document_ids": [],
+                    "question": "How to install neovim?",
+                },
+            )
+            print(f"Tool response: {response}")
+
     except Exception as e:
         print(e)
 

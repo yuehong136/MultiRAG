@@ -32,6 +32,19 @@ from common.connection_utils import timeout
 from common.constants import RetCode
 
 
+class SDKAuthError(Exception):
+    def __init__(
+        self,
+        retmsg: str,
+        retcode: RetCode = RetCode.AUTHENTICATION_ERROR,
+        data: bool = False,
+    ) -> None:
+        super().__init__(retmsg)
+        self.retmsg = retmsg
+        self.retcode = retcode
+        self.data = data
+
+
 async def _coerce_request_data(request: Request) -> dict:
     """
     Fetch JSON body with sane defaults; fallback to form data.
@@ -347,19 +360,19 @@ def token_required(request: Request, db: Session = Depends(get_db)):
             pass
     """
     if os.environ.get("DISABLE_SDK"):
-        return get_json_result(data=False, retmsg="`Authorization` can't be empty")
+        raise SDKAuthError("SDK API is disabled.")
     authorization_str = request.headers.get("Authorization")
     if not authorization_str:
-        return get_json_result(data=False, retmsg="`Authorization` can't be empty")
+        raise SDKAuthError("`Authorization` can't be empty")
 
     authorization_list = authorization_str.split()
     if len(authorization_list) < 2:
-        return get_json_result(data=False, retmsg="Please check your authorization format.")
+        raise SDKAuthError("Please check your authorization format.")
 
     token = authorization_list[1]
     objs = APIToken.query(db, token=token)
     if not objs:
-        return get_json_result(data=False, retmsg="Authentication error: API key is invalid!", retcode=RetCode.AUTHENTICATION_ERROR)
+        raise SDKAuthError("Authentication error: API key is invalid!")
     return objs[0].tenant_id
 # def token_required(func):
 #     @wraps(func)
@@ -399,8 +412,6 @@ def get_result(retcode=RetCode.SUCCESS, retmsg='error', data=None, total=None):
             response["data"] = data
         if total is not None:
             response["total_datasets"] = total
-        else:
-            response = {"code": retcode}
     else:
         response["message"] = retmsg or "Error"
 

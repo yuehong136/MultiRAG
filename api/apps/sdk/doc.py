@@ -1283,7 +1283,7 @@ async def retrieval_test(
     use_kg = req.get("use_kg", False)
     toc_enhance = req.get("toc_enhance", False)
     langs = req.get("cross_languages", [])
-    search_mode_dict = req.get_search_mode_dict()
+    search_mode_dict = request.get_search_mode_dict()
 
     if not isinstance(doc_ids, list):
         return get_error_data_result(retmsg="`document_ids` should be a list")
@@ -1318,8 +1318,8 @@ async def retrieval_test(
     
     try:
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
-        e, kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
-        if not e:
+        kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
+        if not kb:
             return get_error_data_result(retmsg="Dataset not found!")
         
         embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
@@ -1330,7 +1330,7 @@ async def retrieval_test(
         
         # 跨语言翻译
         if langs:
-            question = await cross_languages(db, kb.tenant_id, None, question, langs)
+            question = await cross_languages(kb.tenant_id, None, question, langs)
         
         # 关键词提取增强
         if req.get("keyword", False):
@@ -1338,8 +1338,10 @@ async def retrieval_test(
             question += await keyword_extraction(chat_mdl, question)
         
         # 执行检索
+        filter_exp = ""
         ranks = await settings.retriever.retrieval(
             question,
+            filter_exp,
             embd_mdl,
             tenant_ids,
             kb_names,

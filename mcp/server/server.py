@@ -1,22 +1,22 @@
+import contextvars
 import json
 import logging
 import random
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from functools import wraps
+from typing import Annotated
 
 import click
-import requests
+import httpx
+from pydantic import Field
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
-from starlette.responses import JSONResponse, Response
-from starlette.routing import Mount, Route
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 from strenum import StrEnum
 
-import mcp.types as types
-from mcp.server.lowlevel import Server
+from fastmcp import Context, FastMCP
+from fastmcp.server.http import RequestContextMiddleware, create_sse_app, create_streamable_http_app
 
 
 class LaunchMode(StrEnum):
@@ -24,12 +24,10 @@ class LaunchMode(StrEnum):
     HOST = "host"
 
 
-class Transport(StrEnum):
-    SSE = "sse"
-    STEAMABLE_HTTP = "streamable-http"
-
-
-BASE_URL = "http://127.0.0.1:9380"
+# ---------------------------------------------------------------------------
+# Global configuration (populated by CLI / environment variables)
+# ---------------------------------------------------------------------------
+BASE_URL = "http://127.0.0.1:8123"
 HOST = "127.0.0.1"
 PORT = "9382"
 HOST_API_KEY = ""
@@ -38,41 +36,77 @@ TRANSPORT_SSE_ENABLED = True
 TRANSPORT_STREAMABLE_HTTP_ENABLED = True
 JSON_RESPONSE = True
 
+# Per-request API key storage for host mode
+_request_api_key: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_request_api_key", default=None
+)
 
-class RAGFlowConnector:
+
+def _resolve_api_key() -> str:
+    """Resolve the API key for the current request based on launch mode."""
+    if MODE == LaunchMode.SELF_HOST:
+        return HOST_API_KEY
+    token = _request_api_key.get()
+    if not token:
+        raise ValueError("MultiRAG API key or Bearer token is required.")
+    return token
+
+
+# ---------------------------------------------------------------------------
+# MultiRAGConnector — async httpx-based backend API client
+# ---------------------------------------------------------------------------
+class MultiRAGConnector:
     _MAX_DATASET_CACHE = 32
     _CACHE_TTL = 300
 
-    _dataset_metadata_cache: OrderedDict[str, tuple[dict, float | int]] = OrderedDict()  # "dataset_id" -> (metadata, expiry_ts)
-    _document_metadata_cache: OrderedDict[str, tuple[list[tuple[str, dict]], float | int]] = OrderedDict()  # "dataset_id" -> ([(document_id, doc_metadata)], expiry_ts)
-
-    def __init__(self, base_url: str, version="v1"):
+    def __init__(self, base_url: str, version: str = "v1"):
         self.base_url = base_url
         self.version = version
         self.api_url = f"{self.base_url}/api/{self.version}"
+        self._client: httpx.AsyncClient | None = None
+        self._dataset_metadata_cache: OrderedDict[str, tuple[dict, float | int]] = OrderedDict()
+        self._document_metadata_cache: OrderedDict[str, tuple[list[tuple[str, dict]], float | int]] = OrderedDict()
 
-    def bind_api_key(self, api_key: str):
-        self.api_key = api_key
-        self.authorization_header = {"Authorization": "{} {}".format("Bearer", self.api_key)}
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0))
+        return self._client
 
-    def _post(self, path, json=None, stream=False, files=None):
-        if not self.api_key:
+    async def close(self):
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
+
+    async def _get(self, path: str, api_key: str, params: dict | None = None):
+        if not api_key:
             return None
-        res = requests.post(url=self.api_url + path, json=json, headers=self.authorization_header, stream=stream, files=files)
-        return res
+        client = await self._get_client()
+        return await client.get(
+            url=self.api_url + path,
+            params=params,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
 
-    def _get(self, path, params=None, json=None):
-        res = requests.get(url=self.api_url + path, params=params, headers=self.authorization_header, json=json)
-        return res
+    async def _post(self, path: str, api_key: str, json: dict | None = None):
+        if not api_key:
+            return None
+        client = await self._get_client()
+        return await client.post(
+            url=self.api_url + path,
+            json=json,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
 
-    def _is_cache_valid(self, ts):
+    # -- Cache helpers (unchanged logic) ------------------------------------
+
+    def _is_cache_valid(self, ts: float | int) -> bool:
         return time.time() < ts
 
-    def _get_expiry_timestamp(self):
+    def _get_expiry_timestamp(self) -> float:
         offset = random.randint(-30, 30)
         return time.time() + self._CACHE_TTL + offset
 
-    def _get_cached_dataset_metadata(self, dataset_id):
+    def _get_cached_dataset_metadata(self, dataset_id: str) -> dict | None:
         entry = self._dataset_metadata_cache.get(dataset_id)
         if entry:
             data, ts = entry
@@ -81,13 +115,13 @@ class RAGFlowConnector:
                 return data
         return None
 
-    def _set_cached_dataset_metadata(self, dataset_id, metadata):
+    def _set_cached_dataset_metadata(self, dataset_id: str, metadata: dict):
         self._dataset_metadata_cache[dataset_id] = (metadata, self._get_expiry_timestamp())
         self._dataset_metadata_cache.move_to_end(dataset_id)
         if len(self._dataset_metadata_cache) > self._MAX_DATASET_CACHE:
             self._dataset_metadata_cache.popitem(last=False)
 
-    def _get_cached_document_metadata_by_dataset(self, dataset_id):
+    def _get_cached_document_metadata_by_dataset(self, dataset_id: str) -> dict | None:
         entry = self._document_metadata_cache.get(dataset_id)
         if entry:
             data_list, ts = entry
@@ -96,56 +130,90 @@ class RAGFlowConnector:
                 return {doc_id: doc_meta for doc_id, doc_meta in data_list}
         return None
 
-    def _set_cached_document_metadata_by_dataset(self, dataset_id, doc_id_meta_list):
+    def _set_cached_document_metadata_by_dataset(self, dataset_id: str, doc_id_meta_list: list):
         self._document_metadata_cache[dataset_id] = (doc_id_meta_list, self._get_expiry_timestamp())
         self._document_metadata_cache.move_to_end(dataset_id)
 
-    def list_datasets(self, page: int = 1, page_size: int = 1000, orderby: str = "create_time", desc: bool = True, id: str | None = None, name: str | None = None):
-        res = self._get("/datasets", {"page": page, "page_size": page_size, "orderby": orderby, "desc": desc, "id": id, "name": name})
+    # -- Public API ---------------------------------------------------------
+
+    async def list_datasets_structured(self, api_key: str) -> list[dict]:
+        """Return all datasets with normalized SDK-facing metadata fields."""
+        res = await self._get("/datasets", api_key, {"page": 1, "page_size": 1000, "orderby": "create_time", "desc": True})
         if not res:
-            raise Exception([types.TextContent(type="text", text=res.get("Cannot process this operation."))])
+            raise ValueError("Cannot process this operation.")
+        data = res.json()
+        if data.get("code") == 0:
+            datasets: list[dict] = []
+            for d in data.get("data", []):
+                embedding_model = d.get("embedding_model") or d.get("embd_id", "")
+                datasets.append(
+                    {
+                        "id": d["id"],
+                        "name": d.get("name", ""),
+                        "description": d.get("description", ""),
+                        "embedding_model": embedding_model,
+                        # Keep the legacy alias for older MCP consumers.
+                        "embd_id": embedding_model,
+                    }
+                )
+            return datasets
+        return []
 
-        res = res.json()
-        if res.get("code") == 0:
-            result_list = []
-            for data in res["data"]:
-                d = {"description": data["description"], "id": data["id"]}
-                result_list.append(json.dumps(d, ensure_ascii=False))
-            return "\n".join(result_list)
-        return ""
+    @staticmethod
+    def _embedding_model_from_dataset(dataset: dict) -> str:
+        return dataset.get("embedding_model") or dataset.get("embd_id") or ""
 
-    def retrieval(
+    async def _resolve_retrieval_dataset_ids(self, api_key: str, dataset_ids: list[str]) -> list[str]:
+        datasets = await self.list_datasets_structured(api_key)
+        if not datasets:
+            raise ValueError("No accessible datasets available for retrieval.")
+
+        selected = datasets
+        if dataset_ids:
+            dataset_id_set = set(dataset_ids)
+            selected = [d for d in datasets if d["id"] in dataset_id_set]
+            found_ids = {d["id"] for d in selected}
+            missing_ids = [dataset_id for dataset_id in dataset_ids if dataset_id not in found_ids]
+            if missing_ids:
+                raise ValueError("Unknown or inaccessible dataset_ids: " + ", ".join(missing_ids))
+
+        grouped: dict[str, list[dict]] = {}
+        for dataset in selected:
+            grouped.setdefault(self._embedding_model_from_dataset(dataset), []).append(dataset)
+
+        if len(grouped) > 1:
+            group_desc = "; ".join(
+                f"{embedding_model or '<unknown>'}: "
+                + ", ".join(dataset.get("name") or dataset["id"] for dataset in group)
+                for embedding_model, group in grouped.items()
+            )
+            raise ValueError(
+                "Selected datasets use different embedding_model values. "
+                "Choose dataset_ids from a single embedding_model group. "
+                f"Available groups: {group_desc}"
+            )
+
+        return [dataset["id"] for dataset in selected]
+
+    async def retrieval(
         self,
-        dataset_ids,
-        document_ids=None,
-        question="",
-        page=1,
-        page_size=30,
-        similarity_threshold=0.2,
-        vector_similarity_weight=0.3,
-        top_k=1024,
+        api_key: str,
+        dataset_ids: list[str],
+        document_ids: list[str] | None = None,
+        question: str = "",
+        page: int = 1,
+        page_size: int = 30,
+        similarity_threshold: float = 0.2,
+        vector_similarity_weight: float = 0.3,
+        top_k: int = 1024,
         rerank_id: str | None = None,
         keyword: bool = False,
         force_refresh: bool = False,
-    ):
+    ) -> dict:
         if document_ids is None:
             document_ids = []
 
-        # If no dataset_ids provided or empty list, get all available dataset IDs
-        if not dataset_ids:
-            dataset_list_str = self.list_datasets()
-            dataset_ids = []
-
-            # Parse the dataset list to extract IDs
-            if dataset_list_str:
-                for line in dataset_list_str.strip().split('\n'):
-                    if line.strip():
-                        try:
-                            dataset_info = json.loads(line.strip())
-                            dataset_ids.append(dataset_info["id"])
-                        except (json.JSONDecodeError, KeyError):
-                            # Skip malformed lines
-                            continue
+        dataset_ids = await self._resolve_retrieval_dataset_ids(api_key, dataset_ids)
 
         data_json = {
             "page": page,
@@ -159,74 +227,81 @@ class RAGFlowConnector:
             "dataset_ids": dataset_ids,
             "document_ids": document_ids,
         }
-        # Send a POST request to the backend service (using requests library as an example, actual implementation may vary)
-        res = self._post("/retrieval", json=data_json)
+
+        res = await self._post("/retrieval", api_key, json=data_json)
         if not res:
-            raise Exception([types.TextContent(type="text", text=res.get("Cannot process this operation."))])
+            raise ValueError("Cannot process this operation.")
 
-        res = res.json()
-        if res.get("code") == 0:
-            data = res["data"]
-            chunks = []
+        res_data = res.json()
+        if res_data.get("code") != 0:
+            msg = res_data.get("message") or res_data.get("retmsg") or json.dumps(res_data, ensure_ascii=False)
+            raise ValueError(f"Retrieval API error: {msg}")
+        data = res_data.get("data")
+        if not isinstance(data, dict):
+            raise ValueError(
+                "Retrieval API returned success without a valid data payload: "
+                + json.dumps(res_data, ensure_ascii=False)
+            )
 
-            # Cache document metadata and dataset information
-            document_cache, dataset_cache = self._get_document_metadata_cache(dataset_ids, force_refresh=force_refresh)
+        chunks = []
 
-            # Process chunks with enhanced field mapping including per-chunk metadata
-            for chunk_data in data.get("chunks", []):
-                enhanced_chunk = self._map_chunk_fields(chunk_data, dataset_cache, document_cache)
-                chunks.append(enhanced_chunk)
+        document_cache, dataset_cache = await self._get_document_metadata_cache(
+            dataset_ids, api_key=api_key, force_refresh=force_refresh
+        )
 
-            # Build structured response (no longer need response-level document_metadata)
-            response = {
-                "chunks": chunks,
-                "pagination": {
-                    "page": data.get("page", page),
-                    "page_size": data.get("page_size", page_size),
-                    "total_chunks": data.get("total", len(chunks)),
-                    "total_pages": (data.get("total", len(chunks)) + page_size - 1) // page_size,
-                },
-                "query_info": {
-                    "question": question,
-                    "similarity_threshold": similarity_threshold,
-                    "vector_weight": vector_similarity_weight,
-                    "keyword_search": keyword,
-                    "dataset_count": len(dataset_ids),
-                },
-            }
+        for chunk_data in data.get("chunks", []):
+            enhanced_chunk = self._map_chunk_fields(chunk_data, dataset_cache, document_cache)
+            chunks.append(enhanced_chunk)
 
-            return [types.TextContent(type="text", text=json.dumps(response, ensure_ascii=False))]
+        return {
+            "chunks": chunks,
+            "pagination": {
+                "page": data.get("page", page),
+                "page_size": data.get("page_size", page_size),
+                "total_chunks": data.get("total", len(chunks)),
+                "total_pages": (data.get("total", len(chunks)) + page_size - 1) // page_size,
+            },
+            "query_info": {
+                "question": question,
+                "similarity_threshold": similarity_threshold,
+                "vector_weight": vector_similarity_weight,
+                "keyword_search": keyword,
+                "dataset_count": len(dataset_ids),
+            },
+        }
 
-        raise Exception([types.TextContent(type="text", text=res.get("message"))])
-
-    def _get_document_metadata_cache(self, dataset_ids, force_refresh=False):
-        """Cache document metadata for all documents in the specified datasets"""
-        document_cache = {}
-        dataset_cache = {}
+    async def _get_document_metadata_cache(
+        self, dataset_ids: list[str], *, api_key: str, force_refresh: bool = False
+    ) -> tuple[dict, dict]:
+        """Cache document metadata for all documents in the specified datasets."""
+        document_cache: dict = {}
+        dataset_cache: dict = {}
 
         try:
             for dataset_id in dataset_ids:
                 dataset_meta = None if force_refresh else self._get_cached_dataset_metadata(dataset_id)
                 if not dataset_meta:
-                    # First get dataset info for name
-                    dataset_res = self._get("/datasets", {"id": dataset_id, "page_size": 1})
+                    dataset_res = await self._get("/datasets", api_key, {"id": dataset_id, "page_size": 1})
                     if dataset_res and dataset_res.status_code == 200:
                         dataset_data = dataset_res.json()
                         if dataset_data.get("code") == 0 and dataset_data.get("data"):
                             dataset_info = dataset_data["data"][0]
-                            dataset_meta = {"name": dataset_info.get("name", "Unknown"), "description": dataset_info.get("description", "")}
+                            dataset_meta = {
+                                "name": dataset_info.get("name", "Unknown"),
+                                "description": dataset_info.get("description", ""),
+                            }
                             self._set_cached_dataset_metadata(dataset_id, dataset_meta)
                 if dataset_meta:
                     dataset_cache[dataset_id] = dataset_meta
 
                 docs = None if force_refresh else self._get_cached_document_metadata_by_dataset(dataset_id)
                 if docs is None:
-                    page = 1
-                    page_size = 30
-                    doc_id_meta_list = []
+                    pg = 1
+                    pg_size = 30
+                    doc_id_meta_list: list[tuple[str, dict]] = []
                     docs = {}
-                    while page:
-                        docs_res = self._get(f"/datasets/{dataset_id}/documents?page={page}")
+                    while pg:
+                        docs_res = await self._get(f"/datasets/{dataset_id}/documents", api_key, {"page": pg})
                         docs_data = docs_res.json()
                         if docs_data.get("code") == 0 and docs_data.get("data", {}).get("docs"):
                             for doc in docs_data["data"]["docs"]:
@@ -250,37 +325,33 @@ class RAGFlowConnector:
                                 doc_id_meta_list.append((doc_id, doc_meta))
                                 docs[doc_id] = doc_meta
 
-                            page += 1
-                            if docs_data.get("data", {}).get("total", 0) - page * page_size <= 0:
-                                page = None
+                            pg += 1
+                            if docs_data.get("data", {}).get("total", 0) - pg * pg_size <= 0:
+                                pg = None
+                        else:
+                            pg = None
 
-                        self._set_cached_document_metadata_by_dataset(dataset_id, doc_id_meta_list)
+                    self._set_cached_document_metadata_by_dataset(dataset_id, doc_id_meta_list)
                 if docs:
                     document_cache.update(docs)
 
         except Exception as e:
-            # Gracefully handle metadata cache failures
-            logging.error(f"Problem building the document metadata cache: {str(e)}")
-            pass
+            logging.error(f"Problem building the document metadata cache: {e}")
 
         return document_cache, dataset_cache
 
-    def _map_chunk_fields(self, chunk_data, dataset_cache, document_cache):
-        """Preserve all original API fields and add per-chunk document metadata"""
-        # Start with ALL raw data from API (preserve everything like original version)
+    def _map_chunk_fields(self, chunk_data: dict, dataset_cache: dict, document_cache: dict) -> dict:
+        """Preserve all original API fields and add per-chunk document metadata."""
         mapped = dict(chunk_data)
 
-        # Add dataset name enhancement
         dataset_id = chunk_data.get("dataset_id") or chunk_data.get("kb_id")
         if dataset_id and dataset_id in dataset_cache:
             mapped["dataset_name"] = dataset_cache[dataset_id]["name"]
         else:
             mapped["dataset_name"] = "Unknown"
 
-        # Add document name convenience field
         mapped["document_name"] = chunk_data.get("document_keyword", "")
 
-        # Add per-chunk document metadata
         document_id = chunk_data.get("document_id")
         if document_id and document_id in document_cache:
             mapped["document_metadata"] = document_cache[document_id]
@@ -288,178 +359,166 @@ class RAGFlowConnector:
         return mapped
 
 
-class RAGFlowCtx:
-    def __init__(self, connector: RAGFlowConnector):
-        self.conn = connector
+# ---------------------------------------------------------------------------
+# Auth middleware — handles token extraction for both modes
+# ---------------------------------------------------------------------------
+class AuthMiddleware:
+    """
+    self-host mode: validates that the Bearer token matches HOST_API_KEY.
+    host mode: extracts the Bearer token and stores it in a ContextVar
+               for per-request forwarding to the backend API.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope["path"]
+        if path.startswith("/messages/") or path.startswith("/sse") or path.startswith("/mcp"):
+            headers = dict(scope["headers"])
+            token: str | None = None
+
+            auth_header = headers.get(b"authorization")
+            if auth_header and auth_header.startswith(b"Bearer "):
+                token = auth_header.removeprefix(b"Bearer ").strip().decode(errors="ignore")
+            elif b"api_key" in headers:
+                token = headers[b"api_key"].decode(errors="ignore")
+
+            if not token:
+                response = JSONResponse({"error": "Missing or invalid authorization header"}, status_code=401)
+                await response(scope, receive, send)
+                return
+
+            if MODE == LaunchMode.SELF_HOST and token != HOST_API_KEY:
+                response = JSONResponse({"error": "Invalid API key"}, status_code=401)
+                await response(scope, receive, send)
+                return
+
+            reset_token = _request_api_key.set(token)
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                _request_api_key.reset(reset_token)
+        else:
+            await self.app(scope, receive, send)
 
 
-@asynccontextmanager
-async def sse_lifespan(server: Server) -> AsyncIterator[dict]:
-    ctx = RAGFlowCtx(RAGFlowConnector(base_url=BASE_URL))
-
-    logging.info("Legacy SSE application started with StreamableHTTP session manager!")
-    try:
-        yield {"ragflow_ctx": ctx}
-    finally:
-        logging.info("Legacy SSE application shutting down...")
+# ---------------------------------------------------------------------------
+# Module-level connector singleton
+# ---------------------------------------------------------------------------
+_connector: MultiRAGConnector | None = None
 
 
-app = Server("ragflow-mcp-server", lifespan=sse_lifespan)
+def _get_connector() -> MultiRAGConnector:
+    global _connector
+    if _connector is None:
+        _connector = MultiRAGConnector(base_url=BASE_URL)
+    return _connector
 
 
-def with_api_key(required=True):
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            ctx = app.request_context
-            ragflow_ctx = ctx.lifespan_context.get("ragflow_ctx")
-            if not ragflow_ctx:
-                raise ValueError("Get RAGFlow Context failed")
-
-            connector = ragflow_ctx.conn
-
-            if MODE == LaunchMode.HOST:
-                headers = ctx.session._init_options.capabilities.experimental.get("headers", {})
-                token = None
-
-                # lower case here, because of Starlette conversion
-                auth = headers.get("authorization", "")
-                if auth.startswith("Bearer "):
-                    token = auth.removeprefix("Bearer ").strip()
-                elif "api_key" in headers:
-                    token = headers["api_key"]
-
-                if required and not token:
-                    raise ValueError("RAGFlow API key or Bearer token is required.")
-
-                connector.bind_api_key(token)
-            else:
-                connector.bind_api_key(HOST_API_KEY)
-
-            return await func(*args, connector=connector, **kwargs)
-
-        return wrapper
-
-    return decorator
+# ---------------------------------------------------------------------------
+# FastMCP server instance (created lazily by create_mcp_server)
+# ---------------------------------------------------------------------------
+mcp: FastMCP | None = None
 
 
-@app.list_tools()
-@with_api_key(required=True)
-async def list_tools(*, connector) -> list[types.Tool]:
-    dataset_description = connector.list_datasets()
+def create_mcp_server() -> FastMCP:
+    global mcp
+    mcp = FastMCP("multirag-mcp-server")
+    _register_tools(mcp)
+    return mcp
 
-    return [
-        types.Tool(
-            name="ragflow_retrieval",
-            description="Retrieve relevant chunks from the RAGFlow retrieve interface based on the question. You can optionally specify dataset_ids to search only specific datasets, or omit dataset_ids entirely to search across ALL available datasets. You can also optionally specify document_ids to search within specific documents. When dataset_ids is not provided or is empty, the system will automatically search across all available datasets. Below is the list of all available datasets, including their descriptions and IDs:"
-            + dataset_description,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "dataset_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional array of dataset IDs to search. If not provided or empty, all datasets will be searched."
-                    },
-                    "document_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional array of document IDs to search within."
-                    },
-                    "question": {
-                        "type": "string",
-                        "description": "The question or query to search for."
-                    },
-                    "page": {
-                        "type": "integer",
-                        "description": "Page number for pagination",
-                        "default": 1,
-                        "minimum": 1,
-                    },
-                    "page_size": {
-                        "type": "integer",
-                        "description": "Number of results to return per page (default: 10, max recommended: 50 to avoid token limits)",
-                        "default": 10,
-                        "minimum": 1,
-                        "maximum": 100,
-                    },
-                    "similarity_threshold": {
-                        "type": "number",
-                        "description": "Minimum similarity threshold for results",
-                        "default": 0.2,
-                        "minimum": 0.0,
-                        "maximum": 1.0,
-                    },
-                    "vector_similarity_weight": {
-                        "type": "number",
-                        "description": "Weight for vector similarity vs term similarity",
-                        "default": 0.3,
-                        "minimum": 0.0,
-                        "maximum": 1.0,
-                    },
-                    "keyword": {
-                        "type": "boolean",
-                        "description": "Enable keyword-based search",
-                        "default": False,
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Maximum results to consider before ranking",
-                        "default": 1024,
-                        "minimum": 1,
-                        "maximum": 1024,
-                    },
-                    "rerank_id": {
-                        "type": "string",
-                        "description": "Optional reranking model identifier",
-                    },
-                    "force_refresh": {
-                        "type": "boolean",
-                        "description": "Set to true only if fresh dataset and document metadata is explicitly required. Otherwise, cached metadata is used (default: false).",
-                        "default": False,
-                    },
-                },
-                "required": ["question"],
-            },
+
+def _register_tools(server: FastMCP):
+    """Register all MCP tools on the FastMCP server instance."""
+
+    @server.tool(
+        name="list_datasets",
+        description=(
+            "List all available datasets with their IDs, names, descriptions, and embedding_model values. "
+            "Use this to discover dataset IDs for the multirag_retrieval tool."
         ),
-    ]
+    )
+    async def tool_list_datasets(ctx: Context) -> list[dict]:
+        api_key = _resolve_api_key()
+        connector = _get_connector()
+        await ctx.info("Listing available datasets")
+        return await connector.list_datasets_structured(api_key=api_key)
 
+    @server.tool(
+        name="multirag_retrieval",
+        description=(
+            "Retrieve relevant chunks from the MultiRAG retrieval interface based on the question. "
+            "You can specify dataset_ids to search only specific datasets. If dataset_ids is omitted, "
+            "the tool will search all accessible datasets only when they share the same embedding_model. "
+            "If multiple embedding_model groups exist, call list_datasets first and pass compatible "
+            "dataset_ids from a single embedding_model group. You can also optionally specify "
+            "document_ids to search within specific documents."
+        ),
+    )
+    async def tool_multirag_retrieval(
+        question: Annotated[str, Field(description="The question or query to search for.")],
+        dataset_ids: Annotated[
+            list[str] | None,
+            Field(
+                description=(
+                    "Optional array of dataset IDs to search. If multiple dataset_ids are provided, they must belong "
+                    "to the same embedding_model group. If omitted, all accessible datasets will be searched only "
+                    "when they share the same embedding_model."
+                )
+            ),
+        ] = None,
+        document_ids: Annotated[
+            list[str] | None,
+            Field(description="Optional array of document IDs to search within."),
+        ] = None,
+        page: Annotated[
+            int,
+            Field(description="Page number for pagination", ge=1),
+        ] = 1,
+        page_size: Annotated[
+            int,
+            Field(description="Number of results to return per page (default: 10, max recommended: 50 to avoid token limits)", ge=1, le=100),
+        ] = 10,
+        similarity_threshold: Annotated[
+            float,
+            Field(description="Minimum similarity threshold for results", ge=0.0, le=1.0),
+        ] = 0.2,
+        vector_similarity_weight: Annotated[
+            float,
+            Field(description="Weight for vector similarity vs term similarity", ge=0.0, le=1.0),
+        ] = 0.3,
+        keyword: Annotated[
+            bool,
+            Field(description="Enable keyword-based search"),
+        ] = False,
+        top_k: Annotated[
+            int,
+            Field(description="Maximum results to consider before ranking", ge=1, le=1024),
+        ] = 1024,
+        rerank_id: Annotated[
+            str | None,
+            Field(description="Optional reranking model identifier"),
+        ] = None,
+        force_refresh: Annotated[
+            bool,
+            Field(description="Set to true only if fresh dataset and document metadata is explicitly required. Otherwise, cached metadata is used (default: false)."),
+        ] = False,
+        ctx: Context | None = None,
+    ) -> str:
+        api_key = _resolve_api_key()
+        connector = _get_connector()
 
-@app.call_tool()
-@with_api_key(required=True)
-async def call_tool(name: str, arguments: dict, *, connector) -> list[
-    types.TextContent | types.ImageContent | types.EmbeddedResource]:
-    if name == "ragflow_retrieval":
-        document_ids = arguments.get("document_ids", [])
-        dataset_ids = arguments.get("dataset_ids", [])
-        question = arguments.get("question", "")
-        page = arguments.get("page", 1)
-        page_size = arguments.get("page_size", 10)
-        similarity_threshold = arguments.get("similarity_threshold", 0.2)
-        vector_similarity_weight = arguments.get("vector_similarity_weight", 0.3)
-        keyword = arguments.get("keyword", False)
-        top_k = arguments.get("top_k", 1024)
-        rerank_id = arguments.get("rerank_id")
-        force_refresh = arguments.get("force_refresh", False)
+        if ctx:
+            await ctx.info(f"Searching for: {question}")
 
-        # If no dataset_ids provided or empty list, get all available dataset IDs
-        if not dataset_ids:
-            dataset_list_str = connector.list_datasets()
-            dataset_ids = []
-
-            # Parse the dataset list to extract IDs
-            if dataset_list_str:
-                for line in dataset_list_str.strip().split('\n'):
-                    if line.strip():
-                        try:
-                            dataset_info = json.loads(line.strip())
-                            dataset_ids.append(dataset_info["id"])
-                        except (json.JSONDecodeError, KeyError):
-                            # Skip malformed lines
-                            continue
-
-        return connector.retrieval(
-            dataset_ids=dataset_ids,
+        result = await connector.retrieval(
+            api_key=api_key,
+            dataset_ids=dataset_ids or [],
             document_ids=document_ids,
             question=question,
             page=page,
@@ -471,101 +530,65 @@ async def call_tool(name: str, arguments: dict, *, connector) -> list[
             rerank_id=rerank_id,
             force_refresh=force_refresh,
         )
-    raise ValueError(f"Tool not found: {name}")
+
+        return json.dumps(result, ensure_ascii=False)
 
 
-def create_starlette_app():
-    routes = []
-    middleware = None
-    if MODE == LaunchMode.HOST:
-        from starlette.types import ASGIApp, Receive, Scope, Send
+# ---------------------------------------------------------------------------
+# ASGI application factory — combines SSE and Streamable HTTP transports
+# ---------------------------------------------------------------------------
+def create_starlette_app() -> Starlette:
+    assert mcp is not None, "MCP server must be created before building the ASGI app"
 
-        class AuthMiddleware:
-            def __init__(self, app: ASGIApp):
-                self.app = app
+    routes: list = []
+    lifespans: list = []
 
-            async def __call__(self, scope: Scope, receive: Receive, send: Send):
-                if scope["type"] != "http":
-                    await self.app(scope, receive, send)
-                    return
-
-                path = scope["path"]
-                if path.startswith("/messages/") or path.startswith("/sse") or path.startswith("/mcp"):
-                    headers = dict(scope["headers"])
-                    token = None
-                    auth_header = headers.get(b"authorization")
-                    if auth_header and auth_header.startswith(b"Bearer "):
-                        token = auth_header.removeprefix(b"Bearer ").strip()
-                    elif b"api_key" in headers:
-                        token = headers[b"api_key"]
-
-                    if not token:
-                        response = JSONResponse({"error": "Missing or invalid authorization header"}, status_code=401)
-                        await response(scope, receive, send)
-                        return
-
-                await self.app(scope, receive, send)
-
-        middleware = [Middleware(AuthMiddleware)]
-
-    # Add SSE routes if enabled
     if TRANSPORT_SSE_ENABLED:
-        from mcp.server.sse import SseServerTransport
-
-        sse = SseServerTransport("/messages/")
-
-        async def handle_sse(request):
-            async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
-                await app.run(streams[0], streams[1], app.create_initialization_options(experimental_capabilities={"headers": dict(request.headers)}))
-            return Response()
-
-        routes.extend(
-            [
-                Route("/sse", endpoint=handle_sse, methods=["GET"]),
-                Mount("/messages/", app=sse.handle_post_message),
-            ]
+        sse_app = create_sse_app(
+            server=mcp,
+            message_path="/messages/",
+            sse_path="/sse",
         )
+        routes.extend(sse_app.routes)
 
-    # Add streamable HTTP route if enabled
-    streamablehttp_lifespan = None
     if TRANSPORT_STREAMABLE_HTTP_ENABLED:
-        from starlette.types import Receive, Scope, Send
-
-        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-
-        session_manager = StreamableHTTPSessionManager(
-            app=app,
-            event_store=None,
+        http_app = create_streamable_http_app(
+            server=mcp,
+            streamable_http_path="/mcp",
             json_response=JSON_RESPONSE,
-            stateless=True,
+            stateless_http=True,
         )
+        routes.extend(http_app.routes)
+        lifespans.append(http_app.lifespan)
 
-        async def handle_streamable_http(scope: Scope, receive: Receive, send: Send) -> None:
-            await session_manager.handle_request(scope, receive, send)
+    if lifespans:
+        from fastmcp.utilities.lifespan import combine_lifespans
+        combined_lifespan = combine_lifespans(*lifespans)
+    else:
+        combined_lifespan = None
 
-        @asynccontextmanager
-        async def streamablehttp_lifespan(app: Starlette) -> AsyncIterator[None]:
-            async with session_manager.run():
-                logging.info("StreamableHTTP application started with StreamableHTTP session manager!")
-                try:
-                    yield
-                finally:
-                    logging.info("StreamableHTTP application shutting down...")
-
-        routes.append(Mount("/mcp", app=handle_streamable_http))
+    # AuthMiddleware handles token validation/extraction for both modes.
+    # RequestContextMiddleware is required by FastMCP for per-request context.
+    parent_middleware = [
+        Middleware(AuthMiddleware),
+        Middleware(RequestContextMiddleware),
+    ]
 
     return Starlette(
         debug=True,
         routes=routes,
-        middleware=middleware,
-        lifespan=streamablehttp_lifespan,
+        middleware=parent_middleware,
+        lifespan=combined_lifespan,
     )
 
 
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
 @click.command()
-@click.option("--base-url", type=str, default="http://127.0.0.1:9380", help="API base URL for RAGFlow backend")
-@click.option("--host", type=str, default="127.0.0.1", help="Host to bind the RAGFlow MCP server")
-@click.option("--port", type=int, default=9382, help="Port to bind the RAGFlow MCP server")
+@click.option("--base-url", type=str, default="http://127.0.0.1:8123", help="API base URL for MultiRAG backend")
+@click.option("--host", type=str, default="127.0.0.1", help="Host to bind the MultiRAG MCP server")
+@click.option("--port", type=int, default=9382, help="Port to bind the MultiRAG MCP server")
 @click.option(
     "--mode",
     type=click.Choice(["self-host", "host"]),
@@ -601,14 +624,14 @@ def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_s
         return str(val).strip().lower() in ("1", "true", "yes", "on")
 
     global BASE_URL, HOST, PORT, MODE, HOST_API_KEY, TRANSPORT_SSE_ENABLED, TRANSPORT_STREAMABLE_HTTP_ENABLED, JSON_RESPONSE
-    BASE_URL = os.environ.get("RAGFLOW_MCP_BASE_URL", base_url)
-    HOST = os.environ.get("RAGFLOW_MCP_HOST", host)
-    PORT = os.environ.get("RAGFLOW_MCP_PORT", str(port))
-    MODE = os.environ.get("RAGFLOW_MCP_LAUNCH_MODE", mode)
-    HOST_API_KEY = os.environ.get("RAGFLOW_MCP_HOST_API_KEY", api_key)
-    TRANSPORT_SSE_ENABLED = parse_bool_flag("RAGFLOW_MCP_TRANSPORT_SSE_ENABLED", transport_sse_enabled)
-    TRANSPORT_STREAMABLE_HTTP_ENABLED = parse_bool_flag("RAGFLOW_MCP_TRANSPORT_STREAMABLE_ENABLED", transport_streamable_http_enabled)
-    JSON_RESPONSE = parse_bool_flag("RAGFLOW_MCP_JSON_RESPONSE", json_response)
+    BASE_URL = os.environ.get("MULTIRAG_MCP_BASE_URL", base_url)
+    HOST = os.environ.get("MULTIRAG_MCP_HOST", host)
+    PORT = os.environ.get("MULTIRAG_MCP_PORT", str(port))
+    MODE = os.environ.get("MULTIRAG_MCP_LAUNCH_MODE", mode)
+    HOST_API_KEY = os.environ.get("MULTIRAG_MCP_HOST_API_KEY", api_key)
+    TRANSPORT_SSE_ENABLED = parse_bool_flag("MULTIRAG_MCP_TRANSPORT_SSE_ENABLED", transport_sse_enabled)
+    TRANSPORT_STREAMABLE_HTTP_ENABLED = parse_bool_flag("MULTIRAG_MCP_TRANSPORT_STREAMABLE_ENABLED", transport_streamable_http_enabled)
+    JSON_RESPONSE = parse_bool_flag("MULTIRAG_MCP_JSON_RESPONSE", json_response)
 
     if MODE == LaunchMode.SELF_HOST and not HOST_API_KEY:
         raise click.UsageError("--api-key is required when --mode is 'self-host'")
@@ -656,6 +679,8 @@ __  __  ____ ____       ____  _____ ______     _______ ____
         if JSON_RESPONSE:
             print("Warning: --json-response ignored because streamable transport is disabled.", flush=True)
 
+    create_mcp_server()
+
     uvicorn.run(
         create_starlette_app(),
         host=HOST,
@@ -669,28 +694,28 @@ if __name__ == "__main__":
 
     1. Self-host mode with both SSE and Streamable HTTP (in JSON response mode) enabled (default):
         uv run mcp/server/server.py --host=127.0.0.1 --port=9382 \
-            --base-url=http://127.0.0.1:9380 \
-            --mode=self-host --api-key=ragflow-xxxxx
+            --base-url=http://127.0.0.1:8123 \
+            --mode=self-host --api-key=multirag-xxxxx
 
     2. Host mode (multi-tenant, self-host only, clients must provide Authorization headers):
         uv run mcp/server/server.py --host=127.0.0.1 --port=9382 \
-            --base-url=http://127.0.0.1:9380 \
+            --base-url=http://127.0.0.1:8123 \
             --mode=host
 
     3. Disable legacy SSE (only streamable HTTP will be active):
         uv run mcp/server/server.py --no-transport-sse-enabled \
-            --mode=self-host --api-key=ragflow-xxxxx
+            --mode=self-host --api-key=multirag-xxxxx
 
     4. Disable streamable HTTP (only legacy SSE will be active):
         uv run mcp/server/server.py --no-transport-streamable-http-enabled \
-            --mode=self-host --api-key=ragflow-xxxxx
+            --mode=self-host --api-key=multirag-xxxxx
 
     5. Use streamable HTTP with SSE-style events (disable JSON response):
         uv run mcp/server/server.py --transport-streamable-http-enabled --no-json-response \
-            --mode=self-host --api-key=ragflow-xxxxx
+            --mode=self-host --api-key=multirag-xxxxx
 
     6. Disable both transports (for testing):
         uv run mcp/server/server.py --no-transport-sse-enabled --no-transport-streamable-http-enabled \
-            --mode=self-host --api-key=ragflow-xxxxx
+            --mode=self-host --api-key=multirag-xxxxx
     """
     main()
