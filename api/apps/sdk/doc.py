@@ -1297,7 +1297,7 @@ async def retrieval_test(
     
     # 处理元数据过滤
     if not doc_ids:
-        metadata_condition = req.get("metadata_condition", {}) or {}
+        metadata_condition = req.get("metadata_condition")
         if metadata_condition:
             metas = DocumentService.get_meta_by_kbs(db, kb_ids)
             doc_ids = meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and"))
@@ -1306,6 +1306,9 @@ async def retrieval_test(
                 return get_result(data={"total": 0, "chunks": [], "doc_aggs": {}})
             if metadata_condition and not doc_ids:
                 doc_ids = ["-999"]
+        else:
+            # If doc_ids is None all documents of the datasets are used
+            doc_ids = None
     similarity_threshold = float(req.get("similarity_threshold", 0.2))
     vector_similarity_weight = float(req.get("vector_similarity_weight", 0.3))
     top = int(req.get("top_k", 1024))
