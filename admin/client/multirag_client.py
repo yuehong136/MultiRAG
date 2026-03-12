@@ -1382,12 +1382,16 @@ class MultiRAGClient:
     def _get_default_models(self) -> dict | None:
         response = self.http_client.request("GET", "user/tenant_info", use_api_base=False, auth_kind="web")
         res_json = response.json()
-        code = res_json.get("code", res_json.get("retcode", -1))
-        if response.status_code == 200 and code == 0:
-            return res_json.get("data", {})
-        msg = res_json.get("message", res_json.get("retmsg", ""))
-        print(f"Fail to get default models: {msg}")
-        return None
+        if response.status_code == 200:
+            code = res_json.get("code", res_json.get("retcode", -1))
+            if code == 0:
+                return res_json.get("data", {})
+            msg = res_json.get("message", res_json.get("retmsg", ""))
+            print(f"Fail to get default models, code: {code}, message: {msg}")
+            return None
+        else:
+            print(f"Fail to get default models, HTTP code: {response.status_code}, message: {res_json}")
+            return None
 
     def _set_default_models(self, model_type: str, model_id: str):
         current = self._get_default_models()
