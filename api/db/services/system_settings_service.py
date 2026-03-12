@@ -16,14 +16,14 @@ class SystemSettingsService(CommonService):
 
     @classmethod
     def get_by_name(cls, db: Session, name: str) -> list[SystemSettings]:
-        stmt = select(cls.model).where(cls.model.name.startswith(name))
+        stmt = select(cls.model).where(cls.model.name == name)
         return list(db.scalars(stmt).all())
 
     @classmethod
     def update_by_name(cls, db: Session, name: str, data: dict) -> SystemSettings:
         data["update_time"] = current_timestamp()
         data["update_date"] = datetime_format(datetime.now())
-        stmt = update(cls.model).where(cls.model.name.startswith(name)).values(data)
+        stmt = update(cls.model).where(cls.model.name == name).values(data)
         db.execute(stmt)
         db.commit()
         return SystemSettings(**data)

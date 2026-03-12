@@ -1808,7 +1808,7 @@ class SystemSettings(BaseModel):
     name: Mapped[str] = mapped_column(String(128), primary_key=True, index=False, nullable=False, doc="Setting name")
     source: Mapped[str] = mapped_column(String(32), nullable=False, index=False, doc="Setting type (e.g. config)")
     data_type: Mapped[str] = mapped_column(String(32), nullable=False, index=False, doc="Data type (e.g. bool, string, integer)")
-    value: Mapped[str] = mapped_column(String(1024), nullable=False, index=False, doc="Setting value")
+    value: Mapped[str] = mapped_column(Text, nullable=False, doc="Configuration value (JSON, string, etc.)")
 
 
 '''

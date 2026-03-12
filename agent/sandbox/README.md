@@ -1,10 +1,10 @@
-# RAGFlow Sandbox
+# MultiRAG Sandbox
 
-A secure, pluggable code execution backend for RAGFlow and beyond.
+A secure, pluggable code execution backend for MultiRAG and beyond.
 
 ## 🔧 Features
 
-- ✅ **Seamless RAGFlow Integration** — Out-of-the-box compatibility with the `code` component.
+- ✅ **Seamless MultiRAG Integration** — Out-of-the-box compatibility with the `code` component.
 - 🔐 **High Security** — Leverages [gVisor](https://gvisor.dev/) for syscall-level sandboxing.
 - 🔧 **Customizable Sandboxing** — Easily modify `seccomp` settings as needed.
 - 🧩 **Pluggable Runtime Support** — Easily extend to support any programming language.
@@ -24,8 +24,8 @@ A secure, pluggable code execution backend for RAGFlow and beyond.
 
 - Linux distro compatible with gVisor
 - [gVisor](https://gvisor.dev/docs/user_guide/install/)
-- Docker >= `24.0.0`
-- Docker Compose >= `v2.26.1` like [RAGFlow](https://github.com/infiniflow/ragflow)
+- Docker >= `25.0` (API 1.44+) — executor manager now bundles Docker CLI `29.1.0` to match newer daemons.
+- Docker Compose >= `v2.26.1` like [MultiRAG](https://github.com/yuehong136/MultiRAG)
 - [uv](https://docs.astral.sh/uv/) as package and project manager
 
 #### Optional (Recommended)
@@ -33,6 +33,10 @@ A secure, pluggable code execution backend for RAGFlow and beyond.
 - [GNU Make](https://www.gnu.org/software/make/) for simplified CLI management
 
 ---
+
+> ⚠️ **New Docker CLI requirement**
+>
+> If you see `client version 1.43 is too old. Minimum supported API version is 1.44`, pull the latest `infiniflow/sandbox-executor-manager:latest` (rebuilt with Docker CLI `29.1.0`) or rebuild it in `./sandbox/executor_manager`. Older images shipped Docker 24.x, which cannot talk to newer Docker daemons.
 
 ### 🐳 Build Docker Base Images
 
@@ -55,7 +59,7 @@ docker build -t sandbox-executor-manager:latest ./executor_manager
 
 ---
 
-### 📦 Running with RAGFlow
+### 📦 Running with MultiRAG
 
 1. Ensure gVisor is correctly installed.
 2. Configure your `.env` in `docker/.env`:
@@ -68,7 +72,7 @@ docker build -t sandbox-executor-manager:latest ./executor_manager
    127.0.0.1 sandbox-executor-manager
    ```
 
-4. Start RAGFlow service.
+4. Start MultiRAG service.
 
 ---
 
@@ -117,7 +121,7 @@ make logs                                 # With Make
 ### 🧰 Makefile Toolbox
 
 | Command           | Description                                      |
-| ----------------- | ------------------------------------------------ |
+|-------------------|--------------------------------------------------|
 | `make`            | Setup, build, launch and test all at once        |
 | `make setup`      | Initialize environment and install uv            |
 | `make ensure_env` | Auto-create `.env` if missing                    |
@@ -134,7 +138,7 @@ make logs                                 # With Make
 
 ## 🔐 Security
 
-The RAGFlow sandbox is designed to balance security and usability, offering solid protection without compromising developer experience.
+The MultiRAG sandbox is designed to balance security and usability, offering solid protection without compromising developer experience.
 
 ### ✅ gVisor Isolation
 
@@ -179,7 +183,7 @@ This security model strikes a balance between **robust isolation** and **develop
 Currently, the following languages are officially supported:
 
 | Language | Priority |
-| -------- | -------- |
+|----------|----------|
 | Python   | High     |
 | Node.js  | Medium   |
 
@@ -239,7 +243,7 @@ Async funcion with aioxs
 const axios = require('axios');
 async function main() {
   try {
-    const response = await axios.get('https://github.com/infiniflow/ragflow');
+    const response = await axios.get('https://github.com/yuehong136/MultiRAG');
     return 'Body:' + response.data;
   } catch (error) {
     return 'Error:' + error.message;
@@ -292,9 +296,25 @@ Follow this checklist to troubleshoot:
   127.0.0.1 es01 infinity mysql minio redis sandbox-executor-manager
   ```
 
-- [ ] **Have you enabled sandbox-related configurations in RAGFlow?**
+- [ ] **Are you running the latest executor manager image?**
 
-  Double-check that all sandbox settings are correctly enabled in your RAGFlow configuration.
+  **Common error:**
+
+  `docker: Error response from daemon: client version 1.43 is too old. Minimum supported API version is 1.44`
+
+  **Fix:**
+
+  Pull the refreshed image that bundles Docker CLI `29.1.0`, or rebuild it in `./sandbox/executor_manager`:
+
+  ```bash
+  docker pull infiniflow/sandbox-executor-manager:latest
+  # or
+  docker build -t sandbox-executor-manager:latest ./sandbox/executor_manager
+  ```
+
+- [ ] **Have you enabled sandbox-related configurations in MultiRAG?**
+
+  Double-check that all sandbox settings are correctly enabled in your MultiRAG configuration.
 
 - [ ] **Have you pulled the required base images for the runners?**
 
