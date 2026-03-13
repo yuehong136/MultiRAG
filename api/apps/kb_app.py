@@ -20,6 +20,7 @@ import numpy as np
 from api.db.db_models import File, get_db
 from api.db.services.connector_service import Connector2KbService
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
@@ -668,7 +669,7 @@ def get_meta(
             )
 
     try:
-        meta = DocumentService.get_meta_by_kbs(db, kb_id_list)
+        meta = DocMetadataService.get_flatted_meta_by_kbs(db, kb_id_list)
         return get_json_result(data=meta)
     except Exception as e:
         return server_error_response(e)

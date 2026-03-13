@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import Dialog
 from api.db.services.common_service import CommonService
-from api.db.services.document_service import DocumentService
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
@@ -501,7 +501,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         questions = [asyncio.run(cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"]))]
 
     if dialog.meta_data_filter:
-        metas = DocumentService.get_meta_by_kbs(db, dialog.kb_ids)
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, dialog.kb_ids)
         attachments = asyncio.run(apply_meta_data_filter(dialog.meta_data_filter, metas, questions[-1], chat_mdl, attachments))
 
     if prompt_config.get("keyword", False):
@@ -811,7 +811,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
         questions = [await cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
 
     if dialog.meta_data_filter:
-        metas = DocumentService.get_meta_by_kbs(db, dialog.kb_ids)
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, dialog.kb_ids)
         attachments = await apply_meta_data_filter(dialog.meta_data_filter, metas, questions[-1], chat_mdl, attachments)
 
     if prompt_config.get("keyword", False):
@@ -1502,7 +1502,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     tenant_ids = list([kb.tenant_id for kb in kbs])
 
     if meta_data_filter:
-        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
         doc_ids = asyncio.run(apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids))
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
@@ -1579,7 +1579,7 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     tenant_ids = list([kb.tenant_id for kb in kbs])
 
     if meta_data_filter:
-        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
         doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
     filter_exp = ""
@@ -1661,7 +1661,7 @@ async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=No
         rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
 
     if meta_data_filter:
-        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
         doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
     ranks = await settings.retriever.retrieval(

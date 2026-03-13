@@ -17,7 +17,7 @@ from api.db.services.canvas_service import completion as agent_completion
 from api.db.services.conversation_service import ConversationService, iframe_completion
 from api.db.services.conversation_service import completion as rag_completion
 from api.db.services.dialog_service import DialogService, async_chat, async_ask, gen_mindmap
-from api.db.services.document_service import DocumentService
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
@@ -250,7 +250,7 @@ async def chat_completion(
         return get_error_data_result(retmsg="metadata_condition must be an object.")
 
     if metadata_condition and req.get("question"):
-        metas = DocumentService.get_meta_by_kbs(db, dia.kb_ids or [])
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, dia.kb_ids or [])
         filtered_doc_ids = meta_filter(
             metas,
             convert_conditions(metadata_condition),
@@ -372,7 +372,7 @@ async def chat_completion_openai_like(
 
     doc_ids_str = None
     if metadata_condition:
-        metas = DocumentService.get_meta_by_kbs(db, dia.kb_ids or [])
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, dia.kb_ids or [])
         filtered_doc_ids = meta_filter(
             metas,
             convert_conditions(metadata_condition),
@@ -1133,7 +1133,7 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
         search_config = SearchService.get_detail(db, req.get("search_id", "")).get("search_config", {})
         meta_data_filter = search_config.get("meta_data_filter", {})
         if meta_data_filter:
-            metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+            metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
             chat_mdl = None
             if meta_data_filter.get("method") in ["auto", "semi_auto"]:
                 chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))

@@ -18,6 +18,7 @@ from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import FileType
 from api.db.db_models import File as FileModel, Task, get_db
 from api.db.services.document_service import DocumentService
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -282,7 +283,8 @@ def update_document(
     if "meta_fields" in req:
         if not isinstance(req["meta_fields"], dict):
             return get_error_data_result(retmsg="meta_fields must be a dictionary")
-        DocumentService.update_meta_fields(db, document_id, req["meta_fields"])
+        if not DocMetadataService.update_document_metadata(db, document_id, req["meta_fields"]):
+            return get_error_data_result(retmsg="Failed to update metadata")
     
     # 更新文档名称
     if "name" in req and req["name"] != doc.name:
@@ -387,7 +389,7 @@ def update_document(
         "4": "FAIL",
     }
     renamed_doc = {}
-    for key, value in doc.to_dict().items():
+    for key, value in DocumentService.serialize_document(db, doc).items():
         new_key = key_mapping.get(key, key)
         if key == "run":
             renamed_doc[new_key] = run_mapping.get(str(value), str(value))
@@ -528,7 +530,7 @@ def list_documents(
 
     doc_ids_filter = None
     if metadata_cond:
-        metas = DocumentService.get_flatted_meta_by_kbs(db, [dataset_id])
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, [dataset_id])
         doc_ids_filter = meta_filter(metas, convert_conditions(metadata_cond), metadata_cond.get("logic", "and"))
         if metadata_cond.get("conditions") and not doc_ids_filter:
             return get_result(data={"total": 0, "docs": []})
@@ -606,7 +608,7 @@ def metadata_summary(
         return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
 
     try:
-        summary = DocumentService.get_metadata_summary(db, dataset_id)
+        summary = DocMetadataService.get_metadata_summary(db, dataset_id)
         return get_result(data={"summary": summary})
     except Exception as e:
         return server_error_response(e)
@@ -689,14 +691,14 @@ async def metadata_batch_update(
         target_doc_ids = set(document_ids)
 
     if metadata_condition:
-        metas = DocumentService.get_flatted_meta_by_kbs(db, [dataset_id])
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, [dataset_id])
         filtered_ids = set(meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and")))
         target_doc_ids = target_doc_ids & filtered_ids
         if metadata_condition.get("conditions") and not target_doc_ids:
             return get_result(data={"updated": 0, "matched_docs": 0})
 
     target_doc_ids = list(target_doc_ids)
-    updated = DocumentService.batch_update_metadata(db, dataset_id, target_doc_ids, updates, deletes)
+    updated = DocMetadataService.batch_update_metadata(db, dataset_id, target_doc_ids, updates, deletes)
     return get_result(data={"updated": updated, "matched_docs": len(target_doc_ids)})
 
 
@@ -975,7 +977,7 @@ async def list_chunks(
     }
 
     # Convert doc to dict with renamed keys
-    doc_dict = doc.to_dict()
+    doc_dict = DocumentService.serialize_document(db, doc)
     renamed_doc = {}
     for key, value in doc_dict.items():
         new_key = key_mapping.get(key, key)
@@ -1305,7 +1307,7 @@ async def retrieval_test(
     if not doc_ids:
         metadata_condition = req.get("metadata_condition")
         if metadata_condition:
-            metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+            metas = DocMetadataService.get_meta_by_kbs(db, kb_ids)
             doc_ids = meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and"))
             # If metadata_condition has conditions but no docs match, return empty result
             if not doc_ids and metadata_condition.get("conditions"):

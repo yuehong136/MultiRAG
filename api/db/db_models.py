@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import inspect
+import sqlalchemy as sa
 from sqlalchemy import create_engine, String, DateTime, BigInteger, event, Integer, Float, Boolean, Text, text, JSON, select
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, Session, object_session, DeclarativeBase, Mapped, mapped_column
@@ -1019,6 +1020,26 @@ class Document(BaseModel):
     suffix: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="", doc="The real file extension suffix")
     run: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="0", doc="start to run processing or cancel.(1: run it; 2: cancel)")
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
+
+
+class DocumentMetadata(BaseModel):
+    """Independent metadata table — decouples metadata from Document.meta_fields.
+
+    For Milvus backend: metadata truth lives here instead of Document.meta_fields.
+    For ES/Infinity backends: metadata lives in docStoreConn sidecar index, but this
+    table is still the canonical model definition.
+    """
+    __tablename__ = "t_ai_document_metadata"
+    __table_args__ = (
+        sa.Index("ix_doc_meta_tenant_kb", "tenant_id", "kb_id"),
+        sa.Index("ix_doc_meta_kb", "kb_id"),
+        {"schema": "usr_ai"},
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False,
+                                    doc="same as document id")
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    kb_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    meta_fields: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default={})
 
 
 class File(BaseModel):

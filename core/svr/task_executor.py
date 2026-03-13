@@ -27,6 +27,7 @@ from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.orm import Session
 
 from api.db.services.document_service import DocumentService
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, has_canceled, CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID
 from api.db.services.file2document_service import File2DocumentService
@@ -617,12 +618,10 @@ async def build_chunks(task, progress_callback, db: Session):
             metadata = update_metadata_to(metadata, doc["metadata_obj"])
             del doc["metadata_obj"]
         if metadata:
-            doc = DocumentService.get_by_id(task["doc_id"])
-            if doc:
-                if isinstance(doc.meta_fields, str):
-                    doc.meta_fields = json.loads(doc.meta_fields)
-                metadata = update_metadata_to(metadata, doc.meta_fields)
-                DocumentService.update_by_id(task["doc_id"], {"meta_fields": metadata})
+            existing_meta = DocMetadataService.get_document_metadata(db, task["doc_id"])
+            existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
+            metadata = update_metadata_to(metadata, existing_meta)
+            DocMetadataService.update_document_metadata(db, task["doc_id"], metadata)
         progress_callback(msg="Question generation {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
 
     if task["kb_parser_config"].get("tag_kb_ids", []):
@@ -1130,12 +1129,10 @@ async def run_dataflow(db: Session, task: dict):
             del ck["positions"]
 
     if metadata:
-        e, doc = DocumentService.get_by_id(db, doc_id)
-        if e:
-            if isinstance(doc.meta_fields, str):
-                doc.meta_fields = json.loads(doc.meta_fields)
-            metadata = update_metadata_to(metadata, doc.meta_fields)
-            DocumentService.update_by_id(db, doc_id, {"meta_fields": metadata})
+        existing_meta = DocMetadataService.get_document_metadata(db, doc_id)
+        existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
+        metadata = update_metadata_to(metadata, existing_meta)
+        DocMetadataService.update_document_metadata(db, doc_id, metadata)
 
     start_ts = timer()
     set_progress(db, task_id, prog=0.82, msg="[DOC Engine]:\nStart to index...")

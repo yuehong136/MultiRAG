@@ -25,6 +25,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import UserTenantService
 from api.db.services.document_service import DocumentService
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils.api_utils import get_json_result
 from core.app.qa import rmPrefix, beAdoc
@@ -383,7 +384,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
         # sres = settings.retriever.search(query, search.index_name_one(tenant_id, kb.name))
         # total = settings.retriever.search(query_count, search.index_name_one(tenant_id, kb.name), kb_ids).total
         sres = await settings.retriever.search(query, search.index_name_one(tenant_id, kb.name), kb_ids, highlight=["content_ltks"])
-        res = {"total": sres.total, "chunks": [], "doc": doc.to_dict()}
+        res = {"total": sres.total, "chunks": [], "doc": DocumentService.serialize_document(db, doc)}
         for id in sres.ids:
             d = {
                 "chunk_id": id,
@@ -1532,7 +1533,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
 
     if meta_data_filter:
-        metas = DocumentService.get_meta_by_kbs(db, kb_ids)
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
         doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
     try:

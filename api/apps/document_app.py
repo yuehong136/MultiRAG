@@ -34,6 +34,7 @@ from common.constants import VALID_TASK_STATUS, TaskStatus, ParserType
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task, doc_upload_and_parse
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
 from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.file2document_service import File2DocumentService
@@ -513,6 +514,7 @@ class MetadataDeleteItem(BaseModel):
 
 class MetadataUpdateRequest(BaseModel):
     """元数据批量更新请求"""
+    kb_id: str | None = Field(default=None, description="知识库ID（ES/Infinity 引擎必填）")
     doc_ids: list[str] = Field(..., description="文档ID列表")
     updates: list[MetadataUpdateItem] | list[dict] = Field(default=[], description="更新操作列表")
     deletes: list[MetadataDeleteItem] | list[dict] = Field(default=[], description="删除操作列表")
@@ -1010,7 +1012,7 @@ def create_document(
             "location": "",
             "size": 0
         })
-        return construct_json_result(data=doc.to_dict(), code=RetCode.SUCCESS)
+        return construct_json_result(data=DocumentService.serialize_document(db, doc), code=RetCode.SUCCESS)
     except Exception as e:
         return construct_error_response(e)
 
@@ -1489,7 +1491,7 @@ def list_docs(
     doc_ids_filter = None
     metas = None
     if metadata_condition or metadata:
-        metas = DocumentService.get_flatted_meta_by_kbs(db, [kb_id])
+        metas = DocMetadataService.get_flatted_meta_by_kbs(db, [kb_id])
 
     if metadata_condition:
         doc_ids_filter = set(meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and")))
@@ -1858,7 +1860,7 @@ def doc_infos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(ma
                 retcode=RetCode.AUTHENTICATION_ERROR
             )
     docs = DocumentService.get_by_ids(db, doc_ids)
-    docs_dicts = [doc.to_dict() for doc in docs]
+    docs_dicts = DocumentService.serialize_documents(db, docs)
     return get_json_result(data=docs_dicts)
 
 
@@ -3205,7 +3207,7 @@ def metadata_summary(
         )
 
     try:
-        summary = DocumentService.get_metadata_summary(db, kb_id, request.doc_ids)
+        summary = DocMetadataService.get_metadata_summary(db, kb_id, request.doc_ids)
         return get_json_result(data={"summary": summary})
     except Exception as e:
         return server_error_response(e)
@@ -3248,8 +3250,8 @@ def metadata_update(
         if not isinstance(d, dict) or not d.get("key"):
             return get_json_result(data=False, retmsg="Each delete requires key.", retcode=RetCode.ARGUMENT_ERROR)
 
-    updated = DocumentService.batch_update_metadata(db, None, document_ids, updates, deletes)
-    return get_json_result(data={"updated": updated})
+    updated = DocMetadataService.batch_update_metadata(db, request.kb_id, document_ids, updates, deletes)
+    return get_json_result(data={"updated": updated, "matched_docs": len(document_ids)})
 
 
 @router.post("/update_metadata_setting", summary="更新文档元数据设置", response_description="成功更新文档元数据设置")
@@ -3280,7 +3282,7 @@ def update_metadata_setting(
     if not doc:
         return get_data_error_result(retmsg="Document not found!")
 
-    return get_json_result(data=doc.to_dict())
+    return get_json_result(data=DocumentService.serialize_document(db, doc))
 
 
 @router.post("/upload_and_parse", summary="上传文件并解析", response_description="成功上传并解析文件")
@@ -3373,8 +3375,7 @@ def set_meta(
             return get_data_error_result(retmsg="Document not found!")
 
         # meta已经是字典对象，不需要再解析
-        if not DocumentService.update_by_id(
-                db, req["doc_id"], {"meta_fields": req["meta"]}):
+        if not DocMetadataService.update_document_metadata(db, req["doc_id"], req["meta"]):
             return get_data_error_result(
                 retmsg="Database error (meta updates)!")
 

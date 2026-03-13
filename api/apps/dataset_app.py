@@ -662,7 +662,11 @@ def update_document(
                 FileService.update_by_id(db, file.id, {"name": req["name"]})
 
         document = DocumentService.get_by_id(db, document_id)
-        return construct_json_result(data=document.to_dict(), message="Success", code=RetCode.SUCCESS)
+        return construct_json_result(
+            data=DocumentService.serialize_document(db, document),
+            message="Success",
+            code=RetCode.SUCCESS,
+        )
     except Exception as e:
         return construct_error_response(e)
 

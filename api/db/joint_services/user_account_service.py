@@ -25,6 +25,7 @@ from api.db.services.canvas_service import UserCanvasService
 from api.db.services.conversation_service import ConversationService
 from api.db.services.dialog_service import DialogService
 from api.db.services.document_service import DocumentService
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
@@ -142,6 +143,10 @@ def create_new_user(db: Session, user_info: dict) -> dict:
         
         # 清理已创建的数据
         try:
+            DocMetadataService.delete_tenant_metadata_container(user_id)
+        except Exception as e:
+            logging.exception(e)
+        try:
             TenantService.delete_by_id(db, user_id)
         except Exception as e:
             logging.exception(e)
@@ -203,6 +208,11 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                 # step1.1.2 delete file and document info in db
                 doc_ids = DocumentService.get_all_doc_ids_by_kb_ids(db, kb_ids)
                 if doc_ids:
+                    for doc in doc_ids:
+                        try:
+                            DocMetadataService.delete_document_metadata(db, doc["id"], skip_empty_check=True)
+                        except Exception as e:
+                            logging.warning(f"Failed to delete metadata for document {doc['id']}: {e}")
                     doc_delete_res = DocumentService.delete_by_ids(db, [i["id"] for i in doc_ids])
                     done_msg += f"- Deleted {doc_delete_res} document records.\n"
                     task_delete_res = TaskService.delete_by_doc_ids(db, [i["id"] for i in doc_ids])
@@ -258,6 +268,10 @@ def delete_user_data(db: Session, user_id: str) -> dict:
             done_msg += f"- Deleted {llm_delete_res} tenant-LLM records.\n"
             langfuse_delete_res = TenantLangfuseService.delete_by_tenant_id(db, tenant_id)
             done_msg += f"- Deleted {langfuse_delete_res} langfuse records.\n"
+            if DocMetadataService.delete_tenant_metadata_container(tenant_id):
+                if settings.DOC_ENGINE.lower() != "milvus":
+                    meta_index = DocMetadataService._get_doc_meta_index_name(tenant_id)
+                    done_msg += f"- Deleted metadata container {meta_index}.\n"
             # step1.3 delete memory and messages
             user_memory = MemoryService.get_by_tenant_id(db, tenant_id)
             if user_memory:

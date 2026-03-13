@@ -320,7 +320,7 @@ class DocumentAdmin(ModelView, model=Document):
                    Document.parser_config, Document.source_type, Document.type, Document.created_by,
                    Document.name, Document.location, Document.size, Document.auth, Document.token_num,
                    Document.chunk_num, Document.progress, Document.progress_msg,
-                   Document.process_begin_at, Document.process_duration, Document.meta_fields,
+                   Document.process_begin_at, Document.process_duration,
                    Document.suffix, Document.run, Document.status, Document.create_date, Document.update_date]
     column_searchable_list = [Document.name, Document.location]
     column_sortable_list = [Document.create_date, Document.size, Document.progress]

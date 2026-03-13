@@ -32,7 +32,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
-from common.metadata_utils import dedupe_list
+from api.db.services.doc_metadata_service import DocMetadataService
 from common import settings
 from common.constants import LLMType, ParserType, TaskStatus, StatusEnum, SVR_CONSUMER_GROUP_NAME, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
 from core.nlp import search, rag_tokenizer
@@ -95,7 +95,6 @@ class DocumentService(CommonService):
             cls.model.progress_msg,
             cls.model.process_begin_at,
             cls.model.process_duration,
-            cls.model.meta_fields,
             cls.model.suffix,
             cls.model.run,
             cls.model.status,
@@ -104,6 +103,74 @@ class DocumentService(CommonService):
             cls.model.update_time,
             cls.model.update_date,
         ]
+
+    @staticmethod
+    def _attach_metadata(
+            db: Session,
+            kb_id: str,
+            docs: list[dict],
+            *,
+            empty_metadata: bool = False,
+    ) -> list[dict]:
+        if not docs:
+            return docs
+
+        if empty_metadata:
+            for doc in docs:
+                doc["meta_fields"] = {}
+            return docs
+
+        metadata_map = DocMetadataService.get_metadata_for_documents(
+            db, [doc["id"] for doc in docs], kb_id
+        )
+        for doc in docs:
+            doc["meta_fields"] = metadata_map.get(doc["id"], {})
+        return docs
+
+    @classmethod
+    def serialize_documents(cls, db: Session, docs: list[Any]) -> list[dict]:
+        """Build response-facing document dicts with metadata attached.
+
+        This helper is intentionally limited to API/SDK response payloads that
+        need the full document view. Do not use it as a general replacement for
+        ``doc.to_dict()`` in internal workflows, task logic, or logging paths.
+        """
+        if not docs:
+            return []
+
+        serialized_docs: list[dict] = []
+        kb_doc_ids: dict[str, list[str]] = {}
+
+        for doc in docs:
+            doc_dict = doc if isinstance(doc, dict) else doc.to_dict()
+            serialized_docs.append(doc_dict)
+            doc_id = doc_dict.get("id")
+            kb_id = doc_dict.get("kb_id")
+            if doc_id and kb_id:
+                kb_doc_ids.setdefault(kb_id, []).append(doc_id)
+
+        metadata_by_doc_id: dict[str, dict] = {}
+        for kb_id, doc_ids in kb_doc_ids.items():
+            metadata_by_doc_id.update(
+                DocMetadataService.get_metadata_for_documents(
+                    db,
+                    list(dict.fromkeys(doc_ids)),
+                    kb_id,
+                )
+            )
+
+        for doc_dict in serialized_docs:
+            doc_dict["meta_fields"] = metadata_by_doc_id.get(doc_dict.get("id"), {})
+
+        return serialized_docs
+
+    @classmethod
+    def serialize_document(cls, db: Session, doc: Any) -> dict | None:
+        """Serialize a single document for external response payloads."""
+        if not doc:
+            return None
+        docs = cls.serialize_documents(db, [doc])
+        return docs[0] if docs else None
 
     @classmethod
     def get_list(
@@ -171,8 +238,8 @@ class DocumentService(CommonService):
         stmt = base.offset((page_number - 1) * items_per_page).limit(items_per_page)
 
         # 7) 执行并返回"字典行"（等价 Peewee 的 .dicts()）
-        rows = db.execute(stmt).mappings().all()
-        return [dict(r) for r in rows], total
+        rows = [dict(r) for r in db.execute(stmt).mappings().all()]
+        return cls._attach_metadata(db, kb_id, rows), total
 
     @classmethod
     def check_doc_health(cls, db: Session, tenant_id: str, filename):
@@ -220,7 +287,22 @@ class DocumentService(CommonService):
             base = base.where(cls.model.id.in_(doc_ids))
 
         if return_empty_metadata:
-            base = base.where(func.coalesce(func.json_length(cls.model.meta_fields), 0) == 0)
+            if settings.DOC_ENGINE.lower() == "milvus":
+                from api.db.db_models import DocumentMetadata
+                meta_subq = select(DocumentMetadata.id).where(
+                    DocumentMetadata.kb_id == kb_id,
+                    DocumentMetadata.meta_fields != {},
+                )
+                base = base.where(~cls.model.id.in_(meta_subq))
+            else:
+                # ES/Infinity: fetch doc_ids with metadata from engine store
+                docs_with_meta = DocMetadataService.get_flatted_meta_by_kbs(db, [kb_id])
+                doc_ids_with_meta = set()
+                for _field, val_map in docs_with_meta.items():
+                    for _val, ids in val_map.items():
+                        doc_ids_with_meta.update(ids)
+                if doc_ids_with_meta:
+                    base = base.where(~cls.model.id.in_(doc_ids_with_meta))
 
         # 计算总数
         count = db.execute(select(func.count()).select_from(base.subquery())).scalar_one()
@@ -239,8 +321,13 @@ class DocumentService(CommonService):
             stmt = base
 
         # 执行并返回字典行（自动获取列名，无需手动维护）
-        rows = db.execute(stmt).mappings().all()
-        return [dict(r) for r in rows], count
+        rows = [dict(r) for r in db.execute(stmt).mappings().all()]
+        return cls._attach_metadata(
+            db,
+            kb_id,
+            rows,
+            empty_metadata=return_empty_metadata,
+        ), count
 
     @classmethod
     def get_filter_by_kb_id(cls, db: Session, kb_id, keywords, run_status, types, suffix):
@@ -327,8 +414,7 @@ class DocumentService(CommonService):
         )
         run_status_stats = db.execute(run_status_stmt).all()
 
-        # 6) metadata 分布：遍历文档的 meta_fields 字段进行统计
-        # 先获取符合条件的唯一文档 ID（避免对 JSON 字段使用 DISTINCT）
+        # 6) metadata 分布：通过 DocMetadataService 获取
         doc_ids_subquery = (
             select(cls.model.id)
             .select_from(cls.model)
@@ -337,14 +423,18 @@ class DocumentService(CommonService):
             .where(*filters)
             .distinct()
         )
-        # 然后获取这些文档的 meta_fields
-        meta_stmt = select(cls.model.meta_fields).where(cls.model.id.in_(doc_ids_subquery))
-        meta_rows = db.scalars(meta_stmt).all()
+        filtered_doc_ids = [r[0] for r in db.execute(doc_ids_subquery).all()]
+        all_meta = {}
+        if filtered_doc_ids:
+            try:
+                all_meta = DocMetadataService.get_metadata_for_documents(db, filtered_doc_ids, kb_id)
+            except Exception as e:
+                logging.warning(f"Failed to fetch metadata for kb {kb_id}: {e}")
 
         metadata_counter = {}
         empty_metadata_count = 0
-        for meta_fields in meta_rows:
-            meta_fields = meta_fields or {}
+        for doc_id in filtered_doc_ids:
+            meta_fields = all_meta.get(doc_id) or {}
             if not meta_fields:
                 empty_metadata_count += 1
                 continue
@@ -1767,7 +1857,7 @@ class DocumentService(CommonService):
         - 返回包含文档信息的字典，如果未找到文档，则返回None。
         """
         doc = db.query(cls.model).filter_by(id=doc_id).first()
-        return doc.to_dict() if doc else None
+        return cls.serialize_document(db, doc)
 
     @classmethod
     def list_documents_in_dataset(cls, db: Session, dataset_id: str, offset: int, count: int,
@@ -1789,9 +1879,9 @@ class DocumentService(CommonService):
             raise IndexError("Offset is out of the valid range.")
 
         if count == -1:
-            return [doc.to_dict() for doc in docs[offset:]], total
+            return cls.serialize_documents(db, docs[offset:]), total
 
-        return [doc.to_dict() for doc in docs[offset:offset + count]], total
+        return cls.serialize_documents(db, docs[offset:offset + count]), total
 
     @classmethod
     def insert(cls, db: Session, doc: dict):
@@ -1881,6 +1971,12 @@ class DocumentService(CommonService):
                     )
         except Exception as e:
             logging.error(f"Failed to delete chunks from doc store for document {doc_id}: {e}")
+
+        # Delete document metadata (non-critical, log and continue)
+        try:
+            DocMetadataService.delete_document_metadata(db, doc_id)
+        except Exception as e:
+            logging.warning(f"Failed to delete metadata for document {doc_id}: {e}")
 
         try:
             graph_source = settings.docStoreConn.get_fields(
@@ -2339,258 +2435,31 @@ class DocumentService(CommonService):
 
     @classmethod
     def update_meta_fields(cls, db: Session, doc_id, meta_fields):
-        return cls.update_by_id(db, doc_id, {"meta_fields": meta_fields})
+        """Deprecated — delegate to DocMetadataService."""
+        return DocMetadataService.update_document_metadata(db, doc_id, meta_fields)
 
     @classmethod
     def get_meta_by_kbs(cls, db: Session, kb_ids):
-        stmt = (
-            select(cls.model.id, cls.model.meta_fields)
-            .where(cls.model.kb_id.in_(kb_ids))
-        )
-
-        meta = {}
-        for row in db.execute(stmt).mappings():
-            doc_id = row["id"]
-            fields = row.get("meta_fields") or {}
-            if not isinstance(fields, dict):
-                continue
-            for key, value in fields.items():
-                if not isinstance(value, list):
-                    value = [value]
-                for vv in value:
-                    if vv not in meta.setdefault(key, {}):
-                        if isinstance(vv, list) or isinstance(vv, dict):
-                            continue
-                        meta[key][vv] = []
-                    meta[key][vv].append(doc_id)
-
-        return meta
+        """Deprecated — delegate to DocMetadataService."""
+        return DocMetadataService.get_meta_by_kbs(db, kb_ids)
 
     @classmethod
     def get_flatted_meta_by_kbs(cls, db: Session, kb_ids: list[str]) -> dict:
-        """
-        获取知识库文档的扁平化元数据。
-
-        - 解析字符串化的 JSON meta_fields，跳过非字典或无法解析的值
-        - 将列表值展开为单独的条目
-          示例: {"tags": ["foo","bar"], "author": "alice"} ->
-            meta["tags"]["foo"] = [doc_id], meta["tags"]["bar"] = [doc_id], meta["author"]["alice"] = [doc_id]
-        适用于 metadata_condition 过滤和需要遵循列表语义的场景。
-        """
-        stmt = select(cls.model.id, cls.model.meta_fields).where(cls.model.kb_id.in_(kb_ids))
-
-        meta: dict = {}
-        for row in db.execute(stmt).mappings():
-            doc_id = row["id"]
-            meta_fields = row.get("meta_fields") or {}
-            if isinstance(meta_fields, str):
-                try:
-                    meta_fields = json.loads(meta_fields)
-                except Exception:
-                    continue
-            if not isinstance(meta_fields, dict):
-                continue
-            for k, v in meta_fields.items():
-                if k not in meta:
-                    meta[k] = {}
-                values = v if isinstance(v, list) else [v]
-                for vv in values:
-                    if vv is None:
-                        continue
-                    sv = str(vv)
-                    if sv not in meta[k]:
-                        meta[k][sv] = []
-                    meta[k][sv].append(doc_id)
-        return meta
+        """Deprecated — delegate to DocMetadataService."""
+        return DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
 
     @classmethod
     def get_metadata_summary(cls, db: Session, kb_id: str, document_ids: list[str] | None = None) -> dict:
-
-        def _meta_value_type(value):
-            if value is None:
-                return None
-            if isinstance(value, list):
-                return "list"
-            if isinstance(value, bool):
-                return "string"
-            if isinstance(value, (int, float)):
-                return "number"
-            if re.match(r"\d{4}\-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", str(value)):
-                return "time"
-            return "string"
-
-        stmt = select(cls.model.id, cls.model.meta_fields).where(cls.model.kb_id == kb_id)
-        if document_ids:
-            stmt = stmt.where(cls.model.id.in_(document_ids))
-
-        summary: dict = {}
-        type_counter: dict = {}
-        for row in db.execute(stmt).mappings():
-            meta_fields = row.get("meta_fields") or {}
-            if isinstance(meta_fields, str):
-                try:
-                    meta_fields = json.loads(meta_fields)
-                except Exception:
-                    continue
-            if not isinstance(meta_fields, dict):
-                continue
-            for k, v in meta_fields.items():
-                value_type = _meta_value_type(v)
-                if value_type:
-                    if k not in type_counter:
-                        type_counter[k] = {}
-                    type_counter[k][value_type] = type_counter[k].get(value_type, 0) + 1
-                values = v if isinstance(v, list) else [v]
-                for vv in values:
-                    if not vv:
-                        continue
-                    sv = str(vv)
-                    if k not in summary:
-                        summary[k] = {}
-                    summary[k][sv] = summary[k].get(sv, 0) + 1
-        result = {}
-        for k, v in summary.items():
-            values = sorted([(val, cnt) for val, cnt in v.items()], key=lambda x: x[1], reverse=True)
-            type_counts = type_counter.get(k, {})
-            value_type = "string"
-            if type_counts:
-                value_type = max(type_counts.items(), key=lambda item: item[1])[0]
-            result[k] = {"type": value_type, "values": values}
-        return result
+        """Deprecated — delegate to DocMetadataService."""
+        return DocMetadataService.get_metadata_summary(db, kb_id, document_ids)
 
     @classmethod
     def batch_update_metadata(cls, db: Session, kb_id: str | None, doc_ids: list[str],
                               updates: list[dict] | None = None,
                               deletes: list[dict] | None = None,
                               adds: list[dict] | None = None) -> int:
-        """
-        批量更新文档元数据。
-
-        Args:
-            db: 数据库会话
-            kb_id: 知识库ID
-            doc_ids: 要更新的文档ID列表
-            updates: 更新操作列表，每个元素包含 {"key": str, "value": any, "match": any (optional)}
-            deletes: 删除操作列表，每个元素包含 {"key": str, "value": any (optional)}
-
-        Returns:
-            更新的文档数量
-        """
-        updates = updates or []
-        deletes = deletes or []
-        if not doc_ids:
-            return 0
-
-        def _normalize_meta(meta):
-            if isinstance(meta, str):
-                try:
-                    meta = json.loads(meta)
-                except Exception:
-                    return {}
-            if not isinstance(meta, dict):
-                return {}
-            return deepcopy(meta)
-
-        def _str_equal(a, b):
-            return str(a) == str(b)
-
-        def _apply_updates(meta: dict) -> bool:
-            changed = False
-            for upd in updates:
-                key = upd.get("key")
-                if not key:
-                    continue
-
-                new_value = upd.get("value")
-                match_provided = upd.get("match")
-                if key not in meta:
-                    if match_provided:
-                        continue
-                    meta[key] = dedupe_list(new_value) if isinstance(new_value, list) else new_value
-                    changed = True
-                    continue
-
-                if isinstance(meta[key], list):
-                    if not match_provided:
-                        if isinstance(new_value, list):
-                            meta[key] = dedupe_list(new_value)
-                        else:
-                            meta[key].append(new_value)
-                        changed = True
-                    else:
-                        match_value = upd.get("match")
-                        replaced = False
-                        new_list = []
-                        for item in meta[key]:
-                            if _str_equal(item, match_value):
-                                new_list.append(new_value)
-                                replaced = True
-                            else:
-                                new_list.append(item)
-                        if replaced:
-                            meta[key] = dedupe_list(new_list)
-                            changed = True
-                else:
-                    if not match_provided:
-                        meta[key] = new_value
-                        changed = True
-                    else:
-                        match_value = upd.get("match")
-                        if _str_equal(meta[key], match_value):
-                            meta[key] = new_value
-                            changed = True
-            return changed
-
-        def _apply_deletes(meta: dict) -> bool:
-            changed = False
-            for d in deletes:
-                key = d.get("key")
-                if not key or key not in meta:
-                    continue
-                value = d.get("value", None)
-                if isinstance(meta[key], list):
-                    if value is None:
-                        del meta[key]
-                        changed = True
-                        continue
-                    new_list = [item for item in meta[key] if not _str_equal(item, value)]
-                    if len(new_list) != len(meta[key]):
-                        if new_list:
-                            meta[key] = new_list
-                        else:
-                            del meta[key]
-                        changed = True
-                else:
-                    if value is None or _str_equal(meta[key], value):
-                        del meta[key]
-                        changed = True
-            return changed
-
-        updated_docs = 0
-        stmt = select(cls.model.id, cls.model.meta_fields).where(
-            cls.model.id.in_(doc_ids)
-        )
-        rows = list(db.execute(stmt).mappings())
-
-        for r in rows:
-            meta = _normalize_meta(r.get("meta_fields") or {})
-            original_meta = deepcopy(meta)
-            changed = _apply_updates(meta)
-            changed = _apply_deletes(meta) or changed
-            if changed and meta != original_meta:
-                db.execute(
-                    update(cls.model)
-                    .where(cls.model.id == r["id"])
-                    .values(
-                        meta_fields=meta,
-                        update_time=current_timestamp(),
-                        update_date=get_format_time()
-                    )
-                )
-                updated_docs += 1
-
-        db.commit()
-        return updated_docs
+        """Deprecated — delegate to DocMetadataService."""
+        return DocMetadataService.batch_update_metadata(db, kb_id, doc_ids, updates, deletes)
 
     @classmethod
     def update_progress(cls, db: Session):

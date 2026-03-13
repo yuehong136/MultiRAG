@@ -83,7 +83,7 @@ def message_fit_in(msg, max_length=4000):
 
 
 def kb_prompt(kbinfos, max_tokens, hash_id=False):
-    from api.db.services.document_service import DocumentService
+    from api.db.services.doc_metadata_service import DocMetadataService
 
     # 兼容不同字段名
     def get_text(ck):
@@ -107,9 +107,16 @@ def kb_prompt(kbinfos, max_tokens, hash_id=False):
             logging.warning(f"Not all the retrieval into prompt: {len(knowledges)}/{kwlg_len}")
             break
     with db_connection() as db:
-        docs = DocumentService.get_by_ids(db, [get_value(ck, "doc_id", "document_id") for ck in
-                                               kbinfos["chunks"][:chunks_num]])
-        docs = {d.id: d.meta_fields for d in docs}
+        doc_ids = list(dict.fromkeys(
+            get_value(ck, "doc_id", "document_id")
+            for ck in kbinfos["chunks"][:chunks_num]
+            if get_value(ck, "doc_id", "document_id")
+        ))
+        docs = DocMetadataService.get_metadata_for_documents(
+            db,
+            doc_ids,
+            get_value(kbinfos["chunks"][0], "kb_id", "dataset_id") if kbinfos["chunks"][:chunks_num] else "",
+        )
 
     def draw_node(k, line):
         if line is not None and not isinstance(line, str):

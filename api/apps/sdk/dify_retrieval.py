@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db
 from api.db.services.document_service import DocumentService
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import apikey_dependency, build_error_result
@@ -227,7 +228,7 @@ async def retrieval(
     search_mode_dict = request_data.get_search_mode_dict()
 
     # 获取元数据并处理过滤条件
-    metas = DocumentService.get_meta_by_kbs(db, [kb_id])
+    metas = DocMetadataService.get_meta_by_kbs(db, [kb_id])
     doc_ids: list[str] = []
 
     try:
@@ -284,12 +285,18 @@ async def retrieval(
                 ranks["chunks"].insert(0, kg_result)
 
         # 构建响应
+        chunks = ranks.get("chunks", [])
+        chunk_doc_ids = list(dict.fromkeys(
+            chunk["doc_id"] for chunk in chunks if chunk.get("doc_id")
+        ))
+        existing_doc_ids = {doc.id for doc in DocumentService.get_by_ids(db, chunk_doc_ids)}
+        metadata_map = DocMetadataService.get_metadata_for_documents(db, chunk_doc_ids, kb_id)
+
         records: list[RetrievalRecord] = []
-        for chunk in ranks.get("chunks", []):
-            _, doc = DocumentService.get_by_id(db, chunk["doc_id"])
+        for chunk in chunks:
             chunk.pop("vector", None)  # 移除向量数据
 
-            meta = getattr(doc, "meta_fields", {}) if doc else {}
+            meta = dict(metadata_map.get(chunk["doc_id"], {})) if chunk["doc_id"] in existing_doc_ids else {}
             meta["doc_id"] = chunk["doc_id"]
 
             records.append(
