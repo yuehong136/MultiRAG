@@ -148,6 +148,9 @@ class InfinityConnection(InfinityConnectionBase):
         filter_cond = None
         filter_fulltext = ""
         if condition:
+            # Remove kb_id filter for Infinity (it uses table separation instead)
+            condition = {k: v for k, v in condition.items() if k != "kb_id"}
+
             table_found = False
             for indexName in index_names:
                 for kb_id in knowledgebase_ids:
