@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 
 from common import settings
 from api.common.exceptions import AdminException, UserNotFoundError
+from api.db import UserTenantRole
 from api.db.services import UserService
+from api.db.services.user_service import TenantService, UserTenantService
 from api.db.db_models import get_db, SessionLocal
 from common.constants import ActiveEnum, StatusEnum
 from api.utils.crypt import decrypt
@@ -97,9 +99,44 @@ def init_default_admin(db: Session):
         }
         if not UserService.save(db, **user_info):
             raise AdminException("Can't init admin.", 500)
+        add_tenant_for_admin(db, user_info, UserTenantRole.OWNER)
         logging.info("Default admin account created successfully")
     elif not any([u.is_active == ActiveEnum.ACTIVE.value for u in users]):
         raise AdminException("No active admin. Please update 'is_active' in db manually.", 500)
+    else:
+        default_admin_rows = [u for u in users if u.email == DEFAULT_ADMIN_EMAIL]
+        if default_admin_rows:
+            default_admin = default_admin_rows[0].to_dict()
+            if not TenantService.get_by_id(db, default_admin["id"]):
+                add_tenant_for_admin(db, default_admin, UserTenantRole.OWNER)
+
+
+def add_tenant_for_admin(db: Session, user_info: dict, role: str):
+    from api.db.services.tenant_llm_service import TenantLLMService
+    from api.db.services.llm_service import get_init_tenant_llm
+
+    tenant = {
+        "id": user_info["id"],
+        "name": user_info["nickname"] + "'s Kingdom",
+        "llm_id": settings.CHAT_MDL,
+        "embd_id": settings.EMBEDDING_MDL,
+        "asr_id": settings.ASR_MDL,
+        "parser_ids": settings.PARSERS,
+        "img2txt_id": settings.IMAGE2TEXT_MDL
+    }
+    usr_tenant = {
+        "tenant_id": user_info["id"],
+        "user_id": user_info["id"],
+        "invited_by": user_info["id"],
+        "role": role
+    }
+
+    tenant_llm = get_init_tenant_llm(db, user_info["id"])
+    TenantService.insert(db, **tenant)
+    UserTenantService.insert(db, **usr_tenant)
+    TenantLLMService.insert_many(db, tenant_llm)
+    logging.info(
+        f"Added tenant for email: {user_info['email']}, A default tenant has been set; changing the default models after login is strongly recommended.")
 
 
 def login_admin(db: Session, email: str, password: str):
