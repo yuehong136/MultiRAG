@@ -34,7 +34,7 @@ from core.nlp import is_english
 
 
 class InfinityConnectionBase(DocStoreConnection):
-    def __init__(self, mapping_file_name: str="infinity_mapping.json", logger_name: str="multirag.infinity_conn"):
+    def __init__(self, mapping_file_name: str = "infinity_mapping.json", logger_name: str = "multirag.infinity_conn"):
         from common.doc_store.infinity_conn_pool import INFINITY_CONN
 
         self.dbName = settings.INFINITY.get("db_name", "default_db")
@@ -86,22 +86,43 @@ class InfinityConnectionBase(DocStoreConnection):
             column_names = inf_table.show_columns()["name"]
             column_names = set(column_names)
             for field_name, field_info in schema.items():
-                if field_name in column_names:
-                    continue
-                res = inf_table.add_columns({field_name: field_info})
-                assert res.error_code == infinity.ErrorCode.OK
-                self.logger.info(f"INFINITY added following column to table {table_name}: {field_name} {field_info}")
-                if field_info["type"] != "varchar" or "analyzer" not in field_info:
-                    continue
-                analyzers = field_info["analyzer"]
-                if isinstance(analyzers, str):
-                    analyzers = [analyzers]
-                for analyzer in analyzers:
-                    inf_table.create_index(
-                        f"ft_{re.sub(r'[^a-zA-Z0-9]', '_', field_name)}_{re.sub(r'[^a-zA-Z0-9]', '_', analyzer)}",
-                        IndexInfo(field_name, IndexType.FullText, {"ANALYZER": analyzer}),
-                        ConflictType.Ignore,
-                    )
+                is_new_column = field_name not in column_names
+                if is_new_column:
+                    res = inf_table.add_columns({field_name: field_info})
+                    assert res.error_code == infinity.ErrorCode.OK
+                    self.logger.info(f"INFINITY added following column to table {table_name}: {field_name} {field_info}")
+
+                if field_info["type"] == "varchar" and "analyzer" in field_info:
+                    analyzers = field_info["analyzer"]
+                    if isinstance(analyzers, str):
+                        analyzers = [analyzers]
+                    for analyzer in analyzers:
+                        inf_table.create_index(
+                            f"ft_{re.sub(r'[^a-zA-Z0-9]', '_', field_name)}_{re.sub(r'[^a-zA-Z0-9]', '_', analyzer)}",
+                            IndexInfo(field_name, IndexType.FullText, {"ANALYZER": analyzer}),
+                            ConflictType.Ignore,
+                        )
+
+                if "index_type" in field_info:
+                    index_config = field_info["index_type"]
+                    if isinstance(index_config, str) and index_config == "secondary":
+                        inf_table.create_index(
+                            f"sec_{field_name}",
+                            IndexInfo(field_name, IndexType.Secondary),
+                            ConflictType.Ignore,
+                        )
+                        self.logger.info(f"INFINITY created secondary index sec_{field_name} for field {field_name}")
+                    elif isinstance(index_config, dict):
+                        if index_config.get("type") == "secondary":
+                            params = {}
+                            if "cardinality" in index_config:
+                                params = {"cardinality": index_config["cardinality"]}
+                            inf_table.create_index(
+                                f"sec_{field_name}",
+                                IndexInfo(field_name, IndexType.Secondary, params),
+                                ConflictType.Ignore,
+                            )
+                            self.logger.info(f"INFINITY created secondary index sec_{field_name} for field {field_name} with params {params}")
 
     """
     Dataframe and fields convert
@@ -246,6 +267,7 @@ class InfinityConnectionBase(DocStoreConnection):
 
         if parser_id is not None:
             from common.constants import ParserType
+
             if parser_id == ParserType.TABLE.value:
                 schema["chunk_data"] = {"type": "json", "default": "{}"}
                 self.logger.info("Added chunk_data column for TABLE parser")
@@ -283,6 +305,31 @@ class InfinityConnectionBase(DocStoreConnection):
                     IndexInfo(field_name, IndexType.FullText, {"ANALYZER": analyzer}),
                     ConflictType.Ignore,
                 )
+
+        # Create secondary indexes for fields with index_type
+        for field_name, field_info in schema.items():
+            if "index_type" not in field_info:
+                continue
+            index_config = field_info["index_type"]
+            if isinstance(index_config, str) and index_config == "secondary":
+                inf_table.create_index(
+                    f"sec_{field_name}",
+                    IndexInfo(field_name, IndexType.Secondary),
+                    ConflictType.Ignore,
+                )
+                self.logger.info(f"INFINITY created secondary index sec_{field_name} for field {field_name}")
+            elif isinstance(index_config, dict):
+                if index_config.get("type") == "secondary":
+                    params = {}
+                    if "cardinality" in index_config:
+                        params = {"cardinality": index_config["cardinality"]}
+                    inf_table.create_index(
+                        f"sec_{field_name}",
+                        IndexInfo(field_name, IndexType.Secondary, params),
+                        ConflictType.Ignore,
+                    )
+                    self.logger.info(f"INFINITY created secondary index sec_{field_name} for field {field_name} with params {params}")
+
         self.connPool.release_conn(inf_conn)
         self.logger.info(f"INFINITY created table {table_name}, vector size {vector_size}")
         return True
