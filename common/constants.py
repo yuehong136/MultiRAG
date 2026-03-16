@@ -82,6 +82,7 @@ class FileSource(StrEnum):
     IMAP = "imap"
     BITBUCKET = "bitbucket"
     ZENDESK = "zendesk"
+    SEAFILE = "seafile"
 
 
 class MCPServerType(StrEnum):
