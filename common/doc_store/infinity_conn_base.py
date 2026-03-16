@@ -74,7 +74,8 @@ class InfinityConnectionBase(DocStoreConnection):
         fp_mapping = os.path.join(get_project_base_directory(), "configs", self.mapping_file_name)
         if not os.path.exists(fp_mapping):
             raise Exception(f"Mapping file not found at {fp_mapping}")
-        schema = json.load(open(fp_mapping))
+        with open(fp_mapping) as f:
+            schema = json.load(f)
         table_names = inf_db.list_tables().table_names
         for table_name in table_names:
             inf_table = inf_db.get_table(table_name)
@@ -240,7 +241,8 @@ class InfinityConnectionBase(DocStoreConnection):
         fp_mapping = os.path.join(get_project_base_directory(), "configs", self.mapping_file_name)
         if not os.path.exists(fp_mapping):
             raise Exception(f"Mapping file not found at {fp_mapping}")
-        schema = json.load(open(fp_mapping))
+        with open(fp_mapping) as f:
+            schema = json.load(f)
 
         if parser_id is not None:
             from common.constants import ParserType
@@ -524,7 +526,8 @@ class InfinityConnectionBase(DocStoreConnection):
             reverse_mapping = {}
             fp_mapping = os.path.join(get_project_base_directory(), "configs", self.mapping_file_name)
             if os.path.exists(fp_mapping):
-                schema = json.load(open(fp_mapping))
+                with open(fp_mapping) as f:
+                    schema = json.load(f)
                 for field_name, field_info in schema.items():
                     if "comment" in field_info:
                         # Parse comma-separated aliases from comment

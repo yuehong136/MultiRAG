@@ -50,7 +50,8 @@ class ESConnectionBase(DocStoreConnection):
             msg = f"Elasticsearch mapping file not found at {fp_mapping}"
             self.logger.error(msg)
             raise Exception(msg)
-        self.mapping = json.load(open(fp_mapping, "r"))
+        with open(fp_mapping, "r") as f:
+            self.mapping = json.load(f)
         self.logger.info(f"Elasticsearch {settings.ES['hosts']} is healthy.")
 
     def _connect(self):
