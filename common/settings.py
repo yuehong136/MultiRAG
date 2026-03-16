@@ -26,6 +26,7 @@ from core.nlp import search
 import memory.utils.es_conn as memory_es_conn
 import memory.utils.infinity_conn as memory_infinity_conn
 import memory.utils.milvus_conn as memory_milvus_conn
+import memory.utils.ob_conn as memory_ob_conn
 # import memory.utils.vastbase_conn as memory_vastbase_conn
 
 # Lighten mode
@@ -310,6 +311,8 @@ def init_settings():
             "db_name": "default_db"
         })
         msgStoreConn = memory_infinity_conn.InfinityConnection()
+    elif lower_case_doc_engine in ["oceanbase", "seekdb"]:
+        msgStoreConn = memory_ob_conn.OBConnection()
     # elif lower_case_doc_engine == "vastbase":
     #     VASTBASE = get_base_config("vastbase", {})
     #     docStoreConn = memory_vastbase_conn.VastBaseConnection()
