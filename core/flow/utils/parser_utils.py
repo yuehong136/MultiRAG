@@ -502,7 +502,7 @@ class FlowParser:
         image_context_size: int = 0
     ) -> dict:
         """
-        Word 文档解析（参考 core/flow/parser/parser.py._word 第 426-445 行）
+        Word 文档解析（参考 core/flow/parser/parser.py._word 第 485-504 行）
         
         Args:
             table_context_size: 表格上下文 token 数（0 表示不添加）
@@ -550,9 +550,15 @@ class FlowParser:
                 raise ValueError(f"Failed to parse .doc file: {e}")
 
         docx_parser = Docx()
-        
+
         if output_format == "json":
-            sections, tbls = await _to_thread(docx_parser, filename, binary)
+            main_sections = await _to_thread(docx_parser, filename, binary)
+            sections = []
+            tbls = []
+            for text, image, html in main_sections:
+                sections.append((text, image))
+                tbls.append(((None, html), ""))
+
             json_sections = [{"text": section[0], "image": section[1]} for section in sections if section]
             json_sections.extend([{"text": tb, "image": None, "doc_type_kwd": "table"} for ((_, tb), _) in tbls])
 
