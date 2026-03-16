@@ -553,18 +553,6 @@ wheels = [
 ]
 
 [[package]]
-name = "aspose-slides"
-version = "25.12.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/43/c6/bfdb79408627a075bdd4f66b591a4cce3ce2fcd380584f4382631d105a3d/aspose_slides-25.12.0-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:bd56639b2de124b2e49af8d5072fe025cce3b9abf26087c555db5679f962d2d0" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/0f/27/5768271487cd0a2dbafee377126250e4136b15921f119c2e03c6dc033636/aspose_slides-25.12.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:489fedb7c1bfc4dad66b4cb1eda97076fb95c04e6e2e8e6bb62a4cd857e50814" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/59/d4/1c150cead38d26386fb0a7608f6e749b7b0e0aaeb30824f732b8c88ce08f/aspose_slides-25.12.0-py3-none-manylinux1_x86_64.whl", hash = "sha256:12190e6debb282381e85f266b54a4cd2f60f2feb437f5ae6c2f42c80a0c1992a" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/97/65/e07738c256f312b4ce00c79a3852ca2f772ddfb71d13b58d1cef0b025814/aspose_slides-25.12.0-py3-none-win32.whl", hash = "sha256:6e48786d759c1017a6eecf49fc1871640000514d7f0f84a43a4b21a69fa7515f" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/cb/49/10295a2c5c67980dacc30dab1a2cef1189cd0dee0240deefd8f10189fd5a/aspose_slides-25.12.0-py3-none-win_amd64.whl", hash = "sha256:333b0a041c4abfe245290c0126df05cafc0b6483fdd6b4c8012425db8d268038" },
-]
-
-[[package]]
 name = "atlassian-python-api"
 version = "4.0.7"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -1947,17 +1935,17 @@ name = "fastembed-gpu"
 version = "0.3.6"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
-    { name = "huggingface-hub" },
-    { name = "loguru" },
-    { name = "mmh3" },
-    { name = "numpy" },
-    { name = "onnxruntime-gpu" },
-    { name = "pillow" },
-    { name = "pystemmer" },
-    { name = "requests" },
-    { name = "snowballstemmer" },
-    { name = "tokenizers" },
-    { name = "tqdm" },
+    { name = "huggingface-hub", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "loguru", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "mmh3", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "numpy", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "onnxruntime-gpu", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "pillow", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "pystemmer", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "requests", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "snowballstemmer", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "tokenizers", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "tqdm", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
 ]
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/da/07/7336c7f3d7ee47f33b407eeb50f5eeb152889de538a52a8f1cc637192816/fastembed_gpu-0.3.6.tar.gz", hash = "sha256:ee2de8918b142adbbf48caaffec0c492f864d73c073eea5a3dcd0e8c1041c50d" }
 wheels = [
@@ -3971,7 +3959,6 @@ dependencies = [
     { name = "anthropic" },
     { name = "arxiv" },
     { name = "asana" },
-    { name = "aspose-slides", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')" },
     { name = "atlassian-python-api" },
     { name = "azure-identity" },
     { name = "azure-storage-file-datalake" },
@@ -4117,7 +4104,6 @@ requires-dist = [
     { name = "anthropic", specifier = "==0.34.1" },
     { name = "arxiv", specifier = "==2.1.3" },
     { name = "asana", specifier = ">=5.2.2" },
-    { name = "aspose-slides", marker = "platform_machine == 'x86_64' or (platform_machine == 'arm64' and sys_platform == 'darwin')", specifier = ">=25.10.0,<26.0.0" },
     { name = "atlassian-python-api", specifier = "==4.0.7" },
     { name = "azure-identity", specifier = "==1.17.1" },
     { name = "azure-storage-file-datalake", specifier = "==12.16.0" },
@@ -4616,12 +4602,12 @@ name = "onnxruntime-gpu"
 version = "1.23.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
-    { name = "coloredlogs" },
-    { name = "flatbuffers" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "protobuf" },
-    { name = "sympy" },
+    { name = "coloredlogs", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "flatbuffers", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "numpy", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "packaging", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "protobuf", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "sympy", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
 ]
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/6c/d9/b7140a4f1615195938c7e358c0804bb84271f0d6886b5cbf105c6cb58aae/onnxruntime_gpu-1.23.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4f2d1f720685d729b5258ec1b36dee1de381b8898189908c98cbeecdb2f2b5c2" },

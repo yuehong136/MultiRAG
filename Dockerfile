@@ -34,7 +34,6 @@ ENV LANG=zh_CN.UTF-8 \
 # 设置apt镜像并安装依赖
 # Python package and implicit dependencies:
 # opencv-python: libglib2.0-0 libglx-mesa0 libgl1
-# aspose-slides: pkg-config libicu-dev libgdiplus
 # python-pptx:   default-jdk
 # selenium:      libatk-bridge2.0-0
 # Building C extensions: libpython3-dev libgtk-4-1 libnss3 xdg-utils libgbm-dev
