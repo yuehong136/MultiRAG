@@ -26,7 +26,7 @@ import markdown_to_json
 
 from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string
-from core.llm.chat_model.base import Base as CompletionLLM
+from core.llm.chat import Base as CompletionLLM
 from core.graphrag.general.extractor import Extractor
 from core.graphrag.general.mind_map_prompt import MIND_MAP_EXTRACTION_PROMPT
 from core.graphrag.utils import ErrorHandlerFn, perform_variable_replacements, chat_limiter

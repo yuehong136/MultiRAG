@@ -24,7 +24,7 @@ from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from agent.component.llm import LLMParam, LLM
 from common.connection_utils import timeout
-from core.llm.chat_model.base import ERROR_PREFIX
+from core.llm.chat import ERROR_PREFIX
 
 
 class CategorizeParam(LLMParam):

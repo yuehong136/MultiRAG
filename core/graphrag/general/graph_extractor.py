@@ -14,7 +14,7 @@ import networkx as nx
 
 from common.token_utils import num_tokens_from_string
 from common.misc_utils import thread_pool_exec
-from core.llm.chat_model.base import Base as CompletionLLM
+from core.llm.chat import Base as CompletionLLM
 from core.graphrag.general.extractor import Extractor, ENTITY_EXTRACTION_MAX_GLEANINGS
 from core.graphrag.general.graph_prompt import GRAPH_EXTRACTION_PROMPT, CONTINUE_PROMPT, LOOP_PROMPT
 from core.graphrag.utils import ErrorHandlerFn, perform_variable_replacements, chat_limiter, split_string_by_multi_markers

@@ -28,7 +28,7 @@ from api.db.services.task_service import has_canceled
 from common.misc_utils import thread_pool_exec
 from common.exceptions import TaskCanceledException
 from core.nlp import is_english
-from core.llm.chat_model.base import Base as CompletionLLM
+from core.llm.chat import Base as CompletionLLM
 from core.graphrag.utils import perform_variable_replacements, chat_limiter, GraphChange
 from core.graphrag.entity_resolution_prompt import ENTITY_RESOLUTION_PROMPT
 from core.graphrag.general.extractor import Extractor
