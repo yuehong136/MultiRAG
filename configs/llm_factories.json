@@ -3738,9 +3738,9 @@
                 },
                 {
                     "llm_name": "jina-reranker-m0",
-                    "tags": "TEXT EMBEDDING,TEXT RE-RANK",
+                    "tags": "TEXT RE-RANK,10K",
                     "max_tokens": 10240,
-                    "mdl_type": "embedding",
+                    "mdl_type": "reranker",
                     "is_tools": false
                 },
                 {
@@ -3752,9 +3752,9 @@
                 },
                 {
                     "llm_name": "bce-reranker-base_v1",
-                    "tags": "TEXT EMBEDDING,TEXT RE-RANK",
+                    "tags": "TEXT RE-RANK",
                     "max_tokens": 512,
-                    "mdl_type": "embedding",
+                    "mdl_type": "reranker",
                     "is_tools": false
                 },
                 {
@@ -3766,9 +3766,9 @@
                 },
                 {
                     "llm_name": "bge-reranker-v2-m3",
-                    "tags": "TEXT EMBEDDING,TEXT RE-RANK",
+                    "tags": "TEXT RE-RANK",
                     "max_tokens": 8192,
-                    "mdl_type": "embedding",
+                    "mdl_type": "reranker",
                     "is_tools": false
                 },
                 {
