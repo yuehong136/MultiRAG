@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Iterable
 from uuid import uuid4
 
 import tiktoken
@@ -223,7 +222,6 @@ class UserCanvasService(CommonService):
             cls.model.id,
             cls.model.avatar,
             cls.model.title,
-            cls.model.dsl,
             cls.model.description,
             cls.model.permission,
             cls.model.user_id.label("tenant_id"),
