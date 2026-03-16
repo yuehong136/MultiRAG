@@ -460,9 +460,9 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese
                 txts.extend([str(c) for c in cln if c])
         clmns_map = [(py_clmns[i].lower() + fields_map[clmn_tys[i]], str(clmns[i]).replace("_", " ")) for i in range(len(clmns))]
 
-        # For Infinity/Milvus: Use original column names as keys since they're stored in chunk_data JSON
+        # For Infinity/Milvus/OceanBase: Use original column names as keys since they're stored in chunk_data JSON
         # For ES/OS: Use full field names with type suffixes (e.g., url_kwd, body_tks)
-        use_chunk_data = settings.DOC_ENGINE.lower() in ("infinity", "milvus")
+        use_chunk_data = settings.DOC_ENGINE.lower() in ("infinity", "milvus", "oceanbase")
         if use_chunk_data:
             field_map = {py_clmns[i].lower(): str(clmns[i]).replace("_", " ") for i in range(len(clmns))}
         else:
@@ -481,7 +481,7 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese
                     continue
                 if not isinstance(row[clmns[j]], pd.Series) and pd.isna(row[clmns[j]]):
                     continue
-                # For Infinity/Milvus: Store in chunk_data JSON column
+                # For Infinity/Milvus/OceanBase: Store in chunk_data JSON column
                 # For ES/OS: Store as individual fields with type suffixes
                 if use_chunk_data:
                     data_json[str(clmns[j])] = row[clmns[j]]
@@ -491,7 +491,7 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese
                 row_fields.append((clmns[j], row[clmns[j]]))
             if not row_fields:
                 continue
-            # Add the data JSON field to the document (for Infinity/Milvus only)
+            # Add the data JSON field to the document (for Infinity/Milvus/OceanBase)
             if use_chunk_data:
                 d["chunk_data"] = data_json
             # Format as a structured text for better LLM comprehension

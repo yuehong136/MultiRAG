@@ -66,6 +66,7 @@ OAUTH_CONFIG = None
 # Doc engine settings
 DOC_ENGINE = os.getenv('DOC_ENGINE', 'milvus')
 DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
+DOC_ENGINE_OCEANBASE = (DOC_ENGINE.lower() == "oceanbase")
 docStoreConn = None
 msgStoreConn = None
 retriever = None
@@ -266,9 +267,10 @@ def init_settings():
     FEISHU_OAUTH = get_base_config("oauth", {}).get("feishu")
     OAUTH_CONFIG = get_base_config("oauth", {})
 
-    global DOC_ENGINE, DOC_ENGINE_INFINITY, docStoreConn, ES, OB, OS, INFINITY, MILVUS, VASTBASE
+    global DOC_ENGINE, DOC_ENGINE_INFINITY, DOC_ENGINE_OCEANBASE, docStoreConn, ES, OB, OS, INFINITY, MILVUS, VASTBASE
     DOC_ENGINE = os.environ.get("DOC_ENGINE", "milvus")
     DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
+    DOC_ENGINE_OCEANBASE = (DOC_ENGINE.lower() == "oceanbase")
     lower_case_doc_engine = DOC_ENGINE.lower()
 
     if lower_case_doc_engine == "elasticsearch":

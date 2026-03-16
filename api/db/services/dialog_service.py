@@ -1065,7 +1065,7 @@ async def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True
 
     # Engine-specific SQL prompts and user_prompt
     json_field_names = list(field_map.keys())
-    uses_chunk_data = doc_engine in ("infinity", "milvus")
+    uses_chunk_data = doc_engine in ("infinity", "milvus", "oceanbase")
 
     if doc_engine == "infinity":
         row_count_override = f"SELECT COUNT(*) AS rows FROM {table_name}" if is_row_count_question(question) else None
@@ -1092,6 +1092,36 @@ Fields (EXACT case): {}
 {}
 Question: {}
 Write SQL using json_extract_string() with exact field names. Include doc_id, docnm for data queries. Only SQL.""".format(
+            table_name,
+            ", ".join(json_field_names),
+            "\n".join([f"  - {field}" for field in json_field_names]),
+            question
+        )
+    elif doc_engine == "oceanbase":
+        row_count_override = f"SELECT COUNT(*) AS rows FROM {table_name}" if is_row_count_question(question) else None
+        sys_prompt = """You are a Database Administrator. Write SQL for a table with JSON 'chunk_data' column.
+
+JSON Extraction: json_extract_string(chunk_data, '$.FieldName')
+Numeric Cast: CAST(json_extract_string(chunk_data, '$.FieldName') AS INTEGER/FLOAT)
+NULL Check: json_extract_isnull(chunk_data, '$.FieldName') == false
+
+RULES:
+1. Use EXACT field names (case-sensitive) from the list below
+2. For SELECT: include doc_id, docnm_kwd, and json_extract_string() for requested fields
+3. For COUNT: use COUNT(*) or COUNT(DISTINCT json_extract_string(...))
+4. Add AS alias for extracted field names
+5. DO NOT select 'content' field
+6. Only add NULL check (json_extract_isnull() == false) in WHERE clause when:
+   - Question asks to "show me" or "display" specific columns
+   - Question mentions "not null" or "excluding null"
+   - Add NULL check for count specific column
+   - DO NOT add NULL check for COUNT(*) queries (COUNT(*) counts all rows including nulls)
+7. Output ONLY the SQL, no explanations"""
+        user_prompt = """Table: {}
+Fields (EXACT case): {}
+{}
+Question: {}
+Write SQL using json_extract_string() with exact field names. Include doc_id, docnm_kwd for data queries. Only SQL.""".format(
             table_name,
             ", ".join(json_field_names),
             "\n".join([f"  - {field}" for field in json_field_names]),
@@ -1196,7 +1226,7 @@ Write SQL using exact field names above. Include doc_id, docnm_kwd for data quer
         logging.warning(f"use_sql: Initial SQL execution FAILED with error: {e}")
         # Build engine-specific retry prompt
         if uses_chunk_data:
-            if doc_engine == "infinity":
+            if doc_engine in ("infinity", "oceanbase"):
                 syntax_hint = "json_extract_string(chunk_data, '$.field_name')"
             else:
                 syntax_hint = 'chunk_data["field_name"]'
