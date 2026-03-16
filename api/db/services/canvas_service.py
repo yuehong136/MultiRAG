@@ -303,6 +303,7 @@ async def completion(
     files = kwargs.get("files", []) or []
     inputs = kwargs.get("inputs", {}) or {}
     user_id = kwargs.get("user_id", "") or ""
+    custom_header = kwargs.get("custom_header", "")
 
     # 组装 canvas & conversation
     if session_id:
@@ -312,14 +313,14 @@ async def completion(
             conv.message = []
         if not isinstance(conv.dsl, str):
             conv.dsl = json.dumps(conv.dsl, ensure_ascii=False)
-        canvas = Canvas(conv.dsl, tenant_id, agent_id, canvas_id=agent_id)
+        canvas = Canvas(conv.dsl, tenant_id, agent_id, canvas_id=agent_id, custom_header=custom_header)
     else:
         ok, cvs = UserCanvasService.get_by_id(db, agent_id)
         assert ok, "Agent not found."
         assert cvs.user_id == tenant_id, "You do not own the agent."
         dsl_str = cvs.dsl if isinstance(cvs.dsl, str) else json.dumps(cvs.dsl, ensure_ascii=False)
         session_id = get_uuid()
-        canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id)
+        canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id, custom_header=custom_header)
         canvas.reset()
         conv_dict = {
             "id": session_id,
