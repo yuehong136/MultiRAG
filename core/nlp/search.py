@@ -9,7 +9,6 @@ import numpy as np
 from pymilvus import AnnSearchRequest, WeightedRanker
 
 from api.db.db_models import db_connection
-from core.prompts.generator import relevant_chunks_with_toc
 from core.nlp import rag_tokenizer, query, is_english
 from common import settings
 from common.doc_store.doc_store_base import (
@@ -1075,6 +1074,8 @@ class Dealer:
         Returns:
             重新排序和补充后的 chunks 列表
         """
+        from core.prompts.generator import relevant_chunks_with_toc
+
         if not chunks:
             return []
 
