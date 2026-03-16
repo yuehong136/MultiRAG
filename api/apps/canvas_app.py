@@ -1053,6 +1053,15 @@ def test_db_connect(
                 port=req["port"],
                 password=req["password"]
             )
+        elif req["db_type"] == "oceanbase":
+            db_conn = MySQLDatabase(
+                req["database"],
+                user=req["username"],
+                host=req["host"],
+                port=req["port"],
+                password=req["password"],
+                charset="utf8mb4"
+            )
         elif req["db_type"] == 'postgres':
             db_conn = PostgresqlDatabase(
                 req["database"],
