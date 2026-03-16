@@ -12,6 +12,7 @@ from common import settings
 from core.utils.es_conn import ESConnection
 from core.utils.milvus_conn import MilvusConnection
 from core.utils.infinity_conn import InfinityConnection
+from core.utils.ob_conn import OBConnection
 
 
 def _ok_nok(ok: bool) -> str:
@@ -161,6 +162,92 @@ def get_infinity_status():
         return {
             "status": "timeout",
             "message": f"error: {str(e)}",
+        }
+
+
+def get_oceanbase_status() -> dict:
+    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
+    if doc_engine != 'oceanbase':
+        raise Exception("OceanBase is not in use.")
+    try:
+        ob_conn = OBConnection()
+        health_info = ob_conn.health()
+        performance_metrics = ob_conn.get_performance_metrics()
+        status = "alive" if health_info.get("status") == "healthy" else "timeout"
+        return {
+            "status": status,
+            "message": {
+                "health": health_info,
+                "performance": performance_metrics
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "timeout",
+            "message": f"error: {str(e)}",
+        }
+
+
+def check_oceanbase_health() -> dict:
+    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
+    if doc_engine != 'oceanbase':
+        return {
+            "status": "not_configured",
+            "details": {
+                "connection": "not_configured",
+                "message": "OceanBase is not configured as the document engine"
+            }
+        }
+    try:
+        ob_conn = OBConnection()
+        health_info = ob_conn.health()
+        performance_metrics = ob_conn.get_performance_metrics()
+        connection_status = performance_metrics.get("connection", "unknown")
+
+        if connection_status == "disconnected" or health_info.get("status") != "healthy":
+            return {
+                "status": "unhealthy",
+                "details": {
+                    "connection": connection_status,
+                    "latency_ms": performance_metrics.get("latency_ms", 0),
+                    "storage_used": performance_metrics.get("storage_used", "N/A"),
+                    "storage_total": performance_metrics.get("storage_total", "N/A"),
+                    "query_per_second": performance_metrics.get("query_per_second", 0),
+                    "slow_queries": performance_metrics.get("slow_queries", 0),
+                    "active_connections": performance_metrics.get("active_connections", 0),
+                    "max_connections": performance_metrics.get("max_connections", 0),
+                    "uri": health_info.get("uri", "unknown"),
+                    "version": health_info.get("version_comment", "unknown"),
+                    "error": health_info.get("error", performance_metrics.get("error"))
+                }
+            }
+
+        is_healthy = (
+            connection_status == "connected" and
+            performance_metrics.get("latency_ms", float('inf')) < 1000
+        )
+        return {
+            "status": "healthy" if is_healthy else "degraded",
+            "details": {
+                "connection": performance_metrics.get("connection", "unknown"),
+                "latency_ms": performance_metrics.get("latency_ms", 0),
+                "storage_used": performance_metrics.get("storage_used", "N/A"),
+                "storage_total": performance_metrics.get("storage_total", "N/A"),
+                "query_per_second": performance_metrics.get("query_per_second", 0),
+                "slow_queries": performance_metrics.get("slow_queries", 0),
+                "active_connections": performance_metrics.get("active_connections", 0),
+                "max_connections": performance_metrics.get("max_connections", 0),
+                "uri": health_info.get("uri", "unknown"),
+                "version": health_info.get("version_comment", "unknown")
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "details": {
+                "connection": "disconnected",
+                "error": str(e)
+            }
         }
 
 
