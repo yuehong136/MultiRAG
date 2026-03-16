@@ -287,7 +287,7 @@ class DocMetadataService:
                 if vt:
                     type_counter.setdefault(k, {})[vt] = type_counter.get(k, {}).get(vt, 0) + 1
                 for vv in (v if isinstance(v, list) else [v]):
-                    if not vv:
+                    if vv is None:
                         continue
                     summary.setdefault(k, {})[str(vv)] = summary.get(k, {}).get(str(vv), 0) + 1
 

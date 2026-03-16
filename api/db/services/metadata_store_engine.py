@@ -119,6 +119,10 @@ class EngineMetadataStore(MetadataStore):
     @classmethod
     def _search_all(cls, index_name: str, condition: dict | None,
                     kb_ids: list[str]) -> list[dict]:
+        if not settings.docStoreConn.index_exist(index_name, ""):
+            logger.debug("Metadata index %s does not exist, skipping search", index_name)
+            return []
+
         from common.doc_store.doc_store_base import OrderByExpr
 
         order_by = OrderByExpr()
