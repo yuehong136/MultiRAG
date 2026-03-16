@@ -33,7 +33,7 @@ from common.misc_utils import get_uuid
 from common.constants import RetCode
 from api.utils.api_utils import get_json_result
 from api.apps import manager
-# from graphrag.general.mind_map_extractor import MindMapExtractor
+# from core.graphrag.general.mind_map_extractor import MindMapExtractor
 # from core.app.tag import label_question
 from core.prompts.template import load_prompt
 from core.prompts.generator import chunks_format

@@ -17,20 +17,21 @@
 import argparse
 import asyncio
 import json
-import logging
 import networkx as nx
+import logging
 
-from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import TenantService
-from graphrag.general.graph_extractor import GraphExtractor
-from graphrag.general.index import update_graph, with_resolution, with_community
+from core.graphrag.general.index import update_graph
+from core.graphrag.light.graph_extractor import GraphExtractor
 from common import settings
+from common.constants import LLMType
 
 settings.init_settings()
+
 
 def callback(prog=None, msg="Processing..."):
     logging.info(msg)
@@ -55,6 +56,7 @@ async def main():
         required=True,
     )
     args = parser.parse_args()
+
     with db_connection() as db:
         doc = DocumentService.get_by_id(db, args.doc_id)
     if not doc:
@@ -71,6 +73,7 @@ async def main():
             fields=["content_with_weight"],
         )
     ]
+
     with db_connection() as db:
         tenant = TenantService.get_by_id(db, args.tenant_id)
         llm_bdl = LLMBundle(db, args.tenant_id, LLMType.CHAT, tenant.llm_id)
@@ -88,23 +91,8 @@ async def main():
         embed_bdl,
         callback,
     )
+
     print(json.dumps(nx.node_link_data(graph), ensure_ascii=False, indent=2))
-
-    await with_resolution(
-        args.tenant_id, kb_id, args.doc_id, llm_bdl, embed_bdl, callback
-    )
-    community_structure, community_reports = await with_community(
-        args.tenant_id, kb_id, args.doc_id, llm_bdl, embed_bdl, callback
-    )
-
-    print(
-        "------------------ COMMUNITY STRUCTURE--------------------\n",
-        json.dumps(community_structure, ensure_ascii=False, indent=2),
-    )
-    print(
-        "------------------ COMMUNITY REPORTS----------------------\n",
-        community_reports,
-    )
 
 if __name__ == "__main__":
     asyncio.run(main)

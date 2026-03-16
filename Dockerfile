@@ -207,7 +207,6 @@ COPY configs configs
 COPY deepdoc deepdoc
 COPY core core
 COPY agent agent
-COPY graphrag graphrag
 COPY workflow workflow
 COPY workflow_v2 workflow_v2
 COPY errors errors
@@ -216,7 +215,6 @@ COPY scripts scripts
 COPY admin admin
 COPY pyproject.toml uv.lock alembic.ini ./
 COPY mcp mcp
-COPY plugin plugin
 COPY common common
 COPY memory memory
 

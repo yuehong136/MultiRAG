@@ -7,7 +7,7 @@ from api.db.db_models import get_db
 from api.service.plugin_service.plugin_service import PluginService
 from api.service.script_scheduler_service.script_scheduler_service import ScriptSchedulerService
 from api.utils.api_utils import get_json_result
-from plugin import GlobalPluginManager
+from agent.plugin import GlobalPluginManager
 
 router = APIRouter()
 

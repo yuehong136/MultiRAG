@@ -28,8 +28,8 @@ from common.float_utils import get_float
 from common import settings
 from common.misc_utils import get_uuid
 from core.nlp.search import Dealer, index_name
-from graphrag.query_analyze_prompt import PROMPTS
-from graphrag.utils import get_entity_type2samples, get_llm_cache, set_llm_cache, get_relation
+from core.graphrag.query_analyze_prompt import PROMPTS
+from core.graphrag.utils import get_entity_type2samples, get_llm_cache, set_llm_cache, get_relation
 
 
 class KGSearch(Dealer):

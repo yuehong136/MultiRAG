@@ -25,13 +25,13 @@ import networkx as nx
 import editdistance
 
 from api.db.services.task_service import has_canceled
-from core.nlp import is_english
-from core.llm.chat_model.base import Base as CompletionLLM
 from common.misc_utils import thread_pool_exec
 from common.exceptions import TaskCanceledException
-from graphrag.utils import perform_variable_replacements, chat_limiter, GraphChange
-from graphrag.entity_resolution_prompt import ENTITY_RESOLUTION_PROMPT
-from graphrag.general.extractor import Extractor
+from core.nlp import is_english
+from core.llm.chat_model.base import Base as CompletionLLM
+from core.graphrag.utils import perform_variable_replacements, chat_limiter, GraphChange
+from core.graphrag.entity_resolution_prompt import ENTITY_RESOLUTION_PROMPT
+from core.graphrag.general.extractor import Extractor
 
 DEFAULT_RECORD_DELIMITER = "##"
 DEFAULT_ENTITY_INDEX_DELIMITER = "<|>"

@@ -10,7 +10,7 @@ import time
 start_ts = time.time()
 
 from common.log_utils import init_root_logger
-from plugin import GlobalPluginManager
+from agent.plugin import GlobalPluginManager
 init_root_logger("multirag_server")
 
 import logging

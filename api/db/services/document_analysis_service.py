@@ -43,7 +43,7 @@ from core.prompts.generator import (
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 
 # 复用项目的缓存和并发控制
-from graphrag.utils import (
+from core.graphrag.utils import (
     get_llm_cache,
     set_llm_cache,
     get_embed_cache,

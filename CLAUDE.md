@@ -42,9 +42,9 @@ MultiRAG is an enterprise-grade RAG (Retrieval-Augmented Generation) backend eng
 - **Parser**: `deepdoc/parser/` - Multi-format document parsing (PDF, DOCX, PPTX, Excel, HTML, Markdown)
 - **Vision**: `deepdoc/vision/` - OCR, layout recognition, table structure extraction
 
-### Knowledge Graph (`/graphrag/`)
-- **General**: Full-featured knowledge graph with Leiden clustering in `graphrag/general/`
-- **Light**: Lightweight implementation in `graphrag/light/`
+### Knowledge Graph (`core/graphrag/`)
+- **General**: Full-featured knowledge graph with Leiden clustering in `core/graphrag/general/`
+- **Light**: Lightweight implementation in `core/graphrag/light/`
 - **Entity Resolution**: Disambiguation and linking
 
 ### Data Connectors (`/common/data_source/`)

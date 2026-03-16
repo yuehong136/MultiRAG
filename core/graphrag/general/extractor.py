@@ -24,14 +24,14 @@ from typing import Callable
 import networkx as nx
 
 from api.db.services.task_service import has_canceled
-from core.llm.chat import Base as CompletionLLM
-from core.prompts.generator import message_fit_in
 from common.exceptions import TaskCanceledException
 from common.connection_utils import timeout
 from common.token_utils import truncate
 from common.misc_utils import thread_pool_exec
-from graphrag.general.graph_prompt import SUMMARIZE_DESCRIPTIONS_PROMPT
-from graphrag.utils import (
+from core.llm.chat import Base as CompletionLLM
+from core.prompts.generator import message_fit_in
+from core.graphrag.general.graph_prompt import SUMMARIZE_DESCRIPTIONS_PROMPT
+from core.graphrag.utils import (
     GraphChange,
     chat_limiter,
     flat_uniq_list,

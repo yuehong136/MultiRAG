@@ -43,6 +43,8 @@ from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 from core.nlp import search, rag_tokenizer, add_positions, concat_img
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text, gen_metadata
+from core.graphrag.general.index import run_graphrag_for_kb
+from core.graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache, chat_limiter
 from common import settings
 from common.constants import LLMType, ParserType, PipelineTaskType, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, PAGERANK_FLD, TAG_FLD, SVR_CONSUMER_GROUP_NAME
 from common.token_utils import num_tokens_from_string, truncate
@@ -56,8 +58,6 @@ from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from common.connection_utils import timeout
 from common.file_utils import get_project_base_directory
 from common.versions import get_multirag_version
-from graphrag.general.index import run_graphrag_for_kb
-from graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache, chat_limiter
 
 BATCH_SIZE = 64
 

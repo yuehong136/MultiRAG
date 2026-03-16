@@ -30,12 +30,12 @@ from common.misc_utils import get_uuid, thread_pool_exec
 from common.connection_utils import timeout
 from core.nlp import rag_tokenizer, search
 from core.utils.redis_conn import RedisDistributedLock
-from graphrag.entity_resolution import EntityResolution
-from graphrag.general.community_reports_extractor import CommunityReportsExtractor
-from graphrag.general.extractor import Extractor
-from graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
-from graphrag.light.graph_extractor import GraphExtractor as LightKGExt
-from graphrag.utils import (
+from core.graphrag.entity_resolution import EntityResolution
+from core.graphrag.general.community_reports_extractor import CommunityReportsExtractor
+from core.graphrag.general.extractor import Extractor
+from core.graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
+from core.graphrag.light.graph_extractor import GraphExtractor as LightKGExt
+from core.graphrag.utils import (
     GraphChange,
     chunk_id,
     does_graph_contains,

@@ -28,7 +28,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
-from graphrag.general.mind_map_extractor import MindMapExtractor
+from core.graphrag.general.mind_map_extractor import MindMapExtractor
 from core.app.tag import label_question
 from core.advanced_rag import DeepResearcher
 from core.nlp.search import index_name
