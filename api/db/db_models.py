@@ -50,6 +50,11 @@ def build_database_url(db_config: dict[str, Any]) -> str:
             hide_password=False
         )
 
+    # OceanBase is MySQL-compatible; map to mysql+pymysql driver
+    if drivername_lower == "oceanbase":
+        drivername = "mysql+pymysql"
+        drivername_lower = "mysql+pymysql"
+
     database = db_config.get("dbname") or db_config.get("database")
     if not database and drivername_lower.startswith("postgresql"):
         database = "postgres"
@@ -109,8 +114,8 @@ def get_engine_config(db_config: dict) -> dict:
     # 根据数据库类型添加特定连接参数
     db_type = db_config.get('name', 'postgresql').lower()
 
-    if db_type == 'mysql':
-        # MySQL 特定配置
+    if db_type in ('mysql', 'oceanbase'):
+        # MySQL/OceanBase 特定配置（OceanBase 兼容 MySQL 协议）
         engine_config['connect_args'] = {
             'connect_timeout': 10,      # 连接超时（秒）
             'read_timeout': 30,         # 读取超时（秒）
@@ -2384,7 +2389,8 @@ class DatabaseLock:
 
         if db_type.lower() == 'postgresql':
             return PostgreSQLDatabaseLock(session, lock_name, timeout)
-        elif db_type.lower() == 'mysql':
+        elif db_type.lower() in ('mysql', 'oceanbase'):
+            # OceanBase 兼容 MySQL 协议，使用相同的锁实现
             return MySQLDatabaseLock(session, lock_name, timeout)
         elif db_type.lower() == 'sqlite':
             return SQLiteDatabaseLock(session, lock_name, timeout)
