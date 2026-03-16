@@ -775,7 +775,7 @@ def reset(
 async def upload(
         canvas_id: str,
         url: str | None = Query(None, description="URL地址，用于下载网页内容"),
-        file: UploadFile | None = File(None),
+        file: list[UploadFile] | None = File(None),
         db: Session = Depends(get_db)
 ):
     """
@@ -840,8 +840,12 @@ async def upload(
         return get_data_error_result(retmsg="canvas not found.")
     
     user_id = canvas["user_id"]
+    file_objs = file if file else []
     try:
-        return get_json_result(data=await FileService.upload_info(db, user_id, file, url))
+        if len(file_objs) == 1:
+            return get_json_result(data=await FileService.upload_info(db, user_id, file_objs[0], url))
+        results = [await FileService.upload_info(db, user_id, f) for f in file_objs]
+        return get_json_result(data=results)
     except Exception as e:
         return server_error_response(e)
 
