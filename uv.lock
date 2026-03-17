@@ -1584,15 +1584,17 @@ wheels = [
 
 [[package]]
 name = "dashscope"
-version = "1.23.3"
+version = "1.25.11"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "aiohttp" },
+    { name = "certifi" },
+    { name = "cryptography" },
     { name = "requests" },
     { name = "websocket-client" },
 ]
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/58/91/ab7719b9b689a9bfaa8c9b7d9b72aa3501534c6d8eaec547beb812d742e9/dashscope-1.23.3-py3-none-any.whl", hash = "sha256:011717456e8aa25df9b402c8ad4af478a6cd079a902099403fd7fb3cfd0b0535" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/30/15/35551e6c6d3ea19df754ed32aa5f281b2052ef9e1ff1538f2708f74f3312/dashscope-1.25.11-py3-none-any.whl", hash = "sha256:93e86437f5f30e759e98292f0490e44eff00c337968363f27d29dd42ec7cc07c" },
 ]
 
 [[package]]
@@ -4217,7 +4219,7 @@ requires-dist = [
     { name = "cn2an", specifier = "==0.5.22" },
     { name = "cohere", specifier = "==5.6.2" },
     { name = "crawl4ai", specifier = ">=0.4.0,<1.0.0" },
-    { name = "dashscope", specifier = "==1.23.3" },
+    { name = "dashscope", specifier = "==1.25.11" },
     { name = "deepl", specifier = "==1.18.0" },
     { name = "demjson3", specifier = "==3.0.6" },
     { name = "discord-py", specifier = "==2.3.2" },
