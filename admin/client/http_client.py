@@ -41,7 +41,7 @@ class HttpClient:
             return f"http://{base}/{path.lstrip('/')}"
 
     def _headers(self, auth_kind: str | None, extra: dict[str, str] | None) -> dict[str, str]:
-        headers = {"User-Agent": "MultiRAG-CLI/0.9.8"}
+        headers = {"User-Agent": "MultiRAG-CLI/0.9.9"}
         if auth_kind == "api" and self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         elif auth_kind == "web" and self.login_token:

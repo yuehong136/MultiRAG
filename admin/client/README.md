@@ -48,7 +48,7 @@ It consists of a server-side Service and a command-line client (CLI), both imple
 1.  Ensure the Admin Service is running.
 2.  Install multirag-cli.
     ```bash
-    pip install multirag-cli==0.9.8
+    pip install multirag-cli==0.9.9
     ```
 3.  Launch the CLI client:
     ```bash
