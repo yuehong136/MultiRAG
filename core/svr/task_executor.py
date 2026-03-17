@@ -1993,8 +1993,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             # 混合：先 HierarchicalMerger，再 RAPTOR
             components_used.extend(["HierarchicalMerger", "RAPTOR"])
             callback(prog=0.3, msg="混合处理：层次化 + RAPTOR...")
-            raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, LLMType.CHAT, llm_name=chat_mdl.llm_name, lang=task_language)
-            raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, LLMType.EMBEDDING, llm_name=embd_mdl.llm_name, lang=task_language)
+            raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, LLMType.CHAT, llm_name=chat_mdl.llm_name)
+            raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, LLMType.EMBEDDING, llm_name=embd_mdl.llm_name)
 
             # 先层次化
             # ✨ 传递 tenant_id 和 db 以支持 VLM 图片理解
@@ -2114,8 +2114,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             # 使用 RAPTOR
             components_used.append("RAPTOR")
             callback(prog=0.3, msg="RAPTOR 聚类处理...")
-            raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, LLMType.CHAT, llm_name=chat_mdl.llm_name, lang=task_language)
-            raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, LLMType.EMBEDDING, llm_name=embd_mdl.llm_name, lang=task_language)
+            raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, LLMType.CHAT, llm_name=chat_mdl.llm_name)
+            raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, LLMType.EMBEDDING, llm_name=embd_mdl.llm_name)
 
             # ⚠️ 降级保护：chunk 太少（< 3）时，RAPTOR 无法有效聚类
             if len(chunks) < 3:

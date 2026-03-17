@@ -767,8 +767,6 @@ class NvidiaEmbed(Base):
             except Exception as _e:
                 log_exception(_e, response)
                 raise Exception(f"Error: {response}")
-            ress.extend([d["embedding"] for d in res["data"]])
-            token_count += self.total_token_count(res)
         return np.array(ress), token_count
 
     def encode_queries(self, text):
@@ -1208,7 +1206,7 @@ class VolcEngineEmbed(Base):
     def _request_multimodal_embedding(self, payload: VolcEngineEmbeddingRequest) -> tuple[list[float], int]:
         data = self._post(self.multimodal_endpoint, payload.model_dump(by_alias=True, exclude_none=True))
         embedding = self._extract_multimodal_embedding(data)
-        usage_tokens = self.total_token_count(data)
+        usage_tokens = total_token_count_from_response(data)
         return embedding, usage_tokens
 
     def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
