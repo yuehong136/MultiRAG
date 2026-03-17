@@ -1,4 +1,4 @@
-# Firecrawl Plugin for RAGFlow - Dependencies
+# Firecrawl Plugin for MultiRAG - Dependencies
 
 # Core dependencies
 aiohttp>=3.8.0

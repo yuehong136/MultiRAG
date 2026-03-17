@@ -1,6 +1,6 @@
 """
-Main integration file for Firecrawl with RAGFlow.
-This file provides the interface between RAGFlow and the Firecrawl plugin.
+Main integration file for Firecrawl with MultiRAG.
+This file provides the interface between MultiRAG and the Firecrawl plugin.
 """
 
 import logging
@@ -8,12 +8,12 @@ from typing import List, Dict, Any
 
 from firecrawl_connector import FirecrawlConnector
 from firecrawl_config import FirecrawlConfig
-from firecrawl_processor import FirecrawlProcessor, RAGFlowDocument
+from firecrawl_processor import FirecrawlProcessor, MultiRAGDocument
 from firecrawl_ui import FirecrawlUIBuilder
 
 
-class RAGFlowFirecrawlIntegration:
-    """Main integration class for Firecrawl with RAGFlow."""
+class MultiRAGFirecrawlIntegration:
+    """Main integration class for Firecrawl with MultiRAG."""
     
     def __init__(self, config: FirecrawlConfig):
         """Initialize the integration."""
@@ -24,8 +24,8 @@ class RAGFlowFirecrawlIntegration:
     
     async def scrape_and_import(self, urls: List[str], 
                                formats: List[str] = None,
-                               extract_options: Dict[str, Any] = None) -> List[RAGFlowDocument]:
-        """Scrape URLs and convert to RAGFlow documents."""
+                               extract_options: Dict[str, Any] = None) -> List[MultiRAGDocument]:
+        """Scrape URLs and convert to MultiRAG documents."""
         if formats is None:
             formats = ["markdown", "html"]
         
@@ -33,15 +33,15 @@ class RAGFlowFirecrawlIntegration:
             # Scrape URLs
             scraped_contents = await self.connector.batch_scrape(urls, formats)
             
-            # Process into RAGFlow documents
+            # Process into MultiRAG documents
             documents = self.processor.process_batch(scraped_contents)
             
             return documents
     
     async def crawl_and_import(self, start_url: str, 
                               limit: int = 100,
-                              scrape_options: Dict[str, Any] = None) -> List[RAGFlowDocument]:
-        """Crawl a website and convert to RAGFlow documents."""
+                              scrape_options: Dict[str, Any] = None) -> List[MultiRAGDocument]:
+        """Crawl a website and convert to MultiRAG documents."""
         if scrape_options is None:
             scrape_options = {"formats": ["markdown", "html"]}
         
@@ -58,13 +58,13 @@ class RAGFlowFirecrawlIntegration:
             if completed_job.error:
                 raise Exception(f"Crawl failed: {completed_job.error}")
             
-            # Process into RAGFlow documents
+            # Process into MultiRAG documents
             documents = self.processor.process_batch(completed_job.data or [])
             
             return documents
     
     def get_ui_schema(self) -> Dict[str, Any]:
-        """Get UI schema for RAGFlow integration."""
+        """Get UI schema for MultiRAG integration."""
         return FirecrawlUIBuilder.create_ui_schema()
     
     def validate_config(self, config_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -158,18 +158,18 @@ class RAGFlowFirecrawlIntegration:
 
 
 # Factory function for creating integration instance
-def create_firecrawl_integration(config_dict: Dict[str, Any]) -> RAGFlowFirecrawlIntegration:
+def create_firecrawl_integration(config_dict: Dict[str, Any]) -> MultiRAGFirecrawlIntegration:
     """Create a Firecrawl integration instance from configuration."""
     config = FirecrawlConfig.from_dict(config_dict)
-    return RAGFlowFirecrawlIntegration(config)
+    return MultiRAGFirecrawlIntegration(config)
 
 
 # Export main classes and functions
 __all__ = [
-    "RAGFlowFirecrawlIntegration",
+    "MultiRAGFirecrawlIntegration",
     "create_firecrawl_integration",
     "FirecrawlConfig",
     "FirecrawlConnector",
     "FirecrawlProcessor",
-    "RAGFlowDocument"
+    "MultiRAGDocument"
 ]

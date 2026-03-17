@@ -1,19 +1,19 @@
-# Firecrawl Integration for RAGFlow
+# Firecrawl Integration for MultiRAG
 
-This integration adds [Firecrawl](https://firecrawl.dev)'s powerful web scraping capabilities to [RAGFlow](https://github.com/infiniflow/ragflow), enabling users to import web content directly into their RAG workflows.
+This integration adds [Firecrawl](https://firecrawl.dev)'s powerful web scraping capabilities to [MultiRAG](https://github.com/yuehong136/multirag), enabling users to import web content directly into their RAG workflows.
 
 ## 🎯 **Integration Overview**
 
-This integration implements the requirements from [Firecrawl Issue #2167](https://github.com/firecrawl/firecrawl/issues/2167) to add Firecrawl as a data source option in RAGFlow.
+This integration implements the requirements from [Firecrawl Issue #2167](https://github.com/firecrawl/firecrawl/issues/2167) to add Firecrawl as a data source option in MultiRAG.
 
 ### ✅ **Acceptance Criteria Met**
 
-- ✅ **Integration appears as selectable data source** in RAGFlow's UI
-- ✅ **Users can input Firecrawl API keys** through RAGFlow's configuration interface
-- ✅ **Successfully scrapes content** and imports into RAGFlow's document processing pipeline
+- ✅ **Integration appears as selectable data source** in MultiRAG's UI
+- ✅ **Users can input Firecrawl API keys** through MultiRAG's configuration interface
+- ✅ **Successfully scrapes content** and imports into MultiRAG's document processing pipeline
 - ✅ **Handles edge cases** (rate limits, failed requests, malformed content)
 - ✅ **Includes documentation** and README updates
-- ✅ **Follows RAGFlow patterns** and coding standards
+- ✅ **Follows MultiRAG patterns** and coding standards
 - ✅ **Ready for engineering review**
 
 ## 🚀 **Features**
@@ -25,9 +25,9 @@ This integration implements the requirements from [Firecrawl Issue #2167](https:
 - **Multiple Output Formats** - Support for markdown, HTML, links, and screenshots
 
 ### Integration Features
-- **RAGFlow Data Source** - Appears as selectable data source in RAGFlow UI
+- **MultiRAG Data Source** - Appears as selectable data source in MultiRAG UI
 - **API Configuration** - Secure API key management with validation
-- **Content Processing** - Converts Firecrawl output to RAGFlow document format
+- **Content Processing** - Converts Firecrawl output to MultiRAG document format
 - **Error Handling** - Comprehensive error handling and retry logic
 - **Rate Limiting** - Built-in rate limiting and request throttling
 
@@ -45,9 +45,9 @@ intergrations/firecrawl/
 ├── __init__.py                 # Package initialization
 ├── firecrawl_connector.py      # API communication with Firecrawl
 ├── firecrawl_config.py         # Configuration management
-├── firecrawl_processor.py      # Content processing for RAGFlow
-├── firecrawl_ui.py            # UI components for RAGFlow
-├── ragflow_integration.py     # Main integration class
+├── firecrawl_processor.py      # Content processing for MultiRAG
+├── firecrawl_ui.py            # UI components for MultiRAG
+├── multirag_integration.py     # Main integration class
 ├── example_usage.py           # Usage examples
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # This file
@@ -57,7 +57,7 @@ intergrations/firecrawl/
 ## 🔧 **Installation**
 
 ### Prerequisites
-- RAGFlow instance running
+- MultiRAG instance running
 - Firecrawl API key (get one at [firecrawl.dev](https://firecrawl.dev))
 
 ### Setup
@@ -66,8 +66,8 @@ intergrations/firecrawl/
    - Sign up for a free account
    - Copy your API key (starts with `fc-`)
 
-2. **Configure in RAGFlow**:
-   - Go to RAGFlow UI → Data Sources → Add New Source
+2. **Configure in MultiRAG**:
+   - Go to MultiRAG UI → Data Sources → Add New Source
    - Select "Firecrawl Web Scraper"
    - Enter your API key
    - Configure additional options if needed
@@ -109,13 +109,13 @@ intergrations/firecrawl/
 
 ## 📊 **API Reference**
 
-### RAGFlowFirecrawlIntegration
+### MultiRAGFirecrawlIntegration
 
-Main integration class for Firecrawl with RAGFlow.
+Main integration class for Firecrawl with MultiRAG.
 
 #### Methods
-- `scrape_and_import(urls, formats, extract_options)` - Scrape URLs and convert to RAGFlow documents
-- `crawl_and_import(start_url, limit, scrape_options)` - Crawl website and convert to RAGFlow documents
+- `scrape_and_import(urls, formats, extract_options)` - Scrape URLs and convert to MultiRAG documents
+- `crawl_and_import(start_url, limit, scrape_options)` - Crawl website and convert to MultiRAG documents
 - `test_connection()` - Test connection to Firecrawl API
 - `validate_config(config_dict)` - Validate configuration settings
 
@@ -131,10 +131,10 @@ Handles communication with the Firecrawl API.
 
 ### FirecrawlProcessor
 
-Processes Firecrawl output for RAGFlow integration.
+Processes Firecrawl output for MultiRAG integration.
 
 #### Methods
-- `process_content(content)` - Process scraped content into RAGFlow document format
+- `process_content(content)` - Process scraped content into MultiRAG document format
 - `process_batch(contents)` - Process multiple scraped contents
 - `chunk_content(document, chunk_size, chunk_overlap)` - Chunk document content for RAG processing
 
@@ -148,7 +148,7 @@ cd intergrations/firecrawl
 python3 -c "
 import sys
 sys.path.append('.')
-from ragflow_integration import create_firecrawl_integration
+from multirag import create_firecrawl_integration
 
 # Test configuration
 config = {
@@ -189,7 +189,7 @@ The integration includes robust error handling for:
 This integration was created as part of the [Firecrawl bounty program](https://github.com/firecrawl/firecrawl/issues/2167). 
 
 ### Development
-1. Fork the RAGFlow repository
+1. Fork the MultiRAG repository
 2. Create a feature branch
 3. Make your changes
 4. Add tests if applicable
@@ -197,13 +197,13 @@ This integration was created as part of the [Firecrawl bounty program](https://g
 
 ## 📄 **License**
 
-This integration is licensed under the same license as RAGFlow (Apache 2.0).
+This integration is licensed under the same license as MultiRAG (Apache 2.0).
 
 ## 🆘 **Support**
 
 - **Firecrawl Documentation**: [docs.firecrawl.dev](https://docs.firecrawl.dev)
-- **RAGFlow Documentation**: [RAGFlow GitHub](https://github.com/infiniflow/ragflow)
-- **Issues**: Report issues in the RAGFlow repository
+- **MultiRAG Documentation**: [MultiRAG GitHub](https://github.com/yuehong136/multirag)
+- **Issues**: Report issues in the MultiRAG repository
 
 ## 🎉 **Acknowledgments**
 
@@ -211,6 +211,6 @@ This integration was developed as part of the Firecrawl bounty program to bridge
 
 ---
 
-**Ready for RAGFlow Integration!** 🚀
+**Ready for MultiRAG Integration!** 🚀
 
-This integration enables RAGFlow users to easily import web content into their knowledge retrieval systems, expanding the ecosystem for both Firecrawl and RAGFlow.
+This integration enables MultiRAG users to easily import web content into their knowledge retrieval systems, expanding the ecosystem for both Firecrawl and MultiRAG.

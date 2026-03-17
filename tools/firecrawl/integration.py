@@ -1,24 +1,24 @@
 """
-RAGFlow Integration Entry Point for Firecrawl
+MultiRAG Integration Entry Point for Firecrawl
 
-This file provides the main entry point for the Firecrawl integration with RAGFlow.
-It follows RAGFlow's integration patterns and provides the necessary interfaces.
+This file provides the main entry point for the Firecrawl integration with MultiRAG.
+It follows MultiRAG's integration patterns and provides the necessary interfaces.
 """
 
 from typing import Dict, Any
 import logging
 
-from ragflow_integration import RAGFlowFirecrawlIntegration, create_firecrawl_integration
+from multirag_integration import MultiRAGFirecrawlIntegration, create_firecrawl_integration
 from firecrawl_ui import FirecrawlUIBuilder
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 
-class FirecrawlRAGFlowPlugin:
+class FirecrawlMultiRAGPlugin:
     """
-    Main plugin class for Firecrawl integration with RAGFlow.
-    This class provides the interface that RAGFlow expects from integrations.
+    Main plugin class for Firecrawl integration with MultiRAG.
+    This class provides the interface that MultiRAG expects from integrations.
     """
     
     def __init__(self):
@@ -34,7 +34,7 @@ class FirecrawlRAGFlowPlugin:
         logger.info(f"Initialized {self.display_name} plugin v{self.version}")
     
     def get_plugin_info(self) -> Dict[str, Any]:
-        """Get plugin information for RAGFlow."""
+        """Get plugin information for MultiRAG."""
         return {
             "name": self.name,
             "display_name": self.display_name,
@@ -48,11 +48,11 @@ class FirecrawlRAGFlowPlugin:
         }
     
     def get_config_schema(self) -> Dict[str, Any]:
-        """Get configuration schema for RAGFlow."""
+        """Get configuration schema for MultiRAG."""
         return FirecrawlUIBuilder.create_data_source_config()["config_schema"]
     
     def get_ui_schema(self) -> Dict[str, Any]:
-        """Get UI schema for RAGFlow."""
+        """Get UI schema for MultiRAG."""
         return FirecrawlUIBuilder.create_ui_schema()
     
     def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -79,7 +79,7 @@ class FirecrawlRAGFlowPlugin:
                 "message": "Connection test failed"
             }
     
-    def create_integration(self, config: Dict[str, Any]) -> RAGFlowFirecrawlIntegration:
+    def create_integration(self, config: Dict[str, Any]) -> MultiRAGFirecrawlIntegration:
         """Create and return a Firecrawl integration instance."""
         return create_firecrawl_integration(config)
     
@@ -92,13 +92,13 @@ class FirecrawlRAGFlowPlugin:
         return FirecrawlUIBuilder.create_validation_rules()
 
 
-# RAGFlow integration entry points
-def get_plugin() -> FirecrawlRAGFlowPlugin:
-    """Get the plugin instance for RAGFlow."""
-    return FirecrawlRAGFlowPlugin()
+# MultiRAG integration entry points
+def get_plugin() -> FirecrawlMultiRAGPlugin:
+    """Get the plugin instance for MultiRAG."""
+    return FirecrawlMultiRAGPlugin()
 
 
-def get_integration(config: Dict[str, Any]) -> RAGFlowFirecrawlIntegration:
+def get_integration(config: Dict[str, Any]) -> MultiRAGFirecrawlIntegration:
     """Get an integration instance with the given configuration."""
     return create_firecrawl_integration(config)
 
@@ -137,13 +137,13 @@ def test_connection(config: Dict[str, Any]) -> Dict[str, Any]:
 
 # Export main functions and classes
 __all__ = [
-    "FirecrawlRAGFlowPlugin",
+    "FirecrawlMultiRAGPlugin",
     "get_plugin",
     "get_integration",
     "get_config_schema",
     "get_ui_schema",
     "validate_config",
     "test_connection",
-    "RAGFlowFirecrawlIntegration",
+    "MultiRAGFirecrawlIntegration",
     "create_firecrawl_integration"
 ]

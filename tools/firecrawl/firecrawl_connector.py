@@ -1,5 +1,5 @@
 """
-Main connector class for integrating Firecrawl with RAGFlow.
+Main connector class for integrating Firecrawl with MultiRAG.
 """
 
 import asyncio
@@ -39,7 +39,7 @@ class CrawlJob:
 
 
 class FirecrawlConnector:
-    """Main connector class for Firecrawl integration with RAGFlow."""
+    """Main connector class for Firecrawl integration with MultiRAG."""
     
     def __init__(self, config: FirecrawlConfig):
         """Initialize the Firecrawl connector."""
@@ -62,7 +62,7 @@ class FirecrawlConnector:
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "RAGFlow-Firecrawl-Plugin/1.0.0"
+            "User-Agent": "MultiRAG-Firecrawl-Plugin/1.0.0"
         }
         
         timeout = aiohttp.ClientTimeout(total=self.config.timeout)

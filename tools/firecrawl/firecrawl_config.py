@@ -1,5 +1,5 @@
 """
-Configuration management for Firecrawl integration with RAGFlow.
+Configuration management for Firecrawl integration with MultiRAG.
 """
 
 import os

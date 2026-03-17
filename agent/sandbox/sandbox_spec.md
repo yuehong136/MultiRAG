@@ -1,8 +1,8 @@
-# RAGFlow Sandbox multi-provider architecture - design specification
+# MultiRAG Sandbox multi-provider architecture - design specification
 
 ## 1. Overview
 
-The goal of this design specification is to enable RAGFlow to support multiple Sandbox deployment modes:
+The goal of this design specification is to enable MultiRAG to support multiple Sandbox deployment modes:
 
 - Self-Managed: On-premise deployment using Daytona/Docker (current implementation)
 - SaaS providers: Cloud-based sandbox services (Aliyun Code Interpreter, E2B)
@@ -218,8 +218,8 @@ SaaS integration with Aliyun Function Compute Code Interpreter service using the
 2. Navigate to **People** → **Users**
 3. Click **Create User**
 4. Configure the user:
-   - **Username**: e.g., `ragflow-sandbox-user`
-   - **Display Name**: e.g., `RAGFlow Sandbox Service Account`
+   - **Username**: e.g., `multirag-sandbox-user`
+   - **Display Name**: e.g., `MultiRAG Sandbox Service Account`
    - **Access Mode**: Check ✅ **OpenAPI/Programmatic Access** (this creates an AccessKey)
    - **Console Login**: Optional (not needed for SDK-only access)
 5. Click **OK** and save the AccessKey ID and Secret immediately (displayed only once!)
@@ -297,7 +297,7 @@ Limits access to specific resource prefixes:
         "agentrun:DeleteTemplate",
         "agentrun:ListTemplates"
       ],
-      "Resource": "acs:agentrun:*:{account_id}:template/ragflow-*"
+      "Resource": "acs:agentrun:*:{account_id}:template/multirag-*"
     },
     {
       "Effect": "Allow",
@@ -335,7 +335,7 @@ Limits access to specific resource prefixes:
 }
 ```
 
-> This limits template creation to only those prefixed with `ragflow-*`
+> This limits template creation to only those prefixed with `multirag-*`
 
 **Option C: Full access (not recommended for production)**
 
@@ -355,14 +355,14 @@ Limits access to specific resource prefixes:
 **Step 3: Authorize the RAM user**
 
 1. Return to **Users** list
-2. Find the user you just created (e.g., `ragflow-sandbox-user`)
+2. Find the user you just created (e.g., `multirag-sandbox-user`)
 3. Click **Add Permissions** in the Actions column
 4. In the **Custom Policy** tab, select the policy you created in Step 2
 5. Click **OK**
 
-**Step 4: Configure RAGFlow with the RAM User credentials**
+**Step 4: Configure MultiRAG with the RAM User credentials**
 
-After creating the RAM user and obtaining the AccessKey, configure it in RAGFlow's admin settings or environment variables:
+After creating the RAM user and obtaining the AccessKey, configure it in MultiRAG's admin settings or environment variables:
 
 ```bash
 # Method 1: Environment variables (for development/testing)
@@ -393,7 +393,7 @@ try:
     # Test template creation
     template = Sandbox.create_template(
         input=TemplateInput(
-            template_name="ragflow-permission-test",
+            template_name="multirag-permission-test",
             template_type=TemplateType.CODE_INTERPRETER
         )
     )
@@ -403,7 +403,7 @@ except Exception as e:
 finally:
     # Cleanup test resources
     try:
-        Sandbox.delete_template("ragflow-permission-test")
+        Sandbox.delete_template("multirag-permission-test")
     except:
         pass
 ```
@@ -1123,7 +1123,7 @@ class CodeExecutorComponent:
 
 ### Credential storage
 - Sensitive credentials (API keys, secrets) encrypted at rest in database
-- Use RAGFlow's existing encryption mechanisms (AES-256)
+- Use MultiRAG's existing encryption mechanisms (AES-256)
 - Never log or expose credentials in error messages or API responses
 - Credentials redacted in UI (show only last 4 characters)
 
@@ -1631,7 +1631,7 @@ PROVIDER_CLASSES = {
 
 **Document version**: 1.0
 **Last updated**: 2026-01-26
-**Author**: RAGFlow Team
+**Author**: MultiRAG Team
 **Status**: Design Specification - Ready for Review
 
 ## Appendix C: configuration storage considerations
@@ -1656,24 +1656,24 @@ Each provider's configuration is stored as JSON in `SystemSettings.value`:
 ## Appendix D: Configuration hot reload limitations
 
 ### Current behavior
-**Provider configuration requires restart**: When switching sandbox providers in the admin panel, the ragflow service must be restarted for changes to take effect.
+**Provider configuration requires restart**: When switching sandbox providers in the admin panel, the multirag service must be restarted for changes to take effect.
 
 **Reason**:
-- Admin and ragflow are separate processes
-- ragflow loads sandbox provider configuration only at startup
+- Admin and multirag are separate processes
+- multirag loads sandbox provider configuration only at startup
 - The `get_provider_manager()` function caches the provider globally
 - Configuration changes in MySQL are not automatically detected
 
 **Impact**:
-- Switching from `self_managed` → `aliyun_codeinterpreter` requires ragflow restart
-- Updating credentials/config requires ragflow restart
+- Switching from `self_managed` → `aliyun_codeinterpreter` requires multirag restart
+- Updating credentials/config requires multirag restart
 - Not a dynamic configuration system
 
 **Workarounds**:
-1. **Production**: Restart ragflow service after configuration changes:
+1. **Production**: Restart multirag service after configuration changes:
    ```bash
    cd docker
-   docker compose restart ragflow-server
+   docker compose restart multirag-server
    ```
 
 2. **Development**: Use the `reload_provider()` function in code:

@@ -1,11 +1,11 @@
 """
-Example usage of the Firecrawl integration with RAGFlow.
+Example usage of the Firecrawl integration with MultiRAG.
 """
 
 import asyncio
 import logging
 
-from .ragflow_integration import RAGFlowFirecrawlIntegration, create_firecrawl_integration
+from .multirag_integration import MultiRAGFirecrawlIntegration, create_firecrawl_integration
 from .firecrawl_config import FirecrawlConfig
 
 
@@ -228,7 +228,7 @@ async def example_configuration_validation():
     
     for i, config in enumerate(test_configs):
         print(f"Test configuration {i+1}:")
-        errors = RAGFlowFirecrawlIntegration(FirecrawlConfig.from_dict(config)).validate_config(config)
+        errors = MultiRAGFirecrawlIntegration(FirecrawlConfig.from_dict(config)).validate_config(config)
         
         if errors:
             print("  Errors found:")
@@ -244,7 +244,7 @@ async def main():
     # Set up logging
     logging.basicConfig(level=logging.INFO)
     
-    print("Firecrawl RAGFlow Integration Examples")
+    print("Firecrawl MultiRAG Integration Examples")
     print("=" * 50)
     
     # Run examples

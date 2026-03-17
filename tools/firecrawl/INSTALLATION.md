@@ -1,10 +1,10 @@
-# Installation Guide for Firecrawl RAGFlow Integration
+# Installation Guide for Firecrawl MultiRAG Integration
 
-This guide will help you install and configure the Firecrawl integration plugin for RAGFlow.
+This guide will help you install and configure the Firecrawl integration plugin for MultiRAG.
 
 ## Prerequisites
 
-- RAGFlow instance running (version 0.20.5 or later)
+- MultiRAG instance running (version 0.20.5 or later)
 - Python 3.8 or higher
 - Firecrawl API key (get one at [firecrawl.dev](https://firecrawl.dev))
 
@@ -15,7 +15,7 @@ This guide will help you install and configure the Firecrawl integration plugin 
 1. **Download the plugin**:
    ```bash
    git clone https://github.com/firecrawl/firecrawl.git
-   cd firecrawl/ragflow-firecrawl-integration
+   cd firecrawl/multirag-firecrawl-integration
    ```
 
 2. **Install dependencies**:
@@ -23,22 +23,22 @@ This guide will help you install and configure the Firecrawl integration plugin 
    pip install -r plugin/firecrawl/requirements.txt
    ```
 
-3. **Copy plugin to RAGFlow**:
+3. **Copy plugin to MultiRAG**:
    ```bash
-   # Assuming RAGFlow is installed in /opt/ragflow
-   cp -r plugin/firecrawl /opt/ragflow/plugin/
+   # Assuming MultiRAG is installed in /opt/multirag
+   cp -r plugin/firecrawl /opt/multirag/plugin/
    ```
 
-4. **Restart RAGFlow**:
+4. **Restart MultiRAG**:
    ```bash
-   # Restart RAGFlow services
-   docker compose -f /opt/ragflow/docker/docker-compose.yml restart
+   # Restart MultiRAG services
+   docker compose -f /opt/multirag/docker/docker-compose.yml restart
    ```
 
 ### Method 2: Using pip (if available)
 
 ```bash
-pip install ragflow-firecrawl-integration
+pip install multirag-firecrawl-integration
 ```
 
 ### Method 3: Development Installation
@@ -46,7 +46,7 @@ pip install ragflow-firecrawl-integration
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/firecrawl/firecrawl.git
-   cd firecrawl/ragflow-firecrawl-integration
+   cd firecrawl/multirag-firecrawl-integration
    ```
 
 2. **Install in development mode**:
@@ -63,10 +63,10 @@ pip install ragflow-firecrawl-integration
 3. Navigate to your dashboard
 4. Copy your API key (starts with `fc-`)
 
-### 2. Configure in RAGFlow
+### 2. Configure in MultiRAG
 
-1. **Access RAGFlow UI**:
-   - Open your browser and go to your RAGFlow instance
+1. **Access MultiRAG UI**:
+   - Open your browser and go to your MultiRAG instance
    - Log in with your credentials
 
 2. **Add Firecrawl Data Source**:
@@ -107,7 +107,7 @@ export FIRECRAWL_RATE_LIMIT_DELAY="1.0"
 
 ```bash
 # Check if the plugin directory exists
-ls -la /opt/ragflow/plugin/firecrawl/
+ls -la /opt/multirag/plugin/firecrawl/
 
 # Should show:
 # __init__.py
@@ -115,7 +115,7 @@ ls -la /opt/ragflow/plugin/firecrawl/
 # firecrawl_config.py
 # firecrawl_processor.py
 # firecrawl_ui.py
-# ragflow_integration.py
+# multirag_integration.py
 # requirements.txt
 ```
 
@@ -123,15 +123,15 @@ ls -la /opt/ragflow/plugin/firecrawl/
 
 ```bash
 # Run the example script
-cd /opt/ragflow/plugin/firecrawl/
+cd /opt/multirag/plugin/firecrawl/
 python example_usage.py
 ```
 
-### 3. Check RAGFlow Logs
+### 3. Check MultiRAG Logs
 
 ```bash
-# Check RAGFlow server logs
-docker logs ragflow-server
+# Check MultiRAG server logs
+docker logs multirag-server
 
 # Look for messages like:
 # "Firecrawl plugin loaded successfully"
@@ -142,10 +142,10 @@ docker logs ragflow-server
 
 ### Common Issues
 
-1. **Plugin not appearing in RAGFlow**:
+1. **Plugin not appearing in MultiRAG**:
    - Check if the plugin directory is in the correct location
-   - Restart RAGFlow services
-   - Check RAGFlow logs for errors
+   - Restart MultiRAG services
+   - Check MultiRAG logs for errors
 
 2. **API Key Invalid**:
    - Ensure your API key starts with `fc-`
@@ -189,17 +189,17 @@ To remove the plugin:
 
 1. **Remove plugin directory**:
    ```bash
-   rm -rf /opt/ragflow/plugin/firecrawl/
+   rm -rf /opt/multirag/plugin/firecrawl/
    ```
 
-2. **Restart RAGFlow**:
+2. **Restart MultiRAG**:
    ```bash
-   docker compose -f /opt/ragflow/docker/docker-compose.yml restart
+   docker compose -f /opt/multirag/docker/docker-compose.yml restart
    ```
 
 3. **Remove dependencies** (optional):
    ```bash
-   pip uninstall ragflow-firecrawl-integration
+   pip uninstall multirag-firecrawl-integration
    ```
 
 ## Support
@@ -207,7 +207,7 @@ To remove the plugin:
 If you encounter issues:
 
 1. Check the [troubleshooting section](#troubleshooting)
-2. Review RAGFlow logs for error messages
+2. Review MultiRAG logs for error messages
 3. Verify your Firecrawl API key and configuration
 4. Check the [Firecrawl documentation](https://docs.firecrawl.dev)
 5. Open an issue in the [Firecrawl repository](https://github.com/firecrawl/firecrawl/issues)
@@ -219,4 +219,4 @@ After successful installation:
 1. Read the [README.md](README.md) for usage examples
 2. Try scraping a simple URL to test the integration
 3. Explore the different scraping options (single URL, crawl, batch)
-4. Configure your RAGFlow workflows to use the scraped content
+4. Configure your MultiRAG workflows to use the scraped content

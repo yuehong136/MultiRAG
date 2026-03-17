@@ -1,5 +1,5 @@
 """
-UI components for Firecrawl integration in RAGFlow.
+UI components for Firecrawl integration in MultiRAG.
 """
 
 from typing import Dict, Any, List, Optional
@@ -16,7 +16,7 @@ class FirecrawlUIComponent:
 
 
 class FirecrawlUIBuilder:
-    """Builder for Firecrawl UI components in RAGFlow."""
+    """Builder for Firecrawl UI components in MultiRAG."""
     
     @staticmethod
     def create_data_source_config() -> Dict[str, Any]:
@@ -254,6 +254,6 @@ class FirecrawlUIBuilder:
                 "start_scraping_job",
                 "monitor_progress",
                 "review_results",
-                "import_to_ragflow"
+                "import_to_multirag"
             ]
         }

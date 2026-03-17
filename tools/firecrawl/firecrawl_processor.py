@@ -1,5 +1,5 @@
 """
-Content processor for converting Firecrawl output to RAGFlow document format.
+Content processor for converting Firecrawl output to MultiRAG document format.
 """
 
 import re
@@ -13,8 +13,8 @@ from firecrawl_connector import ScrapedContent
 
 
 @dataclass
-class RAGFlowDocument:
-    """Represents a document in RAGFlow format."""
+class MultiRAGDocument:
+    """Represents a document in MultiRAG format."""
     
     id: str
     title: str
@@ -30,7 +30,7 @@ class RAGFlowDocument:
 
 
 class FirecrawlProcessor:
-    """Processes Firecrawl content for RAGFlow integration."""
+    """Processes Firecrawl content for MultiRAG integration."""
     
     def __init__(self):
         """Initialize the processor."""
@@ -113,7 +113,7 @@ class FirecrawlProcessor:
         return "en"  # Default to English
     
     def create_metadata(self, content: ScrapedContent) -> Dict[str, Any]:
-        """Create comprehensive metadata for RAGFlow document."""
+        """Create comprehensive metadata for MultiRAG document."""
         metadata = {
             "source": "firecrawl",
             "url": content.url,
@@ -149,8 +149,8 @@ class FirecrawlProcessor:
         except Exception:
             return ""
     
-    def process_content(self, content: ScrapedContent) -> RAGFlowDocument:
-        """Process scraped content into RAGFlow document format."""
+    def process_content(self, content: ScrapedContent) -> MultiRAGDocument:
+        """Process scraped content into MultiRAG document format."""
         if content.error:
             raise ValueError(f"Content has error: {content.error}")
         
@@ -170,8 +170,8 @@ class FirecrawlProcessor:
         # Generate document ID
         doc_id = self.generate_document_id(content.url, cleaned_content)
         
-        # Create RAGFlow document
-        document = RAGFlowDocument(
+        # Create MultiRAG document
+        document = MultiRAGDocument(
             id=doc_id,
             title=title,
             content=cleaned_content,
@@ -185,8 +185,8 @@ class FirecrawlProcessor:
         
         return document
     
-    def process_batch(self, contents: List[ScrapedContent]) -> List[RAGFlowDocument]:
-        """Process multiple scraped contents into RAGFlow documents."""
+    def process_batch(self, contents: List[ScrapedContent]) -> List[MultiRAGDocument]:
+        """Process multiple scraped contents into MultiRAG documents."""
         documents = []
         
         for content in contents:
@@ -199,7 +199,7 @@ class FirecrawlProcessor:
         
         return documents
     
-    def chunk_content(self, document: RAGFlowDocument, 
+    def chunk_content(self, document: MultiRAGDocument,
                      chunk_size: int = 1000, 
                      chunk_overlap: int = 200) -> List[Dict[str, Any]]:
         """Chunk document content for RAG processing."""
@@ -258,8 +258,8 @@ class FirecrawlProcessor:
         
         return chunks
     
-    def validate_document(self, document: RAGFlowDocument) -> bool:
-        """Validate RAGFlow document."""
+    def validate_document(self, document: MultiRAGDocument) -> bool:
+        """Validate MultiRAG document."""
         if not document.id:
             return False
         
