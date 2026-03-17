@@ -1623,6 +1623,23 @@ def get_session(
     return get_json_result(data=conv.to_dict())
 
 
+@router.delete('/{canvas_id}/sessions/{session_id}', summary="删除Canvas会话", response_description="成功删除会话")
+def del_session(
+        canvas_id: str,
+        session_id: str,
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+):
+    tenant_id = user.id
+    if not UserCanvasService.accessible(db, canvas_id, tenant_id):
+        return get_json_result(
+            data=False,
+            retmsg='Only owner of canvas authorized for this operation.',
+            retcode=RetCode.OPERATING_ERROR,
+        )
+    return get_json_result(data=API4ConversationService.delete_by_id(db, session_id))
+
+
 @router.get('/prompts', summary="获取系统提示词", response_description="成功获取提示词")
 def prompts(
         db: Session = Depends(get_db),
