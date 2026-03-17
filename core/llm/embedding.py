@@ -1105,93 +1105,33 @@ class VolcEngineEmbed(Base):
         if not self.api_key:
             raise ValueError("缺少 ark_api_key")
 
-        ep_id = key_payload.get("ep_id", "")
-        endpoint_id = key_payload.get("endpoint_id", "")
-        derived_model_name = f"{ep_id}{endpoint_id}".strip()
-        self.model_name = derived_model_name or model_name
-        # 保留原始模型名称用于 vision 检测（endpoint_id 可能不包含 vision 关键字）
-        self._original_model_name = model_name or ""
+        self.model_name = model_name
         if not self.model_name:
-            raise ValueError("VolcEngine 模型名称缺失，请配置 ep_id + endpoint_id 或显式传入 model_name")
+            raise ValueError("VolcEngine 模型名称缺失，请显式传入 model_name")
 
         self.base_url = base_url.rstrip("/")
         self.multimodal_endpoint = urljoin(f"{self.base_url}/", "embeddings/multimodal")
-        self.text_endpoint = urljoin(f"{self.base_url}/", "embeddings")
         self.timeout = kwargs.get("timeout", 30)
         self.default_dimensions = kwargs.get("dimensions") or key_payload.get("dimensions")
         self.default_encoding_format = kwargs.get("encoding_format") or key_payload.get("encoding_format") or "float"
         self.session = requests.Session()
-        # 同时检查派生模型名称和原始模型名称，确保 vision 模型被正确识别
-        model_lower = self.model_name.lower()
-        original_lower = self._original_model_name.lower()
-        is_vision_by_name = any(
-            k in model_lower or k in original_lower
-            for k in ["vision", "multimodal", "vl"]
-        )
-        self.force_multimodal = bool(
-            key_payload.get("force_multimodal")
-            or kwargs.get("force_multimodal")
-            or is_vision_by_name
-        )
-        if key_payload.get("force_text_endpoint") or kwargs.get("force_text_endpoint"):
-            self.force_multimodal = False
 
     def encode(self, texts: list):
         if not texts:
             return np.array([]), 0
-
-        # 再次确认是否强制多模态 (防止初始化后 model_name 变更或其他原因)
-        # 同时检查派生模型名称和原始模型名称
-        model_lower = self.model_name.lower()
-        original_lower = getattr(self, "_original_model_name", "").lower()
-        is_vision_model = any(k in model_lower or k in original_lower for k in ["vision", "multimodal", "vl"])
-        should_use_multimodal = self.force_multimodal or is_vision_model
-
-        if all(isinstance(item, str) for item in texts) and not should_use_multimodal:
-            embeddings, total_tokens = self._request_text_embeddings(list(texts), self.model_name, self.default_encoding_format)
-            return np.array(embeddings), total_tokens
-
-        if all(isinstance(item, str) for item in texts):
-            # 纯文本输入，但模型要求多模态 -> 走多模态端点
-            payload = self._build_multimodal_payload(self.model_name, texts, self.default_dimensions, self.default_encoding_format)
-            embedding, total_tokens = self._request_multimodal_embedding(payload)
-            # 注意：多模态端点对纯文本列表输入（被封装为单个请求）通常只返回 1 个向量
-            # 如果 texts 有多条，这里其实是把它们合并成了一个 request
-            return np.array([embedding]), total_tokens
-
-        if len(texts) == 1 and self._is_text_request(texts[0]) and not should_use_multimodal:
-            text_inputs, model_name, encoding_format = self._extract_text_request(texts[0])
-            embeddings, total_tokens = self._request_text_embeddings(text_inputs, model_name, encoding_format)
-            return np.array(embeddings), total_tokens
-
-        requests_payload = [self._prepare_multimodal_request(item) for item in texts]
         embeddings = []
         total_tokens = 0
-        for payload in requests_payload:
-            embedding, usage_tokens = self._request_multimodal_embedding(payload)
+        for item in texts:
+            payload = self._prepare_multimodal_request(item)
+            embedding, tokens = self._request_multimodal_embedding(payload)
             embeddings.append(embedding)
-            total_tokens += usage_tokens
+            total_tokens += tokens
         return np.array(embeddings), total_tokens
 
     def encode_queries(self, text):
-        if isinstance(text, str) and not self.force_multimodal:
-            text_inputs, model_name, encoding_format = self._extract_text_request(text)
-            embeddings, usage_tokens = self._request_text_embeddings(text_inputs, model_name, encoding_format)
-            return np.array(embeddings[0]), usage_tokens
-
-        if isinstance(text, str):
-            payload = self._build_multimodal_payload(self.model_name, [text], self.default_dimensions, self.default_encoding_format)
-            embedding, usage_tokens = self._request_multimodal_embedding(payload)
-            return np.array(embedding), usage_tokens
-
-        if self._is_text_request(text) and not self.force_multimodal:
-            text_inputs, model_name, encoding_format = self._extract_text_request(text)
-            embeddings, usage_tokens = self._request_text_embeddings(text_inputs, model_name, encoding_format)
-            return np.array(embeddings[0]), usage_tokens
-
         payload = self._prepare_multimodal_request(text)
-        embedding, usage_tokens = self._request_multimodal_embedding(payload)
-        return np.array(embedding), usage_tokens
+        embedding, tokens = self._request_multimodal_embedding(payload)
+        return np.array(embedding), tokens
 
     def _prepare_multimodal_request(self, item) -> VolcEngineEmbeddingRequest:
         if isinstance(item, VolcEngineEmbeddingRequest):
@@ -1265,38 +1205,11 @@ class VolcEngineEmbed(Base):
             return list(value)
         return [value]
 
-    def _build_multimodal_payload(self, model_name: str, contents: Sequence[Any], dimensions: int | None, encoding_format: str | None) -> VolcEngineEmbeddingRequest:
-        payload_dict: dict[str, Any] = {
-            "model": model_name,
-            "input": self._normalize_contents(contents),
-        }
-        if dimensions is not None:
-            payload_dict["dimensions"] = dimensions
-        if encoding_format is not None:
-            payload_dict["encoding_format"] = encoding_format
-        try:
-            return VolcEngineEmbeddingRequest.model_validate(payload_dict)
-        except ValidationError as exc:
-            raise ValueError(f"VolcEngine 输入参数校验失败: {exc}") from exc
-
     def _request_multimodal_embedding(self, payload: VolcEngineEmbeddingRequest) -> tuple[list[float], int]:
         data = self._post(self.multimodal_endpoint, payload.model_dump(by_alias=True, exclude_none=True))
         embedding = self._extract_multimodal_embedding(data)
         usage_tokens = self.total_token_count(data)
         return embedding, usage_tokens
-
-    def _request_text_embeddings(self, inputs: list[str], model_name: str, encoding_format: str | None) -> tuple[list[list[float]], int]:
-        payload: dict[str, Any] = {
-            "model": model_name,
-            "input": inputs,
-        }
-        if encoding_format is not None:
-            payload["encoding_format"] = encoding_format
-
-        data = self._post(self.text_endpoint, payload)
-        embeddings = self._extract_text_embeddings(data)
-        usage_tokens = self.total_token_count(data)
-        return embeddings, usage_tokens
 
     def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         response = self.session.post(
@@ -1328,17 +1241,6 @@ class VolcEngineEmbed(Base):
 
         return self._decode_embedding(raw_embedding, data)
 
-    def _extract_text_embeddings(self, data: dict[str, Any]) -> list[list[float]]:
-        container = data.get("data")
-        if not isinstance(container, list):
-            raise ValueError("VolcEngine 文本向量化响应格式异常")
-
-        embeddings: list[list[float]] = []
-        for item in container:
-            raw_embedding = item.get("embedding")
-            embeddings.append(self._decode_embedding(raw_embedding, data))
-        return embeddings
-
     def _decode_embedding(self, raw_embedding: Any, context: dict[str, Any]) -> list[float]:
         if isinstance(raw_embedding, list):
             return raw_embedding
@@ -1350,40 +1252,6 @@ class VolcEngineEmbed(Base):
                 raise ValueError("Base64 解码失败") from exc
             return np.frombuffer(decoded, dtype="float32").tolist()
         raise TypeError("未知的 embedding 数据类型")
-
-    def _is_text_request(self, item: Any) -> bool:
-        if isinstance(item, str):
-            return True
-        if isinstance(item, BaseModel):
-            item = item.model_dump(by_alias=True)
-        if isinstance(item, dict) and "input" in item:
-            inputs = item.get("input")
-            if isinstance(inputs, str):
-                return True
-            if isinstance(inputs, Sequence) and all(isinstance(elem, str) for elem in inputs):
-                return True
-        return False
-
-    def _extract_text_request(self, item: Any) -> tuple[list[str], str, str | None]:
-        encoding_format = self.default_encoding_format
-        model_name = self.model_name
-
-        if isinstance(item, str):
-            return [item], model_name, encoding_format
-
-        if isinstance(item, BaseModel):
-            item = item.model_dump(by_alias=True)
-
-        if isinstance(item, Mapping):
-            model_name = item.get("model", model_name)
-            encoding_format = item.get("encoding_format", encoding_format)
-            inputs = item.get("input")
-            if isinstance(inputs, str):
-                return [inputs], model_name, encoding_format
-            if isinstance(inputs, Sequence) and all(isinstance(elem, str) for elem in inputs):
-                return list(inputs), model_name, encoding_format
-
-        raise ValueError("文本向量化请求的输入格式不正确")
 
 
 class GPUStackEmbed(OpenAIEmbed):
